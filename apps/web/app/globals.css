@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* ─── Accent (injected per-module via CSS variable) ─────────────────── */
+  --color-accent:      var(--accent, hsl(217 91% 55%));
+  --color-accent-soft: var(--accent-soft, hsl(217 91% 55% / 0.08));
+
+  /* ─── Neutral palette ───────────────────────────────────────────────── */
+  --color-surface:     var(--surface, #ffffff);
+  --color-surface-2:   var(--surface-2, #f8fafc);
+  --color-border:      var(--border-color, #e2e8f0);
+}
+
+/* ─── Base ──────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Dark mode tokens ──────────────────────────────────────────────────── */
+.dark {
+  --surface:      #030712;
+  --surface-2:    #111827;
+  --border-color: #1f2937;
+}

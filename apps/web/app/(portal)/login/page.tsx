@@ -1,0 +1,87 @@
+'use client';
+
+import { useState, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { jwtDecode } from 'jwt-decode';
+import type { AppProduct } from '@/components/portal/AppLoginPage';
+import type { JwtPayload, AuthTokens } from '@repo/shared-types';
+import { AppLoginPage } from '@/components/portal/AppLoginPage';
+import { useAuthStore } from '@/store/auth';
+import { api } from '@/lib/api';
+
+/* The valid ?app= values that map to a product config */
+const VALID_PRODUCTS: AppProduct[] = ['pos', 'ledger', 'payroll'];
+
+function LoginInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { setTokens, setUser } = useAuthStore();
+
+  const appParam = searchParams.get('app') as AppProduct | null;
+  const product: AppProduct = VALID_PRODUCTS.includes(appParam as AppProduct)
+    ? (appParam as AppProduct)
+    : 'pos'; // default branding when no app selected
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState<string | undefined>();
+
+  async function handleSubmit(values: { tenantId: string; email: string; password: string; rememberMe: boolean }) {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const { data } = await api.post<AuthTokens>('/auth/login', {
+        companyCode: values.tenantId,
+        email: values.email,
+        password: values.password,
+      });
+
+      setTokens(data.accessToken, data.refreshToken);
+      const user = jwtDecode<JwtPayload>(data.accessToken);
+      setUser(user);
+
+      // Mirror token to cookie for middleware edge access
+      document.cookie = `app-session=${data.accessToken}; path=/; SameSite=Lax`;
+
+      // If app was pre-selected, go directly; otherwise show app selector
+      const next = searchParams.get('next');
+      if (next) {
+        router.push(next);
+      } else if (appParam && VALID_PRODUCTS.includes(appParam)) {
+        router.push(`/${appParam}`);
+      } else {
+        router.push('/select');
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string | string[] } } })
+        ?.response?.data?.message;
+      setError(Array.isArray(msg) ? (msg[0] ?? 'Invalid credentials.') : (msg ?? 'Invalid credentials.'));
+      setLoading(false);
+    }
+  }
+
+  const siblingUrls: Partial<Record<AppProduct, string>> = {
+    pos:     '/login?app=pos',
+    ledger:  '/login?app=ledger',
+    payroll: '/login?app=payroll',
+  };
+  // Remove current product from siblings
+  delete siblingUrls[product];
+
+  return (
+    <AppLoginPage
+      product={product}
+      onSubmit={handleSubmit}
+      loading={loading}
+      error={error}
+      siblingUrls={siblingUrls}
+    />
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginInner />
+    </Suspense>
+  );
+}

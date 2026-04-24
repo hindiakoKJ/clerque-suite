@@ -22,8 +22,8 @@ interface AppCard {
 const APPS: AppCard[] = [
   {
     id: 'pos',
-    name: 'POS',
-    description: 'Point-of-sale for retail, F&B, and services.',
+    name: 'Counter',
+    description: 'Point-of-sale for retail, F&B, and services — keep the line moving.',
     Icon: ShoppingCart,
     accent: 'hsl(217 91% 55%)',
     accentDark: 'hsl(217 91% 60%)',
@@ -33,7 +33,7 @@ const APPS: AppCard[] = [
   {
     id: 'ledger',
     name: 'Ledger',
-    description: 'Double-entry accounting with invoices and reports.',
+    description: 'Double-entry accounting with invoices, journals, and reports.',
     Icon: BookOpen,
     accent: 'hsl(173 70% 40%)',
     accentDark: 'hsl(173 70% 45%)',
@@ -42,8 +42,8 @@ const APPS: AppCard[] = [
   },
   {
     id: 'payroll',
-    name: 'Payroll',
-    description: 'Time tracking and attendance management.',
+    name: 'Sync',
+    description: 'Staff time tracking, attendance, and payroll management.',
     Icon: Users,
     accent: 'hsl(262 70% 58%)',
     accentDark: 'hsl(262 70% 65%)',
@@ -80,7 +80,7 @@ export default function SelectPage() {
         {/* Header */}
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Welcome, {user.name}</h1>
-          <p className="text-slate-500 dark:text-slate-400">Choose an app to open.</p>
+          <p className="text-slate-500 dark:text-slate-400">Choose a Clerque app to open.</p>
         </div>
 
         {/* App grid */}

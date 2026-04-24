@@ -28,7 +28,7 @@ export function AppShell({
   navItems,
   logoIcon: LogoIcon,
   appName,
-  brandName = '[AppName]',
+  brandName = 'Clerque',  // "Clerque Counter", "Clerque Ledger", "Clerque Sync"
   headerRight,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);

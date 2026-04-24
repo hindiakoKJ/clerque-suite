@@ -25,7 +25,7 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
         '--accent-soft': PAYROLL_ACCENT_SOFT,
       } as React.CSSProperties}
     >
-      <AppShell navItems={navItems} logoIcon={Users} appName="Payroll">
+      <AppShell navItems={navItems} logoIcon={Users} appName="Sync">
         {children}
       </AppShell>
     </div>

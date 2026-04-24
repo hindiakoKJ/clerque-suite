@@ -22,7 +22,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         '--accent-soft': POS_ACCENT_SOFT,
       } as React.CSSProperties}
     >
-      <AppShell navItems={navItems} logoIcon={ShoppingCart} appName="POS">
+      <AppShell navItems={navItems} logoIcon={ShoppingCart} appName="Counter">
         {children}
       </AppShell>
     </div>

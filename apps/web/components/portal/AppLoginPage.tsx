@@ -24,12 +24,12 @@ interface ProductConfig {
 
 const PRODUCTS: Record<AppProduct, ProductConfig> = {
   pos: {
-    name: 'POS',
+    name: 'Counter',
     Icon: ShoppingCart,
     accent: 'hsl(217 91% 55%)',
     accentDark: 'hsl(217 91% 60%)',
     heroWords: ['Sell faster.', 'Close the till.'],
-    sub: 'Point-of-sale for retail, F&B, and services — built to keep the line moving.',
+    sub: 'Clerque Counter — point-of-sale for retail, F&B, and services. Built to keep the line moving.',
     features: [
       'Fast checkout with barcode + hotkeys',
       'Works offline, syncs when back',
@@ -44,7 +44,7 @@ const PRODUCTS: Record<AppProduct, ProductConfig> = {
     accent: 'hsl(173 70% 40%)',
     accentDark: 'hsl(173 70% 45%)',
     heroWords: ['Books in order.', 'Reports on time.'],
-    sub: 'Double-entry accounting with invoices, reports, and tax-ready exports.',
+    sub: 'Clerque Ledger — double-entry accounting with invoices, reports, and tax-ready exports.',
     features: [
       'Chart of accounts + journal entries',
       'Invoices, bills, and reconciliation',
@@ -54,16 +54,16 @@ const PRODUCTS: Record<AppProduct, ProductConfig> = {
     shadowClass: 'shadow-teal-500/20',
   },
   payroll: {
-    name: 'Payroll',
+    name: 'Sync',
     Icon: Users,
     accent: 'hsl(262 70% 58%)',
     accentDark: 'hsl(262 70% 65%)',
-    heroWords: ['Payday,', 'sorted.'],
-    sub: 'Run payroll end-to-end — staff records, payslips, contributions, and tax.',
+    heroWords: ['Your team,', 'in sync.'],
+    sub: 'Staff time tracking and attendance — clock in, review timesheets, stay on top of hours.',
     features: [
-      'Staff profiles + rate history',
-      'Automatic computations + payslips',
-      'Contribution + tax filings ready',
+      'Clock in / out from any device',
+      'Weekly timesheet + approval flow',
+      'Attendance calendar per employee',
     ],
     showOffline: false,
     shadowClass: 'shadow-violet-500/20',
@@ -165,7 +165,7 @@ export function AppLoginPage({
         {/* Brand */}
         <div className="flex items-center gap-2 font-bold text-xl" style={{ color: accent }}>
           <Icon className="w-6 h-6" />
-          <span>[AppName] · {p.name}</span>
+          <span>Clerque · {p.name}</span>
         </div>
 
         {/* Headline + bullets */}
@@ -190,7 +190,7 @@ export function AppLoginPage({
 
         {/* Footer */}
         <div className="flex gap-4 text-xs text-slate-400 dark:text-slate-600">
-          <span>[AppName] · {p.name} · v1.0.0</span>
+          <span>Clerque {p.name} · v1.0.0</span>
           <span className="ml-auto flex gap-3">
             <a href="#" className="hover:underline">Terms</a>
             <a href="#" className="hover:underline">Privacy</a>
@@ -239,7 +239,7 @@ export function AppLoginPage({
               </div>
             )}
             <h2 className="text-3xl font-bold text-slate-900 dark:text-white">
-              Sign in to [AppName] · {p.name}
+              Sign in to Clerque {p.name}
             </h2>
             <p className="text-slate-500 dark:text-slate-400">
               Enter your tenant ID, email, and password.
@@ -354,7 +354,7 @@ export function AppLoginPage({
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <>
-                  Sign in to {p.name}
+                  Sign in to Clerque {p.name}
                   <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
                 </>
               )}

@@ -12,7 +12,7 @@ interface MobileNavSheetProps {
   brandName?: string;
 }
 
-export function MobileNavSheet({ open, onClose, children, logoIcon: LogoIcon, appName, brandName = '[AppName]' }: MobileNavSheetProps) {
+export function MobileNavSheet({ open, onClose, children, logoIcon: LogoIcon, appName, brandName = 'Clerque' }: MobileNavSheetProps) {
   return (
     <Dialog.Root open={open} onOpenChange={(v) => !v && onClose()}>
       <Dialog.Portal>

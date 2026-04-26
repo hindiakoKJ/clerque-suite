@@ -15,10 +15,17 @@ export class ReportsController {
   constructor(private reportsService: ReportsService) {}
 
   /**
-   * Daily sales summary.
+   * Daily sales summary — powers the POS Dashboard page.
    * date defaults to today in PH time (YYYY-MM-DD).
+   *
+   * Roles mirror the frontend DASHBOARD_ROLES constant exactly:
+   *   BUSINESS_OWNER / SUPER_ADMIN / BRANCH_MANAGER — management
+   *   SALES_LEAD — floor supervisor, needs live daily overview
+   *   FINANCE_LEAD — cash-flow oversight
+   * CASHIER is intentionally excluded (cashier accountability
+   * is handled through the shift EOD report, not the full daily summary).
    */
-  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'FINANCE_LEAD')
   @Get('daily')
   getDaily(
     @CurrentUser() user: JwtPayload,
@@ -30,8 +37,12 @@ export class ReportsController {
     return this.reportsService.getDaily(user.tenantId!, effectiveBranch, effectiveDate);
   }
 
-  /** Shift-scoped EOD report. */
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  /**
+   * Shift-scoped EOD report — shown after closing a shift.
+   * SALES_LEAD added: they open and close shifts so must be able to view
+   * the EOD summary of the shift they just closed.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Get('shift/:shiftId')
   getShift(
     @CurrentUser() user: JwtPayload,

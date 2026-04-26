@@ -59,6 +59,16 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '6120', name: 'Insurance Expense',                type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6130', name: 'Advertising Expense',              type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6140', name: 'Miscellaneous Expense',            type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  // Expenses — Extended (production, project, contractual, compliance)
+  { code: '6150', name: 'Production Materials Expense',     type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6160', name: 'Project Direct Materials',         type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6170', name: 'Contractor Fees Expense',          type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6180', name: 'Commission Expense',               type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6190', name: 'Taxes and Licenses',               type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6200', name: 'Equipment Expense',                type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6210', name: 'Tools and Supplies Expense',       type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  // Liabilities — Tax withholding (expanded)
+  { code: '2061', name: 'Creditable Tax Withheld (EWT)',    type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
 ];
 
 @Injectable()

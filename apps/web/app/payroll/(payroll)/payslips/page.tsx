@@ -1,4 +1,7 @@
 'use client';
+// useSearchParams() requires opt-out of static prerendering
+export const dynamic = 'force-dynamic';
+
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';

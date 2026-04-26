@@ -223,16 +223,37 @@ export default function JournalPage() {
             <X className="h-3.5 w-3.5" /> Clear
           </button>
         )}
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
-          title="Export to Excel"
-        >
-          <Download className="w-4 h-4" />
-          <span className="hidden sm:inline">{exporting ? 'Exporting…' : '.xlsx'}</span>
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Export to Excel"
+          >
+            <Download className="w-4 h-4" />
+            <span className="hidden sm:inline">{exporting ? 'Exporting…' : '.xlsx'}</span>
+          </button>
+          {canEdit && (
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium text-foreground hover:bg-muted transition-colors"
+              title="Import journal entries from Excel/CSV"
+            >
+              <Upload className="w-4 h-4" />
+              <span className="hidden sm:inline">Import</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      <ImportModal
+        open={showImport}
+        title="Import Journal Entries"
+        templateUrl="/import/template/journal-entries"
+        uploadUrl="/import/journal-entries"
+        onClose={() => setShowImport(false)}
+        onSuccess={() => qc.invalidateQueries({ queryKey: ['journal'] })}
+      />
 
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">Loading journal entries…</div>

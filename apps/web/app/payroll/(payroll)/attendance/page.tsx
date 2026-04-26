@@ -42,14 +42,14 @@ function formatHours(h: number | null) {
 }
 
 function StatusBadge({ status }: { status: AttendanceEntry['status'] }) {
-  const map: Record<string, { label: string; variant: 'success' | 'warning' | 'error' | 'default' }> = {
-    OPEN:     { label: 'In Progress', variant: 'warning' },
-    CLOSED:   { label: 'Completed',   variant: 'default' },
-    APPROVED: { label: 'Approved',    variant: 'success' },
-    REJECTED: { label: 'Rejected',    variant: 'error'   },
+  const map: Record<string, { label: string; tone: 'success' | 'warn' | 'danger' | 'default' }> = {
+    OPEN:     { label: 'In Progress', tone: 'warn'    },
+    CLOSED:   { label: 'Completed',   tone: 'default' },
+    APPROVED: { label: 'Approved',    tone: 'success' },
+    REJECTED: { label: 'Rejected',    tone: 'danger'  },
   };
-  const { label, variant } = map[status] ?? { label: status, variant: 'default' };
-  return <Badge variant={variant}>{label}</Badge>;
+  const { label, tone } = map[status] ?? { label: status, tone: 'default' as const };
+  return <Badge tone={tone}>{label}</Badge>;
 }
 
 function Skeleton({ className = '' }: { className?: string }) {

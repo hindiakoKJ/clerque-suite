@@ -1,7 +1,8 @@
 'use client';
 import * as React from 'react';
 import { useState, useEffect } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
+import Link from 'next/link';
 import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MobileNavSheet } from './MobileNavSheet';
@@ -47,10 +48,18 @@ export function AppShell({
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDark, setIsDark] = useState(false);
   const pathname = usePathname();
-  const router   = useRouter();
   const user     = useAuthStore((s) => s.user);
 
   useEffect(() => {
+    // Backstop: re-apply theme from localStorage in case React hydration briefly
+    // reset the class that the inline <head> script set before first paint.
+    try {
+      const stored = localStorage.getItem('theme');
+      const html   = document.documentElement;
+      if (stored === 'dark'  && !html.classList.contains('dark')) html.classList.add('dark');
+      if (stored === 'light' &&  html.classList.contains('dark')) html.classList.remove('dark');
+    } catch {}
+
     const check = () => setIsDark(document.documentElement.classList.contains('dark'));
     check();
     const obs = new MutationObserver(check);
@@ -87,9 +96,10 @@ export function AppShell({
           }
 
           return (
-            <button
+            <Link
               key={href}
-              onClick={() => { router.push(href); onItemClick?.(); }}
+              href={href}
+              onClick={onItemClick}
               className={cn(
                 'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors w-full text-left',
                 active
@@ -109,7 +119,7 @@ export function AppShell({
               {badge != null && badge > 0 && collapsed && (
                 <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
               )}
-            </button>
+            </Link>
           );
         })}
       </nav>
@@ -154,8 +164,8 @@ export function AppShell({
             </div>
           )}
           {/* Settings */}
-          <button
-            onClick={() => router.push('/settings')}
+          <Link
+            href="/settings"
             className={cn(
               'flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors w-full',
               collapsed && 'justify-center px-2',
@@ -164,7 +174,7 @@ export function AppShell({
           >
             <Settings className="h-4 w-4 shrink-0" />
             {!collapsed && <span>Settings</span>}
-          </button>
+          </Link>
           {/* Sign Out — rendered only when the parent layout provides a handler */}
           {onSignOut && (
             <button

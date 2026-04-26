@@ -21,6 +21,9 @@ import { TaxModule } from './tax/tax.module';
 import { AuditModule } from './audit/audit.module';
 import { UomModule } from './uom/uom.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { ApModule } from './ap/ap.module';
+import { ArModule } from './ar/ar.module';
+import { PromotionsModule } from './promotions/promotions.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -48,6 +51,9 @@ import { HealthController } from './health/health.controller';
     AuditModule,
     UomModule,
     PayrollModule,
+    ApModule,
+    ArModule,
+    PromotionsModule,
   ],
 })
 export class AppModule {}

@@ -362,6 +362,7 @@ model Tenant {
   xReadLogs           XReadLog[]
   vendors             Vendor[]
   expenses            ExpenseEntry[]
+  customers           Customer[]
   rawMaterials        RawMaterial[]
 
   @@map("tenants")
@@ -830,12 +831,17 @@ model Order {
   // ── BIR CAS Audit: B2B Customer Fields (AR) ───────────────────────────────
   // Required per RR No. 1-2026 for invoices issued to registered businesses.
   // Walk-in / anonymous retail sales leave all three null.
+  /// FK to the Customer master (AR sub-ledger). Null for walk-in / anonymous sales.
+  customerId       String?
   /// Business name of the corporate buyer (for B2B invoices)
   customerName     String?
   /// BIR TIN of the corporate buyer — required for valid input VAT claim (format: 000-000-000)
   customerTin      String?
   /// Registered address of the corporate buyer — required for invoices > ₱1,000
   customerAddress  String?
+  /// Due date for credit (CHARGE) sales — set to createdAt + Customer.creditTermDays.
+  /// Null for CASH_SALE. Drives AR aging buckets.
+  dueDate          DateTime?
 
   // ── Audit Trail ────────────────────────────────────────────────────────────
   createdById      String?
@@ -855,6 +861,7 @@ model Order {
   tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch           Branch        @relation(fields: [branchId], references: [id])
   shift            Shift?        @relation(fields: [shiftId], references: [id])
+  customer         Customer?     @relation(fields: [customerId], references: [id])
   createdBy        User?         @relation("CreatedByUser", fields: [createdById], references: [id])
   updatedBy        User?         @relation("UpdatedByUser", fields: [updatedById], references: [id])
   voidedBy         User?         @relation("VoidedByUser", fields: [voidedById], references: [id])
@@ -868,6 +875,8 @@ model Order {
   @@index([branchId, status])
   @@index([tenantId, deletedAt])   // soft-delete filter: WHERE deleted_at IS NULL
   @@index([branchId, deletedAt])   // branch-scoped active-order queries
+  @@index([tenantId, customerId])  // AR: customer ledger queries
+  @@index([tenantId, dueDate])     // AR aging: due-date range scans
   @@map("orders")
 }
 
@@ -1394,6 +1403,14 @@ model ExpenseEntry {
   inputVat        Decimal   @db.Decimal(14, 2) @default(0)
   /// Reference document number (vendor invoice #, receipt #, OR #)
   referenceNumber String?
+  /// When the vendor bill is due — drives AP aging buckets (0-30, 31-60, 61-90, 90+)
+  dueDate         DateTime?
+  /// When payment was actually remitted to the vendor
+  paidAt          DateTime?
+  /// Amount paid to vendor (= netAmount for full payment; < netAmount for partial)
+  paidAmount      Decimal?  @db.Decimal(14, 2)
+  /// Bank reference, check number, or e-wallet transaction ID for the payment
+  paymentRef      String?
   status          ExpenseStatus @default(DRAFT)
   notes           String?
   createdById     String?
@@ -1414,6 +1431,38 @@ enum ExpenseStatus {
   DRAFT     // Entered but not yet posted to ledger
   POSTED    // Journal entry created; locked from editing
   VOIDED    // Cancelled; WHT refund/credit memo may be required
+}
+
+// ─── AR — Customer Master ─────────────────────────────────────────────────────
+
+/// Customer / corporate account for B2B credit sales (AR sub-ledger).
+/// Walk-in / retail customers are anonymous — no Customer record needed.
+model Customer {
+  id              String    @id @default(cuid())
+  tenantId        String
+  /// Legal business name as registered with BIR
+  name            String
+  /// BIR TIN — required for valid B2B invoice per RR No. 1-2026
+  tin             String?
+  /// BIR-registered address — required for invoices above ₱1,000
+  address         String?
+  contactEmail    String?
+  contactPhone    String?
+  /// Payment term in calendar days. 0 = cash; 30 = Net 30; 60 = Net 60.
+  creditTermDays  Int       @default(0)
+  /// Maximum outstanding AR balance allowed. NULL = no limit.
+  creditLimit     Decimal?  @db.Decimal(14, 2)
+  notes           String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders          Order[]
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, tin])
+  @@map("customers")
 }
 
 // ─── Payroll — Time Entries ──────────────────────────────────────────────────

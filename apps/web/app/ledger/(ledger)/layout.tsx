@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -23,6 +23,8 @@ const EVENT_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT'] as cons
 const SETTLEMENT_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT'] as const;
 const PERIODS_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD'] as const;
 const BIR_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD'] as const;
+const AP_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
+const AR_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
 
 function inLedgerRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));
@@ -83,6 +85,8 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role),
     makeLedgerNavItem('/ledger/periods',       'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role),
     makeLedgerNavItem('/ledger/bir',           'Tax Estimation',     FileText,        BIR_ROLES,        role, isBirRegistered),
+    makeLedgerNavItem('/ledger/ap/expenses',   'Payables (AP)',      TrendingDown,    AP_ROLES,         role),
+    makeLedgerNavItem('/ledger/ar/invoices',   'Receivables (AR)',   TrendingUp,      AR_ROLES,         role),
   ];
 
   return (

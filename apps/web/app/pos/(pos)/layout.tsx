@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
-  Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle,
+  Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag,
 } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
@@ -43,6 +43,7 @@ const PRODUCTS_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
 const INVENTORY_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD'] as const;
 const STAFF_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'SALES_LEAD', 'PAYROLL_MASTER'] as const;
 const UOM_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
+const PROMOTIONS_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM', 'BRANCH_MANAGER'] as const;
 // Pending Sync is operational — only relevant to roles that create offline orders
 const PENDING_SYNC_ROLES = ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER'] as const;
 
@@ -135,6 +136,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES,     role),
     makeNavItem('/pos/staff',        'Staff',       Users,           STAFF_ROLES,         role),
     makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
+    makeNavItem('/pos/promotions',   'Promotions',  Tag,             PROMOTIONS_ROLES,    role),
     makeNavItem('/pos/pending',      'Pending Sync',Clock,           PENDING_SYNC_ROLES,  role, pendingCount || undefined),
   ];
 

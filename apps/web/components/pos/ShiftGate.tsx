@@ -147,6 +147,10 @@ export function ShiftGate({ children }: ShiftGateProps) {
     );
   }
 
+  // User was just cleared (logout in progress) — the layout will redirect to /login.
+  // Return null to avoid flashing the OpenShiftModal for a single render frame.
+  if (!user) return null;
+
   // Supervisors: bypass shift gate — render children directly with an info banner
   if (isSupervisor) {
     return (

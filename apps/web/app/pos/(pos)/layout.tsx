@@ -1,9 +1,9 @@
 'use client';
 import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
-  Users, Clock, Timer, RefreshCw, LogOut, User, Ruler, AlertTriangle,
+  Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle,
 } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
@@ -65,7 +65,8 @@ function makeNavItem(
 }
 
 export default function PosLayout({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
+  const router   = useRouter();
+  const pathname = usePathname();
   const { user, accessToken, clear } = useAuthStore();
   const { activeShift, clearShift } = useShiftStore();
   const { pendingCount, isSyncing, triggerSync } = usePendingSync();
@@ -80,6 +81,30 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (hydrated && !accessToken) router.replace('/login');
   }, [hydrated, accessToken, router]);
+
+  // ── Smart landing redirect ──────────────────────────────────────────────────
+  // The root /pos page always sends users to /pos/terminal, but supervisors
+  // (BUSINESS_OWNER, BRANCH_MANAGER, etc.) don't have terminal access.
+  // If they land on /pos/terminal without access, redirect to their first
+  // accessible page so they don't stare at a grayed-out terminal screen.
+  useEffect(() => {
+    if (!hydrated || !user) return;
+    const r = user.role;
+    if (
+      (pathname === '/pos/terminal' || pathname === '/pos') &&
+      !inRoles(r, TERMINAL_ROLES)
+    ) {
+      const firstAccessible = [
+        { href: '/pos/dashboard',    roles: DASHBOARD_ROLES  },
+        { href: '/pos/orders',       roles: ORDERS_ROLES     },
+        { href: '/pos/products',     roles: PRODUCTS_ROLES   },
+        { href: '/pos/inventory',    roles: INVENTORY_ROLES  },
+        { href: '/pos/staff',        roles: STAFF_ROLES      },
+        { href: '/pos/settings/uom', roles: UOM_ROLES        },
+      ].find((item) => inRoles(r, item.roles));
+      if (firstAccessible) router.replace(firstAccessible.href);
+    }
+  }, [hydrated, user, pathname, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set accent on <html> so Radix Dialog portals (rendered at document.body)
   // also inherit the correct --accent value in both light and dark mode.
@@ -191,14 +216,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         <User className="h-3.5 w-3.5" />
         <span className="max-w-[80px] truncate">{user?.name || 'Cashier'}</span>
       </div>
-
-      <button
-        onClick={handleLogout}
-        className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md px-2.5 py-1.5 transition-colors"
-      >
-        <LogOut className="h-3.5 w-3.5" />
-        <span className="hidden lg:inline">Sign out</span>
-      </button>
     </>
   );
 

@@ -3,13 +3,14 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronDown, ChevronRight, Plus, X, Receipt,
-  RotateCcw, CheckCircle2, Clock, FileText, AlertTriangle, Download,
+  RotateCcw, CheckCircle2, Clock, FileText, AlertTriangle, Download, Upload,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
 import { toast } from 'sonner';
 import { ReceiptModal, type ReceiptData } from '@/components/pos/ReceiptModal';
+import { ImportModal } from '@/components/ui/ImportModal';
 
 function fmtPeso(n: number) {
   return n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -89,6 +90,7 @@ export default function JournalPage() {
   const [receiptData, setReceiptData]       = useState<ReceiptData | null>(null);
   const [loadingReceipt, setLoadingReceipt] = useState<string | null>(null);
   const [exporting, setExporting]           = useState(false);
+  const [showImport, setShowImport]         = useState(false);
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 

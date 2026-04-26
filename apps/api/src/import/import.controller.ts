@@ -1,0 +1,107 @@
+import {
+  Controller,
+  Post,
+  Get,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  Req,
+  Res,
+  Query,
+  BadRequestException,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ImportService } from './import.service';
+import type { JwtPayload } from '@repo/shared-types';
+
+interface AuthRequest extends Express.Request {
+  user: JwtPayload;
+}
+
+@Controller('import')
+@UseGuards(JwtAuthGuard)
+export class ImportController {
+  constructor(private readonly importService: ImportService) {}
+
+  // ── Products ───────────────────────────────────────────────────────────────
+  @Post('products')
+  @UseInterceptors(FileInterceptor('file'))
+  importProducts(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthRequest,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importProducts(file, req.user.tenantId!);
+  }
+
+  @Get('template/products')
+  async productsTemplate(@Res() res: Response) {
+    const buf = await this.importService.productsTemplate();
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition':
+        'attachment; filename="clerque-products-template.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  // ── Inventory ──────────────────────────────────────────────────────────────
+  @Post('inventory')
+  @UseInterceptors(FileInterceptor('file'))
+  importInventory(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthRequest,
+    @Query('branchId') branchId: string,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    if (!branchId)
+      throw new BadRequestException('branchId query param is required.');
+    return this.importService.importInventory(
+      file,
+      req.user.tenantId!,
+      branchId,
+    );
+  }
+
+  @Get('template/inventory')
+  async inventoryTemplate(@Res() res: Response) {
+    const buf = await this.importService.inventoryTemplate();
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition':
+        'attachment; filename="clerque-inventory-template.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  // ── Journal Entries ────────────────────────────────────────────────────────
+  @Post('journal-entries')
+  @UseInterceptors(FileInterceptor('file'))
+  importJournal(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthRequest,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importJournalEntries(
+      file,
+      req.user.tenantId!,
+      req.user.sub,
+    );
+  }
+
+  @Get('template/journal-entries')
+  async journalTemplate(@Res() res: Response) {
+    const buf = await this.importService.journalTemplate();
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition':
+        'attachment; filename="clerque-journal-template.xlsx"',
+    });
+    res.send(buf);
+  }
+}

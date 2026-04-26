@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical } from 'lucide-react';
+import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { ModifierGroupModal } from '@/components/pos/ModifierGroupModal';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { isFnbType } from '@repo/shared-types';
+import { ImportModal } from '@/components/ui/ImportModal';
 
 interface Category { id: string; name: string; }
 interface Uom { id: string; name: string; abbreviation: string; isActive: boolean; }
@@ -71,6 +72,7 @@ export default function ProductsPage() {
   const isFnb = isFnbType(tenantProfile?.businessType);
 
   const [modifierTarget, setModifierTarget] = useState<Product | null>(null);
+  const [showImport, setShowImport] = useState(false);
 
   const { data: products = [], isLoading } = useQuery<Product[]>({
     queryKey: ['products', showInactive],
@@ -308,14 +310,23 @@ export default function ProductsPage() {
             </button>
           )}
           {canManage && (
-            <button
-              onClick={openCreate}
-              className="flex items-center gap-1.5 text-xs hover:opacity-90 text-white rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
-              style={{ background: 'var(--accent)' }}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Product
-            </button>
+            <>
+              <button
+                onClick={() => setShowImport(true)}
+                className="flex items-center gap-1.5 text-xs border border-border bg-background text-foreground hover:bg-muted rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Import
+              </button>
+              <button
+                onClick={openCreate}
+                className="flex items-center gap-1.5 text-xs hover:opacity-90 text-white rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
+                style={{ background: 'var(--accent)' }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New Product
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -525,6 +536,17 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+
+      {/* Import Modal */}
+      <ImportModal
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        title="Import Products"
+        description="Upload an .xlsx or .csv file to bulk-create or update products."
+        templateUrl="/import/template/products"
+        uploadUrl="/import/products"
+        onSuccess={() => invalidate()}
+      />
 
       {/* Create / Edit Modal */}
       {modal && (

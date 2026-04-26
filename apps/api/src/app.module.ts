@@ -24,6 +24,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { ApModule } from './ap/ap.module';
 import { ArModule } from './ar/ar.module';
 import { PromotionsModule } from './promotions/promotions.module';
+import { ImportModule } from './import/import.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -54,6 +55,7 @@ import { HealthController } from './health/health.controller';
     ApModule,
     ArModule,
     PromotionsModule,
+    ImportModule,
   ],
 })
 export class AppModule {}

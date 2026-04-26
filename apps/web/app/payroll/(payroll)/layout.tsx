@@ -72,6 +72,7 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
   // Clock In/Out is accessible to EVERY role (universal attendance tracking).
   const navItems: NavItem[] = [
     makePayNavItem('/payroll/clock',                 'Clock In / Out', Timer,           CLOCK_ROLES,         role),
+    makePayNavItem('/payroll/attendance',            'My Attendance',  CalendarDays,    CLOCK_ROLES,         role),
     makePayNavItem('/payroll/dashboard',             'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role),
     makePayNavItem('/payroll/timesheets',            'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role),
     makePayNavItem('/payroll/staff',                 'Staff',          UserCheck,       PAY_STAFF_ROLES,     role),

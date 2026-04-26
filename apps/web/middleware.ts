@@ -70,8 +70,9 @@ export function middleware(req: NextRequest) {
       return NextResponse.redirect(new URL('/select', req.url));
     }
 
-    // CLOCK_ONLY users in payroll: redirect to /payroll/clock unless already there
-    if (rule.clockOnlyRedirect && level === 'CLOCK_ONLY' && pathname !== rule.clockOnlyRedirect) {
+    // CLOCK_ONLY users in payroll: only allow clock, payslips, and attendance pages
+    const CLOCK_ONLY_ALLOWED = ['/payroll/clock', '/payroll/payslips', '/payroll/attendance'];
+    if (rule.clockOnlyRedirect && level === 'CLOCK_ONLY' && !CLOCK_ONLY_ALLOWED.some((p) => pathname.startsWith(p))) {
       return NextResponse.redirect(new URL(rule.clockOnlyRedirect, req.url));
     }
 

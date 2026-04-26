@@ -93,6 +93,17 @@ export class PayrollController {
     return this.payrollService.clockOut(user.tenantId!, user.sub, body.breakMins ?? 0);
   }
 
+  /** My attendance history — any authenticated employee */
+  @ApiOperation({ summary: 'Get my attendance records' })
+  @Get('attendance/mine')
+  getMyAttendance(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.payrollService.getMyAttendance(user.tenantId!, user.sub, from, to);
+  }
+
   // ─── Management endpoints (PAYROLL_MASTER / BUSINESS_OWNER) ─────────────
 
   /** List all employees for the tenant */

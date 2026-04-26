@@ -266,6 +266,36 @@ export class PayrollService {
     return { isClockedIn: false, clockedInAt: null, entryId: null, elapsedMins: 0 };
   }
 
+  // ─── My Attendance History ───────────────────────────────────────────────
+
+  async getMyAttendance(tenantId: string, userId: string, from?: string, to?: string) {
+    const where: Record<string, unknown> = { tenantId, userId };
+    if (from || to) {
+      where['clockIn'] = {
+        ...(from ? { gte: new Date(from) } : {}),
+        ...(to   ? { lte: new Date(new Date(to).setHours(23, 59, 59, 999)) } : {}),
+      };
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where: where as Parameters<typeof this.prisma.timeEntry.findMany>[0]['where'],
+      orderBy: { clockIn: 'desc' },
+      take: 90, // max 3 months of daily entries
+    });
+
+    return entries.map((e) => ({
+      id:          e.id,
+      date:        e.clockIn.toISOString().split('T')[0],
+      clockIn:     e.clockIn.toISOString(),
+      clockOut:    e.clockOut?.toISOString() ?? null,
+      grossHours:  e.grossHours ? Number(e.grossHours) : null,
+      otHours:     e.otHours   ? Number(e.otHours)    : 0,
+      breakMins:   e.breakMins ?? 0,
+      status:      e.status,
+      notes:       e.notes ?? null,
+    }));
+  }
+
   // ─── Employees List ──────────────────────────────────────────────────────
 
   async getEmployees(tenantId: string): Promise<EmployeeDto[]> {

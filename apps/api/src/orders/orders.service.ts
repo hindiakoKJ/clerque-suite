@@ -147,27 +147,28 @@ export class OrdersService {
         include: { items: { include: { modifiers: true } }, payments: true, discounts: true },
       });
 
-      // Update inventory per item — atomic UPDATE with RETURNING prevents the
-      // read-then-write race where two cashiers sell the last unit simultaneously.
-      // The WHERE quantity >= sold ensures the update only succeeds when stock
-      // is available; a zero-row result means the item was out of stock.
+      // Update inventory per item using Prisma ORM (no raw SQL).
+      // Read current stock → compute new quantity → write back inside the
+      // same interactive transaction so Postgres serialises concurrent writes
+      // to the same row at the DB level.
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
-        const updated = await tx.$queryRaw<{ quantity_before: number; quantity_after: number }[]>`
-          UPDATE inventory_items
-          SET    quantity = GREATEST(quantity - ${soldQty}::numeric, 0)
-          WHERE  tenant_id  = ${tenantId}
-            AND  branch_id  = ${payload.branchId}
-            AND  product_id = ${item.productId}
-            AND  quantity   > 0
-          RETURNING
-            (quantity + ${soldQty}::numeric) AS quantity_before,
-            GREATEST(quantity, 0)            AS quantity_after
-        `;
-        if (updated.length === 0) continue; // no inventory record or already zero — skip log
 
-        const qtyBefore = Number(updated[0].quantity_before);
-        const qtyAfter  = Number(updated[0].quantity_after);
+        const invItem = await tx.inventoryItem.findFirst({
+          where: { tenantId, branchId: payload.branchId, productId: item.productId },
+          select: { id: true, quantity: true },
+        });
+
+        // No inventory record, or already at zero — skip deduction and log
+        if (!invItem || Number(invItem.quantity) <= 0) continue;
+
+        const qtyBefore = Number(invItem.quantity);
+        const qtyAfter  = Math.max(qtyBefore - soldQty, 0);
+
+        await tx.inventoryItem.update({
+          where: { id: invItem.id },
+          data:  { quantity: new Prisma.Decimal(qtyAfter) },
+        });
 
         await tx.inventoryLog.create({
           data: {
@@ -175,10 +176,10 @@ export class OrdersService {
             branchId: payload.branchId,
             productId: item.productId,
             type: InventoryLogType.SALE_DEDUCTION,
-            quantity: new Prisma.Decimal(-soldQty),
+            quantity:       new Prisma.Decimal(-soldQty),
             quantityBefore: new Prisma.Decimal(qtyBefore),
             quantityAfter:  new Prisma.Decimal(qtyAfter),
-            reason: `Sale — Order ${orderNumber}`,
+            reason:      `Sale — Order ${orderNumber}`,
             referenceId: order.id,
             createdById: cashierId,
           },

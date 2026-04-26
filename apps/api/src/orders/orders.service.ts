@@ -31,8 +31,6 @@ export class OrdersService {
       if (existing) return existing;
     }
 
-    const orderNumber = await this.generateOrderNumber(tenantId);
-
     // ── Tenant compliance guards (outside transaction for clarity) ────────────
 
     const tenant = await this.prisma.tenant.findUniqueOrThrow({
@@ -74,6 +72,10 @@ export class OrdersService {
     await this.assertBranchBelongsToTenant(tenantId, payload.branchId);
 
     return this.prisma.$transaction(async (tx) => {
+      // Generate order number inside the transaction so the count is stable.
+      // Relies on @@unique([tenantId, orderNumber]) as the final race guard.
+      const orderNumber = await this.generateOrderNumberInTx(tx, tenantId);
+
       const order = await tx.order.create({
         data: {
           tenantId,
@@ -450,18 +452,25 @@ export class OrdersService {
     }
   }
 
-  private async generateOrderNumber(tenantId: string): Promise<string> {
-    const year = new Date().getFullYear();
-    // Use a PostgreSQL advisory lock keyed to this tenant so concurrent order
-    // creations serialize here instead of racing on COUNT(*)+1.
-    // hashtext() maps the tenantId string to a stable int for pg_advisory_xact_lock.
-    const result = await this.prisma.$queryRaw<[{ next_seq: bigint }]>`
-      SELECT pg_advisory_xact_lock(hashtext(${tenantId})),
-             (COUNT(*) + 1)::bigint AS next_seq
-      FROM   orders
-      WHERE  tenant_id = ${tenantId}
-    `;
-    const seq = String(Number(result[0].next_seq)).padStart(6, '0');
+  /**
+   * Generate the next sequential order number for the tenant.
+   *
+   * MUST be called inside a Prisma interactive transaction (`tx`) so that
+   * the count is stable for the duration of the write.  The @@unique
+   * constraint on (tenantId, orderNumber) is the final safety net for
+   * the extremely rare concurrent-order race — it surfaces as P2002
+   * (already handled → 409) rather than a silent duplicate.
+   *
+   * Intentionally avoids raw SQL / pg_advisory_xact_lock so that Railway's
+   * Postgres and any connection-pool mode work without P2010 raw-query errors.
+   */
+  private async generateOrderNumberInTx(
+    tx: Parameters<Parameters<typeof this.prisma.$transaction>[0]>[0],
+    tenantId: string,
+  ): Promise<string> {
+    const year  = new Date().getFullYear();
+    const count = await tx.order.count({ where: { tenantId } });
+    const seq   = String(count + 1).padStart(6, '0');
     return `ORD-${year}-${seq}`;
   }
 }

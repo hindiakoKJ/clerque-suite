@@ -152,9 +152,65 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           messages: ['One or more field values exceed the maximum allowed length.'],
         };
 
-      // Default: treat as 400 for known codes, let 5xx ones become 500
+      // Raw query failed (e.g. bad SQL syntax, incompatible PostgreSQL function) → 400
+      case 'P2010':
+        this.logger.error(`Raw query failed [${err.code}]`, err.message);
+        return {
+          status:   HttpStatus.INTERNAL_SERVER_ERROR,
+          code:     'RAW_QUERY_FAILED',
+          messages: ['A database query failed. Please try again or contact support.'],
+        };
+
+      // Check constraint failed → 400
+      case 'P2004':
+        return {
+          status:   HttpStatus.BAD_REQUEST,
+          code:     'CHECK_CONSTRAINT',
+          messages: ['The submitted data failed a database validation rule.'],
+        };
+
+      // Invalid value type for column → 400
+      case 'P2006':
+        return {
+          status:   HttpStatus.BAD_REQUEST,
+          code:     'INVALID_VALUE',
+          messages: ['One or more field values have an invalid type.'],
+        };
+
+      // Missing required value in query → 400
+      case 'P2012':
+        return {
+          status:   HttpStatus.BAD_REQUEST,
+          code:     'MISSING_REQUIRED_VALUE',
+          messages: ['A required value is missing from the request.'],
+        };
+
+      // Connection pool timeout → 503
+      case 'P2024':
+        this.logger.error(`Connection pool timeout [${err.code}]`, err.message);
+        return {
+          status:   HttpStatus.SERVICE_UNAVAILABLE,
+          code:     'DB_POOL_TIMEOUT',
+          messages: ['The database is temporarily busy. Please try again in a moment.'],
+        };
+
+      // Can't reach DB / timeout at connection level → 503
+      case 'P1001':
+      case 'P1002':
+      case 'P1008':
+        this.logger.error(`Database connection error [${err.code}]`, err.message);
+        return {
+          status:   HttpStatus.SERVICE_UNAVAILABLE,
+          code:     'DB_UNREACHABLE',
+          messages: ['Cannot reach the database. Please try again shortly.'],
+        };
+
+      // Default: unrecognised code — log full details for debugging, return safe generic message
       default:
-        this.logger.error(`Unhandled Prisma error code ${err.code}`, err.message);
+        this.logger.error(
+          `Unhandled Prisma error [${err.code}]: ${err.message}`,
+          err.stack ?? String(err),
+        );
         return {
           status:   HttpStatus.INTERNAL_SERVER_ERROR,
           code:     `PRISMA_${err.code}`,

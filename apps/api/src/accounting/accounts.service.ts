@@ -14,6 +14,8 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   // Assets — Receivables
   { code: '1030', name: 'Accounts Receivable',              type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'AR_ONLY',     isSystem: true  },
   { code: '1031', name: 'Digital Wallet Receivable',        type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY', isSystem: true  },
+  // Assets — Tax Receivable
+  { code: '1045', name: 'CWT Receivable (2307)',            type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   // Assets — VAT
   { code: '1040', name: 'Input VAT',                        type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   // Assets — Inventory
@@ -68,7 +70,9 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '6200', name: 'Equipment Expense',                type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6210', name: 'Tools and Supplies Expense',       type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   // Liabilities — Tax withholding (expanded)
-  { code: '2061', name: 'Creditable Tax Withheld (EWT)',    type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
+  // 2061 = EWT you WITHHOLD from payments to contractors/suppliers → remit to BIR
+  // 1045 = CWT withheld FROM YOU by customers (BIR Form 2307) → your tax credit
+  { code: '2061', name: 'EWT Payable (Withheld from Payees)', type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',      isSystem: false },
 ];
 
 @Injectable()

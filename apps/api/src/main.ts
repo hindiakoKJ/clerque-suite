@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import compression from 'compression';
 import Joi from 'joi';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -15,6 +16,10 @@ async function runSeed(logger: Logger) {
   try {
     const SLUG = 'demo';
     const EMAIL = 'admin@demo.com';
+
+    // Fast-exit: skip seed entirely if demo tenant already exists
+    const count = await prisma.tenant.count({ where: { slug: SLUG } });
+    if (count > 0) { logger.log('Seed: demo tenant exists — skipped', 'Bootstrap'); return; }
 
     const tenant = await prisma.tenant.upsert({
       where: { slug: SLUG },
@@ -91,6 +96,8 @@ async function bootstrap() {
 
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
+
+  app.use(compression());
 
   // Allow configured origins + always allow the known production domain
   const allowedOrigins = [

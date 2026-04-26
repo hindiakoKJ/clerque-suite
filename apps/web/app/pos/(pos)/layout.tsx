@@ -127,8 +127,8 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // Items the current role cannot access appear grayed-out with a lock icon.
   // Backend guards remain the authoritative enforcement layer.
   const navItems: NavItem[] = [
-    makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,      role),
     makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES,     role),
+    makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,      role),
     makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,        role),
     makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,      role),
     makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES,     role),

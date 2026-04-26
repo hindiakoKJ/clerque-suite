@@ -269,16 +269,20 @@ export class PayrollService {
   // ─── My Attendance History ───────────────────────────────────────────────
 
   async getMyAttendance(tenantId: string, userId: string, from?: string, to?: string) {
-    const where: Record<string, unknown> = { tenantId, userId };
-    if (from || to) {
-      where['clockIn'] = {
-        ...(from ? { gte: new Date(from) } : {}),
-        ...(to   ? { lte: new Date(new Date(to).setHours(23, 59, 59, 999)) } : {}),
-      };
-    }
+    const clockInFilter: Prisma.DateTimeFilter | undefined =
+      from || to
+        ? {
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to   ? { lte: new Date(new Date(to).setHours(23, 59, 59, 999)) } : {}),
+          }
+        : undefined;
 
     const entries = await this.prisma.timeEntry.findMany({
-      where: where as Parameters<typeof this.prisma.timeEntry.findMany>[0]['where'],
+      where: {
+        tenantId,
+        userId,
+        ...(clockInFilter ? { clockIn: clockInFilter } : {}),
+      },
       orderBy: { clockIn: 'desc' },
       take: 90, // max 3 months of daily entries
     });

@@ -3,6 +3,6 @@ builder = "nixpacks"
 buildCommand = "npm install && npx prisma generate --schema=packages/db/prisma/schema.prisma && npm run build --workspace=apps/api"
 
 [deploy]
-startCommand = "node apps/api/dist/main"
+startCommand = "npx prisma db push --schema=packages/db/prisma/schema.prisma --accept-data-loss && node apps/api/dist/main"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

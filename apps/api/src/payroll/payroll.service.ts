@@ -59,6 +59,30 @@ export interface ClockStatusDto {
   elapsedMins:  number;
 }
 
+export interface PayRunDto {
+  id: string; label: string; periodStart: string; periodEnd: string;
+  frequency: string; status: string;
+  totalGross: number; totalDeductions: number; totalNet: number;
+  employeeCount: number; processedAt: string | null; notes: string | null; createdAt: string;
+}
+
+export interface PayslipDto {
+  id: string; payRunId: string; payRunLabel: string;
+  userId: string; employeeName: string; position: string | null; department: string | null;
+  periodStart: string; periodEnd: string;
+  basicPay: number; overtimePay: number; allowances: number; grossPay: number;
+  sssContrib: number; philhealthContrib: number; pagibigContrib: number;
+  withholdingTax: number; otherDeductions: number; totalDeductions: number; netPay: number;
+  regularHours: number; overtimeHours: number; createdAt: string;
+}
+
+export interface ContributionSummaryDto {
+  month: string; // YYYY-MM
+  totalSss: number; totalPhilhealth: number; totalPagibig: number;
+  totalWithholdingTax: number; totalDeductions: number; employeeCount: number;
+  rows: { employeeName: string; sss: number; philhealth: number; pagibig: number; withholdingTax: number; totalDeductions: number }[];
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Returns the Monday (00:00:00 Asia/Manila) for the week that contains `date`. */
@@ -80,6 +104,73 @@ function currentMonthBounds(): { from: Date; to: Date } {
 /** Day-of-week index → column label for TimesheetRow (0 = Sun … 6 = Sat) */
 const DOW_KEYS: (keyof Pick<TimesheetRow, 'mon'|'tue'|'wed'|'thu'|'fri'|'sat'|'sun'>)[] =
   ['sun','mon','tue','wed','thu','fri','sat'];
+
+type PayFreq = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
+
+/** SSS 2024 — Employee contribution: 4% of Monthly Salary Credit (floored ₱4k, capped ₱30k) */
+function computeSss(monthlyGross: number, freq: PayFreq): number {
+  const msc = Math.max(4000, Math.min(30000, Math.ceil(monthlyGross / 500) * 500));
+  const monthly = msc * 0.04; // 4% employee share
+  const factor = freq === 'SEMI_MONTHLY' ? 0.5 : freq === 'WEEKLY' ? 7 / 30 : 1;
+  return round2(monthly * factor);
+}
+
+/** PhilHealth 2024 — Employee contribution: 2.5% of salary (min ₱250, max ₱2,500/month) */
+function computePhilHealth(monthlyGross: number, freq: PayFreq): number {
+  const monthlyEmployee = Math.max(250, Math.min(monthlyGross * 0.025, 2500));
+  const factor = freq === 'SEMI_MONTHLY' ? 0.5 : freq === 'WEEKLY' ? 7 / 30 : 1;
+  return round2(monthlyEmployee * factor);
+}
+
+/** Pag-IBIG 2024 — Employee: 1% if salary ≤ ₱1,500; else 2% capped at ₱100/month */
+function computePagibig(monthlyGross: number, freq: PayFreq): number {
+  const monthlyEmployee = monthlyGross <= 1500 ? monthlyGross * 0.01 : Math.min(monthlyGross * 0.02, 100);
+  const factor = freq === 'SEMI_MONTHLY' ? 0.5 : freq === 'WEEKLY' ? 7 / 30 : 1;
+  return round2(monthlyEmployee * factor);
+}
+
+/** BIR TRAIN Law withholding tax — annualize period gross, compute annual bracket tax, pro-rate back */
+function computeWithholdingTax(periodGross: number, freq: PayFreq): number {
+  const periods = freq === 'SEMI_MONTHLY' ? 24 : freq === 'WEEKLY' ? 52 : 12;
+  const annual = periodGross * periods;
+  let annualTax = 0;
+  if (annual <= 250_000) annualTax = 0;
+  else if (annual <= 400_000) annualTax = (annual - 250_000) * 0.15;
+  else if (annual <= 800_000) annualTax = 22_500 + (annual - 400_000) * 0.20;
+  else if (annual <= 2_000_000) annualTax = 102_500 + (annual - 800_000) * 0.25;
+  else if (annual <= 8_000_000) annualTax = 402_500 + (annual - 2_000_000) * 0.30;
+  else annualTax = 2_202_500 + (annual - 8_000_000) * 0.35;
+  return round2(annualTax / periods);
+}
+
+/** Compute basic pay for the period from salary info */
+function computeBasicPay(
+  rate: number | null, type: string | null,
+  regularHours: number, freq: PayFreq,
+): number {
+  if (!rate || !type) return 0;
+  if (type === 'HOURLY') return round2(rate * regularHours);
+  if (type === 'DAILY')  return round2((rate / 8) * regularHours);
+  // MONTHLY: prorate to period
+  if (type === 'MONTHLY') {
+    if (freq === 'SEMI_MONTHLY') return round2(rate / 2);
+    if (freq === 'WEEKLY')       return round2(rate * 12 / 52);
+    return round2(rate);
+  }
+  if (type === 'SEMI_MONTHLY') {
+    if (freq === 'SEMI_MONTHLY') return round2(rate);
+    if (freq === 'MONTHLY')      return round2(rate * 2);
+    return round2(rate * 2 / (52 / 12));
+  }
+  return 0;
+}
+
+/** Normalize frequency to monthly equivalent for statutory contribution lookup */
+function toMonthlyGross(periodGross: number, freq: PayFreq): number {
+  if (freq === 'SEMI_MONTHLY') return periodGross * 2;
+  if (freq === 'WEEKLY')       return round2(periodGross * (52 / 12));
+  return periodGross;
+}
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
@@ -405,6 +496,263 @@ export class PayrollService {
       averageGross,
       departmentBreakdown,
       recentRuns:         [],           // Phase 2
+    };
+  }
+
+  // ─── Pay Runs ────────────────────────────────────────────────────────────
+
+  async createPayRun(
+    tenantId: string,
+    dto: { label: string; periodStart: string; periodEnd: string; frequency: 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY'; notes?: string },
+  ): Promise<PayRunDto> {
+    const run = await this.prisma.payRun.create({
+      data: {
+        tenantId,
+        label:       dto.label,
+        periodStart: new Date(dto.periodStart),
+        periodEnd:   new Date(dto.periodEnd),
+        frequency:   dto.frequency as any,
+        status:      'DRAFT' as any,
+        notes:       dto.notes ?? null,
+      },
+    });
+    return this.serializePayRun(run);
+  }
+
+  async getPayRuns(tenantId: string): Promise<PayRunDto[]> {
+    const runs = await this.prisma.payRun.findMany({
+      where:   { tenantId },
+      orderBy: { periodStart: 'desc' },
+    });
+    return runs.map((r) => this.serializePayRun(r));
+  }
+
+  /** Process a DRAFT pay run: compute payslips from TimeEntry data for each employee */
+  async processPayRun(payRunId: string, tenantId: string, processedById: string): Promise<PayRunDto> {
+    const run = await this.prisma.payRun.findFirst({ where: { id: payRunId, tenantId } });
+    if (!run) throw new NotFoundException('Pay run not found');
+    if ((run.status as string) !== 'DRAFT') throw new BadRequestException('Only DRAFT pay runs can be processed');
+
+    const freq = run.frequency as PayFreq;
+
+    // Get all active employees for this tenant
+    const employees = await this.prisma.user.findMany({
+      where:  { tenantId, isActive: true, role: { notIn: ['SUPER_ADMIN', 'EXTERNAL_AUDITOR'] } },
+      select: { id: true, name: true, position: true, salaryRate: true, salaryType: true, branch: { select: { name: true } } },
+    });
+
+    // Get all approved/closed TimeEntry in the pay period
+    const entries = await this.prisma.timeEntry.findMany({
+      where: {
+        tenantId,
+        status:  { in: ['CLOSED', 'APPROVED'] as any[] },
+        clockIn: { gte: run.periodStart, lte: run.periodEnd },
+      },
+      select: { userId: true, grossHours: true, otHours: true },
+    });
+
+    // Aggregate hours per employee
+    const hoursByEmployee = new Map<string, { regular: number; ot: number }>();
+    for (const e of entries) {
+      const h = hoursByEmployee.get(e.userId) ?? { regular: 0, ot: 0 };
+      h.regular += Number(e.grossHours ?? 0);
+      h.ot      += Number(e.otHours   ?? 0);
+      hoursByEmployee.set(e.userId, h);
+    }
+
+    // Generate payslips
+    const payslipData: any[] = [];
+    let totalGross = 0;
+    let totalDeductions = 0;
+    let totalNet = 0;
+
+    for (const emp of employees) {
+      const hours  = hoursByEmployee.get(emp.id) ?? { regular: 0, ot: 0 };
+      const rate   = emp.salaryRate ? Number(emp.salaryRate) : null;
+      const type   = emp.salaryType as string | null;
+
+      const basicPay    = computeBasicPay(rate, type, hours.regular, freq);
+      const hourlyRate  = basicPay > 0 && hours.regular > 0 ? basicPay / hours.regular : (rate ?? 0) / 8;
+      const otPay       = round2(hourlyRate * hours.ot * 1.25); // PH Labor Code 125%
+      const grossPay    = round2(basicPay + otPay);
+      if (grossPay === 0) continue; // Skip employees with zero earnings
+
+      const monthlyGross = toMonthlyGross(grossPay, freq);
+      const sss          = computeSss(monthlyGross, freq);
+      const philhealth   = computePhilHealth(monthlyGross, freq);
+      const pagibig      = computePagibig(monthlyGross, freq);
+      const wht          = computeWithholdingTax(grossPay, freq);
+      const totalDed     = round2(sss + philhealth + pagibig + wht);
+      const netPay       = round2(grossPay - totalDed);
+
+      payslipData.push({
+        tenantId,
+        payRunId,
+        userId:            emp.id,
+        employeeName:      emp.name,
+        position:          emp.position,
+        department:        emp.branch?.name ?? null,
+        basicPay,
+        overtimePay:       otPay,
+        allowances:        0,
+        grossPay,
+        sssContrib:        sss,
+        philhealthContrib: philhealth,
+        pagibigContrib:    pagibig,
+        withholdingTax:    wht,
+        otherDeductions:   0,
+        totalDeductions:   totalDed,
+        netPay,
+        regularHours:      round2(hours.regular),
+        overtimeHours:     round2(hours.ot),
+      });
+
+      totalGross      += grossPay;
+      totalDeductions += totalDed;
+      totalNet        += netPay;
+    }
+
+    // Atomically: delete old payslips (re-processing), insert new, update run status
+    const updatedRun = await this.prisma.$transaction(async (tx) => {
+      await tx.payslip.deleteMany({ where: { payRunId } });
+      await tx.payslip.createMany({ data: payslipData });
+      return tx.payRun.update({
+        where: { id: payRunId },
+        data: {
+          status:        'COMPLETED' as any,
+          totalGross:    round2(totalGross),
+          totalDeductions: round2(totalDeductions),
+          totalNet:      round2(totalNet),
+          employeeCount: payslipData.length,
+          processedAt:   new Date(),
+          processedById,
+        },
+      });
+    });
+
+    return this.serializePayRun(updatedRun);
+  }
+
+  async cancelPayRun(payRunId: string, tenantId: string): Promise<PayRunDto> {
+    const run = await this.prisma.payRun.findFirst({ where: { id: payRunId, tenantId } });
+    if (!run) throw new NotFoundException('Pay run not found');
+    if ((run.status as string) === 'COMPLETED') throw new BadRequestException('Completed pay runs cannot be cancelled');
+    const updated = await this.prisma.payRun.update({
+      where: { id: payRunId },
+      data: { status: 'CANCELLED' as any },
+    });
+    return this.serializePayRun(updated);
+  }
+
+  // ─── Payslips ─────────────────────────────────────────────────────────────
+
+  async getPayslips(tenantId: string, payRunId?: string): Promise<PayslipDto[]> {
+    const slips = await this.prisma.payslip.findMany({
+      where:   { tenantId, ...(payRunId ? { payRunId } : {}) },
+      include: { payRun: { select: { label: true, periodStart: true, periodEnd: true } } },
+      orderBy: [{ payRun: { periodStart: 'desc' } }, { employeeName: 'asc' }],
+    });
+    return slips.map((s) => this.serializePayslip(s));
+  }
+
+  async getMyPayslips(tenantId: string, userId: string): Promise<PayslipDto[]> {
+    const slips = await this.prisma.payslip.findMany({
+      where:   { tenantId, userId },
+      include: { payRun: { select: { label: true, periodStart: true, periodEnd: true } } },
+      orderBy: [{ payRun: { periodStart: 'desc' } }],
+    });
+    return slips.map((s) => this.serializePayslip(s));
+  }
+
+  // ─── Contribution Summary ─────────────────────────────────────────────────
+
+  async getContributions(tenantId: string, month?: string): Promise<ContributionSummaryDto> {
+    // Default to current month YYYY-MM
+    const m = month ?? new Date().toISOString().slice(0, 7);
+    const from = new Date(`${m}-01T00:00:00.000Z`);
+    const to   = new Date(from.getFullYear(), from.getMonth() + 1, 1);
+
+    const slips = await this.prisma.payslip.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: from, lt: to },
+      },
+      select: {
+        employeeName:     true,
+        sssContrib:       true,
+        philhealthContrib: true,
+        pagibigContrib:   true,
+        withholdingTax:   true,
+        totalDeductions:  true,
+      },
+    });
+
+    let totalSss = 0; let totalPh = 0; let totalPg = 0; let totalWht = 0; let totalDed = 0;
+    // Aggregate per employee
+    const empMap = new Map<string, { sss: number; ph: number; pg: number; wht: number; ded: number }>();
+    for (const s of slips) {
+      totalSss += Number(s.sssContrib);
+      totalPh  += Number(s.philhealthContrib);
+      totalPg  += Number(s.pagibigContrib);
+      totalWht += Number(s.withholdingTax);
+      totalDed += Number(s.totalDeductions);
+      const e   = empMap.get(s.employeeName) ?? { sss:0, ph:0, pg:0, wht:0, ded:0 };
+      e.sss += Number(s.sssContrib); e.ph += Number(s.philhealthContrib);
+      e.pg  += Number(s.pagibigContrib); e.wht += Number(s.withholdingTax);
+      e.ded += Number(s.totalDeductions);
+      empMap.set(s.employeeName, e);
+    }
+
+    return {
+      month: m,
+      totalSss: round2(totalSss), totalPhilhealth: round2(totalPh),
+      totalPagibig: round2(totalPg), totalWithholdingTax: round2(totalWht),
+      totalDeductions: round2(totalDed), employeeCount: empMap.size,
+      rows: Array.from(empMap.entries()).map(([name, d]) => ({
+        employeeName: name,
+        sss: round2(d.sss), philhealth: round2(d.ph), pagibig: round2(d.pg),
+        withholdingTax: round2(d.wht), totalDeductions: round2(d.ded),
+      })),
+    };
+  }
+
+  // ─── Serializers ─────────────────────────────────────────────────────────
+
+  private serializePayRun(r: any): PayRunDto {
+    return {
+      id: r.id, label: r.label,
+      periodStart: r.periodStart.toISOString(),
+      periodEnd: r.periodEnd.toISOString(),
+      frequency: r.frequency, status: r.status,
+      totalGross: Number(r.totalGross), totalDeductions: Number(r.totalDeductions),
+      totalNet: Number(r.totalNet), employeeCount: r.employeeCount,
+      processedAt: r.processedAt?.toISOString() ?? null,
+      notes: r.notes ?? null, createdAt: r.createdAt.toISOString(),
+    };
+  }
+
+  private serializePayslip(s: any): PayslipDto {
+    return {
+      id: s.id, payRunId: s.payRunId,
+      payRunLabel: s.payRun?.label ?? '',
+      userId: s.userId, employeeName: s.employeeName,
+      position: s.position ?? null, department: s.department ?? null,
+      periodStart: s.payRun?.periodStart?.toISOString() ?? '',
+      periodEnd:   s.payRun?.periodEnd?.toISOString()   ?? '',
+      basicPay:    Number(s.basicPay),
+      overtimePay: Number(s.overtimePay),
+      allowances:  Number(s.allowances),
+      grossPay:    Number(s.grossPay),
+      sssContrib:        Number(s.sssContrib),
+      philhealthContrib: Number(s.philhealthContrib),
+      pagibigContrib:    Number(s.pagibigContrib),
+      withholdingTax:    Number(s.withholdingTax),
+      otherDeductions:   Number(s.otherDeductions),
+      totalDeductions:   Number(s.totalDeductions),
+      netPay:            Number(s.netPay),
+      regularHours:      Number(s.regularHours),
+      overtimeHours:     Number(s.overtimeHours),
+      createdAt:         s.createdAt.toISOString(),
     };
   }
 }

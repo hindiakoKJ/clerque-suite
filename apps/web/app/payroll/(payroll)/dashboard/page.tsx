@@ -231,7 +231,7 @@ export default function PayrollDashboard() {
                 <h2 className="text-sm font-semibold text-foreground">Recent Pay Runs</h2>
               </div>
               <button
-                onClick={() => router.push('/payroll/coming-soon/runs')}
+                onClick={() => router.push('/payroll/runs')}
                 className="text-xs font-medium flex items-center gap-1 transition-colors hover:opacity-80"
                 style={{ color: 'var(--accent)' }}
               >

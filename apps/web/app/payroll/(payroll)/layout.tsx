@@ -22,6 +22,9 @@ const PAY_DASHBOARD_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 
 const TIMESHEETS_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'SALES_LEAD'] as const;
 const PAY_STAFF_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'MDM'] as const;
 const PAY_RUNS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER'] as const;
+const PAYSLIPS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER',
+                              'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
+                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE', 'EXTERNAL_AUDITOR'] as const;
 
 function inPayrollRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));
@@ -72,9 +75,9 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
     makePayNavItem('/payroll/dashboard',             'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role),
     makePayNavItem('/payroll/timesheets',            'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role),
     makePayNavItem('/payroll/staff',                 'Staff',          UserCheck,       PAY_STAFF_ROLES,     role),
-    makePayNavItem('/payroll/coming-soon/runs',          'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
-    makePayNavItem('/payroll/coming-soon/payslips',      'Payslips',       FileText,        PAY_RUNS_ROLES,      role),
-    makePayNavItem('/payroll/coming-soon/contributions', 'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
+    makePayNavItem('/payroll/runs',                      'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
+    makePayNavItem('/payroll/payslips',                  'Payslips',       FileText,        PAYSLIPS_ROLES,      role),
+    makePayNavItem('/payroll/contributions',             'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
     makePayNavItem('/payroll/coming-soon/reports',       'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
   ];
 

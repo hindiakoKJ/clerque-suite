@@ -4,12 +4,13 @@ import {
   Post,
   Body,
   Query,
+  Param,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, Max, IsEnum, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard }   from '../auth/guards/roles.guard';
@@ -33,6 +34,14 @@ class ClockOutDto {
   @Max(120)
   @Type(() => Number)
   breakMins?: number;
+}
+
+class CreatePayRunDto {
+  @IsString() label: string;
+  @IsDateString() periodStart: string;
+  @IsDateString() periodEnd: string;
+  @IsEnum(['WEEKLY', 'SEMI_MONTHLY', 'MONTHLY']) frequency: 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
+  @IsOptional() @IsString() notes?: string;
 }
 
 // ─── Controller ───────────────────────────────────────────────────────────────
@@ -114,6 +123,75 @@ export class PayrollController {
   @Get('summary')
   getSummary(@CurrentUser() user: JwtPayload) {
     return this.payrollService.getSummary(user.tenantId!);
+  }
+
+  // ─── Pay Runs ────────────────────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'List all pay runs' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Get('runs')
+  getPayRuns(@CurrentUser() user: JwtPayload) {
+    return this.payrollService.getPayRuns(user.tenantId!);
+  }
+
+  @ApiOperation({ summary: 'Create a new pay run (DRAFT)' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Post('runs')
+  @HttpCode(HttpStatus.CREATED)
+  createPayRun(@CurrentUser() user: JwtPayload, @Body() dto: CreatePayRunDto) {
+    return this.payrollService.createPayRun(user.tenantId!, dto);
+  }
+
+  @ApiOperation({ summary: 'Process a DRAFT pay run (generate payslips)' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Post('runs/:id/process')
+  @HttpCode(HttpStatus.OK)
+  processPayRun(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.payrollService.processPayRun(id, user.tenantId!, user.sub);
+  }
+
+  @ApiOperation({ summary: 'Cancel a pay run' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Post('runs/:id/cancel')
+  @HttpCode(HttpStatus.OK)
+  cancelPayRun(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.payrollService.cancelPayRun(id, user.tenantId!);
+  }
+
+  // ─── Payslips ─────────────────────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'List payslips (optionally filter by pay run)' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Get('payslips')
+  getPayslips(
+    @CurrentUser() user: JwtPayload,
+    @Query('payRunId') payRunId?: string,
+  ) {
+    return this.payrollService.getPayslips(user.tenantId!, payRunId);
+  }
+
+  @ApiOperation({ summary: 'My own payslips (any employee)' })
+  @Roles(
+    'GENERAL_EMPLOYEE', 'CASHIER', 'WAREHOUSE_STAFF', 'SALES_LEAD',
+    'BRANCH_MANAGER', 'BUSINESS_OWNER', 'PAYROLL_MASTER', 'MDM',
+    'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
+  )
+  @Get('payslips/mine')
+  getMyPayslips(@CurrentUser() user: JwtPayload) {
+    return this.payrollService.getMyPayslips(user.tenantId!, user.sub);
+  }
+
+  // ─── Contributions ────────────────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'Monthly contribution summary (SSS/PhilHealth/Pag-IBIG/WHT)' })
+  @ApiQuery({ name: 'month', description: 'YYYY-MM (defaults to current month)', required: false })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Get('contributions')
+  getContributions(
+    @CurrentUser() user: JwtPayload,
+    @Query('month') month?: string,
+  ) {
+    return this.payrollService.getContributions(user.tenantId!, month);
   }
 }
 

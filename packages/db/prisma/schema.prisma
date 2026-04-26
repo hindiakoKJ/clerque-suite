@@ -364,6 +364,8 @@ model Tenant {
   expenses            ExpenseEntry[]
   customers           Customer[]
   rawMaterials        RawMaterial[]
+  payRuns             PayRun[]
+  payslips            Payslip[]
 
   @@map("tenants")
 }
@@ -477,6 +479,7 @@ model User {
   ordersAsVoidedBy     Order[]        @relation("VoidedByUser")
   discountsAuthorized  OrderDiscount[] @relation("AuthorizedByUser")
   timeEntries          TimeEntry[]
+  payslips             Payslip[]
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -1494,10 +1497,81 @@ model TimeEntry {
   @@map("time_entries")
 }
 
+/// A payroll processing batch covering a specific period for all employees.
+model PayRun {
+  id            String       @id @default(cuid())
+  tenantId      String
+  label         String
+  periodStart   DateTime
+  periodEnd     DateTime
+  frequency     PayFrequency @default(SEMI_MONTHLY)
+  status        PayRunStatus @default(DRAFT)
+  totalGross    Decimal      @default(0) @db.Decimal(14, 2)
+  totalDeductions Decimal    @default(0) @db.Decimal(14, 2)
+  totalNet      Decimal      @default(0) @db.Decimal(14, 2)
+  employeeCount Int          @default(0)
+  processedAt   DateTime?
+  processedById String?
+  notes         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payslips      Payslip[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, periodStart])
+  @@map("pay_runs")
+}
+
+/// Individual payslip generated for one employee within a PayRun.
+model Payslip {
+  id                String   @id @default(cuid())
+  tenantId          String
+  payRunId          String
+  userId            String
+  employeeName      String
+  position          String?
+  department        String?
+  basicPay          Decimal  @db.Decimal(14, 2)
+  overtimePay       Decimal  @default(0) @db.Decimal(14, 2)
+  allowances        Decimal  @default(0) @db.Decimal(14, 2)
+  grossPay          Decimal  @db.Decimal(14, 2)
+  sssContrib        Decimal  @default(0) @db.Decimal(14, 2)
+  philhealthContrib Decimal  @default(0) @db.Decimal(14, 2)
+  pagibigContrib    Decimal  @default(0) @db.Decimal(14, 2)
+  withholdingTax    Decimal  @default(0) @db.Decimal(14, 2)
+  otherDeductions   Decimal  @default(0) @db.Decimal(14, 2)
+  totalDeductions   Decimal  @db.Decimal(14, 2)
+  netPay            Decimal  @db.Decimal(14, 2)
+  regularHours      Decimal  @db.Decimal(8, 2)
+  overtimeHours     Decimal  @default(0) @db.Decimal(8, 2)
+  createdAt         DateTime @default(now())
+  payRun            PayRun   @relation(fields: [payRunId], references: [id], onDelete: Cascade)
+  user              User     @relation(fields: [userId], references: [id])
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([payRunId])
+  @@index([tenantId, userId])
+  @@index([tenantId, payRunId])
+  @@map("payslips")
+}
+
 /// Time-tracking punch status
 enum TimeEntryStatus {
   OPEN      // Clocked in; no clock-out yet
   CLOSED    // Clock-out recorded; ready for payroll processing
   APPROVED  // Approved by manager / payroll master
   REJECTED  // Disputed entry; will not be paid
+}
+
+enum PayFrequency {
+  WEEKLY
+  SEMI_MONTHLY
+  MONTHLY
+}
+
+enum PayRunStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
 }

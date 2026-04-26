@@ -1,7 +1,9 @@
 'use client';
 import { create } from 'zustand';
 import { computeVat, computeDiscount, round2 } from '@/lib/pos/utils';
+import { getLinePromoDiscount } from '@/lib/pos/promotions';
 import type { CartItemModifier, TaxStatus } from '@repo/shared-types';
+import type { ActivePromotion } from '@/lib/pos/promotions';
 
 export type { CartItemModifier };
 
@@ -19,9 +21,11 @@ export interface CartLine {
   variantId?: string;
   quantity: number;
   unitPrice: number;      // base price + sum of modifier price adjustments
-  itemDiscount: number;
+  itemDiscount: number;   // per-unit discount (promo-applied or manual)
   modifiers?: CartItemModifier[];
   lineKey: string;        // unique key: productId + variantId + sorted optionIds
+  /** Set when a promotion is auto-applied to this line. */
+  promotionApplied?: { promoId: string; promoName: string };
 }
 
 export interface CartDiscount {
@@ -59,6 +63,13 @@ interface CartState {
   removeItem: (lineKey: string) => void;
   updateQty: (lineKey: string, qty: number) => void;
   setItemDiscount: (lineKey: string, discount: number) => void;
+
+  /**
+   * Auto-apply the best active promotion to each cart line.
+   * Called from the terminal page whenever active promotions change.
+   * Lines with no applicable promotion have their promo discount cleared.
+   */
+  applyPromoDiscounts: (promotions: ActivePromotion[]) => void;
 
   /**
    * Apply PWD/SC discount.
@@ -125,6 +136,25 @@ export const useCartStore = create<CartState>()((set, get) => ({
   setItemDiscount: (lineKey, discount) => {
     set((state) => ({
       lines: state.lines.map((l) => l.lineKey === lineKey ? { ...l, itemDiscount: discount } : l),
+    }));
+  },
+
+  applyPromoDiscounts: (promotions) => {
+    set((state) => ({
+      lines: state.lines.map((line) => {
+        const result = getLinePromoDiscount(line, promotions);
+        if (!result) {
+          // Clear any previously applied promo discount
+          return { ...line, itemDiscount: 0, promotionApplied: undefined };
+        }
+        // Convert total discount to per-unit so quantity changes auto-adjust
+        const discountPerUnit = round2(result.discountAmount / line.quantity);
+        return {
+          ...line,
+          itemDiscount: discountPerUnit,
+          promotionApplied: { promoId: result.promoId, promoName: result.promoName },
+        };
+      }),
     }));
   },
 

@@ -1,5 +1,5 @@
 'use client';
-import { Minus, Plus, Trash2, Tag, ShieldOff } from 'lucide-react';
+import { Minus, Plus, Trash2, Tag, ShieldOff, Sparkles } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useCartStore } from '@/store/pos/cart';
 import { Button } from '@/components/ui/button';
@@ -65,6 +65,13 @@ export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
                       </p>
                     )}
                     <p className="text-xs text-muted-foreground">{formatPeso(line.unitPrice)} each</p>
+                    {/* Promotion badge */}
+                    {line.promotionApplied && line.itemDiscount > 0 && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full mt-0.5">
+                        <Sparkles className="h-2.5 w-2.5" />
+                        {line.promotionApplied.promoName} −{formatPeso(line.itemDiscount * line.quantity)}
+                      </span>
+                    )}
                   </div>
                   <button
                     onClick={() => removeItem(line.lineKey)}
@@ -153,6 +160,17 @@ export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
               <span>Subtotal</span>
               <span>{formatPeso(sub)}</span>
             </div>
+            {(() => {
+              const promoTotal = lines.reduce(
+                (s, l) => s + (l.promotionApplied ? l.itemDiscount * l.quantity : 0), 0,
+              );
+              return promoTotal > 0 ? (
+                <div className="flex justify-between text-sm text-emerald-600 dark:text-emerald-400">
+                  <span className="flex items-center gap-1"><Sparkles className="h-3 w-3" />Promo savings</span>
+                  <span>-{formatPeso(promoTotal)}</span>
+                </div>
+              ) : null;
+            })()}
             {disc > 0 && (
               <div className="flex justify-between text-sm text-red-500">
                 <span>Discount</span>

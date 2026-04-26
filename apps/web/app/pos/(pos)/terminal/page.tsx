@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ShoppingCart, X } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,6 +13,7 @@ import { useCartStore } from '@/store/pos/cart';
 import { useAuthStore } from '@/store/auth';
 import { useOnlineStatus } from '@/hooks/pos/useOnlineStatus';
 import { useShiftStore } from '@/store/pos/shift';
+import { useActivePromotions } from '@/hooks/pos/useActivePromotions';
 import { api } from '@/lib/api';
 import { db } from '@/lib/pos/db';
 import { computeVat } from '@/lib/pos/utils';
@@ -31,11 +32,30 @@ export default function PosTerminal() {
   const user      = useAuthStore((s) => s.user);
   const branchId  = useCartStore((s) => s.branchId);
   const taxStatus = useCartStore((s) => s.taxStatus);
-  const { lines, orderDiscount, grandTotal, vatAmount, subtotal, totalDiscount, clearCart } = useCartStore();
+  const { lines, orderDiscount, grandTotal, vatAmount, subtotal, totalDiscount, clearCart, applyPromoDiscounts } = useCartStore();
 
   const activeBranchId = branchId ?? user?.branchId ?? '';
   const tenantId       = user?.tenantId ?? '';
   const cartCount      = lines.reduce((s, l) => s + l.quantity, 0);
+
+  // ── Promotions: auto-apply best deal per cart line ──────────────────────
+  // Track only lineKey + quantity so applyPromoDiscounts() (which modifies itemDiscount)
+  // doesn't create a feedback loop with this memo.
+  const lineFingerprint = useMemo(
+    () => lines.map((l) => `${l.lineKey}:${l.quantity}`).join(','),
+    [lines],
+  );
+  const productIds = useMemo(
+    () => [...new Set(lines.map((l) => l.product.id))],
+    [lineFingerprint], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const { promotions } = useActivePromotions(productIds);
+
+  // Re-apply whenever active promotions change OR cart line composition changes.
+  // (itemDiscount changes don't affect lineFingerprint, so no infinite loop.)
+  useEffect(() => {
+    applyPromoDiscounts(promotions);
+  }, [promotions, lineFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Products (write-through to Dexie) ──────────────────────────────────
   const { data: products = [], isLoading: loadingProducts } = useQuery<CachedProduct[]>({
@@ -113,16 +133,29 @@ export default function PosTerminal() {
         costPrice: l.product.costPrice,
         isVatable: l.product.isVatable,
         modifiers: l.modifiers ?? [],
+        promoId:   l.promotionApplied?.promoId,
+        promoName: l.promotionApplied?.promoName,
       })),
       payments,
-      discounts: orderDiscount ? [{
-        discountType: orderDiscount.type,
-        discountAmount: orderDiscount.discountOnBase,
-        discountPercent: orderDiscount.percent,
-        reason: taxStatus === 'VAT'
-          ? `${orderDiscount.label} — 20% of VAT-excl base ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`
-          : `${orderDiscount.label} — 20% of gross ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`,
-      }] : [],
+      discounts: [
+        // Per-line promo discounts (aggregated for the order-level discount list)
+        ...lines
+          .filter((l) => l.promotionApplied && l.itemDiscount > 0)
+          .map((l) => ({
+            discountType:    'PROMOTION' as const,
+            discountAmount:  l.itemDiscount * l.quantity,
+            discountPercent: undefined as number | undefined,
+            reason: `Promo: ${l.promotionApplied!.promoName} on ${l.product.name}`,
+          })),
+        ...(orderDiscount ? [{
+          discountType: orderDiscount.type,
+          discountAmount: orderDiscount.discountOnBase,
+          discountPercent: orderDiscount.percent,
+          reason: taxStatus === 'VAT'
+            ? `${orderDiscount.label} — 20% of VAT-excl base ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`
+            : `${orderDiscount.label} — 20% of gross ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`,
+        }] : []),
+      ],
       subtotal: sub,
       discountAmount: disc,
       vatAmount: vat,

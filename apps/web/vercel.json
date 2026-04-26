@@ -1,5 +1,0 @@
-{
-  "framework": "nextjs",
-  "installCommand": "cd ../.. && npm install --workspaces --include-workspace-root && npm run build --workspace=packages/shared-types",
-  "buildCommand": "npm run build"
-}

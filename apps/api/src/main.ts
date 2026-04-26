@@ -6,6 +6,75 @@ import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/prisma-exception.filter';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 import { envValidationSchema } from './common/config/env.validation';
+import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+
+// ── Bootstrap seed — runs on every start; upsert-safe, no duplicates ─────────
+async function runSeed(logger: Logger) {
+  const prisma = new PrismaClient();
+  try {
+    const SLUG = 'demo';
+    const EMAIL = 'admin@demo.com';
+
+    const tenant = await prisma.tenant.upsert({
+      where: { slug: SLUG },
+      update: {},
+      create: {
+        name: 'Demo Business', slug: SLUG,
+        businessType: 'RETAIL', status: 'ACTIVE',
+        tier: 'TIER_1', branchQuota: 3, cashierSeatQuota: 5,
+      },
+    });
+
+    const branch = await prisma.branch.upsert({
+      where: { id: `seed-branch-${tenant.id}` },
+      update: {},
+      create: { id: `seed-branch-${tenant.id}`, tenantId: tenant.id, name: 'Main Branch', isActive: true },
+    });
+
+    const existing = await prisma.user.findFirst({ where: { tenantId: tenant.id, email: EMAIL } });
+    if (!existing) {
+      const hash = await bcrypt.hash('Admin1234!', 12);
+      await prisma.user.create({
+        data: {
+          tenantId: tenant.id, branchId: branch.id, email: EMAIL,
+          passwordHash: hash, name: 'Admin', role: 'BUSINESS_OWNER', isActive: true,
+          appAccess: { create: [
+            { appCode: 'POS',     level: 'FULL' },
+            { appCode: 'LEDGER',  level: 'FULL' },
+            { appCode: 'PAYROLL', level: 'FULL' },
+          ]},
+        },
+      });
+      logger.log(`Seed: created admin@demo.com (tenant: ${SLUG})`, 'Bootstrap');
+    } else {
+      logger.log(`Seed: demo tenant already exists — skipped`, 'Bootstrap');
+    }
+
+    // Cashier
+    const cashierEmail = 'cashier@demo.com';
+    const cashierExists = await prisma.user.findFirst({ where: { tenantId: tenant.id, email: cashierEmail } });
+    if (!cashierExists) {
+      const hash = await bcrypt.hash('Cashier1234!', 12);
+      await prisma.user.create({
+        data: {
+          tenantId: tenant.id, branchId: branch.id, email: cashierEmail,
+          passwordHash: hash, name: 'Demo Cashier', role: 'CASHIER', isActive: true,
+          appAccess: { create: [
+            { appCode: 'POS',     level: 'OPERATOR' },
+            { appCode: 'LEDGER',  level: 'NONE' },
+            { appCode: 'PAYROLL', level: 'CLOCK_ONLY' },
+          ]},
+        },
+      });
+      logger.log(`Seed: created cashier@demo.com`, 'Bootstrap');
+    }
+  } catch (err) {
+    logger.error(`Seed failed (non-fatal): ${(err as Error).message}`, 'Bootstrap');
+  } finally {
+    await prisma.$disconnect();
+  }
+}
 
 async function bootstrap() {
   // ── Validate environment variables before anything else starts ─────────────
@@ -20,12 +89,16 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') ?? ['http://localhost:3000'],
-    credentials: true,
-  });
+  // Allow configured origins + always allow the known production domain
+  const allowedOrigins = [
+    ...(process.env.ALLOWED_ORIGINS?.split(',') ?? []),
+    'http://localhost:3000',
+    'https://clerque.hnscorpph.com',
+  ];
+  app.enableCors({ origin: allowedOrigins, credentials: true });
 
   app.setGlobalPrefix('api/v1');
 
@@ -84,6 +157,9 @@ async function bootstrap() {
 
   const port = process.env.PORT ?? 3001;
   await app.listen(port);
-  Logger.log(`🚀 Clerque API running on port ${port}`, 'Bootstrap');
+  logger.log(`🚀 Clerque API running on port ${port}`);
+
+  // Run seed after server is up so DB connection is guaranteed
+  await runSeed(logger);
 }
 bootstrap();

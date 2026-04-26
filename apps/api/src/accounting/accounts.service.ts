@@ -78,11 +78,18 @@ export class AccountsService {
   // ── Seed defaults for a new tenant ──────────────────────────────────────────
 
   async seedDefaultAccounts(tenantId: string): Promise<void> {
-    const existing = await this.prisma.account.count({ where: { tenantId } });
-    if (existing > 0) return;
+    // Fetch only the codes that already exist so we can insert the missing ones.
+    // This lets new accounts added to DEFAULT_ACCOUNTS be back-filled for
+    // existing tenants without touching or duplicating anything already there.
+    const existingCodes = await this.prisma.account
+      .findMany({ where: { tenantId }, select: { code: true } })
+      .then((rows) => new Set(rows.map((r) => r.code)));
+
+    const missing = DEFAULT_ACCOUNTS.filter((a) => !existingCodes.has(a.code));
+    if (missing.length === 0) return;
 
     await this.prisma.account.createMany({
-      data: DEFAULT_ACCOUNTS.map((a) => ({ ...a, tenantId })),
+      data: missing.map((a) => ({ ...a, tenantId })),
       skipDuplicates: true,
     });
   }

@@ -6,19 +6,25 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
-import { UsersService, CreateUserDto, UpdateUserDto } from './users.service';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
-interface ResetPasswordBody { newPassword: string; }
-
+@ApiTags('Users')
+@ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('users')
 export class UsersController {
@@ -31,38 +37,40 @@ export class UsersController {
     return this.usersService.getBranches(user.tenantId!);
   }
 
-  // List staff (owner sees all, manager sees their branch only)
-  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER')
+  // List staff — owner/payroll_master see salary fields; others see masked response
+  @Roles('BUSINESS_OWNER', 'MDM', 'BRANCH_MANAGER', 'SALES_LEAD', 'PAYROLL_MASTER')
   @Get()
   findAll(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
     const filterBranchId =
-      user.role === 'BRANCH_MANAGER' ? (user.branchId ?? undefined) : branchId;
-    return this.usersService.findAll(user.tenantId!, filterBranchId);
+      user.role === 'BRANCH_MANAGER' || user.role === 'MDM' || user.role === 'SALES_LEAD'
+        ? (user.branchId ?? undefined)
+        : branchId;
+    return this.usersService.findAll(user.tenantId!, filterBranchId, user.role);
   }
 
-  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER')
+  @Roles('BUSINESS_OWNER', 'MDM', 'BRANCH_MANAGER', 'SALES_LEAD', 'PAYROLL_MASTER')
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.usersService.findOne(user.tenantId!, id);
+    return this.usersService.findOne(user.tenantId!, id, user.role);
   }
 
-  // Create staff — only owner
-  @Roles('BUSINESS_OWNER')
+  // Create staff — BUSINESS_OWNER and MDM can add employees
+  @Roles('BUSINESS_OWNER', 'MDM')
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {
     return this.usersService.create(user.tenantId!, dto);
   }
 
-  // Update user — only owner
-  @Roles('BUSINESS_OWNER')
+  // Update user — BUSINESS_OWNER and MDM can edit employee details
+  @Roles('BUSINESS_OWNER', 'MDM')
   @Patch(':id')
   update(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
   ) {
-    return this.usersService.update(user.tenantId!, id, dto);
+    return this.usersService.update(user.tenantId!, id, dto, user.role);
   }
 
   // Reset password — only owner
@@ -72,8 +80,28 @@ export class UsersController {
   resetPassword(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: ResetPasswordBody,
+    @Body() body: ResetPasswordDto,
   ) {
     return this.usersService.resetPassword(user.tenantId!, id, body.newPassword);
+  }
+
+  /**
+   * Toggle MDM role — BUSINESS_OWNER only.
+   *
+   * Promotes a staff member to MDM (Master Data Manager) or demotes them back
+   * to GENERAL_EMPLOYEE. Sessions are invalidated immediately on change.
+   * All actions are recorded in the immutable AuditLog.
+   */
+  @Roles('BUSINESS_OWNER')
+  @Patch(':id/toggle-mdm')
+  @HttpCode(HttpStatus.OK)
+  toggleMdm(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Req() req: Request,
+  ) {
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+             ?? req.socket?.remoteAddress;
+    return this.usersService.assignMdmRole(user.tenantId!, id, user.sub, ip);
   }
 }

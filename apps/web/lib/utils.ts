@@ -23,3 +23,35 @@ export function formatTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' });
 }
+
+/**
+ * Download a file from an authenticated API endpoint.
+ * Reads the Bearer token from the persisted auth store in localStorage,
+ * fetches the resource, and triggers a browser download.
+ */
+export async function downloadAuthFile(url: string, filename: string): Promise<void> {
+  let token: string | null = null;
+  try {
+    const raw = localStorage.getItem('app-auth');
+    if (raw) {
+      const { state } = JSON.parse(raw) as { state: { accessToken: string | null } };
+      token = state.accessToken;
+    }
+  } catch { /* ignore */ }
+
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href     = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(blobUrl);
+}

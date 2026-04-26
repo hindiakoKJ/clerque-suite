@@ -1,11 +1,14 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
 
+@ApiTags('Reports')
+@ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('reports')
 export class ReportsController {
@@ -35,6 +38,57 @@ export class ReportsController {
     @Param('shiftId') shiftId: string,
   ) {
     return this.reportsService.getShiftReport(user.tenantId!, shiftId);
+  }
+
+  // ─── Z-Read endpoints (BIR CAS daily tamper-proof totals) ─────────────────
+
+  /**
+   * Generate (or retrieve) the Z-Read for a specific day.
+   * POST is idempotent — calling multiple times for the same date returns the existing record.
+   */
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'FINANCE_LEAD', 'ACCOUNTANT')
+  @Post('z-read')
+  @HttpCode(HttpStatus.OK)
+  generateZRead(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId: string,
+    @Query('date') date?: string,
+  ) {
+    return this.reportsService.generateZRead(
+      user.tenantId!,
+      branchId ?? user.branchId!,
+      date ?? this.todayPH(),
+      user.sub,
+    );
+  }
+
+  /** List Z-Read records for the tenant (most recent first). */
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'FINANCE_LEAD', 'ACCOUNTANT', 'BOOKKEEPER')
+  @Get('z-read')
+  listZReads(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.reportsService.listZReadLogs(
+      user.tenantId!,
+      branchId,
+      limit ? parseInt(limit) : 30,
+    );
+  }
+
+  /**
+   * Generate (or retrieve) the X-Read for a closed shift.
+   * POST is idempotent — duplicate calls return the existing record.
+   */
+  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'ACCOUNTANT')
+  @Post('x-read/:shiftId')
+  @HttpCode(HttpStatus.OK)
+  generateXRead(
+    @CurrentUser() user: JwtPayload,
+    @Param('shiftId') shiftId: string,
+  ) {
+    return this.reportsService.generateXRead(user.tenantId!, shiftId, user.sub);
   }
 
   private todayPH(): string {

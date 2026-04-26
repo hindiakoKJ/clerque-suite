@@ -1,18 +1,25 @@
 import {
   Controller, Get, Post, Patch, Delete,
-  Param, Body, Query, UseGuards,
+  Param, Body, Query, UseGuards, ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
-import { AccountsService, CreateAccountDto, UpdateAccountDto } from './accounts.service';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { AccountsService } from './accounts.service';
+import { CreateAccountDto } from './dto/create-account.dto';
+import { UpdateAccountDto } from './dto/update-account.dto';
 
+@ApiTags('Accounting')
+@ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('accounting/accounts')
 export class AccountsController {
   constructor(private readonly svc: AccountsService) {}
+
+  // ── Read — available to all Ledger roles ─────────────────────────────────
 
   @Get()
   findAll(@CurrentUser() user: JwtPayload) {
@@ -25,14 +32,28 @@ export class AccountsController {
   }
 
   @Get('pl-summary')
-  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BRANCH_MANAGER')
   plSummary(
     @CurrentUser() user: JwtPayload,
     @Query('from') from: string,
-    @Query('to') to: string,
+    @Query('to')   to:   string,
   ) {
     const now = new Date().toISOString().split('T')[0];
     return this.svc.getPLSummary(user.tenantId!, from ?? now, to ?? now);
+  }
+
+  @Get(':accountId/ledger')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BRANCH_MANAGER')
+  accountLedger(
+    @CurrentUser() user: JwtPayload,
+    @Param('accountId') accountId: string,
+    @Query('from')      from?: string,
+    @Query('to')        to?: string,
+    @Query('page')      page?: string,
+  ) {
+    return this.svc.getAccountLedger(user.tenantId!, accountId, {
+      from, to, page: page ? Number(page) : 1,
+    });
   }
 
   @Get(':id')
@@ -40,25 +61,32 @@ export class AccountsController {
     return this.svc.findOne(user.tenantId!, id);
   }
 
+  // ── Write — SUPER_ADMIN only (COA structure changes) ─────────────────────
+  // Regular users can view the COA but cannot add/edit/delete accounts.
+  // This enforces COA integrity: only the platform admin tailors it per tenant.
+
   @Post()
-  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  @Roles('SUPER_ADMIN')
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateAccountDto) {
-    return this.svc.create(user.tenantId!, dto);
+    if (!user.tenantId) throw new ForbiddenException('Tenant context required');
+    return this.svc.create(user.tenantId, dto);
   }
 
   @Patch(':id')
-  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  @Roles('SUPER_ADMIN')
   update(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: UpdateAccountDto,
   ) {
-    return this.svc.update(user.tenantId!, id, dto);
+    if (!user.tenantId) throw new ForbiddenException('Tenant context required');
+    return this.svc.update(user.tenantId, id, dto);
   }
 
   @Delete(':id')
-  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  @Roles('SUPER_ADMIN')
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.svc.delete(user.tenantId!, id);
+    if (!user.tenantId) throw new ForbiddenException('Tenant context required');
+    return this.svc.delete(user.tenantId, id);
   }
 }

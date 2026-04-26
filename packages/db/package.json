@@ -16,6 +16,8 @@
     "prisma": "^6.19.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2",
-    "@repo/typescript-config": "*"
+    "@repo/typescript-config": "*",
+    "bcryptjs": "^3.0.3",
+    "@types/bcryptjs": "^2.4.6"
   }
 }

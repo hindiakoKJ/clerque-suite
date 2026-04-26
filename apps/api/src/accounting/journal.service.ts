@@ -1,16 +1,20 @@
 import {
-  Injectable, NotFoundException, BadRequestException,
+  Injectable, NotFoundException, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountsService } from './accounts.service';
-import { Prisma } from '@prisma/client';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
+import { Prisma, JournalSource } from '@prisma/client';
 
 type LineInput = { accountId: string; debit?: number; credit?: number; description?: string };
 
 export interface CreateJournalDto {
-  date: string;
-  description: string;
-  lines: LineInput[];
+  date:         string;           // Document Date — when the economic event occurred
+  postingDate?: string;           // Posting Date — which period it lands in; defaults to date
+  description:  string;
+  reference?:   string;           // External ref: invoice #, OR #, voucher #
+  lines:        LineInput[];
+  saveDraft?:   boolean;          // if true → status DRAFT, else POSTED immediately
 }
 
 @Injectable()
@@ -18,6 +22,7 @@ export class JournalService {
   constructor(
     private prisma: PrismaService,
     private accounts: AccountsService,
+    private periods: AccountingPeriodsService,
   ) {}
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -36,36 +41,192 @@ export class JournalService {
     const totalCredit = lines.reduce((s, l) => s + (l.credit ?? 0), 0);
     if (Math.abs(totalDebit - totalCredit) > 0.01) {
       throw new BadRequestException(
-        `Journal entry is out of balance: debits ${totalDebit.toFixed(2)} ≠ credits ${totalCredit.toFixed(2)}`
+        `Journal entry is out of balance: debits ${totalDebit.toFixed(2)} ≠ credits ${totalCredit.toFixed(2)}`,
+      );
+    }
+  }
+
+  /**
+   * Guard: check that no manually-entered line targets an AP/AR/SYSTEM-only account.
+   * Pass source='SYSTEM' to bypass (used by the @Cron event processor).
+   * Pass source='AP' / 'AR' to allow their respective sub-ledger accounts.
+   */
+  private async assertPostingControl(
+    tenantId: string,
+    lines: LineInput[],
+    source: JournalSource = 'MANUAL',
+  ) {
+    const accountIds = lines.map((l) => l.accountId).filter(Boolean);
+    const accounts = await this.prisma.account.findMany({
+      where: { id: { in: accountIds }, tenantId },
+      select: { id: true, code: true, name: true, postingControl: true },
+    });
+
+    for (const acct of accounts) {
+      const ctrl = acct.postingControl;
+      if (ctrl === 'OPEN') continue;
+      if (ctrl === 'SYSTEM_ONLY' && source === 'SYSTEM') continue;
+      if (ctrl === 'AP_ONLY'     && source === 'AP')     continue;
+      if (ctrl === 'AR_ONLY'     && source === 'AR')     continue;
+
+      const who = ctrl === 'AP_ONLY'     ? 'the AP module (Phase 4)'
+               : ctrl === 'AR_ONLY'     ? 'the AR module (Phase 5)'
+               : 'the system event processor';
+
+      throw new ForbiddenException(
+        `Account ${acct.code} — ${acct.name} is restricted. Only ${who} may post to it. ` +
+        `Remove it from this manual journal entry.`,
       );
     }
   }
 
   // ── Manual journal entry ────────────────────────────────────────────────────
 
-  async create(tenantId: string, dto: CreateJournalDto, createdBy?: string) {
+  async create(
+    tenantId: string,
+    dto: CreateJournalDto,
+    createdBy?: string,
+    source: JournalSource = 'MANUAL',
+  ) {
     this.validateLines(dto.lines);
+
+    // 1. Posting control guard (skip for system/AP/AR sources)
+    await this.assertPostingControl(tenantId, dto.lines, source);
+
+    // 2. Period lock guard (skip for DRAFTs — they're not yet posted)
+    //    Period lock uses postingDate; falls back to document date if not set.
+    const status = dto.saveDraft ? 'DRAFT' : 'POSTED';
+    const postingDate = new Date(dto.postingDate ?? dto.date);
+    if (status === 'POSTED') {
+      await this.periods.assertDateIsOpen(tenantId, postingDate);
+    }
+
     const entryNumber = await this.nextEntryNumber(tenantId);
 
     return this.prisma.journalEntry.create({
       data: {
         tenantId,
         entryNumber,
-        date: new Date(dto.date),
+        date:        new Date(dto.date),
+        postingDate,
         description: dto.description,
-        status: 'POSTED',
-        createdBy: createdBy ?? 'MANUAL',
+        reference:   dto.reference ?? null,
+        status,
+        source,
+        createdBy:   createdBy ?? 'MANUAL',
+        postedAt:    status === 'POSTED' ? new Date() : null,
+        postedBy:    status === 'POSTED' ? (createdBy ?? null) : null,
         lines: {
           create: dto.lines.map((l) => ({
-            accountId: l.accountId,
+            accountId:   l.accountId,
             description: l.description,
-            debit:  new Prisma.Decimal(l.debit  ?? 0),
-            credit: new Prisma.Decimal(l.credit ?? 0),
+            debit:       new Prisma.Decimal(l.debit  ?? 0),
+            credit:      new Prisma.Decimal(l.credit ?? 0),
           })),
         },
       },
-      include: { lines: { include: { account: { select: { code: true, name: true } } } } },
+      include: {
+        lines: { include: { account: { select: { code: true, name: true } } } },
+      },
     });
+  }
+
+  // ── Post a DRAFT entry ──────────────────────────────────────────────────────
+
+  async post(tenantId: string, id: string, postedBy: string) {
+    const entry = await this.prisma.journalEntry.findFirst({
+      where: { id, tenantId },
+      include: { lines: true },
+    });
+    if (!entry) throw new NotFoundException('Journal entry not found');
+    if (entry.status !== 'DRAFT') {
+      throw new BadRequestException(`Entry is already ${entry.status.toLowerCase()} — only DRAFT entries can be posted`);
+    }
+
+    // Re-run guards at post time
+    // Period lock checks postingDate; falls back to document date for old entries.
+    const lineInputs = entry.lines.map((l) => ({
+      accountId: l.accountId,
+      debit:  Number(l.debit),
+      credit: Number(l.credit),
+    }));
+    await this.assertPostingControl(tenantId, lineInputs, 'MANUAL');
+    await this.periods.assertDateIsOpen(tenantId, entry.postingDate ?? entry.date);
+
+    // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId, status: 'DRAFT' }
+    // ensures the write is atomically scoped to this tenant and the correct draft state.
+    // A plain update({ where: { id } }) would succeed even if tenantId changed between
+    // the findFirst check above and the write here.
+    await this.prisma.journalEntry.updateMany({
+      where: { id, tenantId, status: 'DRAFT' },
+      data:  { status: 'POSTED', postedBy, postedAt: new Date() },
+    });
+
+    // Re-fetch with full includes for the response (updateMany does not return rows)
+    return this.prisma.journalEntry.findFirst({
+      where: { id, tenantId },
+      include: {
+        lines: { include: { account: { select: { code: true, name: true } } } },
+      },
+    });
+  }
+
+  // ── Reverse a POSTED entry ──────────────────────────────────────────────────
+
+  async reverse(tenantId: string, id: string, reversedBy: string, reverseDate?: string) {
+    const original = await this.prisma.journalEntry.findFirst({
+      where: { id, tenantId },
+      include: {
+        lines:      { include: { account: { select: { code: true, name: true, postingControl: true } } } },
+        reversedBy: true,
+      },
+    });
+    if (!original) throw new NotFoundException('Journal entry not found');
+    if (original.status !== 'POSTED') {
+      throw new BadRequestException('Only POSTED entries can be reversed');
+    }
+    if (original.reversedBy) {
+      throw new BadRequestException(
+        `Entry ${original.entryNumber} has already been reversed by ${original.reversedBy.entryNumber}`,
+      );
+    }
+
+    // Reversal posting date = reverseDate (user-chosen) or today
+    const targetDate = reverseDate ? new Date(reverseDate) : new Date();
+    await this.periods.assertDateIsOpen(tenantId, targetDate);
+
+    const entryNumber = await this.nextEntryNumber(tenantId);
+    const description = `Reversal of ${original.entryNumber}: ${original.description}`;
+
+    const reversal = await this.prisma.journalEntry.create({
+      data: {
+        tenantId,
+        entryNumber,
+        date:        targetDate,   // document date = reversal date
+        postingDate: targetDate,   // posting date = reversal date (same for reversals)
+        description,
+        status:      'POSTED',
+        source:      original.source,
+        createdBy:   reversedBy,
+        postedBy:    reversedBy,
+        postedAt:    new Date(),
+        // Link back to original
+        reversalOfId: original.id,
+        lines: {
+          create: original.lines.map((l) => ({
+            accountId:   l.accountId,
+            description: `Reversal: ${l.description ?? original.description}`,
+            debit:       new Prisma.Decimal(Number(l.credit)), // flip
+            credit:      new Prisma.Decimal(Number(l.debit)),  // flip
+          })),
+        },
+      },
+      include: {
+        lines: { include: { account: { select: { code: true, name: true } } } },
+      },
+    });
+
+    return reversal;
   }
 
   // ── Process a single AccountingEvent → Journal Entry ────────────────────────
@@ -77,7 +238,6 @@ export class JournalService {
     if (!event) throw new NotFoundException('Accounting event not found');
     if (event.status === 'SYNCED') return { skipped: true };
 
-    // Resolve system accounts (lazy-seeded)
     await this.accounts.seedDefaultAccounts(tenantId);
 
     const getAccount = async (code: string) => {
@@ -99,18 +259,15 @@ export class JournalService {
 
         description = `Sale ${payload['orderNumber'] ?? event.id}`;
 
-        // Bug 3 fix: debit side must equal totalAmount, not the raw tendered amounts.
-        // Raw cash payment can exceed totalAmount (includes change given back).
-        // Compute the cash/digital split from totalAmount proportionally.
         const digitalTotal   = payments.filter(p => p.method !== 'CASH').reduce((s, p) => s + Number(p.amount), 0);
-        const digitalPortion = Math.min(digitalTotal, total);          // digital can't exceed total
-        const cashPortion    = Math.round((total - digitalPortion) * 100) / 100;  // remainder is cash
+        const digitalPortion = Math.min(digitalTotal, total);
+        const cashPortion    = Math.round((total - digitalPortion) * 100) / 100;
 
         if (cashPortion > 0)    lines.push({ accountId: await getAccount('1010'), debit: cashPortion,    description: 'Cash sales' });
         if (digitalPortion > 0) lines.push({ accountId: await getAccount('1031'), debit: digitalPortion, description: 'Digital wallet sales' });
 
         lines.push({ accountId: await getAccount('4010'), credit: total - vatAmt, description: 'Sales revenue' });
-        lines.push({ accountId: await getAccount('2020'), credit: vatAmt, description: 'Output VAT 12%' });
+        lines.push({ accountId: await getAccount('2020'), credit: vatAmt,         description: 'Output VAT 12%' });
 
       } else if (event.type === 'COGS') {
         const cogsLines = (payload['lines'] as Array<{ totalCost: number }>) ?? [];
@@ -122,7 +279,6 @@ export class JournalService {
         lines.push({ accountId: await getAccount('1050'), credit: totalCost, description: 'Inventory deduction' });
 
       } else if (event.type === 'VOID') {
-        // Reversal: fetch original SALE event for the same order
         const origSale = await this.prisma.accountingEvent.findFirst({
           where: { orderId: event.orderId ?? '', type: 'SALE', status: 'SYNCED', tenantId },
           include: { journalEntry: { include: { lines: { include: { account: true } } } } },
@@ -131,17 +287,15 @@ export class JournalService {
         description = `Void reversal ${payload['orderId'] ?? event.id}`;
 
         if (origSale?.journalEntry) {
-          // Mirror original lines with debit/credit swapped
           for (const line of origSale.journalEntry.lines) {
             lines.push({
               accountId: line.accountId,
-              debit:  Number(line.credit),
-              credit: Number(line.debit),
+              debit:     Number(line.credit),
+              credit:    Number(line.debit),
               description: `Reversal: ${line.description ?? ''}`,
             });
           }
         } else {
-          // Fallback: use payload data from this VOID event
           const total  = Number(payload['totalAmount'] ?? 0);
           const vatAmt = Number(payload['vatAmount']   ?? 0);
           lines.push({ accountId: await getAccount('4010'), debit:  total - vatAmt, description: 'Void - reverse revenue' });
@@ -150,7 +304,6 @@ export class JournalService {
         }
 
       } else {
-        // INVENTORY_ADJUSTMENT, SETTLEMENT, etc. — mark as skipped for now
         await this.prisma.accountingEvent.update({
           where: { id: eventId },
           data: { status: 'SYNCED', syncedAt: new Date() },
@@ -169,16 +322,38 @@ export class JournalService {
       this.validateLines(lines);
       const entryNumber = await this.nextEntryNumber(tenantId);
 
+      // Guard: system events must also respect period lock.
+      // If the period is closed, mark the event FAILED — the cron will not retry it,
+      // and the accountant must either reopen the period or write a manual adjustment.
+      const eventDate = new Date(date);
+      try {
+        await this.periods.assertDateIsOpen(tenantId, eventDate);
+      } catch (periodErr) {
+        await this.prisma.accountingEvent.update({
+          where: { id: eventId },
+          data: {
+            status:     'FAILED',
+            retryCount: { increment: 1 },
+            lastError:  periodErr instanceof Error ? periodErr.message : String(periodErr),
+          },
+        });
+        throw periodErr; // propagate so caller knows
+      }
+
       const je = await this.prisma.$transaction(async (tx) => {
         const entry = await tx.journalEntry.create({
           data: {
             tenantId,
             accountingEventId: eventId,
             entryNumber,
-            date: new Date(date),
+            date:        eventDate,
+            postingDate: eventDate, // system events post to the period of the event
             description,
-            status: 'POSTED',
-            createdBy: 'SYSTEM',
+            status:      'POSTED',
+            source:      'SYSTEM',
+            createdBy:   'SYSTEM',
+            postedBy:    'SYSTEM',
+            postedAt:    new Date(),
             lines: {
               create: lines.map((l) => ({
                 accountId:   l.accountId,
@@ -205,9 +380,9 @@ export class JournalService {
       await this.prisma.accountingEvent.update({
         where: { id: eventId },
         data: {
-          status: 'FAILED',
+          status:     'FAILED',
           retryCount: { increment: 1 },
-          lastError: err instanceof Error ? err.message : String(err),
+          lastError:  err instanceof Error ? err.message : String(err),
         },
       });
       throw err;
@@ -217,36 +392,52 @@ export class JournalService {
   // ── Process all pending events for a tenant ─────────────────────────────────
 
   async processAllPending(tenantId: string) {
-    const pending = await this.prisma.accountingEvent.findMany({
-      where: { tenantId, status: 'PENDING' },
-      orderBy: { createdAt: 'asc' },
-      take: 100,
-    });
+    let synced = 0, failed = 0, skipped = 0, processed = 0;
+    const BATCH = 100;
 
-    let synced = 0, failed = 0, skipped = 0;
-    for (const evt of pending) {
-      try {
-        const result = await this.processEvent(tenantId, evt.id);
-        if (result.skipped) skipped++; else synced++;
-      } catch { failed++; }
+    while (true) {
+      const pending = await this.prisma.accountingEvent.findMany({
+        where: { tenantId, status: 'PENDING' },
+        orderBy: { createdAt: 'asc' },
+        take: BATCH,
+      });
+      if (pending.length === 0) break;
+
+      for (const evt of pending) {
+        try {
+          const result = await this.processEvent(tenantId, evt.id);
+          if (result.skipped) skipped++; else synced++;
+        } catch { failed++; }
+        processed++;
+      }
+
+      if (pending.length < BATCH) break;
     }
-    return { processed: pending.length, synced, failed, skipped };
+
+    return { processed, synced, failed, skipped };
   }
 
   // ── List journal entries ─────────────────────────────────────────────────────
 
-  async findAll(tenantId: string, opts: { page?: number; from?: string; to?: string }) {
-    const { page = 1, from, to } = opts;
+  async findAll(tenantId: string, opts: { page?: number; from?: string; to?: string; status?: string }) {
+    const { page = 1, from, to, status } = opts;
     const take = 50;
     const skip = (page - 1) * take;
 
+    // Date filter: prefer postingDate; fall back to document date for legacy entries.
+    const dateRange = (from || to) ? {
+      ...(from ? { gte: new Date(from) } : {}),
+      ...(to   ? { lte: new Date(to)   } : {}),
+    } : undefined;
+
     const where: Prisma.JournalEntryWhereInput = {
       tenantId,
-      ...(from || to ? {
-        date: {
-          ...(from ? { gte: new Date(from) } : {}),
-          ...(to   ? { lte: new Date(to)   } : {}),
-        },
+      ...(status ? { status: status as any } : {}),
+      ...(dateRange ? {
+        OR: [
+          { postingDate: dateRange },
+          { postingDate: null, date: dateRange },
+        ],
       } : {}),
     };
 
@@ -254,7 +445,7 @@ export class JournalService {
       this.prisma.journalEntry.count({ where }),
       this.prisma.journalEntry.findMany({
         where,
-        orderBy: { date: 'desc' },
+        orderBy: [{ postingDate: 'desc' }, { date: 'desc' }, { createdAt: 'desc' }],
         skip,
         take,
         include: {
@@ -263,6 +454,8 @@ export class JournalService {
             orderBy: { debit: 'desc' },
           },
           accountingEvent: { select: { type: true, orderId: true } },
+          reversalOf:  { select: { id: true, entryNumber: true } },
+          reversedBy:  { select: { id: true, entryNumber: true } },
         },
       }),
     ]);
@@ -279,6 +472,8 @@ export class JournalService {
           orderBy: { debit: 'desc' },
         },
         accountingEvent: { select: { type: true, orderId: true, payload: true } },
+        reversalOf:  { select: { id: true, entryNumber: true } },
+        reversedBy:  { select: { id: true, entryNumber: true } },
       },
     });
     if (!entry) throw new NotFoundException('Journal entry not found');

@@ -8,12 +8,15 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  NotFoundException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { OrdersService } from './orders.service';
 import { OfflineOrder } from '@repo/shared-types';
 
@@ -23,46 +26,72 @@ interface CreateOrderBody {
 
 interface VoidOrderBody {
   reason: string;
+  /**
+   * Required when the caller role is CASHIER.
+   * Must be the UUID of a SALES_LEAD or BUSINESS_OWNER in the same tenant.
+   * Implements the dual-authorization SOD rule: cashiers cannot self-authorize voids.
+   */
+  supervisorId?: string;
 }
 
 interface BulkSyncBody {
   orders: OfflineOrder[];
 }
 
+@ApiTags('Orders')
+@ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('orders')
 export class OrdersController {
   constructor(private ordersService: OrdersService) {}
 
   @Get()
-  findAll(
+  async findAll(
     @CurrentUser() user: JwtPayload,
     @Query('branchId') branchId?: string,
     @Query('shiftId') shiftId?: string,
   ) {
-    return this.ordersService.findAll(user.tenantId!, branchId, shiftId);
+    try {
+      return await this.ordersService.findAll(user.tenantId!, branchId, shiftId);
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      throw new InternalServerErrorException('Failed to retrieve orders');
+    }
   }
 
   @Get(':id')
-  findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.ordersService.findOne(user.tenantId!, id);
+  async findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    try {
+      return await this.ordersService.findOne(user.tenantId!, id);
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      throw new InternalServerErrorException('Failed to retrieve order');
+    }
   }
 
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() body: CreateOrderBody) {
     return this.ordersService.create(user.tenantId!, user.sub, body.order);
   }
 
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Post('sync')
   @HttpCode(HttpStatus.OK)
   bulkSync(@CurrentUser() user: JwtPayload, @Body() body: BulkSyncBody) {
     return this.ordersService.bulkSync(user.tenantId!, user.sub, body.orders);
   }
 
-  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER')
+  /**
+   * Void an order.
+   *
+   * SOD Rule — Dual Authorization:
+   *   SALES_LEAD / BRANCH_MANAGER / BUSINESS_OWNER → void directly (no co-auth needed).
+   *   CASHIER → must provide `supervisorId` (UUID of a SALES_LEAD or OWNER in same tenant).
+   *             Backend validates the supervisor's role before proceeding.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Post(':id/void')
   @HttpCode(HttpStatus.OK)
   void(
@@ -70,6 +99,8 @@ export class OrdersController {
     @Param('id') id: string,
     @Body() body: VoidOrderBody,
   ) {
-    return this.ordersService.void(user.tenantId!, id, user.sub, body.reason);
+    return this.ordersService.void(
+      user.tenantId!, id, user.sub, user.role, body.reason, body.supervisorId,
+    );
   }
 }

@@ -14,19 +14,13 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ShiftsService } from './shifts.service';
+import { OpenShiftDto } from './dto/open-shift.dto';
+import { CloseShiftDto } from './dto/close-shift.dto';
 
-interface OpenShiftDto {
-  branchId: string;
-  openingCash: number;
-  notes?: string;
-}
-
-interface CloseShiftDto {
-  closingCashDeclared: number;
-  notes?: string;
-}
-
+@ApiTags('Shifts')
+@ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('shifts')
 export class ShiftsController {

@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 export interface PaymentBreakdown {
   method: string;
@@ -184,6 +185,137 @@ export class ReportsService {
       topProducts,
       byHour,
     };
+  }
+
+  // ─── Z-Read: daily tamper-proof totals (BIR CAS accreditation) ──────────────
+  //
+  // One Z-Read record per branch per calendar date (PH UTC+8).
+  // INSERT-only — the unique constraint on (branchId, date) enforces idempotency.
+  // Calling this a second time for the same day returns the existing record.
+
+  async generateZRead(
+    tenantId:     string,
+    branchId:     string,
+    dateStr:      string,   // YYYY-MM-DD in PH time
+    generatedById?: string,
+  ) {
+    // Build the date in UTC+8 (PH local midnight)
+    const startOfDay = new Date(`${dateStr}T00:00:00+08:00`);
+    const endOfDay   = new Date(`${dateStr}T23:59:59.999+08:00`);
+
+    // Idempotency: return existing record if already generated
+    const existing = await this.prisma.zReadLog.findUnique({
+      where: { branchId_date: { branchId, date: startOfDay } },
+    });
+    if (existing) return existing;
+
+    const orders = await this.prisma.order.findMany({
+      where: { tenantId, branchId, completedAt: { gte: startOfDay, lte: endOfDay } },
+      include: { payments: true, items: true },
+    });
+
+    const completed   = orders.filter((o) => o.status === 'COMPLETED');
+    const voided      = orders.filter((o) => o.status === 'VOIDED');
+    const grossSales  = completed.reduce((s, o) => s + Number(o.subtotal),     0);
+    const netSales    = completed.reduce((s, o) => s + Number(o.totalAmount),  0);
+    const vatAmount   = completed.reduce((s, o) => s + Number(o.vatAmount),    0);
+    const discountAmt = completed.reduce((s, o) => s + Number(o.discountAmount), 0);
+
+    let cashAmount = 0, nonCashAmount = 0;
+    for (const order of completed) {
+      for (const p of order.payments) {
+        if (p.method === 'CASH') cashAmount    += Number(p.amount);
+        else                     nonCashAmount += Number(p.amount);
+      }
+    }
+
+    return this.prisma.zReadLog.create({
+      data: {
+        tenantId,
+        branchId,
+        date:          startOfDay,
+        totalOrders:   completed.length,
+        voidCount:     voided.length,
+        grossSales:    new Prisma.Decimal(grossSales),
+        netSales:      new Prisma.Decimal(netSales),
+        vatAmount:     new Prisma.Decimal(vatAmount),
+        discountAmount: new Prisma.Decimal(discountAmt),
+        cashAmount:    new Prisma.Decimal(cashAmount),
+        nonCashAmount: new Prisma.Decimal(nonCashAmount),
+        generatedById,
+      },
+    });
+  }
+
+  async listZReadLogs(tenantId: string, branchId?: string, limit = 30) {
+    return this.prisma.zReadLog.findMany({
+      where: { tenantId, ...(branchId ? { branchId } : {}) },
+      orderBy: { date: 'desc' },
+      take: limit,
+    });
+  }
+
+  // ─── X-Read: shift-level tamper-proof totals ──────────────────────────────────
+  //
+  // One X-Read record per shift. Created at shift close.
+  // The unique constraint on shiftId prevents double-generation.
+
+  async generateXRead(tenantId: string, shiftId: string, generatedById?: string) {
+    // Idempotency
+    const existing = await this.prisma.xReadLog.findUnique({ where: { shiftId } });
+    if (existing) return existing;
+
+    const shift = await this.prisma.shift.findFirst({
+      where: { id: shiftId, tenantId },
+    });
+    if (!shift) throw new NotFoundException('Shift not found');
+    if (!shift.closedAt) throw new ConflictException('Cannot generate X-Read for an open shift.');
+
+    const orders = await this.prisma.order.findMany({
+      where: { shiftId, tenantId },
+      include: { payments: true, items: true },
+    });
+
+    const completed   = orders.filter((o) => o.status === 'COMPLETED');
+    const voided      = orders.filter((o) => o.status === 'VOIDED');
+    const grossSales  = completed.reduce((s, o) => s + Number(o.subtotal),       0);
+    const netSales    = completed.reduce((s, o) => s + Number(o.totalAmount),    0);
+    const vatAmount   = completed.reduce((s, o) => s + Number(o.vatAmount),      0);
+    const discountAmt = completed.reduce((s, o) => s + Number(o.discountAmount), 0);
+
+    let cashAmount = 0, nonCashAmount = 0;
+    for (const order of completed) {
+      for (const p of order.payments) {
+        if (p.method === 'CASH') cashAmount    += Number(p.amount);
+        else                     nonCashAmount += Number(p.amount);
+      }
+    }
+
+    const openingCash  = Number(shift.openingCash);
+    const closingCash  = shift.closingCashDeclared ? Number(shift.closingCashDeclared) : 0;
+    const cashVariance = shift.variance ? Number(shift.variance) : 0;
+
+    return this.prisma.xReadLog.create({
+      data: {
+        tenantId,
+        branchId:      shift.branchId,
+        shiftId,
+        openedAt:      shift.openedAt,
+        closedAt:      shift.closedAt,
+        totalOrders:   completed.length,
+        voidCount:     voided.length,
+        grossSales:    new Prisma.Decimal(grossSales),
+        netSales:      new Prisma.Decimal(netSales),
+        vatAmount:     new Prisma.Decimal(vatAmount),
+        discountAmount: new Prisma.Decimal(discountAmt),
+        cashAmount:    new Prisma.Decimal(cashAmount),
+        nonCashAmount: new Prisma.Decimal(nonCashAmount),
+        openingCash:   new Prisma.Decimal(openingCash),
+        closingCash:   new Prisma.Decimal(closingCash),
+        cashVariance:  new Prisma.Decimal(cashVariance),
+        generatedById,
+      },
+    });
   }
 
   // Helper to satisfy TypeScript for the return type reference

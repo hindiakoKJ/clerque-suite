@@ -1,6 +1,9 @@
 'use client';
 import { create } from 'zustand';
-import { computeVat, computePwdScDiscount } from '@/lib/pos/utils';
+import { computeVat, computeDiscount, round2 } from '@/lib/pos/utils';
+import type { CartItemModifier, TaxStatus } from '@repo/shared-types';
+
+export type { CartItemModifier };
 
 export interface CartProduct {
   id: string;
@@ -15,8 +18,10 @@ export interface CartLine {
   product: CartProduct;
   variantId?: string;
   quantity: number;
-  unitPrice: number;
+  unitPrice: number;      // base price + sum of modifier price adjustments
   itemDiscount: number;
+  modifiers?: CartItemModifier[];
+  lineKey: string;        // unique key: productId + variantId + sorted optionIds
 }
 
 export interface CartDiscount {
@@ -42,12 +47,18 @@ interface CartState {
   orderDiscount: CartDiscount | null;
   branchId: string | null;
   shiftId: string | null;
+  /** Tenant BIR tax classification. Set at login from JWT; drives all tax & discount logic. */
+  taxStatus: TaxStatus;
+  /** Convenience derived flag (taxStatus === 'VAT'). */
+  isVatRegistered: boolean;
   setBranch: (branchId: string, shiftId?: string) => void;
+  /** Called once on auth store hydration to push tenant flags into the cart store. */
+  setTenantFlags: (taxStatus: TaxStatus) => void;
 
-  addItem: (product: CartProduct, variantId?: string) => void;
-  removeItem: (productId: string, variantId?: string) => void;
-  updateQty: (productId: string, qty: number, variantId?: string) => void;
-  setItemDiscount: (productId: string, discount: number) => void;
+  addItem: (product: CartProduct, variantId?: string, modifiers?: CartItemModifier[]) => void;
+  removeItem: (lineKey: string) => void;
+  updateQty: (lineKey: string, qty: number) => void;
+  setItemDiscount: (lineKey: string, discount: number) => void;
 
   /**
    * Apply PWD/SC discount.
@@ -70,56 +81,68 @@ export const useCartStore = create<CartState>()((set, get) => ({
   orderDiscount: null,
   branchId: null,
   shiftId: null,
+  taxStatus: 'UNREGISTERED', // safe default; overwritten by setTenantFlags() on auth hydration
+  isVatRegistered: false,
 
   setBranch: (branchId, shiftId) => set({ branchId, shiftId }),
+  setTenantFlags: (taxStatus) => set({ taxStatus, isVatRegistered: taxStatus === 'VAT' }),
 
-  addItem: (product, variantId) => {
+  addItem: (product, variantId, modifiers) => {
+    const sortedOptionIds = (modifiers ?? []).map((m) => m.modifierOptionId).sort().join(',');
+    const lineKey = [product.id, variantId ?? '', sortedOptionIds].join('|');
+    const priceAdjustment = (modifiers ?? []).reduce((sum, m) => sum + m.priceAdjustment, 0);
+    const unitPrice = product.price + priceAdjustment;
+
     set((state) => {
-      const existing = state.lines.find((l) => l.product.id === product.id && l.variantId === variantId);
+      const existing = state.lines.find((l) => l.lineKey === lineKey);
       if (existing) {
         return {
           lines: state.lines.map((l) =>
-            l.product.id === product.id && l.variantId === variantId
-              ? { ...l, quantity: l.quantity + 1 }
-              : l,
+            l.lineKey === lineKey ? { ...l, quantity: l.quantity + 1 } : l,
           ),
         };
       }
       return {
-        lines: [...state.lines, { product, variantId, quantity: 1, unitPrice: product.price, itemDiscount: 0 }],
+        lines: [...state.lines, { product, variantId, modifiers, lineKey, quantity: 1, unitPrice, itemDiscount: 0 }],
       };
     });
   },
 
-  removeItem: (productId, variantId) => {
+  removeItem: (lineKey) => {
     set((state) => {
-      const nextLines = state.lines.filter((l) => !(l.product.id === productId && l.variantId === variantId));
+      const nextLines = state.lines.filter((l) => l.lineKey !== lineKey);
       return { lines: nextLines, orderDiscount: nextLines.length === 0 ? null : state.orderDiscount };
     });
   },
 
-  updateQty: (productId, qty, variantId) => {
-    if (qty <= 0) { get().removeItem(productId, variantId); return; }
+  updateQty: (lineKey, qty) => {
+    if (qty <= 0) { get().removeItem(lineKey); return; }
     set((state) => ({
-      lines: state.lines.map((l) =>
-        l.product.id === productId && l.variantId === variantId ? { ...l, quantity: qty } : l,
-      ),
+      lines: state.lines.map((l) => l.lineKey === lineKey ? { ...l, quantity: qty } : l),
     }));
   },
 
-  setItemDiscount: (productId, discount) => {
+  setItemDiscount: (lineKey, discount) => {
     set((state) => ({
-      lines: state.lines.map((l) => l.product.id === productId ? { ...l, itemDiscount: discount } : l),
+      lines: state.lines.map((l) => l.lineKey === lineKey ? { ...l, itemDiscount: discount } : l),
     }));
   },
 
   applyPwdSc: (type, idRef, idOwnerName, selectedSubtotal) => {
-    const fullSubtotal    = get().subtotal();
-    const basis           = selectedSubtotal ?? fullSubtotal;
+    const { taxStatus } = get();
+    const fullSubtotal  = get().subtotal();
+    const basis         = selectedSubtotal ?? fullSubtotal;
     const unselectedSubtotal = selectedSubtotal != null ? fullSubtotal - selectedSubtotal : 0;
 
-    const { vatExclusiveBase, discountOnBase, vatOnDiscounted, totalSavings } = computePwdScDiscount(basis);
-    const vatOnUnselected = unselectedSubtotal > 0 ? computeVat(unselectedSubtotal).vat : 0;
+    // RA 9994 / RA 7277 — dispatch to correct engine via unified helper
+    const { vatExclusiveBase, discountOnBase, vatOnDiscounted, totalSavings } =
+      computeDiscount(basis, taxStatus);
+
+    // Unselected items: only carry VAT for VAT-registered tenants
+    const vatOnUnselected =
+      taxStatus === 'VAT' && unselectedSubtotal > 0
+        ? computeVat(unselectedSubtotal).vat
+        : 0;
 
     set({
       orderDiscount: {
@@ -149,15 +172,27 @@ export const useCartStore = create<CartState>()((set, get) => ({
   },
 
   vatAmount: () => {
-    const { lines, orderDiscount } = get();
+    const { lines, orderDiscount, taxStatus } = get();
+
+    // Only VAT-registered tenants collect 12% VAT
+    if (taxStatus !== 'VAT') return 0;
+
     const isPwdSc = orderDiscount?.type === 'PWD' || orderDiscount?.type === 'SENIOR_CITIZEN';
     if (isPwdSc && orderDiscount) {
       return orderDiscount.vatOnDiscounted + (orderDiscount.vatOnUnselected ?? 0);
     }
-    const subtotalAfterDiscount =
-      lines.reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0) -
-      (orderDiscount?.discountOnBase ?? 0);
-    const vatableAmount = lines.some((l) => l.product.isVatable) ? subtotalAfterDiscount : 0;
+    // Compute VAT only on vatable lines, proportionally reduced by any order-level discount.
+    // Using some() then applying the full subtotal was wrong for mixed-vatable carts — it
+    // overcollected VAT on non-vatable items (e.g. basic food, medicines, senior essentials).
+    const fullSubtotal    = lines.reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0);
+    const vatableSubtotal = lines
+      .filter((l) => l.product.isVatable)
+      .reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0);
+    if (vatableSubtotal === 0) return 0;
+    // Apply order discount proportionally to the vatable portion
+    const discountOnBase  = orderDiscount?.discountOnBase ?? 0;
+    const discountRatio   = fullSubtotal > 0 ? (fullSubtotal - discountOnBase) / fullSubtotal : 1;
+    const vatableAmount   = round2(vatableSubtotal * discountRatio);
     return computeVat(vatableAmount).vat;
   },
 

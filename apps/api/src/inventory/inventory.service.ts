@@ -1,21 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
+import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { SetThresholdDto } from './dto/set-threshold.dto';
 
-export interface AdjustStockDto {
-  productId: string;
-  branchId: string;
-  quantity: number;       // positive = add, negative = remove
-  type: 'INITIAL' | 'STOCK_IN' | 'STOCK_OUT' | 'ADJUSTMENT';
-  reason?: string;
-  note?: string;
-}
-
-export interface SetThresholdDto {
-  productId: string;
-  branchId: string;
-  lowStockAlert: number | null;
-}
+export { AdjustStockDto, SetThresholdDto };
 
 @Injectable()
 export class InventoryService {
@@ -23,28 +12,62 @@ export class InventoryService {
 
   // ─── List inventory for a branch ─────────────────────────────────────────
 
-  async list(tenantId: string, branchId: string) {
-    const items = await this.prisma.inventoryItem.findMany({
-      where: { tenantId, branchId },
-      include: {
+  async list(
+    tenantId: string,
+    branchId: string,
+    opts: { page?: number; search?: string; lowStockOnly?: boolean } = {},
+  ) {
+    const { page = 1, search, lowStockOnly } = opts;
+    const take = 50;
+    const skip = (page - 1) * take;
+
+    const where: Prisma.InventoryItemWhereInput = {
+      tenantId,
+      branchId,
+      ...(search ? {
         product: {
-          select: {
-            id: true,
-            name: true,
-            sku: true,
-            isVatable: true,
-            isActive: true,
-            category: { select: { id: true, name: true } },
+          OR: [
+            { name: { contains: search, mode: 'insensitive' } },
+            { sku:  { contains: search, mode: 'insensitive' } },
+          ],
+        },
+      } : {}),
+    };
+
+    const [total, items] = await Promise.all([
+      this.prisma.inventoryItem.count({ where }),
+      this.prisma.inventoryItem.findMany({
+        where,
+        include: {
+          product: {
+            select: {
+              id: true, name: true, sku: true,
+              isVatable: true, isActive: true, costPrice: true,
+              category: { select: { id: true, name: true } },
+            },
           },
         },
-      },
-      orderBy: [{ product: { name: 'asc' } }],
-    });
-    return items.map((item) => ({
+        orderBy: [{ product: { name: 'asc' } }],
+        skip,
+        take,
+      }),
+    ]);
+
+    const rows = items.map((item) => ({
       ...item,
-      quantity: Number(item.quantity),
+      quantity:   Number(item.quantity),
+      totalValue: item.product.costPrice
+        ? Number(item.quantity) * Number(item.product.costPrice)
+        : null,
       isLowStock: item.lowStockAlert != null && Number(item.quantity) <= item.lowStockAlert,
     }));
+
+    return {
+      data:  lowStockOnly ? rows.filter((r) => r.isLowStock) : rows,
+      total,
+      page,
+      pages: Math.ceil(total / take),
+    };
   }
 
   // ─── Low-stock items ──────────────────────────────────────────────────────
@@ -65,6 +88,24 @@ export class InventoryService {
       }));
   }
 
+  // ─── Branch ownership guard ───────────────────────────────────────────────
+
+  /**
+   * Guard: verify that `branchId` is owned by `tenantId`.
+   * Prevents cross-tenant branch injection in client-supplied DTOs.
+   */
+  private async assertBranchBelongsToTenant(tenantId: string, branchId: string): Promise<void> {
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: branchId, tenantId },
+      select: { id: true },
+    });
+    if (!branch) {
+      throw new ForbiddenException(
+        'The provided branchId does not belong to your organization.',
+      );
+    }
+  }
+
   // ─── Adjust stock ─────────────────────────────────────────────────────────
 
   async adjust(tenantId: string, createdById: string, dto: AdjustStockDto) {
@@ -75,6 +116,9 @@ export class InventoryService {
       where: { id: productId, tenantId },
     });
     if (!product) throw new NotFoundException('Product not found');
+
+    // Verify branch belongs to tenant (CRITICAL-2 fix — prevents cross-tenant branch injection)
+    await this.assertBranchBelongsToTenant(tenantId, branchId);
 
     return this.prisma.$transaction(async (tx) => {
       // Upsert inventory item
@@ -133,6 +177,9 @@ export class InventoryService {
       where: { id: productId, tenantId },
     });
     if (!product) throw new NotFoundException('Product not found');
+
+    // Verify branch belongs to tenant (CRITICAL-2 fix)
+    await this.assertBranchBelongsToTenant(tenantId, branchId);
 
     const item = await this.prisma.inventoryItem.upsert({
       where: { branchId_productId: { branchId, productId } },

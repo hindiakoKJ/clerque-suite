@@ -14,6 +14,8 @@ export interface ActiveShift {
   orderCount: number;
   voidCount: number;
   expectedCash: number;
+  /** Per-method totals for digital payment reconciliation */
+  digitalBreakdown: Record<string, number>;
 }
 
 interface ShiftState {

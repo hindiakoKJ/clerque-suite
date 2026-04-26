@@ -12,13 +12,30 @@ datasource db {
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 enum UserRole {
+  // ── Administrative ──────────────────────────────────────────────────────────
   SUPER_ADMIN
-  BUSINESS_OWNER
-  ACCOUNTANT
-  BRANCH_MANAGER
-  CASHIER
-  GENERAL_EMPLOYEE
-  EXTERNAL_AUDITOR
+  BUSINESS_OWNER       // Full access; the only role that can assign MDM / PAYROLL_MASTER
+
+  // ── Operations ──────────────────────────────────────────────────────────────
+  BRANCH_MANAGER       // Branch-level operations; subset of BUSINESS_OWNER rights
+
+  // ── Sales & Revenue ─────────────────────────────────────────────────────────
+  SALES_LEAD           // Sales + void/discount authority; supervises cashiers
+  CASHIER              // Sales only; voids require SALES_LEAD / BUSINESS_OWNER co-auth
+  AR_ACCOUNTANT        // Accounts Receivable / Collections (Phase 4 — AR module)
+
+  // ── Expenditure & Inventory ──────────────────────────────────────────────────
+  AP_ACCOUNTANT        // Accounts Payable / Supplier Bills (Phase 4 — AP module)
+  MDM                  // Master Data Manager — products/prices/suppliers; assigned by OWNER only
+  WAREHOUSE_STAFF      // Stock movement / inventory adjustments; no financial access
+
+  // ── Finance & Compliance ─────────────────────────────────────────────────────
+  FINANCE_LEAD         // Bank reconciliation / cash-flow reports; no payroll
+  BOOKKEEPER           // Journal entries / GL; no payroll; no price edits
+  PAYROLL_MASTER       // Salaries / payroll runs; exclusive salary column access
+  ACCOUNTANT           // Legacy — full ledger read; no payroll
+  GENERAL_EMPLOYEE     // Clock-in/out only
+  EXTERNAL_AUDITOR     // Read-only compliance view; no writes anywhere
 }
 
 /// Which application the access entry refers to
@@ -83,6 +100,13 @@ enum ValuationMethod {
   FIFO
 }
 
+/// Cash-basis: recognize revenue/expense when cash moves.
+/// Accrual: recognize when earned/incurred (standard for VAT-registered MSMEs).
+enum AccountingMethod {
+  CASH
+  ACCRUAL
+}
+
 enum PaymentMethod {
   CASH
   GCASH_PERSONAL
@@ -97,6 +121,38 @@ enum OrderStatus {
   COMPLETED
   VOIDED
   RETURNED
+}
+
+/// BIR-required tax classification per line item.
+/// Drives VAT computation and BIR form categorization.
+///   VAT_12     → Standard rated; 12% VAT collected and remitted to BIR (Form 2550Q).
+///   VAT_EXEMPT → Exempt by law (e.g., basic food staples, medicines); no VAT collected.
+///   ZERO_RATED → Subject to VAT but at 0% (e.g., exports, PEZA locators); input VAT reclaimable.
+enum TaxType {
+  VAT_12
+  VAT_EXEMPT
+  ZERO_RATED
+}
+
+/// Controls how the invoice is settled at point-of-sale.
+///   CASH_SALE → Payment received immediately (cash, e-wallet, QR Ph).
+///   CHARGE    → On-account/credit; receivable pending (B2B, corporate accounts).
+///               Phase 4: links to AR sub-ledger when built.
+enum InvoiceType {
+  CASH_SALE
+  CHARGE
+}
+
+enum SettlementStatus {
+  PENDING     // transactions collected, not yet settled to bank
+  SETTLED     // bank receipt confirmed
+  RECONCILED  // matched to bank statement line
+  DISPUTED    // amount mismatch — under investigation
+}
+
+enum AccountingPeriodStatus {
+  OPEN
+  CLOSED
 }
 
 enum AccountingEventType {
@@ -132,6 +188,27 @@ enum DiscountType {
   SENIOR_CITIZEN
 }
 
+/// BIR registration / VAT status of the business.
+/// Drives receipt title, TIN display, VAT math, and PWD discount engine.
+/// VAT          = BIR-registered + VAT-registered → collects 12% VAT, issues VAT OR
+/// NON_VAT      = BIR-registered but not VAT       → no VAT collected, issues Official Receipt
+/// UNREGISTERED = no BIR registration              → issues Acknowledgement Receipt only
+enum TaxStatus {
+  VAT
+  NON_VAT
+  UNREGISTERED
+}
+
+/// Categorises audit log events for tax / price settings.
+enum AuditAction {
+  TAX_STATUS_CHANGED
+  TIN_UPDATED
+  PRICE_ADJUSTED
+  DISCOUNT_APPLIED
+  VOID_PROCESSED
+  SETTING_CHANGED
+}
+
 enum SessionStatus {
   ACTIVE
   REVOKED
@@ -155,6 +232,23 @@ enum JournalEntryStatus {
   DRAFT
   POSTED
   VOIDED
+}
+
+/// Controls who is allowed to post to this account.
+/// OPEN = manual JEs allowed; others = sub-ledger or system only.
+enum PostingControl {
+  OPEN        // Accountant / Business Owner can post via manual JE
+  AP_ONLY     // Only AP module service may post (Phase 4)
+  AR_ONLY     // Only AR module service may post (Phase 5)
+  SYSTEM_ONLY // Only the @Cron event processor may post (Sales, COGS, VAT)
+}
+
+/// Tracks which subsystem originated a journal entry.
+enum JournalSource {
+  MANUAL  // posted by a human via the JE screen
+  SYSTEM  // posted by the accounting event queue (@Cron)
+  AP      // posted by the AP module (Phase 4)
+  AR      // posted by the AR module (Phase 5)
 }
 
 // ─── Super Admin ──────────────────────────────────────────────────────────────
@@ -194,7 +288,11 @@ model Tenant {
   name                     String
   slug                     String           @unique
   businessType             BusinessType     @default(RETAIL)
-  tin                      String?
+  tin                      String?          // Legacy field; use tinNumber going forward
+  /// BIR Tax Identification Number — format: 000-000-000-00000 (15 chars with dashes)
+  tinNumber                String?
+  /// Business name exactly as it appears on the BIR Certificate of Registration
+  businessName             String?
   address                  String?
   contactEmail             String?
   contactPhone             String?
@@ -205,6 +303,25 @@ model Tenant {
   cashierSeatQuota         Int              @default(2)
   hasTimeMonitoring        Boolean          @default(false)
   hasBirForms              Boolean          @default(false)
+  /// Primary tax classification per BIR registration.
+  /// Drives receipt type, VAT math, PWD discount engine, and journal entries.
+  taxStatus                TaxStatus        @default(UNREGISTERED)
+  /// Derived convenience flag — true when taxStatus = VAT.
+  /// Kept for backward compatibility with existing JWT consumers.
+  isBirRegistered          Boolean          @default(false)
+  /// Derived convenience flag — true when taxStatus IN (VAT, NON_VAT).
+  /// Kept for backward compatibility with existing JWT consumers.
+  isVatRegistered          Boolean          @default(false)
+  /// Accounting method: ACCRUAL (default, for registered MSMEs) or CASH (backyard)
+  accountingMethod         AccountingMethod @default(ACCRUAL)
+  /// BIR Permit to Use (PTU) — issued for CAS-accredited POS systems
+  isPtuHolder              Boolean          @default(false)
+  /// PTU number as printed on the BIR PTU certificate (e.g. "PTU-123456-2024")
+  ptuNumber                String?
+  /// Machine Identification Number (MIN) — BIR CAS accreditation identifier
+  minNumber                String?
+  /// Registered address exactly as it appears on BIR Certificate of Registration
+  registeredAddress        String?
   managerAccountingEnabled Boolean          @default(false)
   inventoryMode            InventoryMode    @default(UNIT_BASED)
   valuationMethod          ValuationMethod  @default(WAC)
@@ -218,6 +335,7 @@ model Tenant {
   products            Product[]
   categories          Category[]
   orders              Order[]
+  shifts              Shift[]
   accountingEvents    AccountingEvent[]
   accounts            Account[]
   journalEntries      JournalEntry[]
@@ -225,6 +343,15 @@ model Tenant {
   discountTypes       DiscountTypeConfig[]
   promotions          Promotion[]
   paymentConfigs      PaymentChannelConfig[]
+  modifierGroups      ModifierGroup[]
+  unitsOfMeasure      UnitOfMeasure[]
+  settlementBatches   SettlementBatch[]
+  accountingPeriods   AccountingPeriod[]
+  auditLogs           AuditLog[]
+  zReadLogs           ZReadLog[]
+  xReadLogs           XReadLog[]
+  vendors             Vendor[]
+  expenses            ExpenseEntry[]
 
   @@map("tenants")
 }
@@ -243,6 +370,35 @@ model SubscriptionLog {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("subscription_logs")
+}
+
+/// Immutable audit trail for any change to tax settings or price adjustments.
+/// Records are INSERT-only; never updated or deleted — required for BIR compliance.
+model AuditLog {
+  id          String      @id @default(cuid())
+  tenantId    String
+  action      AuditAction
+  /// The table / domain entity that was changed (e.g. "Tenant", "Order", "Product")
+  entityType  String
+  /// Primary key of the changed entity
+  entityId    String
+  /// Previous state as JSON snapshot
+  before      Json?
+  /// New state as JSON snapshot
+  after       Json?
+  /// Human-readable description of the change
+  description String?
+  /// User who triggered the change (null = system action)
+  performedBy String?
+  ipAddress   String?
+  createdAt   DateTime    @default(now())
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, action])
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
 }
 
 // ─── Branch ───────────────────────────────────────────────────────────────────
@@ -301,6 +457,7 @@ model User {
   loginLogs            LoginLog[]
   appAccess            UserAppAccess[]
   ordersAsCreator      Order[]        @relation("CreatedByUser")
+  ordersAsUpdatedBy    Order[]        @relation("UpdatedByUser")
   ordersAsVoidedBy     Order[]        @relation("VoidedByUser")
   discountsAuthorized  OrderDiscount[] @relation("AuthorizedByUser")
 
@@ -336,6 +493,7 @@ model UserSession {
 
   user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@map("user_sessions")
 }
 
@@ -365,6 +523,7 @@ model LoginLog {
 
   user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([tenantId, createdAt])
   @@map("login_logs")
 }
 
@@ -383,6 +542,7 @@ model Category {
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   products    Product[]
 
+  @@index([tenantId, sortOrder])
   @@map("categories")
 }
 
@@ -392,25 +552,35 @@ model Product {
   categoryId     String?
   name           String
   description    String?
+  /// Internal Stock-Keeping Unit — unique per tenant when set
   sku            String?
+  /// Barcode (EAN-13, UPC-A, QR, etc.) — for scanner integration and BIR inventory audit
+  barcode        String?
   imageUrl       String?
   price          Decimal       @db.Decimal(12, 2)
   costPrice      Decimal?      @db.Decimal(12, 2)
   inventoryMode  InventoryMode @default(UNIT_BASED)
+  /// Whether this item carries 12% VAT. Drives taxType on OrderItem at checkout.
   isVatable      Boolean       @default(true)
   isActive       Boolean       @default(true)
+  /// Unit of Measure for this product (PC, KG, BOX, LITER, etc.)
+  unitOfMeasureId String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
   tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   category       Category?     @relation(fields: [categoryId], references: [id])
+  unitOfMeasure  UnitOfMeasure? @relation(fields: [unitOfMeasureId], references: [id])
   variants       ProductVariant[]
   inventory      InventoryItem[]
   inventoryLogs  InventoryLog[]
   bomItems       BomItem[]
   orderItems     OrderItem[]
   promotionItems PromotionProduct[]
+  modifierGroups ProductModifierGroup[]
 
+  @@index([tenantId, sku])
+  @@index([tenantId, barcode])
   @@map("products")
 }
 
@@ -539,6 +709,8 @@ model Promotion {
   tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   products         PromotionProduct[]
 
+  @@index([tenantId, isActive])
+  @@index([tenantId, isActive, startDate, endDate])   // promo rules engine: active + date-range filter
   @@map("promotions")
 }
 
@@ -607,11 +779,37 @@ model Order {
   pwdScIdOwnerName String?
   notes            String?
   clientUuid       String?       @unique
+
+  // ── BIR CAS Audit: Invoice Classification ─────────────────────────────────
+  /// How payment is settled at POS.
+  /// CASH_SALE = paid immediately; CHARGE = on-account (B2B / corporate).
+  invoiceType      InvoiceType   @default(CASH_SALE)
+  /// Dominant tax classification for the order.
+  /// Individual line items may override this with their own taxType.
+  taxType          TaxType       @default(VAT_12)
+
+  // ── BIR CAS Audit: B2B Customer Fields (AR) ───────────────────────────────
+  // Required per RR No. 1-2026 for invoices issued to registered businesses.
+  // Walk-in / anonymous retail sales leave all three null.
+  /// Business name of the corporate buyer (for B2B invoices)
+  customerName     String?
+  /// BIR TIN of the corporate buyer — required for valid input VAT claim (format: 000-000-000)
+  customerTin      String?
+  /// Registered address of the corporate buyer — required for invoices > ₱1,000
+  customerAddress  String?
+
+  // ── Audit Trail ────────────────────────────────────────────────────────────
   createdById      String?
-  voidedById       String?
+  /// Last user to modify this record (role change, void, correction)
+  updatedById      String?
+  voidedById       String?    // The supervisor who authorized the void (SALES_LEAD / OWNER)
+  voidInitiatedById String?   // The cashier who requested the void (null if supervisor voided directly)
   voidedAt         DateTime?
   voidReason       String?
   completedAt      DateTime?
+  /// Soft-delete timestamp — set on void/correction; NULL means active.
+  /// BIR requirement: invoice numbers must never have gaps; hard delete is forbidden.
+  deletedAt        DateTime?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
@@ -619,6 +817,7 @@ model Order {
   branch           Branch        @relation(fields: [branchId], references: [id])
   shift            Shift?        @relation(fields: [shiftId], references: [id])
   createdBy        User?         @relation("CreatedByUser", fields: [createdById], references: [id])
+  updatedBy        User?         @relation("UpdatedByUser", fields: [updatedById], references: [id])
   voidedBy         User?         @relation("VoidedByUser", fields: [voidedById], references: [id])
   items            OrderItem[]
   payments         OrderPayment[]
@@ -626,6 +825,10 @@ model Order {
   accountingEvents AccountingEvent[]
 
   @@unique([tenantId, orderNumber])
+  @@index([tenantId, createdAt])
+  @@index([branchId, status])
+  @@index([tenantId, deletedAt])   // soft-delete filter: WHERE deleted_at IS NULL
+  @@index([branchId, deletedAt])   // branch-scoped active-order queries
   @@map("orders")
 }
 
@@ -642,25 +845,32 @@ model OrderItem {
   lineTotal      Decimal         @db.Decimal(12, 2)
   costPrice      Decimal?        @db.Decimal(12, 2)
   isVatable      Boolean         @default(true)
+  /// BIR per-line tax classification. Overrides the order-level taxType for this line.
+  /// VAT_12 = standard 12%; VAT_EXEMPT = exempt by law; ZERO_RATED = 0% (exports/PEZA).
+  taxType        TaxType         @default(VAT_12)
   notes          String?
 
   order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product        Product         @relation(fields: [productId], references: [id])
   variant        ProductVariant? @relation(fields: [variantId], references: [id])
+  modifiers      OrderItemModifier[]
 
+  @@index([orderId])
   @@map("order_items")
 }
 
 model OrderPayment {
-  id        String        @id @default(cuid())
-  orderId   String
-  method    PaymentMethod
-  amount    Decimal       @db.Decimal(12, 2)
-  reference String?
-  createdAt DateTime      @default(now())
+  id               String            @id @default(cuid())
+  orderId          String
+  method           PaymentMethod
+  amount           Decimal           @db.Decimal(12, 2)
+  reference        String?
+  createdAt        DateTime          @default(now())
 
-  order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order            Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  settlementItem   SettlementItem?
 
+  @@index([orderId])   // settlement unmatched-payment lookup
   @@map("order_payments")
 }
 
@@ -680,6 +890,7 @@ model OrderDiscount {
   order            Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   authorizedBy     User?        @relation("AuthorizedByUser", fields: [authorizedById], references: [id])
 
+  @@index([orderId])   // order detail fetch includes discounts
   @@map("order_discounts")
 }
 
@@ -698,9 +909,12 @@ model Shift {
   closedAt            DateTime?
   notes               String?
 
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch              Branch    @relation(fields: [branchId], references: [id])
   orders              Order[]
 
+  @@index([tenantId, branchId])
+  @@index([branchId, closedAt])   // getActive(): WHERE branchId = X AND closedAt IS NULL
   @@map("shifts")
 }
 
@@ -724,24 +938,26 @@ model AccountingEvent {
   journalEntry JournalEntry?
 
   @@index([tenantId, status])
+  @@index([tenantId, status, createdAt])   // CRON processor: PENDING events ordered by age
   @@map("accounting_events")
 }
 
 // ─── Chart of Accounts ────────────────────────────────────────────────────────
 
 model Account {
-  id            String        @id @default(cuid())
-  tenantId      String
-  code          String
-  name          String
-  type          AccountType
-  normalBalance NormalBalance
-  isSystem      Boolean       @default(false)
-  isActive      Boolean       @default(true)
-  parentId      String?
-  description   String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id             String         @id @default(cuid())
+  tenantId       String
+  code           String
+  name           String
+  type           AccountType
+  normalBalance  NormalBalance
+  postingControl PostingControl @default(OPEN)
+  isSystem       Boolean        @default(false)
+  isActive       Boolean        @default(true)
+  parentId       String?
+  description    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   parent        Account?      @relation("AccountHierarchy", fields: [parentId], references: [id])
@@ -760,18 +976,36 @@ model JournalEntry {
   tenantId          String
   accountingEventId String?            @unique
   entryNumber       String
+  /// Document Date — date the economic event occurred (source doc date)
   date              DateTime
+  /// Posting Date — determines which accounting period the entry lands in.
+  /// User-editable; must fall within an open period before posting.
+  /// Defaults to the document date when not explicitly set.
+  postingDate       DateTime?
   description       String
+  /// Optional external reference: invoice #, OR #, voucher #, etc.
+  reference         String?
   status            JournalEntryStatus @default(POSTED)
+  source            JournalSource      @default(MANUAL)
   createdBy         String?
+  postedBy          String?            // userId who approved DRAFT → POSTED
+  postedAt          DateTime?
+  /// Points to the JE this entry is reversing (set on the reversal JE)
+  reversalOfId      String?            @unique
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
   tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   accountingEvent   AccountingEvent?   @relation(fields: [accountingEventId], references: [id])
   lines             JournalLine[]
+  /// The original entry that this JE reverses
+  reversalOf        JournalEntry?      @relation("JEReversals", fields: [reversalOfId], references: [id])
+  /// The reversal entry created for this JE (if any)
+  reversedBy        JournalEntry?      @relation("JEReversals")
 
+  @@index([tenantId, postingDate])
   @@index([tenantId, date])
+  @@index([tenantId, status])
   @@map("journal_entries")
 }
 
@@ -782,6 +1016,10 @@ model JournalLine {
   description    String?
   debit          Decimal      @default(0) @db.Decimal(14, 2)
   credit         Decimal      @default(0) @db.Decimal(14, 2)
+  /// Transaction currency (future FX support). Always "PHP" until multi-currency is enabled.
+  currency       String       @default("PHP")
+  /// Exchange rate to PHP functional currency. Always 1 until FX engine is built.
+  exchangeRate   Decimal      @default(1) @db.Decimal(12, 6)
   createdAt      DateTime     @default(now())
 
   journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
@@ -790,4 +1028,351 @@ model JournalLine {
   @@index([journalEntryId])
   @@index([accountId])
   @@map("journal_lines")
+}
+
+// ─── Modifier Groups (F&B add-ons) ───────────────────────────────────────────
+
+/// A named group of choices attached to a product (e.g. "Size", "Add-ons")
+model ModifierGroup {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  required    Boolean  @default(false)
+  multiSelect Boolean  @default(false)
+  minSelect   Int      @default(0)
+  maxSelect   Int?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  options     ModifierOption[]
+  products    ProductModifierGroup[]
+
+  @@index([tenantId])
+  @@map("modifier_groups")
+}
+
+/// A single choice within a modifier group (e.g. "Large +₱20")
+model ModifierOption {
+  id              String   @id @default(cuid())
+  modifierGroupId String
+  name            String
+  priceAdjustment Decimal  @default(0) @db.Decimal(12, 2)
+  isDefault       Boolean  @default(false)
+  sortOrder       Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  group         ModifierGroup       @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  orderItemMods OrderItemModifier[]
+
+  @@index([modifierGroupId])
+  @@map("modifier_options")
+}
+
+/// Junction: which modifier groups apply to a product
+model ProductModifierGroup {
+  productId       String
+  modifierGroupId String
+  sortOrder       Int    @default(0)
+
+  product       Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  modifierGroup ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@id([productId, modifierGroupId])
+  @@map("product_modifier_groups")
+}
+
+/// Snapshot of the modifier chosen at sale time — never re-queried from option table
+model OrderItemModifier {
+  id               String   @id @default(cuid())
+  orderItemId      String
+  modifierGroupId  String
+  modifierOptionId String
+  groupName        String
+  optionName       String
+  priceAdjustment  Decimal  @db.Decimal(12, 2)
+
+  orderItem      OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  modifierOption ModifierOption @relation(fields: [modifierOptionId], references: [id])
+
+  @@index([orderItemId])
+  @@map("order_item_modifiers")
+}
+
+// ─── Units of Measure ─────────────────────────────────────────────────────────
+
+/// Configurable UoM per tenant — used by Retail / Construction product types
+model UnitOfMeasure {
+  id               String   @id @default(cuid())
+  tenantId         String
+  name             String
+  abbreviation     String
+  baseUnit         String?
+  conversionFactor Decimal? @db.Decimal(12, 6)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@unique([tenantId, abbreviation])
+  @@index([tenantId])
+  @@map("units_of_measure")
+}
+
+// ─── Settlement Tracking ──────────────────────────────────────────────────────
+
+/// A batch of digital payments (GCash/Maya/QR Ph) that settle together to the bank.
+/// GCash and Maya collect money from customers on the merchant's behalf, then transfer
+/// a lump sum to the merchant's bank account 1–3 business days later.
+/// One SettlementBatch = one bank credit entry.
+model SettlementBatch {
+  id                String           @id @default(cuid())
+  tenantId          String
+  branchId          String
+  method            PaymentMethod    // GCASH_BUSINESS, MAYA_BUSINESS, QR_PH, etc.
+  referenceNumber   String?          // Gateway's own batch/settlement reference
+  expectedAmount    Decimal          @db.Decimal(12, 2) // Sum of transactions in batch
+  actualAmount      Decimal?         @db.Decimal(12, 2) // Amount that actually arrived in bank
+  variance          Decimal?         @db.Decimal(12, 2) // actualAmount - expectedAmount
+  periodStart       DateTime         // Earliest transaction date in this batch
+  periodEnd         DateTime         // Latest transaction date in this batch
+  settledAt         DateTime?        // When bank credit was received
+  bankReference     String?          // Bank transaction reference / OR number
+  status            SettlementStatus @default(PENDING)
+  notes             String?
+  reconciledById    String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items             SettlementItem[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, method, periodStart])
+  @@map("settlement_batches")
+}
+
+/// Links one OrderPayment to a SettlementBatch — the line-item level.
+/// One GCash payment from a customer = one SettlementItem inside a batch.
+model SettlementItem {
+  id                String          @id @default(cuid())
+  settlementBatchId String
+  orderPaymentId    String          @unique  // one payment can only be in one batch
+  amount            Decimal         @db.Decimal(12, 2)
+  transactionRef    String?         // Gateway transaction reference for this specific payment
+  createdAt         DateTime        @default(now())
+
+  batch             SettlementBatch @relation(fields: [settlementBatchId], references: [id], onDelete: Cascade)
+  orderPayment      OrderPayment    @relation(fields: [orderPaymentId], references: [id])
+
+  @@index([settlementBatchId])
+  @@map("settlement_items")
+}
+
+// ─── Accounting Periods ───────────────────────────────────────────────────────
+
+/// A closed period prevents any new journal entries from being posted to it.
+/// Think of it like a locked accounting book for a given month.
+///
+/// Immutability rules (mirrors SAP period management / OB52):
+///   - Closing a period writes closedById + closedAt (permanent facts, never nulled).
+///   - Reopening a period writes reopenedById + reopenedAt + reopenReason and increments
+///     reopenCount. The close metadata is preserved so auditors can see the full history.
+///   - Both actions are mirrored to the AuditLog for BIR/CAS compliance.
+///   - No postings (journal entries or order sync) can land in a CLOSED period.
+model AccountingPeriod {
+  id             String                 @id @default(cuid())
+  tenantId       String
+  name           String                 // e.g. "April 2026"
+  startDate      DateTime
+  endDate        DateTime
+  status         AccountingPeriodStatus @default(OPEN)
+  /// User who last closed this period. Never nulled on reopen — preserved as a historical fact.
+  closedById     String?
+  closedAt       DateTime?
+  /// User who last reopened this period (null if never reopened).
+  reopenedById   String?
+  reopenedAt     DateTime?
+  /// Mandatory justification written by the Business Owner when reopening.
+  reopenReason   String?
+  /// How many times this period has been reopened. BIR auditors flag counts > 0 for review.
+  reopenCount    Int                    @default(0)
+  notes          String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, startDate])
+  @@index([tenantId, status])
+  @@map("accounting_periods")
+}
+
+// ─── Z-Read Log (INSERT-only — BIR CAS daily tamper-proof totals) ──────────────
+// One record per branch per calendar date. Never updated after creation.
+// Mirrors the physical Z-Reading printout required by BIR CAS accreditation.
+model ZReadLog {
+  id              String    @id @default(cuid())
+  tenantId        String
+  branchId        String
+  /// Calendar date of the sales day (local PH time, stored as midnight UTC+8)
+  date            DateTime  @db.Date
+  /// Total completed (non-voided) orders for the day
+  totalOrders     Int
+  /// Total voided orders for the day
+  voidCount       Int
+  /// Gross sales before any discounts (sum of order.subtotal)
+  grossSales      Decimal   @db.Decimal(15, 4)
+  /// Net sales after all discounts (sum of order.totalAmount for completed orders)
+  netSales        Decimal   @db.Decimal(15, 4)
+  /// Total VAT collected (0 for UNREGISTERED and NON_VAT tenants)
+  vatAmount       Decimal   @db.Decimal(15, 4)
+  /// Total discount amount applied
+  discountAmount  Decimal   @db.Decimal(15, 4)
+  /// Cash payments total
+  cashAmount      Decimal   @db.Decimal(15, 4)
+  /// Non-cash (card, e-wallet, etc.) payments total
+  nonCashAmount   Decimal   @db.Decimal(15, 4)
+  /// Who triggered this Z-Read (system cron = null, manual = userId)
+  generatedById   String?
+  /// Insert timestamp — immutable anchor for audit
+  createdAt       DateTime  @default(now())
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// One Z-Read per branch per day — uniqueness enforced at DB level
+  @@unique([branchId, date])
+  @@index([tenantId, date])
+  @@map("z_read_logs")
+}
+
+// ─── X-Read Log (shift-level tamper-proof totals) ────────────────────────────
+// One record per shift. Never updated after creation.
+model XReadLog {
+  id              String    @id @default(cuid())
+  tenantId        String
+  branchId        String
+  shiftId         String    @unique
+  /// Shift open timestamp
+  openedAt        DateTime
+  /// Shift close timestamp
+  closedAt        DateTime
+  totalOrders     Int
+  voidCount       Int
+  grossSales      Decimal   @db.Decimal(15, 4)
+  netSales        Decimal   @db.Decimal(15, 4)
+  vatAmount       Decimal   @db.Decimal(15, 4)
+  discountAmount  Decimal   @db.Decimal(15, 4)
+  cashAmount      Decimal   @db.Decimal(15, 4)
+  nonCashAmount   Decimal   @db.Decimal(15, 4)
+  openingCash     Decimal   @db.Decimal(15, 4)
+  closingCash     Decimal   @db.Decimal(15, 4)
+  cashVariance    Decimal   @db.Decimal(15, 4)
+  generatedById   String?
+  createdAt       DateTime  @default(now())
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, closedAt])
+  @@map("x_read_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 4 AP STUBS — Accounts Payable & Withholding Tax
+//
+// These models are schema-ready but have no API controllers yet.
+// They exist to:
+//   1. Pass BIR CAS audit (WHT records must be in the database)
+//   2. Enable future Phase 4 AP module without a breaking migration
+//
+// BIR references:
+//   ATC (Alphanumeric Tax Code) — Form 1601-EQ classification
+//   WHT (Withholding Tax) — creditable withholding on vendor payments
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Master list of vendors/suppliers.
+/// Required for BIR Form 1601-EQ (withholding tax return) and input VAT claims.
+model Vendor {
+  id              String    @id @default(cuid())
+  tenantId        String
+  /// Legal business name as registered with BIR
+  name            String
+  /// Vendor's BIR TIN — required for valid input VAT claim (format: 000-000-000-000)
+  tin             String?
+  /// Vendor's BIR-registered address — required for input VAT documentation
+  address         String?
+  contactEmail    String?
+  contactPhone    String?
+  /// Default ATC (Alphanumeric Tax Code) for withholding on payments to this vendor.
+  /// Examples: WI160 = rentals (5%), WI010 = professional fees (10/15%), WI040 = services (2%)
+  defaultAtcCode  String?
+  /// Default WHT rate for this vendor (as decimal, e.g. 0.05 = 5%)
+  defaultWhtRate  Decimal?  @db.Decimal(5, 4)
+  isActive        Boolean   @default(true)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses        ExpenseEntry[]
+
+  @@index([tenantId, tin])
+  @@index([tenantId, isActive])
+  @@map("vendors")
+}
+
+/// Expense / vendor bill — records AP transactions with withholding tax.
+/// Connects to the GL via AccountingEvent → JournalEntry.
+/// BIR CAS requirement: every outgoing payment with WHT must be traceable.
+model ExpenseEntry {
+  id              String    @id @default(cuid())
+  tenantId        String
+  branchId        String?
+  vendorId        String?
+  /// Human-readable description of the expense (e.g., "Office rental Q1 2026")
+  description     String
+  /// Date the expense was incurred (document date)
+  expenseDate     DateTime
+  /// Gross amount before withholding (the invoice face value)
+  grossAmount     Decimal   @db.Decimal(14, 2)
+  /// BIR Alphanumeric Tax Code — classifies the nature of the payment for 1601-EQ.
+  /// Must match the ATC on the BIR withholding tax certificate (2307).
+  atcCode         String?
+  /// WHT rate applied (e.g., 0.05 = 5%). Pulled from Vendor.defaultWhtRate or manually set.
+  whtRate         Decimal?  @db.Decimal(5, 4)
+  /// Computed withholding tax amount (grossAmount × whtRate).
+  /// This is the amount remitted to BIR — held back from the vendor payment.
+  whtAmount       Decimal   @db.Decimal(14, 2) @default(0)
+  /// Net amount actually paid to the vendor (grossAmount − whtAmount).
+  netAmount       Decimal   @db.Decimal(14, 2)
+  /// Input VAT on this purchase (for VAT-registered tenants claiming input tax).
+  inputVat        Decimal   @db.Decimal(14, 2) @default(0)
+  /// Reference document number (vendor invoice #, receipt #, OR #)
+  referenceNumber String?
+  status          ExpenseStatus @default(DRAFT)
+  notes           String?
+  createdById     String?
+  updatedById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor          Vendor?   @relation(fields: [vendorId], references: [id])
+
+  @@index([tenantId, expenseDate])
+  @@index([tenantId, status])
+  @@index([vendorId])
+  @@map("expense_entries")
+}
+
+enum ExpenseStatus {
+  DRAFT     // Entered but not yet posted to ledger
+  POSTED    // Journal entry created; locked from editing
+  VOIDED    // Cancelled; WHT refund/credit memo may be required
 }

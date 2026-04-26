@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clerque — Sign in</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;1,400;1,500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── Tokens ───────────────────────────────────────────────────── */
+    :root {
+      --bg:           #EEE9DF;
+      --surface:      #F5F1EA;
+      --surface-2:    #EDE8DF;
+      --border:       #D6CFC4;
+      --border-focus: #8B5E3C;
+      --text:         #1A1612;
+      --text-muted:   #7A6F5E;
+      --text-faint:   #A89E90;
+      --accent:       #8B5E3C;
+      --accent-soft:  #F0E8DF;
+      --accent-hover: #7A5234;
+      --danger:       #C0392B;
+
+      --font-serif:   'Newsreader', Georgia, serif;
+      --font-sans:    'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+
+      --radius-sm:    6px;
+      --radius-md:    10px;
+      --radius-lg:    16px;
+      --radius-xl:    24px;
+
+      --shadow-card:  0 2px 12px rgba(26,22,18,0.08), 0 1px 3px rgba(26,22,18,0.06);
+      --shadow-input: 0 1px 2px rgba(26,22,18,0.06) inset;
+    }
+
+    /* ── Reset ────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-text-size-adjust: 100%; }
+
+    body {
+      min-height: 100svh;
+      background: var(--bg);
+      font-family: var(--font-sans);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Layout shells ────────────────────────────────────────────── */
+    .layout {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px 40px;
+    }
+
+    /* ── Wordmark ─────────────────────────────────────────────────── */
+    .wordmark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+      text-decoration: none;
+    }
+    .wordmark-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--text);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .wordmark-icon span {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-size: 24px;
+      color: var(--surface);
+      line-height: 1;
+      margin-top: 2px;
+    }
+    .wordmark-text {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-size: 22px;
+      color: var(--text);
+      letter-spacing: -0.3px;
+    }
+
+    /* ── Card ─────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-card);
+      width: 100%;
+      max-width: 400px;
+      padding: 36px 32px 32px;
+    }
+
+    .card-header {
+      margin-bottom: 28px;
+    }
+    .card-title {
+      font-family: var(--font-serif);
+      font-size: 26px;
+      font-weight: 400;
+      color: var(--text);
+      letter-spacing: -0.3px;
+      line-height: 1.2;
+    }
+    .card-title em {
+      font-style: italic;
+      color: var(--accent);
+    }
+    .card-subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+
+    /* ── Form ─────────────────────────────────────────────────────── */
+    .form { display: flex; flex-direction: column; gap: 16px; }
+
+    .field { display: flex; flex-direction: column; gap: 6px; }
+
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    input {
+      height: 44px;
+      padding: 0 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      color: var(--text);
+      box-shadow: var(--shadow-input);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      -webkit-appearance: none;
+    }
+    input::placeholder { color: var(--text-faint); }
+    input:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(139,94,60,0.12), var(--shadow-input);
+    }
+
+    /* ── Divider ─────────────────────────────────────────────────── */
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 4px 0;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .divider span {
+      font-size: 11px;
+      color: var(--text-faint);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    /* ── Forgot ──────────────────────────────────────────────────── */
+    .field-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .forgot {
+      font-size: 12px;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .forgot:hover { text-decoration: underline; }
+
+    /* ── Submit ──────────────────────────────────────────────────── */
+    .btn-primary {
+      width: 100%;
+      height: 46px;
+      background: var(--text);
+      color: var(--surface);
+      border: none;
+      border-radius: var(--radius-md);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      margin-top: 4px;
+    }
+    .btn-primary:hover { background: #2c2420; }
+    .btn-primary:active { transform: scale(0.99); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── App pills ────────────────────────────────────────────────── */
+    .app-pills {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      border: 1px solid;
+    }
+    .pill-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    .pill-counter { color: #3b7fd4; border-color: #c2d9f5; background: #eef4fd; }
+    .pill-counter .pill-dot { background: #3b82f6; }
+    .pill-ledger  { color: #2a9070; border-color: #b8e0d4; background: #edf7f3; }
+    .pill-ledger  .pill-dot { background: #2aa87e; }
+    .pill-sync    { color: #7c52c8; border-color: #d4c4f0; background: #f3eefb; }
+    .pill-sync    .pill-dot { background: #8b5cf6; }
+
+    /* ── Footer text ─────────────────────────────────────────────── */
+    .card-footer {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-faint);
+      line-height: 1.6;
+    }
+    .card-footer a { color: var(--accent); text-decoration: none; font-weight: 500; }
+    .card-footer a:hover { text-decoration: underline; }
+
+    /* ── Bottom bar ──────────────────────────────────────────────── */
+    .bottom-bar {
+      text-align: center;
+      padding: 20px 16px;
+      font-size: 12px;
+      color: var(--text-faint);
+      letter-spacing: 0.03em;
+    }
+    .bottom-bar a { color: var(--text-muted); text-decoration: none; }
+    .bottom-bar a:hover { color: var(--text); }
+    .bottom-bar .sep { margin: 0 8px; opacity: 0.4; }
+
+    /* ── Tablet (≥ 640px) ─────────────────────────────────────────── */
+    @media (min-width: 640px) {
+      .card { padding: 44px 44px 40px; }
+      .card-title { font-size: 30px; }
+    }
+
+    /* ── Laptop (≥ 1024px) ────────────────────────────────────────── */
+    @media (min-width: 1024px) {
+      body { flex-direction: row; }
+
+      .layout {
+        flex: 1;
+        padding: 40px 48px;
+      }
+
+      /* Left panel */
+      .panel-left {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 64px 72px;
+        max-width: 560px;
+      }
+
+      .panel-left .wordmark { margin-bottom: 48px; }
+      .panel-left .wordmark-icon { width: 52px; height: 52px; border-radius: 14px; }
+      .panel-left .wordmark-icon span { font-size: 30px; }
+      .panel-left .wordmark-text { font-size: 28px; }
+
+      .panel-tagline {
+        font-family: var(--font-serif);
+        font-size: 38px;
+        font-weight: 400;
+        line-height: 1.25;
+        letter-spacing: -0.5px;
+        color: var(--text);
+        margin-bottom: 20px;
+      }
+      .panel-tagline em { font-style: italic; color: var(--accent); }
+
+      .panel-desc {
+        font-size: 16px;
+        color: var(--text-muted);
+        line-height: 1.7;
+        max-width: 380px;
+        margin-bottom: 40px;
+      }
+
+      .panel-apps {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+        max-width: 320px;
+      }
+      .app-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 16px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+      .app-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 9px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        flex-shrink: 0;
+      }
+      .app-row-info { flex: 1; min-width: 0; }
+      .app-row-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        line-height: 1.2;
+      }
+      .app-row-desc {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 1px;
+      }
+      .app-row-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      /* Right panel */
+      .panel-right {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 64px 72px;
+        border-left: 1px solid var(--border);
+        background: var(--surface);
+      }
+      .panel-right .card {
+        box-shadow: none;
+        border: none;
+        background: transparent;
+        max-width: 380px;
+        padding: 0;
+      }
+      .panel-right .wordmark { display: none; }
+
+      /* hide mobile wordmark on desktop */
+      .mobile-wordmark { display: none; }
+    }
+
+    /* Mobile: hide panel elements */
+    .panel-left,
+    .panel-tagline,
+    .panel-desc,
+    .panel-apps { display: none; }
+
+    @media (min-width: 1024px) {
+      .panel-left { display: flex; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── LEFT PANEL (laptop only) ─────────────────────────────── -->
+  <div class="panel-left">
+    <a href="#" class="wordmark" aria-label="Clerque">
+      <div class="wordmark-icon"><span>C</span></div>
+      <span class="wordmark-text">Clerque</span>
+    </a>
+
+    <p class="panel-tagline">One login.<br>Every tool your<br><em>business needs.</em></p>
+    <p class="panel-desc">Counter for your floor, Ledger for your books, Sync for your team — all under one account.</p>
+
+    <div class="panel-apps">
+      <div class="app-row">
+        <div class="app-icon" style="background:#eef4fd;">🛒</div>
+        <div class="app-row-info">
+          <div class="app-row-name">Counter</div>
+          <div class="app-row-desc">Point of Sale · offline-first</div>
+        </div>
+        <div class="app-row-dot" style="background:#3b82f6;"></div>
+      </div>
+      <div class="app-row">
+        <div class="app-icon" style="background:#edf7f3;">📒</div>
+        <div class="app-row-info">
+          <div class="app-row-name">Ledger</div>
+          <div class="app-row-desc">Accounting · double-entry</div>
+        </div>
+        <div class="app-row-dot" style="background:#2aa87e;"></div>
+      </div>
+      <div class="app-row">
+        <div class="app-icon" style="background:#f3eefb;">👥</div>
+        <div class="app-row-info">
+          <div class="app-row-name">Sync</div>
+          <div class="app-row-desc">Time &amp; Payroll · attendance</div>
+        </div>
+        <div class="app-row-dot" style="background:#8b5cf6;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT PANEL / MAIN ────────────────────────────────────── -->
+  <div class="panel-right layout">
+
+    <!-- Wordmark (mobile + tablet only) -->
+    <a href="#" class="wordmark mobile-wordmark" aria-label="Clerque">
+      <div class="wordmark-icon"><span>C</span></div>
+      <span class="wordmark-text">Clerque</span>
+    </a>
+
+    <div class="card">
+      <div class="card-header">
+        <h1 class="card-title">Welcome <em>back.</em></h1>
+        <p class="card-subtitle">Sign in to continue to your workspace.</p>
+
+        <div class="app-pills" style="margin-top: 12px;">
+          <span class="pill pill-counter"><span class="pill-dot"></span>Counter</span>
+          <span class="pill pill-ledger"><span class="pill-dot"></span>Ledger</span>
+          <span class="pill pill-sync"><span class="pill-dot"></span>Sync</span>
+        </div>
+      </div>
+
+      <form class="form" onsubmit="return false;">
+        <div class="field">
+          <label for="tenant">Tenant ID</label>
+          <input
+            id="tenant"
+            type="text"
+            placeholder="your-business"
+            autocomplete="organization"
+            spellcheck="false"
+          />
+        </div>
+
+        <div class="field">
+          <label for="email">Email address</label>
+          <input
+            id="email"
+            type="email"
+            placeholder="you@example.com"
+            autocomplete="email"
+            inputmode="email"
+          />
+        </div>
+
+        <div class="field">
+          <div class="field-row">
+            <label for="password">Password</label>
+            <a href="#" class="forgot">Forgot password?</a>
+          </div>
+          <input
+            id="password"
+            type="password"
+            placeholder="••••••••"
+            autocomplete="current-password"
+          />
+        </div>
+
+        <button type="submit" class="btn-primary">Sign in to Clerque</button>
+      </form>
+
+      <div class="card-footer">
+        Don't have an account?
+        <a href="#">Contact your administrator</a>
+        <br />
+        <span style="margin-top: 4px; display: inline-block;">
+          Or <a href="#">request a demo</a>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── BOTTOM BAR ─────────────────────────────────────────────── -->
+  <footer class="bottom-bar">
+    <a href="#">Privacy</a><span class="sep">·</span>
+    <a href="#">Terms</a><span class="sep">·</span>
+    © 2025 Clerque
+  </footer>
+
+</body>
+</html>

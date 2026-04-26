@@ -1,0 +1,285 @@
+'use client';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
+  Users, Clock, Timer, RefreshCw, LogOut, User, Ruler, AlertTriangle,
+} from 'lucide-react';
+import { AppShell, type NavItem } from '@/components/shell/AppShell';
+import { OfflineBanner } from '@/components/pos/OfflineBanner';
+import { ShiftGate } from '@/components/pos/ShiftGate';
+import { CloseShiftModal } from '@/components/pos/CloseShiftModal';
+import { ShiftEodReport, type ShiftReportData } from '@/components/pos/ShiftEodReport';
+import { PrinterButton } from '@/components/pos/PrinterButton';
+import { useAuthStore } from '@/store/auth';
+import { useShiftStore } from '@/store/pos/shift';
+import { useShiftGuard } from '@/hooks/pos/useShiftGuard';
+import { usePendingSync } from '@/hooks/pos/usePendingSync';
+import { closeShift, getShiftSummary } from '@/lib/pos/shifts';
+import { api } from '@/lib/api';
+import { db } from '@/lib/pos/db';
+import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
+
+const POS_ACCENT      = 'hsl(217 91% 55%)';
+const POS_ACCENT_SOFT = 'hsl(217 91% 55% / 0.08)';
+
+const BASE_NAV: NavItem[] = [
+  { href: '/pos/terminal',  label: 'Terminal',    icon: ShoppingCart },
+  { href: '/pos/dashboard', label: 'Dashboard',   icon: LayoutDashboard },
+  { href: '/pos/orders',    label: 'Orders',      icon: ShoppingBag },
+  { href: '/pos/products',  label: 'Products',    icon: Package },
+  { href: '/pos/inventory', label: 'Inventory',   icon: ClipboardList },
+  { href: '/pos/staff',     label: 'Staff',       icon: Users },
+  { href: '/pos/pending',   label: 'Pending Sync',icon: Clock },
+];
+
+// ── SOD Nav Role Sets ──────────────────────────────────────────────────────────
+// These are used ONLY for sidebar visibility — backend guards are the real wall.
+const TERMINAL_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER'] as const;
+const DASHBOARD_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'FINANCE_LEAD'] as const;
+const ORDERS_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER'] as const;
+const PRODUCTS_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
+const INVENTORY_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD'] as const;
+const STAFF_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'SALES_LEAD', 'PAYROLL_MASTER'] as const;
+const UOM_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
+
+function inRoles(role: string | undefined | null, set: readonly string[]) {
+  return !!(role && set.includes(role));
+}
+
+export default function PosLayout({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
+  const { user, accessToken, clear } = useAuthStore();
+  const { activeShift, clearShift } = useShiftStore();
+  const { pendingCount, isSyncing, triggerSync } = usePendingSync();
+
+  const [showCloseShift,      setShowCloseShift]      = useState(false);
+  const [showSignOutWarning,  setShowSignOutWarning]  = useState(false);
+  const [signOutAfterClose,   setSignOutAfterClose]   = useState(false);
+  const [eodReport,           setEodReport]           = useState<ShiftReportData | null>(null);
+  const [hydrated,            setHydrated]            = useState(false);
+
+  useEffect(() => { setHydrated(true); }, []);
+  useEffect(() => {
+    if (hydrated && !accessToken) router.replace('/login');
+  }, [hydrated, accessToken, router]);
+
+  // ── Browser-level guard: shows native "Leave site?" dialog on tab close / refresh ──
+  useShiftGuard(!!activeShift);
+
+  const role = user?.role;
+
+  // Build nav — each item gated to only the roles that should see it.
+  // This is the "Clean Dashboard" UX requirement (SOD visibility layer).
+  const navItems: NavItem[] = [
+    ...(inRoles(role, TERMINAL_ROLES)  ? [{ href: '/pos/terminal',  label: 'Terminal',    icon: ShoppingCart }] : []),
+    ...(inRoles(role, DASHBOARD_ROLES) ? [{ href: '/pos/dashboard', label: 'Dashboard',   icon: LayoutDashboard }] : []),
+    ...(inRoles(role, ORDERS_ROLES)    ? [{ href: '/pos/orders',    label: 'Orders',      icon: ShoppingBag }] : []),
+    ...(inRoles(role, PRODUCTS_ROLES)  ? [{ href: '/pos/products',  label: 'Products',    icon: Package }] : []),
+    ...(inRoles(role, INVENTORY_ROLES) ? [{ href: '/pos/inventory', label: 'Inventory',   icon: ClipboardList }] : []),
+    ...(inRoles(role, STAFF_ROLES)     ? [{ href: '/pos/staff',        label: 'Staff',       icon: Users  }] : []),
+    ...(inRoles(role, UOM_ROLES)       ? [{ href: '/pos/settings/uom', label: 'Units (UoM)',  icon: Ruler  }] : []),
+    // Pending sync is always shown for roles that can create orders (offline capability)
+    ...(inRoles(role, ORDERS_ROLES)    ? [{ href: '/pos/pending', label: 'Pending Sync', icon: Clock, badge: pendingCount || undefined }] : []),
+  ];
+
+  async function doLogout() {
+    const refresh = localStorage.getItem('app-auth');
+    if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
+    clear();
+    clearShift();
+    document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    router.push('/login');
+  }
+
+  function handleLogout() {
+    // If a shift is active, show a warning instead of logging out immediately
+    if (activeShift) {
+      setShowSignOutWarning(true);
+      return;
+    }
+    void doLogout();
+  }
+
+
+  async function handleCloseShift(closingCashDeclared: number, notes?: string) {
+    if (!activeShift) return;
+    const shiftId = activeShift.id;
+    await closeShift(shiftId, closingCashDeclared, notes);
+    setShowCloseShift(false);
+    toast.success('Shift closed successfully.');
+    try {
+      const { data } = await api.get(`/reports/shift/${shiftId}`);
+      setEodReport(data as ShiftReportData);
+    } catch (err) {
+      console.warn('EOD report fetch failed:', err);
+      toast.warning('End-of-day report unavailable — check your connection and view it from Orders.');
+    }
+    clearShift();
+    try { await db.activeShift.clear(); } catch {}
+
+    // If shift was closed as part of a sign-out flow, log out after a short delay
+    // (gives the EOD report modal time to render before the page unmounts)
+    if (signOutAfterClose) {
+      setSignOutAfterClose(false);
+      setTimeout(() => { void doLogout(); }, 2500);
+    }
+  }
+
+  async function refreshShift() {
+    if (!activeShift) return;
+    try { useShiftStore.getState().setActiveShift(await getShiftSummary(activeShift.id)); } catch {}
+  }
+
+  const headerRight = (
+    <>
+      {pendingCount > 0 && (
+        <button
+          onClick={triggerSync}
+          disabled={isSyncing}
+          className="hidden sm:flex items-center gap-1.5 text-xs bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-white rounded-md px-2.5 py-1.5 transition-colors font-medium"
+        >
+          <RefreshCw className={cn('h-3.5 w-3.5', isSyncing && 'animate-spin')} />
+          {pendingCount} pending
+        </button>
+      )}
+
+      {activeShift && (
+        <button
+          onClick={async () => { await refreshShift(); setShowCloseShift(true); }}
+          className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-2.5 py-1.5 transition-colors"
+        >
+          <Timer className="h-3.5 w-3.5" />
+          Close Shift
+        </button>
+      )}
+
+      <div className="hidden sm:block">
+        <PrinterButton />
+      </div>
+
+      <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary rounded-md px-2.5 py-1.5">
+        <User className="h-3.5 w-3.5" />
+        <span className="max-w-[80px] truncate">{user?.name || 'Cashier'}</span>
+      </div>
+
+      <button
+        onClick={handleLogout}
+        className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md px-2.5 py-1.5 transition-colors"
+      >
+        <LogOut className="h-3.5 w-3.5" />
+        <span className="hidden lg:inline">Sign out</span>
+      </button>
+    </>
+  );
+
+  if (!hydrated) return null;
+
+  return (
+    <div
+      style={{
+        '--accent':      POS_ACCENT,
+        '--accent-soft': POS_ACCENT_SOFT,
+      } as React.CSSProperties}
+    >
+      <AppShell
+        navItems={navItems}
+        logoIcon={ShoppingCart}
+        appName="Counter"
+        headerRight={headerRight}
+        onSignOut={handleLogout}
+      >
+        <OfflineBanner />
+        <ShiftGate>{children}</ShiftGate>
+      </AppShell>
+
+      {activeShift && (
+        <CloseShiftModal
+          open={showCloseShift}
+          shift={activeShift}
+          onClose={() => setShowCloseShift(false)}
+          onConfirm={handleCloseShift}
+        />
+      )}
+
+      {eodReport && (
+        <ShiftEodReport open data={eodReport} onClose={() => setEodReport(null)} />
+      )}
+
+      {/* ── Sign-Out Guard Modal ─────────────────────────────────────────────
+          Shown when the user clicks "Sign Out" while a shift is still open.
+          Gives three options:
+            1. Close Shift & Sign Out  (recommended)
+            2. Sign Out Anyway         (emergency escape — shift stays open on server)
+            3. Cancel                  (stay in the POS)
+      ──────────────────────────────────────────────────────────────────────── */}
+      {showSignOutWarning && activeShift && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+
+            {/* Header */}
+            <div className="flex items-start gap-3 px-6 pt-6 pb-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center">
+                <AlertTriangle className="h-5 w-5 text-amber-500" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-foreground text-base leading-snug">
+                  Shift Still Open
+                </h2>
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                  You have an active shift. Signing out without closing it means
+                  your cash count and sales won&apos;t be recorded for this session.
+                </p>
+              </div>
+            </div>
+
+            {/* Shift info strip */}
+            <div className="mx-6 mb-4 px-3 py-2.5 rounded-xl bg-muted/60 border border-border text-xs text-muted-foreground flex items-center justify-between">
+              <span>Shift opened</span>
+              <span className="font-medium text-foreground">
+                {new Date(activeShift.openedAt).toLocaleString('en-PH', {
+                  month: 'short', day: 'numeric',
+                  hour: '2-digit', minute: '2-digit',
+                  timeZone: 'Asia/Manila',
+                })}
+              </span>
+            </div>
+
+            {/* Actions */}
+            <div className="px-6 pb-6 flex flex-col gap-2">
+              {/* Primary: close shift first, then auto-logout */}
+              <button
+                onClick={() => {
+                  setShowSignOutWarning(false);
+                  setSignOutAfterClose(true);   // handleCloseShift will doLogout() after
+                  setShowCloseShift(true);
+                }}
+                className="w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                style={{ background: 'var(--accent)' }}
+              >
+                Close Shift First, then Sign Out
+              </button>
+
+              {/* Secondary: force logout (destructive) */}
+              <button
+                onClick={() => { setShowSignOutWarning(false); void doLogout(); }}
+                className="w-full py-2 rounded-xl text-sm font-medium text-red-500 hover:bg-red-500/8 border border-red-200/50 dark:border-red-800/40 transition-colors"
+              >
+                Sign Out Anyway
+              </button>
+
+              {/* Cancel */}
+              <button
+                onClick={() => setShowSignOutWarning(false)}
+                className="w-full py-2 rounded-xl text-sm font-medium text-muted-foreground hover:bg-muted transition-colors"
+              >
+                Stay in POS
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

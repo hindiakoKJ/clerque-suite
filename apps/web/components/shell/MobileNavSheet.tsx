@@ -1,7 +1,8 @@
 'use client';
 import * as React from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
+import { X, LogOut } from 'lucide-react';
+import { useAuthStore } from '@/store/auth';
 
 interface MobileNavSheetProps {
   open: boolean;
@@ -10,9 +11,12 @@ interface MobileNavSheetProps {
   logoIcon: React.ElementType;
   appName: string;
   brandName?: string;
+  onSignOut?: () => void;
 }
 
-export function MobileNavSheet({ open, onClose, children, logoIcon: LogoIcon, appName, brandName = 'Clerque' }: MobileNavSheetProps) {
+export function MobileNavSheet({ open, onClose, children, logoIcon: LogoIcon, appName, brandName = 'Clerque', onSignOut }: MobileNavSheetProps) {
+  const user = useAuthStore((s) => s.user);
+
   return (
     <Dialog.Root open={open} onOpenChange={(v) => !v && onClose()}>
       <Dialog.Portal>
@@ -39,7 +43,29 @@ export function MobileNavSheet({ open, onClose, children, logoIcon: LogoIcon, ap
               </button>
             </Dialog.Close>
           </div>
+
           <div className="flex-1 overflow-y-auto">{children}</div>
+
+          {/* Mobile footer — user info + sign out */}
+          <div className="border-t border-border p-3 shrink-0 space-y-1">
+            {user && (
+              <div className="px-3 py-2 rounded-md bg-muted/30">
+                <p className="text-xs font-medium text-foreground truncate">{user.name}</p>
+                <p className="text-[11px] text-muted-foreground truncate">
+                  {user.role?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                </p>
+              </div>
+            )}
+            {onSignOut && (
+              <button
+                onClick={() => { onClose(); onSignOut(); }}
+                className="flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-red-500/10 hover:text-red-500 transition-colors w-full"
+              >
+                <LogOut className="h-4 w-4 shrink-0" />
+                <span>Sign out</span>
+              </button>
+            )}
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -32,9 +32,8 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Body() dto: RefreshDto) {
-    // Decode to get userId without full validation — refresh strategy handles trust
-    const payload = this.authService['jwt'].decode(dto.refreshToken) as { sub: string };
-    return this.authService.refresh(payload.sub, dto.refreshToken);
+    const sub = this.authService.extractRefreshSub(dto.refreshToken);
+    return this.authService.refresh(sub, dto.refreshToken);
   }
 
   @UseGuards(JwtAuthGuard)

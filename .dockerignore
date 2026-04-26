@@ -1,0 +1,38 @@
+# Dependencies (installed fresh inside Docker)
+node_modules
+**/node_modules
+
+# Next.js build (web app goes to Vercel, not Docker)
+apps/web
+.next
+**/.next
+
+# Prisma local dev DB
+packages/db/prisma/*.db
+packages/db/prisma/*.db-journal
+
+# Compiled outputs — rebuilt inside Docker
+**/dist
+**/.turbo
+
+# Env files — injected at runtime via Railway environment variables
+.env
+.env.*
+!.env.example
+
+# Git / IDE
+.git
+.gitignore
+.vscode
+.idea
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CI
+.github

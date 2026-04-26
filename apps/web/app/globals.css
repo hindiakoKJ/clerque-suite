@@ -1,17 +1,69 @@
 @import "tailwindcss";
 
-@theme inline {
-  /* ─── Accent (injected per-module via CSS variable) ─────────────────── */
-  --color-accent:      var(--accent, hsl(217 91% 55%));
-  --color-accent-soft: var(--accent-soft, hsl(217 91% 55% / 0.08));
+/* ─── Class-based dark mode (Tailwind v4) ───────────────────────────────── */
+/* dark: utilities apply when any ancestor carries the .dark class           */
+@variant dark (&:where(.dark, .dark *));
 
-  /* ─── Neutral palette ───────────────────────────────────────────────── */
-  --color-surface:     var(--surface, #ffffff);
-  --color-surface-2:   var(--surface-2, #f8fafc);
-  --color-border:      var(--border-color, #e2e8f0);
+/* ─── Tailwind token map ─────────────────────────────────────────────────── */
+/* All values are CSS-var references so they hot-swap between :root / .dark  */
+@theme inline {
+  /* Per-app accent — injected by each app's layout.tsx */
+  --color-accent:              var(--accent,        hsl(217 91% 55%));
+  --color-accent-soft:         var(--accent-soft,   hsl(217 91% 55% / 0.08));
+
+  /* Surfaces */
+  --color-background:          var(--bg,            #ffffff);
+  --color-card:                var(--card,           #f8fafc);
+  --color-muted:               var(--muted,          #f1f5f9);
+
+  /* Text */
+  --color-foreground:          var(--fg,             #0f172a);
+  --color-muted-foreground:    var(--fg-muted,       #64748b);
+
+  /* Interactive / secondary */
+  --color-secondary:           var(--secondary,      #f1f5f9);
+  --color-secondary-foreground:var(--secondary-fg,   #0f172a);
+
+  /* Borders */
+  --color-border:              var(--border-col,     #e2e8f0);
+
+  /* Inputs */
+  --color-input:               var(--input-bg,       #f8fafc);
 }
 
-/* ─── Base ──────────────────────────────────────────────────────────────── */
+/* ─── Light mode tokens (default) ───────────────────────────────────────── */
+:root {
+  color-scheme: light;
+  --bg:           #ffffff;
+  --card:         #f8fafc;
+  --muted:        #f1f5f9;
+  --fg:           #0f172a;
+  --fg-muted:     #64748b;
+  --secondary:    #f1f5f9;
+  --secondary-fg: #0f172a;
+  --border-col:   #e2e8f0;
+  --input-bg:     #f8fafc;
+  --input-fg:     #0f172a;
+  --input-placeholder: #94a3b8;
+}
+
+/* ─── Dark mode tokens ───────────────────────────────────────────────────── */
+.dark {
+  color-scheme: dark;
+  --bg:           #030712;
+  --card:         #111827;
+  --muted:        #1e293b;
+  --fg:           #f1f5f9;
+  --fg-muted:     #94a3b8;
+  --secondary:    #1e293b;
+  --secondary-fg: #e2e8f0;
+  --border-col:   #1f2937;
+  --input-bg:     #1e293b;
+  --input-fg:     #f1f5f9;
+  --input-placeholder: #4b5563;
+}
+
+/* ─── Base ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 
 html {
@@ -19,9 +71,18 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ─── Dark mode tokens ──────────────────────────────────────────────────── */
-.dark {
-  --surface:      #030712;
-  --surface-2:    #111827;
-  --border-color: #1f2937;
+body {
+  background-color: var(--bg, #ffffff);
+  color: var(--fg, #0f172a);
+}
+
+/* ─── Semantic input base ────────────────────────────────────────────────── */
+/* Applied globally so any <input> or <textarea> picks up dark-aware colors  */
+input, textarea, select {
+  color: var(--input-fg, #0f172a);
+  background-color: var(--input-bg, #f8fafc);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--input-placeholder, #94a3b8);
 }

@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ── Type check both apps ────────────────────────────────────────────────────
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --workspaces --include-workspace-root
+
+      - name: Build shared-types
+        run: npm run build --workspace=packages/shared-types
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/db/prisma/schema.prisma
+
+      - name: Type check — API
+        run: npm run check-types --workspace=apps/api
+
+      - name: Type check — Web
+        run: npm run check-types --workspace=apps/web
+
+  # ── Lint ────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --workspaces --include-workspace-root
+
+      - name: Build shared-types
+        run: npm run build --workspace=packages/shared-types
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/db/prisma/schema.prisma
+
+      - name: Lint — API
+        run: npm run lint --workspace=apps/api
+
+  # ── Docker build check (verifies the Dockerfile compiles cleanly) ───────────
+  docker-build:
+    name: Docker Build (API)
+    runs-on: ubuntu-latest
+    # Only run on push to main to keep PR feedback fast
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: clerque-api:ci

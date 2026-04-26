@@ -1,19 +1,30 @@
 import { db } from './db';
 import { api } from '@/lib/api';
 
+const MAX_RETRIES = 5;
+
 interface SyncResult {
   clientUuid: string;
   orderId?: string;
   error?: string;
 }
 
-export async function syncPendingOrders(): Promise<{ synced: number; failed: number }> {
-  const pending = await db.pendingOrders
+export async function syncPendingOrders(): Promise<{ synced: number; failed: number; abandoned: number }> {
+  const all = await db.pendingOrders
     .where('status')
     .anyOf(['PENDING', 'FAILED'])
     .toArray();
 
-  if (pending.length === 0) return { synced: 0, failed: 0 };
+  // Permanently abandon orders that have exceeded the retry cap
+  const overLimit = all.filter((o) => o.retries >= MAX_RETRIES);
+  for (const o of overLimit) {
+    await db.pendingOrders.update(o.id!, { status: 'FAILED', lastError: `Abandoned after ${MAX_RETRIES} retries: ${o.lastError ?? 'unknown error'}` });
+  }
+  const abandoned = overLimit.length;
+
+  const pending = all.filter((o) => o.retries < MAX_RETRIES);
+
+  if (pending.length === 0) return { synced: 0, failed: 0, abandoned };
 
   let synced = 0;
   let failed = 0;
@@ -58,5 +69,5 @@ export async function syncPendingOrders(): Promise<{ synced: number; failed: num
     }
   }
 
-  return { synced, failed };
+  return { synced, failed, abandoned };
 }

@@ -1,10 +1,12 @@
 'use client';
 import * as React from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MobileNavSheet } from './MobileNavSheet';
+import { toggleTheme } from '@/components/portal/AppLoginPage';
+import { useAuthStore } from '@/store/auth';
 
 export interface NavItem {
   href: string;
@@ -21,6 +23,8 @@ interface AppShellProps {
   appName: string;
   brandName?: string;
   headerRight?: React.ReactNode;
+  /** When provided, a Sign Out button is rendered in the sidebar footer and mobile nav. */
+  onSignOut?: () => void;
 }
 
 export function AppShell({
@@ -30,11 +34,22 @@ export function AppShell({
   appName,
   brandName = 'Clerque',  // "Clerque Counter", "Clerque Ledger", "Clerque Sync"
   headerRight,
+  onSignOut,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isDark, setIsDark] = useState(false);
   const pathname = usePathname();
   const router   = useRouter();
+  const user     = useAuthStore((s) => s.user);
+
+  useEffect(() => {
+    const check = () => setIsDark(document.documentElement.classList.contains('dark'));
+    check();
+    const obs = new MutationObserver(check);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => obs.disconnect();
+  }, []);
 
   function NavList({ onItemClick }: { onItemClick?: () => void }) {
     return (
@@ -98,7 +113,43 @@ export function AppShell({
           <NavList />
         </div>
 
-        <div className="p-2 border-t border-border shrink-0">
+        <div className="p-2 border-t border-border shrink-0 space-y-1">
+          {/* User info */}
+          {!collapsed && user && (
+            <div className="px-3 py-2 rounded-md bg-muted/30">
+              <p className="text-xs font-medium text-foreground truncate">{user.name}</p>
+              <p className="text-[11px] text-muted-foreground truncate">
+                {user.role?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+              </p>
+            </div>
+          )}
+          {/* Settings */}
+          <button
+            onClick={() => router.push('/settings')}
+            className={cn(
+              'flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors w-full',
+              collapsed && 'justify-center px-2',
+            )}
+            title={collapsed ? 'Settings' : undefined}
+          >
+            <Settings className="h-4 w-4 shrink-0" />
+            {!collapsed && <span>Settings</span>}
+          </button>
+          {/* Sign Out — rendered only when the parent layout provides a handler */}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-red-500/10 hover:text-red-500 transition-colors w-full',
+                collapsed && 'justify-center px-2',
+              )}
+              title={collapsed ? 'Sign out' : undefined}
+            >
+              <LogOut className="h-4 w-4 shrink-0" />
+              {!collapsed && <span>Sign out</span>}
+            </button>
+          )}
+          {/* Collapse toggle */}
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="flex items-center justify-center w-full h-8 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
@@ -123,10 +174,19 @@ export function AppShell({
             </div>
           </div>
           <div className="hidden md:block" />
-          {headerRight && <div className="flex items-center gap-1">{headerRight}</div>}
+          <div className="flex items-center gap-1">
+            {headerRight}
+            <button
+              onClick={toggleTheme}
+              aria-label="Toggle dark mode"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+          </div>
         </header>
 
-        <main className="flex-1 overflow-hidden">{children}</main>
+        <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
 
       <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName}>

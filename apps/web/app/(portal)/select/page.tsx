@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ShoppingCart, BookOpen, Users, Lock, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import type { AccessLevel } from '@repo/shared-types';
+import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 
 /* ─── App card registry ──────────────────────────────────────────────────── */
 
@@ -57,6 +58,15 @@ const APPS: AppCard[] = [
 export default function SelectPage() {
   const router = useRouter();
   const { user, hasAccess, accessToken } = useAuthStore();
+  const [wizardDismissed, setWizardDismissed] = useState(false);
+
+  const isOwner = user?.role === 'BUSINESS_OWNER';
+  const { data: tenantProfile } = useBusinessSetup(isOwner);
+
+  const showWizard =
+    isOwner &&
+    !wizardDismissed &&
+    tenantProfile?.businessType === 'RETAIL';
 
   // If not authenticated, redirect to login
   useEffect(() => {
@@ -76,6 +86,9 @@ export default function SelectPage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-white dark:bg-gray-950 px-4">
+      {showWizard && (
+        <BusinessSetupWizard onDismiss={() => setWizardDismissed(true)} />
+      )}
       <div className="w-full max-w-2xl space-y-8">
         {/* Header */}
         <div className="text-center space-y-2">

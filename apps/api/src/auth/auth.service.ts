@@ -6,7 +6,8 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS } from '@repo/shared-types';
+import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags } from '@repo/shared-types';
+import type { TaxStatus } from '@repo/shared-types';
 
 const ACCESS_EXPIRY = '15m';
 const REFRESH_EXPIRY = '7d';
@@ -113,14 +114,34 @@ export class AuthService {
 
     const appAccess = await this.loadAppAccess(userId, role);
 
+    // Fetch tenant registration flags to embed in JWT
+    const tenant = tenantId
+      ? await this.prisma.tenant.findUnique({
+          where:  { id: tenantId },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true },
+        })
+      : null;
+
+    const taxStatus = (tenant?.taxStatus ?? 'UNREGISTERED') as TaxStatus;
+    const flags     = taxStatusFlags(taxStatus);
+
     const payload: JwtPayload = {
-      sub: userId,
+      sub:             userId,
       name,
       tenantId,
       branchId,
-      role: role as JwtPayload['role'],
-      isSuperAdmin: false,
+      role:            role as JwtPayload['role'],
+      isSuperAdmin:    false,
       appAccess,
+      taxStatus,
+      isVatRegistered: flags.isVatRegistered,
+      isBirRegistered: flags.isBirRegistered,
+      tinNumber:         tenant?.tinNumber ?? null,
+      businessName:      tenant?.businessName ?? null,
+      registeredAddress: tenant?.registeredAddress ?? null,
+      isPtuHolder:       tenant?.isPtuHolder ?? false,
+      ptuNumber:         tenant?.ptuNumber ?? null,
+      minNumber:         tenant?.minNumber ?? null,
     };
 
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_EXPIRY });
@@ -222,15 +243,34 @@ export class AuthService {
     });
   }
 
+  /** Verify refresh token signature and return the subject (userId). Throws 401 on invalid/expired token. */
+  extractRefreshSub(token: string): string {
+    try {
+      const payload = this.jwt.verify(token) as { sub: string };
+      return payload.sub;
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+  }
+
   issueTokensForSuperAdmin(adminId: string): AuthTokens {
     const payload: JwtPayload = {
-      sub: adminId,
-      name: 'Super Admin',
-      tenantId: null,
-      branchId: null,
-      role: 'SUPER_ADMIN',
-      isSuperAdmin: true,
-      appAccess: DEFAULT_APP_ACCESS['SUPER_ADMIN'],
+      sub:             adminId,
+      name:            'Super Admin',
+      tenantId:        null,
+      branchId:        null,
+      role:            'SUPER_ADMIN',
+      isSuperAdmin:    true,
+      appAccess:       DEFAULT_APP_ACCESS['SUPER_ADMIN'],
+      taxStatus:         'UNREGISTERED', // Super Admin operates outside any specific tenant
+      isVatRegistered:   false,
+      isBirRegistered:   false,
+      tinNumber:         null,
+      businessName:      null,
+      registeredAddress: null,
+      isPtuHolder:       false,
+      ptuNumber:         null,
+      minNumber:         null,
     };
     const accessToken = this.jwt.sign(payload, { expiresIn: '2h' });
     const refreshToken = this.jwt.sign(

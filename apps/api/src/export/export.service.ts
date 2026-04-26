@@ -3,6 +3,9 @@ import ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { JournalService } from '../accounting/journal.service';
+import { ExpensesService } from '../ap/expenses.service';
+import { ArService } from '../ar/ar.service';
+import { PayrollService } from '../payroll/payroll.service';
 
 // ── Shared formatting helpers ────────────────────────────────────────────────
 
@@ -76,6 +79,9 @@ export class ExportService {
     private prisma:    PrismaService,
     private accounts:  AccountsService,
     private journal:   JournalService,
+    private apService: ExpensesService,
+    private arService: ArService,
+    private payrollService: PayrollService,
   ) {}
 
   private async tenantName(tenantId: string): Promise<string> {
@@ -404,5 +410,218 @@ export class ExportService {
     ].join(','));
 
     return lines.join('\r\n');
+  }
+
+  // ── AP Aging ───────────────────────────────────────────────────────────────
+
+  async exportApAging(tenantId: string): Promise<Buffer> {
+    const [name, aging] = await Promise.all([
+      this.tenantName(tenantId),
+      this.apService.getAging(tenantId),
+    ]);
+
+    const wb = buildWorkbook();
+    const ws = wb.addWorksheet('AP Aging', { views: [{ state: 'frozen', ySplit: 4 }] });
+    ws.properties.tabColor = { argb: 'FFDC322F' };
+
+    const COL_COUNT = 7;
+    writeReportHeader(
+      ws,
+      name,
+      'AP Aging Report',
+      `As of ${new Date(aging.asOf).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}   |   Generated: ${new Date().toLocaleString()}`,
+      COL_COUNT,
+    );
+
+    ws.columns = [
+      { key: 'vendor',     header: 'Vendor',               width: 36 },
+      { key: 'total',      header: 'Total Outstanding',    width: 20, style: { numFmt: PESO_FMT } },
+      { key: 'current',    header: 'Current (not due)',     width: 20, style: { numFmt: PESO_FMT } },
+      { key: 'days1_30',   header: '1–30 Days',            width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'days31_60',  header: '31–60 Days',           width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'days61_90',  header: '61–90 Days',           width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'days90plus', header: '90+ Days',             width: 18, style: { numFmt: PESO_FMT } },
+    ];
+
+    applyHeaderStyle(ws.getRow(4));
+
+    aging.rows.forEach((r, idx) => {
+      const row = ws.addRow({
+        vendor:     r.vendorName,
+        total:      r.total,
+        current:    r.current,
+        days1_30:   r.days1_30,
+        days31_60:  r.days31_60,
+        days61_90:  r.days61_90,
+        days90plus: r.days90plus,
+      });
+      applyAlternatingFill(row, idx);
+      // Color 90+ cell red if amount > 0
+      if (r.days90plus > 0) {
+        row.getCell('days90plus').font = { color: { argb: 'FFDC322F' }, bold: true };
+      }
+    });
+
+    // Totals row
+    const totRow = ws.addRow({
+      vendor:     'TOTAL',
+      total:      aging.totals.total,
+      current:    aging.totals.current,
+      days1_30:   aging.totals.days1_30,
+      days31_60:  aging.totals.days31_60,
+      days61_90:  aging.totals.days61_90,
+      days90plus: aging.totals.days90plus,
+    });
+    totRow.font   = { bold: true };
+    totRow.border = { top: { style: 'thin' } };
+
+    autoWidth(ws);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  // ── AR Aging ───────────────────────────────────────────────────────────────
+
+  async exportArAging(tenantId: string): Promise<Buffer> {
+    const [name, aging] = await Promise.all([
+      this.tenantName(tenantId),
+      this.arService.getAging(tenantId),
+    ]);
+
+    const wb = buildWorkbook();
+    const ws = wb.addWorksheet('AR Aging', { views: [{ state: 'frozen', ySplit: 4 }] });
+    ws.properties.tabColor = { argb: 'FF268BD2' };
+
+    const COL_COUNT = 7;
+    writeReportHeader(
+      ws,
+      name,
+      'AR Aging Report',
+      `As of ${new Date(aging.asOf).toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}   |   Generated: ${new Date().toLocaleString()}`,
+      COL_COUNT,
+    );
+
+    ws.columns = [
+      { key: 'customer',    header: 'Customer',            width: 36 },
+      { key: 'total',       header: 'Total Outstanding',   width: 20, style: { numFmt: PESO_FMT } },
+      { key: 'notDue',      header: 'Not Due',             width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'bucket1_30',  header: '1–30 Days',           width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'bucket31_60', header: '31–60 Days',          width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'bucket61_90', header: '61–90 Days',          width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'bucket90plus',header: '90+ Days',            width: 18, style: { numFmt: PESO_FMT } },
+    ];
+
+    applyHeaderStyle(ws.getRow(4));
+
+    aging.rows.forEach((r, idx) => {
+      const row = ws.addRow({
+        customer:    r.customerName,
+        total:       r.total,
+        notDue:      r.notDue,
+        bucket1_30:  r.bucket1_30,
+        bucket31_60: r.bucket31_60,
+        bucket61_90: r.bucket61_90,
+        bucket90plus: r.bucket90plus,
+      });
+      applyAlternatingFill(row, idx);
+      // Color 90+ cell red if amount > 0
+      if (r.bucket90plus > 0) {
+        row.getCell('bucket90plus').font = { color: { argb: 'FFDC322F' }, bold: true };
+      }
+    });
+
+    // Totals row
+    const totRow = ws.addRow({
+      customer:    'GRAND TOTAL',
+      total:       aging.grandTotal.total,
+      notDue:      aging.grandTotal.notDue,
+      bucket1_30:  aging.grandTotal.bucket1_30,
+      bucket31_60: aging.grandTotal.bucket31_60,
+      bucket61_90: aging.grandTotal.bucket61_90,
+      bucket90plus: aging.grandTotal.bucket90plus,
+    });
+    totRow.font   = { bold: true };
+    totRow.border = { top: { style: 'thin' } };
+
+    autoWidth(ws);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  // ── Payroll YTD ────────────────────────────────────────────────────────────
+
+  async exportPayrollYtd(tenantId: string, year: number): Promise<Buffer> {
+    const [name, allRuns] = await Promise.all([
+      this.tenantName(tenantId),
+      this.payrollService.getPayRuns(tenantId),
+    ]);
+
+    const yearStr = String(year);
+    const runs = allRuns.filter(
+      (r) => r.status === 'COMPLETED' && r.periodStart.startsWith(yearStr),
+    );
+
+    const wb = buildWorkbook();
+    const ws = wb.addWorksheet('Payroll YTD', { views: [{ state: 'frozen', ySplit: 4 }] });
+    ws.properties.tabColor = { argb: 'FF2AA198' };
+
+    const COL_COUNT = 8;
+    writeReportHeader(
+      ws,
+      name,
+      `Payroll Year-to-Date ${yearStr}`,
+      `Generated: ${new Date().toLocaleString()}`,
+      COL_COUNT,
+    );
+
+    ws.columns = [
+      { key: 'periodStart',  header: 'Period Start',  width: 18 },
+      { key: 'periodEnd',    header: 'Period End',    width: 18 },
+      { key: 'label',        header: 'Label',         width: 24 },
+      { key: 'frequency',    header: 'Frequency',     width: 16 },
+      { key: 'employees',    header: 'Employees',     width: 12 },
+      { key: 'grossPay',     header: 'Gross Pay',     width: 20, style: { numFmt: PESO_FMT } },
+      { key: 'deductions',   header: 'Deductions',    width: 20, style: { numFmt: PESO_FMT } },
+      { key: 'netPay',       header: 'Net Pay',       width: 20, style: { numFmt: PESO_FMT } },
+    ];
+
+    applyHeaderStyle(ws.getRow(4));
+
+    let sumGross = 0;
+    let sumDeductions = 0;
+    let sumNet = 0;
+
+    runs.forEach((r, idx) => {
+      sumGross      += r.totalGross;
+      sumDeductions += r.totalDeductions;
+      sumNet        += r.totalNet;
+
+      const row = ws.addRow({
+        periodStart: r.periodStart.slice(0, 10),
+        periodEnd:   r.periodEnd.slice(0, 10),
+        label:       r.label,
+        frequency:   r.frequency,
+        employees:   r.employeeCount,
+        grossPay:    r.totalGross,
+        deductions:  r.totalDeductions,
+        netPay:      r.totalNet,
+      });
+      applyAlternatingFill(row, idx);
+    });
+
+    // Totals row
+    const totRow = ws.addRow({
+      periodStart: '',
+      periodEnd:   '',
+      label:       'TOTAL',
+      frequency:   '',
+      employees:   runs.reduce((s, r) => s + r.employeeCount, 0),
+      grossPay:    sumGross,
+      deductions:  sumDeductions,
+      netPay:      sumNet,
+    });
+    totRow.font   = { bold: true };
+    totRow.border = { top: { style: 'thin' } };
+
+    autoWidth(ws);
+    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 }

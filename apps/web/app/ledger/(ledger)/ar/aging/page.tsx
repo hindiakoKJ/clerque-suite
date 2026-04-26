@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { BarChart3, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { formatPeso } from '@/lib/utils';
+import { formatPeso, downloadAuthFile } from '@/lib/utils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -97,12 +97,11 @@ export default function AgingPage() {
           )}
         </div>
         <button
-          disabled
-          title="Excel export coming soon"
-          className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium text-muted-foreground opacity-50 cursor-not-allowed self-start sm:self-auto"
+          onClick={() => downloadAuthFile('/export/ar-aging', `ar-aging-${new Date().toISOString().slice(0, 10)}.xlsx`)}
+          className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-3 py-1.5 text-muted-foreground hover:bg-muted transition-colors self-start sm:self-auto"
         >
-          <Download className="w-4 h-4" />
-          <span className="hidden sm:inline">Download</span>
+          <Download className="h-4 w-4" />
+          Export
         </button>
       </div>
 

@@ -1,9 +1,9 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarDays } from 'lucide-react';
+import { CalendarDays, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { formatPeso } from '@/lib/utils';
+import { formatPeso, downloadAuthFile } from '@/lib/utils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -115,12 +115,21 @@ export default function AgingPage() {
             Outstanding accounts payable grouped by days past due
           </p>
         </div>
-        {data && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2 border border-border self-start">
-            <CalendarDays className="h-3.5 w-3.5 shrink-0" />
-            <span>As of {fmtDate(data.asOf)}</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2 self-start">
+          {data && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2 border border-border">
+              <CalendarDays className="h-3.5 w-3.5 shrink-0" />
+              <span>As of {fmtDate(data.asOf)}</span>
+            </div>
+          )}
+          <button
+            onClick={() => downloadAuthFile('/export/ap-aging', `ap-aging-${new Date().toISOString().slice(0, 10)}.xlsx`)}
+            className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-3 py-1.5 text-muted-foreground hover:bg-muted transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </button>
+        </div>
       </div>
 
       {/* Grand Total Card */}

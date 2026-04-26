@@ -95,6 +95,44 @@ export class ExportController {
   }
 
   /**
+   * GET /export/ap-aging
+   * Downloads AP Aging report as Excel.
+   */
+  @Get('ap-aging')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN', 'FINANCE_LEAD', 'AP_ACCOUNTANT')
+  async apAging(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const buffer = await this.svc.exportApAging(user.tenantId!);
+    sendXlsx(res, buffer, `ap-aging-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  /**
+   * GET /export/ar-aging
+   * Downloads AR Aging report as Excel.
+   */
+  @Get('ar-aging')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN', 'FINANCE_LEAD', 'AR_ACCOUNTANT')
+  async arAging(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const buffer = await this.svc.exportArAging(user.tenantId!);
+    sendXlsx(res, buffer, `ar-aging-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  /**
+   * GET /export/payroll-ytd?year=YYYY
+   * Downloads Payroll Year-to-Date summary as Excel.
+   */
+  @Get('payroll-ytd')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER')
+  async payrollYtd(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') yearStr: string | undefined,
+    @Res() res: Response,
+  ) {
+    const year   = yearStr ? parseInt(yearStr, 10) : new Date().getFullYear();
+    const buffer = await this.svc.exportPayrollYtd(user.tenantId!, year);
+    sendXlsx(res, buffer, `payroll-ytd-${year}.xlsx`);
+  }
+
+  /**
    * GET /export/accountant-csv?from=YYYY-MM-DD&to=YYYY-MM-DD
    *
    * "Accountant Export" — CSV of all completed orders (revenue) for the date range.

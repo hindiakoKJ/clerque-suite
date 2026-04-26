@@ -37,7 +37,11 @@ export async function downloadAuthFile(url: string, filename: string): Promise<v
       const { state } = JSON.parse(raw) as { state: { accessToken: string | null } };
       token = state.accessToken;
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    // Auth token could not be read from localStorage (parse error, SSR, or private browsing).
+    // Log for debugging; the request will proceed without a token and receive a 401.
+    console.error('[downloadAuthFile] could not read auth token from localStorage:', err);
+  }
 
   const res = await fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},

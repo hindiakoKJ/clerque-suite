@@ -75,6 +75,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   const [showSignOutWarning,  setShowSignOutWarning]  = useState(false);
   const [signOutAfterClose,   setSignOutAfterClose]   = useState(false);
   const [eodReport,           setEodReport]           = useState<ShiftReportData | null>(null);
+  const [logoutOnEodClose,    setLogoutOnEodClose]    = useState(false);
   const [hydrated,            setHydrated]            = useState(false);
 
   useEffect(() => { setHydrated(true); }, []);
@@ -162,9 +163,18 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     await closeShift(shiftId, closingCashDeclared, notes);
     setShowCloseShift(false);
     toast.success('Shift closed successfully.');
+
+    // Terminal operators (CASHIER / SALES_LEAD) always log out after closing a shift.
+    // Shared terminals need the login screen between cashier rotations so each
+    // shift is tied to the correct user account. Supervisors stay logged in.
+    const willLogout = signOutAfterClose || inRoles(role, TERMINAL_ROLES);
+    setSignOutAfterClose(false);
+
+    let hasEod = false;
     try {
       const { data } = await api.get(`/reports/shift/${shiftId}`);
       setEodReport(data as ShiftReportData);
+      hasEod = true;
     } catch (err) {
       console.warn('EOD report fetch failed:', err);
       toast.warning('End-of-day report unavailable — check your connection and view it from Orders.');
@@ -172,11 +182,15 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     clearShift();
     try { await db.activeShift.clear(); } catch {}
 
-    // If shift was closed as part of a sign-out flow, log out after a short delay
-    // (gives the EOD report modal time to render before the page unmounts)
-    if (signOutAfterClose) {
-      setSignOutAfterClose(false);
-      setTimeout(() => { void doLogout(); }, 2500);
+    if (willLogout) {
+      if (hasEod) {
+        // Logout is deferred to when the cashier taps "Done & Sign Out" on the EOD modal.
+        // This ensures they have time to view/print the report before being signed out.
+        setLogoutOnEodClose(true);
+      } else {
+        // No EOD report to show — log out after a brief pause so the success toast is visible.
+        setTimeout(() => { void doLogout(); }, 1800);
+      }
     }
   }
 
@@ -249,7 +263,18 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       )}
 
       {eodReport && (
-        <ShiftEodReport open data={eodReport} onClose={() => setEodReport(null)} />
+        <ShiftEodReport
+          open
+          data={eodReport}
+          signOutOnClose={logoutOnEodClose}
+          onClose={() => {
+            setEodReport(null);
+            if (logoutOnEodClose) {
+              setLogoutOnEodClose(false);
+              void doLogout();
+            }
+          }}
+        />
       )}
 
       {/* ── Sign-Out Guard Modal ─────────────────────────────────────────────

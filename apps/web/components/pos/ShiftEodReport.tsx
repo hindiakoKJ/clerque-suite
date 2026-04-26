@@ -1,6 +1,6 @@
 'use client';
 import { useRef } from 'react';
-import { Printer, Zap } from 'lucide-react';
+import { Printer, Zap, LogOut } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { printer } from '@/lib/pos/printer';
@@ -45,6 +45,8 @@ interface ShiftEodReportProps {
   open: boolean;
   data: ShiftReportData;
   onClose: () => void;
+  /** When true, the "Done" button becomes "Done & Sign Out" and shows a handover notice. */
+  signOutOnClose?: boolean;
 }
 
 function fmt(date: string | null | undefined) {
@@ -54,7 +56,7 @@ function fmt(date: string | null | undefined) {
   });
 }
 
-export function ShiftEodReport({ open, data, onClose }: ShiftEodReportProps) {
+export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: ShiftEodReportProps) {
   const printRef = useRef<HTMLDivElement>(null);
   const printerConnected = usePrinterStore((s) => s.connected);
 
@@ -222,6 +224,17 @@ export function ShiftEodReport({ open, data, onClose }: ShiftEodReportProps) {
             )}
           </div>
 
+          {/* Shift handover notice — shown only for terminal operators */}
+          {signOutOnClose && (
+            <div className="mt-4 flex items-start gap-2 rounded-xl bg-amber-500/10 border border-amber-200/50 dark:border-amber-800/40 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-300">
+              <LogOut className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>
+                Your shift is closed. Tap <strong>Done &amp; Sign Out</strong> so the next cashier
+                can log in and start their own shift on this terminal.
+              </span>
+            </div>
+          )}
+
           <div className="flex gap-2 mt-4">
             {printerConnected ? (
               <Button onClick={handleThermalPrint} variant="outline" className="flex-1 gap-2">
@@ -232,7 +245,13 @@ export function ShiftEodReport({ open, data, onClose }: ShiftEodReportProps) {
                 <Printer className="h-4 w-4" /> Print
               </Button>
             )}
-            <Button onClick={onClose} className="flex-1">Done</Button>
+            <Button onClick={onClose} className="flex-1 gap-2">
+              {signOutOnClose ? (
+                <><LogOut className="h-4 w-4" /> Done &amp; Sign Out</>
+              ) : (
+                'Done'
+              )}
+            </Button>
           </div>
         </div>
       </DialogContent>

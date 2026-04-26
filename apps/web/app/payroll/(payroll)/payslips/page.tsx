@@ -1,8 +1,5 @@
 'use client';
-// useSearchParams() requires opt-out of static prerendering
-export const dynamic = 'force-dynamic';
-
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
 import { FileText, X } from 'lucide-react';
@@ -151,9 +148,11 @@ function PayslipModal({
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ── Main Content (uses useSearchParams — must live inside a <Suspense>) ──────
+// Next.js requires any component calling useSearchParams() to be rendered
+// inside a Suspense boundary so the server build can handle it correctly.
 
-export default function PayslipsPage() {
+function PayslipsContent() {
   const { user }       = useAuthStore();
   const searchParams   = useSearchParams();
   const initialRunId   = searchParams.get('payRunId') ?? '';
@@ -304,5 +303,14 @@ export default function PayslipsPage() {
 
       {viewSlip && <PayslipModal slip={viewSlip} onClose={() => setViewSlip(null)} />}
     </div>
+  );
+}
+
+// ── Page export — wraps content in Suspense so useSearchParams() is safe ─────
+export default function PayslipsPage() {
+  return (
+    <Suspense>
+      <PayslipsContent />
+    </Suspense>
   );
 }

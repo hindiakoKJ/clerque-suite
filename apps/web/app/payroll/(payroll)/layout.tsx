@@ -78,7 +78,7 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
     makePayNavItem('/payroll/runs',                      'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
     makePayNavItem('/payroll/payslips',                  'Payslips',       FileText,        PAYSLIPS_ROLES,      role),
     makePayNavItem('/payroll/contributions',             'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
-    makePayNavItem('/payroll/coming-soon/reports',       'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
+    makePayNavItem('/payroll/reports',                   'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
   ];
 
   return (

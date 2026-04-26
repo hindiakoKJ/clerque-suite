@@ -28,8 +28,9 @@ export default function PosTerminal() {
   const queryClient = useQueryClient();
   const activeShift = useShiftStore((s) => s.activeShift);
 
-  const user     = useAuthStore((s) => s.user);
-  const branchId = useCartStore((s) => s.branchId);
+  const user      = useAuthStore((s) => s.user);
+  const branchId  = useCartStore((s) => s.branchId);
+  const taxStatus = useCartStore((s) => s.taxStatus);
   const { lines, orderDiscount, grandTotal, vatAmount, subtotal, totalDiscount, clearCart } = useCartStore();
 
   const activeBranchId = branchId ?? user?.branchId ?? '';
@@ -103,7 +104,11 @@ export default function PosTerminal() {
         unitPrice: l.unitPrice,
         quantity: l.quantity,
         discountAmount: l.itemDiscount * l.quantity,
-        vatAmount: l.product.isVatable ? computeVat(l.unitPrice * l.quantity).vat : 0,
+        // Per-item VAT: only VAT-registered tenants collect VAT.
+        // isVatable on the product is irrelevant for NON_VAT / UNREGISTERED tenants.
+        vatAmount: taxStatus === 'VAT' && l.product.isVatable
+          ? computeVat(l.unitPrice * l.quantity).vat
+          : 0,
         lineTotal: (l.unitPrice - l.itemDiscount) * l.quantity,
         costPrice: l.product.costPrice,
         isVatable: l.product.isVatable,
@@ -114,7 +119,9 @@ export default function PosTerminal() {
         discountType: orderDiscount.type,
         discountAmount: orderDiscount.discountOnBase,
         discountPercent: orderDiscount.percent,
-        reason: `${orderDiscount.label} — 20% of VAT-excl ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`,
+        reason: taxStatus === 'VAT'
+          ? `${orderDiscount.label} — 20% of VAT-excl base ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`
+          : `${orderDiscount.label} — 20% of gross ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`,
       }] : [],
       subtotal: sub,
       discountAmount: disc,

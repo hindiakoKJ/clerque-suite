@@ -3,12 +3,13 @@ import { useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, Search, SlidersHorizontal, ChevronLeft, ChevronRight,
-  Plus, Pencil, FlaskConical, Package,
+  Plus, Pencil, FlaskConical, Package, Upload,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { StockAdjustModal } from '@/components/pos/StockAdjustModal';
+import { ImportModal } from '@/components/ui/ImportModal';
 import { useDebounce } from '@/hooks/useDebounce';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { isFnbType } from '@repo/shared-types';
@@ -76,6 +77,7 @@ export default function InventoryPage() {
   const [adjustTarget, setAdjustTarget] = useState<InventoryRow | null>(null);
   const [editThreshold, setEditThreshold] = useState<{ id: string; value: string } | null>(null);
   const [savingThreshold, setSavingThreshold] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   // ── Ingredient state ───────────────────────────────────────────────────────
   const [matModal, setMatModal] = useState<'create' | 'edit' | 'receive' | null>(null);
@@ -239,17 +241,28 @@ export default function InventoryPage() {
         </div>
         <div className="flex items-center gap-2">
           {activeTab === 'products' && (
-            <button
-              onClick={() => onFilterLow(!filterLow)}
-              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${
-                filterLow
-                  ? 'bg-amber-500 text-white'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
-              }`}
-            >
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Low stock only
-            </button>
+            <>
+              <button
+                onClick={() => onFilterLow(!filterLow)}
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${
+                  filterLow
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                }`}
+              >
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Low stock only
+              </button>
+              {canEdit && (
+                <button
+                  onClick={() => setShowImport(true)}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Import
+                </button>
+              )}
+            </>
           )}
           {activeTab === 'ingredients' && canEdit && (
             <button
@@ -671,6 +684,21 @@ export default function InventoryPage() {
           onSuccess={invalidate}
         />
       )}
+
+      {/* Inventory Import Modal */}
+      <ImportModal
+        open={showImport}
+        title="Import Inventory"
+        description="Upload a spreadsheet to set stock quantities and low-stock alert thresholds in bulk."
+        templateUrl="/api/v1/import/template/inventory"
+        uploadUrl="/import/inventory"
+        extraParams={branchId ? { branchId } : undefined}
+        onClose={() => setShowImport(false)}
+        onSuccess={() => {
+          invalidate();
+          setShowImport(false);
+        }}
+      />
     </div>
   );
 }

@@ -97,17 +97,15 @@ export class AccountsService {
   // ── Read ────────────────────────────────────────────────────────────────────
 
   async findAll(tenantId: string) {
-    const accounts = await this.prisma.account.findMany({
+    // Always sync — inserts any DEFAULT_ACCOUNTS codes missing for this tenant.
+    // No-ops instantly if nothing is missing (Set diff = 0).
+    await this.seedDefaultAccounts(tenantId);
+
+    return this.prisma.account.findMany({
       where: { tenantId },
       orderBy: [{ type: 'asc' }, { code: 'asc' }],
       include: { parent: { select: { id: true, code: true, name: true } } },
     });
-
-    if (accounts.length === 0) {
-      await this.seedDefaultAccounts(tenantId);
-      return this.findAll(tenantId);
-    }
-    return accounts;
   }
 
   async findOne(tenantId: string, id: string) {

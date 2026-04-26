@@ -25,7 +25,8 @@ export class ImportService {
     }
     // xlsx
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(file.buffer);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await wb.xlsx.load(file.buffer as any);
     const ws = wb.worksheets[0];
     const rows: string[][] = [];
     ws.eachRow((row) => {
@@ -429,15 +430,19 @@ export class ImportService {
         }
         if (lineError) continue;
 
+        // Generate entry number: JE-IMPORT-timestamp-ref
+        const entryNumber = `JE-IMP-${Date.now()}-${ref}`.slice(0, 50);
+
         await this.prisma.journalEntry.create({
           data: {
             tenantId,
+            entryNumber,
             reference: ref,
             description: group.description,
-            entryDate: new Date(group.date),
+            date: new Date(group.date),
             status: 'POSTED',
             source: 'MANUAL',
-            createdById: userId,
+            createdBy: userId,
             lines: {
               create: resolvedLines.map((l) => ({
                 accountId: l.accountId,

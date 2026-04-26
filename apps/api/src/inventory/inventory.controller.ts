@@ -19,6 +19,8 @@ import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
+import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
+import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 
 @ApiTags('Inventory')
 @ApiBearerAuth('access-token')
@@ -82,5 +84,58 @@ export class InventoryController {
   @HttpCode(HttpStatus.OK)
   setThreshold(@CurrentUser() user: JwtPayload, @Body() body: SetThresholdDto) {
     return this.inventoryService.setThreshold(user.tenantId!, body);
+  }
+
+  // ─── Raw Materials (F&B ingredient library) ─────────────────────────────────
+
+  /** List all raw materials — used to populate recipe dropdowns */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Get('raw-materials')
+  listRawMaterials(
+    @CurrentUser() user: JwtPayload,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
+    return this.inventoryService.listRawMaterials(user.tenantId!, includeInactive === 'true');
+  }
+
+  /** Raw material stock levels for a branch */
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+  @Get('raw-materials/stock')
+  listRawMaterialStock(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId: string,
+  ) {
+    return this.inventoryService.listRawMaterialStock(user.tenantId!, branchId ?? user.branchId!);
+  }
+
+  /** Create a new raw material (ingredient) */
+  @Roles('BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Post('raw-materials')
+  createRawMaterial(@CurrentUser() user: JwtPayload, @Body() dto: CreateRawMaterialDto) {
+    return this.inventoryService.createRawMaterial(user.tenantId!, dto);
+  }
+
+  /** Update raw material name, unit, or cost price */
+  @Roles('BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Patch('raw-materials/:id')
+  @HttpCode(HttpStatus.OK)
+  updateRawMaterial(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: Partial<CreateRawMaterialDto> & { isActive?: boolean },
+  ) {
+    return this.inventoryService.updateRawMaterial(user.tenantId!, id, dto);
+  }
+
+  /** Receive a delivery of a raw material — adds stock + updates WAC cost */
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Post('raw-materials/:id/receive')
+  @HttpCode(HttpStatus.OK)
+  receiveRawMaterial(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: ReceiveRawMaterialDto,
+  ) {
+    return this.inventoryService.receiveRawMaterial(user.tenantId!, id, dto);
   }
 }

@@ -24,6 +24,8 @@ export class EventsController {
     private readonly events:  EventsService,
   ) {}
 
+  /** List accounting events — Accountant and above; External Auditor read-only. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get()
   findAll(
     @CurrentUser() user: JwtPayload,
@@ -36,6 +38,8 @@ export class EventsController {
     });
   }
 
+  /** Event queue stats — same read-access set. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get('stats')
   stats(@CurrentUser() user: JwtPayload) {
     return this.events.stats(user.tenantId!);

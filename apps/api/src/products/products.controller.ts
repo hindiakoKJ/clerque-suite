@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Patch,
   Delete,
   Body,
@@ -68,5 +69,35 @@ export class ProductsController {
   @Delete(':id')
   deactivate(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.productsService.deactivate(user.tenantId!, id);
+  }
+
+  /**
+   * Replace the product-level recipe (BOM) in one atomic call.
+   * Passing an empty array clears the recipe and sets inventoryMode = UNIT_BASED.
+   * Body: { items: [{ rawMaterialId, quantity }] }
+   */
+  @Roles('BUSINESS_OWNER', 'MDM')
+  @Put(':id/bom')
+  saveBom(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { items: Array<{ rawMaterialId: string; quantity: number }> },
+  ) {
+    return this.productsService.saveBom(user.tenantId!, id, body.items ?? []);
+  }
+
+  /**
+   * Replace the variant-level recipe for a specific size/variant.
+   * Body: { items: [{ rawMaterialId, quantity }] }
+   */
+  @Roles('BUSINESS_OWNER', 'MDM')
+  @Put(':id/variants/:variantId/bom')
+  saveVariantBom(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') productId: string,
+    @Param('variantId') variantId: string,
+    @Body() body: { items: Array<{ rawMaterialId: string; quantity: number }> },
+  ) {
+    return this.productsService.saveVariantBom(user.tenantId!, productId, variantId, body.items ?? []);
   }
 }

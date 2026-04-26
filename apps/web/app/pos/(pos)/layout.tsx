@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
@@ -24,28 +24,44 @@ import { toast } from 'sonner';
 const POS_ACCENT      = 'hsl(217 91% 55%)';
 const POS_ACCENT_SOFT = 'hsl(217 91% 55% / 0.08)';
 
-const BASE_NAV: NavItem[] = [
-  { href: '/pos/terminal',  label: 'Terminal',    icon: ShoppingCart },
-  { href: '/pos/dashboard', label: 'Dashboard',   icon: LayoutDashboard },
-  { href: '/pos/orders',    label: 'Orders',      icon: ShoppingBag },
-  { href: '/pos/products',  label: 'Products',    icon: Package },
-  { href: '/pos/inventory', label: 'Inventory',   icon: ClipboardList },
-  { href: '/pos/staff',     label: 'Staff',       icon: Users },
-  { href: '/pos/pending',   label: 'Pending Sync',icon: Clock },
-];
-
 // ── SOD Nav Role Sets ──────────────────────────────────────────────────────────
-// These are used ONLY for sidebar visibility — backend guards are the real wall.
-const TERMINAL_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER'] as const;
+// Backend guards are the authoritative wall — these control sidebar visibility/state.
+//
+// Roles that can operate the register (open/close shifts):
+//   CASHIER, SALES_LEAD
+// Roles that are supervisors (view-only in POS, bypass ShiftGate):
+//   BUSINESS_OWNER, BRANCH_MANAGER, SUPER_ADMIN, FINANCE_LEAD, MDM, WAREHOUSE_STAFF,
+//   BOOKKEEPER, ACCOUNTANT, PAYROLL_MASTER, EXTERNAL_AUDITOR, GENERAL_EMPLOYEE
+//
+// Nav items are ALWAYS shown to every POS user but grayed-out (with lock icon)
+// when the current role doesn't have access — so staff can see the full system
+// capability and understand what each role unlocks.
+const TERMINAL_ROLES   = ['SALES_LEAD', 'CASHIER'] as const;
 const DASHBOARD_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'FINANCE_LEAD'] as const;
-const ORDERS_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER'] as const;
+const ORDERS_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER', 'EXTERNAL_AUDITOR'] as const;
 const PRODUCTS_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
 const INVENTORY_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD'] as const;
 const STAFF_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'SALES_LEAD', 'PAYROLL_MASTER'] as const;
 const UOM_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
+// Pending Sync is operational — only relevant to roles that create offline orders
+const PENDING_SYNC_ROLES = ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER'] as const;
 
 function inRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));
+}
+
+/** Build a nav item — always visible; grayed-out with lock if role lacks access. */
+function makeNavItem(
+  href: string, label: string, icon: React.ElementType,
+  allowedRoles: readonly string[], role: string | undefined | null,
+  badge?: number,
+): NavItem {
+  const hasAccess = inRoles(role, allowedRoles);
+  return {
+    href, label, icon, badge,
+    disabled: !hasAccess,
+    disabledReason: hasAccess ? undefined : 'Your role doesn\'t have access to this section',
+  };
 }
 
 export default function PosLayout({ children }: { children: React.ReactNode }) {
@@ -65,23 +81,35 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     if (hydrated && !accessToken) router.replace('/login');
   }, [hydrated, accessToken, router]);
 
+  // Set accent on <html> so Radix Dialog portals (rendered at document.body)
+  // also inherit the correct --accent value in both light and dark mode.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--accent',      POS_ACCENT);
+    root.style.setProperty('--accent-soft', POS_ACCENT_SOFT);
+    return () => {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-soft');
+    };
+  }, []);
+
   // ── Browser-level guard: shows native "Leave site?" dialog on tab close / refresh ──
   useShiftGuard(!!activeShift);
 
   const role = user?.role;
 
-  // Build nav — each item gated to only the roles that should see it.
-  // This is the "Clean Dashboard" UX requirement (SOD visibility layer).
+  // Build nav — ALL items are shown to every POS user.
+  // Items the current role cannot access appear grayed-out with a lock icon.
+  // Backend guards remain the authoritative enforcement layer.
   const navItems: NavItem[] = [
-    ...(inRoles(role, TERMINAL_ROLES)  ? [{ href: '/pos/terminal',  label: 'Terminal',    icon: ShoppingCart }] : []),
-    ...(inRoles(role, DASHBOARD_ROLES) ? [{ href: '/pos/dashboard', label: 'Dashboard',   icon: LayoutDashboard }] : []),
-    ...(inRoles(role, ORDERS_ROLES)    ? [{ href: '/pos/orders',    label: 'Orders',      icon: ShoppingBag }] : []),
-    ...(inRoles(role, PRODUCTS_ROLES)  ? [{ href: '/pos/products',  label: 'Products',    icon: Package }] : []),
-    ...(inRoles(role, INVENTORY_ROLES) ? [{ href: '/pos/inventory', label: 'Inventory',   icon: ClipboardList }] : []),
-    ...(inRoles(role, STAFF_ROLES)     ? [{ href: '/pos/staff',        label: 'Staff',       icon: Users  }] : []),
-    ...(inRoles(role, UOM_ROLES)       ? [{ href: '/pos/settings/uom', label: 'Units (UoM)',  icon: Ruler  }] : []),
-    // Pending sync is always shown for roles that can create orders (offline capability)
-    ...(inRoles(role, ORDERS_ROLES)    ? [{ href: '/pos/pending', label: 'Pending Sync', icon: Clock, badge: pendingCount || undefined }] : []),
+    makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,      role),
+    makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES,     role),
+    makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,        role),
+    makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,      role),
+    makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES,     role),
+    makeNavItem('/pos/staff',        'Staff',       Users,           STAFF_ROLES,         role),
+    makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
+    makeNavItem('/pos/pending',      'Pending Sync',Clock,           PENDING_SYNC_ROLES,  role, pendingCount || undefined),
   ];
 
   async function doLogout() {

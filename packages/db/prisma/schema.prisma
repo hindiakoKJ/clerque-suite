@@ -54,12 +54,22 @@ enum AccessLevel {
   FULL
 }
 
-/// Used to pre-seed chart of accounts labels on tenant onboarding
+/// Used to pre-seed chart of accounts labels on tenant onboarding.
+/// F&B group (any of these enables recipe/ingredient inventory):
+///   COFFEE_SHOP, RESTAURANT, BAKERY, FOOD_STALL, BAR_LOUNGE, CATERING
+/// Non-F&B group: RETAIL, SERVICE, MANUFACTURING
 enum BusinessType {
-  COFFEE_SHOP
-  RETAIL
-  SERVICE
-  MANUFACTURING
+  // ── Food & Beverage ──────────────────────────────────────────────────────
+  COFFEE_SHOP    // Café, milk tea, coffee kiosk (legacy value — kept for backward compat)
+  RESTAURANT     // Dine-in or takeout restaurant
+  BAKERY         // Bakery, pastry shop, cake shop
+  FOOD_STALL     // Carinderia, turo-turo, market stall
+  BAR_LOUNGE     // Bar, lounge, nightspot with food/drinks
+  CATERING       // Catering / events food service
+  // ── Non-F&B ──────────────────────────────────────────────────────────────
+  RETAIL         // Convenience store, boutique, product-based shop
+  SERVICE        // Salon, clinic, laundry, repair, any service-based
+  MANUFACTURING  // Fabrication, construction, BOM / bill-of-materials workflows
 }
 
 enum TenantStatus {
@@ -352,6 +362,7 @@ model Tenant {
   xReadLogs           XReadLog[]
   vendors             Vendor[]
   expenses            ExpenseEntry[]
+  rawMaterials        RawMaterial[]
 
   @@map("tenants")
 }
@@ -442,6 +453,10 @@ model User {
   tin                  String?
   photo                String?
   kioskPin             String?
+  /// Mobile / contact number for HR records
+  phone                String?
+  /// Job title / position (e.g. "Barista", "Shift Supervisor")
+  position             String?
   isActive             Boolean        @default(true)
   hiredAt              DateTime?
   separatedAt          DateTime?
@@ -460,8 +475,10 @@ model User {
   ordersAsUpdatedBy    Order[]        @relation("UpdatedByUser")
   ordersAsVoidedBy     Order[]        @relation("VoidedByUser")
   discountsAuthorized  OrderDiscount[] @relation("AuthorizedByUser")
+  timeEntries          TimeEntry[]
 
   @@unique([tenantId, email])
+  @@index([tenantId, role])
   @@map("users")
 }
 
@@ -594,8 +611,9 @@ model ProductVariant {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  orderItems  OrderItem[]
+  product         Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems      OrderItem[]
+  variantBomItems VariantBomItem[]
 
   @@map("product_variants")
 }
@@ -606,16 +624,37 @@ model RawMaterial {
   id          String   @id @default(cuid())
   tenantId    String
   name        String
-  unit        String
+  /// Unit of measure for this ingredient (g, ml, pc, kg, etc.)
+  unit        String   @default("g")
   costPrice   Decimal? @db.Decimal(12, 4)
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  bomItems    BomItem[]
-  inventory   RawMaterialInventory[]
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bomItems         BomItem[]
+  variantBomItems  VariantBomItem[]
+  inventory        RawMaterialInventory[]
 
+  @@index([tenantId, isActive])
   @@map("raw_materials")
+}
+
+/// Variant-level BOM — maps a specific product size/variant to ingredient quantities.
+/// Example: ProductVariant "Large Iced Americano" → espresso beans 25g, water 180ml.
+/// Overrides or supplements the product-level BomItem for that variant.
+model VariantBomItem {
+  id            String         @id @default(cuid())
+  variantId     String
+  rawMaterialId String
+  /// How much of the raw material is consumed per unit of this variant
+  quantity      Decimal        @db.Decimal(12, 4)
+
+  variant       ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  rawMaterial   RawMaterial    @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
+
+  @@unique([variantId, rawMaterialId])
+  @@map("variant_bom_items")
 }
 
 model BomItem {
@@ -1375,4 +1414,41 @@ enum ExpenseStatus {
   DRAFT     // Entered but not yet posted to ledger
   POSTED    // Journal entry created; locked from editing
   VOIDED    // Cancelled; WHT refund/credit memo may be required
+}
+
+// ─── Payroll — Time Entries ──────────────────────────────────────────────────
+
+/// Single clock-in / clock-out punch for an employee.
+/// One OPEN entry per user at a time (enforced via unique partial index).
+model TimeEntry {
+  id         String          @id @default(cuid())
+  tenantId   String
+  userId     String
+  clockIn    DateTime
+  clockOut   DateTime?
+  /// Break duration in minutes (deducted from gross hours)
+  breakMins  Int             @default(0)
+  status     TimeEntryStatus @default(OPEN)
+  notes      String?
+  /// Computed gross hours = (clockOut - clockIn) minus breakMins; null while OPEN
+  grossHours Decimal?        @db.Decimal(6, 2)
+  /// Overtime hours beyond 8h/day (PH Labor Code Art. 87)
+  otHours    Decimal?        @db.Decimal(6, 2)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, clockIn])
+  @@index([tenantId, userId, clockIn])
+  @@index([userId, status])
+  @@map("time_entries")
+}
+
+/// Time-tracking punch status
+enum TimeEntryStatus {
+  OPEN      // Clocked in; no clock-out yet
+  CLOSED    // Clock-out recorded; ready for payroll processing
+  APPROVED  // Approved by manager / payroll master
+  REJECTED  // Disputed entry; will not be paid
 }

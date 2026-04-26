@@ -5,6 +5,12 @@ import { useShiftStore } from '@/store/pos/shift';
 import { fetchActiveShift, openShift, getShiftSummary } from '@/lib/pos/shifts';
 import { OpenShiftModal } from './OpenShiftModal';
 import { db } from '@/lib/pos/db';
+import { ShieldCheck } from 'lucide-react';
+
+/** Roles that supervise the POS but do not operate the register. */
+const SUPERVISOR_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SUPER_ADMIN', 'FINANCE_LEAD',
+                          'MDM', 'WAREHOUSE_STAFF', 'BOOKKEEPER', 'ACCOUNTANT',
+                          'PAYROLL_MASTER', 'EXTERNAL_AUDITOR'] as const;
 
 interface ShiftGateProps {
   children: React.ReactNode;
@@ -14,6 +20,10 @@ export function ShiftGate({ children }: ShiftGateProps) {
   const user = useAuthStore((s) => s.user);
   const { activeShift, setActiveShift } = useShiftStore();
   const [checking, setChecking] = useState(true);
+
+  // Supervisors bypass the shift gate entirely — they are not cashiers.
+  // They can view all POS pages (orders, dashboard, reports) without opening a shift.
+  const isSupervisor = SUPERVISOR_ROLES.includes(user?.role as typeof SUPERVISOR_ROLES[number]);
 
   const branchId = activeShift?.branchId ?? user?.branchId ?? '';
 
@@ -132,8 +142,26 @@ export function ShiftGate({ children }: ShiftGateProps) {
   if (checking) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
-        Loading shift…
+        Loading…
       </div>
+    );
+  }
+
+  // Supervisors: bypass shift gate — render children directly with an info banner
+  if (isSupervisor) {
+    return (
+      <>
+        {/* Supervisor mode indicator — shown only when no active shift */}
+        {!activeShift && (
+          <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-amber-500/8 border-b border-amber-200/40 dark:border-amber-800/30">
+            <ShieldCheck className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              Supervisor view — no shift open. Cashiers can start a shift from the Terminal page.
+            </p>
+          </div>
+        )}
+        {children}
+      </>
     );
   }
 

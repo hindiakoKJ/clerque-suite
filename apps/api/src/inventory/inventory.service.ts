@@ -3,8 +3,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
+import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
+import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 
-export { AdjustStockDto, SetThresholdDto };
+export { AdjustStockDto, SetThresholdDto, CreateRawMaterialDto, ReceiveRawMaterialDto };
 
 @Injectable()
 export class InventoryService {
@@ -164,6 +166,33 @@ export class InventoryService {
         },
       });
 
+      // ── Accounting event — always fired so the ledger stays in sync
+      // regardless of whether the user has Ledger app access (tier gating
+      // controls visibility only; accounting records are always created).
+      // Journal processor uses cost value; if costPrice is null the event
+      // will be marked SYNCED (skipped) without posting a zero-value JE.
+      const costPrice = product.costPrice ? Number(product.costPrice) : 0;
+      const totalValue = Math.abs(quantity) * costPrice;
+      await tx.accountingEvent.create({
+        data: {
+          tenantId,
+          type: 'INVENTORY_ADJUSTMENT',
+          status: 'PENDING',
+          payload: {
+            productId,
+            productName: product.name,
+            branchId,
+            adjustmentType: type,  // INITIAL | STOCK_IN | STOCK_OUT | ADJUSTMENT
+            quantity,
+            quantityBefore,
+            quantityAfter,
+            costPrice,
+            totalValue,
+            reason: reason ?? null,
+          },
+        },
+      });
+
       return { ...item, quantity: Number(item.quantity) };
     });
   }
@@ -209,6 +238,120 @@ export class InventoryService {
       quantity: Number(l.quantity),
       quantityBefore: Number(l.quantityBefore),
       quantityAfter: Number(l.quantityAfter),
+    }));
+  }
+
+  // ─── Raw Materials (F&B ingredient library) ───────────────────────────────
+
+  async listRawMaterials(tenantId: string, includeInactive = false) {
+    const items = await this.prisma.rawMaterial.findMany({
+      where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
+      orderBy: { name: 'asc' },
+    });
+    return items.map((m) => ({
+      ...m,
+      costPrice: m.costPrice != null ? Number(m.costPrice) : null,
+    }));
+  }
+
+  async createRawMaterial(tenantId: string, dto: CreateRawMaterialDto) {
+    const item = await this.prisma.rawMaterial.create({
+      data: {
+        tenantId,
+        name: dto.name,
+        unit: dto.unit,
+        costPrice: dto.costPrice != null ? new Prisma.Decimal(dto.costPrice) : undefined,
+      },
+    });
+    return { ...item, costPrice: item.costPrice != null ? Number(item.costPrice) : null };
+  }
+
+  async updateRawMaterial(tenantId: string, id: string, dto: Partial<CreateRawMaterialDto> & { isActive?: boolean }) {
+    const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
+    if (!item) throw new NotFoundException('Raw material not found');
+
+    const updated = await this.prisma.rawMaterial.update({
+      where: { id },
+      data: {
+        ...(dto.name != null ? { name: dto.name } : {}),
+        ...(dto.unit != null ? { unit: dto.unit } : {}),
+        ...(dto.costPrice != null ? { costPrice: new Prisma.Decimal(dto.costPrice) } : {}),
+        ...(dto.isActive != null ? { isActive: dto.isActive } : {}),
+      },
+    });
+    return { ...updated, costPrice: updated.costPrice != null ? Number(updated.costPrice) : null };
+  }
+
+  /** Add incoming stock for a raw material (supplier delivery). Applies WAC cost update. */
+  async receiveRawMaterial(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto) {
+    const material = await this.prisma.rawMaterial.findFirst({
+      where: { id: rawMaterialId, tenantId },
+    });
+    if (!material) throw new NotFoundException('Raw material not found');
+
+    // Verify branch belongs to tenant
+    await this.assertBranchBelongsToTenant(tenantId, dto.branchId);
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.rawMaterialInventory.findUnique({
+        where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
+      });
+
+      const qtyBefore = existing ? Number(existing.quantity) : 0;
+      const qtyAfter  = qtyBefore + dto.quantity;
+
+      await tx.rawMaterialInventory.upsert({
+        where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
+        create: {
+          tenantId,
+          branchId: dto.branchId,
+          rawMaterialId,
+          quantity: new Prisma.Decimal(qtyAfter),
+        },
+        update: { quantity: new Prisma.Decimal(qtyAfter) },
+      });
+
+      // WAC cost update: if new cost price provided, update material cost
+      if (dto.costPrice != null) {
+        const oldCost    = material.costPrice ? Number(material.costPrice) : 0;
+        const totalOldValue  = qtyBefore * oldCost;
+        const totalNewValue  = dto.quantity * dto.costPrice;
+        const newWac = qtyAfter > 0
+          ? (totalOldValue + totalNewValue) / qtyAfter
+          : dto.costPrice;
+
+        await tx.rawMaterial.update({
+          where: { id: rawMaterialId },
+          data: { costPrice: new Prisma.Decimal(newWac) },
+        });
+      }
+
+      return {
+        rawMaterialId,
+        branchId: dto.branchId,
+        quantityBefore: qtyBefore,
+        quantityAfter: qtyAfter,
+        quantity: dto.quantity,
+      };
+    });
+  }
+
+  /** Get raw-material stock levels for a branch */
+  async listRawMaterialStock(tenantId: string, branchId: string) {
+    const stocks = await this.prisma.rawMaterialInventory.findMany({
+      where: { tenantId, branchId },
+      include: {
+        rawMaterial: { select: { id: true, name: true, unit: true, costPrice: true, isActive: true } },
+      },
+      orderBy: { rawMaterial: { name: 'asc' } },
+    });
+    return stocks.map((s) => ({
+      ...s,
+      quantity: Number(s.quantity),
+      costPrice: s.rawMaterial.costPrice != null ? Number(s.rawMaterial.costPrice) : null,
+      totalValue: s.rawMaterial.costPrice != null
+        ? Number(s.quantity) * Number(s.rawMaterial.costPrice)
+        : null,
     }));
   }
 }

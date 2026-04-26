@@ -7,7 +7,11 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 
-type StaffRole = 'BUSINESS_OWNER' | 'MDM' | 'BRANCH_MANAGER' | 'ACCOUNTANT' | 'CASHIER' | 'GENERAL_EMPLOYEE';
+type StaffRole =
+  | 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'SALES_LEAD'
+  | 'CASHIER' | 'MDM' | 'WAREHOUSE_STAFF'
+  | 'FINANCE_LEAD' | 'BOOKKEEPER' | 'ACCOUNTANT'
+  | 'PAYROLL_MASTER' | 'GENERAL_EMPLOYEE' | 'EXTERNAL_AUDITOR';
 
 interface Branch { id: string; name: string; }
 interface StaffMember {
@@ -21,22 +25,38 @@ interface StaffMember {
   createdAt: string;
 }
 
-const ROLES: { value: StaffRole; label: string }[] = [
-  { value: 'BUSINESS_OWNER',    label: 'Business Owner' },
-  { value: 'MDM',               label: 'Master Data Mgr' },
-  { value: 'BRANCH_MANAGER',    label: 'Branch Manager' },
-  { value: 'ACCOUNTANT',        label: 'Accountant' },
-  { value: 'CASHIER',           label: 'Cashier' },
-  { value: 'GENERAL_EMPLOYEE',  label: 'General Employee' },
+/**
+ * Role catalog — shown in create/edit dropdowns and in the permissions reference card.
+ * Access column describes what each role can do at a high level.
+ */
+const ROLES: { value: StaffRole; label: string; access: string }[] = [
+  { value: 'BUSINESS_OWNER',   label: 'Business Owner',      access: 'Full access to all modules. Cannot open shifts (supervisor only).' },
+  { value: 'BRANCH_MANAGER',   label: 'Branch Manager',      access: 'Oversees orders, reports, inventory. Cannot open shifts.' },
+  { value: 'SALES_LEAD',       label: 'Sales Lead',          access: 'Can open/close shifts, void orders, apply manager discounts.' },
+  { value: 'CASHIER',          label: 'Cashier',             access: 'Opens shifts, rings up sales, basic order management.' },
+  { value: 'MDM',              label: 'Master Data Mgr',     access: 'Manages products, categories, inventory, UoM. No financial access.' },
+  { value: 'WAREHOUSE_STAFF',  label: 'Warehouse Staff',     access: 'Stock adjustments and raw material receiving only.' },
+  { value: 'FINANCE_LEAD',     label: 'Finance Lead',        access: 'Bank reconciliation, cash-flow reports. No payroll, no price edits.' },
+  { value: 'BOOKKEEPER',       label: 'Bookkeeper',          access: 'Journal entries and GL read. No payroll, no price edits.' },
+  { value: 'ACCOUNTANT',       label: 'Accountant',          access: 'Full ledger read. No payroll.' },
+  { value: 'PAYROLL_MASTER',   label: 'Payroll Master',      access: 'Payroll runs and salary data. Cannot access POS or Ledger.' },
+  { value: 'GENERAL_EMPLOYEE', label: 'General Employee',    access: 'Clock-in/out only. No POS or Ledger access.' },
+  { value: 'EXTERNAL_AUDITOR', label: 'External Auditor',    access: 'Read-only compliance view across all modules. Zero write access.' },
 ];
 
-const ROLE_COLORS: Record<StaffRole, string> = {
+const ROLE_COLORS: Partial<Record<StaffRole, string>> = {
   BUSINESS_OWNER:   'bg-purple-500/10 text-purple-600 dark:text-purple-400',
-  MDM:              'bg-blue-500/10 text-blue-600 dark:text-blue-400',
   BRANCH_MANAGER:   'bg-[var(--accent-soft)] text-[var(--accent)]',
-  ACCOUNTANT:       'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  SALES_LEAD:       'bg-orange-500/10 text-orange-600 dark:text-orange-400',
   CASHIER:          'bg-green-500/10 text-green-600 dark:text-green-400',
+  MDM:              'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+  WAREHOUSE_STAFF:  'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  FINANCE_LEAD:     'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  BOOKKEEPER:       'bg-teal-500/10 text-teal-600 dark:text-teal-400',
+  ACCOUNTANT:       'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
+  PAYROLL_MASTER:   'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
   GENERAL_EMPLOYEE: 'bg-secondary text-secondary-foreground',
+  EXTERNAL_AUDITOR: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
 };
 
 const EMPTY_CREATE = {
@@ -261,7 +281,7 @@ export default function StaffPage() {
                     <td className="px-6 py-3 font-medium text-foreground">{s.name}</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{s.email}</td>
                     <td className="px-4 py-3">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${ROLE_COLORS[s.role]}`}>
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${ROLE_COLORS[s.role] ?? 'bg-secondary text-secondary-foreground'}`}>
                         {ROLES.find((r) => r.value === s.role)?.label ?? s.role}
                       </span>
                     </td>
@@ -410,7 +430,14 @@ export default function StaffPage() {
                   </select>
                 </FormField>
               </div>
-              {createForm.role === 'CASHIER' && (
+              {/* Role access description */}
+              {ROLES.find((r) => r.value === createForm.role) && (
+                <div className="flex gap-2 text-[11px] bg-muted/50 rounded-lg px-3 py-2 text-muted-foreground">
+                  <span className="shrink-0">ℹ️</span>
+                  <span>{ROLES.find((r) => r.value === createForm.role)!.access}</span>
+                </div>
+              )}
+              {(createForm.role === 'CASHIER' || createForm.role === 'SALES_LEAD') && (
                 <FormField label="Kiosk PIN (optional — 4 digits)">
                   <input
                     type="text"
@@ -470,6 +497,12 @@ export default function StaffPage() {
                   </select>
                 </FormField>
               </div>
+              {ROLES.find((r) => r.value === editForm.role) && (
+                <div className="flex gap-2 text-[11px] bg-muted/50 rounded-lg px-3 py-2 text-muted-foreground">
+                  <span className="shrink-0">ℹ️</span>
+                  <span>{ROLES.find((r) => r.value === editForm.role)!.access}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-foreground">Active</p>

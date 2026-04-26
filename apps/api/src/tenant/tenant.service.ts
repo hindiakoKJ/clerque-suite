@@ -35,6 +35,15 @@ export class TenantService {
     private audit:    AuditService,
   ) {}
 
+  /** Returns all active branches for branch-picker dropdowns across the app. */
+  async getBranches(tenantId: string) {
+    return this.prisma.branch.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, name: true, address: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async getProfile(tenantId: string) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },

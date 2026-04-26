@@ -303,6 +303,37 @@ export class JournalService {
           lines.push({ accountId: await getAccount('1010'), credit: total,           description: 'Void - reverse cash' });
         }
 
+      } else if (event.type === 'INVENTORY_ADJUSTMENT') {
+        const totalValue     = Number(payload['totalValue']     ?? 0);
+        const quantity       = Number(payload['quantity']       ?? 0);
+        const adjustmentType = String(payload['adjustmentType'] ?? '');
+        const productName    = String(payload['productName']    ?? 'Product');
+        const reason         = payload['reason'] ? String(payload['reason']) : null;
+
+        // Skip zero-value entries (no cost price set on product)
+        if (totalValue === 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+
+        description = `Inventory ${adjustmentType.toLowerCase().replace('_', ' ')}: ${productName}${reason ? ` — ${reason}` : ''}`;
+
+        if (quantity > 0) {
+          // Stock increase: DR Merchandise Inventory / CR Owner's Capital
+          // (Owner's Capital is the default source for manual stock additions;
+          //  for supplier purchases this will move to AP when AP module is built.)
+          lines.push({ accountId: await getAccount('1050'), debit:  totalValue, description: `Stock received: ${productName}` });
+          lines.push({ accountId: await getAccount('3010'), credit: totalValue, description: 'Owner equity — inventory funded' });
+        } else {
+          // Stock reduction / write-off: DR COGS / CR Merchandise Inventory
+          const absValue = Math.abs(totalValue);
+          lines.push({ accountId: await getAccount('5010'), debit:  absValue, description: `Inventory write-off: ${productName}` });
+          lines.push({ accountId: await getAccount('1050'), credit: absValue, description: `Stock removed: ${productName}` });
+        }
+
       } else {
         await this.prisma.accountingEvent.update({
           where: { id: eventId },

@@ -45,6 +45,17 @@ interface BulkSyncBody {
 export class OrdersController {
   constructor(private ordersService: OrdersService) {}
 
+  /**
+   * List orders for this tenant's branch.
+   * Read access: all operational + management roles; External Auditor gets read-only view.
+   * Excluded: GENERAL_EMPLOYEE, WAREHOUSE_STAFF, BOOKKEEPER (no business need for order history).
+   */
+  @Roles(
+    'CASHIER', 'SALES_LEAD',
+    'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN',
+    'MDM', 'FINANCE_LEAD', 'ACCOUNTANT', 'PAYROLL_MASTER',
+    'EXTERNAL_AUDITOR',
+  )
   @Get()
   async findAll(
     @CurrentUser() user: JwtPayload,
@@ -59,6 +70,16 @@ export class OrdersController {
     }
   }
 
+  /**
+   * Get a single order by ID.
+   * Same read-access set as the list endpoint.
+   */
+  @Roles(
+    'CASHIER', 'SALES_LEAD',
+    'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN',
+    'MDM', 'FINANCE_LEAD', 'ACCOUNTANT', 'PAYROLL_MASTER',
+    'EXTERNAL_AUDITOR',
+  )
   @Get(':id')
   async findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     try {

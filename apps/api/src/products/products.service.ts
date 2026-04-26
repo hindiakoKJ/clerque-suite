@@ -99,6 +99,83 @@ export class ProductsService {
     return this.prisma.product.update({ where: { id }, data: { isActive: false } });
   }
 
+  /**
+   * Replace all BOM items for a product in one atomic operation.
+   * Passing an empty array clears the recipe entirely.
+   * Also sets inventoryMode = RECIPE_BASED when items are provided, UNIT_BASED when cleared.
+   */
+  async saveBom(
+    tenantId: string,
+    productId: string,
+    items: CreateBomItemDto[],
+  ) {
+    await this.findOne(tenantId, productId); // ownership check
+
+    return this.prisma.$transaction(async (tx) => {
+      // Wipe existing BOM
+      await tx.bomItem.deleteMany({ where: { productId } });
+
+      // Re-insert new BOM
+      if (items.length > 0) {
+        await tx.bomItem.createMany({
+          data: items.map((b) => ({
+            productId,
+            rawMaterialId: b.rawMaterialId,
+            quantity: new Prisma.Decimal(b.quantity),
+          })),
+        });
+      }
+
+      // Sync inventoryMode flag
+      await tx.product.update({
+        where: { id: productId },
+        data: { inventoryMode: items.length > 0 ? 'RECIPE_BASED' : 'UNIT_BASED' },
+      });
+
+      // Return updated BOM with raw material names
+      return tx.bomItem.findMany({
+        where: { productId },
+        include: { rawMaterial: { select: { id: true, name: true, unit: true } } },
+      });
+    });
+  }
+
+  /**
+   * Replace all BOM items for a specific variant.
+   * Used by the Variants & Recipe modal to set size-specific quantities.
+   */
+  async saveVariantBom(
+    tenantId: string,
+    productId: string,
+    variantId: string,
+    items: Array<{ rawMaterialId: string; quantity: number }>,
+  ) {
+    // Verify the variant belongs to the product which belongs to the tenant
+    const variant = await this.prisma.productVariant.findFirst({
+      where: { id: variantId, productId, product: { tenantId } },
+    });
+    if (!variant) throw new NotFoundException('Variant not found');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.variantBomItem.deleteMany({ where: { variantId } });
+
+      if (items.length > 0) {
+        await tx.variantBomItem.createMany({
+          data: items.map((b) => ({
+            variantId,
+            rawMaterialId: b.rawMaterialId,
+            quantity: new Prisma.Decimal(b.quantity),
+          })),
+        });
+      }
+
+      return tx.variantBomItem.findMany({
+        where: { variantId },
+        include: { rawMaterial: { select: { id: true, name: true, unit: true } } },
+      });
+    });
+  }
+
   /** Barcode scanner lookup — returns the first active product matching the barcode value. */
   async findByBarcode(tenantId: string, barcode: string) {
     const product = await this.prisma.product.findFirst({

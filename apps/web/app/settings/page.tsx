@@ -40,18 +40,86 @@ interface StaffUser {
 }
 
 const ROLES = [
-  { value: 'BUSINESS_OWNER',  label: 'Business Owner',   desc: 'Full access to all modules' },
-  { value: 'BRANCH_MANAGER',  label: 'Branch Manager',   desc: 'Manages POS, reports, inventory' },
-  { value: 'ACCOUNTANT',      label: 'Accountant',       desc: 'Ledger, journal, periods' },
-  { value: 'CASHIER',         label: 'Cashier',          desc: 'POS terminal only' },
-  { value: 'GENERAL_EMPLOYEE',label: 'General Employee', desc: 'Clock-in / payroll only' },
+  // ── Management ──────────────────────────────────────────────────────────────
+  {
+    value: 'BUSINESS_OWNER',
+    label: 'Business Owner',
+    desc:  'Full access to all modules. Supervisor — cannot operate the register. Can manage all staff, payroll, and financial data.',
+  },
+  {
+    value: 'BRANCH_MANAGER',
+    label: 'Branch Manager',
+    desc:  'Oversight of POS orders, inventory, and branch reports. Supervisor — cannot open shifts. No payroll or ledger access.',
+  },
+  // ── POS / Operations ────────────────────────────────────────────────────────
+  {
+    value: 'SALES_LEAD',
+    label: 'Sales Lead',
+    desc:  'Opens and closes shifts, voids orders, applies manager-level discounts. Also manages timesheets for their team.',
+  },
+  {
+    value: 'CASHIER',
+    label: 'Cashier',
+    desc:  'Operates the POS register — open shifts, ring up sales, process payments. No management access.',
+  },
+  // ── Master Data / Stock ──────────────────────────────────────────────────────
+  {
+    value: 'MDM',
+    label: 'Master Data Manager',
+    desc:  'Creates and edits products, categories, pricing, inventory, and UoM. No financial reports or payroll access.',
+  },
+  {
+    value: 'WAREHOUSE_STAFF',
+    label: 'Warehouse Staff',
+    desc:  'Stock adjustments and goods receiving only. Cannot edit product pricing or access financial data.',
+  },
+  // ── Finance / Accounting ─────────────────────────────────────────────────────
+  {
+    value: 'FINANCE_LEAD',
+    label: 'Finance Lead',
+    desc:  'Cash-flow reports, bank reconciliation, and inventory valuation. Read access to ledger. No payroll or journal entry creation.',
+  },
+  {
+    value: 'BOOKKEEPER',
+    label: 'Bookkeeper',
+    desc:  'Creates journal entries and manages the general ledger. No payroll, no product pricing, no period close.',
+  },
+  {
+    value: 'ACCOUNTANT',
+    label: 'Accountant',
+    desc:  'Full read access to the ledger, trial balance, and journal. Can post and reverse entries. No payroll access.',
+  },
+  // ── Payroll ──────────────────────────────────────────────────────────────────
+  {
+    value: 'PAYROLL_MASTER',
+    label: 'Payroll Master',
+    desc:  'Manages pay runs, payslips, salary data, and SSS/PhilHealth/Pag-IBIG contributions. No access to ledger or POS.',
+  },
+  // ── General ──────────────────────────────────────────────────────────────────
+  {
+    value: 'GENERAL_EMPLOYEE',
+    label: 'General Employee',
+    desc:  'Minimal access — clock in/out only. Assign to staff who do not operate the POS, ledger, or payroll.',
+  },
+  {
+    value: 'EXTERNAL_AUDITOR',
+    label: 'External Auditor',
+    desc:  'Read-only view across all modules (POS orders, ledger, inventory). Zero write access.',
+  },
 ];
 
 const BUSINESS_TYPE_LABELS: Record<string, string> = {
-  RETAIL:      'Retail',
-  COFFEE_SHOP: 'Coffee Shop / F&B',
+  // F&B group
+  COFFEE_SHOP: 'Café / Coffee Shop',
   RESTAURANT:  'Restaurant',
-  SERVICES:    'Services',
+  BAKERY:      'Bakery / Pastry',
+  FOOD_STALL:  'Food Stall / Carinderia',
+  BAR_LOUNGE:  'Bar / Lounge',
+  CATERING:    'Catering',
+  // Non-F&B
+  RETAIL:        'Retail',
+  SERVICE:       'Service',
+  MANUFACTURING: 'Manufacturing / Construction',
 };
 
 const INPUT_CLS = 'w-full border border-border bg-background rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed';

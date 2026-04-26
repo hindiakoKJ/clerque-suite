@@ -1,5 +1,5 @@
 'use client';
-import type React from 'react';
+import React, { useEffect } from 'react';
 import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
@@ -28,11 +28,39 @@ function inLedgerRoles(role: string | undefined | null, set: readonly string[]) 
   return !!(role && set.includes(role));
 }
 
+/** Build a ledger nav item — always visible; grayed-out with lock if role lacks access. */
+function makeLedgerNavItem(
+  href: string, label: string, icon: React.ElementType,
+  allowedRoles: readonly string[], role: string | undefined | null,
+  extraCondition = true,
+): NavItem {
+  const hasAccess = extraCondition && inLedgerRoles(role, allowedRoles);
+  return {
+    href, label, icon,
+    disabled: !hasAccess,
+    disabledReason: !extraCondition
+      ? 'Requires BIR registration — enable in Settings → BIR & Tax'
+      : hasAccess ? undefined : 'Your role doesn\'t have access to this section',
+  };
+}
+
 export default function LedgerLayout({ children }: { children: React.ReactNode }) {
   const router         = useRouter();
   const { user, clear } = useAuthStore();
   const isBirRegistered = user?.isBirRegistered ?? false;
   const role           = user?.role;
+
+  // Set accent on <html> so Radix Dialog portals (rendered at document.body)
+  // also inherit the correct --accent value.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--accent',      LEDGER_ACCENT);
+    root.style.setProperty('--accent-soft', LEDGER_ACCENT_SOFT);
+    return () => {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-soft');
+    };
+  }, []);
 
   async function handleLogout() {
     const refresh = localStorage.getItem('app-auth');
@@ -42,15 +70,19 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     router.push('/login');
   }
 
+  // All ledger nav items are shown to every Ledger user.
+  // Items the current role cannot access appear grayed-out with a lock icon.
+  // The BIR Tax item also requires isBirRegistered — shown grayed out with a
+  // setup hint when the tenant hasn't configured BIR registration yet.
   const navItems: NavItem[] = [
-    ...(inLedgerRoles(role, DASHBOARD_ROLES)  ? [{ href: '/ledger/dashboard',     label: 'Dashboard',          icon: LayoutDashboard }] : []),
-    ...(inLedgerRoles(role, ACCOUNTS_ROLES)   ? [{ href: '/ledger/accounts',      label: 'Chart of Accounts',  icon: ListOrdered }]     : []),
-    ...(inLedgerRoles(role, TRIAL_BAL_ROLES)  ? [{ href: '/ledger/trial-balance', label: 'Trial Balance',      icon: Scale }]           : []),
-    ...(inLedgerRoles(role, JOURNAL_ROLES)    ? [{ href: '/ledger/journal',       label: 'Journal Entries',    icon: BookMarked }]      : []),
-    ...(inLedgerRoles(role, EVENT_ROLES)      ? [{ href: '/ledger/events',        label: 'Event Queue',        icon: Zap }]             : []),
-    ...(inLedgerRoles(role, SETTLEMENT_ROLES) ? [{ href: '/ledger/settlement',    label: 'Settlement',         icon: Banknote }]        : []),
-    ...(inLedgerRoles(role, PERIODS_ROLES)    ? [{ href: '/ledger/periods',       label: 'Accounting Periods', icon: CalendarClock }]   : []),
-    ...(isBirRegistered && inLedgerRoles(role, BIR_ROLES) ? [{ href: '/ledger/bir', label: 'Tax Estimation', icon: FileText }] : []),
+    makeLedgerNavItem('/ledger/dashboard',     'Dashboard',          LayoutDashboard, DASHBOARD_ROLES,  role),
+    makeLedgerNavItem('/ledger/accounts',      'Chart of Accounts',  ListOrdered,     ACCOUNTS_ROLES,   role),
+    makeLedgerNavItem('/ledger/trial-balance', 'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role),
+    makeLedgerNavItem('/ledger/journal',       'Journal Entries',    BookMarked,      JOURNAL_ROLES,    role),
+    makeLedgerNavItem('/ledger/events',        'Event Queue',        Zap,             EVENT_ROLES,      role),
+    makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role),
+    makeLedgerNavItem('/ledger/periods',       'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role),
+    makeLedgerNavItem('/ledger/bir',           'Tax Estimation',     FileText,        BIR_ROLES,        role, isBirRegistered),
   ];
 
   return (

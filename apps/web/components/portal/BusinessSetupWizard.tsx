@@ -1,11 +1,13 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Coffee, ShoppingBag, Wrench, Factory, ChevronRight, X } from 'lucide-react';
+import { Coffee, ShoppingBag, Wrench, Factory, ChevronRight, X, ChevronDown } from 'lucide-react';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
+import { isFnbType, type BusinessType } from '@repo/shared-types';
 
-type BusinessType = 'COFFEE_SHOP' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
+// Re-export BusinessType so consumers (useBusinessSetup callers) can use the shared type
+export type { BusinessType };
 
 interface TenantProfile {
   id: string;
@@ -19,15 +21,28 @@ interface Option {
   description: string;
   Icon: React.ElementType;
   color: string;
+  /** When true this option expands to show F&B sub-type choices */
+  isFnbGroup?: boolean;
 }
+
+// F&B sub-types the user can choose from inside the "Food & Beverage" group
+const FNB_SUB_OPTIONS: { type: BusinessType; label: string; description: string }[] = [
+  { type: 'COFFEE_SHOP', label: 'Café / Coffee Shop',   description: 'Espresso bar, milk tea, kiosk' },
+  { type: 'RESTAURANT',  label: 'Restaurant',           description: 'Dine-in or takeout, full-service' },
+  { type: 'BAKERY',      label: 'Bakery / Pastry',      description: 'Bakery, cake shop, pastry counter' },
+  { type: 'FOOD_STALL',  label: 'Food Stall / Carinderia', description: 'Market stall, turo-turo, carinderia' },
+  { type: 'BAR_LOUNGE',  label: 'Bar / Lounge',         description: 'Bar, lounge, nightspot with food' },
+  { type: 'CATERING',    label: 'Catering',             description: 'Events catering, food service' },
+];
 
 const OPTIONS: Option[] = [
   {
-    type: 'COFFEE_SHOP',
+    type: 'COFFEE_SHOP',   // representative type for the group; overridden by sub-type selection
     label: 'Food & Beverage',
-    description: 'Café, restaurant, or any food business. Unlocks modifier groups (Size, Add-ons, etc.).',
+    description: 'Café, restaurant, bakery, bar, catering. Unlocks recipe-based inventory and modifier groups.',
     Icon: Coffee,
     color: 'hsl(25 85% 50%)',
+    isFnbGroup: true,
   },
   {
     type: 'RETAIL',
@@ -57,7 +72,10 @@ interface Props {
 }
 
 export function BusinessSetupWizard({ onDismiss }: Props) {
-  const [selected, setSelected] = useState<BusinessType | null>(null);
+  // `selected` is the final BusinessType that will be saved
+  const [selected, setSelected]   = useState<BusinessType | null>(null);
+  // `fnbExpanded` tracks whether the F&B group is open to show sub-types
+  const [fnbExpanded, setFnbExpanded] = useState(false);
   const qc = useQueryClient();
 
   const { mutate: save, isPending } = useMutation({
@@ -70,6 +88,39 @@ export function BusinessSetupWizard({ onDismiss }: Props) {
     },
     onError: () => toast.error('Failed to save. Try again.'),
   });
+
+  const FNB_COLOR = 'hsl(25 85% 50%)';
+
+  // Which top-level option card is highlighted
+  function isCardSelected(opt: Option) {
+    if (opt.isFnbGroup) return !!selected && isFnbType(selected);
+    return selected === opt.type;
+  }
+
+  function handleCardClick(opt: Option) {
+    if (opt.isFnbGroup) {
+      setFnbExpanded((v) => !v);
+      // If they click the group card without picking a sub-type yet, don't change selected
+      return;
+    }
+    setFnbExpanded(false);
+    setSelected(opt.type);
+  }
+
+  function handleSubType(type: BusinessType) {
+    setSelected(type);
+  }
+
+  // Label for the confirm button
+  const selectedLabel =
+    selected == null ? null
+    : isFnbType(selected)
+      ? (FNB_SUB_OPTIONS.find((s) => s.type === selected)?.label ?? 'Food & Beverage')
+      : OPTIONS.find((o) => o.type === selected)?.label;
+
+  const accentColor = selected
+    ? (isFnbType(selected) ? FNB_COLOR : OPTIONS.find((o) => o.type === selected)?.color ?? '#8B5E3C')
+    : '#94a3b8';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -102,45 +153,90 @@ export function BusinessSetupWizard({ onDismiss }: Props) {
 
         {/* Options */}
         <div className="px-8 pb-2 space-y-2">
-          {OPTIONS.map(({ type, label, description, Icon, color }) => {
-            const isSelected = selected === type;
+          {OPTIONS.map((opt) => {
+            const { type, label, description, Icon, color, isFnbGroup } = opt;
+            const isSelected = isCardSelected(opt);
             return (
-              <button
-                key={type}
-                onClick={() => setSelected(type)}
-                className={`w-full flex items-center gap-4 rounded-2xl border-2 px-4 py-3.5 text-left transition-all ${
-                  isSelected
-                    ? 'border-transparent shadow-md'
-                    : 'border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:hover:border-slate-700'
-                }`}
-                style={isSelected ? {
-                  borderColor: color,
-                  background: `color-mix(in oklab, ${color} 8%, transparent)`,
-                } : {}}
-              >
-                <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                  style={{ background: `color-mix(in oklab, ${color} 15%, transparent)` }}
+              <div key={type}>
+                <button
+                  onClick={() => handleCardClick(opt)}
+                  className={`w-full flex items-center gap-4 rounded-2xl border-2 px-4 py-3.5 text-left transition-all ${
+                    isSelected
+                      ? 'border-transparent shadow-md'
+                      : 'border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:hover:border-slate-700'
+                  }`}
+                  style={isSelected ? {
+                    borderColor: color,
+                    background: `color-mix(in oklab, ${color} 8%, transparent)`,
+                  } : {}}
                 >
-                  <Icon className="h-5 w-5" style={{ color }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-900 dark:text-white">{label}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mt-0.5">
-                    {description}
-                  </p>
-                </div>
-                {isSelected && (
                   <div
-                    className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
-                    style={{ background: color }}
+                    className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                    style={{ background: `color-mix(in oklab, ${color} 15%, transparent)` }}
                   >
-                    <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
+                    <Icon className="h-5 w-5" style={{ color }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-white">{label}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mt-0.5">
+                      {description}
+                    </p>
+                  </div>
+                  {isFnbGroup ? (
+                    <ChevronDown
+                      className={`h-4 w-4 text-slate-400 shrink-0 transition-transform ${fnbExpanded ? 'rotate-180' : ''}`}
+                    />
+                  ) : isSelected ? (
+                    <div
+                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+                      style={{ background: color }}
+                    >
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  ) : null}
+                </button>
+
+                {/* F&B sub-type picker — shown when group is expanded */}
+                {isFnbGroup && fnbExpanded && (
+                  <div className="mt-1.5 ml-4 pl-4 border-l-2 border-slate-100 dark:border-slate-800 space-y-1">
+                    {FNB_SUB_OPTIONS.map((sub) => {
+                      const isSubSelected = selected === sub.type;
+                      return (
+                        <button
+                          key={sub.type}
+                          onClick={() => handleSubType(sub.type)}
+                          className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all ${
+                            isSubSelected
+                              ? 'shadow-sm'
+                              : 'hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                          }`}
+                          style={isSubSelected ? {
+                            background: `color-mix(in oklab, ${FNB_COLOR} 10%, transparent)`,
+                            outline: `1.5px solid ${FNB_COLOR}`,
+                          } : {}}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-slate-900 dark:text-white">{sub.label}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">{sub.description}</p>
+                          </div>
+                          {isSubSelected && (
+                            <div
+                              className="w-4 h-4 rounded-full flex items-center justify-center shrink-0"
+                              style={{ background: FNB_COLOR }}
+                            >
+                              <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>
@@ -151,10 +247,10 @@ export function BusinessSetupWizard({ onDismiss }: Props) {
             onClick={() => selected && save(selected)}
             disabled={!selected || isPending}
             className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold text-sm text-white transition-all disabled:opacity-40 hover:opacity-90"
-            style={{ background: selected ? OPTIONS.find((o) => o.type === selected)?.color ?? '#8B5E3C' : '#94a3b8' }}
+            style={{ background: accentColor }}
           >
-            {isPending ? 'Saving…' : 'Confirm & Continue'}
-            {!isPending && <ChevronRight className="h-4 w-4" />}
+            {isPending ? 'Saving…' : selectedLabel ? `Confirm — ${selectedLabel}` : 'Select a business type'}
+            {!isPending && selected && <ChevronRight className="h-4 w-4" />}
           </button>
           <p className="text-center text-xs text-slate-400 mt-3">
             You can change this any time from Settings.

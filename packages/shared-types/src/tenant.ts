@@ -3,8 +3,48 @@ export type TenantStatus = 'ACTIVE' | 'GRACE' | 'SUSPENDED';
 export type InventoryMode = 'UNIT_BASED' | 'RECIPE_BASED';
 export type ValuationMethod = 'WAC' | 'FIFO';
 
-/** Business type — determines default chart of accounts on tenant onboarding */
-export type BusinessType = 'COFFEE_SHOP' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
+/**
+ * Business type — determines default chart of accounts on tenant onboarding
+ * and which feature sets are unlocked (e.g. recipe/ingredient inventory for F&B).
+ */
+export type BusinessType =
+  // F&B group — all of these unlock recipe-based inventory and modifier groups
+  | 'COFFEE_SHOP'   // Café, milk tea, coffee kiosk (legacy value — kept for backward compat)
+  | 'RESTAURANT'    // Dine-in or takeout restaurant
+  | 'BAKERY'        // Bakery, pastry shop, cake shop
+  | 'FOOD_STALL'    // Carinderia, turo-turo, market stall
+  | 'BAR_LOUNGE'    // Bar, lounge, nightspot with food/drinks
+  | 'CATERING'      // Catering / events food service
+  // Non-F&B group
+  | 'RETAIL'
+  | 'SERVICE'
+  | 'MANUFACTURING';
+
+/**
+ * The complete set of F&B business types.
+ * Any type in this set unlocks:
+ *   • Recipe-based inventory (ingredient BOM)
+ *   • Modifier groups (Size, Add-ons, Temperature, etc.)
+ *   • Ingredients tab in Inventory
+ */
+export const FNB_BUSINESS_TYPES = [
+  'COFFEE_SHOP',
+  'RESTAURANT',
+  'BAKERY',
+  'FOOD_STALL',
+  'BAR_LOUNGE',
+  'CATERING',
+] as const;
+
+export type FnbBusinessType = (typeof FNB_BUSINESS_TYPES)[number];
+
+/**
+ * Returns true when the given business type is a Food & Beverage operation.
+ * Use this everywhere instead of `businessType === 'COFFEE_SHOP'`.
+ */
+export function isFnbType(businessType: string | null | undefined): boolean {
+  return (FNB_BUSINESS_TYPES as readonly string[]).includes(businessType ?? '');
+}
 
 /**
  * Accounting method:

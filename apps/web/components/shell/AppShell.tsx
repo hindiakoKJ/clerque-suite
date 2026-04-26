@@ -2,7 +2,7 @@
 import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut } from 'lucide-react';
+import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MobileNavSheet } from './MobileNavSheet';
 import { toggleTheme } from '@/components/portal/AppLoginPage';
@@ -14,6 +14,13 @@ export interface NavItem {
   icon: React.ElementType;
   /** Shows an amber pill / dot when > 0 */
   badge?: number;
+  /**
+   * When true, the item is visible in the nav but rendered as a non-clickable
+   * dimmed row with a lock icon — indicates the user's role doesn't allow access.
+   */
+  disabled?: boolean;
+  /** Tooltip shown on hover when disabled (e.g. "Requires Branch Manager or above") */
+  disabledReason?: string;
 }
 
 interface AppShellProps {
@@ -54,8 +61,31 @@ export function AppShell({
   function NavList({ onItemClick }: { onItemClick?: () => void }) {
     return (
       <nav className="flex flex-col gap-0.5 p-2">
-        {navItems.map(({ href, label, icon: Icon, badge }) => {
-          const active = pathname === href || pathname.startsWith(href + '/');
+        {navItems.map(({ href, label, icon: Icon, badge, disabled, disabledReason }) => {
+          const active = !disabled && (pathname === href || pathname.startsWith(href + '/'));
+          const tooltip = collapsed
+            ? disabled ? `${label} — ${disabledReason ?? 'No access for your role'}` : label
+            : disabled ? (disabledReason ?? 'No access for your role') : undefined;
+
+          // Disabled: visible but non-interactive dimmed row
+          if (disabled) {
+            return (
+              <div
+                key={href}
+                title={tooltip}
+                className={cn(
+                  'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium w-full',
+                  'text-muted-foreground/40 cursor-not-allowed select-none',
+                  collapsed && 'justify-center px-2',
+                )}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                {!collapsed && <span className="truncate flex-1">{label}</span>}
+                {!collapsed && <Lock className="h-3 w-3 shrink-0 opacity-50" />}
+              </div>
+            );
+          }
+
           return (
             <button
               key={href}
@@ -67,7 +97,7 @@ export function AppShell({
                   : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
                 collapsed && 'justify-center px-2',
               )}
-              title={collapsed ? label : undefined}
+              title={tooltip}
             >
               <Icon className="h-4 w-4 shrink-0" />
               {!collapsed && <span className="truncate flex-1">{label}</span>}
@@ -189,7 +219,7 @@ export function AppShell({
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
 
-      <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName}>
+      <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName} onSignOut={onSignOut}>
         <NavList onItemClick={() => setMobileOpen(false)} />
       </MobileNavSheet>
     </div>

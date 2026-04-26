@@ -84,6 +84,8 @@ export default function JournalPage() {
   const [showModal, setShowModal]           = useState(false);
   const [reverseTarget, setReverseTarget]   = useState<JournalEntry | null>(null);
   const [reverseDate, setReverseDate]       = useState('');
+  // Dedicated warning step shown when user tries to reverse a reversal entry
+  const [reversalWarning, setReversalWarning] = useState<JournalEntry | null>(null);
   const [receiptData, setReceiptData]       = useState<ReceiptData | null>(null);
   const [loadingReceipt, setLoadingReceipt] = useState<string | null>(null);
   const [exporting, setExporting]           = useState(false);
@@ -174,7 +176,7 @@ export default function JournalPage() {
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-5xl mx-auto">
+    <div className="p-4 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-foreground">Journal Entries</h1>
@@ -340,7 +342,15 @@ export default function JournalPage() {
                                   )}
                                   {entry.status === 'POSTED' && !entry.reversedBy && entry.source === 'MANUAL' && (
                                     <button
-                                      onClick={() => { setReverseTarget(entry); setReverseDate(new Date().toISOString().split('T')[0]); }}
+                                      onClick={() => {
+                                        if (entry.reversalOf) {
+                                          // This entry is itself a reversal — show warning first
+                                          setReversalWarning(entry);
+                                        } else {
+                                          setReverseTarget(entry);
+                                          setReverseDate(new Date().toISOString().split('T')[0]);
+                                        }
+                                      }}
                                       title="Reverse this entry"
                                       className="text-muted-foreground hover:text-amber-600 transition-colors p-1 rounded"
                                     >
@@ -484,6 +494,55 @@ export default function JournalPage() {
           onClose={() => setShowModal(false)}
           onSaved={() => { setShowModal(false); qc.invalidateQueries({ queryKey: ['journal'] }); }}
         />
+      )}
+
+      {/* Reversal-of-reversal warning — shown BEFORE opening the reversal date modal */}
+      {reversalWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-background rounded-2xl border border-border shadow-2xl w-full max-w-md">
+            <div className="flex items-center gap-3 px-5 py-4 border-b border-border">
+              <div className="w-9 h-9 rounded-full bg-red-500/10 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-4 h-4 text-red-500" />
+              </div>
+              <div>
+                <h2 className="font-semibold text-foreground text-sm">Reversing a Reversal Entry</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">This requires your careful attention</p>
+              </div>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div className="rounded-lg bg-red-500/8 border border-red-400/30 p-3 text-xs text-red-700 dark:text-red-400 space-y-2">
+                <p>
+                  <span className="font-mono font-semibold">{reversalWarning.entryNumber}</span> is itself a reversal of{' '}
+                  <span className="font-mono font-semibold">{reversalWarning.reversalOf!.entryNumber}</span>.
+                </p>
+                <p>
+                  Reversing it again will effectively <span className="font-semibold">re-post the original transaction</span> back
+                  into the ledger. This creates a chain of reversal entries that can be difficult to untangle during an audit.
+                </p>
+                <p className="font-medium">Only proceed if you are certain this is the correct action.</p>
+              </div>
+            </div>
+            <div className="px-5 pb-5 flex gap-3">
+              <button
+                onClick={() => setReversalWarning(null)}
+                className="flex-1 border border-border text-muted-foreground rounded-xl py-2 text-sm font-medium hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const entry = reversalWarning;
+                  setReversalWarning(null);
+                  setReverseTarget(entry);
+                  setReverseDate(new Date().toISOString().split('T')[0]);
+                }}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-xl py-2 text-sm font-medium transition-colors"
+              >
+                Proceed Anyway
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Reverse confirmation */}

@@ -1,5 +1,5 @@
 'use client';
-import type React from 'react';
+import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
@@ -9,21 +9,51 @@ import { api } from '@/lib/api';
 const PAYROLL_ACCENT      = 'hsl(262 70% 58%)';
 const PAYROLL_ACCENT_SOFT = 'hsl(262 70% 58% / 0.08)';
 
-const navItems: NavItem[] = [
-  { href: '/payroll/clock',        label: 'Clock In / Out',   icon: Timer },
-  { href: '/payroll/dashboard',    label: 'Dashboard',        icon: LayoutDashboard },
-  { href: '/payroll/timesheets',   label: 'Timesheets',       icon: CalendarDays },
-  { href: '/payroll/staff',        label: 'Staff',            icon: UserCheck },
-  // Coming Soon items — still in nav, route shows placeholder
-  { href: '/payroll/coming-soon/runs',          label: 'Pay Runs',        icon: DollarSign },
-  { href: '/payroll/coming-soon/payslips',      label: 'Payslips',        icon: FileText },
-  { href: '/payroll/coming-soon/contributions', label: 'Contributions',   icon: HeartHandshake },
-  { href: '/payroll/coming-soon/reports',       label: 'Reports',         icon: Clock },
-];
+// ── Payroll SOD Role Sets ─────────────────────────────────────────────────────
+// Clock In/Out → ALL roles (every employee can track attendance)
+// Dashboard    → Owners, managers, payroll admins, finance leads
+// Timesheets   → Management + Sales Lead (who manages shift workers)
+// Staff        → HR/Payroll management only
+// Pay Runs & financial payroll → PAYROLL_MASTER + BUSINESS_OWNER only
+const CLOCK_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER',
+                              'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
+                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE', 'EXTERNAL_AUDITOR'] as const;
+const PAY_DASHBOARD_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'FINANCE_LEAD'] as const;
+const TIMESHEETS_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'SALES_LEAD'] as const;
+const PAY_STAFF_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'MDM'] as const;
+const PAY_RUNS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER'] as const;
+
+function inPayrollRoles(role: string | undefined | null, set: readonly string[]) {
+  return !!(role && set.includes(role));
+}
+
+function makePayNavItem(
+  href: string, label: string, icon: React.ElementType,
+  allowedRoles: readonly string[], role: string | undefined | null,
+): NavItem {
+  const hasAccess = inPayrollRoles(role, allowedRoles);
+  return {
+    href, label, icon,
+    disabled: !hasAccess,
+    disabledReason: hasAccess ? undefined : 'Your role doesn\'t have access to this section',
+  };
+}
 
 export default function PayrollLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { user, clear } = useAuthStore();
+
+  // Set accent on <html> so Radix Dialog portals (rendered at document.body)
+  // also inherit the correct --accent value.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--accent',      PAYROLL_ACCENT);
+    root.style.setProperty('--accent-soft', PAYROLL_ACCENT_SOFT);
+    return () => {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-soft');
+    };
+  }, []);
 
   async function handleLogout() {
     const refresh = localStorage.getItem('app-auth');
@@ -32,6 +62,21 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
     document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     router.push('/login');
   }
+
+  const role = user?.role;
+
+  // Build payroll nav — all items shown; grayed-out when role lacks access.
+  // Clock In/Out is accessible to EVERY role (universal attendance tracking).
+  const navItems: NavItem[] = [
+    makePayNavItem('/payroll/clock',                 'Clock In / Out', Timer,           CLOCK_ROLES,         role),
+    makePayNavItem('/payroll/dashboard',             'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role),
+    makePayNavItem('/payroll/timesheets',            'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role),
+    makePayNavItem('/payroll/staff',                 'Staff',          UserCheck,       PAY_STAFF_ROLES,     role),
+    makePayNavItem('/payroll/coming-soon/runs',          'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
+    makePayNavItem('/payroll/coming-soon/payslips',      'Payslips',       FileText,        PAY_RUNS_ROLES,      role),
+    makePayNavItem('/payroll/coming-soon/contributions', 'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
+    makePayNavItem('/payroll/coming-soon/reports',       'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
+  ];
 
   return (
     <div

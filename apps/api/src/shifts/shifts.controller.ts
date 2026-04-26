@@ -26,8 +26,12 @@ import { CloseShiftDto } from './dto/close-shift.dto';
 export class ShiftsController {
   constructor(private shiftsService: ShiftsService) {}
 
-  /** Open a new shift (or return the existing active one — idempotent) */
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  /**
+   * Open a new shift (or return the existing active one — idempotent).
+   * Restricted to operational cashier roles only.
+   * BUSINESS_OWNER and BRANCH_MANAGER are supervisors — they do not operate the register.
+   */
+  @Roles('CASHIER', 'SALES_LEAD')
   @Post()
   @HttpCode(HttpStatus.CREATED)
   open(@CurrentUser() user: JwtPayload, @Body() body: OpenShiftDto) {
@@ -40,15 +44,18 @@ export class ShiftsController {
     );
   }
 
-  /** Get the current cashier's active (open) shift */
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  /**
+   * Get the active (open) shift for a branch.
+   * Supervisors can see which shift is running without being the cashier.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN')
   @Get('active')
   getActive(@CurrentUser() user: JwtPayload, @Query('branchId') branchId: string) {
     return this.shiftsService.getActive(user.tenantId!, user.sub, branchId);
   }
 
-  /** List recent shifts for the tenant (filtered by branch optionally) */
-  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER')
+  /** List recent shifts — management / reporting view */
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN', 'FINANCE_LEAD')
   @Get()
   list(
     @CurrentUser() user: JwtPayload,
@@ -59,14 +66,17 @@ export class ShiftsController {
   }
 
   /** Get a specific shift by ID with full summary */
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN', 'FINANCE_LEAD')
   @Get(':id')
   getById(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.shiftsService.getById(user.tenantId!, id);
   }
 
-  /** Close the shift — only the shift owner can close it */
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  /**
+   * Close the active shift — cashier/sales-lead only.
+   * Supervisors cannot close a shift they never opened.
+   */
+  @Roles('CASHIER', 'SALES_LEAD')
   @Post(':id/close')
   @HttpCode(HttpStatus.OK)
   close(

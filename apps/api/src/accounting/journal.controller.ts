@@ -16,6 +16,8 @@ import { JournalService, CreateJournalDto } from './journal.service';
 export class JournalController {
   constructor(private readonly svc: JournalService) {}
 
+  /** Read journal entries — Bookkeeper and above; External Auditor read-only. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get()
   findAll(
     @CurrentUser() user: JwtPayload,
@@ -29,6 +31,8 @@ export class JournalController {
     });
   }
 
+  /** Get single journal entry — same read-access set. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.svc.findOne(user.tenantId!, id);

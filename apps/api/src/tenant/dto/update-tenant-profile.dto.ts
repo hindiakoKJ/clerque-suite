@@ -8,12 +8,19 @@ import {
   Matches,
 } from 'class-validator';
 
-export const BUSINESS_TYPES = ['COFFEE_SHOP', 'RETAIL', 'SERVICE', 'MANUFACTURING'] as const;
+export const BUSINESS_TYPES = [
+  // F&B group
+  'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING',
+  // Non-F&B group
+  'RETAIL', 'SERVICE', 'MANUFACTURING',
+] as const;
+
+export type BusinessTypeValue = (typeof BUSINESS_TYPES)[number];
 
 export class UpdateTenantProfileDto {
   @IsOptional()
   @IsEnum(BUSINESS_TYPES)
-  businessType?: 'COFFEE_SHOP' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
+  businessType?: BusinessTypeValue;
 
   @IsOptional()
   @IsString()

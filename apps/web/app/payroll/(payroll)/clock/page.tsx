@@ -1,43 +1,90 @@
 'use client';
 
-// Payroll Clock — punch in/out page
-// Accessible to ALL users with any Payroll access (CLOCK_ONLY and above)
-// UI will be replaced with Claude Design handoff spec
-import { useState, useEffect } from 'react';
-import { Timer, LogIn, LogOut } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Timer, LogIn, LogOut, Loader2 } from 'lucide-react';
+import { api } from '@/lib/api';
+import { toast } from 'sonner';
+
+interface ClockStatus {
+  isClockedIn: boolean;
+  clockedInAt: string | null;
+  entryId:     string | null;
+  elapsedMins: number;
+}
 
 export default function ClockPage() {
-  const [now, setNow] = useState(new Date());
-  const [isClockedIn, setIsClockedIn] = useState(false);
-  const [clockedInAt, setClockedInAt] = useState<Date | null>(null);
+  const [now,          setNow]          = useState(new Date());
+  const [status,       setStatus]       = useState<ClockStatus | null>(null);
+  const [loading,      setLoading]      = useState(true);
+  const [actionPending, setActionPending] = useState(false);
 
+  // Tick every second
   useEffect(() => {
-    const interval = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(interval);
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
   }, []);
 
-  function handleToggle() {
-    if (isClockedIn) {
-      setIsClockedIn(false);
-      setClockedInAt(null);
-    } else {
-      setIsClockedIn(true);
-      setClockedInAt(new Date());
+  // Fetch clock status on mount
+  const fetchStatus = useCallback(async () => {
+    try {
+      const { data } = await api.get<ClockStatus>('/payroll/clock/status');
+      setStatus(data);
+    } catch {
+      // If the endpoint fails (network/auth), show a neutral state
+      setStatus({ isClockedIn: false, clockedInAt: null, entryId: null, elapsedMins: 0 });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void fetchStatus(); }, [fetchStatus]);
+
+  // Clock in
+  async function handleClockIn() {
+    setActionPending(true);
+    try {
+      const { data } = await api.post<ClockStatus>('/payroll/clock/in', {});
+      setStatus(data);
+      toast.success('Clocked in successfully.');
+    } catch (err: any) {
+      const msg = err?.response?.data?.message?.[0] ?? err?.response?.data?.message ?? 'Failed to clock in.';
+      toast.error(msg);
+    } finally {
+      setActionPending(false);
     }
   }
 
-  const elapsed = clockedInAt
-    ? Math.floor((now.getTime() - clockedInAt.getTime()) / 1000)
+  // Clock out
+  async function handleClockOut() {
+    setActionPending(true);
+    try {
+      const { data } = await api.post<ClockStatus>('/payroll/clock/out', { breakMins: 0 });
+      setStatus(data);
+      toast.success('Clocked out successfully.');
+    } catch (err: any) {
+      const msg = err?.response?.data?.message?.[0] ?? err?.response?.data?.message ?? 'Failed to clock out.';
+      toast.error(msg);
+    } finally {
+      setActionPending(false);
+    }
+  }
+
+  // Compute elapsed time from the server-provided clockedInAt timestamp
+  const clockedInAt = status?.clockedInAt ? new Date(status.clockedInAt) : null;
+  const elapsed     = clockedInAt
+    ? Math.max(0, Math.floor((now.getTime() - clockedInAt.getTime()) / 1000))
     : 0;
   const hrs  = Math.floor(elapsed / 3600).toString().padStart(2, '0');
   const mins = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');
   const secs = (elapsed % 60).toString().padStart(2, '0');
 
+  const isClockedIn = status?.isClockedIn ?? false;
+
   return (
     <div className="overflow-y-auto h-full p-6">
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-8">
 
-        {/* Clock display */}
+        {/* Current time display */}
         <div className="text-center space-y-2">
           <p className="text-sm text-slate-500 dark:text-slate-400">Current time</p>
           <p className="text-5xl font-mono font-bold text-slate-900 dark:text-white tabular-nums">
@@ -48,7 +95,7 @@ export default function ClockPage() {
           </p>
         </div>
 
-        {/* Session timer */}
+        {/* Session elapsed timer — only shown while clocked in */}
         {isClockedIn && (
           <div className="text-center">
             <p className="text-xs text-slate-400 mb-1">Time on shift</p>
@@ -58,24 +105,35 @@ export default function ClockPage() {
           </div>
         )}
 
-        {/* Punch button — UI to be replaced by Claude Design */}
-        <button
-          onClick={handleToggle}
-          className="flex items-center gap-3 px-10 py-4 rounded-2xl font-semibold text-white text-lg shadow-lg transition-all hover:brightness-110 active:scale-[0.97]"
-          style={{ background: 'var(--accent)' }}
-        >
-          {isClockedIn
-            ? <><LogOut className="w-5 h-5" /> Clock Out</>
-            : <><LogIn  className="w-5 h-5" /> Clock In</>
-          }
-        </button>
+        {/* Punch button */}
+        {loading ? (
+          <div className="flex items-center gap-2 text-slate-400">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span className="text-sm">Checking status…</span>
+          </div>
+        ) : (
+          <button
+            onClick={isClockedIn ? handleClockOut : handleClockIn}
+            disabled={actionPending}
+            className="flex items-center gap-3 px-10 py-4 rounded-2xl font-semibold text-white text-lg shadow-lg transition-all hover:brightness-110 active:scale-[0.97] disabled:opacity-60 disabled:cursor-not-allowed"
+            style={{ background: 'var(--accent)' }}
+          >
+            {actionPending ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : isClockedIn ? (
+              <><LogOut className="w-5 h-5" /> Clock Out</>
+            ) : (
+              <><LogIn  className="w-5 h-5" /> Clock In</>
+            )}
+          </button>
+        )}
 
         <p className="text-xs text-slate-400">
-          {isClockedIn
-            ? `Clocked in at ${clockedInAt?.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}`
-            : 'Not clocked in'
-          }
+          {isClockedIn && clockedInAt
+            ? `Clocked in at ${clockedInAt.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}`
+            : 'Not clocked in'}
         </p>
+
       </div>
     </div>
   );

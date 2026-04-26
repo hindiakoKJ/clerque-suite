@@ -17,6 +17,19 @@ import { UpdateTaxSettingsDto } from './dto/update-tax-settings.dto';
 export class TenantController {
   constructor(private tenantService: TenantService) {}
 
+  /** Returns all active branches for the authenticated user's tenant.
+   *  Used by product inventory prompt, shift open, and any branch-picker UI. */
+  @Roles(
+    'CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'ACCOUNTANT',
+    'BOOKKEEPER', 'FINANCE_LEAD', 'MDM', 'PAYROLL_MASTER',
+    'WAREHOUSE_STAFF', 'SALES_LEAD', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
+    'GENERAL_EMPLOYEE',
+  )
+  @Get('branches')
+  getBranches(@CurrentUser() user: JwtPayload) {
+    return this.tenantService.getBranches(user.tenantId!);
+  }
+
   @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'ACCOUNTANT')
   @Get('profile')
   getProfile(@CurrentUser() user: JwtPayload) {

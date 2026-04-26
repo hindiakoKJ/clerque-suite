@@ -19,20 +19,28 @@ import { UpdateAccountDto } from './dto/update-account.dto';
 export class AccountsController {
   constructor(private readonly svc: AccountsService) {}
 
-  // ── Read — available to all Ledger roles ─────────────────────────────────
+  // ── Read — scoped by role ──────────────────────────────────────────────────
 
+  /** Chart of accounts list — all Ledger roles can view the COA. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get()
   findAll(@CurrentUser() user: JwtPayload) {
     return this.svc.findAll(user.tenantId!);
   }
 
+  /** Trial balance — all Ledger roles. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get('trial-balance')
   trialBalance(@CurrentUser() user: JwtPayload, @Query('asOf') asOf?: string) {
     return this.svc.getTrialBalance(user.tenantId!, asOf);
   }
 
+  /**
+   * P&L Summary — restricted to management + finance roles.
+   * Bookkeeper and External Auditor do NOT get P&L access (SOD).
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BRANCH_MANAGER', 'FINANCE_LEAD')
   @Get('pl-summary')
-  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BRANCH_MANAGER')
   plSummary(
     @CurrentUser() user: JwtPayload,
     @Query('from') from: string,
@@ -42,8 +50,13 @@ export class AccountsController {
     return this.svc.getPLSummary(user.tenantId!, from ?? now, to ?? now);
   }
 
+  /**
+   * Account ledger drill-down (FBL3N equivalent).
+   * Bookkeeper included — they review individual GL movements.
+   * External Auditor included — read-only audit trail access.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get(':accountId/ledger')
-  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BRANCH_MANAGER')
   accountLedger(
     @CurrentUser() user: JwtPayload,
     @Param('accountId') accountId: string,
@@ -56,6 +69,8 @@ export class AccountsController {
     });
   }
 
+  /** Single account detail — same read-access set as list. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.svc.findOne(user.tenantId!, id);

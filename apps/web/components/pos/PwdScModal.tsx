@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useCartStore } from '@/store/pos/cart';
-import { computePwdScDiscount } from '@/lib/pos/utils';
+import { computeDiscount } from '@/lib/pos/utils';
 import { formatPeso } from '@/lib/utils';
 
 interface PwdScModalProps {
@@ -23,8 +23,10 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
   const [idOwnerName, setIdOwnerName] = useState('');
   const [error, setError] = useState('');
 
-  const lines = useCartStore((s) => s.lines);
+  const lines      = useCartStore((s) => s.lines);
   const applyPwdSc = useCartStore((s) => s.applyPwdSc);
+  const taxStatus  = useCartStore((s) => s.taxStatus);
+  const isVat      = taxStatus === 'VAT';
 
   // Cashier must explicitly choose which item(s) get the discount.
   // Default is empty — nothing selected — so no accidental blanket discounts.
@@ -66,8 +68,8 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
     [lines, selected],
   );
 
-  // Live discount preview
-  const preview = selectedSubtotal > 0 ? computePwdScDiscount(selectedSubtotal) : null;
+  // Live discount preview — routes to correct engine based on tenant tax status
+  const preview = selectedSubtotal > 0 ? computeDiscount(selectedSubtotal, taxStatus) : null;
 
   function handleApply() {
     if (!idOwnerName.trim()) {
@@ -106,10 +108,17 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
         <div className="px-6 py-4 space-y-4">
           {/* Law notice */}
           <div className={`${ACCENT_SOFT_BG} rounded-xl p-3 text-sm`}>
-            <p className={`font-medium ${ACCENT_CLS}`}>20% discount on VAT-exclusive base (PH law)</p>
+            <p className={`font-medium ${ACCENT_CLS}`}>
+              {isVat
+                ? '20% discount on VAT-exclusive base (PH law)'
+                : '20% discount on selling price (PH law)'}
+            </p>
             <p className={`text-xs mt-1 text-muted-foreground`}>
               Per RA 9994 / RA 7277: discount applies to <strong>1 unit per item</strong> per transaction.
               For qty &gt; 1, only 1 unit is discounted; the rest are at full price.
+              {!isVat && (
+                <> No VAT component — discount is applied directly on the price.</>
+              )}
             </p>
           </div>
 
@@ -200,18 +209,31 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                 <span>Selected subtotal</span>
                 <span>{formatPeso(selectedSubtotal)}</span>
               </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>VAT-excl. base</span>
-                <span>{formatPeso(preview.vatExclusiveBase)}</span>
-              </div>
-              <div className={`flex justify-between ${ACCENT_CLS} font-medium`}>
-                <span>20% discount on base</span>
-                <span>-{formatPeso(preview.discountOnBase)}</span>
-              </div>
-              <div className="flex justify-between text-muted-foreground">
-                <span>VAT relief</span>
-                <span>-{formatPeso(preview.totalSavings - preview.discountOnBase)}</span>
-              </div>
+
+              {isVat ? (
+                // VAT-registered: show full VAT breakdown
+                <>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>VAT-excl. base</span>
+                    <span>{formatPeso(preview.vatExclusiveBase)}</span>
+                  </div>
+                  <div className={`flex justify-between ${ACCENT_CLS} font-medium`}>
+                    <span>20% discount on base</span>
+                    <span>-{formatPeso(preview.discountOnBase)}</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>VAT relief</span>
+                    <span>-{formatPeso(preview.totalSavings - preview.discountOnBase)}</span>
+                  </div>
+                </>
+              ) : (
+                // Non-VAT / Unregistered: simple 20% on gross — no VAT to strip
+                <div className={`flex justify-between ${ACCENT_CLS} font-medium`}>
+                  <span>20% discount</span>
+                  <span>-{formatPeso(preview.discountOnBase)}</span>
+                </div>
+              )}
+
               <div className={`flex justify-between font-semibold ${ACCENT_CLS} border-t border-border/50 pt-1`}>
                 <span>Total savings</span>
                 <span>-{formatPeso(preview.totalSavings)}</span>

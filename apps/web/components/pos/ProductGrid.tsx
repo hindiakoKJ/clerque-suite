@@ -91,17 +91,17 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-background">
       {/* Search + Category filters */}
-      <div className="p-3 bg-white border-b border-gray-200 space-y-2">
+      <div className="p-3 bg-card border-b border-border space-y-2">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
             placeholder="Search products..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 h-10 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            className="w-full pl-9 pr-4 h-10 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow"
           />
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
@@ -111,7 +111,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
               'shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
               !activeCat
                 ? 'text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
             )}
             style={!activeCat ? { background: 'var(--accent)' } : undefined}
           >
@@ -125,7 +125,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                 'shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
                 activeCat === cat.id
                   ? 'text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+                  : 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
               )}
               style={activeCat === cat.id ? { background: 'var(--accent)' } : undefined}
             >
@@ -140,11 +140,11 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
         {loading ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="h-28 rounded-xl bg-gray-200 animate-pulse" />
+              <div key={i} className="h-28 rounded-xl bg-muted animate-pulse" />
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="flex items-center justify-center h-40 text-gray-400 text-sm">
+          <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">
             No products found
           </div>
         ) : (
@@ -159,26 +159,30 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                 <button
                   key={p.id}
                   onClick={() => handleAdd(p)}
+                  disabled={isOut}
                   className={cn(
                     'group relative flex flex-col items-start p-3 rounded-xl border hover:shadow-md active:scale-95 transition-all text-left',
                     isOut
-                      ? 'bg-gray-50 border-gray-200 opacity-60'
+                      ? 'bg-muted border-border opacity-60 cursor-not-allowed'
                       : isLow
-                      ? 'bg-white border-amber-300 hover:border-amber-400'
-                      : 'bg-white border-gray-200',
+                      ? 'bg-card border-amber-400 dark:border-amber-500 hover:border-amber-500 dark:hover:border-amber-400'
+                      : 'bg-card border-border hover:border-[var(--accent)]/40',
                   )}
-                  style={!isOut && !isLow ? { '--tw-ring-color': 'var(--accent)' } as React.CSSProperties : undefined}
                 >
+                  {/* Icon tile */}
                   <div className={cn(
                     'w-full h-12 rounded-lg flex items-center justify-center mb-2 transition-colors',
-                    isLow ? 'bg-amber-50 group-hover:bg-amber-100' : 'bg-[color-mix(in_oklab,var(--accent)_8%,white)] group-hover:bg-[color-mix(in_oklab,var(--accent)_14%,white)]',
+                    isLow
+                      ? 'bg-amber-500/10 group-hover:bg-amber-500/15'
+                      : 'bg-[var(--accent-soft)] group-hover:bg-[var(--accent-soft)]/80',
                   )}>
                     <span className="text-2xl">
                       {p.category?.name === 'Beverages' ? '☕' :
                        p.category?.name === 'Food' ? '🍱' : '📦'}
                     </span>
                   </div>
-                  <p className="text-xs font-medium text-gray-900 leading-tight line-clamp-2">{p.name}</p>
+
+                  <p className="text-xs font-medium text-foreground leading-tight line-clamp-2">{p.name}</p>
                   <p className="text-sm font-bold mt-1" style={{ color: 'var(--accent)' }}>{formatPeso(Number(p.price))}</p>
 
                   {/* Stock badge */}
@@ -186,10 +190,10 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                     <span className={cn(
                       'absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded-full font-semibold',
                       isOut
-                        ? 'bg-gray-200 text-gray-500'
+                        ? 'bg-muted text-muted-foreground'
                         : isLow
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-green-100 text-green-600',
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                        : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
                     )}>
                       {isOut ? 'OUT' : isLow ? `LOW·${stock}` : stock}
                     </span>
@@ -200,6 +204,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
           </div>
         )}
       </div>
+
       {pickerProduct && (
         <ModifierPickerModal
           productName={pickerProduct.name}

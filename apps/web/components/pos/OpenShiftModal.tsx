@@ -8,6 +8,9 @@ import { formatPeso } from '@/lib/utils';
 const BILL_DENOMINATIONS = [1000, 500, 200, 100, 50, 20];
 const COIN_DENOMINATIONS = [10, 5, 1];
 
+const INPUT_CLS =
+  'w-full border border-border bg-background text-foreground placeholder:text-muted-foreground rounded-lg px-3 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow';
+
 interface OpenShiftModalProps {
   onOpen: (openingCash: number, notes?: string) => Promise<void>;
   cashierName: string;
@@ -59,19 +62,21 @@ export function OpenShiftModal({ onOpen, cashierName }: OpenShiftModalProps) {
         </DialogHeader>
 
         <div className="px-6 py-2 space-y-4">
-          <p className="text-sm text-gray-500">
-            Welcome, <span className="font-medium text-gray-800">{cashierName}</span>. Enter the
+          <p className="text-sm text-muted-foreground">
+            Welcome, <span className="font-medium text-foreground">{cashierName}</span>. Enter the
             opening cash before starting your shift.
           </p>
 
           {/* Mode toggle */}
-          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+          <div className="flex rounded-lg border border-border overflow-hidden text-xs font-medium">
             {(['simple', 'denomination'] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
                 className={`flex-1 py-2 transition-colors capitalize ${
-                  mode === m ? 'text-white' : 'text-gray-500 hover:bg-gray-50'
+                  mode === m
+                    ? 'text-white'
+                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                 }`}
                 style={mode === m ? { background: 'var(--accent)' } : undefined}
               >
@@ -82,38 +87,38 @@ export function OpenShiftModal({ onOpen, cashierName }: OpenShiftModalProps) {
 
           {mode === 'simple' ? (
             <div>
-              <label className="text-xs text-gray-500 font-medium">Opening cash (₱)</label>
+              <label className="text-xs text-muted-foreground font-medium">Opening cash (₱)</label>
               <input
                 type="number"
                 value={simpleAmount}
                 onChange={(e) => { setSimpleAmount(e.target.value); setError(''); }}
                 placeholder="0.00"
-                className="mt-1 w-full h-12 rounded-lg border border-gray-300 px-3 text-xl font-bold focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                className={`mt-1 h-12 text-xl font-bold ${INPUT_CLS}`}
                 autoFocus
               />
             </div>
           ) : (
             <div className="space-y-2">
-              <p className="text-xs text-gray-500 font-medium">Count bills and coins</p>
+              <p className="text-xs text-muted-foreground font-medium">Count bills and coins</p>
               {[...BILL_DENOMINATIONS, ...COIN_DENOMINATIONS].map((d) => (
                 <div key={d} className="flex items-center gap-3">
-                  <span className="w-16 text-sm font-medium text-right">{formatPeso(d)}</span>
-                  <span className="text-gray-300">×</span>
+                  <span className="w-16 text-sm font-medium text-foreground text-right">{formatPeso(d)}</span>
+                  <span className="text-muted-foreground/50">×</span>
                   <input
                     type="number"
                     min={0}
                     value={counts[d] ?? ''}
                     onChange={(e) => setCount(d, e.target.value)}
                     placeholder="0"
-                    className="w-20 h-8 rounded border border-gray-200 px-2 text-sm text-center focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+                    className="w-20 h-8 rounded border border-border bg-background text-foreground px-2 text-sm text-center focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
                   />
-                  <span className="text-xs text-gray-400 ml-auto">
+                  <span className="text-xs text-muted-foreground ml-auto">
                     = {formatPeso(d * (counts[d] ?? 0))}
                   </span>
                 </div>
               ))}
-              <div className="flex justify-between font-bold text-sm pt-2 border-t border-gray-200">
-                <span>Total</span>
+              <div className="flex justify-between font-bold text-sm pt-2 border-t border-border">
+                <span className="text-foreground">Total</span>
                 <span style={{ color: 'var(--accent)' }}>{formatPeso(denomTotal)}</span>
               </div>
             </div>
@@ -121,18 +126,18 @@ export function OpenShiftModal({ onOpen, cashierName }: OpenShiftModalProps) {
 
           {/* Notes (optional) */}
           <div>
-            <label className="text-xs text-gray-500 font-medium">Notes (optional)</label>
+            <label className="text-xs text-muted-foreground font-medium">Notes (optional)</label>
             <input
               type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="e.g. Drawer A, morning shift"
-              className="mt-1 w-full h-9 rounded-lg border border-gray-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              className={`mt-1 h-9 text-sm ${INPUT_CLS}`}
             />
           </div>
 
           {/* Summary */}
-          <div className="rounded-xl p-3 text-center" style={{ background: 'color-mix(in oklab, var(--accent) 8%, white)' }}>
+          <div className="rounded-xl p-3 text-center bg-[var(--accent-soft)]">
             <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--accent)' }}>Opening Cash</p>
             <p className="text-3xl font-bold mt-0.5" style={{ color: 'var(--accent)' }}>{formatPeso(openingCash)}</p>
           </div>
@@ -144,7 +149,7 @@ export function OpenShiftModal({ onOpen, cashierName }: OpenShiftModalProps) {
           <Button
             onClick={handleSubmit}
             disabled={loading}
-            className="w-full"
+            className="w-full text-white"
             style={{ background: 'var(--accent)' }}
           >
             {loading ? 'Opening shift…' : 'Start Shift'}

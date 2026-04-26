@@ -12,6 +12,11 @@ interface PwdScModalProps {
   onClose: () => void;
 }
 
+// Design token alias for the PWD accent — uses the app's CSS accent variable
+// so the modal matches the POS theme in both light and dark mode.
+const ACCENT_CLS = 'text-[var(--accent)]';
+const ACCENT_SOFT_BG = 'bg-[var(--accent-soft)]';
+
 export function PwdScModal({ open, onClose }: PwdScModalProps) {
   const [type, setType] = useState<'PWD' | 'SENIOR_CITIZEN'>('SENIOR_CITIZEN');
   const [idRef, setIdRef] = useState('');
@@ -99,9 +104,10 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
         </DialogHeader>
 
         <div className="px-6 py-4 space-y-4">
-          <div className="bg-purple-50 rounded-xl p-3 text-sm text-purple-700">
-            <p className="font-medium">20% discount on VAT-exclusive base (PH law)</p>
-            <p className="text-xs mt-1 text-purple-500">
+          {/* Law notice */}
+          <div className={`${ACCENT_SOFT_BG} rounded-xl p-3 text-sm`}>
+            <p className={`font-medium ${ACCENT_CLS}`}>20% discount on VAT-exclusive base (PH law)</p>
+            <p className={`text-xs mt-1 text-muted-foreground`}>
               Per RA 9994 / RA 7277: discount applies to <strong>1 unit per item</strong> per transaction.
               For qty &gt; 1, only 1 unit is discounted; the rest are at full price.
             </p>
@@ -109,7 +115,7 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
 
           {/* Discount type */}
           <div>
-            <p className="text-xs text-gray-500 font-medium mb-2">Discount type</p>
+            <p className="text-xs text-muted-foreground font-medium mb-2">Discount type</p>
             <div className="grid grid-cols-2 gap-2">
               {(['SENIOR_CITIZEN', 'PWD'] as const).map((t) => (
                 <button
@@ -117,9 +123,10 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                   onClick={() => setType(t)}
                   className={`py-2.5 rounded-lg border text-sm font-medium transition-colors ${
                     type === t
-                      ? 'border-purple-500 bg-purple-50 text-purple-700'
-                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                      ? 'text-white border-transparent'
+                      : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
                   }`}
+                  style={type === t ? { background: 'var(--accent)' } : undefined}
                 >
                   {t === 'SENIOR_CITIZEN' ? '👴 Senior Citizen' : '♿ PWD'}
                 </button>
@@ -130,24 +137,24 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
           {/* Per-item checkboxes */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-gray-500 font-medium">Items to discount</p>
+              <p className="text-xs text-muted-foreground font-medium">Items to discount</p>
               <div className="flex gap-2 text-xs">
                 <button
                   onClick={() => setSelected(new Set(lineKeys))}
-                  className="text-purple-600 hover:text-purple-700"
+                  className={`${ACCENT_CLS} hover:opacity-80`}
                 >
                   All
                 </button>
-                <span className="text-gray-300">|</span>
+                <span className="text-muted-foreground/40">|</span>
                 <button
                   onClick={() => setSelected(new Set())}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-muted-foreground hover:text-foreground"
                 >
                   None
                 </button>
               </div>
             </div>
-            <div className="border border-gray-100 rounded-lg divide-y divide-gray-50 max-h-44 overflow-y-auto">
+            <div className="border border-border rounded-lg divide-y divide-border max-h-44 overflow-y-auto">
               {lines.map((l) => {
                 const key = `${l.product.id}-${l.variantId ?? ''}`;
                 const checked = selected.has(key);
@@ -155,21 +162,21 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                   <label
                     key={key}
                     className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
-                      checked ? 'bg-purple-50' : 'bg-white hover:bg-gray-50'
+                      checked ? ACCENT_SOFT_BG : 'bg-card hover:bg-secondary/50'
                     }`}
                   >
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggleLine(key)}
-                      className="accent-purple-600 h-4 w-4 shrink-0"
+                      className="h-4 w-4 shrink-0 accent-[var(--accent)]"
                     />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-800 truncate">{l.product.name}</p>
-                      <p className="text-xs text-gray-400">
+                      <p className="text-sm text-foreground truncate">{l.product.name}</p>
+                      <p className="text-xs text-muted-foreground">
                         {l.quantity > 1 ? (
                           <>
-                            <span className="text-purple-600 font-medium">1 discounted</span>
+                            <span className={`${ACCENT_CLS} font-medium`}>1 discounted</span>
                             {' + '}{l.quantity - 1} full price · {formatPeso(l.unitPrice)} ea.
                           </>
                         ) : (
@@ -177,7 +184,7 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                         )}
                       </p>
                     </div>
-                    <span className="text-sm font-medium text-gray-700 shrink-0">
+                    <span className="text-sm font-medium text-foreground shrink-0">
                       {formatPeso(l.unitPrice - l.itemDiscount)}
                     </span>
                   </label>
@@ -188,30 +195,30 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
 
           {/* Live preview */}
           {preview ? (
-            <div className="bg-purple-50 rounded-lg px-3 py-2.5 space-y-1 text-[11px]">
-              <div className="flex justify-between text-gray-500">
+            <div className={`${ACCENT_SOFT_BG} rounded-lg px-3 py-2.5 space-y-1 text-[11px]`}>
+              <div className="flex justify-between text-muted-foreground">
                 <span>Selected subtotal</span>
                 <span>{formatPeso(selectedSubtotal)}</span>
               </div>
-              <div className="flex justify-between text-gray-500">
+              <div className="flex justify-between text-muted-foreground">
                 <span>VAT-excl. base</span>
                 <span>{formatPeso(preview.vatExclusiveBase)}</span>
               </div>
-              <div className="flex justify-between text-purple-600 font-medium">
+              <div className={`flex justify-between ${ACCENT_CLS} font-medium`}>
                 <span>20% discount on base</span>
                 <span>-{formatPeso(preview.discountOnBase)}</span>
               </div>
-              <div className="flex justify-between text-gray-400">
+              <div className="flex justify-between text-muted-foreground">
                 <span>VAT relief</span>
                 <span>-{formatPeso(preview.totalSavings - preview.discountOnBase)}</span>
               </div>
-              <div className="flex justify-between font-semibold text-purple-700 border-t border-purple-200 pt-1">
+              <div className={`flex justify-between font-semibold ${ACCENT_CLS} border-t border-border/50 pt-1`}>
                 <span>Total savings</span>
                 <span>-{formatPeso(preview.totalSavings)}</span>
               </div>
             </div>
           ) : (
-            <p className="text-xs text-gray-400 text-center">
+            <p className="text-xs text-muted-foreground text-center">
               Select at least one item to preview the discount.
             </p>
           )}
@@ -219,9 +226,9 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
           {/* ID owner name + ID reference */}
           <div className="space-y-3">
             <div>
-              <label className="text-xs text-gray-500 font-medium">
+              <label className="text-xs text-muted-foreground font-medium">
                 Name of ID Holder
-                <span className="text-red-400 ml-1">*</span>
+                <span className="text-destructive ml-1">*</span>
               </label>
               <Input
                 value={idOwnerName}
@@ -231,9 +238,9 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
               />
             </div>
             <div>
-              <label className="text-xs text-gray-500 font-medium">
+              <label className="text-xs text-muted-foreground font-medium">
                 {type === 'PWD' ? 'PWD ID Number' : 'Senior Citizen ID / OSCA Number'}
-                <span className="text-red-400 ml-1">*</span>
+                <span className="text-destructive ml-1">*</span>
               </label>
               <Input
                 value={idRef}
@@ -241,11 +248,11 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                 placeholder="Enter ID number (any format)"
                 className="mt-1"
               />
-              <p className="text-[10px] text-gray-400 mt-0.5">
+              <p className="text-[10px] text-muted-foreground mt-0.5">
                 No standard format — enter as shown on the card.
               </p>
             </div>
-            {error && <p className="text-xs text-red-500">{error}</p>}
+            {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
         </div>
 
@@ -253,8 +260,8 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
           <Button variant="outline" onClick={handleClose}>Cancel</Button>
           <Button
             onClick={handleApply}
-            variant="default"
-            className="bg-purple-600 hover:bg-purple-700"
+            className="text-white"
+            style={{ background: 'var(--accent)' }}
             disabled={selectedSubtotal <= 0}
           >
             Apply Discount

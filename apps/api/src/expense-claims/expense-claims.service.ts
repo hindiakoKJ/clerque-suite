@@ -21,7 +21,7 @@ const MANAGER_ROLES = [
 ];
 
 // Roles allowed to approve/reject claims
-const REVIEWER_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'FINANCE_LEAD'];
+const REVIEWER_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'FINANCE_LEAD', 'ACCOUNTANT'];
 
 // Roles allowed to mark claims as paid
 const PAY_ROLES = ['BUSINESS_OWNER', 'FINANCE_LEAD'];
@@ -242,7 +242,7 @@ export class ExpenseClaimsService {
   ) {
     if (!REVIEWER_ROLES.includes(role)) {
       throw new ForbiddenException(
-        'Only BUSINESS_OWNER, BRANCH_MANAGER, or FINANCE_LEAD can review claims',
+        'Only BUSINESS_OWNER, BRANCH_MANAGER, FINANCE_LEAD, or ACCOUNTANT can review claims',
       );
     }
 

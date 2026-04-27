@@ -40,4 +40,14 @@ export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'production', 'test')
     .default('development'),
+
+  // ── Mail (Resend) ─────────────────────────────────────────────────────────
+  RESEND_API_KEY: Joi.string().optional()
+    .description('Resend API key for transactional email. Optional — mail is silently skipped if absent.'),
+
+  MAIL_FROM: Joi.string().email({ tlds: { allow: false } }).default('noreply@clerque.app')
+    .description('Sender address used in all outbound emails. Defaults to noreply@clerque.app.'),
+
+  APP_URL: Joi.string().uri().default('http://localhost:3000')
+    .description('Public URL of the frontend app — used in email links (reset password, payslips).'),
 });

@@ -1,8 +1,24 @@
 [build]
 builder = "nixpacks"
-buildCommand = "npm install && npx prisma generate --schema=packages/db/prisma/schema.prisma && npm run build --workspace=apps/api && npm run seed --workspace=packages/db"
+# Build: install, generate Prisma client, compile shared-types then API.
+# Seed is intentionally NOT run here — it runs at startup in main.ts
+# after the DB connection is confirmed live.
+buildCommand = "npm install && npm run build --workspace=packages/shared-types && npx prisma generate --schema=packages/db/prisma/schema.prisma && npm run build --workspace=apps/api"
 
 [deploy]
-startCommand = "node apps/api/dist/main"
+# Start: resolve any migrations that were applied via prisma db push (no IF NOT
+# EXISTS guards, so migrate deploy would fail without this pre-step).  The
+# || true makes each resolve a no-op if the migration is already tracked.
+# Migration 6 (phase8-10) uses IF NOT EXISTS throughout so migrate deploy is
+# safe to run on it unconditionally.
+startCommand = """
+npx prisma migrate resolve --applied 20260425014738_init                              --schema=packages/db/prisma/schema.prisma 2>/dev/null || true &&
+npx prisma migrate resolve --applied 20260425040054_phase1_modifiers_uom             --schema=packages/db/prisma/schema.prisma 2>/dev/null || true &&
+npx prisma migrate resolve --applied 20260425055445_phase2_settlement_accounting_periods --schema=packages/db/prisma/schema.prisma 2>/dev/null || true &&
+npx prisma migrate resolve --applied 20260426035055_tax_compliance_and_audit         --schema=packages/db/prisma/schema.prisma 2>/dev/null || true &&
+npx prisma migrate resolve --applied 20260426120000_payroll_time_entries             --schema=packages/db/prisma/schema.prisma 2>/dev/null || true &&
+npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma &&
+node apps/api/dist/main
+"""
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

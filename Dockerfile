@@ -31,6 +31,9 @@ RUN npx prisma generate --schema=packages/db/prisma/schema.prisma
 # 3. Compile NestJS API → apps/api/dist/
 RUN cd apps/api && npm run build
 
+# Copy startup script (used by railway.toml startCommand)
+COPY start.sh ./
+
 EXPOSE 3001
 
 # Run migrations then start the server.

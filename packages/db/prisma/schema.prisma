@@ -366,6 +366,10 @@ model Tenant {
   rawMaterials        RawMaterial[]
   payRuns             PayRun[]
   payslips            Payslip[]
+  documents           Document[]
+  orSequence          OrSequence?
+  expenseClaims       ExpenseClaim[]
+  expenseClaimSeq     ExpenseClaimSequence?
 
   @@map("tenants")
 }
@@ -463,9 +467,12 @@ model User {
   isActive             Boolean        @default(true)
   hiredAt              DateTime?
   separatedAt          DateTime?
-  enable2fa            Boolean        @default(false)
-  twoFactorSecret      String?
-  createdAt            DateTime       @default(now())
+  enable2fa                Boolean        @default(false)
+  twoFactorSecret          String?
+  /// Time-limited token for self-service password reset (expires in 1 hour)
+  passwordResetToken       String?        @unique
+  passwordResetTokenExpiry DateTime?
+  createdAt                DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
   tenant               Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1574,4 +1581,127 @@ enum PayRunStatus {
   DRAFT
   COMPLETED
   CANCELLED
+}
+
+// ─── Phase 7 — Document Attachments ──────────────────────────────────────────
+
+/// Generic document/attachment — links a file to any entity.
+/// Stored on disk (uploads/ folder); DB tracks metadata only.
+model Document {
+  id           String   @id @default(cuid())
+  tenantId     String
+  /// Discriminator: "Order" | "ExpenseEntry" | "JournalEntry" | "ExpenseClaim"
+  entityType   String
+  entityId     String
+  /// Original filename as uploaded by the user
+  filename     String
+  /// MIME type (e.g. "application/pdf", "image/jpeg", "image/png")
+  mimeType     String
+  /// File size in bytes
+  sizeBytes    Int
+  /// Path relative to the uploads root (e.g. "tenants/abc/documents/xyz.pdf")
+  storagePath  String
+  /// Human label, e.g. "Official Receipt", "Delivery Receipt", "Invoice"
+  label        String?
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+  @@map("documents")
+}
+
+// ─── Phase 8 — OR Sequential Numbering ───────────────────────────────────────
+
+/// Tracks the next Official Receipt / Sales Invoice sequence number per tenant.
+/// BIR requires sequential, unbroken OR/SI numbering (RR No. 18-2012).
+model OrSequence {
+  id         String   @id @default(cuid())
+  tenantId   String   @unique
+  /// Prefix printed before the number (e.g. "OR", "SI", "AR")
+  prefix     String   @default("OR")
+  /// Last sequence number issued. Next = lastNumber + 1.
+  lastNumber Int      @default(0)
+  /// Zero-pad length for the numeric portion (8 → "OR-00000001")
+  padLength  Int      @default(8)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("or_sequences")
+}
+
+// ─── Phase 10 — Travel & Expense Claims ──────────────────────────────────────
+
+enum ExpenseClaimStatus {
+  DRAFT       // Employee filling in; not yet submitted
+  SUBMITTED   // Submitted for manager approval
+  APPROVED    // Manager approved; ready for payment
+  REJECTED    // Manager rejected with reason
+  PAID        // Reimbursed to employee
+}
+
+/// An employee expense claim (meals, transport, accommodation, supplies, etc.)
+model ExpenseClaim {
+  id            String             @id @default(cuid())
+  tenantId      String
+  branchId      String?
+  /// Auto-generated number, e.g. "EC-2026-00001"
+  claimNumber   String
+  submittedById String
+  title         String
+  description   String?
+  totalAmount   Decimal            @db.Decimal(14, 2)
+  status        ExpenseClaimStatus @default(DRAFT)
+  submittedAt   DateTime?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNotes   String?
+  paidAt        DateTime?
+  paymentRef    String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items         ExpenseClaimItem[]
+
+  @@unique([tenantId, claimNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, submittedById])
+  @@map("expense_claims")
+}
+
+/// One line item within an expense claim.
+model ExpenseClaimItem {
+  id          String       @id @default(cuid())
+  claimId     String
+  /// Category: "Meals", "Transport", "Accommodation", "Supplies", "Communication", "Other"
+  category    String
+  description String
+  amount      Decimal      @db.Decimal(14, 2)
+  receiptDate DateTime
+  /// Receipt / OR number from the vendor
+  receiptRef  String?
+  createdAt   DateTime     @default(now())
+
+  claim       ExpenseClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([claimId])
+  @@map("expense_claim_items")
+}
+
+/// Auto-incrementing claim sequence counter per tenant.
+model ExpenseClaimSequence {
+  id         String   @id @default(cuid())
+  tenantId   String   @unique
+  lastNumber Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("expense_claim_sequences")
 }

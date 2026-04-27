@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { FileText, Download, ChevronDown, ChevronRight, AlertTriangle, TableIcon } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { FileText, Download, ChevronDown, ChevronRight, AlertTriangle, TableIcon, Settings2, BookOpen } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
@@ -381,10 +381,324 @@ function Section2551Q({ year, quarter }: { year: number; quarter: Quarter }) {
   );
 }
 
+// ── Sub-component: OR Sequence Settings ─────────────────────────────────────
+
+interface OrSequence {
+  id: string; tenantId: string; prefix: string; lastNumber: number; padLength: number;
+}
+
+function SectionOrSequence({ isOwner }: { isOwner: boolean }) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery<OrSequence>({
+    queryKey: ['bir-or-sequence'],
+    queryFn: () => api.get('/bir/or-sequence').then((r) => r.data),
+  });
+
+  const [editing, setEditing] = useState(false);
+  const [prefix, setPrefix]   = useState('');
+  const [padLen, setPadLen]   = useState(8);
+
+  function openEdit() {
+    setPrefix(data?.prefix ?? 'OR');
+    setPadLen(data?.padLength ?? 8);
+    setEditing(true);
+  }
+
+  const save = useMutation({
+    mutationFn: () => api.patch('/bir/or-sequence', { prefix: prefix.trim().toUpperCase(), padLength: padLen }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bir-or-sequence'] });
+      setEditing(false);
+      toast.success('OR sequence settings saved.');
+    },
+    onError: () => toast.error('Failed to save OR sequence settings.'),
+  });
+
+  const previewNumber = data
+    ? `${editing ? prefix.trim().toUpperCase() || 'OR' : data.prefix}-${String(data.lastNumber + 1).padStart(editing ? padLen : data.padLength, '0')}`
+    : '—';
+
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <Settings2 className="w-4 h-4 text-muted-foreground" />
+          <h2 className="font-semibold text-foreground">OR Sequential Numbering</h2>
+        </div>
+        {isOwner && !editing && (
+          <button
+            onClick={openEdit}
+            className="h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors"
+          >
+            Edit Settings
+          </button>
+        )}
+      </div>
+
+      {isLoading && <div className="px-5 py-6 text-sm text-muted-foreground">Loading OR sequence…</div>}
+
+      {data && !editing && (
+        <div className="p-5 grid grid-cols-3 gap-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">Prefix</p>
+            <p className="font-mono font-bold text-foreground text-lg">{data.prefix}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">Last Number Issued</p>
+            <p className="font-mono font-bold text-foreground text-lg">{data.lastNumber.toLocaleString()}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">Next OR Number</p>
+            <p className="font-mono font-bold text-[var(--accent)] text-lg">{previewNumber}</p>
+          </div>
+        </div>
+      )}
+
+      {editing && (
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Prefix</label>
+              <input
+                value={prefix}
+                onChange={(e) => setPrefix(e.target.value.toUpperCase())}
+                maxLength={10}
+                className="h-9 px-3 w-full rounded-lg border border-border bg-background text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground uppercase tracking-wide mb-1 block">Pad Length</label>
+              <input
+                type="number"
+                value={padLen}
+                min={4}
+                max={12}
+                onChange={(e) => setPadLen(Number(e.target.value))}
+                className="h-9 px-3 w-full rounded-lg border border-border bg-background text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Next number preview: <span className="font-mono font-semibold text-[var(--accent)]">{previewNumber}</span>
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => save.mutate()}
+              disabled={save.isPending}
+              className="h-9 px-4 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
+            >
+              {save.isPending ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              onClick={() => setEditing(false)}
+              className="h-9 px-4 rounded-lg border border-border bg-background text-sm text-foreground hover:bg-muted transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sub-component: EWT / SAWT ────────────────────────────────────────────────
+
+interface EwtVendor {
+  vendorName: string; vendorTin: string | null;
+  atcCode: string | null; totalGross: number; totalWht: number; entries: number;
+}
+interface EwtData {
+  year: number; quarter: Quarter;
+  periodFrom: string; periodTo: string;
+  totalWhtAmount: number;
+  vendors: EwtVendor[];
+}
+
+function SectionEwtSawt({ year, quarter }: { year: number; quarter: Quarter }) {
+  const { data, isLoading, error } = useQuery<EwtData>({
+    queryKey: ['bir-ewt', year, quarter],
+    queryFn: () => api.get(`/bir/ewt?year=${year}&quarter=${quarter}`).then((r) => r.data),
+  });
+
+  function handleExportSawt() {
+    if (!data) return;
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `sawt-alphalist-${year}-Q${quarter}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+        <div>
+          <h2 className="font-semibold text-foreground">EWT / SAWT — Form 2307 &amp; Alphalist</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Expanded Withholding Tax summary per vendor
+            {data && ` • Period: ${data.periodFrom} – ${data.periodTo}`}
+          </p>
+        </div>
+        <button
+          onClick={handleExportSawt}
+          disabled={!data}
+          className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Download className="w-3.5 h-3.5" /> Export SAWT
+        </button>
+      </div>
+
+      {isLoading && <div className="px-5 py-6 text-sm text-muted-foreground">Loading EWT data…</div>}
+      {error && (
+        <div className="px-5 py-6 text-sm text-red-500">
+          {(error as any)?.response?.data?.message ?? 'Failed to load EWT data.'}
+        </div>
+      )}
+
+      {data && (
+        <div className="p-5 space-y-4">
+          <div className="rounded-lg bg-amber-500/5 border border-amber-400/20 p-3 inline-flex flex-col text-center min-w-40">
+            <p className="text-[10px] font-semibold uppercase text-amber-600 tracking-wide">Total WHT Withheld</p>
+            <p className="text-xl font-bold text-amber-700 dark:text-amber-400 mt-1">{fmtPeso(data.totalWhtAmount)}</p>
+          </div>
+
+          {data.vendors.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No withholding tax entries for this period.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs uppercase text-muted-foreground border-b border-border">
+                  <th className="pb-2 text-left font-semibold">Vendor</th>
+                  <th className="pb-2 text-left font-semibold w-36">TIN</th>
+                  <th className="pb-2 text-left font-semibold w-24">ATC</th>
+                  <th className="pb-2 text-right font-semibold w-28">Gross Amount</th>
+                  <th className="pb-2 text-right font-semibold w-28">WHT Withheld</th>
+                  <th className="pb-2 text-right font-semibold w-16">Txns</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {data.vendors.map((v, i) => (
+                  <tr key={i}>
+                    <td className="py-2 text-foreground font-medium">{v.vendorName}</td>
+                    <td className="py-2 font-mono text-xs text-muted-foreground">{v.vendorTin ?? '—'}</td>
+                    <td className="py-2 font-mono text-xs text-muted-foreground">{v.atcCode ?? '—'}</td>
+                    <td className="py-2 text-right font-mono text-sm">{fmtPeso(v.totalGross)}</td>
+                    <td className="py-2 text-right font-mono text-sm font-semibold text-amber-600">{fmtPeso(v.totalWht)}</td>
+                    <td className="py-2 text-right text-muted-foreground">{v.entries}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sub-component: Books of Account ─────────────────────────────────────────
+
+const MONTH_LABELS = [
+  'January','February','March','April','May','June',
+  'July','August','September','October','November','December',
+];
+
+function SectionBooksOfAccount() {
+  const [bookYear,  setBookYear]  = useState(new Date().getFullYear());
+  const [bookMonth, setBookMonth] = useState(new Date().getMonth() + 1);
+  const [loading,   setLoading]   = useState<string | null>(null);
+
+  async function download(type: 'sales' | 'purchases' | 'disbursements') {
+    setLoading(type);
+    const pad  = String(bookMonth).padStart(2, '0');
+    const names: Record<string, string> = {
+      sales:          `sales-book-${bookYear}-${pad}.xlsx`,
+      purchases:      `purchase-book-${bookYear}-${pad}.xlsx`,
+      disbursements:  `cash-disbursements-${bookYear}-${pad}.xlsx`,
+    };
+    try {
+      await downloadAuthFile(
+        `${API_URL}/bir/books/${type}?year=${bookYear}&month=${bookMonth}`,
+        names[type]!,
+      );
+    } catch {
+      toast.error(`Failed to download ${names[type]}.`);
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2.5">
+        <BookOpen className="w-4 h-4 text-muted-foreground" />
+        <h2 className="font-semibold text-foreground">Books of Account</h2>
+      </div>
+      <div className="p-5 space-y-4">
+        <p className="text-xs text-muted-foreground">
+          Download BIR-required books of account as Excel files for a specific month. Each file includes
+          a totals row and is formatted for printing or submission.
+        </p>
+
+        {/* Month / year selector */}
+        <div className="flex items-center gap-2">
+          <select
+            value={bookYear}
+            onChange={(e) => setBookYear(Number(e.target.value))}
+            className="h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          >
+            {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+          <select
+            value={bookMonth}
+            onChange={(e) => setBookMonth(Number(e.target.value))}
+            className="h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          >
+            {MONTH_LABELS.map((m, i) => (
+              <option key={i + 1} value={i + 1}>{m}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Download buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {([
+            { type: 'sales',         label: 'Sales Book',            desc: 'Completed POS orders' },
+            { type: 'purchases',     label: 'Purchase Book',         desc: 'Posted expense entries' },
+            { type: 'disbursements', label: 'Cash Disbursements',    desc: 'Payments remitted to vendors' },
+          ] as const).map(({ type, label, desc }) => (
+            <button
+              key={type}
+              onClick={() => download(type)}
+              disabled={loading !== null}
+              className="flex flex-col items-start gap-1 p-4 rounded-lg border border-border bg-background hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-left"
+            >
+              <div className="flex items-center justify-between w-full">
+                <span className="text-sm font-semibold text-foreground">{label}</span>
+                {loading === type
+                  ? <span className="text-xs text-muted-foreground">Downloading…</span>
+                  : <Download className="w-3.5 h-3.5 text-muted-foreground" />
+                }
+              </div>
+              <span className="text-xs text-muted-foreground">{desc}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main BIR / Tax Estimation Guide Page ──────────────────────────────────────
 
 export default function BirPage() {
   const { user } = useAuthStore();
+  const isOwner = user?.role === 'BUSINESS_OWNER';
   const [year,    setYear]    = useState(new Date().getFullYear());
   const [quarter, setQuarter] = useState<Quarter>(currentQuarter());
   const [csvFrom, setCsvFrom] = useState('');
@@ -489,6 +803,15 @@ export default function BirPage() {
 
       {/* 1701Q — quarterly income tax for all BIR-registered tenants */}
       <Section1701Q year={year} quarter={quarter} />
+
+      {/* ── EWT / SAWT — Form 2307 ────────────────────────────────────────── */}
+      <SectionEwtSawt year={year} quarter={quarter} />
+
+      {/* ── OR Sequential Numbering ───────────────────────────────────────── */}
+      <SectionOrSequence isOwner={isOwner} />
+
+      {/* ── Books of Account ──────────────────────────────────────────────── */}
+      <SectionBooksOfAccount />
 
       {/* ── Accountant Export CSV ──────────────────────────────────────────── */}
       <div className="rounded-xl border border-border bg-card p-5">

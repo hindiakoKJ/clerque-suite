@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, X, FileText, CheckCircle2, AlertTriangle,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Paperclip,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import DocumentAttachments from '@/components/shared/DocumentAttachments';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -338,6 +339,17 @@ function ExpenseModal({
             </div>
           </div>
 
+          {/* Attachments — only shown when editing an existing expense */}
+          {isEdit && expense && (
+            <div className="border-t border-border pt-4">
+              <DocumentAttachments
+                entityType="ExpenseEntry"
+                entityId={expense.id}
+                canManage
+              />
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2 border-t border-border">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={saving}>
@@ -486,6 +498,7 @@ export default function ExpensesPage() {
   const [expenseModal, setExpenseModal] = useState<Expense | null | 'new'>(null);
   const [payModal, setPayModal] = useState<Expense | null>(null);
   const [confirmPost, setConfirmPost] = useState<Expense | null>(null);
+  const [attachModal, setAttachModal] = useState<Expense | null>(null);
 
   // Vendors for dropdown
   const { data: vendors = [] } = useQuery<VendorOption[]>({
@@ -726,6 +739,15 @@ export default function ExpensesPage() {
                                   Void
                                 </button>
                               )}
+                              {canWrite && (
+                                <button
+                                  onClick={() => setAttachModal(expense)}
+                                  className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline flex items-center gap-0.5"
+                                >
+                                  <Paperclip className="h-3 w-3" />
+                                  Files
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -820,6 +842,24 @@ export default function ExpensesPage() {
           onClose={() => setPayModal(null)}
           onSaved={() => { setPayModal(null); invalidate(); }}
         />
+      )}
+
+      {/* Attachments Modal */}
+      {attachModal && (
+        <Dialog open onOpenChange={() => setAttachModal(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Attachments — {attachModal.description}</DialogTitle>
+            </DialogHeader>
+            <div className="pt-2">
+              <DocumentAttachments
+                entityType="ExpenseEntry"
+                entityId={attachModal.id}
+                canManage={canWrite}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

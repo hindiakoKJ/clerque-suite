@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Query, Body, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -87,5 +87,99 @@ export class BirController {
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     res.json(invoice);
+  }
+
+  // ── OR Sequential Numbering ───────────────────────────────────────────────
+
+  @Get('or-sequence')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  getOrSequence(@CurrentUser() user: JwtPayload) {
+    return this.svc.getOrSequence(user.tenantId!);
+  }
+
+  @Patch('or-sequence')
+  @Roles('BUSINESS_OWNER')
+  updateOrSequence(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { prefix: string; padLength: number },
+  ) {
+    return this.svc.updateOrSequence(user.tenantId!, body.prefix, body.padLength);
+  }
+
+  // ── EWT / Form 2307 ──────────────────────────────────────────────────────
+
+  @Get('ewt')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  getEwt(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year: string,
+    @Query('quarter') quarter: string,
+  ) {
+    return this.svc.getEwtData(user.tenantId!, +year, +quarter as 1 | 2 | 3 | 4);
+  }
+
+  // ── SAWT Alphalist ────────────────────────────────────────────────────────
+
+  @Get('sawt')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  getSawt(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year: string,
+    @Query('quarter') quarter: string,
+  ) {
+    return this.svc.getSawtData(user.tenantId!, +year, +quarter as 1 | 2 | 3 | 4);
+  }
+
+  // ── Books of Account ──────────────────────────────────────────────────────
+
+  @Get('books/sales')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  async salesBook(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Res() res: Response,
+  ) {
+    const buf = await this.svc.exportSalesBook(user.tenantId!, +year, +month);
+    const filename = `sales-book-${year}-${month.padStart(2, '0')}.xlsx`;
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    res.send(buf);
+  }
+
+  @Get('books/purchases')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  async purchaseBook(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Res() res: Response,
+  ) {
+    const buf = await this.svc.exportPurchaseBook(user.tenantId!, +year, +month);
+    const filename = `purchase-book-${year}-${month.padStart(2, '0')}.xlsx`;
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    res.send(buf);
+  }
+
+  @Get('books/disbursements')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  async cashDisbursements(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Res() res: Response,
+  ) {
+    const buf = await this.svc.exportCashDisbursements(user.tenantId!, +year, +month);
+    const filename = `cash-disbursements-${year}-${month.padStart(2, '0')}.xlsx`;
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+    res.send(buf);
   }
 }

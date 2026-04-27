@@ -69,4 +69,30 @@ export class AuthController {
     }
     await this.authService.changePassword(user.sub, body.currentPassword, body.newPassword);
   }
+
+  /**
+   * POST /auth/forgot-password
+   * Accepts email + tenantSlug. Always responds 204 (no email enumeration).
+   * If the user exists and is active, a password-reset email is sent.
+   */
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async forgotPassword(@Body() body: { email?: string; tenantSlug?: string }) {
+    if (!body.email || !body.tenantSlug) return; // silent — avoid enumeration
+    await this.authService.forgotPassword(body.email, body.tenantSlug);
+  }
+
+  /**
+   * POST /auth/reset-password
+   * Validates the one-time reset token and sets the new password.
+   * All sessions are revoked after a successful reset.
+   */
+  @Post('reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resetPassword(@Body() body: { token?: string; newPassword?: string }) {
+    if (!body.token || !body.newPassword) {
+      throw new BadRequestException('token and newPassword are required.');
+    }
+    await this.authService.resetPassword(body.token, body.newPassword);
+  }
 }

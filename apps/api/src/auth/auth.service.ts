@@ -2,10 +2,14 @@ import {
   Injectable,
   UnauthorizedException,
   ForbiddenException,
+  BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags } from '@repo/shared-types';
 import type { TaxStatus } from '@repo/shared-types';
 
@@ -18,7 +22,8 @@ const LOCKOUT_MINUTES = 15;
 export class AuthService {
   constructor(
     private prisma: PrismaService,
-    private jwt: JwtService,
+    private jwt:    JwtService,
+    private mail:   MailService,
   ) {}
 
   async validateUser(email: string, password: string, companyCode?: string) {
@@ -241,6 +246,71 @@ export class AuthService {
       where: { userId, status: 'ACTIVE' },
       data: { status: 'REVOKED' },
     });
+  }
+
+  // ── Forgot / Reset Password ────────────────────────────────────────────────
+
+  /** Generate a 1-hour password-reset token and email it to the user.
+   *  Always returns success (no email enumeration — never reveal whether the
+   *  email exists in our system). */
+  async forgotPassword(email: string, tenantSlug: string): Promise<void> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { slug: tenantSlug.toLowerCase().trim() },
+      select: { id: true, name: true },
+    });
+    if (!tenant) return; // silent — don't reveal tenant existence
+
+    const user = await this.prisma.user.findUnique({
+      where:  { tenantId_email: { tenantId: tenant.id, email: email.toLowerCase().trim() } },
+      select: { id: true, name: true, email: true, isActive: true },
+    });
+    if (!user || !user.isActive) return; // silent — don't reveal user existence
+
+    const token   = randomBytes(32).toString('hex');
+    const expiry  = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data:  { passwordResetToken: token, passwordResetTokenExpiry: expiry },
+    });
+
+    await this.mail.sendPasswordReset({
+      to:         user.email,
+      name:       user.name,
+      token,
+      tenantSlug,
+    });
+  }
+
+  /** Validate a reset token and set the new password. */
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    if (!token?.trim())         throw new BadRequestException('Reset token is required.');
+    if (newPassword.length < 8) throw new BadRequestException('Password must be at least 8 characters.');
+
+    const user = await this.prisma.user.findUnique({
+      where:  { passwordResetToken: token },
+      select: { id: true, passwordResetTokenExpiry: true },
+    });
+
+    if (!user || !user.passwordResetTokenExpiry) {
+      throw new NotFoundException('Reset link is invalid or has already been used.');
+    }
+    if (user.passwordResetTokenExpiry < new Date()) {
+      throw new BadRequestException('Reset link has expired. Please request a new one.');
+    }
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash:            hash,
+        passwordResetToken:       null,
+        passwordResetTokenExpiry: null,
+      },
+    });
+
+    // Revoke all sessions — any stolen refresh tokens are now useless
+    await this.logoutAllDevices(user.id);
   }
 
   /** Change the authenticated user's own password after verifying the current one.

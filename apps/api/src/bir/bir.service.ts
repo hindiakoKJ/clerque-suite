@@ -1,5 +1,6 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import ExcelJS from 'exceljs';
 
 // ── BIR form result types ────────────────────────────────────────────────────
 
@@ -288,6 +289,320 @@ export class BirService {
         .filter((r) => r.balance > 0)
         .sort((a, b) => a.code.localeCompare(b.code)),
     };
+  }
+
+  // ── OR Sequential Numbering ───────────────────────────────────────────────
+
+  /** Get-or-create the OR sequence for a tenant, then increment and return the next formatted number. */
+  async nextOrNumber(tenantId: string): Promise<string> {
+    // Ensure the row exists first (no-op if already present).
+    await this.prisma.orSequence.upsert({
+      where:  { tenantId },
+      create: { tenantId, prefix: 'OR', lastNumber: 0, padLength: 8 },
+      update: {},
+    });
+    // Atomic increment — Prisma issues a single UPDATE … RETURNING so no race condition.
+    const seq = await this.prisma.orSequence.update({
+      where: { tenantId },
+      data:  { lastNumber: { increment: 1 } },
+    });
+    const padded = String(seq.lastNumber).padStart(seq.padLength, '0');
+    return `${seq.prefix}-${padded}`; // e.g. "OR-00000001"
+  }
+
+  /** Return current sequence info without incrementing (for settings display). */
+  async getOrSequence(tenantId: string) {
+    return this.prisma.orSequence.upsert({
+      where:  { tenantId },
+      create: { tenantId, prefix: 'OR', lastNumber: 0, padLength: 8 },
+      update: {},
+    });
+  }
+
+  /** Update OR prefix / pad length (BUSINESS_OWNER only). */
+  async updateOrSequence(tenantId: string, prefix: string, padLength: number) {
+    return this.prisma.orSequence.upsert({
+      where:  { tenantId },
+      create: { tenantId, prefix, padLength, lastNumber: 0 },
+      update: { prefix, padLength },
+    });
+  }
+
+  // ── EWT — Expanded Withholding Tax (Form 2307) ────────────────────────────
+
+  /**
+   * Generate BIR Form 2307 data — EWT summary per vendor for a period.
+   * Pulls from ExpenseEntry records with whtAmount > 0.
+   */
+  async getEwtData(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+    await this.assertBirRegistered(tenantId);
+    const { from, to } = quarterBounds(year, quarter);
+
+    const expenses = await this.prisma.expenseEntry.findMany({
+      where: {
+        tenantId,
+        status: 'POSTED',
+        expenseDate: { gte: from, lte: to },
+        whtAmount: { gt: 0 },
+      },
+      include: { vendor: { select: { name: true, tin: true } } },
+      orderBy: { expenseDate: 'asc' },
+    });
+
+    // Group by vendor
+    const vendorMap = new Map<string, {
+      vendorName: string; vendorTin: string | null;
+      atcCode: string | null; totalGross: number; totalWht: number; entries: number;
+    }>();
+
+    for (const e of expenses) {
+      const key = e.vendorId ?? `no-vendor-${e.atcCode}`;
+      const existing = vendorMap.get(key);
+      if (existing) {
+        existing.totalGross += Number(e.grossAmount);
+        existing.totalWht  += Number(e.whtAmount);
+        existing.entries++;
+      } else {
+        vendorMap.set(key, {
+          vendorName: e.vendor?.name ?? 'Unknown Vendor',
+          vendorTin:  e.vendor?.tin ?? null,
+          atcCode:    e.atcCode,
+          totalGross: Number(e.grossAmount),
+          totalWht:   Number(e.whtAmount),
+          entries:    1,
+        });
+      }
+    }
+
+    return {
+      year, quarter,
+      periodFrom: toIso(from), periodTo: toIso(to),
+      totalWhtAmount: expenses.reduce((s, e) => s + Number(e.whtAmount), 0),
+      vendors: Array.from(vendorMap.values()),
+    };
+  }
+
+  // ── SAWT — Summary Alphalist of Withholding Tax at Source ─────────────────
+
+  /**
+   * SAWT — Summary Alphalist of Withholding Tax at Source.
+   * Required attachment to BIR income tax returns; lists all vendors from whom you withheld tax.
+   */
+  async getSawtData(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+    // SAWT is an expanded view of the EWT data — same source, different presentation
+    return this.getEwtData(tenantId, year, quarter);
+  }
+
+  // ── Books of Account Exports (ExcelJS) ────────────────────────────────────
+
+  /** Sales Book — all completed POS orders for a period, grouped by day */
+  async exportSalesBook(tenantId: string, year: number, month: number): Promise<Buffer> {
+    await this.assertBirRegistered(tenantId);
+
+    const from = new Date(year, month - 1, 1);
+    const to   = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, tinNumber: true, businessName: true },
+    });
+
+    const orders = await this.prisma.order.findMany({
+      where: { tenantId, status: 'COMPLETED', completedAt: { gte: from, lte: to } },
+      include: { items: true, payments: true },
+      orderBy: { completedAt: 'asc' },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+    const ws = wb.addWorksheet('Sales Book', { views: [{ state: 'frozen', ySplit: 4 }] });
+
+    const monthName = from.toLocaleString('en-PH', { month: 'long', year: 'numeric' });
+    ws.mergeCells('A1:I1');
+    ws.getCell('A1').value = `${tenant?.businessName ?? tenant?.name} — Sales Book — ${monthName}`;
+    ws.getCell('A1').font  = { bold: true, size: 13 };
+    ws.mergeCells('A2:I2');
+    ws.getCell('A2').value = `TIN: ${tenant?.tinNumber ?? 'N/A'} | Generated: ${new Date().toLocaleString('en-PH')}`;
+    ws.getCell('A2').font  = { size: 9, color: { argb: 'FF666666' } };
+
+    ws.columns = [
+      { header: 'Date',         key: 'date',        width: 12 },
+      { header: 'OR/SI No.',    key: 'orNumber',     width: 16 },
+      { header: 'Customer',     key: 'customer',     width: 24 },
+      { header: 'Gross Sales',  key: 'grossSales',   width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'VAT-Exempt',   key: 'vatExempt',    width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'Zero-Rated',   key: 'zeroRated',    width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'Taxable Sales', key: 'taxable',     width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'Output VAT',   key: 'outputVat',    width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'Total Amount', key: 'totalAmount',  width: 14, style: { numFmt: '₱#,##0.00' } },
+    ];
+
+    // Style header row (row 4)
+    const headerRow = ws.getRow(4);
+    headerRow.font = { bold: true, size: 10 };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+
+    let totalGross = 0, totalVat = 0, totalAmount = 0;
+    orders.forEach((o, i) => {
+      const gross  = Number(o.totalAmount) - Number(o.vatAmount);
+      const vat    = Number(o.vatAmount);
+      const total  = Number(o.totalAmount);
+      totalGross  += gross; totalVat += vat; totalAmount += total;
+      const row = ws.addRow({
+        date:        (o.completedAt ?? o.createdAt).toLocaleDateString('en-PH'),
+        orNumber:    o.orderNumber,
+        customer:    'Walk-in',
+        grossSales:  total,
+        vatExempt:   0,
+        zeroRated:   0,
+        taxable:     gross,
+        outputVat:   vat,
+        totalAmount: total,
+      });
+      if (i % 2 === 1) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+    });
+
+    // Totals row
+    const totalsRow = ws.addRow({
+      date: 'TOTAL', orNumber: '', customer: '',
+      grossSales: totalAmount, vatExempt: 0, zeroRated: 0,
+      taxable: totalGross, outputVat: totalVat, totalAmount,
+    });
+    totalsRow.font = { bold: true };
+    totalsRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /** Purchase Book — all posted expense entries for a period */
+  async exportPurchaseBook(tenantId: string, year: number, month: number): Promise<Buffer> {
+    await this.assertBirRegistered(tenantId);
+
+    const from = new Date(year, month - 1, 1);
+    const to   = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, tinNumber: true, businessName: true },
+    });
+
+    const expenses = await this.prisma.expenseEntry.findMany({
+      where: { tenantId, status: 'POSTED', expenseDate: { gte: from, lte: to } },
+      include: { vendor: { select: { name: true, tin: true } } },
+      orderBy: { expenseDate: 'asc' },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+    const monthName = from.toLocaleString('en-PH', { month: 'long', year: 'numeric' });
+    const ws = wb.addWorksheet('Purchase Book', { views: [{ state: 'frozen', ySplit: 4 }] });
+
+    ws.mergeCells('A1:H1');
+    ws.getCell('A1').value = `${tenant?.businessName ?? tenant?.name} — Purchase Book — ${monthName}`;
+    ws.getCell('A1').font  = { bold: true, size: 13 };
+
+    ws.columns = [
+      { header: 'Date',          key: 'date',      width: 12 },
+      { header: 'Reference No.', key: 'ref',       width: 16 },
+      { header: 'Vendor',        key: 'vendor',    width: 28 },
+      { header: 'Vendor TIN',    key: 'vendorTin', width: 18 },
+      { header: 'Gross Amount',  key: 'gross',     width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'Input VAT',     key: 'inputVat',  width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'WHT Amount',    key: 'wht',       width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'Net Amount',    key: 'net',       width: 14, style: { numFmt: '₱#,##0.00' } },
+    ];
+
+    const headerRow = ws.getRow(4);
+    headerRow.font = { bold: true, size: 10 };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+
+    let totGross = 0, totVat = 0, totWht = 0, totNet = 0;
+    expenses.forEach((e, i) => {
+      totGross += Number(e.grossAmount); totVat += Number(e.inputVat);
+      totWht   += Number(e.whtAmount);  totNet  += Number(e.netAmount);
+      const row = ws.addRow({
+        date:      e.expenseDate.toLocaleDateString('en-PH'),
+        ref:       e.referenceNumber ?? '',
+        vendor:    e.vendor?.name ?? '',
+        vendorTin: e.vendor?.tin ?? '',
+        gross:     Number(e.grossAmount),
+        inputVat:  Number(e.inputVat),
+        wht:       Number(e.whtAmount),
+        net:       Number(e.netAmount),
+      });
+      if (i % 2 === 1) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+    });
+
+    const totals = ws.addRow({ date: 'TOTAL', ref: '', vendor: '', vendorTin: '', gross: totGross, inputVat: totVat, wht: totWht, net: totNet });
+    totals.font = { bold: true };
+    totals.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /** Cash Disbursements Book — all payments made (expense entries with paidAt set) */
+  async exportCashDisbursements(tenantId: string, year: number, month: number): Promise<Buffer> {
+    await this.assertBirRegistered(tenantId);
+
+    const from = new Date(year, month - 1, 1);
+    const to   = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, tinNumber: true, businessName: true },
+    });
+
+    const payments = await this.prisma.expenseEntry.findMany({
+      where: { tenantId, paidAt: { gte: from, lte: to }, status: { in: ['POSTED'] } },
+      include: { vendor: { select: { name: true, tin: true } } },
+      orderBy: { paidAt: 'asc' },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+    const monthName = from.toLocaleString('en-PH', { month: 'long', year: 'numeric' });
+    const ws = wb.addWorksheet('Cash Disbursements', { views: [{ state: 'frozen', ySplit: 4 }] });
+
+    ws.mergeCells('A1:G1');
+    ws.getCell('A1').value = `${tenant?.businessName ?? tenant?.name} — Cash Disbursements Book — ${monthName}`;
+    ws.getCell('A1').font  = { bold: true, size: 13 };
+
+    ws.columns = [
+      { header: 'Payment Date',  key: 'paidAt',  width: 14 },
+      { header: 'Payment Ref.',  key: 'payRef',  width: 20 },
+      { header: 'Payee',         key: 'payee',   width: 28 },
+      { header: 'Description',   key: 'desc',    width: 32 },
+      { header: 'Amount Paid',   key: 'amount',  width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'WHT Withheld',  key: 'wht',     width: 14, style: { numFmt: '₱#,##0.00' } },
+      { header: 'Gross Invoice', key: 'gross',   width: 14, style: { numFmt: '₱#,##0.00' } },
+    ];
+
+    const headerRow = ws.getRow(4);
+    headerRow.font = { bold: true, size: 10 };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+
+    let totAmount = 0, totWht = 0, totGross = 0;
+    payments.forEach((e, i) => {
+      totAmount += Number(e.paidAmount ?? e.netAmount);
+      totWht    += Number(e.whtAmount);
+      totGross  += Number(e.grossAmount);
+      const row = ws.addRow({
+        paidAt:  e.paidAt!.toLocaleDateString('en-PH'),
+        payRef:  e.paymentRef ?? '',
+        payee:   e.vendor?.name ?? '',
+        desc:    e.description,
+        amount:  Number(e.paidAmount ?? e.netAmount),
+        wht:     Number(e.whtAmount),
+        gross:   Number(e.grossAmount),
+      });
+      if (i % 2 === 1) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+    });
+
+    const totals = ws.addRow({ paidAt: 'TOTAL', payRef: '', payee: '', desc: '', amount: totAmount, wht: totWht, gross: totGross });
+    totals.font = { bold: true };
+    totals.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
   // ── EIS — Per-order e-invoice JSON ────────────────────────────────────────

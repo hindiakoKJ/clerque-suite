@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRef, useEffect, useState } from 'react';
+import { EcosystemHero, BrandSheet, EndorsementLockup } from '@/components/brand';
+import { ClerqueLogo, SteadyLogo } from '@/components/brand/logos';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -985,6 +987,37 @@ export default function Page() {
         <EcosystemSection />
         <WorkflowSection />
         <HUDSection />
+
+        {/* ── Brand Identity sections ──────────────────────────────────────── */}
+        <EcosystemHero />
+
+        {/* Endorsement lockup showcase */}
+        <section className="bg-sand px-8 py-16 md:px-14 md:py-20">
+          <div className="mx-auto max-w-6xl">
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink/40 mb-3">
+              Endorsement System · Product Lockups
+            </p>
+            <h2 className="mb-10 text-2xl font-semibold tracking-wordmark-tight text-ink md:text-3xl">
+              Every product, unmistakably HNScorpPH.
+            </h2>
+            <div className="grid gap-6 md:grid-cols-2">
+              <EndorsementLockup
+                ProductMark={ClerqueLogo}
+                productName="Clerque"
+                productColorClass="text-clerque-600"
+              />
+              <EndorsementLockup
+                ProductMark={SteadyLogo}
+                productName="Steady"
+                productColorClass="text-steady-600"
+              />
+            </div>
+          </div>
+        </section>
+
+        <BrandSheet />
+        {/* ───────────────────────────────────────────────────────────────────── */}
+
         <CTABanner />
       </main>
       <Footer />

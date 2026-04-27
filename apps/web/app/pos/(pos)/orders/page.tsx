@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import DocumentAttachments from '@/components/shared/DocumentAttachments';
 
 interface Payment { method: string; amount: number | string; reference?: string; }
 interface OrderItem { productName: string; quantity: number | string; unitPrice: number | string; lineTotal: number | string; }
@@ -229,6 +230,15 @@ export default function OrdersPage() {
                                 </div>
                               )}
                             </div>
+                          </div>
+
+                          {/* Document attachments — read-only for cashiers */}
+                          <div className="mt-4 border-t border-border pt-4">
+                            <DocumentAttachments
+                              entityType="Order"
+                              entityId={o.id}
+                              canManage={false}
+                            />
                           </div>
                         </td>
                       </tr>

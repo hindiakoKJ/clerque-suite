@@ -25,6 +25,9 @@ import { ApModule } from './ap/ap.module';
 import { ArModule } from './ar/ar.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { ImportModule } from './import/import.module';
+import { MailModule } from './mail/mail.module';
+import { DocumentsModule } from './documents/documents.module';
+import { ExpenseClaimsModule } from './expense-claims/expense-claims.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -56,6 +59,9 @@ import { HealthController } from './health/health.controller';
     ArModule,
     PromotionsModule,
     ImportModule,
+    MailModule,
+    DocumentsModule,
+    ExpenseClaimsModule,
   ],
 })
 export class AppModule {}

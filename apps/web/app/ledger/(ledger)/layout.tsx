@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -26,6 +26,7 @@ const BIR_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKE
 const AP_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
 const AR_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
 const AUDIT_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR'] as const;
+const EXPENSE_APPROVAL_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'FINANCE_LEAD', 'ACCOUNTANT'] as const;
 
 function inLedgerRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));
@@ -88,8 +89,9 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     makeLedgerNavItem('/ledger/bir',           'Tax Estimation',     FileText,        BIR_ROLES,        role, isBirRegistered),
     makeLedgerNavItem('/ledger/ap/expenses',   'Payables (AP)',      TrendingDown,    AP_ROLES,         role),
     makeLedgerNavItem('/ledger/ar/invoices',   'Receivables (AR)',   TrendingUp,      AR_ROLES,         role),
-    makeLedgerNavItem('/ledger/audit',         'Audit Log',          ShieldCheck,     AUDIT_ROLES,      role),
-  ];
+    makeLedgerNavItem('/ledger/audit',            'Audit Log',          ShieldCheck,     AUDIT_ROLES,             role),
+    makeLedgerNavItem('/ledger/expense-approvals','Expense Approvals',  ClipboardCheck,  EXPENSE_APPROVAL_ROLES,  role),
+  ].filter((item) => !item.disabled || item.disabledReason?.startsWith('Requires'));
 
   return (
     <div

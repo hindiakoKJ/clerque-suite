@@ -33,5 +33,15 @@ RUN cd apps/api && npm run build
 
 EXPOSE 3001
 
-# Run migrations then start the server
-CMD ["sh", "-c", "npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma && node apps/api/dist/main"]
+# Run migrations then start the server.
+#
+# migrate resolve --applied is safe to call even if the migration is already
+# applied (it will print an error we suppress, then exit 0 via "|| true").
+# Purpose: the two migrations below were applied to Railway via "db push" before
+# their migration files were created, so Prisma never tracked them.  Without
+# this step they show as "failed" and block every subsequent migrate deploy.
+CMD ["sh", "-c", \
+  "npx prisma migrate resolve --applied 20260426035055_tax_compliance_and_audit --schema=packages/db/prisma/schema.prisma 2>/dev/null || true && \
+   npx prisma migrate resolve --applied 20260426120000_payroll_time_entries --schema=packages/db/prisma/schema.prisma 2>/dev/null || true && \
+   npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma && \
+   node apps/api/dist/main"]

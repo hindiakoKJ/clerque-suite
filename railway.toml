@@ -1,11 +1,15 @@
 [build]
 builder = "nixpacks"
-# 1. Install workspace deps
+# Nixpacks defaults to production-only npm install which skips devDependencies.
+# We need devDeps because @nestjs/cli (provides `nest build`) is a devDep.
+# `--include=dev` (or equivalently `--production=false`) overrides the default.
+#
+# 1. Install workspace deps WITH dev
 # 2. Build @repo/shared-types (API imports its types)
 # 3. Generate Prisma client from schema
 # 4. Compile NestJS API → apps/api/dist/
-# Seed intentionally excluded — it runs in main.ts after DB connection confirmed
-buildCommand = "npm install && npm run build --workspace=packages/shared-types && npx prisma generate --schema=packages/db/prisma/schema.prisma && npm run build --workspace=apps/api"
+# Seed intentionally excluded — runs in main.ts after DB connection confirmed
+buildCommand = "npm install --include=dev && npm run build --workspace=packages/shared-types && npx prisma generate --schema=packages/db/prisma/schema.prisma && npm run build --workspace=apps/api"
 
 [deploy]
 startCommand = "sh start.sh"

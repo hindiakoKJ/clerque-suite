@@ -5,14 +5,23 @@ import { Resend } from 'resend';
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
-  private readonly resend: Resend;
+  // null when RESEND_API_KEY is not configured — mail is silently skipped.
+  // Calling `new Resend('')` throws synchronously, which would crash
+  // module init and prevent the HTTP server from ever binding to a port.
+  private readonly resend: Resend | null;
   private readonly from: string;
   private readonly appUrl: string;
 
   constructor(private config: ConfigService) {
-    this.resend  = new Resend(this.config.get<string>('RESEND_API_KEY') ?? '');
+    const apiKey = this.config.get<string>('RESEND_API_KEY');
+    this.resend  = apiKey ? new Resend(apiKey) : null;
     this.from    = this.config.get<string>('MAIL_FROM')    ?? 'noreply@clerque.app';
     this.appUrl  = this.config.get<string>('APP_URL')      ?? 'http://localhost:3000';
+    if (!this.resend) {
+      this.logger.warn(
+        'RESEND_API_KEY not set — outbound email is disabled (password reset, payslip ready, etc. will be logged but not delivered).',
+      );
+    }
   }
 
   // ── Forgot Password ────────────────────────────────────────────────────────
@@ -142,6 +151,12 @@ export class MailService {
   // ── Internal helpers ───────────────────────────────────────────────────────
 
   private async send(opts: { to: string; subject: string; html: string }) {
+    if (!this.resend) {
+      // No API key configured — skip silently with a debug-level note.
+      // The constructor already logged a single warn at startup.
+      this.logger.debug(`Mail skipped (no RESEND_API_KEY): "${opts.subject}" → ${opts.to}`);
+      return;
+    }
     try {
       const { error } = await this.resend.emails.send({
         from:    this.from,

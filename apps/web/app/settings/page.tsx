@@ -5,6 +5,7 @@ import {
   Settings, Building2, Users, ArrowLeft, Lock,
   Plus, X, CheckCircle2, XCircle, RotateCcw,
   ChevronDown, Shield, FileText, AlertTriangle, Info,
+  KeyRound, Eye, EyeOff,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -13,7 +14,7 @@ import { toast } from 'sonner';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Tab = 'profile' | 'tax' | 'users';
+type Tab = 'profile' | 'tax' | 'users' | 'security';
 type TaxStatus = 'VAT' | 'NON_VAT' | 'UNREGISTERED';
 
 interface TenantProfile {
@@ -162,8 +163,12 @@ export default function SettingsPage() {
     name: '', email: '', password: '', role: 'CASHIER',
   });
 
-  // ── Reset password form ───────────────────────────────────────────────────
+  // ── Reset password form (owner resets staff) ─────────────────────────────
   const [newPassword, setNewPassword] = useState('');
+
+  // ── Change my password (self-service) ────────────────────────────────────
+  const [pwForm, setPwForm]         = useState({ current: '', next: '', confirm: '' });
+  const [showPw, setShowPw]         = useState({ current: false, next: false, confirm: false });
 
   // ── Queries ───────────────────────────────────────────────────────────────
   const { data: profile, isLoading: profileLoading } = useQuery<TenantProfile>({
@@ -240,7 +245,7 @@ export default function SettingsPage() {
 
   const resetPasswordMut = useMutation({
     mutationFn: ({ id, password }: { id: string; password: string }) =>
-      api.patch(`/users/${id}/reset-password`, { newPassword: password }).then((r) => r.data),
+      api.post(`/users/${id}/reset-password`, { newPassword: password }).then((r) => r.data),
     onSuccess: () => {
       setResetTarget(null);
       setNewPassword('');
@@ -248,6 +253,23 @@ export default function SettingsPage() {
     },
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed to reset password.'),
   });
+
+  const changePasswordMut = useMutation({
+    mutationFn: (body: { currentPassword: string; newPassword: string }) =>
+      api.post('/auth/change-password', body),
+    onSuccess: () => {
+      setPwForm({ current: '', next: '', confirm: '' });
+      toast.success('Password changed. All other sessions have been signed out.');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed to change password.'),
+  });
+
+  function handleChangePassword() {
+    if (!pwForm.current) { toast.error('Enter your current password.'); return; }
+    if (pwForm.next.length < 8) { toast.error('New password must be at least 8 characters.'); return; }
+    if (pwForm.next !== pwForm.confirm) { toast.error('Passwords do not match.'); return; }
+    changePasswordMut.mutate({ currentPassword: pwForm.current, newPassword: pwForm.next });
+  }
 
   // ── Profile form helpers ──────────────────────────────────────────────────
   function setField(key: keyof typeof profileForm, value: string) {
@@ -276,9 +298,10 @@ export default function SettingsPage() {
         {/* Tab bar */}
         <div className="flex gap-1 bg-muted/40 p-1 rounded-xl w-fit flex-wrap">
           {([
-            { id: 'profile', label: 'Business Profile', Icon: Building2 },
-            { id: 'tax',     label: 'BIR & Tax',        Icon: FileText },
-            { id: 'users',   label: 'Staff & Roles',     Icon: Users },
+            { id: 'profile',  label: 'Business Profile', Icon: Building2 },
+            { id: 'tax',      label: 'BIR & Tax',        Icon: FileText },
+            { id: 'users',    label: 'Staff & Roles',     Icon: Users },
+            { id: 'security', label: 'Security',          Icon: KeyRound },
           ] as const).map(({ id, label, Icon }) => (
             <button
               key={id}
@@ -603,6 +626,135 @@ export default function SettingsPage() {
                 <InfoRow label="PTU Holder"     value={user?.isPtuHolder ? 'Yes' : 'No'} />
                 <InfoRow label="MIN"            value={user?.minNumber ?? '—'} />
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Security tab ─────────────────────────────────────────────────── */}
+        {tab === 'security' && (
+          <div className="space-y-5">
+            {/* Change own password */}
+            <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold text-foreground">Change My Password</h3>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Enter your current password to set a new one. All other active sessions will be
+                signed out immediately after a successful change.
+              </p>
+
+              {/* Current password */}
+              <Field label="Current Password" required>
+                <div className="relative">
+                  <input
+                    type={showPw.current ? 'text' : 'password'}
+                    className={INPUT_CLS + ' pr-10'}
+                    placeholder="Your current password"
+                    value={pwForm.current}
+                    onChange={(e) => setPwForm((f) => ({ ...f, current: e.target.value }))}
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw((s) => ({ ...s, current: !s.current }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPw.current ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </Field>
+
+              {/* New password */}
+              <Field label="New Password" required>
+                <div className="relative">
+                  <input
+                    type={showPw.next ? 'text' : 'password'}
+                    className={INPUT_CLS + ' pr-10'}
+                    placeholder="Min. 8 characters"
+                    value={pwForm.next}
+                    onChange={(e) => setPwForm((f) => ({ ...f, next: e.target.value }))}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw((s) => ({ ...s, next: !s.next }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPw.next ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {/* Strength indicator */}
+                {pwForm.next && (
+                  <div className="mt-1.5 flex gap-1">
+                    {[8, 12, 16].map((len, i) => (
+                      <div
+                        key={i}
+                        className={`h-1 flex-1 rounded-full transition-colors ${
+                          pwForm.next.length >= len
+                            ? i === 0 ? 'bg-amber-400' : i === 1 ? 'bg-[var(--accent)]' : 'bg-emerald-500'
+                            : 'bg-muted'
+                        }`}
+                      />
+                    ))}
+                    <span className="text-[10px] text-muted-foreground ml-1">
+                      {pwForm.next.length < 8 ? 'Too short' : pwForm.next.length < 12 ? 'OK' : pwForm.next.length < 16 ? 'Good' : 'Strong'}
+                    </span>
+                  </div>
+                )}
+              </Field>
+
+              {/* Confirm password */}
+              <Field label="Confirm New Password" required>
+                <div className="relative">
+                  <input
+                    type={showPw.confirm ? 'text' : 'password'}
+                    className={`${INPUT_CLS} pr-10 ${pwForm.confirm && pwForm.next !== pwForm.confirm ? 'border-red-400 focus:ring-red-400' : ''}`}
+                    placeholder="Repeat new password"
+                    value={pwForm.confirm}
+                    onChange={(e) => setPwForm((f) => ({ ...f, confirm: e.target.value }))}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw((s) => ({ ...s, confirm: !s.confirm }))}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPw.confirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {pwForm.confirm && pwForm.next !== pwForm.confirm && (
+                  <p className="text-xs text-red-500 mt-1">Passwords do not match.</p>
+                )}
+              </Field>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  onClick={handleChangePassword}
+                  disabled={
+                    !pwForm.current || pwForm.next.length < 8 ||
+                    pwForm.next !== pwForm.confirm || changePasswordMut.isPending
+                  }
+                  className={BTN_PRIMARY}
+                >
+                  <KeyRound className="w-4 h-4" />
+                  {changePasswordMut.isPending ? 'Changing…' : 'Change Password'}
+                </button>
+              </div>
+            </div>
+
+            {/* Session info */}
+            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <h3 className="text-sm font-semibold text-foreground">Active Session</h3>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <InfoRow label="Logged in as"  value={user?.name ?? '—'} />
+                <InfoRow label="Role"           value={user?.role ?? '—'} />
+                <InfoRow label="Email"          value={'(session)' } />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Changing your password will sign out all other devices. Your current session stays active
+                until you sign out or your access token expires (15 minutes).
+              </p>
             </div>
           </div>
         )}

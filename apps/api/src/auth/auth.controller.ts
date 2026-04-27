@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpStatus,
   Delete,
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
@@ -48,5 +49,24 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async logoutAll(@CurrentUser() user: JwtPayload) {
     await this.authService.logoutAllDevices(user.sub);
+  }
+
+  /**
+   * POST /auth/change-password
+   * Authenticated users can change their own password.
+   * Requires current password for verification.
+   * All sessions are revoked after a successful change.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async changePassword(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { currentPassword?: string; newPassword?: string },
+  ) {
+    if (!body.currentPassword || !body.newPassword) {
+      throw new BadRequestException('currentPassword and newPassword are required.');
+    }
+    await this.authService.changePassword(user.sub, body.currentPassword, body.newPassword);
   }
 }

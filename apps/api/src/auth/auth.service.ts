@@ -243,6 +243,36 @@ export class AuthService {
     });
   }
 
+  /** Change the authenticated user's own password after verifying the current one.
+   *  All existing sessions (except the current one) are revoked so stolen
+   *  refresh tokens cannot be used after a password change. */
+  async changePassword(
+    userId:          string,
+    currentPassword: string,
+    newPassword:     string,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where:  { id: userId },
+      select: { passwordHash: true },
+    });
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) throw new UnauthorizedException('Current password is incorrect.');
+
+    if (newPassword.length < 8) {
+      throw new ForbiddenException('New password must be at least 8 characters.');
+    }
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data:  { passwordHash: hash },
+    });
+
+    // Revoke all sessions so the new password takes effect everywhere
+    await this.logoutAllDevices(userId);
+  }
+
   /** Verify refresh token signature and return the subject (userId). Throws 401 on invalid/expired token. */
   extractRefreshSub(token: string): string {
     try {

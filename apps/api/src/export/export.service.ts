@@ -322,6 +322,81 @@ export class ExportService {
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
+  // ── Chart of Accounts ─────────────────────────────────────────────────────
+
+  async exportChartOfAccounts(tenantId: string): Promise<Buffer> {
+    const [name, accts] = await Promise.all([
+      this.tenantName(tenantId),
+      this.prisma.account.findMany({
+        where:   { tenantId, isActive: true },
+        include: { parent: { select: { code: true, name: true } } },
+        orderBy: [{ type: 'asc' }, { code: 'asc' }],
+      }),
+    ]);
+
+    const wb = buildWorkbook();
+    const ws = wb.addWorksheet('Chart of Accounts', {
+      views: [{ state: 'frozen', ySplit: 4 }],
+    });
+    ws.properties.tabColor = { argb: 'FF2AA198' };
+
+    const COL_COUNT = 8;
+    writeReportHeader(
+      ws,
+      name,
+      'Chart of Accounts',
+      `Generated: ${new Date().toLocaleString()}   |   ${accts.length} active accounts`,
+      COL_COUNT,
+    );
+
+    ws.columns = [
+      { key: 'code',           header: 'Code',            width: 12 },
+      { key: 'name',           header: 'Account Name',    width: 44 },
+      { key: 'type',           header: 'Type',            width: 14 },
+      { key: 'normalBalance',  header: 'Normal Balance',  width: 16 },
+      { key: 'postingControl', header: 'Posting Control', width: 18 },
+      { key: 'isSystem',       header: 'System Account',  width: 16 },
+      { key: 'parentCode',     header: 'Parent Code',     width: 14 },
+      { key: 'description',    header: 'Description',     width: 44 },
+    ];
+
+    applyHeaderStyle(ws.getRow(4));
+
+    // Group by type with section headers
+    const TYPE_ORDER = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'];
+    let rowIdx = 0;
+
+    for (const type of TYPE_ORDER) {
+      const group = accts.filter((a) => a.type === type);
+      if (!group.length) continue;
+
+      // Section header row
+      const secRow = ws.addRow({ code: '', name: type, type: '', normalBalance: '', postingControl: '', isSystem: '', parentCode: '', description: '' });
+      secRow.font = { bold: true, size: 11, color: { argb: 'FF2AA198' } };
+      secRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F5F3' } };
+
+      for (const a of group) {
+        const row = ws.addRow({
+          code:           a.code,
+          name:           a.name,
+          type:           a.type,
+          normalBalance:  a.normalBalance,
+          postingControl: a.postingControl,
+          isSystem:       a.isSystem ? 'Yes' : 'No',
+          parentCode:     a.parent?.code ?? '',
+          description:    a.description ?? '',
+        });
+        applyAlternatingFill(row, rowIdx++);
+        if (a.isSystem) {
+          row.getCell('isSystem').font = { italic: true, color: { argb: 'FF888888' } };
+        }
+      }
+    }
+
+    autoWidth(ws);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
   // ── Accountant CSV Export ──────────────────────────────────────────────────
   //
   // Plain CSV of all completed orders for a date range.

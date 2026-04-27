@@ -133,6 +133,19 @@ export class ExportController {
   }
 
   /**
+   * GET /export/chart-of-accounts
+   * Downloads the full Chart of Accounts as Excel (grouped by type).
+   * Roles: all accounting roles + BOOKKEEPER + FINANCE_LEAD.
+   */
+  @Get('chart-of-accounts')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async chartOfAccounts(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const buffer   = await this.svc.exportChartOfAccounts(user.tenantId!);
+    const filename = `chart-of-accounts-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /**
    * GET /export/accountant-csv?from=YYYY-MM-DD&to=YYYY-MM-DD
    *
    * "Accountant Export" — CSV of all completed orders (revenue) for the date range.

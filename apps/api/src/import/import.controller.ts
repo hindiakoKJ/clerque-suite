@@ -78,6 +78,29 @@ export class ImportController {
     res.send(buf);
   }
 
+  // ── Chart of Accounts ─────────────────────────────────────────────────────
+  @Post('chart-of-accounts')
+  @UseInterceptors(FileInterceptor('file'))
+  importChartOfAccounts(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthRequest,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importChartOfAccounts(file, req.user.tenantId!);
+  }
+
+  @Get('template/chart-of-accounts')
+  async coaTemplate(@Res() res: Response) {
+    const buf = await this.importService.coaTemplate();
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition':
+        'attachment; filename="clerque-coa-template.xlsx"',
+    });
+    res.send(buf);
+  }
+
   // ── Journal Entries ────────────────────────────────────────────────────────
   @Post('journal-entries')
   @UseInterceptors(FileInterceptor('file'))

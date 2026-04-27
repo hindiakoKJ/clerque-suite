@@ -1,12 +1,15 @@
 'use client';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import {
   BookOpen, Lock, ShieldAlert, Shield, ChevronRight, Search,
+  Download, Upload,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { downloadAuthFile } from '@/lib/utils';
+import { ImportModal } from '@/components/ui/ImportModal';
 
 type AccountType    = 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
 type PostingControl = 'OPEN' | 'AP_ONLY' | 'AR_ONLY' | 'SYSTEM_ONLY';
@@ -41,19 +44,35 @@ const CTRL_CONFIG: Record<PostingControl, { label: string; Icon: React.ElementTy
   SYSTEM_ONLY: { label: 'System',  Icon: Lock,        color: 'text-muted-foreground bg-muted/60', tip: 'Posted automatically by the event queue only' },
 };
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+
 export default function AccountsPage() {
   const router       = useRouter();
   const user         = useAuthStore((s) => s.user);
   const isSuperAdmin = user?.isSuperAdmin;
+  const queryClient  = useQueryClient();
 
-  const [search,     setSearch]     = useState('');
-  const [filterType, setFilterType] = useState<AccountType | ''>('');
-  const [filterCtrl, setFilterCtrl] = useState<PostingControl | ''>('');
+  const [search,      setSearch]      = useState('');
+  const [filterType,  setFilterType]  = useState<AccountType | ''>('');
+  const [filterCtrl,  setFilterCtrl]  = useState<PostingControl | ''>('');
+  const [showImport,  setShowImport]  = useState(false);
+  const [exporting,   setExporting]   = useState(false);
 
   const { data: accounts = [], isLoading } = useQuery<Account[]>({
     queryKey: ['accounts'],
     queryFn: () => api.get('/accounting/accounts').then((r) => r.data),
   });
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const url      = `${API_URL}/api/v1/export/chart-of-accounts`;
+      const filename = `chart-of-accounts-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      await downloadAuthFile(url, filename);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const filtered = accounts.filter((a) => {
     if (!a.isActive) return false;
@@ -74,12 +93,31 @@ export default function AccountsPage() {
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-5">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-foreground">Chart of Accounts</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          {accounts.filter((a) => a.isActive).length} active accounts
-          {isSuperAdmin && <span className="ml-2 text-amber-500 font-medium">· Super Admin view</span>}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-foreground">Chart of Accounts</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {accounts.filter((a) => a.isActive).length} active accounts
+            {isSuperAdmin && <span className="ml-2 text-amber-500 font-medium">· Super Admin view</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Import COA
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={exporting || isLoading}
+            className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            <Download className="h-3.5 w-3.5" />
+            {exporting ? 'Exporting…' : 'Export .xlsx'}
+          </button>
+        </div>
       </div>
 
       {/* Context notice */}
@@ -219,6 +257,18 @@ export default function AccountsPage() {
           })}
         </div>
       )}
+      <ImportModal
+        open={showImport}
+        title="Import Chart of Accounts"
+        description="Upload your existing COA to add or update accounts. System accounts are protected and cannot be overwritten. New accounts are created with Open posting control."
+        templateUrl="/api/v1/import/template/chart-of-accounts"
+        uploadUrl="/import/chart-of-accounts"
+        onClose={() => setShowImport(false)}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: ['accounts'] });
+          setShowImport(false);
+        }}
+      />
     </div>
   );
 }

@@ -464,6 +464,143 @@ export class ImportService {
     return result;
   }
 
+  // ── Chart of Accounts Import ────────────────────────────────────────────────
+  // Expected columns: Code*, Name*, Type*, Normal Balance, Description, Parent Code
+  // Rules:
+  //   - Existing account (same code): update name/description if different; skip isSystem accounts
+  //   - New account: create with postingControl = OPEN; derive normalBalance from type if blank
+  //   - Valid types: ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE
+  //   - Normal balance auto-derived: ASSET/EXPENSE → DEBIT; LIABILITY/EQUITY/REVENUE → CREDIT
+  async importChartOfAccounts(
+    file: Express.Multer.File,
+    tenantId: string,
+  ): Promise<ImportResult> {
+    const rows = await this.parseFile(file);
+    if (rows.length < 2)
+      throw new BadRequestException('File must have a header row and at least one data row.');
+
+    const VALID_TYPES = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'] as const;
+    type AcctType = typeof VALID_TYPES[number];
+
+    function deriveNormalBalance(type: AcctType): 'DEBIT' | 'CREDIT' {
+      return type === 'ASSET' || type === 'EXPENSE' ? 'DEBIT' : 'CREDIT';
+    }
+
+    const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
+    const dataRows = rows.slice(1);
+
+    // Build a local code → id map for parent resolution (includes existing + rows above current)
+    const existingMap = new Map<string, { id: string; isSystem: boolean }>();
+    const existing = await this.prisma.account.findMany({
+      where:  { tenantId },
+      select: { id: true, code: true, isSystem: true },
+    });
+    for (const a of existing) existingMap.set(a.code, { id: a.id, isSystem: a.isSystem });
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNum = i + 2;
+      // Columns: Code, Name, Type, Normal Balance, Description, Parent Code
+      const [codeRaw, nameRaw, typeRaw, normalBalanceRaw, descriptionRaw, parentCodeRaw] = dataRows[i];
+
+      const code = codeRaw?.trim();
+      const name = nameRaw?.trim();
+
+      if (!code) { result.skipped++; continue; }
+      if (!name) {
+        result.errors.push({ row: rowNum, message: `Row ${rowNum}: Name is required.` });
+        continue;
+      }
+
+      const typeUpper = typeRaw?.trim().toUpperCase() as AcctType;
+      if (!VALID_TYPES.includes(typeUpper)) {
+        result.errors.push({ row: rowNum, message: `Row ${rowNum}: Invalid type "${typeRaw}". Must be ASSET, LIABILITY, EQUITY, REVENUE, or EXPENSE.` });
+        continue;
+      }
+
+      const nbRaw = normalBalanceRaw?.trim().toUpperCase();
+      const normalBalance: 'DEBIT' | 'CREDIT' =
+        nbRaw === 'DEBIT' || nbRaw === 'CREDIT' ? nbRaw : deriveNormalBalance(typeUpper);
+
+      const description = descriptionRaw?.trim() || null;
+      const parentCode  = parentCodeRaw?.trim() || null;
+
+      // Resolve parent
+      let parentId: string | null = null;
+      if (parentCode) {
+        const parentEntry = existingMap.get(parentCode);
+        if (!parentEntry) {
+          result.errors.push({ row: rowNum, message: `Row ${rowNum}: Parent account code "${parentCode}" not found.` });
+          continue;
+        }
+        parentId = parentEntry.id;
+      }
+
+      try {
+        const entry = existingMap.get(code);
+        if (entry) {
+          // Existing account — skip system accounts, update user accounts
+          if (entry.isSystem) {
+            result.skipped++;
+            continue;
+          }
+          await this.prisma.account.update({
+            where: { id: entry.id },
+            data: {
+              name,
+              type: typeUpper,
+              normalBalance,
+              ...(description !== null && { description }),
+              ...(parentId !== null && { parentId }),
+            },
+          });
+          result.updated++;
+        } else {
+          // New account
+          const created = await this.prisma.account.create({
+            data: {
+              tenantId,
+              code,
+              name,
+              type: typeUpper,
+              normalBalance,
+              postingControl: 'OPEN',
+              isSystem:       false,
+              isActive:       true,
+              description,
+              ...(parentId !== null && { parentId }),
+            },
+          });
+          existingMap.set(code, { id: created.id, isSystem: false });
+          result.imported++;
+        }
+      } catch (err: any) {
+        result.errors.push({ row: rowNum, message: err.message ?? 'Unknown error' });
+      }
+    }
+    return result;
+  }
+
+  async coaTemplate(): Promise<Buffer> {
+    return this.makeTemplate(
+      'Chart of Accounts',
+      [
+        'Code*',
+        'Name*',
+        'Type* (ASSET/LIABILITY/EQUITY/REVENUE/EXPENSE)',
+        'Normal Balance (DEBIT/CREDIT)',
+        'Description',
+        'Parent Code',
+      ],
+      [
+        ['1010', 'Cash on Hand',             'ASSET',     'DEBIT',  'Petty cash and cash on premises', ''],
+        ['1020', 'Cash in Bank — BDO',       'ASSET',     'DEBIT',  'BDO checking account',            '1020'],
+        ['2010', 'Accounts Payable',          'LIABILITY', 'CREDIT', 'Trade payables',                  ''],
+        ['4010', 'Sales Revenue',             'REVENUE',  'CREDIT', 'Revenue from sales of goods',     ''],
+        ['6010', 'Salaries and Wages',        'EXPENSE',  'DEBIT',  'Regular employee salaries',       ''],
+      ],
+    );
+  }
+
   async journalTemplate(): Promise<Buffer> {
     return this.makeTemplate(
       'Journal Entries',

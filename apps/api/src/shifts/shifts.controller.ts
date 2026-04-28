@@ -28,10 +28,11 @@ export class ShiftsController {
 
   /**
    * Open a new shift (or return the existing active one — idempotent).
-   * Restricted to operational cashier roles only.
-   * BUSINESS_OWNER and BRANCH_MANAGER are supervisors — they do not operate the register.
+   * BUSINESS_OWNER included so Tier 1 (Solo) and Tier 2 (Duo) owners can
+   * operate the till themselves — owner-as-cashier is the default workflow
+   * for those tiers. BRANCH_MANAGER stays out: they supervise, not operate.
    */
-  @Roles('CASHIER', 'SALES_LEAD')
+  @Roles('CASHIER', 'SALES_LEAD', 'BUSINESS_OWNER')
   @Post()
   @HttpCode(HttpStatus.CREATED)
   open(@CurrentUser() user: JwtPayload, @Body() body: OpenShiftDto) {
@@ -73,10 +74,11 @@ export class ShiftsController {
   }
 
   /**
-   * Close the active shift — cashier/sales-lead only.
-   * Supervisors cannot close a shift they never opened.
+   * Close the active shift. BUSINESS_OWNER can close their own shift
+   * (owner-as-cashier on Tier 1/2). The service still enforces that the
+   * caller is the user who opened the shift.
    */
-  @Roles('CASHIER', 'SALES_LEAD')
+  @Roles('CASHIER', 'SALES_LEAD', 'BUSINESS_OWNER')
   @Post(':id/close')
   @HttpCode(HttpStatus.OK)
   close(

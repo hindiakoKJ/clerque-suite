@@ -6,6 +6,8 @@ import { useMutation } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
+import { StaffPermissionEditor } from '@/components/staff/StaffPermissionEditor';
+import type { TierId, UserRole } from '@repo/shared-types';
 
 type StaffRole =
   | 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'SALES_LEAD'
@@ -65,6 +67,8 @@ const EMPTY_CREATE = {
 };
 const EMPTY_EDIT = {
   name: '', role: 'CASHIER' as StaffRole, branchId: '', isActive: true,
+  personaKey: null as string | null,
+  customPermissions: [] as string[],
 };
 
 const INPUT_CLS =
@@ -123,7 +127,14 @@ export default function StaffPage() {
 
   function openEdit(s: StaffMember) {
     setEditTarget(s);
-    setEditForm({ name: s.name, role: s.role, branchId: s.branchId ?? '', isActive: s.isActive });
+    setEditForm({
+      name: s.name,
+      role: s.role,
+      branchId: s.branchId ?? '',
+      isActive: s.isActive,
+      personaKey: (s as { personaKey?: string | null }).personaKey ?? null,
+      customPermissions: (s as { customPermissions?: string[] }).customPermissions ?? [],
+    });
     setModal('edit');
   }
 
@@ -152,7 +163,14 @@ export default function StaffPage() {
       invalidate();
       setModal(null);
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to create staff member.');
+      const data = (err as { response?: { data?: { code?: string; message?: string; requiredTier?: string } } })?.response?.data;
+      if (data?.code === 'TIER_QUOTA_EXCEEDED') {
+        toast.error(data.message ?? 'Staff cap reached.', {
+          action: { label: 'Upgrade', onClick: () => { window.location.href = '/settings/subscription'; } },
+        });
+      } else {
+        toast.error(data?.message ?? 'Failed to create staff member.');
+      }
     } finally {
       setSaving(false);
     }
@@ -167,12 +185,19 @@ export default function StaffPage() {
         role: editForm.role,
         branchId: editForm.branchId || null,
         isActive: editForm.isActive,
+        personaKey:        editForm.personaKey,
+        customPermissions: editForm.customPermissions,
       });
       toast.success('Staff member updated.');
       invalidate();
       setModal(null);
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to update.');
+      const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
+      if (data?.code === 'SOD_BLOCK') {
+        toast.error(data.message ?? 'Permission change rejected by Segregation of Duties rules.');
+      } else {
+        toast.error(data?.message ?? 'Failed to update.');
+      }
     } finally {
       setSaving(false);
     }
@@ -518,6 +543,20 @@ export default function StaffPage() {
                   }`} />
                 </button>
               </div>
+
+              {/* RBAC Phase 5: persona + custom permissions + SOD warnings */}
+              {user?.tier && (
+                <div className="border-t border-border pt-3">
+                  <StaffPermissionEditor
+                    role={editForm.role as UserRole}
+                    tier={user.tier as TierId}
+                    personaKey={editForm.personaKey}
+                    customPermissions={editForm.customPermissions}
+                    onPersonaChange={(key) => setEditForm((f) => ({ ...f, personaKey: key }))}
+                    onCustomPermissionsChange={(perms) => setEditForm((f) => ({ ...f, customPermissions: perms }))}
+                  />
+                </div>
+              )}
             </div>
             <ModalFooter onCancel={() => setModal(null)} onSave={handleEdit} saving={saving} saveLabel="Save Changes" />
           </div>

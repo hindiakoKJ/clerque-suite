@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsNotEmpty,
@@ -47,4 +48,24 @@ export class UpdateUserDto {
   @IsString()
   @Matches(/^\d{4,8}$/, { message: 'kioskPin must be 4–8 digits.' })
   kioskPin?: string | null;
+
+  /** RBAC: persona template applied at create / last-edit (e.g., CASHIER_COOK). */
+  @ApiPropertyOptional({ example: 'CASHIER_COOK', nullable: true })
+  @IsOptional()
+  @Transform(({ value }) => (value === '' ? null : value))
+  @IsString()
+  @MaxLength(64)
+  personaKey?: string | null;
+
+  /** RBAC: extra permission grants beyond role + persona defaults (PermissionKey strings). */
+  @ApiPropertyOptional({ example: ['inventory:adjust'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  customPermissions?: string[];
+
+  /** RBAC: SOD warning overrides accepted by the owner (free-form JSON). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  sodOverrides?: unknown;
 }

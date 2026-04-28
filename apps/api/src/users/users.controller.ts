@@ -73,7 +73,7 @@ export class UsersController {
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
   ) {
-    return this.usersService.update(user.tenantId!, id, dto, user.role);
+    return this.usersService.update(user.tenantId!, id, dto, user.role, user.sub);
   }
 
   // Reset password — only owner

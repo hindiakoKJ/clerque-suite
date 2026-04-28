@@ -184,7 +184,7 @@ export class AuthService {
     const tenant = tenantId
       ? await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true },
         })
       : null;
 
@@ -216,6 +216,7 @@ export class AuthService {
       isPtuHolder:       tenant?.isPtuHolder ?? false,
       ptuNumber:         tenant?.ptuNumber ?? null,
       minNumber:         tenant?.minNumber ?? null,
+      tier:              (tenant?.tier ?? undefined) as JwtPayload['tier'],
       personaKey:        userRbac?.personaKey ?? null,
       customPermissions: userRbac?.customPermissions ?? [],
     };

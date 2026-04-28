@@ -7,8 +7,9 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
-import { DEFAULT_APP_ACCESS, hasPermission } from '@repo/shared-types';
+import { DEFAULT_APP_ACCESS, hasPermission, hasBlockingViolation, detectViolations } from '@repo/shared-types';
 import { CreateUserDto, StaffRole } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
@@ -129,8 +130,34 @@ export class UsersService {
 
   // ─── Update user ──────────────────────────────────────────────────────────
 
-  async update(tenantId: string, id: string, dto: UpdateUserDto, callerRole?: string) {
+  async update(tenantId: string, id: string, dto: UpdateUserDto, callerRole?: string, callerId?: string) {
     await this.findOne(tenantId, id, callerRole);
+
+    // SOD pre-check: if customPermissions are being changed (or role is changing),
+    // evaluate the FINAL intended permission set against SOD_RULES. A BLOCK
+    // violation refuses the write outright; a WARN passes through but is logged
+    // when the caller provides sodOverrides (the staff editor handles that flow).
+    if (dto.customPermissions !== undefined || dto.role !== undefined) {
+      const target = await this.prisma.user.findFirst({
+        where:  { id, tenantId },
+        select: { role: true, customPermissions: true },
+      });
+      if (target) {
+        // Cast through unknown — frontend role enum and shared-types UserRole
+        // diverge slightly (extra MDM, EXTERNAL_AUDITOR variants on the
+        // shared-types side); detectViolations validates against its own list.
+        const finalRole   = (dto.role ?? target.role) as unknown as Parameters<typeof hasBlockingViolation>[0];
+        const finalCustom = (dto.customPermissions ?? target.customPermissions) as Parameters<typeof hasBlockingViolation>[1];
+        if (hasBlockingViolation(finalRole, finalCustom)) {
+          const violations = detectViolations(finalRole, finalCustom).filter((v) => v.rule.severity === 'BLOCK');
+          throw new BadRequestException({
+            code: 'SOD_BLOCK',
+            message: `Permission change rejected — Segregation of Duties violation: ${violations.map((v) => v.rule.key).join(', ')}`,
+            violations,
+          });
+        }
+      }
+    }
 
     // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId } is atomic.
     // The prior findOne validates existence; updateMany adds the tenantId guard to
@@ -147,9 +174,31 @@ export class UsersService {
         ...(dto.kioskPin !== undefined
           ? { kioskPin: dto.kioskPin === null ? null : await bcrypt.hash(dto.kioskPin, 8) }
           : {}),
+        ...(dto.personaKey        !== undefined ? { personaKey:        dto.personaKey }                       : {}),
+        ...(dto.customPermissions !== undefined ? { customPermissions: dto.customPermissions }                : {}),
+        ...(dto.sodOverrides      !== undefined ? { sodOverrides:      dto.sodOverrides as Prisma.InputJsonValue } : {}),
       },
     });
     if (result.count === 0) throw new NotFoundException('User not found');
+
+    // Audit-log the permissions change so SOD log + governance reports have
+    // a record. We log even when only role / persona changed — those affect
+    // the user's effective permission set too.
+    if (dto.role !== undefined || dto.personaKey !== undefined || dto.customPermissions !== undefined || dto.sodOverrides !== undefined) {
+      await this.audit.log({
+        tenantId,
+        action:      'PERMISSIONS_UPDATED' as const,
+        entityType:  'User',
+        entityId:    id,
+        after:       {
+          role:              dto.role,
+          personaKey:        dto.personaKey,
+          customPermissions: dto.customPermissions,
+        },
+        description: 'Staff permissions / persona / role updated',
+        performedBy: callerId,
+      });
+    }
 
     // Re-fetch with full select for the response (updateMany does not return rows)
     const updated = await this.prisma.user.findFirst({

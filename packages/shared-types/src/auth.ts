@@ -103,6 +103,8 @@ export interface JwtPayload {
   ptuNumber?:         string | null;
   /** Machine Identification Number (MIN) assigned by BIR during CAS accreditation. */
   minNumber?:         string | null;
+  /** Tenant subscription tier — drives tier-locked permission gating in the UI. */
+  tier?:              import('./tiers').TierId;
   /**
    * RBAC: persona template the user was created from. Reference into
    * packages/shared-types/src/personas.ts. Frontend uses this to render the

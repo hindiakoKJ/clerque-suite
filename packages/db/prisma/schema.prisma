@@ -1001,10 +1001,51 @@ model Shift {
   tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch              Branch    @relation(fields: [branchId], references: [id])
   orders              Order[]
+  cashOuts            ShiftCashOut[]
 
   @@index([tenantId, branchId])
   @@index([branchId, closedAt])   // getActive(): WHERE branchId = X AND closedAt IS NULL
   @@map("shifts")
+}
+
+/// Cash leaving the till during a shift.
+/// PAID_OUT  = real expense paid from cash drawer (parking tip, ice run,
+///             COD delivery payment). Reduces expected cash AND posts a
+///             journal entry (DR Expense / CR Cash on Hand).
+/// CASH_DROP = mid-shift safekeeping — cashier hands cash to manager who
+///             puts it in the safe. Reduces expected cash; offset to
+///             "Cash on Safe" — no expense.
+///
+/// Both subtract from the close-shift expected-cash math, so variance
+/// reconciles cleanly when legitimate cash leaves the till mid-shift.
+enum CashOutType {
+  PAID_OUT
+  CASH_DROP
+}
+
+model ShiftCashOut {
+  id              String       @id @default(cuid())
+  tenantId        String
+  branchId        String
+  shiftId         String
+  type            CashOutType
+  amount          Decimal      @db.Decimal(12, 2)
+  reason          String       // free-text, ≥10 chars validated at DTO
+  category        String?      // 'supplies' | 'delivery' | 'fuel' | 'change_fund' | 'other' | etc.
+  receiptPhotoUrl String?      // optional snap of the receipt; OCR-fillable
+  /// User who recorded the cash-out (typically the cashier on shift)
+  createdById     String
+  /// Optional manager who approved an above-threshold paid-out (PIN co-auth)
+  approvedById    String?
+  /// AI-assisted flag — set when receipt OCR pre-filled the form
+  aiAssisted      Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+
+  shift           Shift        @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, shiftId])
+  @@index([branchId, createdAt])
+  @@map("shift_cash_outs")
 }
 
 // ─── Accounting Events ────────────────────────────────────────────────────────

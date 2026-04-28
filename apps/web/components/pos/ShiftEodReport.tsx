@@ -39,6 +39,17 @@ export interface ShiftReportData {
   nonCashRevenue: number;
   byPaymentMethod: PaymentBreakdown[];
   topProducts: TopProduct[];
+  /** Cash-out events on this shift (paid-outs + cash drops). */
+  cashOuts?: Array<{
+    id: string;
+    type: 'PAID_OUT' | 'CASH_DROP';
+    amount: number;
+    reason: string;
+    category?: string | null;
+    createdAt: string;
+  }>;
+  paidOutTotal?: number;
+  cashDropTotal?: number;
 }
 
 interface ShiftEodReportProps {
@@ -158,21 +169,49 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
 
             <hr className="border-dashed border-gray-200 my-3" />
 
+            {/* Cash-outs (paid-outs + drops) — shown before reconciliation */}
+            {data.cashOuts && data.cashOuts.length > 0 && (
+              <>
+                <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Cash Out During Shift</p>
+                <ul className="space-y-1 mb-3">
+                  {data.cashOuts.map((c) => (
+                    <li key={c.id} className="flex justify-between text-xs">
+                      <span className="text-gray-600 truncate pr-2">
+                        <span className={`font-mono text-[9px] uppercase mr-1 ${c.type === 'PAID_OUT' ? 'text-amber-700' : 'text-blue-700'}`}>
+                          {c.type === 'PAID_OUT' ? 'Paid' : 'Drop'}
+                        </span>
+                        {c.reason}
+                      </span>
+                      <span className="text-gray-700">−{formatPeso(c.amount)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <hr className="border-dashed border-gray-200 my-3" />
+              </>
+            )}
+
             {/* Cash reconciliation */}
             <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Cash Reconciliation</p>
             <div className="space-y-1">
               {[
                 ['Opening Cash', shift.openingCash],
                 ['+ Cash Sales', data.cashRevenue],
+                ...(data.paidOutTotal && data.paidOutTotal > 0 ? [['− Paid-outs', -data.paidOutTotal] as const] : []),
+                ...(data.cashDropTotal && data.cashDropTotal > 0 ? [['− Cash drops', -data.cashDropTotal] as const] : []),
               ].map(([label, value]) => (
                 <div key={String(label)} className="flex justify-between text-xs">
                   <span className="text-gray-500">{label}</span>
-                  <span>{formatPeso(Number(value))}</span>
+                  <span className={Number(value) < 0 ? 'text-amber-700' : ''}>
+                    {Number(value) < 0 ? '−' : ''}{formatPeso(Math.abs(Number(value)))}
+                  </span>
                 </div>
               ))}
               <div className="flex justify-between text-xs font-semibold pt-1 border-t border-gray-100">
                 <span>Expected in Drawer</span>
-                <span>{formatPeso(shift.closingCashExpected ?? (shift.openingCash + data.cashRevenue))}</span>
+                <span>{formatPeso(
+                  shift.closingCashExpected
+                    ?? (shift.openingCash + data.cashRevenue - (data.paidOutTotal ?? 0) - (data.cashDropTotal ?? 0))
+                )}</span>
               </div>
               <div className="flex justify-between text-xs">
                 <span className="text-gray-500">Declared</span>

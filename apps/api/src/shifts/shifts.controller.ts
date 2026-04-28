@@ -18,6 +18,8 @@ import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ShiftsService } from './shifts.service';
 import { OpenShiftDto } from './dto/open-shift.dto';
 import { CloseShiftDto } from './dto/close-shift.dto';
+import { CreateCashOutDto } from './dto/cash-out.dto';
+import { Delete } from '@nestjs/common';
 
 @ApiTags('Shifts')
 @ApiBearerAuth('access-token')
@@ -71,6 +73,41 @@ export class ShiftsController {
   @Get(':id')
   getById(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.shiftsService.getById(user.tenantId!, id);
+  }
+
+  /**
+   * Record a cash-out (PAID_OUT or CASH_DROP) on an open shift.
+   * Paid-outs >₱500 require an approvedById of a manager+ role.
+   * Cash drops always require a manager confirmation.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BUSINESS_OWNER', 'BRANCH_MANAGER')
+  @Post(':id/cash-out')
+  @HttpCode(HttpStatus.CREATED)
+  recordCashOut(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') shiftId: string,
+    @Body() body: CreateCashOutDto,
+  ) {
+    return this.shiftsService.recordCashOut(user.tenantId!, shiftId, user.sub, body);
+  }
+
+  /** List cash-outs on a shift (used by EOD report + live cart-side count). */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN', 'FINANCE_LEAD', 'ACCOUNTANT')
+  @Get(':id/cash-outs')
+  listCashOuts(@CurrentUser() user: JwtPayload, @Param('id') shiftId: string) {
+    return this.shiftsService.listCashOuts(user.tenantId!, shiftId);
+  }
+
+  /** Remove a cash-out before close. Recording cashier OR manager+ only. */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Delete(':id/cash-outs/:cashOutId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteCashOut(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') shiftId: string,
+    @Param('cashOutId') cashOutId: string,
+  ) {
+    await this.shiftsService.deleteCashOut(user.tenantId!, shiftId, cashOutId, user.sub, user.role);
   }
 
   /**

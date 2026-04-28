@@ -3,13 +3,14 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
-  Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag,
+  Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
 } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
 import { ShiftGate } from '@/components/pos/ShiftGate';
 import { CloseShiftModal } from '@/components/pos/CloseShiftModal';
 import { ShiftEodReport, type ShiftReportData } from '@/components/pos/ShiftEodReport';
+import { CashOutModal } from '@/components/pos/CashOutModal';
 import { PrinterButton } from '@/components/pos/PrinterButton';
 import { useAuthStore } from '@/store/auth';
 import { useShiftStore } from '@/store/pos/shift';
@@ -76,6 +77,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   const { pendingCount, isSyncing, triggerSync } = usePendingSync();
 
   const [showCloseShift,      setShowCloseShift]      = useState(false);
+  const [showCashOut,         setShowCashOut]         = useState(false);
   const [showSignOutWarning,  setShowSignOutWarning]  = useState(false);
   const [signOutAfterClose,   setSignOutAfterClose]   = useState(false);
   const [eodReport,           setEodReport]           = useState<ShiftReportData | null>(null);
@@ -219,6 +221,17 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
 
       {activeShift && (
         <button
+          onClick={() => setShowCashOut(true)}
+          className="hidden sm:flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded-md px-2.5 py-1.5 transition-colors"
+          title="Record cash leaving the till (paid-out / drop to safe)"
+        >
+          <Wallet className="h-3.5 w-3.5" />
+          Cash Out
+        </button>
+      )}
+
+      {activeShift && (
+        <button
           onClick={async () => { await refreshShift(); setShowCloseShift(true); }}
           className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-2.5 py-1.5 transition-colors"
         >
@@ -266,6 +279,13 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
           onConfirm={handleCloseShift}
         />
       )}
+
+      <CashOutModal
+        open={showCashOut}
+        shiftId={activeShift?.id ?? null}
+        onClose={() => setShowCashOut(false)}
+        onSuccess={refreshShift}
+      />
 
       {eodReport && (
         <ShiftEodReport

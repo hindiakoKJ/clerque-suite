@@ -49,6 +49,17 @@ export interface ShiftReport extends SalesSummary {
     variance: number | null;
     notes: string | null;
   };
+  /** Cash leaving the till during the shift (paid-outs + drops). */
+  cashOuts: Array<{
+    id:        string;
+    type:      'PAID_OUT' | 'CASH_DROP';
+    amount:    number;
+    reason:    string;
+    category:  string | null;
+    createdAt: string;
+  }>;
+  paidOutTotal:  number;
+  cashDropTotal: number;
 }
 
 @Injectable()
@@ -83,12 +94,26 @@ export class ReportsService {
     });
     if (!shift) throw new NotFoundException('Shift not found');
 
-    const orders = await this.prisma.order.findMany({
-      where: { shiftId, tenantId },
-      include: { payments: true, items: true },
-    });
+    const [orders, cashOuts] = await Promise.all([
+      this.prisma.order.findMany({
+        where: { shiftId, tenantId },
+        include: { payments: true, items: true },
+      }),
+      this.prisma.shiftCashOut.findMany({
+        where:   { shiftId, tenantId },
+        orderBy: { createdAt: 'asc' },
+        select:  { id: true, type: true, amount: true, reason: true, category: true, createdAt: true },
+      }),
+    ]);
 
     const summary = this.computeSummary(orders);
+    let paidOutTotal  = 0;
+    let cashDropTotal = 0;
+    for (const c of cashOuts) {
+      const amt = Number(c.amount);
+      if (c.type === 'PAID_OUT')  paidOutTotal  += amt;
+      if (c.type === 'CASH_DROP') cashDropTotal += amt;
+    }
     return {
       ...summary,
       shift: {
@@ -101,6 +126,16 @@ export class ReportsService {
         variance: shift.variance ? Number(shift.variance) : null,
         notes: shift.notes,
       },
+      cashOuts: cashOuts.map((c) => ({
+        id:        c.id,
+        type:      c.type,
+        amount:    Number(c.amount),
+        reason:    c.reason,
+        category:  c.category,
+        createdAt: c.createdAt.toISOString(),
+      })),
+      paidOutTotal,
+      cashDropTotal,
     };
   }
 

@@ -36,6 +36,18 @@ export class TenantController {
     return this.tenantService.getProfile(user.tenantId!);
   }
 
+  /**
+   * GET /tenant/subscription
+   * Drives the Settings → Subscription page: current tier, staff usage vs cap,
+   * branches vs quota, and feature flags. BUSINESS_OWNER only — staff don't
+   * need to see the upgrade CTA on a shared terminal.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Get('subscription')
+  getSubscription(@CurrentUser() user: JwtPayload) {
+    return this.tenantService.getSubscription(user.tenantId!);
+  }
+
   @Roles('BUSINESS_OWNER')
   @Patch('profile')
   @HttpCode(HttpStatus.OK)

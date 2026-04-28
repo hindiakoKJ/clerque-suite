@@ -44,6 +44,54 @@ export class TenantService {
     });
   }
 
+  /**
+   * GET /tenant/subscription — current tier + staff usage + expiry.
+   * Used by Settings → Subscription page to render the upgrade CTA.
+   */
+  async getSubscription(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        tier: true,
+        expiresAt: true,
+        branchQuota: true,
+        cashierSeatQuota: true,
+        hasTimeMonitoring: true,
+        hasBirForms: true,
+        isDemoTenant: true,
+        signupSource: true,
+      },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found');
+
+    // Active non-owner staff count — what the tier cap limits.
+    const staffCount = await this.prisma.user.count({
+      where: {
+        tenantId,
+        isActive: true,
+        role: { notIn: ['BUSINESS_OWNER', 'SUPER_ADMIN'] },
+      },
+    });
+
+    // Active branch count for branch quota display.
+    const branchCount = await this.prisma.branch.count({
+      where: { tenantId, isActive: true },
+    });
+
+    return {
+      tier:              tenant.tier,
+      expiresAt:         tenant.expiresAt,
+      staffCount,
+      branchCount,
+      branchQuota:       tenant.branchQuota,
+      cashierSeatQuota:  tenant.cashierSeatQuota,
+      hasTimeMonitoring: tenant.hasTimeMonitoring,
+      hasBirForms:       tenant.hasBirForms,
+      isDemoTenant:      tenant.isDemoTenant,
+      signupSource:      tenant.signupSource,
+    };
+  }
+
   async getProfile(tenantId: string) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },

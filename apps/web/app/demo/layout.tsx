@@ -1,18 +1,17 @@
+/**
+ * Demo route metadata.  Tells search engines and AI scrapers NOT to index
+ * the demo content — prevents:
+ *   - "Bambu Coffee" appearing in Google search results
+ *   - LLM training crawlers learning made-up TINs / addresses / employees
+ *   - Confused customers landing on the demo from search
+ *
+ * Applies to /demo and all nested /demo/* routes (Next.js App Router
+ * propagates layout-level metadata to child routes).
+ */
+
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
-/**
- * Demo route metadata.  Tells search engines and AI scrapers NOT to index
- * the demo content.  This prevents:
- *   - "Bambu Coffee" (the fictional demo business) appearing in search results
- *   - LLM training crawlers learning about made-up TINs / addresses / employees
- *   - Confused customers landing on the demo from a search engine
- *
- * Note: this only applies to the /demo entry page itself.  The pages the
- * demo redirects INTO (/pos/terminal, /ledger/*, /payroll/*) need
- * additional handling — for those, the noindex is set client-side via
- * a <meta> tag injected by DemoBanner when isDemoMode() returns true.
- */
 export const metadata: Metadata = {
   title: 'Clerque — Live Demo',
   description:

@@ -4,117 +4,31 @@
  * Demo Entry Page — /demo
  *
  * The single entry point into demo mode.  Visitors land here from a
- * marketing CTA on the landing page (HNScorpPH) or directly via URL.
+ * marketing CTA and click "Start the Demo" to enter the standalone
+ * demo experience at /demo/pos/terminal.
  *
- * Responsibilities:
- *   1. Activate demo cookie + sessionStorage flag (lib/demo/config.ts)
- *   2. Seed the auth store with the demo user identity so app pages see
- *      a "logged-in" user (bypassing the real auth flow entirely)
- *   3. Show a brief intro modal explaining what demo mode is
- *   4. Redirect to /pos/terminal once the visitor clicks "Start"
+ * Architecture: the demo at /demo/* is fully self-contained — it does
+ * NOT mount the real Clerque app's pages.  Each /demo/* page reads
+ * directly from useDemoStore and renders a simplified version of the
+ * Clerque UI.  No auth bypass, no API interception, no shape-matching.
  *
- * The seeded auth store uses a fake demo accessToken that the demoApi
- * adapter accepts.  The real backend is never called.
+ * This page just:
+ *   1. Activates the demo cookie + sessionStorage flag (so isDemoMode()
+ *      returns true on subsequent /demo/* pages — used for the banner
+ *      and noindex meta)
+ *   2. Touches useDemoStore to ensure it's hydrated from seed data
+ *   3. Redirects to /demo/pos/terminal
  */
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { activateDemo } from '@/lib/demo/config';
 import { useDemoStore } from '@/lib/demo/store';
-import { DEMO_USER_INFO } from '@/lib/demo/seed';
-import { useAuthStore } from '@/store/auth';
-import { useCartStore } from '@/store/pos/cart';
-import { useShiftStore } from '@/store/pos/shift';
 import { ShoppingCart, BookOpen, Users, ArrowRight, Sparkles } from 'lucide-react';
-
-const DEMO_AUTH_FLAG_KEY = 'clerque-demo-auth';
 
 export default function DemoEntryPage() {
   const router = useRouter();
   const [step, setStep] = useState<'intro' | 'starting'>('intro');
-
-  function startDemo() {
-    setStep('starting');
-
-    // 1. Activate demo flags (cookie + sessionStorage)
-    activateDemo();
-
-    // 2. Seed auth store with demo identity.  The accessToken is a fake
-    //    string the demo adapter recognises; jwtDecode would normally parse
-    //    it, so we provide a minimal valid-looking JWT payload directly.
-    const demoUser = {
-      sub: DEMO_USER_INFO.id,
-      name: DEMO_USER_INFO.name,
-      email: DEMO_USER_INFO.email,
-      tenantId: DEMO_USER_INFO.tenantId,
-      branchId: DEMO_USER_INFO.branchId,
-      role: DEMO_USER_INFO.role,
-      isSuperAdmin: false,
-      appAccess: [
-        { app: 'POS' as const, level: 'FULL' as const },
-        { app: 'LEDGER' as const, level: 'FULL' as const },
-        { app: 'PAYROLL' as const, level: 'FULL' as const },
-      ],
-      taxStatus: 'VAT' as const,
-      isVatRegistered: true,
-      isBirRegistered: true,
-      tinNumber: '012-345-678-000',
-      businessName: 'Bambu Coffee',
-      registeredAddress: '123 Demo Street, Quezon City',
-      isPtuHolder: false,
-      ptuNumber: null,
-      minNumber: null,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
-    };
-
-    // Use the proper setters — setTokens then setUser.  setUser internally
-    // pushes taxStatus into the cart store via setTenantFlags(), which is
-    // critical: without it, the cart store's taxStatus stays 'UNREGISTERED'
-    // (the default) while user.taxStatus is 'VAT', causing VAT-calc effects
-    // to thrash and trigger a "Maximum update depth" infinite-render loop.
-    useAuthStore.getState().setTokens('demo-access-token', 'demo-refresh-token');
-    useAuthStore.getState().setUser(demoUser);
-
-    // Initialise the cart store's branch context so the terminal page's
-    // activeBranchId resolves immediately (otherwise it's empty string and
-    // the products query is `enabled: false`).
-    useCartStore.getState().setBranch(DEMO_USER_INFO.branchId);
-
-    // Seed an active shift in the shift store so the POS terminal doesn't
-    // open the OpenShiftModal blocking gate.  Numbers come from the demo
-    // store's active shift seed.
-    useShiftStore.getState().setActiveShift({
-      id: 'demo-shift-active',
-      branchId: DEMO_USER_INFO.branchId,
-      cashierId: DEMO_USER_INFO.id,
-      openingCash: 2000,
-      openedAt: new Date().toISOString(),
-      cashSales: 0,
-      nonCashSales: 0,
-      totalSales: 0,
-      orderCount: 0,
-      voidCount: 0,
-      expectedCash: 2000,
-      digitalBreakdown: {},
-    });
-
-    // Marker so the auth store knows it's a demo session (prevents
-    // accidental refresh attempts against the real /auth/refresh endpoint).
-    try {
-      window.sessionStorage.setItem(DEMO_AUTH_FLAG_KEY, '1');
-    } catch {
-      /* sessionStorage may be unavailable */
-    }
-
-    // 3. Touch the demo store so it hydrates from seed data
-    useDemoStore.getState();
-
-    // 4. Redirect to POS terminal
-    setTimeout(() => {
-      router.push('/pos/terminal');
-    }, 600);
-  }
 
   // Auto-reset on URL flag — let HNScorpPH link with ?reset=1 to force a
   // fresh demo state if the visitor returns.
@@ -125,6 +39,22 @@ export default function DemoEntryPage() {
       useDemoStore.getState().reset();
     }
   }, []);
+
+  function startDemo() {
+    setStep('starting');
+
+    // Activate demo flags so the banner / noindex meta show on every
+    // /demo/* page the visitor navigates to.
+    activateDemo();
+
+    // Touch the demo store so it hydrates from seed data
+    useDemoStore.getState();
+
+    // Redirect to the standalone demo POS terminal
+    setTimeout(() => {
+      router.push('/demo/pos/terminal');
+    }, 600);
+  }
 
   if (step === 'starting') {
     return (
@@ -162,10 +92,10 @@ export default function DemoEntryPage() {
             <div className="flex items-start gap-3">
               <ShoppingCart className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
               <div>
-                <p className="font-semibold text-stone-800">POS Terminal</p>
+                <p className="font-semibold text-stone-800">Counter (POS)</p>
                 <p className="text-sm text-stone-600">
-                  Sell coffee, take cash or GCash payment, even bill B2B customers on credit.
-                  Try voiding an order. Watch the receipt print.
+                  Sell coffee, take cash or GCash payment, watch the receipt print.
+                  Browse inventory and product catalog.
                 </p>
               </div>
             </div>
@@ -175,17 +105,17 @@ export default function DemoEntryPage() {
                 <p className="font-semibold text-stone-800">Ledger</p>
                 <p className="text-sm text-stone-600">
                   Every sale auto-posts to the journal. See the trial balance update.
-                  Browse a sample chart of accounts. Track unpaid B2B invoices in AR aging.
+                  Browse a sample chart of accounts. Post your own manual journal entries.
                 </p>
               </div>
             </div>
             <div className="flex items-start gap-3">
               <Users className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
               <div>
-                <p className="font-semibold text-stone-800">Payroll</p>
+                <p className="font-semibold text-stone-800">Sync (Payroll)</p>
                 <p className="text-sm text-stone-600">
-                  Clock in/out. View employee timesheets and last month's payslips
-                  with SSS, PhilHealth, and Pag-IBIG contributions.
+                  Clock in and out. View attendance and timesheets.
+                  See sample payslips with SSS, PhilHealth, and Pag-IBIG contributions.
                 </p>
               </div>
             </div>

@@ -53,6 +53,13 @@ interface DemoStoreActions {
 
   /** Clock out for an employee — completes their open time entry. */
   clockOut: (employeeId: string) => DemoTimeEntry | null;
+
+  /** Post a manual journal entry (Demo Ledger > Journal page). */
+  postManualJournalEntry: (input: {
+    description: string;
+    reference?: string;
+    lines: Array<{ accountId: string; debit: number; credit: number; description?: string }>;
+  }) => DemoJournalEntry;
 }
 
 export interface RecordOrderInput {
@@ -408,6 +415,65 @@ export const useDemoStore = create<Store>()(
           timeEntries: state.timeEntries.map((t) => (t.id === open.id ? closed : t)),
         });
         return closed;
+      },
+
+      postManualJournalEntry: (input) => {
+        const state = get();
+        const seq = state.nextJournalSeq;
+        const now = new Date().toISOString();
+
+        // Validate: balanced and at least 2 lines
+        const totalDebit = round2(input.lines.reduce((s, l) => s + (l.debit || 0), 0));
+        const totalCredit = round2(input.lines.reduce((s, l) => s + (l.credit || 0), 0));
+        if (input.lines.length < 2) {
+          throw new Error('Journal entry must have at least two lines.');
+        }
+        if (Math.abs(totalDebit - totalCredit) > 0.01) {
+          throw new Error(
+            `Journal entry is not balanced (debit ${totalDebit} ≠ credit ${totalCredit}).`,
+          );
+        }
+        if (totalDebit === 0) {
+          throw new Error('Journal entry has zero amounts.');
+        }
+
+        // Materialize lines with account names looked up from store
+        const materialized = input.lines.map((l) => {
+          const account = state.accounts.find((a) => a.id === l.accountId);
+          if (!account) {
+            throw new Error(`Account ${l.accountId} not found.`);
+          }
+          return {
+            accountId: account.id,
+            accountCode: account.code,
+            accountName: account.name,
+            debit: round2(l.debit || 0),
+            credit: round2(l.credit || 0),
+            description: l.description ?? null,
+          };
+        });
+
+        const entry: DemoJournalEntry = {
+          id: `demo-je-manual-${seq}`,
+          entryNumber: `JE-2026-${String(seq).padStart(5, '0')}`,
+          date: now,
+          postingDate: now,
+          description: input.description,
+          reference: input.reference ?? null,
+          status: 'POSTED',
+          source: 'MANUAL',
+          lines: materialized,
+          totalDebit,
+          totalCredit,
+          sourceOrderId: null,
+        };
+
+        set({
+          journalEntries: [entry, ...state.journalEntries],
+          nextJournalSeq: seq + 1,
+        });
+
+        return entry;
       },
     }),
     {

@@ -226,6 +226,11 @@ enum AuditAction {
   DISCOUNT_APPLIED
   VOID_PROCESSED
   SETTING_CHANGED
+  /// RBAC: owner overrode an SOD warning when assigning permissions.
+  /// Stored with the rule id and the owner's reason in the `details` JSON.
+  SOD_OVERRIDE_GRANTED
+  /// RBAC: a staff member's role / persona / permissions were changed.
+  PERMISSIONS_UPDATED
 }
 
 enum SessionStatus {

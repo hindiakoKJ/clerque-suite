@@ -109,6 +109,33 @@ export class AuditService {
     });
   }
 
+  /**
+   * Log an SOD warning override — owner explicitly accepted a yellow warning
+   * when assigning permissions that violate Segregation of Duties.
+   * The full set of overrides is also stored on User.sodOverrides for the
+   * staff-edit screen to render; this AuditLog row is the immutable copy.
+   */
+  async logSodOverride(
+    tenantId:     string,
+    targetUserId: string,
+    ruleId:       string,
+    reason:       string,
+    permissions:  string[],
+    performedBy:  string,
+    ipAddress?:   string,
+  ): Promise<void> {
+    return this.log({
+      tenantId,
+      action:      AuditAction.SOD_OVERRIDE_GRANTED,
+      entityType:  'User',
+      entityId:    targetUserId,
+      after:       { ruleId, reason, permissions },
+      description: `SOD override accepted for rule ${ruleId}: ${reason}`,
+      performedBy,
+      ipAddress,
+    });
+  }
+
   /** Retrieve audit log for a tenant, paginated. */
   async findAll(tenantId: string, opts: { page?: number; action?: AuditAction; entityType?: string }) {
     const { page = 1, action, entityType } = opts;

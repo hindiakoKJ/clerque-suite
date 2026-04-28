@@ -19,3 +19,7 @@ ALTER TABLE "tenants" ADD COLUMN "signupSource" "SignupSource" NOT NULL DEFAULT 
 ALTER TABLE "users" ADD COLUMN "personaKey" TEXT;
 ALTER TABLE "users" ADD COLUMN "customPermissions" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE "users" ADD COLUMN "sodOverrides" JSONB;
+
+-- 5. Extend AuditAction enum for RBAC events
+ALTER TYPE "AuditAction" ADD VALUE IF NOT EXISTS 'SOD_OVERRIDE_GRANTED';
+ALTER TYPE "AuditAction" ADD VALUE IF NOT EXISTS 'PERMISSIONS_UPDATED';

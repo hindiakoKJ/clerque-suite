@@ -24,6 +24,7 @@
  */
 
 import type { AppCode } from './auth';
+import { PERMISSION_MATRIX, type PermissionKey } from './permissions';
 
 export type TierId = 'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5' | 'TIER_6';
 
@@ -329,4 +330,128 @@ export function nextTier(tierId: TierId): TierConfig | null {
   const idx = order.indexOf(tierId);
   if (idx === -1 || idx === order.length - 1) return null;
   return TIERS[order[idx + 1]];
+}
+
+/* ─── Permission ↔ Tier-feature bridge (Option 6 — Tier-Bounded Customization) ───
+ *
+ * Each granular permission (from permissions.ts) may require a tier feature
+ * flag to be exercisable.  Permissions NOT listed in PERMISSION_REQUIRES_FEATURE
+ * are universally available at all tiers — gated only by the user's role
+ * (per PERMISSION_MATRIX) and any custom overrides the owner has toggled.
+ *
+ * The Staff Edit UI uses these helpers to render each permission in one of
+ * four states:
+ *   - available + enabled   ☑
+ *   - available + disabled  ☐
+ *   - tier-locked           🔒 with upgrade hint
+ *   - role-locked           🔒 with role hint
+ *
+ * Backend defense-in-depth: assertPermission() should also call
+ * isPermissionAvailableAtTier() so a user who somehow has a permission in
+ * their JWT but their tenant downgraded still gets blocked.
+ */
+
+/**
+ * Permissions that require a specific tier feature flag.
+ * If a permission is NOT in this map, it's universally available (every tier).
+ */
+export const PERMISSION_REQUIRES_FEATURE: Partial<Record<PermissionKey, TierFeatureFlag>> = {
+  // ── Ledger read-level (T3+) ───────────────────────────────────────────────
+  'ledger:view':                 'ledger:read',
+  'ledger:trial_balance':        'ledger:read',
+  'ledger:export':               'ledger:read',
+  'finance:cash_flow':           'ledger:read',
+
+  // ── Ledger full-level (T4+): manual journal, period mgmt, settlement ──────
+  'ledger:journal_entry':        'ledger:full',
+  'ledger:period_close':         'ledger:full',
+  'ledger:period_reopen':        'ledger:full',
+  'finance:bank_recon':          'ledger:full',
+
+  // ── Payroll (T5+) ─────────────────────────────────────────────────────────
+  'payroll:view_salary':         'payroll:full',
+  'payroll:edit':                'payroll:full',
+  'payroll:run':                 'payroll:full',
+  // Assigning the PAYROLL_MASTER role requires payroll to exist as a feature
+  'staff:assign_payroll_master': 'payroll:full',
+
+  // ── Compliance (T6 only) ──────────────────────────────────────────────────
+  'audit:view':                  'audit:log',
+  'bir:view':                    'bir:forms',
+
+  // Universal permissions intentionally NOT listed — gated only by role:
+  //   product:create, product:edit_*, product:deactivate
+  //   order:create, order:void_*, order:apply_discount
+  //   inventory:view, inventory:adjust, inventory:set_threshold
+  //   staff:view, staff:create, staff:edit, staff:deactivate, staff:reset_password
+  //   staff:assign_mdm                  (universal action; role-gated to OWNER)
+  //   settings:tax, settings:general
+  //   bir:generate_eis                  (per-order EIS export at till — POS basic)
+};
+
+/**
+ * Check whether a specific permission is exercisable at a given tier.
+ * Permissions not in PERMISSION_REQUIRES_FEATURE return true (universal).
+ */
+export function isPermissionAvailableAtTier(
+  permission: PermissionKey,
+  tier: TierId,
+): boolean {
+  const requiredFlag = PERMISSION_REQUIRES_FEATURE[permission];
+  if (!requiredFlag) return true;
+  return TIERS[tier].enabledFeatures.includes(requiredFlag);
+}
+
+/**
+ * Return all permissions exercisable at this tier.  Used by the Staff Edit
+ * UI to know which checkboxes to show as available vs tier-locked.
+ *
+ * The result is the SUPERSET — actual exercisability still depends on the
+ * user's role (via PERMISSION_MATRIX) and any custom overrides.
+ */
+export function listAvailablePermissionsAtTier(tier: TierId): PermissionKey[] {
+  return (Object.keys(PERMISSION_MATRIX) as PermissionKey[]).filter(
+    (p) => isPermissionAvailableAtTier(p, tier),
+  );
+}
+
+/**
+ * Return all permissions that are tier-locked (NOT exercisable) at this tier.
+ * Used by the Staff Edit UI to show 🔒 lock icons with upgrade hints.
+ */
+export function listTierLockedPermissions(tier: TierId): PermissionKey[] {
+  return (Object.keys(PERMISSION_MATRIX) as PermissionKey[]).filter(
+    (p) => !isPermissionAvailableAtTier(p, tier),
+  );
+}
+
+/**
+ * For a tier-locked permission, return the FEATURE FLAG that locks it.
+ * The UI uses this to show "Upgrade to Tier X" hints — caller looks up
+ * which tier first includes the flag.
+ *
+ * Returns null if the permission is universal (never tier-locked).
+ */
+export function getRequiredFeatureForPermission(
+  permission: PermissionKey,
+): TierFeatureFlag | null {
+  return PERMISSION_REQUIRES_FEATURE[permission] ?? null;
+}
+
+/**
+ * For a feature flag, return the LOWEST tier that enables it.
+ * Used for upgrade-CTA hints: "Upgrade to Tier 4 to unlock Journal Entries".
+ *
+ * Returns null if no tier in TIERS includes this flag (shouldn't happen
+ * for a valid TierFeatureFlag, but defensive for future flags added before
+ * being wired into a tier).
+ */
+export function lowestTierForFeature(
+  flag: TierFeatureFlag,
+): TierId | null {
+  const order: TierId[] = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'];
+  for (const id of order) {
+    if (TIERS[id].enabledFeatures.includes(flag)) return id;
+  }
+  return null;
 }

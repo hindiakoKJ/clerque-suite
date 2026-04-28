@@ -29,6 +29,7 @@
 
 import type { UserRole, AppAccessEntry } from './auth';
 import type { PermissionKey } from './permissions';
+import type { TierId } from './tiers';
 
 export type PersonaKey =
   | 'OWNER_OPERATOR'
@@ -74,10 +75,24 @@ export interface PersonaTemplate {
    * touch sensitive data and should only be assignable by the owner).
    */
   requiresOwnerAssignment: boolean;
+  /**
+   * Minimum subscription tier where this persona is offered as a quick-start
+   * template.  The persona's permissions must all be exercisable at this tier
+   * (verifiable via verifyPersonaTierConsistency() helper).
+   *
+   * NOTE: a persona with `minTier=TIER_3` is OFFERED as a template at T3+,
+   * but the template's INTRINSIC capabilities can grow when the tenant
+   * upgrades.  Example: BOOKKEEPER_DEFAULT.minTier=TIER_3 — at T3 the
+   * Bookkeeper sees read-only ledger; at T4 the same persona's user gains
+   * journal-entry posting because the tier feature flag activates.
+   */
+  minTier: TierId;
 }
 
 export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
   // ── Owner-Operator ─────────────────────────────────────────────────────────
+  // Available at every tier — the owner is always present.  Capabilities expand
+  // automatically as tier upgrades unlock more features.
   OWNER_OPERATOR: {
     key: 'OWNER_OPERATOR',
     displayName: 'Owner-Operator',
@@ -87,9 +102,11 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_1',
   },
 
   // ── Cashier variants ───────────────────────────────────────────────────────
+  // T2+ — first staff slot opens at Duo (Owner+1).
   CASHIER_BASIC: {
     key: 'CASHIER_BASIC',
     displayName: 'Cashier',
@@ -99,6 +116,7 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_2',
   },
   CASHIER_COOK: {
     key: 'CASHIER_COOK',
@@ -109,6 +127,7 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['inventory:view'],
     relevantFor: ['FNB'],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_2',
   },
   CASHIER_INVENTORY: {
     key: 'CASHIER_INVENTORY',
@@ -119,6 +138,7 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['inventory:view', 'inventory:adjust'],
     relevantFor: ['RETAIL'],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_2',
   },
   SENIOR_CASHIER: {
     key: 'SENIOR_CASHIER',
@@ -129,9 +149,11 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_2',
   },
 
   // ── Branch Manager ─────────────────────────────────────────────────────────
+  // T3+ — manager-level oversight starts when the team is large enough to need one.
   BRANCH_MANAGER_DEFAULT: {
     key: 'BRANCH_MANAGER_DEFAULT',
     displayName: 'Branch Manager',
@@ -141,9 +163,12 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_3',
   },
 
   // ── Bookkeeper variants ────────────────────────────────────────────────────
+  // T3+ for the basic Bookkeeper (read-only ledger access at T3, full posting at T4+).
+  // T4+ for the AR-Clerk variant which needs ar:full feature unlocked at T4.
   BOOKKEEPER_DEFAULT: {
     key: 'BOOKKEEPER_DEFAULT',
     displayName: 'Bookkeeper',
@@ -154,6 +179,7 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['ledger:export'],
     relevantFor: [],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_3',
   },
   BOOKKEEPER_AR_CLERK: {
     key: 'BOOKKEEPER_AR_CLERK',
@@ -167,9 +193,11 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     ],
     relevantFor: [],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_4',
   },
 
   // ── Inventory Manager ──────────────────────────────────────────────────────
+  // T4+ — dedicated inventory role makes sense at Squad scale where there's a back room.
   INVENTORY_MANAGER: {
     key: 'INVENTORY_MANAGER',
     displayName: 'Inventory Manager',
@@ -179,9 +207,11 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['inventory:set_threshold'],
     relevantFor: ['RETAIL', 'MANUFACTURING', 'FNB'],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_4',
   },
 
   // ── Payroll Officer ────────────────────────────────────────────────────────
+  // T5+ — payroll:full feature flag is required.
   PAYROLL_OFFICER: {
     key: 'PAYROLL_OFFICER',
     displayName: 'Payroll Officer',
@@ -191,9 +221,11 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: true,
+    minTier: 'TIER_5',
   },
 
   // ── General Employee ───────────────────────────────────────────────────────
+  // T2+ — first staff slot.
   GENERAL_EMPLOYEE_DEFAULT: {
     key: 'GENERAL_EMPLOYEE_DEFAULT',
     displayName: 'General Employee',
@@ -203,9 +235,11 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
+    minTier: 'TIER_2',
   },
 
   // ── External Auditor ───────────────────────────────────────────────────────
+  // T6 only — audit:log feature flag is required.
   EXTERNAL_AUDITOR_DEFAULT: {
     key: 'EXTERNAL_AUDITOR_DEFAULT',
     displayName: 'External Auditor',
@@ -215,6 +249,7 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: true,
+    minTier: 'TIER_6',
   },
 };
 
@@ -256,4 +291,67 @@ export function computeExtraPermissions(
   const custom = customPermissions ?? [];
   const merged = new Set<PermissionKey>([...fromPersona, ...custom]);
   return Array.from(merged);
+}
+
+/* ─── Tier-aware persona filtering (Option 6) ──────────────────────────────── */
+
+/** Internal: tier ordering for "is X >= Y" comparisons. */
+const TIER_ORDER: TierId[] = [
+  'TIER_1',
+  'TIER_2',
+  'TIER_3',
+  'TIER_4',
+  'TIER_5',
+  'TIER_6',
+];
+
+/**
+ * Check if a persona is offered as a quick-start template at the given tier.
+ *
+ * A persona is available iff `tenantTier >= persona.minTier`.  Owners on
+ * higher tiers see all lower-tier personas plus their own tier's additions.
+ */
+export function isPersonaAvailableAtTier(
+  personaKey: PersonaKey,
+  tier: TierId,
+): boolean {
+  const persona = PERSONAS[personaKey];
+  if (!persona) return false;
+  return TIER_ORDER.indexOf(tier) >= TIER_ORDER.indexOf(persona.minTier);
+}
+
+/**
+ * List all personas (including OWNER_OPERATOR) available as templates at a
+ * given tier.  Used by tier-aware admin views and the onboarding wizard.
+ */
+export function listAvailablePersonas(tier: TierId): PersonaTemplate[] {
+  return Object.values(PERSONAS).filter((p) =>
+    isPersonaAvailableAtTier(p.key, tier),
+  );
+}
+
+/**
+ * List personas appropriate for HIRING staff at a given tier.
+ *
+ * Excludes OWNER_OPERATOR (the owner already exists; you don't "hire" them).
+ * Used by the Staff Edit modal's persona dropdown to populate the choices
+ * an owner sees when adding a new team member.
+ */
+export function listHiringPersonas(tier: TierId): PersonaTemplate[] {
+  return listAvailablePersonas(tier).filter((p) => p.key !== 'OWNER_OPERATOR');
+}
+
+/**
+ * Filter personas BOTH by tier AND by business type.  Type-specific personas
+ * appear first, then universal ones.  This is the primary "what should the
+ * picker show?" helper for the staff creation flow.
+ */
+export function listHiringPersonasForTenant(
+  tier: TierId,
+  businessType: 'FNB' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING',
+): PersonaTemplate[] {
+  const tierFiltered = listHiringPersonas(tier);
+  const specific = tierFiltered.filter((p) => p.relevantFor.includes(businessType));
+  const universal = tierFiltered.filter((p) => p.relevantFor.length === 0);
+  return [...specific, ...universal];
 }

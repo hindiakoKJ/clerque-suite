@@ -14,6 +14,7 @@ import { useAuthStore } from '@/store/auth';
 import { useOnlineStatus } from '@/hooks/pos/useOnlineStatus';
 import { useShiftStore } from '@/store/pos/shift';
 import { useActivePromotions } from '@/hooks/pos/useActivePromotions';
+import { useSound } from '@/hooks/pos/useSound';
 import { api } from '@/lib/api';
 import { db } from '@/lib/pos/db';
 import { computeVat } from '@/lib/pos/utils';
@@ -28,6 +29,7 @@ export default function PosTerminal() {
   const isOnline    = useOnlineStatus();
   const queryClient = useQueryClient();
   const activeShift = useShiftStore((s) => s.activeShift);
+  const playSound   = useSound();
 
   const user      = useAuthStore((s) => s.user);
   const branchId  = useCartStore((s) => s.branchId);
@@ -53,8 +55,34 @@ export default function PosTerminal() {
 
   // Re-apply whenever active promotions change OR cart line composition changes.
   // (itemDiscount changes don't affect lineFingerprint, so no infinite loop.)
+  // Diff before/after so we can surface a toast when a promo is freshly applied —
+  // otherwise the cashier sees the total drop with no explanation.
   useEffect(() => {
+    const before = new Map(
+      useCartStore.getState().lines.map((l) => [l.lineKey, l.promotionApplied?.promoId] as const),
+    );
     applyPromoDiscounts(promotions);
+    const after = useCartStore.getState().lines;
+    const newlyApplied = new Map<string, { name: string; saved: number }>();
+    for (const line of after) {
+      const prevId = before.get(line.lineKey);
+      const nowId  = line.promotionApplied?.promoId;
+      if (nowId && nowId !== prevId) {
+        const existing = newlyApplied.get(nowId);
+        const saved = line.itemDiscount * line.quantity;
+        if (existing) {
+          existing.saved += saved;
+        } else {
+          newlyApplied.set(nowId, { name: line.promotionApplied!.promoName, saved });
+        }
+      }
+    }
+    if (newlyApplied.size > 0) {
+      playSound('click');
+      for (const { name, saved } of newlyApplied.values()) {
+        toast.info(`Promo applied: ${name} — saved ₱${saved.toFixed(2)}`);
+      }
+    }
   }, [promotions, lineFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Products (write-through to Dexie) ──────────────────────────────────
@@ -220,6 +248,7 @@ export default function PosTerminal() {
 
     if (!isOnline) {
       await saveOffline();
+      playSound('warn');
       toast.warning('Order saved offline — will sync when reconnected.');
       return;
     }
@@ -230,6 +259,7 @@ export default function PosTerminal() {
       setMobileCartOpen(false);
       setReceiptData({ ...receiptBase, orderNumber: order.orderNumber, isOffline: false });
       clearCart();
+      playSound('success');
       toast.success(`Order #${order.orderNumber} completed`);
     } catch (err: unknown) {
       const isNetworkError =
@@ -237,10 +267,13 @@ export default function PosTerminal() {
         (err as { code?: string })?.code === 'ECONNABORTED';
       if (isNetworkError) {
         await saveOffline();
+        playSound('warn');
         toast.warning('Connection lost — order saved offline and will sync automatically.');
         return;
       }
-      // Re-throw so PaymentModal can display the backend error message
+      // Server rejected the order — give the cashier an audible cue before
+      // PaymentModal surfaces the backend error message.
+      playSound('error');
       throw err;
     }
   }

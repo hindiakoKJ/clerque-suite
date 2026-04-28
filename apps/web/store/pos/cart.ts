@@ -1,5 +1,6 @@
 'use client';
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { computeVat, computeDiscount, round2 } from '@/lib/pos/utils';
 import { getLinePromoDiscount } from '@/lib/pos/promotions';
 import type { CartItemModifier, TaxStatus } from '@repo/shared-types';
@@ -87,7 +88,9 @@ interface CartState {
   grandTotal: () => number;
 }
 
-export const useCartStore = create<CartState>()((set, get) => ({
+export const useCartStore = create<CartState>()(
+  persist(
+    (set, get) => ({
   lines: [],
   orderDiscount: null,
   branchId: null,
@@ -245,4 +248,24 @@ export const useCartStore = create<CartState>()((set, get) => ({
   },
 
   grandTotal: () => get().subtotal() - (get().orderDiscount?.totalSavings ?? 0),
-}));
+    }),
+    {
+      name: 'clerque-cart',
+      // sessionStorage: cart survives accidental refresh / brief crash within
+      // the same tab session, but a fully closed browser/tab clears it.
+      // This matches the "never lose a sale" principle without leaking carts
+      // across logins on shared terminals.
+      storage: createJSONStorage(() => sessionStorage),
+      partialize: (state) => ({
+        lines: state.lines,
+        orderDiscount: state.orderDiscount,
+        branchId: state.branchId,
+        shiftId: state.shiftId,
+        // taxStatus / isVatRegistered intentionally NOT persisted — they
+        // are re-set fresh from the JWT on every auth-store hydration so
+        // a stale value can never be used to compute VAT.
+      }),
+      version: 1,
+    },
+  ),
+);

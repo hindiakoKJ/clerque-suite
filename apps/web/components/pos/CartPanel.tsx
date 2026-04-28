@@ -75,7 +75,8 @@ export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
                   </div>
                   <button
                     onClick={() => removeItem(line.lineKey)}
-                    className="text-muted-foreground/40 hover:text-red-500 transition-colors mt-0.5"
+                    aria-label="Remove item from cart"
+                    className="p-2 -m-1 rounded-lg text-muted-foreground/40 hover:text-red-500 hover:bg-red-500/10 transition-colors"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -84,16 +85,18 @@ export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => updateQty(line.lineKey, line.quantity - 1)}
-                      className="h-7 w-7 rounded-lg border border-border bg-background text-foreground flex items-center justify-center hover:bg-accent/10 transition-colors"
+                      aria-label="Decrease quantity"
+                      className="h-10 w-10 rounded-lg border border-border bg-background text-foreground flex items-center justify-center hover:bg-accent/10 active:scale-95 transition-all"
                     >
-                      <Minus className="h-3 w-3" />
+                      <Minus className="h-4 w-4" />
                     </button>
-                    <span className="text-sm font-semibold w-6 text-center text-foreground">{line.quantity}</span>
+                    <span className="text-base font-semibold w-8 text-center text-foreground tabular-nums">{line.quantity}</span>
                     <button
                       onClick={() => updateQty(line.lineKey, line.quantity + 1)}
-                      className="h-7 w-7 rounded-lg border border-border bg-background text-foreground flex items-center justify-center hover:bg-accent/10 transition-colors"
+                      aria-label="Increase quantity"
+                      className="h-10 w-10 rounded-lg border border-border bg-background text-foreground flex items-center justify-center hover:bg-accent/10 active:scale-95 transition-all"
                     >
-                      <Plus className="h-3 w-3" />
+                      <Plus className="h-4 w-4" />
                     </button>
                   </div>
                   <span className="text-sm font-bold text-foreground">

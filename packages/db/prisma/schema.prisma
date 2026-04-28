@@ -84,6 +84,15 @@ enum SubscriptionTier {
   TIER_3
   TIER_4
   TIER_5
+  TIER_6
+}
+
+/// Where a tenant originated from. Drives onboarding flow + future
+/// freemium/Play-Store differentiation. Default WEB is the existing path.
+enum SignupSource {
+  WEB
+  PLAYSTORE
+  IMPORTED
 }
 
 enum EmploymentType {
@@ -313,6 +322,12 @@ model Tenant {
   cashierSeatQuota         Int              @default(2)
   hasTimeMonitoring        Boolean          @default(false)
   hasBirForms              Boolean          @default(false)
+  /// Marks the public shared demo tenant. Receipts watermarked, settings
+  /// locked, nightly cron resets data. Exactly one record should have this true.
+  isDemoTenant             Boolean          @default(false)
+  /// Where this tenant originated from. WEB = sales-led signup, PLAYSTORE =
+  /// future freemium standalone POS app, IMPORTED = backfill / migration.
+  signupSource             SignupSource     @default(WEB)
   /// Primary tax classification per BIR registration.
   /// Drives receipt type, VAT math, PWD discount engine, and journal entries.
   taxStatus                TaxStatus        @default(UNREGISTERED)
@@ -472,6 +487,17 @@ model User {
   /// Time-limited token for self-service password reset (expires in 1 hour)
   passwordResetToken       String?        @unique
   passwordResetTokenExpiry DateTime?
+  /// RBAC: persona template the user was created from (e.g. "CASHIER_COOK").
+  /// Reference into packages/shared-types/src/personas.ts; null for legacy users.
+  personaKey               String?
+  /// RBAC: extra permissions granted on top of the role + persona defaults.
+  /// Members are PermissionKey strings (see permissions.ts). JWT-issue time
+  /// merges these into the user's effective permission set.
+  customPermissions        String[]       @default([])
+  /// RBAC: SOD warning overrides. JSON shape:
+  ///   { ruleId: string; reason: string; overriddenAt: ISO; overriddenById: cuid }[]
+  /// Recorded when the owner explicitly accepts a yellow SOD warning.
+  sodOverrides             Json?
   createdAt                DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 

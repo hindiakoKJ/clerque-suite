@@ -89,6 +89,67 @@ export class AuthService {
     return user;
   }
 
+  /**
+   * PIN-based login for cashiers on a shared terminal.
+   * Inputs: tenantSlug + email + 4-8 digit PIN.
+   *
+   * Security model:
+   *   - PIN is bcrypt-hashed at rest (set in users.service.ts)
+   *   - Same lockout as email login (MAX_FAILED_ATTEMPTS in LOCKOUT_MINUTES window)
+   *   - Failed attempts logged to LoginLog with success=false
+   *   - PIN must be exactly 4-8 digits (DTO validates input shape)
+   *
+   * Returns the user record (same shape as validateUser) or null on bad PIN.
+   * Lockout / suspended-tenant cases throw ForbiddenException.
+   */
+  async validateUserByPin(email: string, pin: string, companyCode: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { slug: companyCode.toLowerCase().trim() },
+      select: { id: true, status: true },
+    });
+    if (!tenant) return null;
+    if (tenant.status === 'SUSPENDED') {
+      throw new ForbiddenException('This account has been suspended. Please contact support.');
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: { email: email.toLowerCase().trim(), isActive: true, tenantId: tenant.id },
+      select: {
+        id:           true,
+        tenantId:     true,
+        branchId:     true,
+        role:         true,
+        name:         true,
+        kioskPin:     true,
+        appAccess:    { select: { appCode: true, level: true } },
+      },
+    });
+    if (!user) return null;
+
+    // No PIN set on this account — owner must set one before PIN login works
+    if (!user.kioskPin) return null;
+
+    const windowStart = new Date(Date.now() - LOCKOUT_MINUTES * 60 * 1000);
+    const recentFailures = await this.prisma.loginLog.count({
+      where: { userId: user.id, success: false, createdAt: { gte: windowStart } },
+    });
+    if (recentFailures >= MAX_FAILED_ATTEMPTS) {
+      throw new ForbiddenException(
+        `Account locked after ${MAX_FAILED_ATTEMPTS} failed attempts. Try again in ${LOCKOUT_MINUTES} minutes.`,
+      );
+    }
+
+    const valid = await bcrypt.compare(pin, user.kioskPin);
+    if (!valid) {
+      await this.prisma.loginLog.create({
+        data: { userId: user.id, tenantId: user.tenantId, email, success: false },
+      });
+      return null;
+    }
+
+    return user;
+  }
+
   /** Load app access rows, falling back to role defaults if none seeded yet */
   private async loadAppAccess(userId: string, role: string): Promise<AppAccessEntry[]> {
     const rows = await this.prisma.userAppAccess.findMany({

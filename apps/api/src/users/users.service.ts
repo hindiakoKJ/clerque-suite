@@ -65,7 +65,7 @@ export class UsersService {
         branchId: true,
         isActive: true,
         createdAt: true,
-        kioskPin: true,
+        // PIN hash itself is never returned — we expose a boolean elsewhere if needed
         // SOD Salary Privacy Wall
         salaryType: canViewSalary,
         salaryRate: canViewSalary,
@@ -102,7 +102,9 @@ export class UsersService {
         passwordHash,
         role: dto.role,
         branchId: dto.branchId ?? null,
-        kioskPin: dto.kioskPin ?? null,
+        // PIN is stored hashed (bcrypt cost 8 — 4-8 digits brute-force easily, so
+        // lockout via LoginLog after MAX_FAILED_ATTEMPTS is the real defense)
+        kioskPin: dto.kioskPin ? await bcrypt.hash(dto.kioskPin, 8) : null,
         appAccess: {
           create: defaultAccess.map((a) => ({
             appCode: a.app,
@@ -141,7 +143,10 @@ export class UsersService {
         ...(dto.role     !== undefined ? { role:     dto.role }     : {}),
         ...(dto.branchId !== undefined ? { branchId: dto.branchId } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-        ...(dto.kioskPin !== undefined ? { kioskPin: dto.kioskPin } : {}),
+        // null clears the PIN; otherwise re-hash the provided plaintext
+        ...(dto.kioskPin !== undefined
+          ? { kioskPin: dto.kioskPin === null ? null : await bcrypt.hash(dto.kioskPin, 8) }
+          : {}),
       },
     });
     if (result.count === 0) throw new NotFoundException('User not found');

@@ -25,15 +25,23 @@ function LoginInner() {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | undefined>();
 
-  async function handleSubmit(values: { tenantId: string; email: string; password: string; rememberMe: boolean }) {
+  async function handleSubmit(values: { tenantId: string; email: string; password: string; rememberMe: boolean; mode: 'password' | 'pin' }) {
     setLoading(true);
     setError(undefined);
     try {
-      const { data } = await api.post<AuthTokens>('/auth/login', {
-        companyCode: values.tenantId,
-        email: values.email,
-        password: values.password,
-      });
+      // PIN login dispatches to /auth/pin-login (returns the same AuthTokens shape).
+      // Password login keeps the original /auth/login path.
+      const { data } = values.mode === 'pin'
+        ? await api.post<AuthTokens>('/auth/pin-login', {
+            companyCode: values.tenantId,
+            email:       values.email,
+            pin:         values.password,
+          })
+        : await api.post<AuthTokens>('/auth/login', {
+            companyCode: values.tenantId,
+            email:       values.email,
+            password:    values.password,
+          });
 
       setTokens(data.accessToken, data.refreshToken);
       const user = jwtDecode<JwtPayload>(data.accessToken);

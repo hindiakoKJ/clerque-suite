@@ -11,7 +11,8 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
-import { RefreshDto, LogoutDto } from './dto/login.dto';
+import { RefreshDto, LogoutDto, PinLoginDto } from './dto/login.dto';
+import { UnauthorizedException } from '@nestjs/common';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -28,6 +29,29 @@ export class AuthController {
     const deviceInfo = req.headers['user-agent'];
     const ipAddress = req.ip;
     return this.authService.login(id, tenantId, branchId, role, name ?? '', deviceInfo, ipAddress);
+  }
+
+  /**
+   * POST /auth/pin-login
+   * Cashier fast-login. tenantSlug + email + 4-8 digit PIN.
+   * Returns the same JWT shape as /auth/login.
+   */
+  @Post('pin-login')
+  @HttpCode(HttpStatus.OK)
+  async pinLogin(@Request() req: any, @Body() dto: PinLoginDto) {
+    const user = await this.authService.validateUserByPin(dto.email, dto.pin, dto.companyCode);
+    if (!user) throw new UnauthorizedException('Invalid PIN, email, or company code.');
+    const deviceInfo = req.headers['user-agent'];
+    const ipAddress = req.ip;
+    return this.authService.login(
+      user.id,
+      user.tenantId,
+      user.branchId,
+      user.role,
+      user.name ?? '',
+      deviceInfo,
+      ipAddress,
+    );
   }
 
   @Post('refresh')

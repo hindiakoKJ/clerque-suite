@@ -4,7 +4,7 @@ import { useState, useEffect, type ElementType } from 'react';
 import {
   Eye, EyeOff, ArrowRight,
   ShoppingCart, BookOpen, Users, Wifi, WifiOff, Check,
-  Sun, Moon,
+  Sun, Moon, Lock, Hash, Delete,
 } from 'lucide-react';
 
 /* ─── Product registry ─────────────────────────────────────────────────── */
@@ -76,8 +76,11 @@ const PRODUCTS: Record<AppProduct, ProductConfig> = {
 export interface LoginValues {
   tenantId: string;
   email: string;
+  /** Carries the password (mode='password') or the 4-8 digit PIN (mode='pin'). */
   password: string;
   rememberMe: boolean;
+  /** Discriminates the auth path the consumer should route to. */
+  mode: 'password' | 'pin';
 }
 
 export interface AppLoginPageProps {
@@ -115,6 +118,8 @@ export function AppLoginPage({
   const [tenantId,   setTenantId]   = useState('');
   const [email,      setEmail]      = useState('');
   const [password,   setPassword]   = useState('');
+  const [pin,        setPin]        = useState('');
+  const [mode,       setMode]       = useState<'password' | 'pin'>('password');
   const [showPw,     setShowPw]     = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isOnline,   setIsOnline]   = useState(true);
@@ -151,8 +156,27 @@ export function AppLoginPage({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onSubmit({ tenantId: tenantId.trim(), email, password, rememberMe });
+    onSubmit({
+      tenantId: tenantId.trim(),
+      email,
+      password: mode === 'pin' ? pin : password,
+      rememberMe,
+      mode,
+    });
   }
+
+  // PIN numpad — touchscreen-first, but keyboard digits also work via the
+  // hidden text input. Pressing "C" clears, backspace deletes the last digit.
+  function pinPress(digit: string) {
+    setPin((prev) => (prev.length < 8 ? prev + digit : prev));
+  }
+  function pinBackspace() {
+    setPin((prev) => prev.slice(0, -1));
+  }
+  function pinClear() {
+    setPin('');
+  }
+  const pinValid = pin.length >= 4 && pin.length <= 8;
 
   /* Read dark state from DOM directly — avoids stale closure on focus */
   function onInputFocus(e: React.FocusEvent<HTMLInputElement>) {
@@ -266,8 +290,34 @@ export function AppLoginPage({
               Sign in to Clerque {p.name}
             </h2>
             <p className="text-muted-foreground">
-              Enter your tenant ID, email, and password.
+              {mode === 'pin'
+                ? 'Fast cashier sign-in with your 4–8 digit PIN.'
+                : 'Enter your tenant ID, email, and password.'}
             </p>
+
+            {/* Mode toggle — segmented control */}
+            <div className="inline-flex rounded-lg border border-border bg-secondary p-0.5 mt-2">
+              <button
+                type="button"
+                onClick={() => setMode('password')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md inline-flex items-center gap-1.5 transition-colors ${
+                  mode === 'password' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Lock className="w-3 h-3" />
+                Password
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('pin')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md inline-flex items-center gap-1.5 transition-colors ${
+                  mode === 'pin' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Hash className="w-3 h-3" />
+                PIN
+              </button>
+            </div>
           </div>
 
           <form className="space-y-5" onSubmit={handleSubmit}>
@@ -306,38 +356,102 @@ export function AppLoginPage({
               />
             </div>
 
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-semibold text-foreground">Password</label>
-                <a
-                  href={`/forgot-password?app=${product}`}
-                  className="text-xs font-medium hover:underline"
-                  style={{ color: accent }}
-                >
-                  Forgot password?
-                </a>
+            {mode === 'password' ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-semibold text-foreground">Password</label>
+                  <a
+                    href={`/forgot-password?app=${product}`}
+                    className="text-xs font-medium hover:underline"
+                    style={{ color: accent }}
+                  >
+                    Forgot password?
+                  </a>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showPw ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                    className={`${inputCls} pr-11`}
+                    onFocus={onInputFocus}
+                    onBlur={onInputBlur}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw(!showPw)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
-              <div className="relative">
-                <input
-                  type={showPw ? 'text' : 'password'}
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete="current-password"
-                  className={`${inputCls} pr-11`}
-                  onFocus={onInputFocus}
-                  onBlur={onInputBlur}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPw(!showPw)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+            ) : (
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-foreground">PIN</label>
+                {/* Masked dot display — large, easy to read at a glance */}
+                <div className="flex items-center justify-center gap-2 py-3 rounded-lg border border-border bg-input">
+                  {Array.from({ length: 8 }).map((_, i) => {
+                    const filled = i < pin.length;
+                    return (
+                      <span
+                        key={i}
+                        className={`w-3 h-3 rounded-full transition-all ${
+                          filled
+                            ? 'scale-100'
+                            : i < 4
+                              ? 'scale-75 bg-muted-foreground/30'
+                              : 'scale-50 bg-muted-foreground/15'
+                        }`}
+                        style={filled ? { background: accent } : undefined}
+                      />
+                    );
+                  })}
+                </div>
+                {/* Numpad — 44px+ tap targets */}
+                <div className="grid grid-cols-3 gap-2 pt-1">
+                  {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => pinPress(d)}
+                      className="h-14 rounded-lg border border-border bg-card text-2xl font-semibold text-foreground hover:bg-secondary active:scale-95 transition-all"
+                    >
+                      {d}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={pinClear}
+                    aria-label="Clear PIN"
+                    className="h-14 rounded-lg border border-border bg-card text-sm font-semibold text-muted-foreground hover:bg-secondary hover:text-red-500 active:scale-95 transition-all"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => pinPress('0')}
+                    className="h-14 rounded-lg border border-border bg-card text-2xl font-semibold text-foreground hover:bg-secondary active:scale-95 transition-all"
+                  >
+                    0
+                  </button>
+                  <button
+                    type="button"
+                    onClick={pinBackspace}
+                    aria-label="Delete last digit"
+                    className="h-14 rounded-lg border border-border bg-card text-foreground inline-flex items-center justify-center hover:bg-secondary active:scale-95 transition-all"
+                  >
+                    <Delete className="w-5 h-5" />
+                  </button>
+                </div>
+                <p className="text-[11px] text-muted-foreground text-center">
+                  Ask your owner to set your PIN if this is your first time.
+                </p>
               </div>
-            </div>
+            )}
 
             <div className="flex items-center gap-2">
               <input
@@ -361,7 +475,7 @@ export function AppLoginPage({
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (mode === 'pin' && !pinValid)}
               className={`group flex w-full items-center justify-center gap-2 rounded-lg py-3.5 font-semibold text-white shadow-lg ${p.shadowClass} hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed`}
               style={{ background: accent }}
             >

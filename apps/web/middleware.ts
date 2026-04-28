@@ -15,7 +15,7 @@ const APP_RULES: Array<{
   { prefix: '/payroll', app: 'PAYROLL', minLevel: 'CLOCK_ONLY', clockOnlyRedirect: '/payroll/clock' },
 ];
 
-const PUBLIC_PATHS = ['/', '/login', '/select'];
+const PUBLIC_PATHS = ['/', '/login', '/select', '/demo'];
 
 function getToken(req: NextRequest): string | null {
   // Tokens live in Zustand's persisted localStorage key `app-auth`.
@@ -25,11 +25,22 @@ function getToken(req: NextRequest): string | null {
   return req.cookies.get('app-session')?.value ?? null;
 }
 
+function isInDemoMode(req: NextRequest): boolean {
+  return req.cookies.get('clerque-demo')?.value === '1';
+}
+
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Always allow public paths and Next.js internals
   if (PUBLIC_PATHS.some((p) => pathname === p) || pathname.startsWith('/_next') || pathname.startsWith('/api')) {
+    return NextResponse.next();
+  }
+
+  // Demo mode: bypass all auth checks. The demo cookie is set by the /demo
+  // entry page; the demoApi adapter handles all backend calls client-side.
+  // No real JWT exists, so we cannot run the standard access checks.
+  if (isInDemoMode(req)) {
     return NextResponse.next();
   }
 

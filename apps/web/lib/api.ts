@@ -1,16 +1,37 @@
 import axios from 'axios';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
+import { isDemoMode } from './demo/config';
+import { demoApi } from './demo/api';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-export const api = axios.create({
+const realApi = axios.create({
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
 });
 
+/**
+ * Public api client.  Routes to the demo adapter when demo mode is active
+ * (cookie or sessionStorage flag set by /demo entry).  Otherwise routes
+ * to the real backend via axios.
+ *
+ * The Proxy pattern lets us check demo state on every method call so that
+ * activating/deactivating demo mode mid-session takes effect immediately
+ * without re-importing.
+ */
+export const api = new Proxy(realApi, {
+  get(target, prop, receiver) {
+    if (typeof window !== 'undefined' && isDemoMode()) {
+      const demoValue = (demoApi as unknown as Record<string | symbol, unknown>)[prop];
+      if (demoValue !== undefined) return demoValue;
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+}) as typeof realApi;
+
 /* ─── Request interceptor — attach Bearer token ──────────────────────────── */
-api.interceptors.request.use((config) => {
+realApi.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     try {
       const raw = localStorage.getItem('app-auth');
@@ -39,7 +60,7 @@ function processQueue(error: unknown, token: string | null) {
   failQueue = [];
 }
 
-api.interceptors.response.use(
+realApi.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config;
@@ -53,7 +74,7 @@ api.interceptors.response.use(
         failQueue.push({ resolve, reject });
       }).then((token) => {
         original.headers.Authorization = `Bearer ${token}`;
-        return api(original);
+        return realApi(original);
       });
     }
 
@@ -83,7 +104,7 @@ api.interceptors.response.use(
 
       processQueue(null, newAccess);
       original.headers.Authorization = `Bearer ${newAccess}`;
-      return api(original);
+      return realApi(original);
     } catch (err) {
       processQueue(err, null);
       localStorage.removeItem('app-auth');

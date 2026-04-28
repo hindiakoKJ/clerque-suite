@@ -18,16 +18,26 @@
 export const DEMO_COOKIE_NAME = 'clerque-demo';
 export const DEMO_SESSION_KEY = 'clerque-demo';
 
-/** Check if the current session is in demo mode.  Safe on both server and client. */
+/** Check if the current session is in demo mode.  Safe on both server and client.
+ *
+ * IMPORTANT: demo mode is determined by URL pathname FIRST.  The cookie /
+ * sessionStorage flags are secondary — they only enable demo behavior when
+ * the user is actually on a /demo/* route.  This prevents the demo banner
+ * (and any other demo-conditional UI) from leaking into real Clerque pages
+ * when a user previously visited /demo and still has the cookie set.
+ */
 export function isDemoMode(): boolean {
-  // Server-side: only the cookie is available.
-  if (typeof window === 'undefined') {
-    // Next.js doesn't expose cookies here without explicit `cookies()` call;
-    // server components that need this should call isDemoModeFromHeaders().
+  if (typeof window === 'undefined') return false;
+
+  // Pathname is the authoritative signal.  If we're not on a /demo route,
+  // we are NOT in demo mode regardless of any stored flags.
+  if (!window.location.pathname.startsWith('/demo')) {
     return false;
   }
 
-  // Client-side: check both cookie and sessionStorage.
+  // On a /demo route — confirm via cookie / sessionStorage that demo was
+  // actually activated (not just someone hitting /demo cold).  The /demo
+  // welcome page is the only thing that calls activateDemo().
   const cookieMatch = document.cookie
     .split(';')
     .map((c) => c.trim())
@@ -40,7 +50,9 @@ export function isDemoMode(): boolean {
     // sessionStorage may be unavailable (private browsing, etc.)
   }
 
-  return false;
+  // On /demo path but no flags set yet — we're on the welcome page itself
+  // (or a stale URL).  Treat as demo so the banner is visible there too.
+  return true;
 }
 
 /** For server-side detection in middleware or route handlers. */

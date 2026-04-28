@@ -45,6 +45,8 @@ export interface CartDiscount {
   percent?: number;
   idRef?: string;
   idOwnerName?: string;
+  /** Free-text reason — required for CASHIER_APPLIED / MANAGER_OVERRIDE; logged on receipt + journal */
+  reason?: string;
 }
 
 interface CartState {
@@ -78,6 +80,13 @@ interface CartState {
    *                         If omitted the entire cart subtotal is used.
    */
   applyPwdSc: (type: 'PWD' | 'SENIOR_CITIZEN', idRef: string, idOwnerName: string, selectedSubtotal?: number) => void;
+  /**
+   * Manual cashier-applied whole-cart discount.
+   * @param value     Either a percent (1-100) or a fixed peso amount.
+   * @param isPercent true → value is a percent of subtotal; false → value is a fixed peso amount.
+   * @param reason    Required free-text reason (logged on receipt + journal).
+   */
+  applyManualDiscount: (value: number, isPercent: boolean, reason: string) => void;
   removeOrderDiscount: () => void;
   clearCart: () => void;
 
@@ -207,6 +216,30 @@ export const useCartStore = create<CartState>()(
         percent: 20,
         idRef,
         idOwnerName,
+      },
+    });
+  },
+
+  applyManualDiscount: (value, isPercent, reason) => {
+    const sub = get().subtotal();
+    if (sub <= 0) return;
+    // Cap discount at the subtotal so we never go negative
+    const rawAmount = isPercent ? sub * (value / 100) : value;
+    const discountOnBase = round2(Math.min(Math.max(0, rawAmount), sub));
+    if (discountOnBase === 0) return;
+    set({
+      orderDiscount: {
+        type: 'CASHIER_APPLIED',
+        label: isPercent ? `Discount (${value}%)` : 'Discount',
+        discountOnBase,
+        vatExclusiveBase: sub,
+        // VAT recalc on the discounted total is handled by vatAmount() via the
+        // discountRatio path — these two fields stay 0 for CASHIER_APPLIED.
+        vatOnDiscounted: 0,
+        vatOnUnselected: 0,
+        totalSavings: discountOnBase,
+        percent: isPercent ? value : undefined,
+        reason,
       },
     });
   },

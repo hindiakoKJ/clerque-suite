@@ -60,10 +60,23 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   const [pickerProduct, setPickerProduct] = useState<Product | null>(null);
   const addItem = useCartStore((s) => s.addItem);
 
+  // Quantity multiplier: leading "3x ", "3* ", or "3 " is parsed off the search
+  // term so the cashier can ring up "3x latte" → next tap adds 3 of that line.
+  // Multiplier is reset back to 1 after each successful add.
+  const qtyMatch  = search.match(/^(\d+)\s*[x*]?\s+(.*)$/i);
+  const multiplier = qtyMatch ? Math.min(99, Math.max(1, parseInt(qtyMatch[1], 10))) : 1;
+  const searchTerm = qtyMatch ? qtyMatch[2] : search;
+
   const filtered = products.filter((p) => {
     const matchCat = !activeCat || p.categoryId === activeCat;
-    const matchSearch = !search || p.name.toLowerCase().includes(search.toLowerCase());
-    return matchCat && matchSearch;
+    if (!searchTerm) return matchCat;
+    const q = searchTerm.toLowerCase();
+    // Match against name OR sku OR barcode — manual SKU entry just works in the
+    // same search box, no separate field needed.
+    const matchName    = p.name.toLowerCase().includes(q);
+    const matchSku     = (p as { sku?: string }).sku?.toLowerCase().includes(q) ?? false;
+    const matchBarcode = (p as { barcode?: string }).barcode?.toLowerCase().includes(q) ?? false;
+    return matchCat && (matchName || matchSku || matchBarcode);
   });
 
   function handleAdd(p: Product) {
@@ -71,13 +84,14 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
       (g) => g.modifierGroup.options.some((o) => o.isActive),
     );
     if (activeGroups.length > 0) {
+      // Modifier picker handles a single item at a time — multiplier doesn't apply.
       setPickerProduct(p);
       return;
     }
-    commitAdd(p, []);
+    commitAdd(p, [], multiplier);
   }
 
-  function commitAdd(p: Product, modifiers: CartItemModifier[]) {
+  function commitAdd(p: Product, modifiers: CartItemModifier[], qty = 1) {
     const product: CartProduct = {
       id: p.id,
       name: p.name,
@@ -86,8 +100,13 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
       isVatable: p.isVatable,
       categoryId: p.categoryId ?? undefined,
     };
-    addItem(product, undefined, modifiers);
+    for (let i = 0; i < qty; i++) {
+      addItem(product, undefined, modifiers);
+    }
     setPickerProduct(null);
+    // Clear search after a successful add so the multiplier resets and the
+    // cashier sees the full grid for the next item.
+    if (qty > 1 || search) setSearch('');
   }
 
   return (
@@ -98,11 +117,20 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Search products..."
+            placeholder="Search by name, SKU, or barcode  (try: 3x latte)"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 h-10 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow"
+            className={`w-full pl-9 ${multiplier > 1 ? 'pr-16' : 'pr-4'} h-10 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow`}
           />
+          {multiplier > 1 && (
+            <span
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded-md text-xs font-bold text-white"
+              style={{ background: 'var(--accent)' }}
+              title={`Next tap will add ${multiplier} of the selected product`}
+            >
+              ×{multiplier}
+            </span>
+          )}
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
           <button

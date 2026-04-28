@@ -1,12 +1,17 @@
 'use client';
 import { useState } from 'react';
-import { Minus, Plus, Trash2, Tag, ShieldOff, Sparkles, Pause, FolderOpen } from 'lucide-react';
+import { Minus, Plus, Trash2, Tag, ShieldOff, Sparkles, Pause, FolderOpen, Percent } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useCartStore } from '@/store/pos/cart';
 import { useParkedSalesStore } from '@/store/pos/parkedSales';
+import { useAuthStore } from '@/store/auth';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ManualDiscountModal } from '@/components/pos/ManualDiscountModal';
 import { toast } from 'sonner';
+
+/** Roles allowed to apply manual discounts. Mirrors PERMISSION_MATRIX entry for order:apply_discount. */
+const DISCOUNT_ROLES = new Set(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD', 'SUPER_ADMIN']);
 
 interface CartPanelProps {
   onCheckout: () => void;
@@ -20,9 +25,13 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
   const parkSale       = useParkedSalesStore((s) => s.add);
   const parkedCount    = useParkedSalesStore((s) => s.sales.length);
 
-  const [confirmClear, setConfirmClear] = useState(false);
-  const [parkOpen, setParkOpen]         = useState(false);
-  const [parkName, setParkName]         = useState('');
+  const userRole = useAuthStore((s) => s.user?.role);
+  const canDiscount = !!userRole && DISCOUNT_ROLES.has(userRole);
+
+  const [confirmClear, setConfirmClear]   = useState(false);
+  const [parkOpen, setParkOpen]           = useState(false);
+  const [parkName, setParkName]           = useState('');
+  const [discountOpen, setDiscountOpen]   = useState(false);
 
   const sub = subtotal();
   const disc = totalDiscount();
@@ -151,17 +160,56 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
       {/* Discounts + Totals */}
       {!isEmpty && (
         <div className="border-t border-border px-4 py-3 space-y-2">
-          {/* PWD / SC button */}
+          {/* Discount triggers — visible to roles with order:apply_discount */}
           {!orderDiscount && (
-            <button
-              onClick={onApplyPwdSc}
-              className="w-full flex items-center gap-2 text-xs text-purple-500 hover:text-purple-400 font-medium py-1"
-            >
-              <Tag className="h-3.5 w-3.5" />
-              Apply PWD / Senior Citizen Discount
-            </button>
+            <div className="flex flex-col gap-1">
+              <button
+                onClick={onApplyPwdSc}
+                className="w-full flex items-center gap-2 text-xs text-purple-500 hover:text-purple-400 font-medium py-1"
+              >
+                <Tag className="h-3.5 w-3.5" />
+                Apply PWD / Senior Citizen Discount
+              </button>
+              {canDiscount && (
+                <button
+                  onClick={() => setDiscountOpen(true)}
+                  className="w-full flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 hover:text-amber-500 font-medium py-1"
+                >
+                  <Percent className="h-3.5 w-3.5" />
+                  Apply manual discount
+                </button>
+              )}
+            </div>
           )}
-          {orderDiscount && (
+          {orderDiscount && orderDiscount.type === 'CASHIER_APPLIED' && (
+            <div className="space-y-1 py-1 border-t border-dashed border-amber-400/30">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1">
+                  <Percent className="h-3 w-3" />
+                  {orderDiscount.label}
+                </span>
+                <button onClick={removeOrderDiscount} aria-label="Remove discount" className="text-muted-foreground/40 hover:text-red-500">
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+              <div className="bg-amber-500/10 rounded-lg px-2.5 py-2 space-y-1 text-[11px]">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span>{formatPeso(orderDiscount.vatExclusiveBase)}</span>
+                </div>
+                <div className="flex justify-between text-amber-600 dark:text-amber-400 font-medium">
+                  <span>Discount</span>
+                  <span>-{formatPeso(orderDiscount.discountOnBase)}</span>
+                </div>
+                {orderDiscount.reason && (
+                  <p className="text-muted-foreground italic pt-1 border-t border-amber-400/20">
+                    "{orderDiscount.reason}"
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+          {orderDiscount && orderDiscount.type !== 'CASHIER_APPLIED' && (
             <div className="space-y-1 py-1 border-t border-dashed border-purple-400/30">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-purple-500 font-medium flex items-center gap-1">
@@ -298,6 +346,9 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Manual cart discount */}
+      <ManualDiscountModal open={discountOpen} onClose={() => setDiscountOpen(false)} />
 
       {/* Clear confirm */}
       <Dialog open={confirmClear} onOpenChange={(v) => !v && setConfirmClear(false)}>

@@ -203,9 +203,13 @@ export default function PosTerminal() {
           discountType: orderDiscount.type,
           discountAmount: orderDiscount.discountOnBase,
           discountPercent: orderDiscount.percent,
-          reason: taxStatus === 'VAT'
-            ? `${orderDiscount.label} — 20% of VAT-excl base ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`
-            : `${orderDiscount.label} — 20% of gross ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`,
+          // CASHIER_APPLIED: cashier supplies a free-text reason captured in the modal.
+          // PWD/SC: synthesize the regulator-compliant breakdown line.
+          reason: orderDiscount.type === 'CASHIER_APPLIED'
+            ? (orderDiscount.reason ?? orderDiscount.label)
+            : taxStatus === 'VAT'
+              ? `${orderDiscount.label} — 20% of VAT-excl base ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`
+              : `${orderDiscount.label} — 20% of gross ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`,
         }] : []),
       ],
       subtotal: sub,

@@ -46,37 +46,37 @@ export default function DemoTimesheetPage() {
   return (
     <div className="p-4 sm:p-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-stone-900">Timesheet</h1>
-        <p className="text-sm text-stone-500">
+        <h1 className="text-xl font-semibold text-stone-900 dark:text-stone-100">Timesheet</h1>
+        <p className="text-sm text-stone-500 dark:text-stone-500">
           Hours worked by each employee for the past 7 days. Click a cell to see entries.
         </p>
       </div>
 
-      <div className="bg-white border border-stone-200 rounded-lg overflow-x-auto">
+      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg overflow-x-auto">
         <table className="w-full min-w-[640px]">
-          <thead className="bg-stone-50 border-b border-stone-200">
-            <tr className="text-[10px] uppercase tracking-wide text-stone-600">
-              <th className="text-left px-4 py-2.5 font-semibold sticky left-0 bg-stone-50 z-10">
+          <thead className="bg-stone-50 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800">
+            <tr className="text-[10px] uppercase tracking-wide text-stone-600 dark:text-stone-400">
+              <th className="text-left px-4 py-2.5 font-semibold sticky left-0 bg-stone-50 dark:bg-stone-900/30 z-10">
                 Employee
               </th>
               {days.map((d) => (
                 <th key={d.key} className="text-center px-3 py-2.5 font-semibold">
                   <div>{d.weekday}</div>
-                  <div className="text-stone-400 text-[9px] font-normal">{d.label}</div>
+                  <div className="text-stone-400 dark:text-stone-500 text-[9px] font-normal">{d.label}</div>
                 </th>
               ))}
               <th className="text-right px-4 py-2.5 font-semibold">Total</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-stone-100 text-sm">
+          <tbody className="divide-y divide-stone-100 dark:divide-stone-800 text-sm">
             {visibleEmployees.map((emp) => {
               const empHours = grid[emp.id] ?? {};
               const total = Object.values(empHours).reduce((s, h) => s + h, 0);
               return (
-                <tr key={emp.id} className="hover:bg-stone-50">
-                  <td className="px-4 py-2.5 sticky left-0 bg-white z-10">
-                    <p className="font-medium text-stone-900">{emp.name}</p>
-                    <p className="text-xs text-stone-500">{emp.role.replace(/_/g, ' ')}</p>
+                <tr key={emp.id} className="hover:bg-stone-50 dark:hover:bg-stone-800/50 dark:bg-stone-900/30">
+                  <td className="px-4 py-2.5 sticky left-0 bg-white dark:bg-stone-900 z-10">
+                    <p className="font-medium text-stone-900 dark:text-stone-100">{emp.name}</p>
+                    <p className="text-xs text-stone-500 dark:text-stone-500">{emp.role.replace(/_/g, ' ')}</p>
                   </td>
                   {days.map((d) => {
                     const hours = empHours[d.key] ?? 0;
@@ -87,12 +87,12 @@ export default function DemoTimesheetPage() {
                             {hours.toFixed(1)}
                           </span>
                         ) : (
-                          <span className="text-stone-300">—</span>
+                          <span className="text-stone-300 dark:text-stone-600">—</span>
                         )}
                       </td>
                     );
                   })}
-                  <td className="px-4 py-2.5 text-right font-bold text-stone-900">
+                  <td className="px-4 py-2.5 text-right font-bold text-stone-900 dark:text-stone-100">
                     {total.toFixed(1)}
                   </td>
                 </tr>

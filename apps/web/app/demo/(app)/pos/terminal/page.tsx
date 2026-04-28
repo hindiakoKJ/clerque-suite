@@ -132,16 +132,16 @@ export default function DemoPosTerminal() {
   return (
     <div className="flex flex-col lg:flex-row h-[calc(100vh-44px-58px)] min-h-[600px]">
       {/* ── Left: Product grid ────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 bg-stone-50">
-        <div className="p-4 bg-white border-b border-stone-200 space-y-3">
+      <div className="flex-1 flex flex-col min-w-0 bg-stone-50 dark:bg-stone-900/30">
+        <div className="p-4 bg-white dark:bg-stone-900 border-b border-stone-200 dark:border-stone-800 space-y-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400 dark:text-stone-500" />
             <input
               type="text"
               placeholder="Search products by name or barcode..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-10 pr-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full pl-10 pr-3 py-2 border border-stone-300 dark:border-stone-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
           <div className="flex flex-wrap gap-2">
@@ -150,7 +150,7 @@ export default function DemoPosTerminal() {
               className={`px-3 py-1.5 rounded-md text-xs font-semibold ${
                 activeCategory === 'all'
                   ? 'bg-blue-600 text-white'
-                  : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                  : 'bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700'
               }`}
             >
               All
@@ -162,7 +162,7 @@ export default function DemoPosTerminal() {
                 className={`px-3 py-1.5 rounded-md text-xs font-semibold ${
                   activeCategory === c.id
                     ? 'bg-blue-600 text-white'
-                    : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                    : 'bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 dark:bg-stone-700'
                 }`}
               >
                 {c.name}
@@ -173,7 +173,7 @@ export default function DemoPosTerminal() {
 
         <div className="flex-1 overflow-y-auto p-4">
           {visibleProducts.length === 0 ? (
-            <div className="text-center py-12 text-stone-500">No products match.</div>
+            <div className="text-center py-12 text-stone-500 dark:text-stone-500">No products match.</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {visibleProducts.map((p) => (
@@ -181,19 +181,19 @@ export default function DemoPosTerminal() {
                   key={p.id}
                   onClick={() => addToCart(p)}
                   disabled={p.inventoryQty <= 0}
-                  className="bg-white border border-stone-200 rounded-lg p-3 text-left hover:border-blue-400 hover:shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg p-3 text-left hover:border-blue-400 hover:shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <p className="text-xs text-stone-400 uppercase tracking-wide truncate">
+                  <p className="text-xs text-stone-400 dark:text-stone-500 uppercase tracking-wide truncate">
                     {p.categoryName}
                   </p>
-                  <p className="font-semibold text-stone-900 mt-0.5 line-clamp-2 min-h-[40px]">
+                  <p className="font-semibold text-stone-900 dark:text-stone-100 mt-0.5 line-clamp-2 min-h-[40px]">
                     {p.name}
                   </p>
                   <div className="mt-2 flex items-end justify-between gap-1">
-                    <p className="font-bold text-stone-800">{peso(p.price)}</p>
+                    <p className="font-bold text-stone-800 dark:text-stone-200">{peso(p.price)}</p>
                     <p
                       className={`text-[10px] ${
-                        p.inventoryQty <= p.lowStockAlert ? 'text-red-600' : 'text-stone-500'
+                        p.inventoryQty <= p.lowStockAlert ? 'text-red-600' : 'text-stone-500 dark:text-stone-500'
                       }`}
                     >
                       {p.inventoryQty} left
@@ -207,16 +207,16 @@ export default function DemoPosTerminal() {
       </div>
 
       {/* ── Right: Cart panel ─────────────────────────────────────────── */}
-      <div className="w-full lg:w-96 lg:border-l border-stone-200 bg-white flex flex-col">
-        <div className="p-4 border-b border-stone-200 flex items-center justify-between">
+      <div className="w-full lg:w-96 lg:border-l border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 flex flex-col">
+        <div className="p-4 border-b border-stone-200 dark:border-stone-800 flex items-center justify-between">
           <div>
-            <h2 className="font-semibold text-stone-900">Current Order</h2>
-            <p className="text-xs text-stone-500">{totals.itemCount} item(s)</p>
+            <h2 className="font-semibold text-stone-900 dark:text-stone-100">Current Order</h2>
+            <p className="text-xs text-stone-500 dark:text-stone-500">{totals.itemCount} item(s)</p>
           </div>
           {cart.length > 0 && (
             <button
               onClick={clearCart}
-              className="text-stone-400 hover:text-red-600 text-xs"
+              className="text-stone-400 dark:text-stone-500 hover:text-red-600 text-xs"
             >
               Clear all
             </button>
@@ -225,36 +225,36 @@ export default function DemoPosTerminal() {
 
         <div className="flex-1 overflow-y-auto">
           {cart.length === 0 ? (
-            <div className="p-8 text-center text-sm text-stone-500">
+            <div className="p-8 text-center text-sm text-stone-500 dark:text-stone-500">
               Pick products from the left to start an order.
             </div>
           ) : (
-            <ul className="divide-y divide-stone-100">
+            <ul className="divide-y divide-stone-100 dark:divide-stone-800">
               {cart.map((line) => (
                 <li key={line.productId} className="px-4 py-3 flex items-start gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm text-stone-900 truncate">
+                    <p className="font-medium text-sm text-stone-900 dark:text-stone-100 truncate">
                       {line.product.name}
                     </p>
-                    <p className="text-xs text-stone-500">{peso(line.product.price)}</p>
+                    <p className="text-xs text-stone-500 dark:text-stone-500">{peso(line.product.price)}</p>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => changeQty(line.productId, -1)}
-                      className="w-6 h-6 rounded bg-stone-100 hover:bg-stone-200 inline-flex items-center justify-center"
+                      className="w-6 h-6 rounded bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 dark:bg-stone-700 inline-flex items-center justify-center"
                     >
                       <Minus className="w-3 h-3" />
                     </button>
                     <span className="w-6 text-center text-sm font-semibold">{line.quantity}</span>
                     <button
                       onClick={() => changeQty(line.productId, 1)}
-                      className="w-6 h-6 rounded bg-stone-100 hover:bg-stone-200 inline-flex items-center justify-center"
+                      className="w-6 h-6 rounded bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 dark:bg-stone-700 inline-flex items-center justify-center"
                     >
                       <Plus className="w-3 h-3" />
                     </button>
                     <button
                       onClick={() => removeLine(line.productId)}
-                      className="ml-1 text-stone-400 hover:text-red-600"
+                      className="ml-1 text-stone-400 dark:text-stone-500 hover:text-red-600"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -266,16 +266,16 @@ export default function DemoPosTerminal() {
         </div>
 
         {cart.length > 0 && (
-          <div className="border-t border-stone-200 p-4 space-y-2">
+          <div className="border-t border-stone-200 dark:border-stone-800 p-4 space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-stone-600">Subtotal (VAT excl.)</span>
+              <span className="text-stone-600 dark:text-stone-400">Subtotal (VAT excl.)</span>
               <span className="font-medium">{peso(totals.subtotalNet)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-stone-600">VAT (12%)</span>
+              <span className="text-stone-600 dark:text-stone-400">VAT (12%)</span>
               <span className="font-medium">{peso(totals.vat)}</span>
             </div>
-            <div className="flex items-center justify-between text-base font-bold pt-2 border-t border-stone-100">
+            <div className="flex items-center justify-between text-base font-bold pt-2 border-t border-stone-100 dark:border-stone-800">
               <span>Total</span>
               <span>{peso(totals.total)}</span>
             </div>
@@ -326,20 +326,20 @@ function PaymentModal({ total, customers, onClose, onConfirm }: PaymentModalProp
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl">
+      <div className="bg-white dark:bg-stone-900 rounded-xl max-w-md w-full p-6 shadow-2xl">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-lg text-stone-900">Take Payment</h3>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600">
+          <h3 className="font-semibold text-lg text-stone-900 dark:text-stone-100">Take Payment</h3>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:text-stone-400">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="bg-stone-50 rounded-lg p-4 mb-4 text-center">
-          <p className="text-xs text-stone-500 uppercase">Amount Due</p>
-          <p className="text-3xl font-bold text-stone-900">{peso(total)}</p>
+        <div className="bg-stone-50 dark:bg-stone-900/30 rounded-lg p-4 mb-4 text-center">
+          <p className="text-xs text-stone-500 dark:text-stone-500 uppercase">Amount Due</p>
+          <p className="text-3xl font-bold text-stone-900 dark:text-stone-100">{peso(total)}</p>
         </div>
 
-        <p className="text-sm font-semibold text-stone-700 mb-2">Payment method</p>
+        <p className="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Payment method</p>
         <div className="grid grid-cols-2 gap-2 mb-4">
           {(Object.keys(PAYMENT_LABELS) as PaymentMethod[]).map((m) => (
             <button
@@ -348,7 +348,7 @@ function PaymentModal({ total, customers, onClose, onConfirm }: PaymentModalProp
               className={`p-2.5 rounded-lg border text-sm font-medium ${
                 method === m
                   ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-stone-200 text-stone-700 hover:bg-stone-50'
+                  : 'border-stone-200 dark:border-stone-800 text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-800/50 dark:bg-stone-900/30'
               }`}
             >
               {PAYMENT_LABELS[m]}
@@ -358,26 +358,26 @@ function PaymentModal({ total, customers, onClose, onConfirm }: PaymentModalProp
 
         {method === 'CASH' && (
           <div className="mb-4">
-            <p className="text-sm font-semibold text-stone-700 mb-2">Cash tendered</p>
+            <p className="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Cash tendered</p>
             <input
               type="number"
               value={tendered}
               onChange={(e) => setTendered(Number(e.target.value) || 0)}
-              className="w-full px-3 py-2 border border-stone-300 rounded-lg text-lg font-semibold"
+              className="w-full px-3 py-2 border border-stone-300 dark:border-stone-700 rounded-lg text-lg font-semibold"
             />
             <div className="flex flex-wrap gap-1.5 mt-2">
               {[total, 50, 100, 500, 1000].map((v) => (
                 <button
                   key={v}
                   onClick={() => setTendered((prev) => v === total ? total : prev + v)}
-                  className="px-3 py-1 text-xs bg-stone-100 hover:bg-stone-200 rounded"
+                  className="px-3 py-1 text-xs bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 dark:bg-stone-700 rounded"
                 >
                   {v === total ? 'Exact' : `+₱${v}`}
                 </button>
               ))}
             </div>
-            <div className="mt-3 flex items-center justify-between text-sm bg-stone-50 rounded p-2">
-              <span className="text-stone-600">Change</span>
+            <div className="mt-3 flex items-center justify-between text-sm bg-stone-50 dark:bg-stone-900/30 rounded p-2">
+              <span className="text-stone-600 dark:text-stone-400">Change</span>
               <span className="font-bold">
                 {peso(Math.max(0, change))}
               </span>
@@ -387,11 +387,11 @@ function PaymentModal({ total, customers, onClose, onConfirm }: PaymentModalProp
 
         {method === 'CHARGE' && (
           <div className="mb-4">
-            <p className="text-sm font-semibold text-stone-700 mb-2">B2B Customer</p>
+            <p className="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">B2B Customer</p>
             <select
               value={customerId ?? ''}
               onChange={(e) => setCustomerId(e.target.value || null)}
-              className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm"
+              className="w-full px-3 py-2 border border-stone-300 dark:border-stone-700 rounded-lg text-sm"
             >
               <option value="">Select a customer…</option>
               {customers.map((c) => (
@@ -400,14 +400,14 @@ function PaymentModal({ total, customers, onClose, onConfirm }: PaymentModalProp
                 </option>
               ))}
             </select>
-            <p className="text-xs text-stone-500 mt-1">
+            <p className="text-xs text-stone-500 dark:text-stone-500 mt-1">
               CHARGE invoices show as receivables in Ledger AR aging.
             </p>
           </div>
         )}
 
         {(method === 'GCASH_BUSINESS' || method === 'MAYA_BUSINESS' || method === 'QR_PH') && (
-          <p className="text-xs text-stone-500 mb-4 italic">
+          <p className="text-xs text-stone-500 dark:text-stone-500 mb-4 italic">
             Demo: a real digital wallet payment would prompt for a reference number.
           </p>
         )}
@@ -435,15 +435,15 @@ function ReceiptModal({ order, onClose }: ReceiptModalProps) {
   const date = new Date(order.createdAt);
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl max-w-sm w-full p-6 shadow-2xl">
+      <div className="bg-white dark:bg-stone-900 rounded-xl max-w-sm w-full p-6 shadow-2xl">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-lg text-stone-900">Receipt</h3>
-          <button onClick={onClose} className="text-stone-400 hover:text-stone-600">
+          <h3 className="font-semibold text-lg text-stone-900 dark:text-stone-100">Receipt</h3>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 dark:text-stone-400">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="font-mono text-xs space-y-1 bg-stone-50 rounded-lg p-4">
+        <div className="font-mono text-xs space-y-1 bg-stone-50 dark:bg-stone-900/30 rounded-lg p-4">
           <div className="border-2 border-dashed border-red-500 bg-red-50 text-red-700 rounded px-2 py-1.5 mb-3 text-center">
             <p className="font-extrabold tracking-widest text-[11px]">⚠ DEMO RECEIPT ⚠</p>
             <p className="text-[9px]">NOT A VALID OFFICIAL RECEIPT — sample only</p>
@@ -451,26 +451,26 @@ function ReceiptModal({ order, onClose }: ReceiptModalProps) {
 
           <div className="text-center space-y-0.5 mb-3">
             <p className="font-bold">Bambu Coffee</p>
-            <p className="text-stone-500 text-[10px]">123 Demo St., Quezon City</p>
-            <p className="text-stone-500 text-[10px]">TIN: 012-345-678-000</p>
-            <p className="font-semibold text-stone-700 text-[11px] uppercase tracking-wide mt-1">
+            <p className="text-stone-500 dark:text-stone-500 text-[10px]">123 Demo St., Quezon City</p>
+            <p className="text-stone-500 dark:text-stone-500 text-[10px]">TIN: 012-345-678-000</p>
+            <p className="font-semibold text-stone-700 dark:text-stone-300 text-[11px] uppercase tracking-wide mt-1">
               {order.invoiceType === 'CHARGE' ? 'CHARGE INVOICE' : 'VAT OFFICIAL RECEIPT'}
             </p>
-            <p className="text-stone-500">
+            <p className="text-stone-500 dark:text-stone-500">
               {date.toLocaleDateString('en-PH')} {date.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
             </p>
             <p className="font-medium">#{order.orderNumber}</p>
           </div>
 
           {order.invoiceType === 'CHARGE' && order.customerName && (
-            <div className="border border-dashed border-stone-300 rounded p-2 mb-2">
-              <p className="text-stone-400 uppercase text-[9px]">Bill To</p>
+            <div className="border border-dashed border-stone-300 dark:border-stone-700 rounded p-2 mb-2">
+              <p className="text-stone-400 dark:text-stone-500 uppercase text-[9px]">Bill To</p>
               <p className="font-semibold">{order.customerName}</p>
               {order.customerTin && <p className="text-[9px]">TIN: {order.customerTin}</p>}
             </div>
           )}
 
-          <div className="border-t border-b border-dashed border-stone-300 py-2 my-2 space-y-0.5">
+          <div className="border-t border-b border-dashed border-stone-300 dark:border-stone-700 py-2 my-2 space-y-0.5">
             {order.items.map((item) => (
               <div key={item.id} className="flex justify-between gap-2">
                 <span className="flex-1 truncate">
@@ -490,7 +490,7 @@ function ReceiptModal({ order, onClose }: ReceiptModalProps) {
               <span>VAT (12%)</span>
               <span>{peso(order.vatAmount)}</span>
             </div>
-            <div className="flex justify-between font-bold text-sm pt-1 border-t border-dashed border-stone-300 mt-1">
+            <div className="flex justify-between font-bold text-sm pt-1 border-t border-dashed border-stone-300 dark:border-stone-700 mt-1">
               <span>TOTAL</span>
               <span>{peso(order.totalAmount)}</span>
             </div>
@@ -508,14 +508,14 @@ function ReceiptModal({ order, onClose }: ReceiptModalProps) {
             )}
           </div>
 
-          <p className="text-center text-stone-400 text-[9px] mt-3">
+          <p className="text-center text-stone-400 dark:text-stone-500 text-[9px] mt-3">
             Thank you for trying Clerque!
           </p>
         </div>
 
         <button
           onClick={onClose}
-          className="mt-4 w-full py-2.5 bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold rounded-lg"
+          className="mt-4 w-full py-2.5 bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 text-stone-800 dark:text-stone-200 font-semibold rounded-lg"
         >
           Close
         </button>

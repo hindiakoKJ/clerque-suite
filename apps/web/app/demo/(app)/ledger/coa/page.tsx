@@ -62,8 +62,8 @@ export default function DemoCoaPage() {
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-6xl">
       <div>
-        <h1 className="text-xl font-semibold text-stone-900">Chart of Accounts</h1>
-        <p className="text-sm text-stone-500">
+        <h1 className="text-xl font-semibold text-stone-900 dark:text-stone-100">Chart of Accounts</h1>
+        <p className="text-sm text-stone-500 dark:text-stone-500">
           The accounts where every transaction posts.
         </p>
       </div>
@@ -83,19 +83,19 @@ export default function DemoCoaPage() {
 
       <div className="space-y-4">
         {groups.map((group) => (
-          <div key={group.type} className="bg-white border border-stone-200 rounded-lg overflow-hidden">
-            <div className="px-4 py-2.5 bg-stone-50 border-b border-stone-200 flex items-center justify-between">
+          <div key={group.type} className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg overflow-hidden">
+            <div className="px-4 py-2.5 bg-stone-50 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className={`px-2 py-0.5 text-[10px] font-semibold rounded ${TYPE_COLORS[group.type]}`}>
                   {group.type}
                 </span>
-                <span className="text-xs text-stone-500">
+                <span className="text-xs text-stone-500 dark:text-stone-500">
                   {group.accounts.length} account(s)
                 </span>
               </div>
             </div>
             <table className="w-full">
-              <thead className="text-[10px] uppercase text-stone-500">
+              <thead className="text-[10px] uppercase text-stone-500 dark:text-stone-500">
                 <tr>
                   <th className="text-left px-4 py-2 font-semibold w-20">Code</th>
                   <th className="text-left px-4 py-2 font-semibold">Account Name</th>
@@ -103,17 +103,17 @@ export default function DemoCoaPage() {
                   <th className="text-right px-4 py-2 font-semibold">Balance</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-100 text-sm">
+              <tbody className="divide-y divide-stone-100 dark:divide-stone-800 text-sm">
                 {group.accounts.map((a) => {
                   const balance = balances[a.id] ?? 0;
                   return (
-                    <tr key={a.id} className="hover:bg-stone-50">
-                      <td className="px-4 py-2 font-mono text-xs text-stone-600">{a.code}</td>
-                      <td className="px-4 py-2 text-stone-900">{a.name}</td>
-                      <td className="px-4 py-2 text-center hidden sm:table-cell text-xs text-stone-500">
+                    <tr key={a.id} className="hover:bg-stone-50 dark:hover:bg-stone-800/50 dark:bg-stone-900/30">
+                      <td className="px-4 py-2 font-mono text-xs text-stone-600 dark:text-stone-400">{a.code}</td>
+                      <td className="px-4 py-2 text-stone-900 dark:text-stone-100">{a.name}</td>
+                      <td className="px-4 py-2 text-center hidden sm:table-cell text-xs text-stone-500 dark:text-stone-500">
                         {a.normalBalance}
                       </td>
-                      <td className={`px-4 py-2 text-right font-medium ${balance > 0 ? 'text-stone-900' : 'text-stone-400'}`}>
+                      <td className={`px-4 py-2 text-right font-medium ${balance > 0 ? 'text-stone-900 dark:text-stone-100' : 'text-stone-400 dark:text-stone-500'}`}>
                         {peso(balance)}
                       </td>
                     </tr>

@@ -37,24 +37,24 @@ export default function DemoClockPage() {
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-2xl">
       <div>
-        <h1 className="text-xl font-semibold text-stone-900">Time Clock</h1>
-        <p className="text-sm text-stone-500">
+        <h1 className="text-xl font-semibold text-stone-900 dark:text-stone-100">Time Clock</h1>
+        <p className="text-sm text-stone-500 dark:text-stone-500">
           Punch in or out.  The recorded time appears in your timesheet automatically.
         </p>
       </div>
 
-      <div className="bg-white border border-stone-200 rounded-xl p-6 sm:p-8 text-center space-y-6">
+      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl p-6 sm:p-8 text-center space-y-6">
         <div>
-          <p className="text-xs uppercase tracking-wider text-stone-500">Current time</p>
-          <p className="font-mono text-3xl sm:text-4xl font-bold text-stone-900 mt-1">
+          <p className="text-xs uppercase tracking-wider text-stone-500 dark:text-stone-500">Current time</p>
+          <p className="font-mono text-3xl sm:text-4xl font-bold text-stone-900 dark:text-stone-100 mt-1">
             {now ? now.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}
           </p>
-          <p className="text-sm text-stone-500 mt-1">
+          <p className="text-sm text-stone-500 dark:text-stone-500 mt-1">
             {now ? now.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : ''}
           </p>
         </div>
 
-        <div className="border-t border-stone-200 pt-6 space-y-3">
+        <div className="border-t border-stone-200 dark:border-stone-800 pt-6 space-y-3">
           {isClockedIn && ownerOpen && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-900">
               <p className="font-semibold">Clocked in since</p>
@@ -82,25 +82,25 @@ export default function DemoClockPage() {
       </div>
 
       {ownerHistory.length > 0 && (
-        <div className="bg-white border border-stone-200 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-stone-200 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-stone-500" />
-            <h2 className="font-semibold text-stone-900 text-sm">Recent punches</h2>
+        <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-stone-200 dark:border-stone-800 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-stone-500 dark:text-stone-500" />
+            <h2 className="font-semibold text-stone-900 dark:text-stone-100 text-sm">Recent punches</h2>
           </div>
-          <ul className="divide-y divide-stone-100 text-sm">
+          <ul className="divide-y divide-stone-100 dark:divide-stone-800 text-sm">
             {ownerHistory.map((t) => (
               <li key={t.id} className="px-4 py-2.5 flex items-center justify-between">
                 <div>
-                  <p className="text-stone-900">
+                  <p className="text-stone-900 dark:text-stone-100">
                     {new Date(t.clockIn).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })}
                   </p>
-                  <p className="text-xs text-stone-500">
+                  <p className="text-xs text-stone-500 dark:text-stone-500">
                     {new Date(t.clockIn).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
                     {' → '}
                     {t.clockOut ? new Date(t.clockOut).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }) : '—'}
                   </p>
                 </div>
-                <p className="text-sm font-semibold text-stone-700">{t.hoursWorked.toFixed(1)} hrs</p>
+                <p className="text-sm font-semibold text-stone-700 dark:text-stone-300">{t.hoursWorked.toFixed(1)} hrs</p>
               </li>
             ))}
           </ul>

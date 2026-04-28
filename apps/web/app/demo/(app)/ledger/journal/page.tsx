@@ -99,8 +99,8 @@ export default function DemoJournalPage() {
     <div className="p-4 sm:p-6 space-y-6 max-w-6xl">
       <div className="flex items-end justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold text-stone-900">Journal Entries</h1>
-          <p className="text-sm text-stone-500">
+          <h1 className="text-xl font-semibold text-stone-900 dark:text-stone-100">Journal Entries</h1>
+          <p className="text-sm text-stone-500 dark:text-stone-500">
             All postings — auto-generated from POS sales, plus your manual entries.
           </p>
         </div>
@@ -114,36 +114,36 @@ export default function DemoJournalPage() {
       </div>
 
       {showForm && (
-        <div className="bg-white border-2 border-emerald-200 rounded-lg p-4 space-y-4">
+        <div className="bg-white dark:bg-stone-900 border-2 border-emerald-200 rounded-lg p-4 space-y-4">
           <div>
-            <h2 className="font-semibold text-stone-900">New Journal Entry</h2>
-            <p className="text-xs text-stone-500">Manual entries balance debit and credit.</p>
+            <h2 className="font-semibold text-stone-900 dark:text-stone-100">New Journal Entry</h2>
+            <p className="text-xs text-stone-500 dark:text-stone-500">Manual entries balance debit and credit.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="md:col-span-2 block">
-              <span className="text-xs font-semibold text-stone-700">Description *</span>
+              <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">Description *</span>
               <input
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="e.g. Owner cash injection"
-                className="mt-1 w-full px-3 py-2 border border-stone-300 rounded-lg text-sm"
+                className="mt-1 w-full px-3 py-2 border border-stone-300 dark:border-stone-700 rounded-lg text-sm"
               />
             </label>
             <label className="block">
-              <span className="text-xs font-semibold text-stone-700">Reference</span>
+              <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">Reference</span>
               <input
                 value={reference}
                 onChange={(e) => setReference(e.target.value)}
                 placeholder="optional"
-                className="mt-1 w-full px-3 py-2 border border-stone-300 rounded-lg text-sm"
+                className="mt-1 w-full px-3 py-2 border border-stone-300 dark:border-stone-700 rounded-lg text-sm"
               />
             </label>
           </div>
 
-          <div className="border border-stone-200 rounded-lg overflow-hidden">
+          <div className="border border-stone-200 dark:border-stone-800 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-stone-50 text-[10px] uppercase tracking-wide text-stone-500">
+              <thead className="bg-stone-50 dark:bg-stone-900/30 text-[10px] uppercase tracking-wide text-stone-500 dark:text-stone-500">
                 <tr>
                   <th className="text-left px-3 py-2 font-semibold">Account</th>
                   <th className="text-left px-3 py-2 font-semibold hidden lg:table-cell">Note</th>
@@ -152,14 +152,14 @@ export default function DemoJournalPage() {
                   <th className="px-3 py-2 w-8"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-100">
+              <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
                 {draftLines.map((line, idx) => (
                   <tr key={idx}>
                     <td className="px-3 py-2">
                       <select
                         value={line.accountId}
                         onChange={(e) => updateLine(idx, 'accountId', e.target.value)}
-                        className="w-full px-2 py-1.5 border border-stone-300 rounded text-sm"
+                        className="w-full px-2 py-1.5 border border-stone-300 dark:border-stone-700 rounded text-sm"
                       >
                         <option value="">Select account…</option>
                         {accounts.map((a) => (
@@ -174,7 +174,7 @@ export default function DemoJournalPage() {
                         value={line.description}
                         onChange={(e) => updateLine(idx, 'description', e.target.value)}
                         placeholder="optional"
-                        className="w-full px-2 py-1.5 border border-stone-200 rounded text-xs"
+                        className="w-full px-2 py-1.5 border border-stone-200 dark:border-stone-800 rounded text-xs"
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -186,7 +186,7 @@ export default function DemoJournalPage() {
                           updateLine(idx, 'debit', e.target.value);
                           if (e.target.value) updateLine(idx, 'credit', '');
                         }}
-                        className="w-full px-2 py-1.5 border border-stone-300 rounded text-sm text-right"
+                        className="w-full px-2 py-1.5 border border-stone-300 dark:border-stone-700 rounded text-sm text-right"
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -198,14 +198,14 @@ export default function DemoJournalPage() {
                           updateLine(idx, 'credit', e.target.value);
                           if (e.target.value) updateLine(idx, 'debit', '');
                         }}
-                        className="w-full px-2 py-1.5 border border-stone-300 rounded text-sm text-right"
+                        className="w-full px-2 py-1.5 border border-stone-300 dark:border-stone-700 rounded text-sm text-right"
                       />
                     </td>
                     <td className="px-3 py-2 text-center">
                       <button
                         onClick={() => removeLine(idx)}
                         disabled={draftLines.length <= 2}
-                        className="text-stone-400 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                        className="text-stone-400 dark:text-stone-500 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -213,7 +213,7 @@ export default function DemoJournalPage() {
                   </tr>
                 ))}
               </tbody>
-              <tfoot className="bg-stone-50 border-t border-stone-200 text-sm font-bold">
+              <tfoot className="bg-stone-50 dark:bg-stone-900/30 border-t border-stone-200 dark:border-stone-800 text-sm font-bold">
                 <tr>
                   <td colSpan={2} className="px-3 py-2 text-right hidden lg:table-cell">Total</td>
                   <td colSpan={1} className="px-3 py-2 text-right lg:hidden">Total</td>
@@ -245,13 +245,13 @@ export default function DemoJournalPage() {
             <div className="bg-red-50 text-red-700 text-sm rounded p-3">{submitError}</div>
           )}
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200">
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200 dark:border-stone-800">
             <button
               onClick={() => {
                 resetForm();
                 setShowForm(false);
               }}
-              className="px-4 py-2 text-sm font-medium text-stone-600 hover:bg-stone-100 rounded-lg"
+              className="px-4 py-2 text-sm font-medium text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 dark:bg-stone-800 rounded-lg"
             >
               Cancel
             </button>
@@ -267,13 +267,13 @@ export default function DemoJournalPage() {
       )}
 
       {/* Entries list */}
-      <div className="bg-white border border-stone-200 rounded-lg overflow-hidden">
+      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg overflow-hidden">
         {journalEntries.length === 0 ? (
-          <div className="p-8 text-center text-stone-500">
+          <div className="p-8 text-center text-stone-500 dark:text-stone-500">
             No entries yet. Make a sale or post a manual entry above.
           </div>
         ) : (
-          <ul className="divide-y divide-stone-100">
+          <ul className="divide-y divide-stone-100 dark:divide-stone-800">
             {journalEntries.slice(0, 50).map((je) => (
               <JournalEntryRow
                 key={je.id}
@@ -306,17 +306,17 @@ function JournalEntryRow({
     <li>
       <button
         onClick={onToggle}
-        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-stone-50 text-left"
+        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-stone-50 dark:hover:bg-stone-800/50 dark:bg-stone-900/30 text-left"
       >
         {isExpanded ? (
-          <ChevronDown className="w-4 h-4 text-stone-400 flex-shrink-0" />
+          <ChevronDown className="w-4 h-4 text-stone-400 dark:text-stone-500 flex-shrink-0" />
         ) : (
-          <ChevronRight className="w-4 h-4 text-stone-400 flex-shrink-0" />
+          <ChevronRight className="w-4 h-4 text-stone-400 dark:text-stone-500 flex-shrink-0" />
         )}
         <Icon className={`w-4 h-4 flex-shrink-0 ${sourceColor}`} />
         <div className="flex-1 min-w-0">
-          <p className="font-medium text-sm text-stone-900 truncate">{entry.description}</p>
-          <p className="text-xs text-stone-500">
+          <p className="font-medium text-sm text-stone-900 dark:text-stone-100 truncate">{entry.description}</p>
+          <p className="text-xs text-stone-500 dark:text-stone-500">
             {entry.entryNumber} · {date.toLocaleDateString('en-PH')}
             {' · '}
             {entry.source === 'SYSTEM' ? 'Auto-posted' : 'Manual'}
@@ -324,28 +324,28 @@ function JournalEntryRow({
           </p>
         </div>
         <div className="text-right">
-          <p className="text-sm font-semibold text-stone-900">{peso(entry.totalDebit)}</p>
-          <p className="text-[10px] text-stone-500 uppercase">{entry.lines.length} lines</p>
+          <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">{peso(entry.totalDebit)}</p>
+          <p className="text-[10px] text-stone-500 dark:text-stone-500 uppercase">{entry.lines.length} lines</p>
         </div>
       </button>
       {isExpanded && (
-        <div className="px-4 pb-4 ml-7 mr-4 mb-2 bg-stone-50 rounded-lg overflow-hidden border border-stone-200">
+        <div className="px-4 pb-4 ml-7 mr-4 mb-2 bg-stone-50 dark:bg-stone-900/30 rounded-lg overflow-hidden border border-stone-200 dark:border-stone-800">
           <table className="w-full text-sm">
-            <thead className="text-[10px] uppercase tracking-wide text-stone-500">
+            <thead className="text-[10px] uppercase tracking-wide text-stone-500 dark:text-stone-500">
               <tr>
                 <th className="text-left px-3 py-2 font-semibold">Account</th>
                 <th className="text-right px-3 py-2 font-semibold w-28">Debit</th>
                 <th className="text-right px-3 py-2 font-semibold w-28">Credit</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-stone-200">
+            <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
               {entry.lines.map((line, idx) => (
                 <tr key={idx}>
                   <td className="px-3 py-2">
-                    <p className="font-mono text-xs text-stone-500">{line.accountCode}</p>
-                    <p className="text-stone-900">{line.accountName}</p>
+                    <p className="font-mono text-xs text-stone-500 dark:text-stone-500">{line.accountCode}</p>
+                    <p className="text-stone-900 dark:text-stone-100">{line.accountName}</p>
                     {line.description && (
-                      <p className="text-xs text-stone-500 italic">{line.description}</p>
+                      <p className="text-xs text-stone-500 dark:text-stone-500 italic">{line.description}</p>
                     )}
                   </td>
                   <td className="px-3 py-2 text-right">

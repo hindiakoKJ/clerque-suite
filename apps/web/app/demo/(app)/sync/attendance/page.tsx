@@ -21,8 +21,8 @@ export default function DemoMyAttendancePage() {
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-xl font-semibold text-stone-900">My Attendance</h1>
-        <p className="text-sm text-stone-500">
+        <h1 className="text-xl font-semibold text-stone-900 dark:text-stone-100">My Attendance</h1>
+        <p className="text-sm text-stone-500 dark:text-stone-500">
           Your personal clock-in / clock-out history.
         </p>
       </div>
@@ -33,9 +33,9 @@ export default function DemoMyAttendancePage() {
         <SummaryCard label="Open" value={String(openCount)} highlight={openCount > 0} />
       </div>
 
-      <div className="bg-white border border-stone-200 rounded-lg overflow-hidden">
+      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg overflow-hidden">
         <table className="w-full">
-          <thead className="bg-stone-50 border-b border-stone-200 text-[10px] uppercase tracking-wide text-stone-600">
+          <thead className="bg-stone-50 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800 text-[10px] uppercase tracking-wide text-stone-600 dark:text-stone-400">
             <tr>
               <th className="text-left px-4 py-2.5 font-semibold">Date</th>
               <th className="text-left px-4 py-2.5 font-semibold">Clock In</th>
@@ -44,10 +44,10 @@ export default function DemoMyAttendancePage() {
               <th className="text-center px-4 py-2.5 font-semibold">Status</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-stone-100 text-sm">
+          <tbody className="divide-y divide-stone-100 dark:divide-stone-800 text-sm">
             {myEntries.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center py-8 text-stone-500">
+                <td colSpan={5} className="text-center py-8 text-stone-500 dark:text-stone-500">
                   No attendance yet. Visit Time Clock and punch in.
                 </td>
               </tr>
@@ -56,8 +56,8 @@ export default function DemoMyAttendancePage() {
                 const inDate = new Date(t.clockIn);
                 const outDate = t.clockOut ? new Date(t.clockOut) : null;
                 return (
-                  <tr key={t.id} className="hover:bg-stone-50">
-                    <td className="px-4 py-2.5 text-stone-900">
+                  <tr key={t.id} className="hover:bg-stone-50 dark:hover:bg-stone-800/50 dark:bg-stone-900/30">
+                    <td className="px-4 py-2.5 text-stone-900 dark:text-stone-100">
                       {inDate.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })}
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs">
@@ -66,12 +66,12 @@ export default function DemoMyAttendancePage() {
                     <td className="px-4 py-2.5 font-mono text-xs">
                       {outDate ? outDate.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }) : '—'}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-stone-700">
+                    <td className="px-4 py-2.5 text-right font-semibold text-stone-700 dark:text-stone-300">
                       {t.hoursWorked.toFixed(2)}
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       {outDate ? (
-                        <span className="inline-flex px-2 py-0.5 text-[10px] font-semibold rounded bg-stone-100 text-stone-700">
+                        <span className="inline-flex px-2 py-0.5 text-[10px] font-semibold rounded bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300">
                           Closed
                         </span>
                       ) : (
@@ -93,9 +93,9 @@ export default function DemoMyAttendancePage() {
 
 function SummaryCard({ label, value, highlight = false }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div className={`bg-white border rounded-lg p-4 ${highlight ? 'border-emerald-300 bg-emerald-50' : 'border-stone-200'}`}>
-      <p className="text-[10px] uppercase tracking-wider text-stone-500">{label}</p>
-      <p className="text-2xl font-bold text-stone-900 mt-1">{value}</p>
+    <div className={`bg-white dark:bg-stone-900 border rounded-lg p-4 ${highlight ? 'border-emerald-300 bg-emerald-50' : 'border-stone-200 dark:border-stone-800'}`}>
+      <p className="text-[10px] uppercase tracking-wider text-stone-500 dark:text-stone-500">{label}</p>
+      <p className="text-2xl font-bold text-stone-900 dark:text-stone-100 mt-1">{value}</p>
     </div>
   );
 }

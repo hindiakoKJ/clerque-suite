@@ -57,21 +57,21 @@ export default function DemoTrialBalancePage() {
     <div className="p-4 sm:p-6 space-y-6 max-w-5xl">
       <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-stone-900">Trial Balance</h1>
-          <p className="text-sm text-stone-500">
+          <h1 className="text-xl font-semibold text-stone-900 dark:text-stone-100">Trial Balance</h1>
+          <p className="text-sm text-stone-500 dark:text-stone-500">
             As of {new Date().toLocaleDateString('en-PH', { dateStyle: 'long' })}
           </p>
         </div>
         <div className="text-right">
-          <p className="text-xs text-stone-500">Bambu Coffee · TIN 012-345-678-000</p>
-          <p className="text-xs text-stone-500">Demo data — VAT Registered</p>
+          <p className="text-xs text-stone-500 dark:text-stone-500">Bambu Coffee · TIN 012-345-678-000</p>
+          <p className="text-xs text-stone-500 dark:text-stone-500">Demo data — VAT Registered</p>
         </div>
       </div>
 
-      <div className="bg-white border border-stone-200 rounded-lg overflow-hidden">
+      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg overflow-hidden">
         <table className="w-full">
-          <thead className="bg-stone-50 border-b border-stone-200">
-            <tr className="text-[10px] uppercase tracking-wide text-stone-600">
+          <thead className="bg-stone-50 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800">
+            <tr className="text-[10px] uppercase tracking-wide text-stone-600 dark:text-stone-400">
               <th className="text-left px-4 py-2.5 font-semibold w-20">Code</th>
               <th className="text-left px-4 py-2.5 font-semibold">Account</th>
               <th className="text-left px-4 py-2.5 font-semibold hidden sm:table-cell">Type</th>
@@ -79,20 +79,20 @@ export default function DemoTrialBalancePage() {
               <th className="text-right px-4 py-2.5 font-semibold">Credit</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-stone-100 text-sm">
+          <tbody className="divide-y divide-stone-100 dark:divide-stone-800 text-sm">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center py-8 text-stone-500">
+                <td colSpan={5} className="text-center py-8 text-stone-500 dark:text-stone-500">
                   No transactions posted yet. Make a sale on the POS terminal to see the
                   trial balance update.
                 </td>
               </tr>
             ) : (
               rows.map((r) => (
-                <tr key={r.accountId} className="hover:bg-stone-50">
-                  <td className="px-4 py-2 font-mono text-xs text-stone-600">{r.code}</td>
-                  <td className="px-4 py-2 text-stone-900">{r.name}</td>
-                  <td className="px-4 py-2 hidden sm:table-cell text-xs text-stone-500">
+                <tr key={r.accountId} className="hover:bg-stone-50 dark:hover:bg-stone-800/50 dark:bg-stone-900/30">
+                  <td className="px-4 py-2 font-mono text-xs text-stone-600 dark:text-stone-400">{r.code}</td>
+                  <td className="px-4 py-2 text-stone-900 dark:text-stone-100">{r.name}</td>
+                  <td className="px-4 py-2 hidden sm:table-cell text-xs text-stone-500 dark:text-stone-500">
                     {TYPE_LABELS[r.type] ?? r.type}
                   </td>
                   <td className="px-4 py-2 text-right font-medium">
@@ -106,7 +106,7 @@ export default function DemoTrialBalancePage() {
             )}
           </tbody>
           {rows.length > 0 && (
-            <tfoot className="bg-stone-50 border-t-2 border-stone-300 font-bold">
+            <tfoot className="bg-stone-50 dark:bg-stone-900/30 border-t-2 border-stone-300 dark:border-stone-700 font-bold">
               <tr>
                 <td colSpan={3} className="px-4 py-3 text-right text-sm">TOTAL</td>
                 <td className="px-4 py-3 text-right">{peso(totalDebit)}</td>

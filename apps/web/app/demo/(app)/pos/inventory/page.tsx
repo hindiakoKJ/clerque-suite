@@ -19,8 +19,8 @@ export default function DemoInventoryPage() {
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-6xl">
       <div>
-        <h1 className="text-xl font-semibold text-stone-900">Inventory</h1>
-        <p className="text-sm text-stone-500">
+        <h1 className="text-xl font-semibold text-stone-900 dark:text-stone-100">Inventory</h1>
+        <p className="text-sm text-stone-500 dark:text-stone-500">
           Current stock levels for all active products at Bambu Main Branch.
         </p>
       </div>
@@ -40,47 +40,47 @@ export default function DemoInventoryPage() {
         </div>
       )}
 
-      <div className="bg-white border border-stone-200 rounded-lg overflow-hidden">
+      <div className="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-lg overflow-hidden">
         <table className="w-full">
-          <thead className="bg-stone-50 border-b border-stone-200">
+          <thead className="bg-stone-50 dark:bg-stone-900/30 border-b border-stone-200 dark:border-stone-800">
             <tr>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wide">
+              <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 dark:text-stone-400 uppercase tracking-wide">
                 Product
               </th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wide">
+              <th className="text-left px-4 py-3 text-xs font-semibold text-stone-600 dark:text-stone-400 uppercase tracking-wide">
                 Category
               </th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wide">
+              <th className="text-right px-4 py-3 text-xs font-semibold text-stone-600 dark:text-stone-400 uppercase tracking-wide">
                 Price
               </th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wide">
+              <th className="text-right px-4 py-3 text-xs font-semibold text-stone-600 dark:text-stone-400 uppercase tracking-wide">
                 Stock
               </th>
-              <th className="text-right px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wide hidden sm:table-cell">
+              <th className="text-right px-4 py-3 text-xs font-semibold text-stone-600 dark:text-stone-400 uppercase tracking-wide hidden sm:table-cell">
                 Low-stock alert
               </th>
-              <th className="text-center px-4 py-3 text-xs font-semibold text-stone-600 uppercase tracking-wide">
+              <th className="text-center px-4 py-3 text-xs font-semibold text-stone-600 dark:text-stone-400 uppercase tracking-wide">
                 Status
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-stone-100">
+          <tbody className="divide-y divide-stone-100 dark:divide-stone-800">
             {products.map((p) => {
               const isLow = p.inventoryQty <= p.lowStockAlert;
               return (
-                <tr key={p.id} className="hover:bg-stone-50">
+                <tr key={p.id} className="hover:bg-stone-50 dark:hover:bg-stone-800/50 dark:bg-stone-900/30">
                   <td className="px-4 py-3">
-                    <p className="font-medium text-stone-900">{p.name}</p>
-                    <p className="text-xs text-stone-500 font-mono">{p.sku}</p>
+                    <p className="font-medium text-stone-900 dark:text-stone-100">{p.name}</p>
+                    <p className="text-xs text-stone-500 dark:text-stone-500 font-mono">{p.sku}</p>
                   </td>
-                  <td className="px-4 py-3 text-sm text-stone-600">{p.categoryName}</td>
-                  <td className="px-4 py-3 text-right text-sm font-medium text-stone-900">
+                  <td className="px-4 py-3 text-sm text-stone-600 dark:text-stone-400">{p.categoryName}</td>
+                  <td className="px-4 py-3 text-right text-sm font-medium text-stone-900 dark:text-stone-100">
                     {peso(p.price)}
                   </td>
-                  <td className={`px-4 py-3 text-right font-bold ${isLow ? 'text-red-600' : 'text-stone-900'}`}>
+                  <td className={`px-4 py-3 text-right font-bold ${isLow ? 'text-red-600' : 'text-stone-900 dark:text-stone-100'}`}>
                     {p.inventoryQty}
                   </td>
-                  <td className="px-4 py-3 text-right text-sm text-stone-500 hidden sm:table-cell">
+                  <td className="px-4 py-3 text-right text-sm text-stone-500 dark:text-stone-500 hidden sm:table-cell">
                     {p.lowStockAlert}
                   </td>
                   <td className="px-4 py-3 text-center">

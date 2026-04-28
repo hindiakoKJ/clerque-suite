@@ -136,7 +136,8 @@ const SEED_CUSTOMERS: DemoCustomer[] = [
 /* ─── Employees (3 demo staff) ─────────────────────────────────────────────── */
 
 const SEED_EMPLOYEES: DemoEmployee[] = [
-  { id: DEMO_OWNER_ID,   name: 'You (Demo Owner)', role: 'BUSINESS_OWNER', personaKey: 'OWNER_OPERATOR',          email: 'owner@demo.bambu',      branchId: DEMO_BRANCH_ID, isActive: true, monthlySalary: 0 },
+  // Owner has a salary so they can have their own payslip in Personnel View
+  { id: DEMO_OWNER_ID,   name: 'You (Demo Owner)', role: 'BUSINESS_OWNER', personaKey: 'OWNER_OPERATOR',          email: 'owner@demo.bambu',      branchId: DEMO_BRANCH_ID, isActive: true, monthlySalary: 35000 },
   { id: DEMO_CASHIER_ID, name: 'Anna Reyes',       role: 'CASHIER',        personaKey: 'CASHIER_BASIC',           email: 'anna@demo.bambu',       branchId: DEMO_BRANCH_ID, isActive: true, monthlySalary: 18000 },
   { id: 'demo-employee-john',     name: 'John Cruz',  role: 'GENERAL_EMPLOYEE', personaKey: 'GENERAL_EMPLOYEE_DEFAULT', email: 'john@demo.bambu',  branchId: DEMO_BRANCH_ID, isActive: true, monthlySalary: 16000 },
   { id: 'demo-employee-sandra',   name: 'Sandra Lim', role: 'BOOKKEEPER',       personaKey: 'BOOKKEEPER_DEFAULT',       email: 'sandra@demo.bambu', branchId: DEMO_BRANCH_ID, isActive: true, monthlySalary: 22000 },

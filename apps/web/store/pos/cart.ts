@@ -140,22 +140,40 @@ export const useCartStore = create<CartState>()((set, get) => ({
   },
 
   applyPromoDiscounts: (promotions) => {
-    set((state) => ({
-      lines: state.lines.map((line) => {
+    set((state) => {
+      // Empty cart: nothing to discount.  Returning {} from set() means
+      // "no state change" — Zustand will skip the re-render.  Critical
+      // because this method is called from a useEffect whose dep array
+      // includes `promotions`; if we always returned a new lines array
+      // (even an empty one), it would trigger an infinite render loop.
+      if (state.lines.length === 0) return {};
+
+      let changed = false;
+      const newLines = state.lines.map((line) => {
         const result = getLinePromoDiscount(line, promotions);
-        if (!result) {
-          // Clear any previously applied promo discount
-          return { ...line, itemDiscount: 0, promotionApplied: undefined };
+        const newDiscount = result ? round2(result.discountAmount / line.quantity) : 0;
+        const newPromo = result
+          ? { promoId: result.promoId, promoName: result.promoName }
+          : undefined;
+
+        // Compare against the line's current state — if nothing actually
+        // differs, return the same line reference to skip re-render
+        const currentPromoId = line.promotionApplied?.promoId;
+        const newPromoId = newPromo?.promoId;
+        if (line.itemDiscount === newDiscount && currentPromoId === newPromoId) {
+          return line; // unchanged — same reference
         }
-        // Convert total discount to per-unit so quantity changes auto-adjust
-        const discountPerUnit = round2(result.discountAmount / line.quantity);
+        changed = true;
         return {
           ...line,
-          itemDiscount: discountPerUnit,
-          promotionApplied: { promoId: result.promoId, promoName: result.promoName },
+          itemDiscount: newDiscount,
+          promotionApplied: newPromo,
         };
-      }),
-    }));
+      });
+
+      // No line actually changed → return {} to skip the re-render entirely
+      return changed ? { lines: newLines } : {};
+    });
   },
 
   applyPwdSc: (type, idRef, idOwnerName, selectedSubtotal) => {

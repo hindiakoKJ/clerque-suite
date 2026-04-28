@@ -9,6 +9,21 @@ interface UseActivePromotionsResult {
 }
 
 /**
+ * Stable empty-array reference.
+ *
+ * Returned when no promotions data is available (query disabled or
+ * still loading), so consumers using `promotions` in useEffect
+ * dep-arrays don't re-run their effect on every render due to a fresh
+ * `[]` literal.
+ *
+ * Bug history: previous `data ?? []` created a new array on every
+ * render → useEffect re-fired → applyPromoDiscounts() called →
+ * cart-store set() → re-render → infinite loop (React #185 "Maximum
+ * update depth exceeded") which crashed the POS terminal.
+ */
+const EMPTY_PROMOTIONS: ActivePromotion[] = [];
+
+/**
  * Fetch promotions that are active RIGHT NOW for the given product IDs.
  * Designed for POS checkout — re-validates every 60 seconds so time-gated
  * promotions (e.g. happy hour) automatically kick in / expire.
@@ -33,7 +48,7 @@ export function useActivePromotions(productIds: string[]): UseActivePromotionsRe
   });
 
   return {
-    promotions: data ?? [],
+    promotions: data ?? EMPTY_PROMOTIONS,
     isLoading,
   };
 }

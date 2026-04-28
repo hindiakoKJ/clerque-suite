@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
-  Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Receipt,
+  Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag,
 } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
@@ -46,12 +46,9 @@ const UOM_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
 const PROMOTIONS_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM', 'BRANCH_MANAGER'] as const;
 // Pending Sync is operational — only relevant to roles that create offline orders
 const PENDING_SYNC_ROLES = ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER'] as const;
-// All authenticated POS users can submit expense claims
-const MY_EXPENSES_ROLES = [
-  'CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN',
-  'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
-  'PAYROLL_MASTER', 'GENERAL_EMPLOYEE', 'EXTERNAL_AUDITOR', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
-] as const;
+// My Expenses moved to /payroll/my-expenses — it's a personal-reimbursement
+// concept (HR territory), not a POS sale-floor concept. POS will instead get
+// a dedicated Cash Paid-Out / Cash Drop feature for till petty-cash.
 
 function inRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));
@@ -144,7 +141,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
     makeNavItem('/pos/promotions',   'Promotions',  Tag,             PROMOTIONS_ROLES,    role),
     makeNavItem('/pos/pending',      'Pending Sync',Clock,           PENDING_SYNC_ROLES,  role, pendingCount || undefined),
-    makeNavItem('/pos/my-expenses',  'My Expenses', Receipt,         MY_EXPENSES_ROLES,   role),
   ].filter((item) => !item.disabled);
 
   async function doLogout() {

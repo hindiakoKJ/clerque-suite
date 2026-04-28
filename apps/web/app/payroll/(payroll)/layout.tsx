@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake } from 'lucide-react';
+import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
@@ -25,6 +25,8 @@ const PAY_RUNS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER'] 
 const PAYSLIPS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER',
                               'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
                               'PAYROLL_MASTER', 'GENERAL_EMPLOYEE', 'EXTERNAL_AUDITOR'] as const;
+// My Expenses — personal-reimbursement claims; every authenticated employee can submit.
+const MY_EXPENSES_ROLES   = PAYSLIPS_ROLES;
 
 function inPayrollRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));
@@ -78,6 +80,7 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
     makePayNavItem('/payroll/staff',       'Staff',          UserCheck,       PAY_STAFF_ROLES,     role),
     makePayNavItem('/payroll/runs',        'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
     makePayNavItem('/payroll/payslips',    'Payslips',       FileText,        PAYSLIPS_ROLES,      role),
+    makePayNavItem('/payroll/my-expenses', 'My Expenses',    Receipt,         MY_EXPENSES_ROLES,   role),
     makePayNavItem('/payroll/contributions','Contributions', HeartHandshake,  PAY_RUNS_ROLES,      role),
     makePayNavItem('/payroll/reports',     'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
   ].filter((item) => !item.disabled);

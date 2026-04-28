@@ -23,6 +23,8 @@ import { activateDemo } from '@/lib/demo/config';
 import { useDemoStore } from '@/lib/demo/store';
 import { DEMO_USER_INFO } from '@/lib/demo/seed';
 import { useAuthStore } from '@/store/auth';
+import { useCartStore } from '@/store/pos/cart';
+import { useShiftStore } from '@/store/pos/shift';
 import { ShoppingCart, BookOpen, Users, ArrowRight, Sparkles } from 'lucide-react';
 
 const DEMO_AUTH_FLAG_KEY = 'clerque-demo-auth';
@@ -66,10 +68,35 @@ export default function DemoEntryPage() {
       exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
     };
 
-    useAuthStore.setState({
-      accessToken: 'demo-access-token',
-      refreshToken: 'demo-refresh-token',
-      user: demoUser,
+    // Use the proper setters — setTokens then setUser.  setUser internally
+    // pushes taxStatus into the cart store via setTenantFlags(), which is
+    // critical: without it, the cart store's taxStatus stays 'UNREGISTERED'
+    // (the default) while user.taxStatus is 'VAT', causing VAT-calc effects
+    // to thrash and trigger a "Maximum update depth" infinite-render loop.
+    useAuthStore.getState().setTokens('demo-access-token', 'demo-refresh-token');
+    useAuthStore.getState().setUser(demoUser);
+
+    // Initialise the cart store's branch context so the terminal page's
+    // activeBranchId resolves immediately (otherwise it's empty string and
+    // the products query is `enabled: false`).
+    useCartStore.getState().setBranch(DEMO_USER_INFO.branchId);
+
+    // Seed an active shift in the shift store so the POS terminal doesn't
+    // open the OpenShiftModal blocking gate.  Numbers come from the demo
+    // store's active shift seed.
+    useShiftStore.getState().setActiveShift({
+      id: 'demo-shift-active',
+      branchId: DEMO_USER_INFO.branchId,
+      cashierId: DEMO_USER_INFO.id,
+      openingCash: 2000,
+      openedAt: new Date().toISOString(),
+      cashSales: 0,
+      nonCashSales: 0,
+      totalSales: 0,
+      orderCount: 0,
+      voidCount: 0,
+      expectedCash: 2000,
+      digitalBreakdown: {},
     });
 
     // Marker so the auth store knows it's a demo session (prevents

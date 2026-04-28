@@ -1,6 +1,6 @@
 'use client';
-import { useRef } from 'react';
-import { Printer, WifiOff, Zap } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Printer, WifiOff, Zap, Ban } from 'lucide-react';
 import { printer, type PrintReceiptData } from '@/lib/pos/printer';
 import { usePrinterStore } from '@/store/pos/printer';
 import { useAuthStore } from '@/store/auth';
@@ -9,9 +9,23 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { formatPeso } from '@/lib/utils';
 import { computeVat, round2 } from '@/lib/pos/utils';
+import { api } from '@/lib/api';
 import type { PaymentMethod, TaxStatus } from '@repo/shared-types';
 import { getProviderPhase } from '@repo/shared-types';
 import { isDemoMode } from '@/lib/demo/config';
+import { useSound } from '@/hooks/pos/useSound';
+
+/**
+ * Roles allowed to void directly from the terminal (no supervisor co-auth).
+ * Mirrors VOID_DIRECT_ROLES in apps/api/src/orders/orders.service.ts so the UI
+ * shows the button to the right people. Backend re-validates regardless.
+ */
+const VOID_DIRECT_ROLES = new Set([
+  'BUSINESS_OWNER',
+  'BRANCH_MANAGER',
+  'SALES_LEAD',
+  'SUPER_ADMIN',
+]);
 
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   CASH:           'Cash',
@@ -43,6 +57,8 @@ export interface PaymentEntry {
 }
 
 export interface ReceiptData {
+  /** Server order id — present when the order has been posted (not offline). Used for in-receipt void. */
+  orderId?:         string;
   orderNumber:      string;
   lines:            ReceiptLine[];
   subtotal:         number;
@@ -215,6 +231,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const printRef      = useRef<HTMLDivElement>(null);
   const printerConnected = usePrinterStore((s) => s.connected);
   const user          = useAuthStore((s) => s.user);
+  const playSound     = useSound();
   const taxStatus: TaxStatus = user?.taxStatus ?? 'UNREGISTERED';
   const tinNumber             = user?.tinNumber;
   const businessName          = user?.businessName;
@@ -222,6 +239,42 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const isPtuHolder           = user?.isPtuHolder ?? false;
   const ptuNumber             = user?.ptuNumber;
   const minNumber             = user?.minNumber;
+
+  // ── In-receipt void (role-gated) ───────────────────────────────────────────
+  // Visible only when:
+  //   - the order has a real server id (not offline / not LOCAL-)
+  //   - the current user's role is allowed to void without supervisor co-auth
+  // CASHIER and lower must use the Orders page where supervisor co-auth is collected.
+  const canVoid = !!data?.orderId && !data?.isOffline &&
+    !!user?.role && VOID_DIRECT_ROLES.has(user.role);
+  const [voidOpen, setVoidOpen]       = useState(false);
+  const [voidReason, setVoidReason]   = useState('');
+  const [voidPending, setVoidPending] = useState(false);
+  const [isVoided, setIsVoided]       = useState(false);
+
+  async function handleVoid() {
+    if (!data?.orderId) return;
+    const reason = voidReason.trim();
+    if (reason.length < 5) {
+      toast.error('Please give a reason (at least 5 characters).');
+      return;
+    }
+    setVoidPending(true);
+    try {
+      await api.post(`/orders/${data.orderId}/void`, { reason });
+      setIsVoided(true);
+      setVoidOpen(false);
+      setVoidReason('');
+      playSound('error');
+      toast.success(`Order ${data.orderNumber} voided.`);
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'Void failed. Try again or use the Orders page.';
+      toast.error(msg);
+    } finally {
+      setVoidPending(false);
+    }
+  }
 
   async function handleThermalPrint() {
     if (!data) return;
@@ -295,6 +348,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const docTitle      = receiptTitle(taxStatus);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
@@ -486,6 +540,12 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             </p>
           </div>
 
+          {isVoided && (
+            <div className="mt-4 px-3 py-2 rounded-lg bg-red-100 border border-red-200 text-red-700 text-center text-sm font-semibold">
+              VOIDED — keep this receipt for the audit trail.
+            </div>
+          )}
+
           <div className="flex gap-2 mt-4">
             {printerConnected ? (
               <Button onClick={handleThermalPrint} variant="outline" className="flex-1 gap-2">
@@ -498,8 +558,51 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             )}
             <Button onClick={onClose} className="flex-1">New Order</Button>
           </div>
+
+          {canVoid && !isVoided && (
+            <button
+              onClick={() => setVoidOpen(true)}
+              className="mt-2 w-full text-center text-xs text-muted-foreground hover:text-red-600 transition-colors py-2 inline-flex items-center justify-center gap-1.5"
+            >
+              <Ban className="h-3.5 w-3.5" />
+              Void this order
+            </button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
+
+    {/* Void confirmation modal — separate Dialog tree so it's not nested */}
+    <Dialog open={voidOpen} onOpenChange={(v) => { if (!v && !voidPending) { setVoidOpen(false); setVoidReason(''); } }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-red-600">
+            <Ban className="h-5 w-5" />
+              Void order {data.orderNumber}?
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Voiding reverses the sale, restocks inventory, and is logged to the audit trail with your name and the reason below. This cannot be undone.
+          </p>
+          <textarea
+            value={voidReason}
+            onChange={(e) => setVoidReason(e.target.value)}
+            placeholder="Reason for void (e.g. wrong item, customer cancelled)"
+            rows={3}
+            maxLength={200}
+            disabled={voidPending}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-red-500 disabled:opacity-50"
+          />
+          <div className="flex gap-2 justify-end mt-2">
+            <Button variant="outline" onClick={() => { setVoidOpen(false); setVoidReason(''); }} disabled={voidPending}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleVoid} disabled={voidPending || voidReason.trim().length < 5}>
+              {voidPending ? 'Voiding…' : 'Confirm void'}
+            </Button>
+          </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

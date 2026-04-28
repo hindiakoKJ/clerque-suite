@@ -9,21 +9,24 @@ import { CartPanel } from '@/components/pos/CartPanel';
 import { PaymentModal, type PaymentEntry, type B2bOrderInfo } from '@/components/pos/PaymentModal';
 import { PwdScModal } from '@/components/pos/PwdScModal';
 import { ReceiptModal, type ReceiptData } from '@/components/pos/ReceiptModal';
+import { ParkedSalesModal } from '@/components/pos/ParkedSalesModal';
 import { useCartStore } from '@/store/pos/cart';
 import { useAuthStore } from '@/store/auth';
 import { useOnlineStatus } from '@/hooks/pos/useOnlineStatus';
 import { useShiftStore } from '@/store/pos/shift';
 import { useActivePromotions } from '@/hooks/pos/useActivePromotions';
 import { useSound } from '@/hooks/pos/useSound';
+import { useBarcodeScanner } from '@/hooks/pos/useBarcodeScanner';
 import { api } from '@/lib/api';
 import { db } from '@/lib/pos/db';
 import { computeVat } from '@/lib/pos/utils';
 import type { CachedProduct, CachedCategory } from '@/lib/pos/db';
 
 export default function PosTerminal() {
-  const [showPayment, setShowPayment] = useState(false);
-  const [showPwdSc,   setShowPwdSc]   = useState(false);
-  const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
+  const [showPayment, setShowPayment]   = useState(false);
+  const [showPwdSc,   setShowPwdSc]     = useState(false);
+  const [showParked,  setShowParked]    = useState(false);
+  const [receiptData, setReceiptData]   = useState<ReceiptData | null>(null);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
 
   const isOnline    = useOnlineStatus();
@@ -34,7 +37,7 @@ export default function PosTerminal() {
   const user      = useAuthStore((s) => s.user);
   const branchId  = useCartStore((s) => s.branchId);
   const taxStatus = useCartStore((s) => s.taxStatus);
-  const { lines, orderDiscount, grandTotal, vatAmount, subtotal, totalDiscount, clearCart, applyPromoDiscounts } = useCartStore();
+  const { lines, orderDiscount, grandTotal, vatAmount, subtotal, totalDiscount, clearCart, applyPromoDiscounts, addItem } = useCartStore();
 
   const activeBranchId = branchId ?? user?.branchId ?? '';
   const tenantId       = user?.tenantId ?? '';
@@ -106,6 +109,27 @@ export default function PosTerminal() {
     enabled: !!activeBranchId,
     staleTime: 60_000,
     retry: isOnline ? 3 : false,
+  });
+
+  // ── Barcode scanner (HID/Bluetooth keyboard-emulating) ─────────────────
+  // On scan, look up the product by barcode and add it to the cart.
+  // Skipped automatically when an input/textarea is focused so the search
+  // box still works for keyboard typing.
+  useBarcodeScanner({
+    enabled: !showPayment && !showPwdSc && !showParked && !receiptData,
+    onScan: (code) => {
+      const match = (products as CachedProduct[]).find((p) => p.barcode === code);
+      if (!match) {
+        playSound('error');
+        toast.error(`No product matches barcode ${code}`);
+        return;
+      }
+      addItem(
+        { id: match.id, name: match.name, price: match.price, costPrice: match.costPrice, isVatable: match.isVatable, categoryId: match.categoryId },
+      );
+      playSound('click');
+      toast.success(`Added: ${match.name}`);
+    },
   });
 
   // ── Categories (write-through) ──────────────────────────────────────────
@@ -254,10 +278,15 @@ export default function PosTerminal() {
     }
 
     try {
-      const { data: order } = await api.post('/orders', { order: orderPayload });
+      // Tight 3s timeout for the optimistic path: a fast network completes
+      // well under this; a stuck request falls through to the offline-save
+      // catch below, which queues the order locally and surfaces a "saved
+      // offline" receipt with a LOCAL- number. The cashier never stares at
+      // a frozen "Processing…" screen for more than a few seconds.
+      const { data: order } = await api.post('/orders', { order: orderPayload }, { timeout: 3000 });
       setShowPayment(false);
       setMobileCartOpen(false);
-      setReceiptData({ ...receiptBase, orderNumber: order.orderNumber, isOffline: false });
+      setReceiptData({ ...receiptBase, orderId: order.id, orderNumber: order.orderNumber, isOffline: false });
       clearCart();
       playSound('success');
       toast.success(`Order #${order.orderNumber} completed`);
@@ -290,6 +319,7 @@ export default function PosTerminal() {
         <CartPanel
           onCheckout={() => setShowPayment(true)}
           onApplyPwdSc={() => setShowPwdSc(true)}
+          onOpenParkedSales={() => setShowParked(true)}
         />
       </div>
 
@@ -309,6 +339,7 @@ export default function PosTerminal() {
             <CartPanel
               onCheckout={() => setShowPayment(true)}
               onApplyPwdSc={() => setShowPwdSc(true)}
+              onOpenParkedSales={() => setShowParked(true)}
             />
           </div>
         </div>
@@ -338,6 +369,8 @@ export default function PosTerminal() {
       />
 
       <PwdScModal open={showPwdSc} onClose={() => setShowPwdSc(false)} />
+
+      <ParkedSalesModal open={showParked} onClose={() => setShowParked(false)} />
 
       <ReceiptModal
         open={!!receiptData}

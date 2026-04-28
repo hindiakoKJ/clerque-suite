@@ -1,17 +1,28 @@
 'use client';
-import { Minus, Plus, Trash2, Tag, ShieldOff, Sparkles } from 'lucide-react';
+import { useState } from 'react';
+import { Minus, Plus, Trash2, Tag, ShieldOff, Sparkles, Pause, FolderOpen } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useCartStore } from '@/store/pos/cart';
+import { useParkedSalesStore } from '@/store/pos/parkedSales';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { toast } from 'sonner';
 
 interface CartPanelProps {
   onCheckout: () => void;
   onApplyPwdSc: () => void;
+  onOpenParkedSales: () => void;
 }
 
-export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
-  const { lines, orderDiscount, taxStatus, isVatRegistered, removeItem, updateQty, removeOrderDiscount, subtotal, totalDiscount, vatAmount, grandTotal } =
+export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartPanelProps) {
+  const { lines, orderDiscount, taxStatus, isVatRegistered, branchId, shiftId, removeItem, updateQty, removeOrderDiscount, clearCart, subtotal, totalDiscount, vatAmount, grandTotal } =
     useCartStore();
+  const parkSale       = useParkedSalesStore((s) => s.add);
+  const parkedCount    = useParkedSalesStore((s) => s.sales.length);
+
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [parkOpen, setParkOpen]         = useState(false);
+  const [parkName, setParkName]         = useState('');
 
   const sub = subtotal();
   const disc = totalDiscount();
@@ -19,12 +30,40 @@ export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
   const total = grandTotal();
   const isEmpty = lines.length === 0;
 
+  function handlePark() {
+    const name = parkName.trim() || `Park #${parkedCount + 1}`;
+    const itemCount = lines.reduce((s, l) => s + l.quantity, 0);
+    parkSale({
+      name,
+      branchId,
+      shiftId,
+      lines,
+      orderDiscount,
+      totalAmount: total,
+      itemCount,
+    });
+    clearCart();
+    setParkOpen(false);
+    setParkName('');
+    toast.success(`Parked as "${name}"`);
+  }
+
   return (
     <div className="flex flex-col h-full bg-card border-l border-border">
       {/* Header */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
         <h2 className="font-semibold text-foreground">Order</h2>
         <div className="flex items-center gap-1.5">
+          {parkedCount > 0 && (
+            <button
+              onClick={onOpenParkedSales}
+              className="flex items-center gap-1 text-[10px] font-semibold text-purple-600 dark:text-purple-400 bg-purple-500/10 hover:bg-purple-500/20 px-2 py-1 rounded-full transition-colors"
+              aria-label={`Open ${parkedCount} parked sale${parkedCount !== 1 ? 's' : ''}`}
+            >
+              <FolderOpen className="h-3 w-3" />
+              {parkedCount} parked
+            </button>
+          )}
           {taxStatus === 'NON_VAT' && (
             <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
               <ShieldOff className="h-3 w-3" />
@@ -198,10 +237,35 @@ export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
             </div>
           </div>
 
+          <div className="flex gap-2 mt-1">
+            <Button
+              onClick={() => setParkOpen(true)}
+              variant="outline"
+              size="lg"
+              className="flex-1 gap-2"
+              disabled={isEmpty}
+              aria-label="Park current sale to recall later"
+            >
+              <Pause className="h-4 w-4" />
+              Park
+            </Button>
+            <Button
+              onClick={() => setConfirmClear(true)}
+              variant="outline"
+              size="lg"
+              className="flex-1 gap-2 hover:bg-red-500/10 hover:text-red-600 hover:border-red-500/30"
+              disabled={isEmpty}
+              aria-label="Clear all items from cart"
+            >
+              <Trash2 className="h-4 w-4" />
+              Clear
+            </Button>
+          </div>
+
           <Button
             onClick={onCheckout}
             size="lg"
-            className="w-full mt-1"
+            className="w-full"
             style={{ background: 'var(--accent)' }}
             disabled={isEmpty}
           >
@@ -209,6 +273,49 @@ export function CartPanel({ onCheckout, onApplyPwdSc }: CartPanelProps) {
           </Button>
         </div>
       )}
+
+      {/* Park-sale name dialog */}
+      <Dialog open={parkOpen} onOpenChange={(v) => { if (!v) { setParkOpen(false); setParkName(''); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Park this sale</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Save the cart for later — recall it from the same terminal within 24 hours.
+          </p>
+          <input
+            value={parkName}
+            onChange={(e) => setParkName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handlePark(); }}
+            placeholder={`Park #${parkedCount + 1}`}
+            autoFocus
+            maxLength={40}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          />
+          <div className="flex gap-2 justify-end mt-2">
+            <Button variant="outline" onClick={() => { setParkOpen(false); setParkName(''); }}>Cancel</Button>
+            <Button onClick={handlePark}>Park sale</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clear confirm */}
+      <Dialog open={confirmClear} onOpenChange={(v) => !v && setConfirmClear(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Clear cart?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This removes all {lines.reduce((s, l) => s + l.quantity, 0)} item{lines.reduce((s, l) => s + l.quantity, 0) !== 1 ? 's' : ''} from the cart. This cannot be undone — consider <span className="font-semibold text-foreground">Park</span> instead if you want to come back to it.
+          </p>
+          <div className="flex gap-2 justify-end mt-2">
+            <Button variant="outline" onClick={() => setConfirmClear(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => { clearCart(); setConfirmClear(false); toast.success('Cart cleared'); }}>
+              Clear cart
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -26,7 +26,22 @@ export function DemoBanner() {
 
   // Detect demo mode on client mount (cookie/sessionStorage are client-only)
   useEffect(() => {
-    setActive(isDemoMode());
+    const isDemo = isDemoMode();
+    setActive(isDemo);
+
+    // Inject robots:noindex meta whenever we're in demo mode, on ANY page,
+    // so that POS / Ledger / Payroll routes the demo redirects into are
+    // never indexed.  Removed if demo deactivates.
+    if (isDemo) {
+      let meta = document.querySelector('meta[name="robots"][data-demo="1"]');
+      if (!meta) {
+        meta = document.createElement('meta');
+        meta.setAttribute('name', 'robots');
+        meta.setAttribute('content', 'noindex, nofollow, nosnippet, noarchive');
+        meta.setAttribute('data-demo', '1');
+        document.head.appendChild(meta);
+      }
+    }
   }, []);
 
   if (!active) return null;
@@ -53,8 +68,9 @@ export function DemoBanner() {
           <Sparkles className="w-4 h-4 flex-shrink-0" />
           <p className="text-xs sm:text-sm font-medium truncate">
             <span className="hidden sm:inline">🎬 </span>
-            <strong>Demo Mode</strong>
-            <span className="hidden md:inline"> — your changes save in this browser tab only</span>
+            <strong>DEMO MODE</strong>
+            <span className="hidden sm:inline"> — sample data, NOT a real account</span>
+            <span className="hidden md:inline"> · receipts say "DEMO" · nothing is saved to a server</span>
           </p>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">

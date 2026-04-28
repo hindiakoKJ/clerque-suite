@@ -72,6 +72,14 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Soft cap on the number of orders a demo visitor can accumulate.
+ * Above this cap, recordOrder() refuses with a friendly error so the
+ * sessionStorage budget (typically 5MB) doesn't fill up and start
+ * silently failing writes.
+ */
+const DEMO_MAX_ORDERS = 500;
+
 export const useDemoStore = create<Store>()(
   persist(
     (set, get) => ({
@@ -81,6 +89,11 @@ export const useDemoStore = create<Store>()(
 
       recordOrder: (input) => {
         const state = get();
+        if (state.orders.length >= DEMO_MAX_ORDERS) {
+          throw new Error(
+            `Demo limit reached (${DEMO_MAX_ORDERS} orders). Click "Reset Demo" in the top banner to clear the demo and start fresh.`,
+          );
+        }
         const seq = state.nextOrderSeq;
         const orderNumber = `OR-2026-${String(seq).padStart(5, '0')}`;
         const orderId = `demo-order-live-${seq}`;

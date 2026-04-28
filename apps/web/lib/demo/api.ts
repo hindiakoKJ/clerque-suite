@@ -86,7 +86,9 @@ const routes: RouteEntry[] = [
   // ── Products ────────────────────────────────────────────────────────────────
   { method: 'GET', pattern: /^\/?products$/, handler: () => ok(useDemoStore.getState().products) },
   { method: 'GET', pattern: /^\/?products\/pos$/, handler: () => {
-      // POS-optimized format: include category info, inventory at branch
+      // POS-optimized format: matches the real Prisma response shape from
+      // products.service.ts findForPos().  inventory is an ARRAY (Prisma
+      // returns array because it's a one-to-many filtered by branch).
       return ok(
         useDemoStore.getState().products.map((p) => ({
           id: p.id,
@@ -97,11 +99,20 @@ const routes: RouteEntry[] = [
           costPrice: p.costPrice,
           isVatable: p.isVatable,
           isActive: p.isActive,
-          category: { id: p.categoryId, name: p.categoryName },
-          unitOfMeasure: { id: p.unitOfMeasure, abbreviation: p.unitOfMeasure },
-          inventory: { quantity: p.inventoryQty, lowStockAlert: p.lowStockAlert },
-          modifiers: [],
+          // Flat fields for CachedProduct compatibility (Dexie writes)
+          categoryId: p.categoryId,
+          // Nested for components that use the Prisma-shaped response
+          category: { id: p.categoryId, name: p.categoryName, sortOrder: 1 },
+          unitOfMeasure: { id: p.unitOfMeasure, name: p.unitOfMeasure, abbreviation: p.unitOfMeasure },
+          unitOfMeasureId: p.unitOfMeasure,
+          inventory: [{ quantity: p.inventoryQty, lowStockAlert: p.lowStockAlert }],
+          modifierGroups: [],
           variants: [],
+          tenantId: 'demo-tenant',
+          // Soft-delete + timestamp fields some components expect
+          deletedAt: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         })),
       );
     },
@@ -587,6 +598,50 @@ const routes: RouteEntry[] = [
 
   // ── Audit ───────────────────────────────────────────────────────────────────
   { method: 'GET', pattern: /^\/?audit$/, handler: () => ok({ data: [], total: 0 }) },
+
+  // ── Promotions ──────────────────────────────────────────────────────────────
+  // Safe empty array — demo doesn't simulate promotions but pages must not crash
+  { method: 'GET', pattern: /^\/?promotions$/, handler: () => ok({ data: [], total: 0 }) },
+  { method: 'GET', pattern: /^\/?promotions\/active$/, handler: () => ok([]) },
+
+  // ── Modifiers ───────────────────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?modifiers\/groups$/, handler: () => ok([]) },
+  { method: 'GET', pattern: /^\/?modifiers\/products\/[^/]+\/groups$/, handler: () => ok([]) },
+
+  // ── UOM ─────────────────────────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?uom$/, handler: () => ok([
+      { id: 'CUP', name: 'Cup', abbreviation: 'CUP', isActive: true },
+      { id: 'PCS', name: 'Pieces', abbreviation: 'PCS', isActive: true },
+    ]),
+  },
+
+  // ── Settlement ──────────────────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?settlement\/pending-summary$/, handler: () => ok({
+      pendingTotal: 0,
+      byMethod: [],
+    }),
+  },
+  { method: 'GET', pattern: /^\/?settlement\/batches$/, handler: () => ok({ data: [], total: 0 }) },
+  { method: 'GET', pattern: /^\/?settlement\/unmatched$/, handler: () => ok([]) },
+
+  // ── Accounting periods ──────────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?accounting-periods$/, handler: () => ok([]) },
+
+  // ── BIR ─────────────────────────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?bir\/2550q$/, handler: () => ok({ outputVat: 0, inputVat: 0, netPayable: 0 }) },
+  { method: 'GET', pattern: /^\/?bir\/1701q$/, handler: () => ok({ revenue: 0, expense: 0, taxableIncome: 0 }) },
+  { method: 'GET', pattern: /^\/?bir\/or-sequence$/, handler: () => ok({ prefix: 'OR', lastNumber: 1010, padLength: 5 }) },
+
+  // ── Expense Claims ──────────────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?expense-claims$/, handler: () => ok({ data: [], total: 0 }) },
+
+  // ── AP (Accounts Payable) ───────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?ap\/expenses$/, handler: () => ok({ data: [], total: 0 }) },
+  { method: 'GET', pattern: /^\/?ap\/vendors$/, handler: () => ok({ data: [], total: 0 }) },
+  { method: 'GET', pattern: /^\/?ap\/vendors\/aging$/, handler: () => ok({ buckets: { current: 0, b30: 0, b60: 0, b90: 0, b90plus: 0 }, total: 0 }) },
+
+  // ── Documents ──────────────────────────────────────────────────────────────
+  { method: 'GET', pattern: /^\/?documents$/, handler: () => ok([]) },
 ];
 
 /* ─── Public API: drop-in axios replacement ────────────────────────────────── */

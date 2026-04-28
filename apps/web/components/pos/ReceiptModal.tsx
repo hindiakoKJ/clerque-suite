@@ -11,6 +11,7 @@ import { formatPeso } from '@/lib/utils';
 import { computeVat, round2 } from '@/lib/pos/utils';
 import type { PaymentMethod, TaxStatus } from '@repo/shared-types';
 import { getProviderPhase } from '@repo/shared-types';
+import { isDemoMode } from '@/lib/demo/config';
 
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   CASH:           'Cash',
@@ -314,6 +315,14 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
 
         <div className="px-6 pb-6">
           <div ref={printRef} className="font-mono text-xs space-y-1">
+
+            {/* Demo watermark — printed AND on-screen, can't be removed */}
+            {isDemoMode() && (
+              <div className="demo-watermark border-2 border-dashed border-red-500 bg-red-50 text-red-700 rounded px-2 py-1.5 mb-3 text-center">
+                <p className="font-extrabold tracking-widest text-[11px]">⚠ DEMO RECEIPT ⚠</p>
+                <p className="text-[9px]">NOT A VALID OFFICIAL RECEIPT — sample only</p>
+              </div>
+            )}
 
             {/* Offline badge */}
             {data.isOffline && (

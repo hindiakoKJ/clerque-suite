@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { DemoBanner } from '@/components/demo/DemoBanner';
+import { DemoErrorBoundary } from '@/components/demo/DemoErrorBoundary';
 
 const geistSans = Geist({ subsets: ['latin'], variable: '--font-geist-sans' });
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono' });
@@ -30,7 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans bg-background text-foreground`}>
         <Providers>
           <DemoBanner />
-          {children}
+          <DemoErrorBoundary>{children}</DemoErrorBoundary>
         </Providers>
       </body>
     </html>

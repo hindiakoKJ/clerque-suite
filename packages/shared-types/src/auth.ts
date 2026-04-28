@@ -103,6 +103,18 @@ export interface JwtPayload {
   ptuNumber?:         string | null;
   /** Machine Identification Number (MIN) assigned by BIR during CAS accreditation. */
   minNumber?:         string | null;
+  /**
+   * RBAC: persona template the user was created from. Reference into
+   * packages/shared-types/src/personas.ts. Frontend uses this to render the
+   * persona badge + "reset to persona default" affordance on the staff editor.
+   */
+  personaKey?:        string | null;
+  /**
+   * RBAC: extra permission grants beyond the role + persona defaults.
+   * Backend `assertPermission()` consults this set in addition to the role's
+   * default matrix. Empty for users created before the RBAC framework.
+   */
+  customPermissions?: string[];
   iat?: number;
   exp?: number;
 }

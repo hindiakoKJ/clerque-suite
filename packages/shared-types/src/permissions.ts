@@ -135,9 +135,16 @@ export const PERMISSION_MATRIX: Record<PermissionKey, UserRole[]> = {
 export function hasPermission(
   role: string | null | undefined,
   action: PermissionKey,
+  /**
+   * Optional extra grants from User.customPermissions (RBAC Phase 3).
+   * If the action is in this list the user passes regardless of role default.
+   * Pre-RBAC callers (no third arg) get the original behaviour.
+   */
+  customPermissions?: readonly string[] | null,
 ): boolean {
   if (!role) return false;
   if (role === 'SUPER_ADMIN') return true;
+  if (customPermissions && customPermissions.includes(action)) return true;
   return (PERMISSION_MATRIX[action] as string[]).includes(role);
 }
 
@@ -151,8 +158,9 @@ export function hasPermission(
 export function assertPermission(
   role: string | null | undefined,
   action: PermissionKey,
+  customPermissions?: readonly string[] | null,
 ): void {
-  if (!hasPermission(role, action)) {
+  if (!hasPermission(role, action, customPermissions)) {
     throw new Error(
       `Role '${role ?? 'unknown'}' is not authorized to perform '${action}'. ` +
       `Contact your Business Owner if you believe this is incorrect.`,

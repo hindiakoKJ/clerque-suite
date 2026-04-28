@@ -191,6 +191,14 @@ export class AuthService {
     const taxStatus = (tenant?.taxStatus ?? 'UNREGISTERED') as TaxStatus;
     const flags     = taxStatusFlags(taxStatus);
 
+    // Fetch RBAC fields (persona + customPermissions). Pre-RBAC users have
+    // these as null/empty and the rest of the auth chain treats them as
+    // no-ops, so behaviour is unchanged for legacy accounts.
+    const userRbac = await this.prisma.user.findUnique({
+      where:  { id: userId },
+      select: { personaKey: true, customPermissions: true },
+    });
+
     const payload: JwtPayload = {
       sub:             userId,
       name,
@@ -208,6 +216,8 @@ export class AuthService {
       isPtuHolder:       tenant?.isPtuHolder ?? false,
       ptuNumber:         tenant?.ptuNumber ?? null,
       minNumber:         tenant?.minNumber ?? null,
+      personaKey:        userRbac?.personaKey ?? null,
+      customPermissions: userRbac?.customPermissions ?? [],
     };
 
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_EXPIRY });

@@ -14,6 +14,7 @@ import {
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { TierQuotaGuard } from '../auth/guards/tier-quota.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -54,8 +55,10 @@ export class UsersController {
     return this.usersService.findOne(user.tenantId!, id, user.role);
   }
 
-  // Create staff — BUSINESS_OWNER and MDM can add employees
+  // Create staff — BUSINESS_OWNER and MDM can add employees.
+  // TierQuotaGuard rejects with TIER_QUOTA_EXCEEDED if tier.maxStaff reached.
   @Roles('BUSINESS_OWNER', 'MDM')
+  @UseGuards(TierQuotaGuard)
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {

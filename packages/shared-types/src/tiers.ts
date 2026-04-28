@@ -25,26 +25,42 @@
 
 import type { AppCode } from './auth';
 
-export type TierId = 'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5';
+export type TierId = 'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5' | 'TIER_6';
 
 /**
  * Tier feature flag keys.  Each flag corresponds to a feature gate that can
  * be checked across the codebase.  These are coarse-grained on purpose —
  * fine-grained per-action gating belongs in `permissions.ts`.
  *
- * Reserved for future use; specific feature mapping is deferred per the plan.
+ * Final mapping below (locked 2026-04-28):
+ *
+ *   T1 Solo:  pos:basic, pos:offline_sync
+ *   T2 Duo:   + ar:pos_collections
+ *   T3 Trio:  + ledger:read, time_monitoring
+ *   T4 Squad: + ledger:full, multi_branch, ar:full, ap:full
+ *   T5 Team:  + payroll:full
+ *   T6 Multi: + bir:forms, audit:log  (the full compliance package)
+ *
+ * The `ar:pos_collections` flag enables a new "Outstanding Sales" page
+ * inside the POS app — a lite AR view that lists CHARGE-invoice POS orders
+ * with an unpaid balance and lets the owner record collections.  This is
+ * NOT the same as `ar:full` (which is the full Ledger AR sub-module with
+ * customer master, aging buckets, statements).  POS-collections is the
+ * Tier 2 entry point for B2B billing; the full module unlocks at Tier 4.
  */
 export type TierFeatureFlag =
   | 'pos:basic'             // Sell / shift / receipt — every tier has this
   | 'pos:offline_sync'      // Dexie + bulk sync endpoint
-  | 'ledger:read'           // Trial balance, P&L, journal viewing
-  | 'ledger:full'           // Manual journal entries, period close, export
-  | 'payroll:full'          // Payroll runs, payslips, attendance management
-  | 'ar:full'               // Accounts Receivable: customers, invoices, aging
-  | 'ap:full'               // Accounts Payable: vendors, bills, payments
+  | 'ar:pos_collections'    // POS-only "Outstanding Sales" page for collecting CHARGE invoices
+  | 'ledger:read'           // Dashboard, COA view, Trial Balance (read-only)
+  | 'time_monitoring'       // Clock in/out, own attendance, own timesheets
+  | 'ledger:full'           // Manual journal entries, period close, settlement, expense approvals
   | 'multi_branch'          // Branch quota > 1
-  | 'bir:forms'             // 2550Q, 1701Q, 2307, EIS export
-  | 'time_monitoring'       // Clock in/out, timesheets
+  | 'ar:full'               // Full Ledger AR sub-module: customers, invoices, aging, statements
+  | 'ap:full'               // Full Ledger AP sub-module: vendors, bills, WHT 2307, AP aging
+  | 'payroll:full'          // Payroll runs, payslips, salary edits, govt contributions
+  | 'bir:forms'             // 2550Q, 1701Q, 2551Q, EWT, SAWT, EIS — formal BIR tax filings
+  | 'audit:log'             // Centralized audit-log viewer for compliance review
   | 'custom_personas';      // Owner can create custom persona templates (future)
 
 /**
@@ -99,6 +115,9 @@ export interface TierConfig {
 }
 
 export const TIERS: Record<TierId, TierConfig> = {
+  // ── T1 Solo ────────────────────────────────────────────────────────────────
+  // Single-person operation.  Pure POS — sell, take payment, view dashboard.
+  // No B2B billing.  Cash-only retail/service.
   TIER_1: {
     id: 'TIER_1',
     displayName: 'Solo',
@@ -110,42 +129,62 @@ export const TIERS: Record<TierId, TierConfig> = {
     enabledFeatures: ['pos:basic', 'pos:offline_sync'],
     staffBucket: { min: 0, max: 0 },
   },
+
+  // ── T2 Duo ─────────────────────────────────────────────────────────────────
+  // Owner + one helper.  POS + a new "Outstanding Sales" page that lets the
+  // owner track and collect on CHARGE (B2B) invoices created at the till.
+  // Still no Ledger app — back-office work happens inside POS.
   TIER_2: {
     id: 'TIER_2',
     displayName: 'Duo',
-    tagline: 'You plus a helping hand.',
+    tagline: 'You plus a helping hand. Bill B2B and collect later.',
     maxStaff: 1,
     maxBranches: 1,
     maxCashierSeats: 2,
-    includedApps: ['POS', 'LEDGER'],
+    includedApps: ['POS'],
     enabledFeatures: [
       'pos:basic',
       'pos:offline_sync',
-      'ledger:read',
+      'ar:pos_collections',
     ],
     staffBucket: { min: 1, max: 1 },
   },
+
+  // ── T3 Trio ────────────────────────────────────────────────────────────────
+  // Small team starting to need basic books.  Ledger app appears in
+  // read-only mode (Dashboard, COA view, Trial Balance).  Payroll app
+  // appears at clock-only level (employees clock in/out and view their
+  // own attendance/timesheets).  No manual journal entries yet — auto-
+  // posting via the event queue handles bookkeeping silently.
   TIER_3: {
     id: 'TIER_3',
     displayName: 'Trio',
-    tagline: 'A small team, full ledger.',
+    tagline: 'A small team that needs eyes on the books and clocked-in hours.',
     maxStaff: 3,
     maxBranches: 1,
     maxCashierSeats: 3,
-    includedApps: ['POS', 'LEDGER'],
+    includedApps: ['POS', 'LEDGER', 'PAYROLL'],
     enabledFeatures: [
       'pos:basic',
       'pos:offline_sync',
+      'ar:pos_collections',
       'ledger:read',
-      'ledger:full',
-      'bir:forms',
+      'time_monitoring',
     ],
     staffBucket: { min: 2, max: 3 },
   },
+
+  // ── T4 Squad ───────────────────────────────────────────────────────────────
+  // Mid-size with full back-office.  Manual journal entries, period
+  // close/reopen, settlement reconciliation, employee expense approvals.
+  // AR (customer master, aging, statements) and AP (vendor bills, WHT
+  // 2307 capture, AP aging) sub-modules unlock.  Multi-branch enabled.
+  // STILL NO payroll runs, BIR forms, audit log — the business outsources
+  // payroll and BIR filings to a CPA at this stage.
   TIER_4: {
     id: 'TIER_4',
     displayName: 'Squad',
-    tagline: 'Multi-station with payroll.',
+    tagline: 'Mid-size back-office with AR, AP, and multi-branch.',
     maxStaff: 5,
     maxBranches: 2,
     maxCashierSeats: 5,
@@ -153,19 +192,54 @@ export const TIERS: Record<TierId, TierConfig> = {
     enabledFeatures: [
       'pos:basic',
       'pos:offline_sync',
+      'ar:pos_collections',
       'ledger:read',
-      'ledger:full',
-      'payroll:full',
       'time_monitoring',
-      'bir:forms',
+      'ledger:full',
       'multi_branch',
+      'ar:full',
+      'ap:full',
     ],
-    staffBucket: { min: 4, max: 10 },
+    staffBucket: { min: 4, max: 5 },
   },
+
+  // ── T5 Team ────────────────────────────────────────────────────────────────
+  // Same back-office as T4 but brings payroll in-house.  Payroll runs,
+  // payslips, salary edits, govt contributions (SSS, PhilHealth, Pag-IBIG).
+  // Still no formal BIR form generation or centralized audit log — those
+  // unlock at T6 when the business needs full compliance posture.
   TIER_5: {
     id: 'TIER_5',
+    displayName: 'Team',
+    tagline: 'Back-office plus payroll and govt contributions in-house.',
+    maxStaff: 10,
+    maxBranches: 5,
+    maxCashierSeats: 10,
+    includedApps: ['POS', 'LEDGER', 'PAYROLL'],
+    enabledFeatures: [
+      'pos:basic',
+      'pos:offline_sync',
+      'ar:pos_collections',
+      'ledger:read',
+      'time_monitoring',
+      'ledger:full',
+      'multi_branch',
+      'ar:full',
+      'ap:full',
+      'payroll:full',
+    ],
+    staffBucket: { min: 6, max: 10 },
+  },
+
+  // ── T6 Multi ───────────────────────────────────────────────────────────────
+  // Compliance-grade enterprise.  Full BIR form generation (2550Q, 1701Q,
+  // 2551Q, EIS).  Centralized audit log for external auditors and CPA
+  // review.  Unlimited staff, branches, cashier seats.  Custom personas
+  // available for fine-tuned RBAC.
+  TIER_6: {
+    id: 'TIER_6',
     displayName: 'Multi',
-    tagline: 'Multi-branch, full back-office.',
+    tagline: 'Full compliance package — BIR forms, audit log, unlimited scale.',
     maxStaff: -1, // unlimited
     maxBranches: -1, // unlimited
     maxCashierSeats: -1, // unlimited
@@ -173,14 +247,17 @@ export const TIERS: Record<TierId, TierConfig> = {
     enabledFeatures: [
       'pos:basic',
       'pos:offline_sync',
+      'ar:pos_collections',
       'ledger:read',
-      'ledger:full',
-      'payroll:full',
       'time_monitoring',
+      'ledger:full',
+      'multi_branch',
       'ar:full',
       'ap:full',
+      'payroll:full',
       'bir:forms',
-      'multi_branch',
+      'audit:log',
+      'custom_personas',
     ],
     staffBucket: { min: 11, max: -1 },
   },
@@ -191,7 +268,7 @@ export const TIERS: Record<TierId, TierConfig> = {
  * onboarding wizard step "How many staff do you have?".
  *
  * Returns the SMALLEST tier whose staffBucket contains the count.
- * Falls back to TIER_5 for very large counts.
+ * Falls back to TIER_6 for very large counts (11+).
  */
 export function recommendTierForStaffCount(staffCount: number): TierConfig {
   if (staffCount < 0) staffCount = 0;
@@ -201,7 +278,7 @@ export function recommendTierForStaffCount(staffCount: number): TierConfig {
       return tier;
     }
   }
-  return TIERS.TIER_5;
+  return TIERS.TIER_6;
 }
 
 /**
@@ -248,7 +325,7 @@ export function tierHasFeature(
  * Used by the upgrade CTA to know what tier to recommend.
  */
 export function nextTier(tierId: TierId): TierConfig | null {
-  const order: TierId[] = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5'];
+  const order: TierId[] = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'];
   const idx = order.indexOf(tierId);
   if (idx === -1 || idx === order.length - 1) return null;
   return TIERS[order[idx + 1]];

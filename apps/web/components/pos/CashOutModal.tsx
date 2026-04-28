@@ -14,8 +14,8 @@
  * (receipt OCR), but the API already accepts them.
  */
 
-import { useEffect, useState } from 'react';
-import { Wallet, Vault, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Wallet, Vault, AlertTriangle, ShieldCheck, Camera, Sparkles, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
@@ -57,6 +57,13 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
   const [approvers,       setApprovers]       = useState<ApproverOption[]>([]);
   const [submitting,      setSubmitting]      = useState(false);
 
+  // Receipt OCR state
+  const [scanning,        setScanning]        = useState(false);
+  const [aiUsed,          setAiUsed]          = useState(false);
+  const [aiConfidence,    setAiConfidence]    = useState<{ amount: number; vendor: number; date: number; category: number } | null>(null);
+  const [aiVendor,        setAiVendor]        = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Reset on open
   useEffect(() => {
     if (open) {
@@ -65,8 +72,74 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
       setReason('');
       setCategory('supplies');
       setApproverId('');
+      setScanning(false);
+      setAiUsed(false);
+      setAiConfidence(null);
+      setAiVendor(null);
     }
   }, [open]);
+
+  /**
+   * Read a File as base64 (no data: prefix). Used to ship the receipt photo
+   * to /ai/receipt-ocr without going through a file-upload pipeline.
+   */
+  function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => {
+        const result = reader.result as string;
+        const comma = result.indexOf(',');
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleReceiptScan(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Receipt image too large (max 5MB).');
+      return;
+    }
+    setScanning(true);
+    try {
+      const imageBase64 = await fileToBase64(file);
+      const mediaType = (file.type === 'image/png' || file.type === 'image/webp')
+        ? file.type
+        : 'image/jpeg';
+      const { data } = await api.post('/ai/receipt-ocr', { imageBase64, mediaType });
+
+      // Apply suggestions — only auto-fill empty fields so the cashier's
+      // existing edits are preserved.
+      if (data.amount != null && Number.isFinite(data.amount)) {
+        setAmountStr(String(data.amount));
+      }
+      if (data.category && type === 'PAID_OUT') {
+        setCategory(data.category);
+      }
+      if (data.reasonHint) {
+        const hint = data.reasonHint.length >= 10
+          ? data.reasonHint
+          : (data.vendor ? `Bought from ${data.vendor}: ${data.reasonHint}` : data.reasonHint);
+        setReason((prev) => prev.trim().length === 0 ? hint : prev);
+      }
+      setAiVendor(data.vendor ?? null);
+      setAiConfidence(data.confidence ?? null);
+      setAiUsed(true);
+      playSound('success');
+      toast.success('Receipt scanned — review and submit.');
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'Could not read receipt — try a sharper photo.';
+      playSound('error');
+      toast.error(msg);
+    } finally {
+      setScanning(false);
+    }
+  }
 
   // Lazy-load potential approvers when the manager dropdown is needed
   const amount = parseFloat(amountStr);
@@ -103,6 +176,7 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
         reason: reason.trim(),
         category: type === 'PAID_OUT' ? category : undefined,
         approvedById: approverId || undefined,
+        aiAssisted: aiUsed,
       });
       playSound('success');
       toast.success(
@@ -164,6 +238,60 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
             ? 'Real expense paid from the till — ice run, COD payment, parking tip.'
             : 'Move cash from till to the safe — not an expense, just safekeeping.'}
         </p>
+
+        {/* Receipt OCR — paid-outs only (drops have no receipt) */}
+        {type === 'PAID_OUT' && (
+          <div className="space-y-1.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              capture="environment"
+              onChange={handleReceiptScan}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={scanning}
+              className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-dashed border-[var(--accent)]/40 bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] text-sm font-semibold text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {scanning ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Reading receipt…
+                </>
+              ) : aiUsed ? (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  Re-scan receipt
+                </>
+              ) : (
+                <>
+                  <Camera className="h-4 w-4" />
+                  Snap receipt to autofill
+                </>
+              )}
+            </button>
+            {aiUsed && aiConfidence && (
+              <div className="rounded-lg bg-[color-mix(in_oklab,var(--accent)_4%,transparent)] border border-[var(--accent)]/20 px-2.5 py-1.5 text-[11px] space-y-0.5">
+                <div className="flex items-center gap-1 text-[var(--accent)] font-semibold">
+                  <Sparkles className="h-3 w-3" />
+                  AI-assisted — review fields below
+                </div>
+                {aiVendor && (
+                  <p className="text-muted-foreground">
+                    Vendor: <span className="text-foreground font-medium">{aiVendor}</span>
+                    {aiConfidence.vendor < 0.75 && <span className="text-amber-600 ml-1">(low confidence)</span>}
+                  </p>
+                )}
+                {aiConfidence.amount < 0.85 && (
+                  <p className="text-amber-600">⚠ Double-check the amount — confidence {(aiConfidence.amount * 100).toFixed(0)}%</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Amount (₱)</label>

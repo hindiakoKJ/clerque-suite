@@ -28,6 +28,7 @@ import { ImportModule } from './import/import.module';
 import { MailModule } from './mail/mail.module';
 import { DocumentsModule } from './documents/documents.module';
 import { ExpenseClaimsModule } from './expense-claims/expense-claims.module';
+import { AiModule } from './ai/ai.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -62,6 +63,7 @@ import { HealthController } from './health/health.controller';
     MailModule,
     DocumentsModule,
     ExpenseClaimsModule,
+    AiModule,
   ],
 })
 export class AppModule {}

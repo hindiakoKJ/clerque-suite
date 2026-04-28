@@ -1008,6 +1008,35 @@ model Shift {
   @@map("shifts")
 }
 
+/// AI usage telemetry — one row per LLM call. Drives per-tenant cost
+/// tracking, monthly budget caps, and an audit trail of AI-assisted
+/// actions (receipt OCR, JE drafter, time-anomaly resolver, etc.).
+///
+/// Cost is recorded at write-time based on the provider's published pricing;
+/// we do NOT recompute or normalise across providers. If pricing changes,
+/// historical rows keep their original cost.
+model AiUsage {
+  id            String   @id @default(cuid())
+  tenantId      String
+  userId        String?
+  /// Stable action key, e.g. 'receipt_ocr' | 'je_drafter' | 'time_anomaly'.
+  /// New actions can be added without a migration.
+  action        String
+  provider      String   @default("anthropic")
+  model         String
+  inputTokens   Int      @default(0)
+  outputTokens  Int      @default(0)
+  costUsd       Decimal  @default(0) @db.Decimal(12, 6)
+  success       Boolean  @default(true)
+  errorMessage  String?
+  durationMs    Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, action, createdAt])
+  @@map("ai_usage")
+}
+
 /// Cash leaving the till during a shift.
 /// PAID_OUT  = real expense paid from cash drawer (parking tip, ice run,
 ///             COD delivery payment). Reduces expected cash AND posts a

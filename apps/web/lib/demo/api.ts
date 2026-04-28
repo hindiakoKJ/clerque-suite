@@ -205,7 +205,8 @@ const routes: RouteEntry[] = [
 
   // ── Reports ─────────────────────────────────────────────────────────────────
   { method: 'GET', pattern: /^\/?reports\/daily$/, handler: () => {
-      const orders = useDemoStore.getState().orders;
+      const state = useDemoStore.getState();
+      const orders = state.orders;
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayOrders = orders.filter(
@@ -216,10 +217,65 @@ const routes: RouteEntry[] = [
         .flatMap((o) => o.payments)
         .filter((p) => p.method === 'CASH')
         .reduce((s, p) => s + p.amount, 0);
-      const nonCashRevenue = totalRevenue - cashRevenue;
+      const nonCashRevenue = Math.max(0, totalRevenue - cashRevenue);
       const voidCount = orders.filter(
         (o) => new Date(o.createdAt) >= today && o.status === 'VOIDED',
       ).length;
+
+      // Group payments by method
+      const methodTotals: Record<string, { total: number; orders: Set<string> }> = {};
+      for (const o of todayOrders) {
+        for (const p of o.payments) {
+          if (!methodTotals[p.method]) methodTotals[p.method] = { total: 0, orders: new Set() };
+          methodTotals[p.method].total += p.amount;
+          methodTotals[p.method].orders.add(o.id);
+        }
+      }
+      const byPaymentMethod = Object.entries(methodTotals).map(([method, v]) => ({
+        method,
+        totalAmount: Math.round(v.total * 100) / 100,
+        orderCount: v.orders.size,
+      }));
+
+      // Top products by revenue
+      const productAggregates: Record<string, { productId: string; productName: string; quantity: number; revenue: number }> = {};
+      for (const o of todayOrders) {
+        for (const item of o.items) {
+          if (!productAggregates[item.productId]) {
+            productAggregates[item.productId] = {
+              productId: item.productId,
+              productName: item.productName,
+              quantity: 0,
+              revenue: 0,
+            };
+          }
+          productAggregates[item.productId].quantity += item.quantity;
+          productAggregates[item.productId].revenue += item.lineTotal;
+        }
+      }
+      const topProducts = Object.values(productAggregates)
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 10)
+        .map((p) => ({
+          productId: p.productId,
+          productName: p.productName,
+          quantitySold: p.quantity,
+          revenue: Math.round(p.revenue * 100) / 100,
+        }));
+
+      // Hourly breakdown (24 hours, even if zero)
+      const byHour = Array.from({ length: 24 }, (_, hour) => ({
+        hour,
+        orderCount: 0,
+        revenue: 0,
+      }));
+      for (const o of todayOrders) {
+        const h = new Date(o.createdAt).getHours();
+        if (byHour[h]) {
+          byHour[h].orderCount += 1;
+          byHour[h].revenue += o.totalAmount;
+        }
+      }
 
       return ok({
         date: today.toISOString().slice(0, 10),
@@ -228,9 +284,10 @@ const routes: RouteEntry[] = [
         totalRevenue,
         cashRevenue,
         nonCashRevenue,
-        averageOrderValue: todayOrders.length > 0 ? totalRevenue / todayOrders.length : 0,
-        topProducts: [],
-        hourlyBreakdown: [],
+        avgOrderValue: todayOrders.length > 0 ? totalRevenue / todayOrders.length : 0,
+        byPaymentMethod,
+        topProducts,
+        byHour,
       });
     },
   },

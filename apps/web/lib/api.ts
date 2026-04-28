@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { isDemoMode } from './demo/config';
@@ -16,19 +16,54 @@ const realApi = axios.create({
  * (cookie or sessionStorage flag set by /demo entry).  Otherwise routes
  * to the real backend via axios.
  *
- * The Proxy pattern lets us check demo state on every method call so that
- * activating/deactivating demo mode mid-session takes effect immediately
- * without re-importing.
+ * Each method preserves axios's type signature (Promise<AxiosResponse<T>>)
+ * so TanStack Query's `queryFn: () => api.get<T>(...).then(r => r.data)`
+ * keeps inferring T correctly.  In demo mode, the response is shaped
+ * identically (`{ data, status }`) which structurally satisfies AxiosResponse.
  */
-export const api = new Proxy(realApi, {
-  get(target, prop, receiver) {
-    if (typeof window !== 'undefined' && isDemoMode()) {
-      const demoValue = (demoApi as unknown as Record<string | symbol, unknown>)[prop];
-      if (demoValue !== undefined) return demoValue;
+function inDemo(): boolean {
+  return typeof window !== 'undefined' && isDemoMode();
+}
+
+export const api = {
+  defaults: realApi.defaults,
+  interceptors: realApi.interceptors,
+
+  get: <T = any>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> => {
+    if (inDemo()) {
+      return demoApi.get<T>(url, config as never) as unknown as Promise<AxiosResponse<T>>;
     }
-    return Reflect.get(target, prop, receiver);
+    return realApi.get<T>(url, config);
   },
-}) as typeof realApi;
+
+  post: <T = any>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> => {
+    if (inDemo()) {
+      return demoApi.post<T>(url, body, config as never) as unknown as Promise<AxiosResponse<T>>;
+    }
+    return realApi.post<T>(url, body, config);
+  },
+
+  patch: <T = any>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> => {
+    if (inDemo()) {
+      return demoApi.patch<T>(url, body, config as never) as unknown as Promise<AxiosResponse<T>>;
+    }
+    return realApi.patch<T>(url, body, config);
+  },
+
+  put: <T = any>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> => {
+    if (inDemo()) {
+      return demoApi.put<T>(url, body, config as never) as unknown as Promise<AxiosResponse<T>>;
+    }
+    return realApi.put<T>(url, body, config);
+  },
+
+  delete: <T = any>(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> => {
+    if (inDemo()) {
+      return demoApi.delete<T>(url, config as never) as unknown as Promise<AxiosResponse<T>>;
+    }
+    return realApi.delete<T>(url, config);
+  },
+};
 
 /* ─── Request interceptor — attach Bearer token ──────────────────────────── */
 realApi.interceptors.request.use((config) => {

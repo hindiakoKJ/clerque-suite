@@ -101,6 +101,51 @@ export class JournalController {
     return this.import_.importFromXlsx(user.tenantId!, user.sub, file.buffer);
   }
 
+  /**
+   * GET /accounting/journal/import/trial-balance/template
+   * Trial Balance migration template with all OPEN accounts pre-listed.
+   */
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BOOKKEEPER', 'SUPER_ADMIN')
+  @Get('import/trial-balance/template')
+  async downloadTrialBalanceTemplate(
+    @CurrentUser() user: JwtPayload,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.import_.generateTrialBalanceTemplate(user.tenantId!);
+    res.set({
+      'Content-Type':        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="trial-balance-template-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+    });
+    res.send(buffer);
+  }
+
+  /**
+   * POST /accounting/journal/import/trial-balance
+   * Multipart upload + form fields for migrationDate (required) and memo (optional).
+   * Posts a single Opening Balance JE for the entire trial balance.
+   */
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT')
+  @Post('import/trial-balance')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10 * 1024 * 1024 },
+  }))
+  importTrialBalance(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body() body: { migrationDate?: string; memo?: string },
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    if (!body.migrationDate) throw new BadRequestException('migrationDate is required (YYYY-MM-DD).');
+    return this.import_.importTrialBalance(
+      user.tenantId!,
+      user.sub,
+      file.buffer,
+      body.migrationDate,
+      body.memo,
+    );
+  }
+
   /** Reverse a POSTED entry — creates a mirror JE with flipped debits/credits */
   @Post(':id/reverse')
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT')

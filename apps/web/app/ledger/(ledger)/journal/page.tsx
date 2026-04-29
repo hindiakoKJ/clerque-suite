@@ -1245,24 +1245,38 @@ interface ImportResult {
 
 function ImportJournalButton({ onImported }: { onImported: () => void }) {
   const [open, setOpen]               = useState(false);
+  const [mode, setMode]               = useState<'je' | 'tb'>('je');
   const [downloading, setDownloading] = useState(false);
   const [uploading, setUploading]     = useState(false);
   const [result, setResult]           = useState<ImportResult | null>(null);
+  const [tbDate, setTbDate]           = useState(() => {
+    // Default to last day of previous month — most common migration date
+    const d = new Date();
+    d.setDate(0);
+    return d.toISOString().slice(0, 10);
+  });
+  const [tbMemo, setTbMemo]           = useState('');
   const fileInputRef                  = useRef<HTMLInputElement>(null);
 
   async function downloadTemplate() {
     setDownloading(true);
     try {
-      const res = await api.get('/accounting/journal/import/template', { responseType: 'blob' });
+      const url = mode === 'je'
+        ? '/accounting/journal/import/template'
+        : '/accounting/journal/import/trial-balance/template';
+      const filename = mode === 'je'
+        ? `je-import-template-${new Date().toISOString().slice(0, 10)}.xlsx`
+        : `trial-balance-template-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const res = await api.get(url, { responseType: 'blob' });
       const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url = URL.createObjectURL(blob);
+      const objUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `je-import-template-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.href = objUrl;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(objUrl);
       toast.success('Template downloaded');
     } catch (err) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -1281,17 +1295,31 @@ function ImportJournalButton({ onImported }: { onImported: () => void }) {
       toast.error('Please upload an .xlsx file (use the downloaded template).');
       return;
     }
+    if (mode === 'tb' && !tbDate) {
+      toast.error('Pick a migration date before uploading.');
+      return;
+    }
     setUploading(true);
     setResult(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const { data } = await api.post<ImportResult>('/accounting/journal/import', fd, {
+      let url: string;
+      if (mode === 'je') {
+        url = '/accounting/journal/import';
+      } else {
+        url = '/accounting/journal/import/trial-balance';
+        fd.append('migrationDate', tbDate);
+        if (tbMemo.trim()) fd.append('memo', tbMemo.trim());
+      }
+      const { data } = await api.post<ImportResult>(url, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResult(data);
       if (data.successful > 0 && data.failed === 0) {
-        toast.success(`Posted ${data.successful} journal ${data.successful === 1 ? 'entry' : 'entries'}`);
+        toast.success(mode === 'je'
+          ? `Posted ${data.successful} journal ${data.successful === 1 ? 'entry' : 'entries'}`
+          : `Opening balance posted (${data.postedEntries[0]?.lineCount ?? 0} accounts)`);
         onImported();
       } else if (data.failed > 0) {
         toast.error(`No entries posted — ${data.errors.length} ${data.errors.length === 1 ? 'error' : 'errors'} found. Review and re-upload.`);
@@ -1318,14 +1346,39 @@ function ImportJournalButton({ onImported }: { onImported: () => void }) {
       {open && (
         <div className="fixed inset-0 bg-foreground/40 flex items-center justify-center p-4 z-50">
           <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-            <div className="px-6 py-5 border-b border-border flex items-center justify-between shrink-0">
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">Import Journal Entries</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">Upload a filled-in Excel template to bulk-post JEs.</p>
+            <div className="px-6 py-5 border-b border-border shrink-0">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-foreground">Import from Excel</h2>
+                <button onClick={() => { setOpen(false); setResult(null); }} className="text-muted-foreground hover:text-foreground">
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <button onClick={() => { setOpen(false); setResult(null); }} className="text-muted-foreground hover:text-foreground">
-                <X className="h-5 w-5" />
-              </button>
+              {/* Mode tabs */}
+              <div className="inline-flex rounded-lg border border-border bg-secondary p-0.5 mt-3">
+                <button
+                  type="button"
+                  onClick={() => { setMode('je'); setResult(null); }}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                    mode === 'je' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Journal Entries
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setMode('tb'); setResult(null); }}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                    mode === 'tb' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Trial Balance (one-shot)
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                {mode === 'je'
+                  ? 'Bulk-post many journal entries from a single Excel file. Atomic — all or nothing.'
+                  : 'Migrate closing balances from your previous accounting system into Clerque. Run this once at cutover.'}
+              </p>
             </div>
 
             <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
@@ -1334,7 +1387,9 @@ function ImportJournalButton({ onImported }: { onImported: () => void }) {
                 <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Step 1</p>
                 <p className="text-sm font-semibold text-foreground">Download the Excel template</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  The template includes your Chart of Accounts as a reference sheet, plus instructions and sample rows.
+                  {mode === 'je'
+                    ? 'The template includes your Chart of Accounts as a reference sheet, plus instructions and sample rows.'
+                    : 'The template lists every active account in your COA. Fill in each closing balance and verify the DIFFERENCE row shows 0.'}
                 </p>
                 <button
                   onClick={downloadTemplate}
@@ -1345,9 +1400,39 @@ function ImportJournalButton({ onImported }: { onImported: () => void }) {
                 </button>
               </div>
 
+              {/* TB-specific fields */}
+              {mode === 'tb' && (
+                <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Migration details</p>
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">Migration date <span className="text-red-500">*</span></label>
+                    <input
+                      type="date"
+                      value={tbDate}
+                      onChange={(e) => setTbDate(e.target.value)}
+                      className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                    />
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Usually month-end of the period before you cut over to Clerque. Must fall in an OPEN accounting period.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">Memo (optional)</label>
+                    <input
+                      type="text"
+                      value={tbMemo}
+                      onChange={(e) => setTbMemo(e.target.value)}
+                      maxLength={500}
+                      placeholder={`Opening Balance — ${tbDate}`}
+                      className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Step 2 */}
               <div className="rounded-lg border border-border bg-card p-4">
-                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Step 2</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Step {mode === 'tb' ? '3' : '2'}</p>
                 <p className="text-sm font-semibold text-foreground">Upload the filled file</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   Atomic — either all entries post, or none do. Per-row errors will be shown so you can fix and re-upload.

@@ -319,6 +319,234 @@ export class JournalImportService {
     };
   }
 
+  // ─── Trial Balance import (one-shot migration) ────────────────────────────
+
+  /**
+   * Generate a TB template with ALL active OPEN accounts pre-listed (one row
+   * per account, blank Debit/Credit). User fills in their closing balances
+   * from the prior system, uploads, and we post a single big JE that brings
+   * those balances into Clerque.
+   */
+  async generateTrialBalanceTemplate(tenantId: string): Promise<Buffer> {
+    const accounts = await this.prisma.account.findMany({
+      where: { tenantId, isActive: true, postingControl: 'OPEN' },
+      orderBy: { code: 'asc' },
+      select: { code: true, name: true, type: true, normalBalance: true },
+    });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+    wb.created = new Date();
+
+    // ── Sheet 1: Trial Balance ──────────────────────────────────────────────
+    const tb = wb.addWorksheet('Trial Balance', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    tb.columns = [
+      { header: 'Account Code',   key: 'code',   width: 14 },
+      { header: 'Account Name',   key: 'name',   width: 40 },
+      { header: 'Type',           key: 'type',   width: 12 },
+      { header: 'Normal',         key: 'normal', width: 10 },
+      { header: 'Debit',          key: 'debit',  width: 16, style: { numFmt: '#,##0.00' } },
+      { header: 'Credit',         key: 'credit', width: 16, style: { numFmt: '#,##0.00' } },
+    ];
+    const header = tb.getRow(1);
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF8B5E3C' } };
+    header.alignment = { vertical: 'middle', horizontal: 'left' };
+    header.height = 22;
+
+    accounts.forEach((a) => {
+      const row = tb.addRow([a.code, a.name, a.type, a.normalBalance, null, null]);
+      // Read-only first 4 columns visually (we don't actually lock the workbook;
+      // backend re-validates everything anyway).
+      row.getCell(1).font = { color: { argb: 'FF555555' } };
+      row.getCell(2).font = { color: { argb: 'FF555555' } };
+      row.getCell(3).font = { color: { argb: 'FF999999' }, italic: true };
+      row.getCell(4).font = { color: { argb: 'FF999999' }, italic: true };
+    });
+
+    // Totals row at the bottom — formulas so the user sees the balance check live in Excel.
+    const last = accounts.length + 1;
+    const totalsRow = tb.addRow(['', 'TOTALS', '', '', { formula: `SUM(E2:E${last})` }, { formula: `SUM(F2:F${last})` }]);
+    totalsRow.font = { bold: true };
+    totalsRow.getCell(5).numFmt = '#,##0.00';
+    totalsRow.getCell(6).numFmt = '#,##0.00';
+    totalsRow.eachCell((c) => {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+      c.border = { top: { style: 'thin' } };
+    });
+
+    // Difference row — shows zero when balanced. Highlights problems.
+    const diffRow = tb.addRow(['', 'DIFFERENCE (must be 0)', '', '', { formula: `E${last + 1}-F${last + 1}` }, '']);
+    diffRow.getCell(5).numFmt = '#,##0.00';
+    diffRow.font = { bold: true, color: { argb: 'FFCC0000' } };
+
+    // ── Sheet 2: Instructions ───────────────────────────────────────────────
+    const help = wb.addWorksheet('Instructions');
+    help.columns = [{ width: 80 }];
+    [
+      ['Clerque Trial Balance Import — Instructions'],
+      [''],
+      ['PURPOSE:'],
+      ['  Migrate your closing balances from your previous accounting system into Clerque.'],
+      ['  Run this ONCE at the start, on the date you cut over.'],
+      [''],
+      ['HOW TO USE:'],
+      ['  1. Pick a migration date (usually month-end of the period before you cut over).'],
+      ['  2. Pull a Trial Balance from your old system as of that date.'],
+      ['  3. For each account row, type your closing balance into either the Debit or'],
+      ['     Credit column (whichever applies).'],
+      ['  4. Verify the DIFFERENCE row at the bottom shows 0.00 — Excel computes this for you.'],
+      ['  5. Save and upload via Settings → Journal → Import Trial Balance.'],
+      [''],
+      ['WHAT TO INCLUDE:'],
+      ['  - All Balance Sheet accounts (Assets, Liabilities, Equity).'],
+      ['  - Skip Revenue and Expense accounts unless you are mid-period — they normally'],
+      ['    start at zero in the new system.'],
+      ['  - Skip system accounts (Sales, COGS, VAT) — those are managed by POS automatically.'],
+      [''],
+      ['WHAT HAPPENS:'],
+      ['  - One big JE is created on the migration date you choose.'],
+      ['  - Memo: "Opening Balance — [date]".'],
+      ['  - All entries POST immediately (not draft).'],
+      ['  - If you make a mistake, REVERSE the JE and re-import — never delete.'],
+      [''],
+      ['LIMITS:'],
+      ['  - Only OPEN accounts are accepted (locked accounts are skipped at upload time).'],
+      ['  - Date must fall in an OPEN accounting period.'],
+    ].forEach(([t]) => help.addRow([t]));
+    help.getRow(1).font = { bold: true, size: 14 };
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /**
+   * Import a Trial Balance — creates one big "Opening Balance" JE.
+   * Atomic: if any row fails validation, no JE is posted.
+   *
+   * @param migrationDate ISO date (YYYY-MM-DD) — the as-of date for the balances
+   * @param memo optional override; defaults to "Opening Balance — <date>"
+   */
+  async importTrialBalance(
+    tenantId:        string,
+    userId:          string,
+    fileBuffer:      Buffer,
+    migrationDate:   string,
+    memo?:           string,
+  ): Promise<ImportResult> {
+    const wb = new ExcelJS.Workbook();
+    try {
+      await wb.xlsx.load(fileBuffer as unknown as ArrayBuffer);
+    } catch {
+      throw new BadRequestException('Not a valid Excel file. Save as .xlsx and try again.');
+    }
+
+    const sheet = wb.getWorksheet('Trial Balance');
+    if (!sheet) {
+      throw new BadRequestException('Could not find a "Trial Balance" sheet. Use the downloaded template.');
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(migrationDate)) {
+      throw new BadRequestException('migrationDate must be in YYYY-MM-DD format.');
+    }
+
+    const accounts = await this.prisma.account.findMany({
+      where: { tenantId, isActive: true, postingControl: 'OPEN' },
+      select: { id: true, code: true },
+    });
+    const codeToId = new Map(accounts.map((a) => [a.code, a.id]));
+
+    interface TBRow { rowNumber: number; code: string | null; debit: number | null; credit: number | null }
+    const tbRows: TBRow[] = [];
+    sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1) return;                 // header
+      const code = stringValue(row.getCell(1).value);
+      const name = stringValue(row.getCell(2).value);
+      // Skip the TOTALS / DIFFERENCE summary rows
+      if (!code && (name === 'TOTALS' || name === 'DIFFERENCE (must be 0)')) return;
+      const debit  = numberValue(row.getCell(5).value);
+      const credit = numberValue(row.getCell(6).value);
+      // Only collect rows that have an amount — accounts left blank are skipped silently
+      if ((debit ?? 0) === 0 && (credit ?? 0) === 0) return;
+      tbRows.push({ rowNumber, code, debit, credit });
+    });
+
+    if (tbRows.length === 0) {
+      throw new BadRequestException('Trial Balance has no balances to import. Fill in at least one Debit or Credit value.');
+    }
+
+    // Validate
+    const errors: ImportRowError[] = [];
+    let totalDebit = 0;
+    let totalCredit = 0;
+    for (const r of tbRows) {
+      if (!r.code) {
+        errors.push({ row: r.rowNumber, column: 'Account Code', message: 'Account Code is missing.' });
+        continue;
+      }
+      if (!codeToId.has(r.code)) {
+        errors.push({ row: r.rowNumber, column: 'Account Code', message: `Account "${r.code}" not found in your COA (or not OPEN).` });
+        continue;
+      }
+      const d = r.debit ?? 0;
+      const c = r.credit ?? 0;
+      if (d > 0 && c > 0) {
+        errors.push({ row: r.rowNumber, column: 'Debit/Credit', message: 'Account "' + r.code + '" has both Debit and Credit. Pick one.' });
+      }
+      if (d < 0 || c < 0) {
+        errors.push({ row: r.rowNumber, column: 'Debit/Credit', message: 'Negative amounts not allowed. Use the other column for negative balances.' });
+      }
+      totalDebit  += d;
+      totalCredit += c;
+    }
+
+    if (errors.length === 0 && Math.abs(totalDebit - totalCredit) > 0.01) {
+      errors.push({
+        row:    0,
+        column: 'TOTALS',
+        message: `Trial Balance is unbalanced: Debits ₱${totalDebit.toFixed(2)} vs Credits ₱${totalCredit.toFixed(2)} (off by ₱${Math.abs(totalDebit - totalCredit).toFixed(2)}). The DIFFERENCE row at the bottom of your template should show 0.`,
+      });
+    }
+
+    if (errors.length > 0) {
+      return { successful: 0, failed: 1, errors, postedEntries: [] };
+    }
+
+    // Build the single Opening Balance JE
+    const dto: import('./journal.service').CreateJournalDto = {
+      date:        migrationDate,
+      postingDate: migrationDate,
+      description: memo?.trim() || `Opening Balance — ${migrationDate}`,
+      reference:   undefined,
+      saveDraft:   false,
+      lines: tbRows.map((r) => ({
+        accountId:   codeToId.get(r.code!)!,
+        debit:       r.debit  ?? undefined,
+        credit:      r.credit ?? undefined,
+        description: undefined,
+      })),
+    };
+
+    try {
+      const result = await this.journal.create(tenantId, dto, userId);
+      return {
+        successful: 1,
+        failed:     0,
+        errors:     [],
+        postedEntries: [{
+          entryNumber: result.entryNumber,
+          description: result.description,
+          lineCount:   dto.lines.length,
+        }],
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error during posting';
+      this.logger.error(`Trial Balance import failed: ${msg}`);
+      throw new BadRequestException(`Could not post the opening balance: ${msg}`);
+    }
+  }
+
   // ─── Validation per group ──────────────────────────────────────────────────
 
   private validateGroup(

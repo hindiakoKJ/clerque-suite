@@ -17,9 +17,11 @@ import { JwtPayload } from '@repo/shared-types';
 import { AiService } from './ai.service';
 import { AccountPickerService } from './account-picker.service';
 import { JournalDrafterService } from './journal-drafter.service';
+import { JournalGuideService, GuideResult } from './journal-guide.service';
 import { OcrReceiptDto, OcrReceiptResult } from './dto/ocr-receipt.dto';
 import { SuggestAccountsDto } from './dto/suggest-accounts.dto';
 import { DraftJournalDto } from './dto/draft-journal.dto';
+import { GuideJournalDto } from './dto/guide-journal.dto';
 
 const RECEIPT_OCR_SYSTEM_PROMPT = `You are a receipt-reading assistant for a Philippine point-of-sale system.
 
@@ -60,6 +62,7 @@ export class AiController {
     private ai:           AiService,
     private accountPicker: AccountPickerService,
     private drafter:      JournalDrafterService,
+    private guide:        JournalGuideService,
   ) {}
 
   /**
@@ -166,6 +169,27 @@ export class AiController {
     @Body() dto: DraftJournalDto,
   ) {
     return this.drafter.draft(user.tenantId!, user.sub, dto.description);
+  }
+
+  /**
+   * POST /ai/journal-validate
+   * Reviews an in-progress JE and returns per-line + entry-level issues.
+   * Verdict is OK / WARNINGS / BLOCKING. Each issue may include a one-tap
+   * suggestion (swap account, swap side, add line, etc.) the UI can apply.
+   */
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'SUPER_ADMIN')
+  @Post('journal-validate')
+  @HttpCode(HttpStatus.OK)
+  async validateJournal(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: GuideJournalDto,
+  ): Promise<GuideResult> {
+    return this.guide.validate(user.tenantId!, user.sub, {
+      date:      dto.date,
+      memo:      dto.memo,
+      reference: dto.reference,
+      lines:     dto.lines,
+    });
   }
 
   /** Per-tenant AI usage for the current month (cost dashboard). */

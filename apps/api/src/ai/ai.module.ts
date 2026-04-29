@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { AccountPickerService } from './account-picker.service';
 import { JournalDrafterService } from './journal-drafter.service';
+import { JournalGuideService } from './journal-guide.service';
 import { AiController } from './ai.controller';
 
 /**
@@ -17,8 +18,8 @@ import { AiController } from './ai.controller';
  * budget caps, prompt caching, and AiUsage logging for free.
  */
 @Module({
-  providers:   [AiService, AccountPickerService, JournalDrafterService],
+  providers:   [AiService, AccountPickerService, JournalDrafterService, JournalGuideService],
   controllers: [AiController],
-  exports:     [AiService, AccountPickerService, JournalDrafterService],
+  exports:     [AiService, AccountPickerService, JournalDrafterService, JournalGuideService],
 })
 export class AiModule {}

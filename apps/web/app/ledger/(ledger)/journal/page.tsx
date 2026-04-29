@@ -659,6 +659,93 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
   const [aiUsed,       setAiUsed]       = useState(false);
   const [aiUncertainties, setAiUncertainties] = useState<string[]>([]);
 
+  // ── AI Guide state ──────────────────────────────────────────────────────
+  interface GuideIssue {
+    severity:   'BLOCK' | 'WARN' | 'INFO';
+    lineIndex:  number | null;
+    message:    string;
+    rationale:  string;
+    suggestion?: {
+      type:        'swap_account' | 'add_line' | 'swap_side' | 'delete_line' | 'edit_amount' | 'advice_only';
+      description: string;
+      accountId?:  string;
+      side?:       'DEBIT' | 'CREDIT';
+      amount?:     number;
+    };
+  }
+  interface GuideResult {
+    verdict: 'OK' | 'WARNINGS' | 'BLOCKING';
+    summary: string;
+    issues:  GuideIssue[];
+  }
+  const [guidePending, setGuidePending] = useState(false);
+  const [guideResult,  setGuideResult]  = useState<GuideResult | null>(null);
+
+  async function handleGuideCheck() {
+    const validLines = lines.filter((l) => l.accountId && (parseFloat(l.debit) > 0 || parseFloat(l.credit) > 0));
+    if (validLines.length === 0) {
+      toast.error('Add at least one complete line before checking.');
+      return;
+    }
+    setGuidePending(true);
+    try {
+      const { data } = await api.post('/ai/journal-validate', {
+        date:      docDate,
+        memo:      desc || '(no memo)',
+        reference: reference || undefined,
+        lines: validLines.map((l) => ({
+          accountId:   l.accountId,
+          side:        parseFloat(l.debit) > 0 ? 'DEBIT' : 'CREDIT',
+          amount:      parseFloat(l.debit) > 0 ? parseFloat(l.debit) : parseFloat(l.credit),
+          description: l.description || undefined,
+        })),
+      });
+      setGuideResult(data);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'Could not check the entry. Try again.';
+      toast.error(msg);
+    } finally {
+      setGuidePending(false);
+    }
+  }
+
+  function applyGuideSuggestion(issue: GuideIssue) {
+    const s = issue.suggestion;
+    if (!s) return;
+    const idx = issue.lineIndex;
+    if (s.type === 'swap_account' && idx != null && s.accountId) {
+      setLines((prev) => prev.map((l, i) => i === idx ? { ...l, accountId: s.accountId! } : l));
+    } else if (s.type === 'swap_side' && idx != null) {
+      setLines((prev) => prev.map((l, i) => i === idx ? { ...l, debit: l.credit, credit: l.debit } : l));
+    } else if (s.type === 'delete_line' && idx != null) {
+      setLines((prev) => prev.length > 2 ? prev.filter((_, i) => i !== idx) : prev);
+    } else if (s.type === 'add_line' && s.accountId && s.amount != null && s.side) {
+      setLines((prev) => [...prev, {
+        accountId:   s.accountId!,
+        description: '',
+        debit:       s.side === 'DEBIT'  ? s.amount!.toFixed(2) : '',
+        credit:      s.side === 'CREDIT' ? s.amount!.toFixed(2) : '',
+      }]);
+    } else if (s.type === 'edit_amount' && idx != null && s.amount != null) {
+      setLines((prev) => prev.map((l, i) => {
+        if (i !== idx) return l;
+        const isDebit = parseFloat(l.debit) > 0;
+        return isDebit
+          ? { ...l, debit: s.amount!.toFixed(2) }
+          : { ...l, credit: s.amount!.toFixed(2) };
+      }));
+    } else {
+      // advice_only — just dismiss the issue
+    }
+    // Remove the applied issue from the result so the panel updates immediately
+    setGuideResult((prev) => prev ? {
+      ...prev,
+      issues: prev.issues.filter((i) => i !== issue),
+    } : null);
+    toast.success('Applied');
+  }
+
   async function handleAiDraft() {
     if (aiPrompt.trim().length < 5) {
       toast.error('Describe the transaction in at least a few words.');
@@ -941,6 +1028,65 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
                 Out of balance by {Math.abs(totalDebit - totalCredit).toFixed(2)} — debits must equal credits before posting
               </p>
             )}
+
+            {/* AI Guide panel */}
+            {guideResult && (
+              <div className={`rounded-xl border px-3 py-3 space-y-2 ${
+                guideResult.verdict === 'BLOCKING'
+                  ? 'border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800'
+                  : guideResult.verdict === 'WARNINGS'
+                    ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700'
+                    : 'border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-700'
+              }`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className={`text-xs font-bold uppercase tracking-wide ${
+                      guideResult.verdict === 'BLOCKING' ? 'text-red-700 dark:text-red-300'
+                      : guideResult.verdict === 'WARNINGS' ? 'text-amber-700 dark:text-amber-300'
+                      : 'text-emerald-700 dark:text-emerald-300'
+                    }`}>
+                      ✨ AI Check — {guideResult.verdict === 'OK' ? 'Looks good' : guideResult.verdict === 'WARNINGS' ? 'Review before posting' : 'Resolve before posting'}
+                    </p>
+                    <p className="text-xs text-foreground mt-0.5">{guideResult.summary}</p>
+                  </div>
+                  <button type="button" onClick={() => setGuideResult(null)} className="text-muted-foreground hover:text-foreground">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {guideResult.issues.length > 0 && (
+                  <ul className="space-y-1.5 text-xs">
+                    {guideResult.issues.map((issue, i) => (
+                      <li key={i} className="bg-background/60 rounded-lg px-2 py-1.5">
+                        <div className="flex items-start gap-2">
+                          <span className={`font-mono text-[9px] uppercase tracking-wide px-1 py-0.5 rounded mt-0.5 shrink-0 ${
+                            issue.severity === 'BLOCK' ? 'bg-red-200 dark:bg-red-900 text-red-900 dark:text-red-200'
+                            : issue.severity === 'WARN' ? 'bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200'
+                            : 'bg-stone-200 dark:bg-stone-800 text-stone-700 dark:text-stone-300'
+                          }`}>{issue.severity}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-foreground">
+                              {issue.lineIndex != null && <span className="font-mono text-muted-foreground">Line {issue.lineIndex + 1}: </span>}
+                              {issue.message}
+                            </p>
+                            <p className="text-muted-foreground mt-0.5">{issue.rationale}</p>
+                            {issue.suggestion && issue.suggestion.type !== 'advice_only' && (
+                              <button
+                                type="button"
+                                onClick={() => applyGuideSuggestion(issue)}
+                                className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded text-white"
+                                style={{ background: 'var(--accent)' }}
+                              >
+                                Apply: {issue.suggestion.description}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="px-6 py-4 border-t border-border flex items-center gap-3 shrink-0">
@@ -955,11 +1101,20 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
               Save as draft
             </label>
             <div className="flex-1" />
+            <button
+              type="button"
+              onClick={handleGuideCheck}
+              disabled={guidePending}
+              className="h-10 px-4 rounded-xl border border-[var(--accent)]/40 text-sm font-medium text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] disabled:opacity-50 transition-colors"
+              title="Have AI review the entry before you post it"
+            >
+              {guidePending ? 'Checking…' : '✨ Check entry'}
+            </button>
             <button type="button" onClick={onClose}
               className="h-10 px-4 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
               Cancel
             </button>
-            <button type="submit" disabled={saving || !isBalanced}
+            <button type="submit" disabled={saving || !isBalanced || (guideResult?.verdict === 'BLOCKING' && !saveDraft)}
               className="h-10 px-5 text-white text-sm font-medium rounded-xl transition-opacity hover:opacity-90 disabled:opacity-60"
               style={{ background: 'var(--accent)' }}>
               {saving ? 'Saving…' : saveDraft ? 'Save Draft' : 'Post Entry'}

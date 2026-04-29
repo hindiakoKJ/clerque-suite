@@ -1,9 +1,10 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronDown, ChevronRight, Plus, X, Receipt,
   RotateCcw, CheckCircle2, Clock, FileText, AlertTriangle, Download, Upload,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -185,13 +186,16 @@ export default function JournalPage() {
           <p className="text-sm text-muted-foreground mt-1">{data?.total ?? 0} total entries</p>
         </div>
         {canEdit && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-1.5 h-9 px-4 text-white text-sm font-medium rounded-lg transition-opacity hover:opacity-90 whitespace-nowrap self-start sm:self-auto"
-            style={{ background: 'var(--accent)' }}
-          >
-            <Plus className="h-4 w-4" /> New Entry
-          </button>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <ImportJournalButton onImported={() => qc.invalidateQueries({ queryKey: ['journal'] })} />
+            <button
+              onClick={() => setShowModal(true)}
+              className="flex items-center gap-1.5 h-9 px-4 text-white text-sm font-medium rounded-lg transition-opacity hover:opacity-90 whitespace-nowrap"
+              style={{ background: 'var(--accent)' }}
+            >
+              <Plus className="h-4 w-4" /> New Entry
+            </button>
+          </div>
         )}
       </div>
 
@@ -1224,5 +1228,192 @@ function SmartAccountLine({ line, memo, excludeIds, onUpdate, aiEnabled, childre
         {children}
       </div>
     </div>
+  );
+}
+
+// ── Import Journal button + modal ─────────────────────────────────────────────
+// Two actions: download a tenant-specific Excel template, and upload a filled
+// template back. Atomic — either all JEs in the file post or none do.
+
+interface ImportRowError { row: number; column: string; message: string }
+interface ImportResult {
+  successful:    number;
+  failed:        number;
+  errors:        ImportRowError[];
+  postedEntries: { entryNumber: string; description: string; lineCount: number }[];
+}
+
+function ImportJournalButton({ onImported }: { onImported: () => void }) {
+  const [open, setOpen]               = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [uploading, setUploading]     = useState(false);
+  const [result, setResult]           = useState<ImportResult | null>(null);
+  const fileInputRef                  = useRef<HTMLInputElement>(null);
+
+  async function downloadTemplate() {
+    setDownloading(true);
+    try {
+      const res = await api.get('/accounting/journal/import/template', { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `je-import-template-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Template downloaded');
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'Could not download template.';
+      toast.error(msg);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.name.endsWith('.xlsx')) {
+      toast.error('Please upload an .xlsx file (use the downloaded template).');
+      return;
+    }
+    setUploading(true);
+    setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await api.post<ImportResult>('/accounting/journal/import', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setResult(data);
+      if (data.successful > 0 && data.failed === 0) {
+        toast.success(`Posted ${data.successful} journal ${data.successful === 1 ? 'entry' : 'entries'}`);
+        onImported();
+      } else if (data.failed > 0) {
+        toast.error(`No entries posted — ${data.errors.length} ${data.errors.length === 1 ? 'error' : 'errors'} found. Review and re-upload.`);
+      }
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'Upload failed.';
+      toast.error(msg);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1.5 h-9 px-3 text-sm font-medium rounded-lg border border-border bg-background hover:bg-secondary transition-colors text-foreground whitespace-nowrap"
+        title="Import journal entries from Excel"
+      >
+        <FileSpreadsheet className="h-4 w-4" /> Import
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 bg-foreground/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <div className="px-6 py-5 border-b border-border flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Import Journal Entries</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">Upload a filled-in Excel template to bulk-post JEs.</p>
+              </div>
+              <button onClick={() => { setOpen(false); setResult(null); }} className="text-muted-foreground hover:text-foreground">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
+              {/* Step 1 */}
+              <div className="rounded-lg border border-border bg-card p-4">
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Step 1</p>
+                <p className="text-sm font-semibold text-foreground">Download the Excel template</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  The template includes your Chart of Accounts as a reference sheet, plus instructions and sample rows.
+                </p>
+                <button
+                  onClick={downloadTemplate}
+                  disabled={downloading}
+                  className="mt-3 inline-flex items-center gap-1.5 h-9 px-3 text-sm font-medium rounded-lg border border-border bg-background hover:bg-secondary text-foreground disabled:opacity-50"
+                >
+                  {downloading ? 'Generating…' : <><FileSpreadsheet className="h-4 w-4" /> Download template</>}
+                </button>
+              </div>
+
+              {/* Step 2 */}
+              <div className="rounded-lg border border-border bg-card p-4">
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Step 2</p>
+                <p className="text-sm font-semibold text-foreground">Upload the filled file</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Atomic — either all entries post, or none do. Per-row errors will be shown so you can fix and re-upload.
+                </p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={handleUpload}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="mt-3 inline-flex items-center gap-1.5 h-9 px-3 text-sm font-medium rounded-lg text-white disabled:opacity-50"
+                  style={{ background: 'var(--accent)' }}
+                >
+                  {uploading ? 'Uploading…' : <><Plus className="h-4 w-4" /> Choose .xlsx file</>}
+                </button>
+              </div>
+
+              {/* Result */}
+              {result && (
+                <div className={`rounded-lg border p-4 ${
+                  result.failed > 0
+                    ? 'border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800'
+                    : 'border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-700'
+                }`}>
+                  <p className={`text-sm font-bold ${result.failed > 0 ? 'text-red-700 dark:text-red-300' : 'text-emerald-700 dark:text-emerald-300'}`}>
+                    {result.failed > 0
+                      ? `${result.failed} ${result.failed === 1 ? 'entry' : 'entries'} blocked — fix and re-upload`
+                      : `Posted ${result.successful} ${result.successful === 1 ? 'entry' : 'entries'}`}
+                  </p>
+                  {result.errors.length > 0 && (
+                    <ul className="mt-2 space-y-1 max-h-48 overflow-y-auto text-xs">
+                      {result.errors.map((e, i) => (
+                        <li key={i} className="text-foreground">
+                          <span className="font-mono text-muted-foreground">Row {e.row}, {e.column}:</span> {e.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {result.postedEntries.length > 0 && (
+                    <ul className="mt-2 space-y-0.5 max-h-32 overflow-y-auto text-xs">
+                      {result.postedEntries.map((p, i) => (
+                        <li key={i} className="text-emerald-800 dark:text-emerald-200">
+                          <span className="font-mono">{p.entryNumber}</span> — {p.description} ({p.lineCount} lines)
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-border flex justify-end shrink-0">
+              <button
+                onClick={() => { setOpen(false); setResult(null); }}
+                className="h-10 px-4 rounded-xl border border-border text-sm font-medium text-foreground hover:bg-secondary"
+              >
+                {result?.successful ? 'Done' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

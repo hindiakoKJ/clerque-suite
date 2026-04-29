@@ -32,6 +32,15 @@ interface SubscriptionResponse {
   hasBirForms:       boolean;
   isDemoTenant:      boolean;
   signupSource:      string;
+  aiEnabled:         boolean;
+  /**
+   * Reason the AI flag is on or off:
+   *   - 'tier'         → AI on because the tier includes it
+   *   - 'override_on'  → AI on because Anthropic / SUPER_ADMIN flipped the override
+   *   - 'override_off' → AI off because override is explicitly false
+   *   - 'tier_locked'  → AI off because the tier doesn't include it (upgrade path)
+   */
+  aiReason:          'tier' | 'override_on' | 'override_off' | 'tier_locked';
 }
 
 export default function SubscriptionPage() {
@@ -170,6 +179,25 @@ export default function SubscriptionPage() {
               {data.branchCount} of {data.branchQuota === 0 ? '∞' : data.branchQuota}
             </span>
           </div>
+
+          {/* AI feature status */}
+          <div className="flex items-center justify-between text-sm pt-3 border-t border-border">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Sparkles className="w-3.5 h-3.5" />
+              AI features
+            </span>
+            <div className="text-right">
+              <span className={`text-xs font-bold uppercase tracking-wide ${data.aiEnabled ? 'text-emerald-600' : 'text-muted-foreground'}`}>
+                {data.aiEnabled ? 'Enabled' : 'Locked'}
+              </span>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {data.aiReason === 'tier'         && 'Included with your tier'}
+                {data.aiReason === 'override_on'  && 'Manually enabled by support'}
+                {data.aiReason === 'override_off' && 'Disabled — contact support'}
+                {data.aiReason === 'tier_locked'  && 'Available on Team and Multi plans'}
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Included features */}
@@ -244,6 +272,8 @@ function humanizeFeature(flag: string): string {
     'payroll:full':         'Payroll — runs, payslips, government contributions',
     'bir:forms':            'BIR forms — 2550Q, 1701Q, 2551Q, EWT, SAWT, EIS',
     'audit:log':            'Centralized audit log viewer',
+    'ai:enabled':           'AI features — JE drafter, validator, smart account picker, receipt OCR',
+    'custom_personas':      'Custom permission templates per role',
   };
   return map[flag] ?? flag;
 }

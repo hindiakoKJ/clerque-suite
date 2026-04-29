@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Body, Req, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Patch, Body, Req, UseGuards, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -46,6 +46,28 @@ export class TenantController {
   @Get('subscription')
   getSubscription(@CurrentUser() user: JwtPayload) {
     return this.tenantService.getSubscription(user.tenantId!);
+  }
+
+  /**
+   * PATCH /tenant/ai-override
+   * SUPER_ADMIN-only — override the AI feature flag for the current tenant.
+   * Body: { value: boolean | null }   (null reverts to tier default)
+   * Tenant user must re-login to pick up the new flag in their JWT.
+   */
+  @Roles('SUPER_ADMIN')
+  @Patch('ai-override')
+  @HttpCode(HttpStatus.OK)
+  setAiOverride(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { value: boolean | null; tenantId?: string },
+  ) {
+    // SUPER_ADMIN can target any tenant via body.tenantId; tenant-scoped admins
+    // would not reach this endpoint (Roles guard rejects them first).
+    const targetTenantId = body.tenantId ?? user.tenantId;
+    if (!targetTenantId) {
+      throw new BadRequestException('tenantId is required when called outside a tenant context.');
+    }
+    return this.tenantService.setAiOverride(targetTenantId, body.value, user.sub);
   }
 
   @Roles('BUSINESS_OWNER')

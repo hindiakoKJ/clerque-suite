@@ -10,8 +10,8 @@ import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags } from '@repo/shared-types';
-import type { TaxStatus } from '@repo/shared-types';
+import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, isAiEnabledForTenant } from '@repo/shared-types';
+import type { TaxStatus, TierId } from '@repo/shared-types';
 
 const ACCESS_EXPIRY = '15m';
 const REFRESH_EXPIRY = '7d';
@@ -184,7 +184,7 @@ export class AuthService {
     const tenant = tenantId
       ? await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiEnabledOverride: true },
         })
       : null;
 
@@ -217,6 +217,11 @@ export class AuthService {
       ptuNumber:         tenant?.ptuNumber ?? null,
       minNumber:         tenant?.minNumber ?? null,
       tier:              (tenant?.tier ?? undefined) as JwtPayload['tier'],
+      // AI feature gate — resolves tier default + per-tenant override.
+      // Baked into JWT so the frontend can gate UI without an extra fetch.
+      aiEnabled:         tenant?.tier
+        ? isAiEnabledForTenant(tenant.tier as TierId, tenant.aiEnabledOverride)
+        : false,
       personaKey:        userRbac?.personaKey ?? null,
       customPermissions: userRbac?.customPermissions ?? [],
     };

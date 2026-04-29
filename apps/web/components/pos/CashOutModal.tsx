@@ -22,6 +22,7 @@ import { api } from '@/lib/api';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useSound } from '@/hooks/pos/useSound';
+import { useAuthStore } from '@/store/auth';
 
 interface CashOutModalProps {
   open: boolean;
@@ -49,6 +50,8 @@ interface ApproverOption {
 
 export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModalProps) {
   const playSound = useSound();
+  // AI gate — receipt OCR is a TIER_5+ feature; hide the snap button when off.
+  const aiEnabled = useAuthStore((s) => s.user?.aiEnabled ?? false);
   const [type,            setType]            = useState<'PAID_OUT' | 'CASH_DROP'>('PAID_OUT');
   const [amountStr,       setAmountStr]       = useState('');
   const [reason,          setReason]          = useState('');
@@ -239,8 +242,8 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
             : 'Move cash from till to the safe — not an expense, just safekeeping.'}
         </p>
 
-        {/* Receipt OCR — paid-outs only (drops have no receipt) */}
-        {type === 'PAID_OUT' && (
+        {/* Receipt OCR — paid-outs only, AI-enabled tenants only */}
+        {type === 'PAID_OUT' && aiEnabled && (
           <div className="space-y-1.5">
             <input
               ref={fileInputRef}

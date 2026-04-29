@@ -106,6 +106,13 @@ export interface JwtPayload {
   /** Tenant subscription tier — drives tier-locked permission gating in the UI. */
   tier?:              import('./tiers').TierId;
   /**
+   * Whether AI features (Drafter, Guide, Smart Picker, Receipt OCR) are
+   * enabled for this tenant. Resolved at login from tier + per-tenant
+   * override. Frontend hides AI affordances when false; backend
+   * AiEnabledGuard returns 403 with code AI_NOT_ENABLED.
+   */
+  aiEnabled?:         boolean;
+  /**
    * RBAC: persona template the user was created from. Reference into
    * packages/shared-types/src/personas.ts. Frontend uses this to render the
    * persona badge + "reset to persona default" affordance on the staff editor.

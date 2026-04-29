@@ -333,6 +333,11 @@ model Tenant {
   /// Where this tenant originated from. WEB = sales-led signup, PLAYSTORE =
   /// future freemium standalone POS app, IMPORTED = backfill / migration.
   signupSource             SignupSource     @default(WEB)
+  /// AI feature override. Null = inherit from tier (TIER_5+ get AI); true =
+  /// force on regardless of tier (sales-led perk for a lower-tier customer);
+  /// false = force off regardless of tier (e.g. tenant opted out, billing pause).
+  /// SUPER_ADMIN sets this; never exposed for self-service edits.
+  aiEnabledOverride        Boolean?
   /// Primary tax classification per BIR registration.
   /// Drives receipt type, VAT math, PWD discount engine, and journal entries.
   taxStatus                TaxStatus        @default(UNREGISTERED)

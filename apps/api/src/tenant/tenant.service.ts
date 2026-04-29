@@ -3,8 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BusinessType, AccountingMethod } from '@prisma/client';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
-import { taxStatusFlags } from '@repo/shared-types';
-import type { TaxStatus } from '@repo/shared-types';
+import { taxStatusFlags, isAiEnabledForTenant } from '@repo/shared-types';
+import type { TaxStatus, TierId } from '@repo/shared-types';
 
 export interface UpdateTenantProfileDto {
   businessType?: BusinessType;
@@ -60,9 +60,18 @@ export class TenantService {
         hasBirForms: true,
         isDemoTenant: true,
         signupSource: true,
+        aiEnabledOverride: true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found');
+
+    // Resolve AI flag + reason for the subscription card.
+    const aiEnabled = isAiEnabledForTenant(tenant.tier as TierId, tenant.aiEnabledOverride);
+    const aiReason: 'tier' | 'override_on' | 'override_off' | 'tier_locked' =
+      tenant.aiEnabledOverride === true  ? 'override_on'
+    : tenant.aiEnabledOverride === false ? 'override_off'
+    : aiEnabled                          ? 'tier'
+    :                                       'tier_locked';
 
     // Active non-owner staff count — what the tier cap limits.
     const staffCount = await this.prisma.user.count({
@@ -89,7 +98,42 @@ export class TenantService {
       hasBirForms:       tenant.hasBirForms,
       isDemoTenant:      tenant.isDemoTenant,
       signupSource:      tenant.signupSource,
+      aiEnabled,
+      aiReason,
     };
+  }
+
+  /**
+   * SUPER_ADMIN-only: override the AI feature flag for a specific tenant.
+   *   true  → force AI on (sales perk for a lower-tier tenant)
+   *   false → force AI off (opt-out, billing pause)
+   *   null  → revert to tier default
+   * Caller must re-login to pick up the new aiEnabled in their JWT.
+   */
+  async setAiOverride(tenantId: string, value: boolean | null, performedBy: string) {
+    const before = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { aiEnabledOverride: true, tier: true },
+    });
+    if (!before) throw new NotFoundException('Tenant not found');
+
+    await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data:  { aiEnabledOverride: value },
+    });
+
+    await this.audit.log({
+      tenantId,
+      action:      'SETTING_CHANGED',
+      entityType:  'Tenant',
+      entityId:    tenantId,
+      before:      { aiEnabledOverride: before.aiEnabledOverride },
+      after:       { aiEnabledOverride: value },
+      description: `AI feature override set to ${value === null ? 'inherit-tier' : value ? 'forced-on' : 'forced-off'}`,
+      performedBy,
+    });
+
+    return { aiEnabledOverride: value };
   }
 
   async getProfile(tenantId: string) {

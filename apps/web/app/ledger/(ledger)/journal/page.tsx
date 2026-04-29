@@ -632,6 +632,11 @@ export default function JournalPage() {
 interface DraftLine { accountId: string; description: string; debit: string; credit: string }
 
 function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  // AI gate — JWT-resolved flag (tier + per-tenant override). Hides every AI
+  // affordance in this modal when the tenant doesn't have AI enabled. Backend
+  // re-validates via AiEnabledGuard so this is UX, not security.
+  const aiEnabled = useAuthStore((s) => s.user?.aiEnabled ?? false);
+
   const { data: accounts = [] } = useQuery<AccountOption[]>({
     queryKey: ['accounts'],
     queryFn: () => api.get('/accounting/accounts').then((r) => r.data),
@@ -830,17 +835,19 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
         <div className="px-6 py-5 border-b border-border flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold text-foreground">New Journal Entry</h2>
-            <button
-              type="button"
-              onClick={() => setAiOpen((v) => !v)}
-              className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border transition-colors ${
-                aiOpen
-                  ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
-                  : 'bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] border-[var(--accent)]/30 text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_16%,transparent)]'
-              }`}
-            >
-              ✨ Describe & draft
-            </button>
+            {aiEnabled && (
+              <button
+                type="button"
+                onClick={() => setAiOpen((v) => !v)}
+                className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                  aiOpen
+                    ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                    : 'bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] border-[var(--accent)]/30 text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_16%,transparent)]'
+                }`}
+              >
+                ✨ Describe & draft
+              </button>
+            )}
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="h-5 w-5" />
@@ -985,6 +992,7 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
                     onRemove={() => setLines((prev) => prev.filter((_, idx) => idx !== i))}
                     canRemove={lines.length > 2}
                     fieldCls={fieldCls}
+                    aiEnabled={aiEnabled}
                   >
                     <select value={line.accountId} onChange={(e) => updateLine(i, { accountId: e.target.value })} className={fieldCls}>
                       <option value="">Select account…</option>
@@ -1101,15 +1109,17 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
               Save as draft
             </label>
             <div className="flex-1" />
-            <button
-              type="button"
-              onClick={handleGuideCheck}
-              disabled={guidePending}
-              className="h-10 px-4 rounded-xl border border-[var(--accent)]/40 text-sm font-medium text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] disabled:opacity-50 transition-colors"
-              title="Have AI review the entry before you post it"
-            >
-              {guidePending ? 'Checking…' : '✨ Check entry'}
-            </button>
+            {aiEnabled && (
+              <button
+                type="button"
+                onClick={handleGuideCheck}
+                disabled={guidePending}
+                className="h-10 px-4 rounded-xl border border-[var(--accent)]/40 text-sm font-medium text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] disabled:opacity-50 transition-colors"
+                title="Have AI review the entry before you post it"
+              >
+                {guidePending ? 'Checking…' : '✨ Check entry'}
+              </button>
+            )}
             <button type="button" onClick={onClose}
               className="h-10 px-4 rounded-xl border border-border text-sm font-medium text-muted-foreground hover:bg-muted transition-colors">
               Cancel
@@ -1142,6 +1152,7 @@ interface SmartAccountLineProps {
   onRemove:     () => void;
   canRemove:    boolean;
   fieldCls:     string;
+  aiEnabled:    boolean;
   children:     React.ReactNode;
 }
 
@@ -1154,7 +1165,7 @@ interface SuggestionRow {
   reasons:       string[];
 }
 
-function SmartAccountLine({ line, memo, excludeIds, onUpdate, children }: SmartAccountLineProps) {
+function SmartAccountLine({ line, memo, excludeIds, onUpdate, aiEnabled, children }: SmartAccountLineProps) {
   const [suggestions, setSuggestions] = useState<SuggestionRow[]>([]);
   const [loading, setLoading]         = useState(false);
 
@@ -1164,9 +1175,10 @@ function SmartAccountLine({ line, memo, excludeIds, onUpdate, children }: SmartA
   const creditNum = parseFloat(line.credit) || 0;
   const side: 'DEBIT' | 'CREDIT' = creditNum > 0 ? 'CREDIT' : 'DEBIT';
 
-  // Debounce 250ms on memo + side changes; skip when memo is empty or an
-  // account is already chosen for this line.
+  // Debounce 250ms on memo + side changes; skip when memo is empty, an
+  // account is already chosen, or AI is not enabled for this tenant.
   useEffect(() => {
+    if (!aiEnabled) { setSuggestions([]); return; }
     if (line.accountId) { setSuggestions([]); return; }
     if (memo.trim().length < 3) { setSuggestions([]); return; }
     const handle = setTimeout(async () => {
@@ -1185,7 +1197,7 @@ function SmartAccountLine({ line, memo, excludeIds, onUpdate, children }: SmartA
     return () => clearTimeout(handle);
     // excludeIds is stringified-stable enough via memo dep; intentionally narrow
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [memo, side, line.accountId, excludeIds.join(',')]);
+  }, [aiEnabled, memo, side, line.accountId, excludeIds.join(',')]);
 
   return (
     <div className="space-y-1">

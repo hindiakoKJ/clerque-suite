@@ -15,11 +15,12 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, ArrowUpRight, CheckCircle2, Users, Building2,
-  Sparkles, AlertTriangle, Crown,
+  Sparkles, AlertTriangle, Crown, Wrench, Copy, Check,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { TIERS, nextTier, type TierId } from '@repo/shared-types';
+import { toast } from 'sonner';
 
 type AiAddonType = 'STARTER_50' | 'STANDARD_200' | 'PRO_500';
 
@@ -314,6 +315,10 @@ export default function SubscriptionPage() {
           </ul>
         </div>
 
+        {/* Test users seeder (BUSINESS_OWNER only) */}
+        <TestUsersSeederCard />
+
+
         {/* Upgrade CTA */}
         {upgrade && (
           <div className="rounded-xl border border-[var(--accent)]/30 bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] p-5 sm:p-6 space-y-3">
@@ -363,6 +368,169 @@ function formatExpiry(iso: string | null): string {
   if (!iso) return 'no expiry';
   const d = new Date(iso);
   return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// ── Test Users Seeder Card ────────────────────────────────────────────────────
+// Lets the BUSINESS_OWNER spin up one user per role (14 roles) plus sample
+// customers/vendors for testing. Idempotent — safe to click repeatedly.
+
+interface SeedCredential {
+  role:           string;
+  name:           string;
+  shortDesc:      string;
+  email:          string;
+  password:       string;
+  pin:            string;
+  alreadyExisted: boolean;
+  keyAccess:      string[];
+}
+
+interface SeedResult {
+  tenant:       { id: string; slug: string; name: string };
+  branch:       { id: string; name: string };
+  credentials:  SeedCredential[];
+  samples:      { customersCreated: number; vendorsCreated: number; customersAlreadyExisted: number; vendorsAlreadyExisted: number };
+  loginInstructions: string[];
+}
+
+function TestUsersSeederCard() {
+  const [running, setRunning]   = useState(false);
+  const [result, setResult]     = useState<SeedResult | null>(null);
+  const [showAll, setShowAll]   = useState(false);
+  const [copied, setCopied]     = useState<string | null>(null);
+
+  async function run() {
+    setRunning(true);
+    try {
+      const { data } = await api.post<SeedResult>('/tenant/seed-test-users');
+      setResult(data);
+      const fresh = data.credentials.filter((c) => !c.alreadyExisted).length;
+      const reused = data.credentials.length - fresh;
+      const newCustomers = data.samples.customersCreated;
+      const newVendors   = data.samples.vendorsCreated;
+      const summaryParts: string[] = [];
+      if (fresh > 0)        summaryParts.push(`${fresh} new ${fresh === 1 ? 'role' : 'roles'}`);
+      if (reused > 0)       summaryParts.push(`${reused} already existed`);
+      if (newCustomers > 0) summaryParts.push(`${newCustomers} customers`);
+      if (newVendors > 0)   summaryParts.push(`${newVendors} vendors`);
+      toast.success(`Seeded — ${summaryParts.join(', ') || 'no changes'}`);
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'Could not run the seeder.';
+      toast.error(msg);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  function copy(text: string, label: string) {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(label);
+      setTimeout(() => setCopied(null), 1500);
+    });
+  }
+
+  const visibleCreds = result
+    ? showAll ? result.credentials : result.credentials.slice(0, 5)
+    : [];
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-5 sm:p-6 space-y-3">
+      <div className="flex items-start gap-3">
+        <Wrench className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Test users + sample data</h3>
+          <p className="text-sm text-foreground mt-1">
+            One-click setup: creates one user per role (14 roles), plus a few sample customers and vendors so you can sign in as each role and see what they unlock.
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Safe to click multiple times — already-existing users are kept. Predictable password &mdash; only use on the demo account, not real customers.
+          </p>
+        </div>
+      </div>
+
+      <button
+        onClick={run}
+        disabled={running}
+        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-white font-semibold hover:brightness-110 active:scale-[0.98] transition-all text-sm disabled:opacity-60"
+        style={{ background: 'var(--accent)' }}
+      >
+        {running ? 'Seeding…' : (result ? 'Re-run / refresh credentials' : 'Seed test users')}
+      </button>
+
+      {result && (
+        <div className="space-y-3 mt-2">
+          {/* Login summary box */}
+          <div className="rounded-lg bg-secondary px-3 py-2 text-xs space-y-0.5 font-mono">
+            {result.loginInstructions.map((l, i) => (
+              <div key={i} className="text-foreground">{l}</div>
+            ))}
+          </div>
+
+          {/* Credentials table */}
+          <div className="overflow-hidden border border-border rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="bg-secondary text-muted-foreground">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold">Role</th>
+                  <th className="text-left px-3 py-2 font-semibold">Email</th>
+                  <th className="text-left px-3 py-2 font-semibold">What they see</th>
+                  <th className="text-right px-3 py-2 font-semibold">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {visibleCreds.map((c) => (
+                  <tr key={c.email} className="hover:bg-secondary/50">
+                    <td className="px-3 py-2">
+                      <p className="font-semibold text-foreground">{c.name}</p>
+                      <p className="text-[10px] text-muted-foreground font-mono">{c.role}</p>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <button
+                        onClick={() => copy(c.email, c.email)}
+                        className="font-mono text-[11px] inline-flex items-center gap-1 text-foreground hover:text-[var(--accent)] transition-colors"
+                        title="Click to copy"
+                      >
+                        {c.email}
+                        {copied === c.email
+                          ? <Check className="w-3 h-3 text-emerald-500" />
+                          : <Copy className="w-3 h-3 opacity-40" />
+                        }
+                      </button>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <ul className="space-y-0.5 text-[11px] text-muted-foreground">
+                        {c.keyAccess.map((k, i) => <li key={i}>• {k}</li>)}
+                      </ul>
+                    </td>
+                    <td className="px-3 py-2 text-right align-top">
+                      {c.alreadyExisted
+                        ? <span className="text-[10px] text-muted-foreground uppercase">existing</span>
+                        : <span className="text-[10px] text-emerald-600 uppercase font-bold">new</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {result.credentials.length > 5 && (
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              className="text-xs font-medium text-[var(--accent)] hover:underline"
+            >
+              {showAll ? 'Show less' : `Show all ${result.credentials.length} roles`}
+            </button>
+          )}
+
+          <p className="text-[11px] text-muted-foreground">
+            Sample data: {result.samples.customersCreated + result.samples.customersAlreadyExisted} customers, {result.samples.vendorsCreated + result.samples.vendorsAlreadyExisted} vendors total in this tenant.
+          </p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function humanizeFeature(flag: string): string {

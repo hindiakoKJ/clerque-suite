@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Body, Req, UseGuards, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, Req, UseGuards, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -46,6 +46,23 @@ export class TenantController {
   @Get('subscription')
   getSubscription(@CurrentUser() user: JwtPayload) {
     return this.tenantService.getSubscription(user.tenantId!);
+  }
+
+  /**
+   * POST /tenant/seed-test-users
+   * Idempotent — creates one user per role plus sample customers/vendors.
+   * BUSINESS_OWNER scope only. Returns full credentials list.
+   *
+   * Use case: spin up a test demo on prod with realistic role coverage so
+   * you can sign in as each role and see what they see. Predictable
+   * password "Test1234!" + PIN "1234" — never use on a tenant with real
+   * customer data.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Post('seed-test-users')
+  @HttpCode(HttpStatus.OK)
+  seedTestUsers(@CurrentUser() user: JwtPayload) {
+    return this.tenantService.seedTestUsers(user.tenantId!, user.sub);
   }
 
   /**

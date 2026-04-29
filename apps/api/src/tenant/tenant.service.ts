@@ -3,8 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BusinessType, AccountingMethod } from '@prisma/client';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
-import { taxStatusFlags, getAiQuotaForTenant, TIER_PRICING, AI_ADDONS } from '@repo/shared-types';
-import type { TaxStatus, TierId, AiAddonType } from '@repo/shared-types';
+import * as bcrypt from 'bcryptjs';
+import { taxStatusFlags, getAiQuotaForTenant, TIER_PRICING, AI_ADDONS, DEFAULT_APP_ACCESS } from '@repo/shared-types';
+import type { TaxStatus, TierId, AiAddonType, UserRole } from '@repo/shared-types';
 
 export interface UpdateTenantProfileDto {
   businessType?: BusinessType;
@@ -202,6 +203,177 @@ export class TenantService {
     });
 
     return data;
+  }
+
+  /**
+   * Seed test data for the caller's own tenant — one user per major role,
+   * plus a handful of sample customers / vendors / products. Idempotent:
+   * users that already exist by email are left alone, and the credentials
+   * are returned every time so the caller can re-fetch them.
+   *
+   * BUSINESS_OWNER scope only. SUPER_ADMIN can call it for any tenant via
+   * a thin wrapper at the controller. NOT for use on a tenant with real
+   * customer data — the predictable passwords here are weak by design.
+   */
+  async seedTestUsers(tenantId: string, callerId: string) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where:  { id: tenantId },
+      select: { id: true, slug: true, name: true },
+    });
+
+    // Pick or create a default branch — many roles need one assigned
+    let branch = await this.prisma.branch.findFirst({
+      where:   { tenantId, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!branch) {
+      branch = await this.prisma.branch.create({
+        data: { tenantId, name: 'Main Branch', isActive: true },
+      });
+    }
+
+    // ── Test user fixtures ─────────────────────────────────────────────────
+    // One per major role. Email pattern: <role-key>@<slug>.test
+    // Single shared password (for testing only; real production should never
+    // see this seeder — it's BUSINESS_OWNER-gated and intended for the demo
+    // account on prod).
+    const TEST_PASSWORD = 'Test1234!';
+    const TEST_PIN      = '1234';
+
+    interface RoleSeed {
+      role:       UserRole;
+      name:       string;
+      shortDesc:  string;     // user-facing role description
+      keyAccess:  string[];   // bullet points of what they can do (for the response)
+    }
+
+    const ROLES: RoleSeed[] = [
+      { role: 'BUSINESS_OWNER',   name: 'Test Owner',          shortDesc: 'Tenant admin — full access', keyAccess: ['Everything across POS, Ledger, Payroll', 'Manage staff + roles', 'Settings, BIR, audit log'] },
+      { role: 'BRANCH_MANAGER',   name: 'Test Branch Manager', shortDesc: 'Branch oversight',           keyAccess: ['Approve voids + manager-override discounts', 'Settlement batches', 'Read-only Ledger', 'Cannot operate the till'] },
+      { role: 'SALES_LEAD',       name: 'Test Sales Lead',     shortDesc: 'Senior cashier',             keyAccess: ['Operate POS terminal', 'Void orders without supervisor', 'Approve cashier discounts'] },
+      { role: 'CASHIER',          name: 'Test Cashier',        shortDesc: 'Operates the till',          keyAccess: ['Sell, open/close shift', 'Void with supervisor co-auth', 'No price edits'] },
+      { role: 'MDM',              name: 'Test MDM',            shortDesc: 'Master Data Manager',        keyAccess: ['Products, prices, categories, modifiers', 'Inventory adjust', 'No till operation'] },
+      { role: 'WAREHOUSE_STAFF',  name: 'Test Warehouse',      shortDesc: 'Stock movement only',        keyAccess: ['Inventory adjust + receive stock', 'No sales, no prices'] },
+      { role: 'FINANCE_LEAD',     name: 'Test Finance Lead',   shortDesc: 'Senior finance',             keyAccess: ['Bank reconciliation', 'Cash-flow reports', 'No payroll, no price edits'] },
+      { role: 'BOOKKEEPER',       name: 'Test Bookkeeper',     shortDesc: 'Junior accounting',          keyAccess: ['Journal entries', 'GL posting', 'No payroll, no period close'] },
+      { role: 'ACCOUNTANT',       name: 'Test Accountant',     shortDesc: 'Senior accounting',          keyAccess: ['Full Ledger read', 'Journal entries', 'Period close (with OWNER co-auth)'] },
+      { role: 'AR_ACCOUNTANT',    name: 'Test AR Accountant',  shortDesc: 'Customer billing',           keyAccess: ['Customer invoices + collections', 'Read POS sales'] },
+      { role: 'AP_ACCOUNTANT',    name: 'Test AP Accountant',  shortDesc: 'Vendor billing',             keyAccess: ['Supplier bills + payments', 'Vendor master data'] },
+      { role: 'PAYROLL_MASTER',   name: 'Test Payroll Master', shortDesc: 'Payroll runs',               keyAccess: ['Salary view + edits', 'Run payroll', 'Government contributions (SSS/PhilHealth/Pag-IBIG)'] },
+      { role: 'GENERAL_EMPLOYEE', name: 'Test Employee',       shortDesc: 'Generic employee',           keyAccess: ['Clock in / out', 'Submit expense claims', 'View own payslips'] },
+      { role: 'EXTERNAL_AUDITOR', name: 'Test Auditor',        shortDesc: 'Read-only compliance',       keyAccess: ['Read-only Ledger + audit log', 'BIR reports', 'Zero write access'] },
+    ];
+
+    const passwordHash = await bcrypt.hash(TEST_PASSWORD, 12);
+    const pinHash      = await bcrypt.hash(TEST_PIN, 8);
+
+    const created: { role: UserRole; email: string; alreadyExisted: boolean }[] = [];
+    for (const seed of ROLES) {
+      const slug  = seed.role.toLowerCase().replace(/_/g, '');
+      const email = `${slug}@${tenant.slug}.test`;
+
+      const existing = await this.prisma.user.findFirst({
+        where:  { tenantId, email },
+        select: { id: true },
+      });
+      if (existing) {
+        created.push({ role: seed.role, email, alreadyExisted: true });
+        continue;
+      }
+
+      const access = DEFAULT_APP_ACCESS[seed.role] ?? [];
+      await this.prisma.user.create({
+        data: {
+          tenantId,
+          // Owners + cashiers + sales-lead + general employees get a branch.
+          // Pure back-office roles stay null so they aren't bound to one branch.
+          branchId: ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE'].includes(seed.role)
+            ? branch.id
+            : null,
+          email,
+          passwordHash,
+          kioskPin:    pinHash,
+          name:        seed.name,
+          role:        seed.role,
+          isActive:    true,
+          appAccess: {
+            create: access.map((a) => ({ appCode: a.app, level: a.level })),
+          },
+        },
+      });
+      created.push({ role: seed.role, email, alreadyExisted: false });
+    }
+
+    // ── Sample masters: customers + vendors ────────────────────────────────
+    // Skipped if any already exist for this tenant — keeps the seeder safe.
+    const existingCustomers = await this.prisma.customer.count({ where: { tenantId } });
+    let customersCreated = 0;
+    if (existingCustomers === 0) {
+      await this.prisma.customer.createMany({
+        data: [
+          { tenantId, name: 'Andoks Manila Branch',     contactEmail: 'orders@andoks.test',  contactPhone: '+639171234001', creditTermDays: 30, isActive: true },
+          { tenantId, name: 'Manila Office Tower',      contactEmail: 'admin@mot.test',      contactPhone: '+639171234002', creditTermDays: 30, isActive: true },
+          { tenantId, name: 'BGC Coworking Hub',        contactEmail: 'orders@bgcwork.test', contactPhone: '+639171234003', creditTermDays: 15, isActive: true },
+          { tenantId, name: 'Sample Walk-in Customer',  contactEmail: null,                  contactPhone: null,            creditTermDays: 0,  isActive: true },
+        ],
+      });
+      customersCreated = 4;
+    }
+
+    const existingVendors = await this.prisma.vendor.count({ where: { tenantId } });
+    let vendorsCreated = 0;
+    if (existingVendors === 0) {
+      await this.prisma.vendor.createMany({
+        data: [
+          { tenantId, name: 'Meralco',                  tin: '000-100-200-300', contactEmail: 'billing@meralco.test',  contactPhone: '+639171234101', isActive: true },
+          { tenantId, name: 'PLDT Business',            tin: '000-100-200-301', contactEmail: 'biz@pldt.test',         contactPhone: '+639171234102', isActive: true },
+          { tenantId, name: 'Coffee Bean Supplier Co.', tin: '000-100-200-302', contactEmail: 'sales@coffeesupp.test', contactPhone: '+639171234103', isActive: true },
+        ],
+      });
+      vendorsCreated = 3;
+    }
+
+    // Audit log
+    await this.audit.log({
+      tenantId,
+      action:      'SETTING_CHANGED',
+      entityType:  'Tenant',
+      entityId:    tenantId,
+      after:       { seedTestUsers: created.length, customersCreated, vendorsCreated },
+      description: 'Test users + sample masters seeded',
+      performedBy: callerId,
+    });
+
+    return {
+      tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name },
+      branch: { id: branch.id, name: branch.name },
+      credentials: ROLES.map((seed) => {
+        const slug  = seed.role.toLowerCase().replace(/_/g, '');
+        const c = created.find((x) => x.role === seed.role);
+        return {
+          role:           seed.role,
+          name:           seed.name,
+          shortDesc:      seed.shortDesc,
+          email:          `${slug}@${tenant.slug}.test`,
+          password:       TEST_PASSWORD,
+          pin:            TEST_PIN,
+          alreadyExisted: c?.alreadyExisted ?? false,
+          keyAccess:      seed.keyAccess,
+        };
+      }),
+      samples: {
+        customersCreated,
+        vendorsCreated,
+        customersAlreadyExisted: existingCustomers,
+        vendorsAlreadyExisted:   existingVendors,
+      },
+      loginInstructions: [
+        `Tenant ID:  ${tenant.slug}`,
+        `Password:   ${TEST_PASSWORD}  (same for every test user)`,
+        `PIN:        ${TEST_PIN}        (same for every test user)`,
+        `Email:      <role>@${tenant.slug}.test  (e.g. cashier@${tenant.slug}.test)`,
+      ],
+    };
   }
 
   async getProfile(tenantId: string) {

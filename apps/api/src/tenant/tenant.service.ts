@@ -3,8 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BusinessType, AccountingMethod } from '@prisma/client';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
-import { taxStatusFlags, isAiEnabledForTenant } from '@repo/shared-types';
-import type { TaxStatus, TierId } from '@repo/shared-types';
+import { taxStatusFlags, getAiQuotaForTenant, TIER_PRICING, AI_ADDONS } from '@repo/shared-types';
+import type { TaxStatus, TierId, AiAddonType } from '@repo/shared-types';
 
 export interface UpdateTenantProfileDto {
   businessType?: BusinessType;
@@ -60,18 +60,40 @@ export class TenantService {
         hasBirForms: true,
         isDemoTenant: true,
         signupSource: true,
-        aiEnabledOverride: true,
+        setupFeePaidAt: true,
+        aiAddonType: true,
+        aiAddonExpiresAt: true,
+        aiQuotaOverride: true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found');
 
-    // Resolve AI flag + reason for the subscription card.
-    const aiEnabled = isAiEnabledForTenant(tenant.tier as TierId, tenant.aiEnabledOverride);
-    const aiReason: 'tier' | 'override_on' | 'override_off' | 'tier_locked' =
-      tenant.aiEnabledOverride === true  ? 'override_on'
-    : tenant.aiEnabledOverride === false ? 'override_off'
-    : aiEnabled                          ? 'tier'
-    :                                       'tier_locked';
+    // Resolve AI quota — tier-included + active addon + override.
+    const tierId = tenant.tier as TierId;
+    const aiResolution = getAiQuotaForTenant(
+      tierId,
+      tenant.aiAddonType as AiAddonType | null,
+      tenant.aiAddonExpiresAt,
+      tenant.aiQuotaOverride,
+    );
+
+    // Count this month's actual usage.
+    const startOfMonth = new Date();
+    startOfMonth.setUTCDate(1);
+    startOfMonth.setUTCHours(0, 0, 0, 0);
+    const aiUsedThisMonth = await this.prisma.aiUsage.count({
+      where: {
+        tenantId,
+        createdAt: { gte: startOfMonth },
+        action:    { in: ['journal_drafter', 'journal_guide', 'receipt_ocr'] },
+      },
+    });
+
+    // Tier pricing — looked up from the canonical pricing table.
+    const tierPricing = TIER_PRICING[tierId];
+    const aiAddonPackage = tenant.aiAddonType
+      ? AI_ADDONS[tenant.aiAddonType as AiAddonType]
+      : null;
 
     // Active non-owner staff count — what the tier cap limits.
     const staffCount = await this.prisma.user.count({
@@ -98,42 +120,88 @@ export class TenantService {
       hasBirForms:       tenant.hasBirForms,
       isDemoTenant:      tenant.isDemoTenant,
       signupSource:      tenant.signupSource,
-      aiEnabled,
-      aiReason,
+
+      // Pricing — what they pay
+      pricing: {
+        setupFeePhp:    tierPricing.setupFeePhp,
+        monthlyPhp:     tierPricing.monthlyPhp,
+        annualPhp:      tierPricing.annualPhp,
+        setupFeePaidAt: tenant.setupFeePaidAt,
+      },
+
+      // AI quota — usage vs budget
+      ai: {
+        monthlyQuota:    aiResolution.monthlyQuota,
+        usedThisMonth:   aiUsedThisMonth,
+        remaining:       Math.max(0, aiResolution.monthlyQuota - aiUsedThisMonth),
+        source:          aiResolution.source,
+        enabled:         aiResolution.enabled,
+        addonType:       tenant.aiAddonType,
+        addonExpiresAt:  tenant.aiAddonExpiresAt,
+        addonPackage:    aiAddonPackage,
+      },
     };
   }
 
   /**
-   * SUPER_ADMIN-only: override the AI feature flag for a specific tenant.
-   *   true  → force AI on (sales perk for a lower-tier tenant)
-   *   false → force AI off (opt-out, billing pause)
-   *   null  → revert to tier default
-   * Caller must re-login to pick up the new aiEnabled in their JWT.
+   * SUPER_ADMIN-only: assign / extend / cancel an AI add-on subscription.
+   * Plus an optional quota override (kill switch or custom quota) that beats
+   * everything else. Tenant must re-login to pick up the new JWT quota.
+   *
+   * Examples:
+   *   { addonType: 'STANDARD_200', expiresAt: '2026-05-31T23:59:59Z' }
+   *     → activate Standard 200 addon until end of May
+   *   { addonType: null }
+   *     → cancel addon (returns tenant to tier-included quota only)
+   *   { quotaOverride: 1000 }
+   *     → SUPER_ADMIN custom quota (sales perk, beta)
+   *   { quotaOverride: 0 }
+   *     → kill switch (force AI off)
+   *   { quotaOverride: null }
+   *     → remove override (use tier + addon resolution)
    */
-  async setAiOverride(tenantId: string, value: boolean | null, performedBy: string) {
+  async setAiAddon(
+    tenantId:       string,
+    params: {
+      addonType?:     AiAddonType | null;
+      expiresAt?:     Date | null;
+      quotaOverride?: number | null;
+    },
+    performedBy:    string,
+  ) {
     const before = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
-      select: { aiEnabledOverride: true, tier: true },
+      select: {
+        aiAddonType:       true,
+        aiAddonExpiresAt:  true,
+        aiQuotaOverride:   true,
+      },
     });
     if (!before) throw new NotFoundException('Tenant not found');
 
-    await this.prisma.tenant.update({
-      where: { id: tenantId },
-      data:  { aiEnabledOverride: value },
-    });
+    const data: Record<string, unknown> = {};
+    if (params.addonType     !== undefined) data.aiAddonType      = params.addonType;
+    if (params.expiresAt     !== undefined) data.aiAddonExpiresAt = params.expiresAt;
+    if (params.quotaOverride !== undefined) data.aiQuotaOverride  = params.quotaOverride;
+
+    await this.prisma.tenant.update({ where: { id: tenantId }, data });
 
     await this.audit.log({
       tenantId,
       action:      'SETTING_CHANGED',
       entityType:  'Tenant',
       entityId:    tenantId,
-      before:      { aiEnabledOverride: before.aiEnabledOverride },
-      after:       { aiEnabledOverride: value },
-      description: `AI feature override set to ${value === null ? 'inherit-tier' : value ? 'forced-on' : 'forced-off'}`,
+      before:      {
+        aiAddonType:      before.aiAddonType,
+        aiAddonExpiresAt: before.aiAddonExpiresAt,
+        aiQuotaOverride:  before.aiQuotaOverride,
+      },
+      after:       data,
+      description: 'AI add-on subscription / quota override updated',
       performedBy,
     });
 
-    return { aiEnabledOverride: value };
+    return data;
   }
 
   async getProfile(tenantId: string) {

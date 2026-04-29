@@ -632,10 +632,11 @@ export default function JournalPage() {
 interface DraftLine { accountId: string; description: string; debit: string; credit: string }
 
 function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  // AI gate — JWT-resolved flag (tier + per-tenant override). Hides every AI
-  // affordance in this modal when the tenant doesn't have AI enabled. Backend
-  // re-validates via AiEnabledGuard so this is UX, not security.
-  const aiEnabled = useAuthStore((s) => s.user?.aiEnabled ?? false);
+  // AI gate — JWT-resolved monthly quota (tier-included + active addon +
+  // override). 0 = no AI access; >0 = surfaces visible. Backend re-validates
+  // every call against actual usage via AiQuotaGuard.
+  const aiQuotaMonthly = useAuthStore((s) => s.user?.aiQuotaMonthly ?? 0);
+  const aiEnabled = aiQuotaMonthly > 0;
 
   const { data: accounts = [] } = useQuery<AccountOption[]>({
     queryKey: ['accounts'],

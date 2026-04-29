@@ -4,5 +4,6 @@ export * from './pos';
 export * from './accounting';
 export * from './permissions';
 export * from './tiers';
+export * from './pricing';
 export * from './personas';
 export * from './sod';

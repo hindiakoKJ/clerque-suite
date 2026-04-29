@@ -50,8 +50,8 @@ interface ApproverOption {
 
 export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModalProps) {
   const playSound = useSound();
-  // AI gate — receipt OCR is a TIER_5+ feature; hide the snap button when off.
-  const aiEnabled = useAuthStore((s) => s.user?.aiEnabled ?? false);
+  // AI gate — receipt OCR consumes one prompt per scan; hide if no quota.
+  const aiEnabled = useAuthStore((s) => (s.user?.aiQuotaMonthly ?? 0) > 0);
   const [type,            setType]            = useState<'PAID_OUT' | 'CASH_DROP'>('PAID_OUT');
   const [amountStr,       setAmountStr]       = useState('');
   const [reason,          setReason]          = useState('');

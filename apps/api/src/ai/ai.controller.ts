@@ -11,7 +11,7 @@ import {
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { AiEnabledGuard } from './ai-enabled.guard';
+import { AiQuotaGuard } from './ai-quota.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -56,7 +56,7 @@ Return ONLY valid JSON matching this shape, with no surrounding prose:
 
 @ApiTags('AI')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard, AiEnabledGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AiQuotaGuard)
 @Controller('ai')
 export class AiController {
   constructor(

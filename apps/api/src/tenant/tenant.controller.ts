@@ -49,25 +49,49 @@ export class TenantController {
   }
 
   /**
-   * PATCH /tenant/ai-override
-   * SUPER_ADMIN-only — override the AI feature flag for the current tenant.
-   * Body: { value: boolean | null }   (null reverts to tier default)
-   * Tenant user must re-login to pick up the new flag in their JWT.
+   * PATCH /tenant/ai-addon
+   * SUPER_ADMIN-only — assign / extend / cancel AI add-on, or set a custom
+   * quota override.
+   *
+   * Body shape:
+   *   {
+   *     tenantId?:      string         // target tenant; defaults to caller's
+   *     addonType?:     'STARTER_50' | 'STANDARD_200' | 'PRO_500' | null
+   *     expiresAt?:     ISO8601 string | null
+   *     quotaOverride?: number | null  // 0 = kill switch, >0 = custom, null = remove
+   *   }
+   *
+   * Tenant user must re-login to pick up the new aiQuotaMonthly in their JWT.
    */
   @Roles('SUPER_ADMIN')
-  @Patch('ai-override')
+  @Patch('ai-addon')
   @HttpCode(HttpStatus.OK)
-  setAiOverride(
+  setAiAddon(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { value: boolean | null; tenantId?: string },
+    @Body() body: {
+      tenantId?:      string;
+      addonType?:     'STARTER_50' | 'STANDARD_200' | 'PRO_500' | null;
+      expiresAt?:     string | null;
+      quotaOverride?: number | null;
+    },
   ) {
-    // SUPER_ADMIN can target any tenant via body.tenantId; tenant-scoped admins
-    // would not reach this endpoint (Roles guard rejects them first).
     const targetTenantId = body.tenantId ?? user.tenantId;
     if (!targetTenantId) {
       throw new BadRequestException('tenantId is required when called outside a tenant context.');
     }
-    return this.tenantService.setAiOverride(targetTenantId, body.value, user.sub);
+    return this.tenantService.setAiAddon(
+      targetTenantId,
+      {
+        addonType:     body.addonType,
+        expiresAt:     body.expiresAt === undefined
+                          ? undefined
+                          : body.expiresAt === null
+                            ? null
+                            : new Date(body.expiresAt),
+        quotaOverride: body.quotaOverride,
+      },
+      user.sub,
+    );
   }
 
   @Roles('BUSINESS_OWNER')

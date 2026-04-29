@@ -106,12 +106,17 @@ export interface JwtPayload {
   /** Tenant subscription tier — drives tier-locked permission gating in the UI. */
   tier?:              import('./tiers').TierId;
   /**
-   * Whether AI features (Drafter, Guide, Smart Picker, Receipt OCR) are
-   * enabled for this tenant. Resolved at login from tier + per-tenant
-   * override. Frontend hides AI affordances when false; backend
-   * AiEnabledGuard returns 403 with code AI_NOT_ENABLED.
+   * Monthly AI prompt quota resolved from tier-included + active addon +
+   * SUPER_ADMIN override. Baked into JWT at login. Frontend uses this to
+   * hide AI affordances when 0 and show usage warnings when low. Backend
+   * AiQuotaGuard counts this month's usage against the quota.
+   *
+   * Set to 0 when:
+   *   - Tier doesn't include AI and no addon active
+   *   - Override is explicitly 0 (kill switch)
+   *   - Addon expired
    */
-  aiEnabled?:         boolean;
+  aiQuotaMonthly?:    number;
   /**
    * RBAC: persona template the user was created from. Reference into
    * packages/shared-types/src/personas.ts. Frontend uses this to render the

@@ -10,8 +10,8 @@ import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, isAiEnabledForTenant } from '@repo/shared-types';
-import type { TaxStatus, TierId } from '@repo/shared-types';
+import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant } from '@repo/shared-types';
+import type { TaxStatus, TierId, AiAddonType } from '@repo/shared-types';
 
 const ACCESS_EXPIRY = '15m';
 const REFRESH_EXPIRY = '7d';
@@ -184,7 +184,7 @@ export class AuthService {
     const tenant = tenantId
       ? await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiEnabledOverride: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true },
         })
       : null;
 
@@ -217,11 +217,17 @@ export class AuthService {
       ptuNumber:         tenant?.ptuNumber ?? null,
       minNumber:         tenant?.minNumber ?? null,
       tier:              (tenant?.tier ?? undefined) as JwtPayload['tier'],
-      // AI feature gate — resolves tier default + per-tenant override.
-      // Baked into JWT so the frontend can gate UI without an extra fetch.
-      aiEnabled:         tenant?.tier
-        ? isAiEnabledForTenant(tenant.tier as TierId, tenant.aiEnabledOverride)
-        : false,
+      // AI quota — resolves tier-included + active addon + SUPER_ADMIN override
+      // (see pricing.ts → getAiQuotaForTenant). Baked into JWT at login so the
+      // frontend can gate UI and show usage warnings without extra fetches.
+      aiQuotaMonthly:    tenant?.tier
+        ? getAiQuotaForTenant(
+            tenant.tier as TierId,
+            tenant.aiAddonType as AiAddonType | null,
+            tenant.aiAddonExpiresAt,
+            tenant.aiQuotaOverride,
+          ).monthlyQuota
+        : 0,
       personaKey:        userRbac?.personaKey ?? null,
       customPermissions: userRbac?.customPermissions ?? [],
     };

@@ -95,6 +95,15 @@ enum SignupSource {
   IMPORTED
 }
 
+/// AI add-on packages. Sold monthly to TIER_4+ (T1-T3 cannot buy — no JE write).
+/// TIER_5 includes 200 prompts/mo without buying; addon stacks on top.
+/// TIER_6 includes 500 prompts/mo without buying; addon stacks on top.
+enum AiAddonType {
+  STARTER_50    // 50 prompts/mo for ₱250
+  STANDARD_200  // 200 prompts/mo for ₱600
+  PRO_500       // 500 prompts/mo for ₱1,400
+}
+
 enum EmploymentType {
   REGULAR
   PROBATIONARY
@@ -333,11 +342,20 @@ model Tenant {
   /// Where this tenant originated from. WEB = sales-led signup, PLAYSTORE =
   /// future freemium standalone POS app, IMPORTED = backfill / migration.
   signupSource             SignupSource     @default(WEB)
-  /// AI feature override. Null = inherit from tier (TIER_5+ get AI); true =
-  /// force on regardless of tier (sales-led perk for a lower-tier customer);
-  /// false = force off regardless of tier (e.g. tenant opted out, billing pause).
-  /// SUPER_ADMIN sets this; never exposed for self-service edits.
-  aiEnabledOverride        Boolean?
+  /// One-time setup fee paid date. Metadata only — billing is out-of-band.
+  /// Null = setup fee not yet paid (e.g. trial / launch member).
+  setupFeePaidAt           DateTime?
+  /// Active AI add-on package — null = no addon (uses tier-included quota only).
+  /// SUPER_ADMIN assigns via PATCH /tenant/ai-addon. Renews monthly via the
+  /// external billing flow; aiAddonExpiresAt drives the active/inactive check.
+  aiAddonType              AiAddonType?
+  /// When the active addon expires. After this date, addon contributes 0 to
+  /// the monthly quota. Renewal pushes the date forward.
+  aiAddonExpiresAt         DateTime?
+  /// Monthly prompt quota override. Null = inherit (tier-included + addon).
+  /// 0 = kill switch (force AI off entirely, regardless of addon).
+  /// >0 = SUPER_ADMIN custom quota (sales perk, beta access, etc.).
+  aiQuotaOverride          Int?
   /// Primary tax classification per BIR registration.
   /// Drives receipt type, VAT math, PWD discount engine, and journal entries.
   taxStatus                TaxStatus        @default(UNREGISTERED)

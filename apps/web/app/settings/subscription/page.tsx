@@ -21,6 +21,8 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { TIERS, nextTier, type TierId } from '@repo/shared-types';
 
+type AiAddonType = 'STARTER_50' | 'STANDARD_200' | 'PRO_500';
+
 interface SubscriptionResponse {
   tier:              TierId;
   expiresAt:         string | null;
@@ -32,15 +34,28 @@ interface SubscriptionResponse {
   hasBirForms:       boolean;
   isDemoTenant:      boolean;
   signupSource:      string;
-  aiEnabled:         boolean;
-  /**
-   * Reason the AI flag is on or off:
-   *   - 'tier'         → AI on because the tier includes it
-   *   - 'override_on'  → AI on because Anthropic / SUPER_ADMIN flipped the override
-   *   - 'override_off' → AI off because override is explicitly false
-   *   - 'tier_locked'  → AI off because the tier doesn't include it (upgrade path)
-   */
-  aiReason:          'tier' | 'override_on' | 'override_off' | 'tier_locked';
+  pricing: {
+    setupFeePhp:    number;
+    monthlyPhp:     number;
+    annualPhp:      number;
+    setupFeePaidAt: string | null;
+  };
+  ai: {
+    monthlyQuota:    number;
+    usedThisMonth:   number;
+    remaining:       number;
+    source:          'tier_locked' | 'tier_included' | 'addon_only' | 'tier+addon' | 'override' | 'kill_switch';
+    enabled:         boolean;
+    addonType:       AiAddonType | null;
+    addonExpiresAt:  string | null;
+    addonPackage:    {
+      type:            AiAddonType;
+      displayName:     string;
+      promptsIncluded: number;
+      monthlyPhp:      number;
+      pitch:           string;
+    } | null;
+  };
 }
 
 export default function SubscriptionPage() {
@@ -132,6 +147,21 @@ export default function SubscriptionPage() {
               </div>
               <h2 className="text-2xl font-bold text-foreground mt-1">{tier.displayName}</h2>
               <p className="text-sm text-muted-foreground mt-1 max-w-md">{tier.tagline}</p>
+              {/* Pricing — what they pay */}
+              <div className="flex items-baseline gap-3 mt-3 pt-3 border-t border-border">
+                <p className="text-2xl font-bold text-foreground">
+                  ₱{data.pricing.monthlyPhp.toLocaleString('en-PH')}
+                  <span className="text-sm font-normal text-muted-foreground">/mo</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  or ₱{data.pricing.annualPhp.toLocaleString('en-PH')}/yr (2 months free)
+                </p>
+              </div>
+              {!data.pricing.setupFeePaidAt && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                  ⓘ One-time setup fee (₱{data.pricing.setupFeePhp.toLocaleString('en-PH')}) not yet recorded.
+                </p>
+              )}
             </div>
             {data.expiresAt && (
               <div className="text-right">
@@ -180,25 +210,96 @@ export default function SubscriptionPage() {
             </span>
           </div>
 
-          {/* AI feature status */}
-          <div className="flex items-center justify-between text-sm pt-3 border-t border-border">
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Sparkles className="w-3.5 h-3.5" />
-              AI features
-            </span>
-            <div className="text-right">
-              <span className={`text-xs font-bold uppercase tracking-wide ${data.aiEnabled ? 'text-emerald-600' : 'text-muted-foreground'}`}>
-                {data.aiEnabled ? 'Enabled' : 'Locked'}
+          {/* AI quota usage */}
+          <div className="space-y-1.5 pt-3 border-t border-border">
+            <div className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Sparkles className="w-3.5 h-3.5" />
+                AI prompts this month
               </span>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                {data.aiReason === 'tier'         && 'Included with your tier'}
-                {data.aiReason === 'override_on'  && 'Manually enabled by support'}
-                {data.aiReason === 'override_off' && 'Disabled — contact support'}
-                {data.aiReason === 'tier_locked'  && 'Available on Team and Multi plans'}
-              </p>
+              <span className={`font-semibold ${
+                !data.ai.enabled ? 'text-muted-foreground'
+                : data.ai.remaining === 0 ? 'text-red-600'
+                : data.ai.remaining < data.ai.monthlyQuota * 0.2 ? 'text-amber-600'
+                : 'text-foreground'
+              }`}>
+                {data.ai.enabled
+                  ? `${data.ai.usedThisMonth} of ${data.ai.monthlyQuota}`
+                  : 'Locked'}
+              </span>
             </div>
+            {data.ai.enabled && (
+              <div className="h-2 rounded-full bg-secondary overflow-hidden">
+                <div
+                  className={`h-full transition-all ${
+                    data.ai.remaining === 0 ? 'bg-red-500'
+                    : data.ai.remaining < data.ai.monthlyQuota * 0.2 ? 'bg-amber-500'
+                    : 'bg-emerald-500'
+                  }`}
+                  style={{ width: `${Math.min(100, (data.ai.usedThisMonth / Math.max(1, data.ai.monthlyQuota)) * 100)}%` }}
+                />
+              </div>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              {data.ai.source === 'tier_locked'   && 'Available on Team plan and above, or as an add-on for Squad tier.'}
+              {data.ai.source === 'tier_included' && `Included with your ${tier.displayName} plan.`}
+              {data.ai.source === 'addon_only'    && data.ai.addonPackage && `${data.ai.addonPackage.displayName} add-on — renews ${formatExpiry(data.ai.addonExpiresAt)}.`}
+              {data.ai.source === 'tier+addon'    && data.ai.addonPackage && `Tier-included plus ${data.ai.addonPackage.displayName} add-on.`}
+              {data.ai.source === 'override'      && 'Custom quota set by support.'}
+              {data.ai.source === 'kill_switch'   && 'Disabled by support — contact us to re-enable.'}
+            </p>
           </div>
         </div>
+
+        {/* AI add-on packages — visible to TIER_4+ */}
+        {(data.tier === 'TIER_4' || data.tier === 'TIER_5' || data.tier === 'TIER_6') && (
+          <div className="rounded-xl border border-border bg-card p-5 sm:p-6 space-y-3">
+            <div className="flex items-start gap-3">
+              <Sparkles className="w-5 h-5 text-[var(--accent)] shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">AI Add-ons</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Stack on top of your tier-included quota. Cheaper than a part-time bookkeeper.
+                </p>
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-3 pt-1">
+              {[
+                { type: 'STARTER_50',   name: 'Starter',  prompts: 50,  price: 250,   pitch: '~2 prompts/day' },
+                { type: 'STANDARD_200', name: 'Standard', prompts: 200, price: 600,   pitch: '~7 prompts/day' },
+                { type: 'PRO_500',      name: 'Pro',      prompts: 500, price: 1_400, pitch: 'Heavy usage' },
+              ].map((pkg) => {
+                const isActive = data.ai.addonType === pkg.type;
+                return (
+                  <div key={pkg.type} className={`rounded-lg border p-3 ${
+                    isActive
+                      ? 'border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)]'
+                      : 'border-border bg-background'
+                  }`}>
+                    <div className="flex items-baseline justify-between">
+                      <p className="font-bold text-foreground">{pkg.name}</p>
+                      {isActive && <span className="text-[9px] uppercase font-bold tracking-wider text-emerald-600">Active</span>}
+                    </div>
+                    <p className="text-2xl font-bold text-foreground mt-1">₱{pkg.price.toLocaleString('en-PH')}<span className="text-xs font-normal text-muted-foreground">/mo</span></p>
+                    <p className="text-xs text-foreground mt-1">{pkg.prompts} prompts</p>
+                    <p className="text-[10px] text-muted-foreground">{pkg.pitch}</p>
+                  </div>
+                );
+              })}
+            </div>
+            <a
+              href="mailto:support@hnscorpph.com?subject=AI%20Add-on%20Request"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-white font-semibold hover:brightness-110 active:scale-[0.98] transition-all text-sm"
+              style={{ background: 'var(--accent)' }}
+            >
+              {data.ai.addonType ? 'Change add-on' : 'Buy add-on'}
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </a>
+            <p className="text-[10px] text-muted-foreground">
+              Add-on requests are processed manually by our team within 1 business day. Self-service billing coming soon.
+            </p>
+          </div>
+        )}
 
         {/* Included features */}
         <div className="rounded-xl border border-border bg-card p-5 sm:p-6 space-y-3">
@@ -258,6 +359,12 @@ export default function SubscriptionPage() {
   );
 }
 
+function formatExpiry(iso: string | null): string {
+  if (!iso) return 'no expiry';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function humanizeFeature(flag: string): string {
   const map: Record<string, string> = {
     'pos:basic':            'Point of Sale terminal',
@@ -272,7 +379,6 @@ function humanizeFeature(flag: string): string {
     'payroll:full':         'Payroll — runs, payslips, government contributions',
     'bir:forms':            'BIR forms — 2550Q, 1701Q, 2551Q, EWT, SAWT, EIS',
     'audit:log':            'Centralized audit log viewer',
-    'ai:enabled':           'AI features — JE drafter, validator, smart account picker, receipt OCR',
     'custom_personas':      'Custom permission templates per role',
   };
   return map[flag] ?? flag;

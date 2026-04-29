@@ -62,8 +62,8 @@ export type TierFeatureFlag =
   | 'payroll:full'          // Payroll runs, payslips, salary edits, govt contributions
   | 'bir:forms'             // 2550Q, 1701Q, 2551Q, EWT, SAWT, EIS — formal BIR tax filings
   | 'audit:log'             // Centralized audit-log viewer for compliance review
-  | 'custom_personas'       // Owner can create custom persona templates (future)
-  | 'ai:enabled';           // Drafter, Guide, Smart Picker, Receipt OCR — TIER_5 + TIER_6 by default; per-tenant override possible
+  | 'custom_personas';      // Owner can create custom persona templates (future)
+  // AI is quota-based (see TIER_AI_INCLUDED in pricing.ts), not a flag here.
 
 /**
  * Per-tier quota and capability bundle.
@@ -229,7 +229,6 @@ export const TIERS: Record<TierId, TierConfig> = {
       'ar:full',
       'ap:full',
       'payroll:full',
-      'ai:enabled',
     ],
     staffBucket: { min: 6, max: 10 },
   },
@@ -261,27 +260,13 @@ export const TIERS: Record<TierId, TierConfig> = {
       'bir:forms',
       'audit:log',
       'custom_personas',
-      'ai:enabled',
     ],
     staffBucket: { min: 11, max: -1 },
   },
 };
 
-/**
- * Resolve whether AI features are enabled for a given tenant.
- * Override beats tier:
- *   - override === true  → AI on regardless of tier (sales perk)
- *   - override === false → AI off regardless of tier (opt-out)
- *   - override === null  → inherit from tier (TIER_5 + TIER_6 enabled)
- */
-export function isAiEnabledForTenant(
-  tier: TierId,
-  override: boolean | null | undefined,
-): boolean {
-  if (override === true)  return true;
-  if (override === false) return false;
-  return TIERS[tier].enabledFeatures.includes('ai:enabled');
-}
+// AI feature access moved to pricing.ts → getAiQuotaForTenant.
+// AI is now a quota-based addon model, not a binary flag.
 
 /**
  * Recommend a tier based on declared staff count (0..N+).  Used by the

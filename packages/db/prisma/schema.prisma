@@ -413,6 +413,11 @@ model Tenant {
   orSequence          OrSequence?
   expenseClaims       ExpenseClaim[]
   expenseClaimSeq     ExpenseClaimSequence?
+  arInvoices          ARInvoice[]
+  arPayments          ARPayment[]
+  apBills             APBill[]
+  apPayments          APPayment[]
+  documentSequences   DocumentNumberSequence[]
 
   @@map("tenants")
 }
@@ -478,6 +483,10 @@ model Branch {
   inventory   InventoryItem[]
   orders      Order[]
   shifts      Shift[]
+  arInvoices  ARInvoice[]
+  arPayments  ARPayment[]
+  apBills     APBill[]
+  apPayments  APPayment[]
 
   @@map("branches")
 }
@@ -1141,10 +1150,12 @@ model Account {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  parent        Account?      @relation("AccountHierarchy", fields: [parentId], references: [id])
-  children      Account[]     @relation("AccountHierarchy")
-  journalLines  JournalLine[]
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent         Account?        @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children       Account[]       @relation("AccountHierarchy")
+  journalLines   JournalLine[]
+  arInvoiceLines ARInvoiceLine[]
+  apBillLines    APBillLine[]
 
   @@unique([tenantId, code])
   @@index([tenantId, type])
@@ -1184,6 +1195,12 @@ model JournalEntry {
   reversalOf        JournalEntry?      @relation("JEReversals", fields: [reversalOfId], references: [id])
   /// The reversal entry created for this JE (if any)
   reversedBy        JournalEntry?      @relation("JEReversals")
+  /// AR/AP back-references — at most one is non-null per JE (a JE is created
+  /// by exactly one document type: invoice post, bill post, or payment).
+  arInvoice         ARInvoice?         @relation("ARInvoiceJE")
+  arPayment         ARPayment?         @relation("ARPaymentJE")
+  apBill            APBill?            @relation("APBillJE")
+  apPayment         APPayment?         @relation("APPaymentJE")
 
   @@index([tenantId, postingDate])
   @@index([tenantId, date])
@@ -1503,6 +1520,8 @@ model Vendor {
 
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   expenses        ExpenseEntry[]
+  bills           APBill[]
+  payments        APPayment[]
 
   @@index([tenantId, tin])
   @@index([tenantId, isActive])
@@ -1593,10 +1612,362 @@ model Customer {
 
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   orders          Order[]
+  invoices        ARInvoice[]
+  payments        ARPayment[]
 
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
   @@map("customers")
+}
+
+// ─── AR (Accounts Receivable) ────────────────────────────────────────────────
+// Customer invoices + payments + matching. Drives FBL5N-style "show me all
+// open items for customer X" queries. POS Orders with invoiceType=CHARGE
+// continue to exist independently — ARInvoice is the formal back-office
+// invoice document with proper status tracking.
+
+enum InvoiceStatus {
+  DRAFT          // not yet posted; no GL impact
+  OPEN           // posted, no payments
+  PARTIALLY_PAID // some payment applied, balance > 0
+  PAID           // fully paid, balance = 0
+  CANCELLED      // never posted, retained for audit
+  VOIDED         // posted then reversed; reversal JE created
+}
+
+/// Customer invoice — the "you owe us" document.
+/// On POST, creates a JE: DR AR Receivables, CR Revenue/Output VAT.
+/// Status transitions: DRAFT → OPEN → PARTIALLY_PAID → PAID
+///                     OPEN → CANCELLED (if never posted) or VOIDED (post then reverse).
+model ARInvoice {
+  id              String          @id @default(cuid())
+  tenantId        String
+  branchId        String?
+
+  /// User-visible invoice number, tenant-scoped sequence.
+  invoiceNumber   String
+  /// Customer's PO# or our external reference.
+  reference       String?
+
+  customerId      String
+
+  /// Document Date — when the sale happened.
+  invoiceDate     DateTime
+  /// Posting Date — drives accounting period.
+  postingDate     DateTime
+  /// Computed at create: invoiceDate + termsDays (or override).
+  dueDate         DateTime
+  /// Net days. 0 = cash; 30 = Net 30; copied from customer at create unless overridden.
+  termsDays       Int             @default(0)
+
+  subtotal        Decimal         @db.Decimal(14, 2)
+  vatAmount       Decimal         @db.Decimal(14, 2) @default(0)
+  totalAmount     Decimal         @db.Decimal(14, 2)
+  /// Sum of applied payments. Updated on every ARPaymentApplication change.
+  paidAmount      Decimal         @db.Decimal(14, 2) @default(0)
+  /// Computed: totalAmount - paidAmount. Stored for query speed in aging reports.
+  balanceAmount   Decimal         @db.Decimal(14, 2)
+
+  status          InvoiceStatus   @default(DRAFT)
+
+  description     String?
+  notes           String?
+  createdById     String
+  postedById      String?
+  postedAt        DateTime?
+  voidedById      String?
+  voidedAt        DateTime?
+  voidReason      String?
+
+  /// JE created on POST. Null while DRAFT.
+  journalEntryId  String?         @unique
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  customer        Customer        @relation(fields: [customerId], references: [id])
+  journalEntry    JournalEntry?   @relation("ARInvoiceJE", fields: [journalEntryId], references: [id])
+  lines           ARInvoiceLine[]
+  applications    ARPaymentApplication[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId, customerId, status])
+  @@index([tenantId, status, dueDate])         // FBL5N-style: open items past due
+  @@index([tenantId, postingDate])
+  @@map("ar_invoices")
+}
+
+model ARInvoiceLine {
+  id             String      @id @default(cuid())
+  invoiceId      String
+  /// GL account to credit on POST (Revenue, Service Income, etc.).
+  accountId      String
+  description    String?
+  quantity       Decimal     @db.Decimal(14, 4) @default(1)
+  unitPrice      Decimal     @db.Decimal(14, 2)
+  /// Per-line VAT amount (for invoices with mixed VATable/non-VATable).
+  taxAmount      Decimal     @db.Decimal(14, 2) @default(0)
+  lineTotal      Decimal     @db.Decimal(14, 2)
+  createdAt      DateTime    @default(now())
+
+  invoice        ARInvoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  account        Account     @relation(fields: [accountId], references: [id])
+
+  @@index([invoiceId])
+  @@map("ar_invoice_lines")
+}
+
+/// Customer payment received. May apply to one or many invoices via ARPaymentApplication.
+/// Unapplied portion = unallocated credit (customer paid more than billed; sits as credit).
+model ARPayment {
+  id              String          @id @default(cuid())
+  tenantId        String
+  branchId        String?
+
+  paymentNumber   String          // tenant-scoped sequence
+  customerId      String
+  paymentDate     DateTime
+  postingDate     DateTime
+
+  method          PaymentMethod   // CASH | GCASH_BUSINESS | etc. (reuses POS enum)
+  reference       String?         // OR#, check#, GCash ref
+  totalAmount     Decimal         @db.Decimal(14, 2)
+  appliedAmount   Decimal         @db.Decimal(14, 2) @default(0)
+  /// totalAmount - appliedAmount. Sits as customer credit when > 0.
+  unappliedAmount Decimal         @db.Decimal(14, 2)
+
+  description     String?
+  notes           String?
+  createdById     String
+  voidedById      String?
+  voidedAt        DateTime?
+  voidReason      String?
+
+  journalEntryId  String?         @unique
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  customer        Customer        @relation(fields: [customerId], references: [id])
+  journalEntry    JournalEntry?   @relation("ARPaymentJE", fields: [journalEntryId], references: [id])
+  applications    ARPaymentApplication[]
+
+  @@unique([tenantId, paymentNumber])
+  @@index([tenantId, customerId])
+  @@index([tenantId, postingDate])
+  @@map("ar_payments")
+}
+
+/// Junction: one payment can apply to N invoices, one invoice can receive N payments.
+/// On insert/update/delete, recompute the invoice's paidAmount + status.
+model ARPaymentApplication {
+  id            String     @id @default(cuid())
+  paymentId     String
+  invoiceId     String
+  appliedAmount Decimal    @db.Decimal(14, 2)
+  appliedAt     DateTime   @default(now())
+
+  payment       ARPayment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice       ARInvoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, invoiceId])
+  @@index([invoiceId])
+  @@map("ar_payment_applications")
+}
+
+// ─── AP (Accounts Payable) — mirrors AR for vendor bills ─────────────────────
+
+enum BillStatus {
+  DRAFT
+  OPEN
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+  VOIDED
+}
+
+/// Vendor bill — the "we owe them" document.
+/// On POST, creates a JE: DR Expense/Asset, CR AP Payables (+ optional WHT split).
+model APBill {
+  id              String          @id @default(cuid())
+  tenantId        String
+  branchId        String?
+
+  /// Our internal bill number, tenant-scoped sequence.
+  billNumber      String
+  /// Vendor's invoice number printed on their document we received.
+  vendorBillRef   String?
+  /// Our PO# or external reference.
+  reference       String?
+
+  vendorId        String
+
+  billDate        DateTime
+  postingDate     DateTime
+  dueDate         DateTime
+  termsDays       Int             @default(0)
+
+  subtotal        Decimal         @db.Decimal(14, 2)
+  vatAmount       Decimal         @db.Decimal(14, 2) @default(0)
+  /// Withholding tax withheld on payment (PH-specific). Reduces the cash outflow.
+  whtAmount       Decimal         @db.Decimal(14, 2) @default(0)
+  whtAtcCode      String?         // ATC: WI160 (rentals 5%), WI010 (prof fees 10/15%), WI040 (services 2%)
+  totalAmount     Decimal         @db.Decimal(14, 2)
+  paidAmount      Decimal         @db.Decimal(14, 2) @default(0)
+  balanceAmount   Decimal         @db.Decimal(14, 2)
+
+  status          BillStatus      @default(DRAFT)
+
+  description     String?
+  notes           String?
+  createdById     String
+  postedById      String?
+  postedAt        DateTime?
+  voidedById      String?
+  voidedAt        DateTime?
+  voidReason      String?
+
+  journalEntryId  String?         @unique
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  vendor          Vendor          @relation(fields: [vendorId], references: [id])
+  journalEntry    JournalEntry?   @relation("APBillJE", fields: [journalEntryId], references: [id])
+  lines           APBillLine[]
+  applications    APPaymentApplication[]
+
+  @@unique([tenantId, billNumber])
+  @@index([tenantId, vendorId, status])
+  @@index([tenantId, status, dueDate])         // FBL1N-style: open items past due
+  @@index([tenantId, postingDate])
+  @@map("ap_bills")
+}
+
+model APBillLine {
+  id             String     @id @default(cuid())
+  billId         String
+  /// GL account to debit on POST (expense or asset).
+  accountId      String
+  description    String?
+  quantity       Decimal    @db.Decimal(14, 4) @default(1)
+  unitPrice      Decimal    @db.Decimal(14, 2)
+  taxAmount      Decimal    @db.Decimal(14, 2) @default(0)
+  lineTotal      Decimal    @db.Decimal(14, 2)
+  createdAt      DateTime   @default(now())
+
+  bill           APBill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  account        Account    @relation(fields: [accountId], references: [id])
+
+  @@index([billId])
+  @@map("ap_bill_lines")
+}
+
+model APPayment {
+  id              String          @id @default(cuid())
+  tenantId        String
+  branchId        String?
+
+  paymentNumber   String
+  vendorId        String
+  paymentDate     DateTime
+  postingDate     DateTime
+
+  method          PaymentMethod
+  reference       String?
+  totalAmount     Decimal         @db.Decimal(14, 2)
+  appliedAmount   Decimal         @db.Decimal(14, 2) @default(0)
+  unappliedAmount Decimal         @db.Decimal(14, 2)
+
+  description     String?
+  notes           String?
+  createdById     String
+  voidedById      String?
+  voidedAt        DateTime?
+  voidReason      String?
+
+  journalEntryId  String?         @unique
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  vendor          Vendor          @relation(fields: [vendorId], references: [id])
+  journalEntry    JournalEntry?   @relation("APPaymentJE", fields: [journalEntryId], references: [id])
+  applications    APPaymentApplication[]
+
+  @@unique([tenantId, paymentNumber])
+  @@index([tenantId, vendorId])
+  @@index([tenantId, postingDate])
+  @@map("ap_payments")
+}
+
+model APPaymentApplication {
+  id            String     @id @default(cuid())
+  paymentId     String
+  billId        String
+  appliedAmount Decimal    @db.Decimal(14, 2)
+  appliedAt     DateTime   @default(now())
+
+  payment       APPayment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  bill          APBill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, billId])
+  @@index([billId])
+  @@map("ap_payment_applications")
+}
+
+// ─── Document Number Sequences (per-tenant, per-type, optional per-branch) ───
+
+enum SequenceType {
+  AR_INVOICE
+  AR_PAYMENT
+  AP_BILL
+  AP_PAYMENT
+}
+
+enum SequenceResetPolicy {
+  NEVER
+  YEARLY
+  MONTHLY
+}
+
+/// Per-tenant document number generator. Atomic counter increment, optional
+/// monthly/yearly reset. Format string supports {YYYY} {YY} {MM} {####} tokens.
+/// Default format if null: prefix + zero-padded counter (padding chars).
+model DocumentNumberSequence {
+  id           String              @id @default(cuid())
+  tenantId     String
+  type         SequenceType
+  /// Null = tenant-wide. Non-null = per-branch numbering (some tenants want
+  /// distinct invoice ranges per location for BIR compliance).
+  branchId     String?
+  prefix       String              @default("")
+  /// Optional formatter, e.g. "INV-{YYYY}-{####}" → "INV-2026-0001"
+  /// {YYYY} = 4-digit year, {YY} = 2-digit year, {MM} = 2-digit month,
+  /// {####} = zero-padded counter (digits = padding).
+  format       String?
+  padding      Int                 @default(4)
+  counter      Int                 @default(0)
+  /// Last reset date for monthly/yearly sequences. Used by NumberingService
+  /// to decide whether the next call should reset the counter.
+  lastResetAt  DateTime?
+  resetPolicy  SequenceResetPolicy @default(NEVER)
+
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, type, branchId])
+  @@map("document_number_sequences")
 }
 
 // ─── Payroll — Time Entries ──────────────────────────────────────────────────

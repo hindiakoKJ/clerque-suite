@@ -22,15 +22,16 @@ import {
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
 
-const DEFAULT_MODEL = 'claude-sonnet-4-5';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 
 // Pricing as of Apr 2026 — input + output USD per 1M tokens.
 // Vision inputs count toward inputTokens (~1.5k tokens per image typical).
 // Update when provider changes pricing; historical rows keep their cost.
+// Cache reads cost ~0.1x base input; cache writes ~1.25x (5m TTL) or 2x (1h TTL).
 const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-sonnet-4-5':         { input: 3.0,  output: 15.0  },
-  'claude-3-5-sonnet-20241022':{ input: 3.0,  output: 15.0  },
-  'claude-3-5-haiku-20241022': { input: 0.8,  output: 4.0   },
+  'claude-opus-4-7':    { input: 5.0, output: 25.0 },
+  'claude-sonnet-4-6':  { input: 3.0, output: 15.0 },
+  'claude-haiku-4-5':   { input: 1.0, output: 5.0  },
 };
 
 const DEFAULT_MONTHLY_BUDGET_USD = Number(process.env.AI_MONTHLY_BUDGET_USD ?? 10);
@@ -39,12 +40,21 @@ interface CallParams {
   tenantId:    string;
   userId?:     string;
   action:      string;
-  /** Optional override; defaults to claude-sonnet-4-5. */
+  /** Optional override; defaults to DEFAULT_MODEL. */
   model?:      string;
   /** Either text or vision messages — passed straight to the SDK. */
   messages:    Anthropic.MessageParam[];
   systemPrompt?: string;
   maxTokens?:  number;
+  /**
+   * When true, marks the system prompt with cache_control: ephemeral so identical
+   * system prompts hit the prompt cache on subsequent calls (~90% input discount
+   * after the first write). Use for stable instruction-heavy prompts (Drafter,
+   * Guide). Skip for one-shot prompts where the system text varies per call.
+   */
+  cacheSystem?: boolean;
+  /** Adaptive extended thinking — Opus 4.7 / Sonnet 4.6 only. */
+  adaptiveThinking?: boolean;
 }
 
 @Injectable()
@@ -77,20 +87,38 @@ export class AiService {
     const startedAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     let success = true;
     let errorMessage: string | null = null;
     let textOut = '';
+
+    // System prompt: plain string, or text-block array with ephemeral cache marker
+    // when caching is requested. Keeping the prefix-cache marker on the SYSTEM
+    // means the deterministic instructions cache, while the per-call user
+    // message stays uncached (correct — it's the variable bit).
+    const systemParam: string | Anthropic.TextBlockParam[] | undefined =
+      !params.systemPrompt
+        ? undefined
+        : params.cacheSystem
+          ? [{ type: 'text', text: params.systemPrompt, cache_control: { type: 'ephemeral' } }]
+          : params.systemPrompt;
 
     try {
       const response = await this.client.messages.create({
         model,
         max_tokens: params.maxTokens ?? 1024,
-        system:     params.systemPrompt,
-        messages:   params.messages,
+        ...(systemParam !== undefined ? { system: systemParam } : {}),
+        ...(params.adaptiveThinking
+          ? { thinking: { type: 'adaptive' as const } }
+          : {}),
+        messages: params.messages,
       });
-      inputTokens  = response.usage.input_tokens;
-      outputTokens = response.usage.output_tokens;
-      // Concatenate text blocks; ignore tool blocks for now.
+      inputTokens      = response.usage.input_tokens;
+      outputTokens     = response.usage.output_tokens;
+      cacheReadTokens  = response.usage.cache_read_input_tokens   ?? 0;
+      cacheWriteTokens = response.usage.cache_creation_input_tokens ?? 0;
+      // Concatenate text blocks; ignore thinking + tool blocks.
       textOut = response.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')
         .map((b) => b.text)
@@ -103,7 +131,7 @@ export class AiService {
       this.logger.error(`AI call failed (${params.action}): ${errorMessage}`);
       throw new ServiceUnavailableException('AI service temporarily unavailable. Try again or fill in manually.');
     } finally {
-      const cost = this.computeCost(model, inputTokens, outputTokens);
+      const cost = this.computeCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
       // Fire-and-forget; usage logging must never block the user response.
       this.prisma.aiUsage
         .create({
@@ -125,10 +153,25 @@ export class AiService {
     }
   }
 
-  /** Dollar cost of a call given token counts and model pricing. */
-  private computeCost(model: string, inputTokens: number, outputTokens: number): number {
+  /**
+   * Dollar cost of a call given token counts and model pricing.
+   * Cache reads are ~0.1x base input; cache writes (5m TTL) are ~1.25x.
+   * inputTokens here is the uncached portion only (Anthropic returns it that way).
+   */
+  private computeCost(
+    model: string,
+    inputTokens: number,
+    outputTokens: number,
+    cacheReadTokens = 0,
+    cacheWriteTokens = 0,
+  ): number {
     const p = PRICING[model] ?? PRICING[DEFAULT_MODEL];
-    return ((inputTokens / 1e6) * p.input) + ((outputTokens / 1e6) * p.output);
+    return (
+      (inputTokens      / 1e6) * p.input        +
+      (outputTokens     / 1e6) * p.output       +
+      (cacheReadTokens  / 1e6) * p.input * 0.1  +
+      (cacheWriteTokens / 1e6) * p.input * 1.25
+    );
   }
 
   /** Reject if tenant has spent more than DEFAULT_MONTHLY_BUDGET_USD this calendar month. */

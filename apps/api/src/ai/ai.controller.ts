@@ -15,7 +15,11 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { AiService } from './ai.service';
+import { AccountPickerService } from './account-picker.service';
+import { JournalDrafterService } from './journal-drafter.service';
 import { OcrReceiptDto, OcrReceiptResult } from './dto/ocr-receipt.dto';
+import { SuggestAccountsDto } from './dto/suggest-accounts.dto';
+import { DraftJournalDto } from './dto/draft-journal.dto';
 
 const RECEIPT_OCR_SYSTEM_PROMPT = `You are a receipt-reading assistant for a Philippine point-of-sale system.
 
@@ -52,7 +56,11 @@ Return ONLY valid JSON matching this shape, with no surrounding prose:
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('ai')
 export class AiController {
-  constructor(private ai: AiService) {}
+  constructor(
+    private ai:           AiService,
+    private accountPicker: AccountPickerService,
+    private drafter:      JournalDrafterService,
+  ) {}
 
   /**
    * POST /ai/receipt-ocr
@@ -117,6 +125,47 @@ export class AiController {
     // confidence is missing.
     parsed.confidence = parsed.confidence ?? { amount: 0, vendor: 0, date: 0, category: 0 };
     return parsed;
+  }
+
+  /**
+   * POST /ai/suggest-accounts
+   * Returns the top 5 most likely Chart-of-Accounts entries for a journal line
+   * given the memo, side (debit/credit), and accounts already used in the entry.
+   *
+   * NOT an LLM call — pure ranking over the tenant's COA + history. Sub-100ms.
+   * Roles: anyone who can edit a JE.
+   */
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'SUPER_ADMIN')
+  @Post('suggest-accounts')
+  @HttpCode(HttpStatus.OK)
+  async suggestAccounts(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SuggestAccountsDto,
+  ) {
+    return this.accountPicker.suggest(user.tenantId!, {
+      memo:       dto.memo,
+      side:       dto.side,
+      excludeIds: dto.excludeIds,
+      limit:      dto.limit ?? 5,
+    });
+  }
+
+  /**
+   * POST /ai/journal-draft
+   * Natural-language → balanced JE draft.
+   * Returns a draft for human review. Never auto-posts.
+   *
+   * Tier gate: backend permission check happens at posting time on /accounting/journal.
+   * Drafting is allowed for anyone who can post — same role gate.
+   */
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'SUPER_ADMIN')
+  @Post('journal-draft')
+  @HttpCode(HttpStatus.OK)
+  async draftJournal(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: DraftJournalDto,
+  ) {
+    return this.drafter.draft(user.tenantId!, user.sub, dto.description);
   }
 
   /** Per-tenant AI usage for the current month (cost dashboard). */

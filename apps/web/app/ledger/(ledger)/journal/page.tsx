@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronDown, ChevronRight, Plus, X, Receipt,
@@ -652,6 +652,53 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
   ]);
   const [saving, setSaving] = useState(false);
 
+  // ── AI Drafter state ────────────────────────────────────────────────────
+  const [aiOpen,       setAiOpen]       = useState(false);
+  const [aiPrompt,     setAiPrompt]     = useState('');
+  const [aiPending,    setAiPending]    = useState(false);
+  const [aiUsed,       setAiUsed]       = useState(false);
+  const [aiUncertainties, setAiUncertainties] = useState<string[]>([]);
+
+  async function handleAiDraft() {
+    if (aiPrompt.trim().length < 5) {
+      toast.error('Describe the transaction in at least a few words.');
+      return;
+    }
+    setAiPending(true);
+    try {
+      const { data } = await api.post('/ai/journal-draft', { description: aiPrompt.trim() });
+      // Apply: date, memo, reference, lines (replace, not merge — AI gives the
+      // whole entry; user can still edit afterward).
+      if (data.date) {
+        setDocDate(data.date);
+        setPostingDate(data.date);
+      }
+      if (data.memo)      setDesc(data.memo);
+      if (data.reference) setReference(data.reference);
+      if (Array.isArray(data.lines) && data.lines.length > 0) {
+        const draftedLines: DraftLine[] = data.lines.map((l: { accountId: string; side: 'DEBIT' | 'CREDIT'; amount: number; description: string }) => ({
+          accountId:   l.accountId,
+          description: l.description ?? '',
+          debit:       l.side === 'DEBIT'  ? l.amount.toFixed(2) : '',
+          credit:      l.side === 'CREDIT' ? l.amount.toFixed(2) : '',
+        }));
+        // Keep at least 2 rows visible
+        while (draftedLines.length < 2) draftedLines.push({ accountId: '', description: '', debit: '', credit: '' });
+        setLines(draftedLines);
+      }
+      setAiUncertainties(data.uncertainties ?? []);
+      setAiUsed(true);
+      setAiOpen(false);
+      toast.success('Draft ready — review every line before posting.');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'AI drafter failed. Try rephrasing or filling the form manually.';
+      toast.error(msg);
+    } finally {
+      setAiPending(false);
+    }
+  }
+
   const totalDebit  = lines.reduce((s, l) => s + (parseFloat(l.debit)  || 0), 0);
   const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
   const isBalanced  = Math.abs(totalDebit - totalCredit) < 0.01 && totalDebit > 0;
@@ -694,7 +741,20 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
     <div className="fixed inset-0 bg-foreground/40 flex items-center justify-center p-4 z-50">
       <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
         <div className="px-6 py-5 border-b border-border flex items-center justify-between shrink-0">
-          <h2 className="text-lg font-semibold text-foreground">New Journal Entry</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold text-foreground">New Journal Entry</h2>
+            <button
+              type="button"
+              onClick={() => setAiOpen((v) => !v)}
+              className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border transition-colors ${
+                aiOpen
+                  ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                  : 'bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] border-[var(--accent)]/30 text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_16%,transparent)]'
+              }`}
+            >
+              ✨ Describe & draft
+            </button>
+          </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
             <X className="h-5 w-5" />
           </button>
@@ -702,6 +762,49 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
 
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
           <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
+            {/* AI Drafter input */}
+            {aiOpen && (
+              <div className="rounded-xl border border-[var(--accent)]/30 bg-[color-mix(in_oklab,var(--accent)_4%,transparent)] p-3 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Describe the transaction in plain language — the AI will draft a balanced JE you can review.
+                </p>
+                <textarea
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  rows={2}
+                  maxLength={1000}
+                  autoFocus
+                  placeholder="e.g. Paid Meralco bill ₱8,500 last Tuesday from BPI checking"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                />
+                <div className="flex items-center justify-end gap-2">
+                  <button type="button" onClick={() => setAiOpen(false)} className="text-xs text-muted-foreground hover:text-foreground">
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAiDraft}
+                    disabled={aiPending || aiPrompt.trim().length < 5}
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-50 transition-opacity"
+                    style={{ background: 'var(--accent)' }}
+                  >
+                    {aiPending ? 'Drafting…' : 'Draft entry'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {aiUsed && aiUncertainties.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-3 py-2 space-y-1">
+                <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                  ✨ AI-assisted draft — review these before posting:
+                </p>
+                <ul className="text-xs text-amber-800 dark:text-amber-300/90 list-disc pl-4 space-y-0.5">
+                  {aiUncertainties.map((u, i) => <li key={i}>{u}</li>)}
+                </ul>
+              </div>
+            )}
+
             {/* Header fields */}
             <div className="grid grid-cols-2 gap-3">
               {/* Document Date */}
@@ -784,7 +887,18 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
               </div>
               <div className="space-y-1.5">
                 {lines.map((line, i) => (
-                  <div key={i} className="grid grid-cols-[1fr_1fr_100px_100px_32px] gap-1.5 items-center">
+                  <SmartAccountLine
+                    key={i}
+                    line={line}
+                    index={i}
+                    memo={desc}
+                    openAccounts={openAccounts}
+                    excludeIds={lines.filter((_, idx) => idx !== i).map((l) => l.accountId).filter(Boolean)}
+                    onUpdate={(patch) => updateLine(i, patch)}
+                    onRemove={() => setLines((prev) => prev.filter((_, idx) => idx !== i))}
+                    canRemove={lines.length > 2}
+                    fieldCls={fieldCls}
+                  >
                     <select value={line.accountId} onChange={(e) => updateLine(i, { accountId: e.target.value })} className={fieldCls}>
                       <option value="">Select account…</option>
                       {openAccounts.map((a: AccountOption) => (
@@ -803,7 +917,7 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
                       className="h-9 w-8 flex items-center justify-center text-muted-foreground hover:text-rose-500 disabled:opacity-20 transition-colors">
                       <X className="h-4 w-4" />
                     </button>
-                  </div>
+                  </SmartAccountLine>
                 ))}
               </div>
               <button type="button"
@@ -852,6 +966,94 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// ── SmartAccountLine ──────────────────────────────────────────────────────────
+// One row of the JE form, with AI-flavoured account suggestion chips that
+// appear when the user has typed a memo but not yet picked an account. Each
+// chip is a one-tap "use this account" button. Lookups are fully RAG-side
+// (no LLM), sub-100ms, debounced 250ms after the memo settles.
+
+interface SmartAccountLineProps {
+  line:         DraftLine;
+  index:        number;
+  memo:         string;
+  openAccounts: AccountOption[];
+  excludeIds:   string[];
+  onUpdate:     (patch: Partial<DraftLine>) => void;
+  onRemove:     () => void;
+  canRemove:    boolean;
+  fieldCls:     string;
+  children:     React.ReactNode;
+}
+
+interface SuggestionRow {
+  accountId:     string;
+  code:          string;
+  name:          string;
+  type:          string;
+  normalBalance: 'DEBIT' | 'CREDIT';
+  reasons:       string[];
+}
+
+function SmartAccountLine({ line, memo, excludeIds, onUpdate, children }: SmartAccountLineProps) {
+  const [suggestions, setSuggestions] = useState<SuggestionRow[]>([]);
+  const [loading, setLoading]         = useState(false);
+
+  // Side: derive from which amount field the user has touched. If both are
+  // empty (line not yet started) suggest debits — the more common "first move".
+  const debitNum  = parseFloat(line.debit)  || 0;
+  const creditNum = parseFloat(line.credit) || 0;
+  const side: 'DEBIT' | 'CREDIT' = creditNum > 0 ? 'CREDIT' : 'DEBIT';
+
+  // Debounce 250ms on memo + side changes; skip when memo is empty or an
+  // account is already chosen for this line.
+  useEffect(() => {
+    if (line.accountId) { setSuggestions([]); return; }
+    if (memo.trim().length < 3) { setSuggestions([]); return; }
+    const handle = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const { data } = await api.post('/ai/suggest-accounts', {
+          memo, side, excludeIds, limit: 5,
+        });
+        setSuggestions(data.suggestions ?? []);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(handle);
+    // excludeIds is stringified-stable enough via memo dep; intentionally narrow
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memo, side, line.accountId, excludeIds.join(',')]);
+
+  return (
+    <div className="space-y-1">
+      {!line.accountId && suggestions.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap pl-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {loading ? 'Suggesting…' : 'Suggest'}:
+          </span>
+          {suggestions.map((s) => (
+            <button
+              key={s.accountId}
+              type="button"
+              onClick={() => onUpdate({ accountId: s.accountId })}
+              title={s.reasons.length ? s.reasons.join(' · ') : `${s.type} · ${s.normalBalance}`}
+              className="text-[11px] font-mono px-2 py-0.5 rounded-md border border-[var(--accent)]/30 bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] hover:bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] text-foreground transition-colors"
+            >
+              {s.code} · {s.name}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-[1fr_1fr_100px_100px_32px] gap-1.5 items-center">
+        {children}
       </div>
     </div>
   );

@@ -267,6 +267,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         appName="Counter"
         headerRight={headerRight}
         sidebarExtra={<ClockWidget />}
+        helpHref="/pos/help"
         onSignOut={handleLogout}
       >
         <OfflineBanner />

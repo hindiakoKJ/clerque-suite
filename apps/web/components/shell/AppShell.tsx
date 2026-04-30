@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut, Lock } from 'lucide-react';
+import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut, Lock, HelpCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MobileNavSheet } from './MobileNavSheet';
 import { toggleTheme } from '@/components/portal/AppLoginPage';
@@ -44,6 +44,11 @@ interface AppShellProps {
    * Hidden when the sidebar is collapsed.
    */
   sidebarExtra?: React.ReactNode;
+  /**
+   * Route for the per-app Help & Guide page (e.g. "/pos/help"). When set,
+   * a "Help & Guide" link appears above Settings in the sidebar footer.
+   */
+  helpHref?: string;
   /** When provided, a Sign Out button is rendered in the sidebar footer and mobile nav. */
   onSignOut?: () => void;
 }
@@ -56,6 +61,7 @@ export function AppShell({
   brandName = 'Clerque',  // "Clerque Counter", "Clerque Ledger", "Clerque Sync"
   headerRight,
   sidebarExtra,
+  helpHref,
   onSignOut,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -200,6 +206,20 @@ export function AppShell({
                 {user.role?.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
               </p>
             </div>
+          )}
+          {/* Help & Guide — app-specific FAQ + how-to docs */}
+          {helpHref && (
+            <Link
+              href={helpHref}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors w-full',
+                collapsed && 'justify-center px-2',
+              )}
+              title={collapsed ? 'Help & Guide' : undefined}
+            >
+              <HelpCircle className="h-4 w-4 shrink-0" />
+              {!collapsed && <span>Help &amp; Guide</span>}
+            </Link>
           )}
           {/* Settings */}
           <Link

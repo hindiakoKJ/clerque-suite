@@ -131,6 +131,7 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
         navItems={navItems}
         logoIcon={BookOpen}
         appName="Ledger"
+        helpHref="/ledger/help"
         onSignOut={handleLogout}
         headerRight={
           <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary rounded-md px-2.5 py-1.5">

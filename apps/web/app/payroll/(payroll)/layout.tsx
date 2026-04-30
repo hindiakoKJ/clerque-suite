@@ -92,7 +92,7 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
         '--accent-soft': PAYROLL_ACCENT_SOFT,
       } as React.CSSProperties}
     >
-      <AppShell navItems={navItems} logoIcon={Users} appName="Sync" onSignOut={handleLogout}>
+      <AppShell navItems={navItems} logoIcon={Users} appName="Sync" helpHref="/payroll/help" onSignOut={handleLogout}>
         {children}
       </AppShell>
     </div>

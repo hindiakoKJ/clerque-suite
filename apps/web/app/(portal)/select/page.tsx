@@ -53,6 +53,23 @@ const APPS: AppCard[] = [
   },
 ];
 
+/**
+ * Where to land each role inside an app. Important for Sync because
+ * CLOCK_ONLY (CASHIER, GENERAL_EMPLOYEE etc.) lands on /payroll/clock,
+ * while OPERATOR / FULL (PAYROLL_MASTER, BUSINESS_OWNER) lands on the HR
+ * dashboard.
+ */
+function routeForApp(
+  app: AppCard,
+  level: AccessLevel | 'NONE' | undefined,
+): string {
+  if (app.id === 'payroll') {
+    if (level === 'CLOCK_ONLY' || level === 'READ_ONLY') return '/payroll/clock';
+    return '/payroll/dashboard';
+  }
+  return app.route;
+}
+
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
 export default function SelectPage() {
@@ -68,21 +85,31 @@ export default function SelectPage() {
     !wizardDismissed &&
     tenantProfile?.businessType === 'RETAIL';
 
-  // If not authenticated, redirect to login
+  // ── Compute accessible apps with role-aware routes (BEFORE any early
+  // return — React requires hooks in stable call-order across renders).
+  type AppCardWithRoute = AppCard & { resolvedRoute: string };
+  const accessible: AppCardWithRoute[] = user
+    ? APPS
+        .filter((app) => hasAccess(app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL', app.minLevel))
+        .map((app) => {
+          const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
+          const level = user.appAccess.find((a) => a.app === code)?.level;
+          return { ...app, resolvedRoute: routeForApp(app, level) };
+        })
+    : [];
+  const onlyApp = accessible.length === 1 ? accessible[0] : null;
+
+  // Redirect to login if unauthenticated, or straight to the only app the
+  // user has access to. Both effects run unconditionally each render.
   useEffect(() => {
     if (!accessToken) router.replace('/login');
   }, [accessToken, router]);
 
-  if (!user) return null;
-
-  const accessible = APPS.filter((app) => hasAccess(app.id.toUpperCase() as any, app.minLevel));
-
-  // If only one app is accessible, redirect straight there
   useEffect(() => {
-    if (accessible.length === 1) {
-      router.replace(accessible[0].route);
-    }
-  }, [accessible.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (onlyApp) router.replace(onlyApp.resolvedRoute);
+  }, [onlyApp, router]);
+
+  if (!user) return null;
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-white dark:bg-gray-950 px-4">
@@ -96,49 +123,41 @@ export default function SelectPage() {
           <p className="text-slate-500 dark:text-slate-400">Choose a Clerque app to open.</p>
         </div>
 
-        {/* App grid */}
+        {/* App grid — inaccessible apps are hidden, not grayed-out */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {APPS.map((app) => {
-            const canAccess = hasAccess(app.id.toUpperCase() as any, app.minLevel);
+          {accessible.map((app) => {
             const { Icon } = app;
-
             return (
               <button
                 key={app.id}
-                onClick={() => canAccess && router.push(app.route)}
-                disabled={!canAccess}
-                className={`group relative flex flex-col items-start gap-4 rounded-2xl border p-6 text-left transition-all
-                  ${canAccess
-                    ? 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer'
-                    : 'border-slate-100 dark:border-slate-900 bg-slate-50 dark:bg-slate-950 opacity-50 cursor-not-allowed'
-                  }`}
+                onClick={() => router.push(app.resolvedRoute)}
+                className="group relative flex flex-col items-start gap-4 rounded-2xl border p-6 text-left transition-all border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer"
               >
-                {/* Icon */}
                 <div
                   className="rounded-xl p-3"
                   style={{ background: `color-mix(in oklab, ${app.accent} 12%, transparent)` }}
                 >
                   <Icon className="w-6 h-6" style={{ color: app.accent }} />
                 </div>
-
-                {/* Text */}
                 <div className="space-y-1 flex-1">
                   <p className="font-semibold text-slate-900 dark:text-white">{app.name}</p>
                   <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">{app.description}</p>
                 </div>
-
-                {/* Arrow or Lock */}
-                {canAccess ? (
-                  <ArrowRight
-                    className="w-4 h-4 text-slate-400 transition-transform group-hover:translate-x-1"
-                    style={{ color: app.accent }}
-                  />
-                ) : (
-                  <Lock className="w-4 h-4 text-slate-300 dark:text-slate-700" />
-                )}
+                <ArrowRight
+                  className="w-4 h-4 text-slate-400 transition-transform group-hover:translate-x-1"
+                  style={{ color: app.accent }}
+                />
               </button>
             );
           })}
+          {accessible.length === 0 && (
+            <div className="sm:col-span-2 lg:col-span-3 text-center py-8 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
+              <Lock className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+              <p className="text-sm text-slate-500">
+                Your account has no apps assigned. Contact your business owner.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Sign out */}

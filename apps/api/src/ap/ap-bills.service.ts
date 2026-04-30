@@ -332,6 +332,50 @@ export class APBillsService {
     return { data, total, page, pageSize, pages: Math.ceil(total / pageSize) };
   }
 
+  /**
+   * Aging summary for open vendor bills, bucketed by days-past-due.
+   * Net payable basis (totalAmount − whtAmount), since WHT is paid to BIR
+   * separately, not to the vendor.
+   */
+  async getAging(tenantId: string) {
+    const bills = await this.prisma.aPBill.findMany({
+      where: { tenantId, status: { in: ['OPEN', 'PARTIALLY_PAID'] } },
+      select: {
+        id: true, dueDate: true, totalAmount: true, paidAmount: true, whtAmount: true,
+        vendorId: true, vendor: { select: { name: true } },
+      },
+    });
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const buckets = { notDue: 0, bucket1_30: 0, bucket31_60: 0, bucket61_90: 0, bucket90plus: 0, total: 0 };
+    const vendors = new Map<string, { id: string; name: string; balance: number; daysPastDue: number }>();
+
+    for (const b of bills) {
+      const net = Number(b.totalAmount) - Number(b.whtAmount);
+      const balance = net - Number(b.paidAmount);
+      if (balance <= 0) continue;
+      const due = new Date(b.dueDate); due.setHours(0, 0, 0, 0);
+      const daysPastDue = Math.floor((today.getTime() - due.getTime()) / 86400000);
+
+      if      (daysPastDue <= 0)  buckets.notDue       += balance;
+      else if (daysPastDue <= 30) buckets.bucket1_30   += balance;
+      else if (daysPastDue <= 60) buckets.bucket31_60  += balance;
+      else if (daysPastDue <= 90) buckets.bucket61_90  += balance;
+      else                         buckets.bucket90plus += balance;
+      buckets.total += balance;
+
+      const vid = b.vendorId;
+      const cur = vendors.get(vid) ?? { id: vid, name: b.vendor?.name ?? '—', balance: 0, daysPastDue: 0 };
+      cur.balance += balance;
+      cur.daysPastDue = Math.max(cur.daysPastDue, daysPastDue);
+      vendors.set(vid, cur);
+    }
+
+    return {
+      ...buckets,
+      vendors: Array.from(vendors.values()).sort((a, b) => b.balance - a.balance),
+    };
+  }
+
   async findOne(tenantId: string, billId: string) {
     const bill = await this.prisma.aPBill.findFirst({
       where: { id: billId, tenantId },

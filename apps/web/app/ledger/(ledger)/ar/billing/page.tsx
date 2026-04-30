@@ -64,6 +64,16 @@ interface ListResponse {
   pageSize: number;
 }
 
+interface AgingResponse {
+  notDue:        number;
+  bucket1_30:    number;
+  bucket31_60:   number;
+  bucket61_90:   number;
+  bucket90plus:  number;
+  total:         number;
+  customers:     { id: string; name: string; balance: number; daysPastDue: number }[];
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const WRITE_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT'];
@@ -587,6 +597,12 @@ export default function ARBillingPage() {
     enabled:  !!user,
   });
 
+  const { data: aging } = useQuery<AgingResponse>({
+    queryKey: ['ar-billing-aging'],
+    queryFn:  () => api.get('/ar/invoices/aging').then((r) => r.data),
+    enabled:  !!user,
+  });
+
   const { data: customers = [] } = useQuery<Customer[]>({
     queryKey: ['ar-customers-list'],
     queryFn:  () => api.get('/ar/customers').then((r) => r.data?.data ?? r.data),
@@ -601,6 +617,7 @@ export default function ARBillingPage() {
 
   function refresh() {
     qc.invalidateQueries({ queryKey: ['ar-billing-list'] });
+    qc.invalidateQueries({ queryKey: ['ar-billing-aging'] });
     if (selected) {
       api.get(`/ar/invoices/${selected.id}`).then((r) => setSelected(r.data)).catch(() => setSelected(null));
     }
@@ -624,6 +641,35 @@ export default function ARBillingPage() {
           </button>
         )}
       </div>
+
+      {aging && aging.total > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+          <div className="rounded-lg border border-border bg-background px-3 py-2">
+            <div className="text-xs text-muted-foreground">Outstanding</div>
+            <div className="text-base font-semibold">{formatPeso(aging.total)}</div>
+          </div>
+          <div className="rounded-lg border border-border bg-background px-3 py-2">
+            <div className="text-xs text-muted-foreground">Not yet due</div>
+            <div className="text-base font-semibold text-foreground">{formatPeso(aging.notDue)}</div>
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <div className="text-xs text-amber-800">1-30 days</div>
+            <div className="text-base font-semibold text-amber-900">{formatPeso(aging.bucket1_30)}</div>
+          </div>
+          <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2">
+            <div className="text-xs text-orange-800">31-60 days</div>
+            <div className="text-base font-semibold text-orange-900">{formatPeso(aging.bucket31_60)}</div>
+          </div>
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+            <div className="text-xs text-red-800">61-90 days</div>
+            <div className="text-base font-semibold text-red-900">{formatPeso(aging.bucket61_90)}</div>
+          </div>
+          <div className="rounded-lg border border-red-300 bg-red-100 px-3 py-2">
+            <div className="text-xs text-red-900">90+ days</div>
+            <div className="text-base font-semibold text-red-900">{formatPeso(aging.bucket90plus)}</div>
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-2 flex-wrap">
         {(['', 'DRAFT', 'OPEN', 'PARTIALLY_PAID', 'PAID', 'VOIDED'] as const).map((s) => (

@@ -384,6 +384,49 @@ export class ARInvoicesService {
     return { data, total, page, pageSize, pages: Math.ceil(total / pageSize) };
   }
 
+  /**
+   * Aging summary: sums open balance bucketed by days-past-due.
+   * Buckets:  notDue (due ≥ today), 1-30, 31-60, 61-90, 90+
+   * Open = OPEN or PARTIALLY_PAID (excludes draft/voided/paid).
+   */
+  async getAging(tenantId: string) {
+    const invoices = await this.prisma.aRInvoice.findMany({
+      where: { tenantId, status: { in: ['OPEN', 'PARTIALLY_PAID'] } },
+      select: {
+        id: true, dueDate: true, totalAmount: true, paidAmount: true,
+        customerId: true, customer: { select: { name: true } },
+      },
+    });
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const buckets = { notDue: 0, bucket1_30: 0, bucket31_60: 0, bucket61_90: 0, bucket90plus: 0, total: 0 };
+    const customers = new Map<string, { id: string; name: string; balance: number; daysPastDue: number }>();
+
+    for (const inv of invoices) {
+      const balance = Number(inv.totalAmount) - Number(inv.paidAmount);
+      if (balance <= 0) continue;
+      const due = new Date(inv.dueDate); due.setHours(0, 0, 0, 0);
+      const daysPastDue = Math.floor((today.getTime() - due.getTime()) / 86400000);
+
+      if      (daysPastDue <= 0)  buckets.notDue       += balance;
+      else if (daysPastDue <= 30) buckets.bucket1_30   += balance;
+      else if (daysPastDue <= 60) buckets.bucket31_60  += balance;
+      else if (daysPastDue <= 90) buckets.bucket61_90  += balance;
+      else                         buckets.bucket90plus += balance;
+      buckets.total += balance;
+
+      const cid = inv.customerId;
+      const cur = customers.get(cid) ?? { id: cid, name: inv.customer?.name ?? '—', balance: 0, daysPastDue: 0 };
+      cur.balance += balance;
+      cur.daysPastDue = Math.max(cur.daysPastDue, daysPastDue);
+      customers.set(cid, cur);
+    }
+
+    return {
+      ...buckets,
+      customers: Array.from(customers.values()).sort((a, b) => b.balance - a.balance),
+    };
+  }
+
   async findOne(tenantId: string, invoiceId: string) {
     const invoice = await this.prisma.aRInvoice.findFirst({
       where: { id: invoiceId, tenantId },

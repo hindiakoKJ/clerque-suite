@@ -43,6 +43,13 @@ export class APBillsController {
     });
   }
 
+  /** Aging summary for open formal AP bills (net of WHT). */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  @Get('aging')
+  getAging(@CurrentUser() user: JwtPayload) {
+    return this.svc.getAging(user.tenantId!);
+  }
+
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

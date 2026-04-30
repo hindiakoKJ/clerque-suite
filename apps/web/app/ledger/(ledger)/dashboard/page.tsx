@@ -1,370 +1,438 @@
 'use client';
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  TrendingUp, TrendingDown, DollarSign, ShieldCheck,
-  Zap, CheckCircle2, XCircle, AlertCircle, ArrowRight,
+  Activity, AlertTriangle, CheckCircle2, XCircle, ArrowRight, RefreshCw,
+  Clock, Scale, ListChecks, ShieldAlert, FileWarning, Zap, Inbox,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 
+interface ProcessMetrics {
+  generatedAt: string;
+  timeliness: {
+    avgEventLagMs:           number;
+    pendingEvents:           number;
+    failedEvents:            number;
+    daysSalesOutstanding:    number;
+    daysPayableOutstanding:  number;
+    daysSinceLastClose:      number | null;
+  };
+  accuracy: {
+    tbVariance:      number;
+    tbTotalDebits:   number;
+    tbTotalCredits:  number;
+    isBalanced:      boolean;
+    voidsLast30d:    number;
+    voidRateLast30d: number;
+    reopensLast90d:  number;
+  };
+  volume: {
+    jesToday:                number;
+    jesThisMonth:            number;
+    eventsProcessedLast24h:  number;
+    openArInvoices:          number;
+    openArValue:             number;
+    openApBills:             number;
+    openApValue:             number;
+  };
+  control: {
+    pendingExpenseClaims: number;
+    sodOverridesLast30d:  number;
+    productsMissingCost:  number;
+    auditEntriesLast24h:  number;
+    offlineSyncsLast24h:  number;
+  };
+}
+
 function fmtPeso(n: number) {
   return `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
-
-function currentMonthRange() {
-  const now  = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-  const to   = now.toISOString().split('T')[0];
-  return { from, to };
+function fmtLag(ms: number) {
+  if (ms === 0) return '—';
+  if (ms < 60_000)        return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000)     return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000)    return `${(ms / 3_600_000).toFixed(1)}h`;
+  return `${(ms / 86_400_000).toFixed(1)}d`;
+}
+function fmtPct(p: number) {
+  return `${(p * 100).toFixed(2)}%`;
 }
 
-function getGreeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 18) return 'Good afternoon';
-  return 'Good evening';
+type Severity = 'good' | 'warn' | 'bad' | 'neutral';
+
+const SEVERITY_STYLES: Record<Severity, { border: string; text: string; bg: string; }> = {
+  good:    { border: 'border-emerald-500/40', text: 'text-emerald-400',  bg: 'bg-emerald-500/5' },
+  warn:    { border: 'border-amber-500/40',   text: 'text-amber-400',    bg: 'bg-amber-500/5' },
+  bad:     { border: 'border-red-500/40',     text: 'text-red-400',      bg: 'bg-red-500/10' },
+  neutral: { border: 'border-border',         text: 'text-foreground',   bg: 'bg-background' },
+};
+
+function MetricCard({
+  label, value, sub, severity = 'neutral', icon: Icon, onClick,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  severity?: Severity;
+  icon?: React.ElementType;
+  onClick?: () => void;
+}) {
+  const s = SEVERITY_STYLES[severity];
+  const Wrapper = onClick ? 'button' : 'div';
+  return (
+    <Wrapper
+      onClick={onClick}
+      className={`
+        rounded-lg border ${s.border} ${s.bg} p-4 text-left w-full
+        ${onClick ? 'hover:opacity-80 transition cursor-pointer' : ''}
+      `}
+    >
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        {Icon && <Icon className={`w-4 h-4 ${s.text}`} />}
+      </div>
+      <div className={`text-xl font-bold tabular-nums ${s.text}`}>{value}</div>
+      {sub && <div className="text-[11px] text-muted-foreground mt-1 leading-snug">{sub}</div>}
+    </Wrapper>
+  );
 }
 
-interface PLSummary {
-  from: string; to: string;
-  totalRevenue: number; totalExpenses: number; netIncome: number;
-  revenueAccounts: { code: string; name: string; balance: number }[];
-  expenseAccounts: { code: string; name: string; balance: number }[];
+function SectionHeader({ icon: Icon, title, subtitle }: {
+  icon: React.ElementType; title: string; subtitle: string;
+}) {
+  return (
+    <div className="flex items-start gap-2 mb-3">
+      <div className="rounded-lg bg-[var(--accent-soft)] p-2 mt-0.5">
+        <Icon className="w-4 h-4 text-[var(--accent)]" />
+      </div>
+      <div>
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        <p className="text-xs text-muted-foreground leading-tight">{subtitle}</p>
+      </div>
+    </div>
+  );
 }
-interface EventStats { pending: number; synced: number; failed: number }
 
 export default function LedgerDashboardPage() {
   const { user } = useAuthStore();
-  const router = useRouter();
-  const { from, to } = currentMonthRange();
+  const router   = useRouter();
 
-  const monthLabel = new Date().toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
-
-  const { data: pl, isLoading: plLoading } = useQuery<PLSummary>({
-    queryKey: ['pl-summary', from, to],
-    queryFn: () => api.get(`/accounting/accounts/pl-summary?from=${from}&to=${to}`).then((r) => r.data),
-    enabled: !!user,
+  const { data, isLoading, refetch, isFetching } = useQuery<ProcessMetrics>({
+    queryKey: ['ledger-process-metrics'],
+    queryFn:  () => api.get('/ledger/process-metrics').then((r) => r.data),
+    enabled:  !!user,
+    refetchInterval: 60_000, // refresh every minute
   });
 
-  const { data: tb } = useQuery<{ totalDebits: number; totalCredits: number; isBalanced: boolean }>({
-    queryKey: ['trial-balance'],
-    queryFn: () => api.get('/accounting/accounts/trial-balance').then((r) => r.data),
-    enabled: !!user,
-  });
+  // ── Severity decisions per metric ───────────────────────────────────────
+  // Tunable thresholds — adjust to your team's SLAs.
+  const sev = {
+    eventLag:    !data ? 'neutral' : data.timeliness.avgEventLagMs <= 60_000     ? 'good' : data.timeliness.avgEventLagMs <= 600_000   ? 'warn' : 'bad',
+    pending:     !data ? 'neutral' : data.timeliness.pendingEvents === 0          ? 'good' : data.timeliness.pendingEvents <= 5         ? 'warn' : 'bad',
+    failed:      !data ? 'neutral' : data.timeliness.failedEvents === 0           ? 'good' : data.timeliness.failedEvents <= 2          ? 'warn' : 'bad',
+    dso:         !data ? 'neutral' : data.timeliness.daysSalesOutstanding <= 30   ? 'good' : data.timeliness.daysSalesOutstanding <= 60 ? 'warn' : 'bad',
+    dpo:         !data ? 'neutral' : data.timeliness.daysPayableOutstanding <= 30 ? 'good' : data.timeliness.daysPayableOutstanding <= 45 ? 'warn' : 'bad',
+    closeAge:    !data ? 'neutral' : data.timeliness.daysSinceLastClose == null   ? 'warn' : data.timeliness.daysSinceLastClose <= 35    ? 'good' : data.timeliness.daysSinceLastClose <= 60 ? 'warn' : 'bad',
 
-  const { data: stats, refetch: refetchStats } = useQuery<EventStats>({
-    queryKey: ['accounting-event-stats'],
-    queryFn: () => api.get('/accounting/events/stats').then((r) => r.data),
-    enabled: !!user,
-    refetchInterval: 30_000,
-  });
+    balanced:    !data ? 'neutral' : data.accuracy.isBalanced                     ? 'good' : 'bad',
+    voidRate:    !data ? 'neutral' : data.accuracy.voidRateLast30d <= 0.02        ? 'good' : data.accuracy.voidRateLast30d <= 0.05      ? 'warn' : 'bad',
+    reopens:     !data ? 'neutral' : data.accuracy.reopensLast90d === 0           ? 'good' : data.accuracy.reopensLast90d <= 1          ? 'warn' : 'bad',
 
-  const netPositive = (pl?.netIncome ?? 0) >= 0;
+    sodOverride: !data ? 'neutral' : data.control.sodOverridesLast30d === 0       ? 'good' : data.control.sodOverridesLast30d <= 2      ? 'warn' : 'bad',
+    missingCost: !data ? 'neutral' : data.control.productsMissingCost === 0       ? 'good' : data.control.productsMissingCost <= 5      ? 'warn' : 'bad',
+    pendingClaims: !data ? 'neutral' : data.control.pendingExpenseClaims === 0    ? 'good' : data.control.pendingExpenseClaims <= 5     ? 'warn' : 'bad',
+  } as const;
 
   return (
     <div className="min-h-full bg-muted/30">
-
-      {/* Page header */}
-      <div className="bg-background border-b border-border px-6 py-6">
-        <div className="max-w-6xl mx-auto">
-          <p className="text-sm text-muted-foreground mb-0.5">
-            {getGreeting()}, {user?.name?.split(' ')[0] ?? 'there'}
-          </p>
-          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Showing month-to-date figures for{' '}
-            <span className="font-medium text-foreground">{monthLabel}</span>
-          </p>
-        </div>
-      </div>
-
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-
-        {/* Hero Net Income card */}
-        <div
-          className="bg-background rounded-xl border border-border border-l-4 p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4"
-          style={{ borderLeftColor: netPositive ? 'var(--accent)' : 'hsl(349 75% 51%)' }}
-        >
-          <div className="flex-1">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
-              Net Income (MTD)
-            </p>
-            {plLoading ? (
-              <div className="h-10 w-48 bg-muted rounded animate-pulse" />
-            ) : (
-              <p className={`text-2xl sm:text-3xl md:text-4xl font-bold leading-none ${
-                netPositive ? 'text-foreground' : 'text-red-600 dark:text-red-400'
-              }`}>
-                {fmtPeso(pl?.netIncome ?? 0)}
-              </p>
-            )}
-            <p className="text-sm text-muted-foreground mt-2">
-              {monthLabel} · Revenue minus Expenses
+      {/* Header */}
+      <div className="bg-background border-b border-border px-6 py-4">
+        <div className="max-w-6xl mx-auto flex items-end justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
+              <Activity className="w-5 h-5 text-[var(--accent)]" />
+              Ledger Operations Health
+            </h1>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Process metrics — how fast, accurate, and under-control the books are.
+              For financial KPIs (revenue, profit, balances) see Trial Balance, Income Statement,
+              and Balance Sheet.
             </p>
           </div>
-          <div
-            className="flex items-center gap-2 px-4 py-3 rounded-xl"
-            style={{
-              background: netPositive
-                ? 'color-mix(in oklab, var(--accent) 10%, transparent)'
-                : 'hsl(349 75% 51% / 0.1)',
-              color: netPositive ? 'var(--accent)' : 'hsl(349 75% 51%)',
-            }}
-          >
-            {netPositive ? <TrendingUp className="h-6 w-6" /> : <TrendingDown className="h-6 w-6" />}
-            <span className="text-sm font-semibold">
-              {netPositive ? 'Profitable' : 'Net Loss'}
-            </span>
-          </div>
-        </div>
-
-        {/* KPI Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-          <KpiCard
-            label="Revenue (MTD)"
-            value={plLoading ? null : fmtPeso(pl?.totalRevenue ?? 0)}
-            icon={TrendingUp}
-            accentColor="var(--accent)"
-            accentBg="color-mix(in oklab, var(--accent) 10%, transparent)"
-          />
-          <KpiCard
-            label="Expenses (MTD)"
-            value={plLoading ? null : fmtPeso(pl?.totalExpenses ?? 0)}
-            icon={TrendingDown}
-            accentColor="hsl(349 75% 51%)"
-            accentBg="hsl(349 75% 51% / 0.1)"
-          />
-          <KpiCard
-            label="Net Income (MTD)"
-            value={plLoading ? null : fmtPeso(pl?.netIncome ?? 0)}
-            icon={DollarSign}
-            accentColor={netPositive ? 'hsl(221 83% 53%)' : 'hsl(349 75% 51%)'}
-            accentBg={netPositive ? 'hsl(221 83% 53% / 0.1)' : 'hsl(349 75% 51% / 0.1)'}
-            valueColor={netPositive ? undefined : 'text-red-600 dark:text-red-400'}
-          />
-          <KpiCard
-            label="Books Balanced"
-            value={tb ? (tb.isBalanced ? 'Balanced' : 'Out of balance') : null}
-            icon={ShieldCheck}
-            accentColor={tb?.isBalanced ? 'var(--accent)' : 'hsl(349 75% 51%)'}
-            accentBg={tb?.isBalanced
-              ? 'color-mix(in oklab, var(--accent) 10%, transparent)'
-              : 'hsl(349 75% 51% / 0.1)'}
-            valueColor={tb?.isBalanced ? 'text-[var(--accent)]' : 'text-red-600 dark:text-red-400'}
-            badge={tb ? (tb.isBalanced ? '✓' : '!') : undefined}
-          />
-        </div>
-
-        {/* Event queue alert */}
-        {(stats?.pending ?? 0) > 0 && (
-          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-amber-100 dark:bg-amber-900/40 rounded-lg flex items-center justify-center shrink-0">
-                <Zap className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                  {stats!.pending} pending {stats!.pending === 1 ? 'event' : 'events'} waiting to be posted
-                </p>
-                <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
-                  POS sales won&apos;t appear in your ledger until events are processed.
-                </p>
-              </div>
-            </div>
-            <ProcessButton onDone={() => refetchStats()} />
-          </div>
-        )}
-
-        {/* Event queue summary */}
-        <div className="bg-background rounded-xl border border-border overflow-hidden">
-          <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Zap className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold text-foreground">Accounting Event Queue</h2>
-            </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {data && <span>Updated {new Date(data.generatedAt).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
             <button
-              onClick={() => router.push('/ledger/events')}
-              className="text-xs font-medium flex items-center gap-1 transition-colors hover:opacity-80"
-              style={{ color: 'var(--accent)' }}
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-muted disabled:opacity-50 transition-colors"
+              title="Refresh"
             >
-              View all <ArrowRight className="h-3.5 w-3.5" />
+              <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+              Refresh
             </button>
           </div>
-          <div className="px-5 py-4 grid grid-cols-3 gap-4">
-            <StatBadge icon={AlertCircle}  label="Pending" count={stats?.pending ?? 0} color="amber" />
-            <StatBadge icon={CheckCircle2} label="Synced"  count={stats?.synced  ?? 0} color="teal"  />
-            <StatBadge icon={XCircle}      label="Failed"  count={stats?.failed  ?? 0} color="rose"  />
+        </div>
+      </div>
+
+      {isLoading || !data ? (
+        <div className="text-center py-16 text-muted-foreground text-sm">
+          Loading process metrics…
+        </div>
+      ) : (
+        <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
+
+          {/* ── Critical alerts (only show when there's something to fix) ──── */}
+          {(!data.accuracy.isBalanced ||
+            data.timeliness.failedEvents > 0 ||
+            data.control.productsMissingCost > 0 ||
+            (data.timeliness.daysSinceLastClose ?? 0) > 60) && (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle className="w-4 h-4 text-red-400" />
+                <h2 className="text-sm font-semibold text-red-400">Issues that need attention</h2>
+              </div>
+              <ul className="space-y-1 text-xs">
+                {!data.accuracy.isBalanced && (
+                  <li className="flex justify-between">
+                    <span>Trial Balance is out of balance: variance {fmtPeso(data.accuracy.tbVariance)}</span>
+                    <button onClick={() => router.push('/ledger/trial-balance')} className="text-red-400 hover:underline flex items-center gap-1">
+                      Investigate <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </li>
+                )}
+                {data.timeliness.failedEvents > 0 && (
+                  <li className="flex justify-between">
+                    <span>{data.timeliness.failedEvents} POS event{data.timeliness.failedEvents === 1 ? '' : 's'} stuck in FAILED</span>
+                    <button onClick={() => router.push('/ledger/events')} className="text-red-400 hover:underline flex items-center gap-1">
+                      Triage <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </li>
+                )}
+                {data.control.productsMissingCost > 0 && (
+                  <li className="flex justify-between">
+                    <span>{data.control.productsMissingCost} active product{data.control.productsMissingCost === 1 ? '' : 's'} missing cost price (breaks COGS)</span>
+                    <span className="text-muted-foreground">Fix in POS → Products</span>
+                  </li>
+                )}
+                {(data.timeliness.daysSinceLastClose ?? 0) > 60 && (
+                  <li className="flex justify-between">
+                    <span>Last period close was {data.timeliness.daysSinceLastClose} days ago</span>
+                    <button onClick={() => router.push('/ledger/periods')} className="text-red-400 hover:underline flex items-center gap-1">
+                      Close period <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+
+          {/* ── Timeliness ──────────────────────────────────────────────── */}
+          <section>
+            <SectionHeader
+              icon={Clock}
+              title="Timeliness"
+              subtitle="How fresh is the data? Lag, backlog, and cycle times."
+            />
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              <MetricCard
+                label="POS → JE Lag"
+                value={fmtLag(data.timeliness.avgEventLagMs)}
+                sub="Avg time PENDING → POSTED, last 24h. Target: under 1 minute."
+                severity={sev.eventLag}
+                icon={Zap}
+              />
+              <MetricCard
+                label="Pending Events"
+                value={String(data.timeliness.pendingEvents)}
+                sub="Awaiting auto-post. Cron runs every minute."
+                severity={sev.pending}
+                icon={Inbox}
+                onClick={() => router.push('/ledger/events')}
+              />
+              <MetricCard
+                label="Failed Events"
+                value={String(data.timeliness.failedEvents)}
+                sub="Stuck — needs manual triage."
+                severity={sev.failed}
+                icon={XCircle}
+                onClick={() => router.push('/ledger/events')}
+              />
+              <MetricCard
+                label="DSO"
+                value={`${data.timeliness.daysSalesOutstanding.toFixed(1)} d`}
+                sub="Days Sales Outstanding — invoice → cash. Target: ≤ 30."
+                severity={sev.dso}
+              />
+              <MetricCard
+                label="DPO"
+                value={`${data.timeliness.daysPayableOutstanding.toFixed(1)} d`}
+                sub="Days Payable Outstanding — bill → payment. Target: ≤ 30."
+                severity={sev.dpo}
+              />
+              <MetricCard
+                label="Last Period Close"
+                value={data.timeliness.daysSinceLastClose == null ? 'Never' : `${data.timeliness.daysSinceLastClose} d ago`}
+                sub="Days since the most recent monthly close. Target: ≤ 35."
+                severity={sev.closeAge}
+                onClick={() => router.push('/ledger/periods')}
+              />
+            </div>
+          </section>
+
+          {/* ── Accuracy ────────────────────────────────────────────────── */}
+          <section>
+            <SectionHeader
+              icon={Scale}
+              title="Accuracy & Integrity"
+              subtitle="Is the data trustworthy? Balance check, voids, audit risk."
+            />
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+              <MetricCard
+                label="Trial Balance"
+                value={data.accuracy.isBalanced ? 'Balanced' : 'OFF'}
+                sub={data.accuracy.isBalanced
+                  ? `${fmtPeso(data.accuracy.tbTotalDebits)} both sides`
+                  : `Variance ${fmtPeso(data.accuracy.tbVariance)}`}
+                severity={sev.balanced}
+                icon={data.accuracy.isBalanced ? CheckCircle2 : AlertTriangle}
+                onClick={() => router.push('/ledger/trial-balance')}
+              />
+              <MetricCard
+                label="Voids (30d)"
+                value={String(data.accuracy.voidsLast30d)}
+                sub={`${fmtPct(data.accuracy.voidRateLast30d)} of orders. Target: under 2%.`}
+                severity={sev.voidRate}
+              />
+              <MetricCard
+                label="Period Reopens (90d)"
+                value={String(data.accuracy.reopensLast90d)}
+                sub="Audit risk. Each reopen is logged with reason."
+                severity={sev.reopens}
+                icon={ShieldAlert}
+              />
+              <MetricCard
+                label="Total Debits"
+                value={fmtPeso(data.accuracy.tbTotalDebits)}
+                sub="All POSTED journal lines."
+                severity="neutral"
+              />
+              <MetricCard
+                label="Total Credits"
+                value={fmtPeso(data.accuracy.tbTotalCredits)}
+                sub="Should match debits to the centavo."
+                severity="neutral"
+              />
+            </div>
+          </section>
+
+          {/* ── Volume ──────────────────────────────────────────────────── */}
+          <section>
+            <SectionHeader
+              icon={ListChecks}
+              title="Volume & Throughput"
+              subtitle="How busy is the team? JE counts, open AR/AP."
+            />
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              <MetricCard
+                label="JEs Today"
+                value={String(data.volume.jesToday)}
+                sub="Posted journal entries."
+                severity="neutral"
+                onClick={() => router.push('/ledger/journal')}
+              />
+              <MetricCard
+                label="JEs This Month"
+                value={String(data.volume.jesThisMonth)}
+                sub="Month-to-date."
+                severity="neutral"
+              />
+              <MetricCard
+                label="Events (24h)"
+                value={String(data.volume.eventsProcessedLast24h)}
+                sub="Auto-processed in the last day."
+                severity="neutral"
+              />
+              <MetricCard
+                label="Open AR"
+                value={String(data.volume.openArInvoices)}
+                sub={`Outstanding ${fmtPeso(data.volume.openArValue)}`}
+                severity="neutral"
+                onClick={() => router.push('/ledger/ar/billing')}
+              />
+              <MetricCard
+                label="Open AP"
+                value={String(data.volume.openApBills)}
+                sub={`Net payable ${fmtPeso(data.volume.openApValue)}`}
+                severity="neutral"
+                onClick={() => router.push('/ledger/ap/bills')}
+              />
+              <MetricCard
+                label="Offline Syncs (24h)"
+                value={String(data.control.offlineSyncsLast24h)}
+                sub="POS orders posted from offline queue."
+                severity="neutral"
+              />
+            </div>
+          </section>
+
+          {/* ── Control ─────────────────────────────────────────────────── */}
+          <section>
+            <SectionHeader
+              icon={ShieldAlert}
+              title="Control & Compliance"
+              subtitle="What needs the team's attention right now?"
+            />
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+              <MetricCard
+                label="Pending Claims"
+                value={String(data.control.pendingExpenseClaims)}
+                sub="Expense claims awaiting approval."
+                severity={sev.pendingClaims}
+                icon={Inbox}
+                onClick={() => router.push('/ledger/expense-approvals')}
+              />
+              <MetricCard
+                label="SOD Overrides (30d)"
+                value={String(data.control.sodOverridesLast30d)}
+                sub="Times an owner overrode a Segregation-of-Duties warning."
+                severity={sev.sodOverride}
+                icon={ShieldAlert}
+                onClick={() => router.push('/settings/sod-violations')}
+              />
+              <MetricCard
+                label="Products Missing Cost"
+                value={String(data.control.productsMissingCost)}
+                sub="No cost price → COGS not booked → profit overstated."
+                severity={sev.missingCost}
+                icon={FileWarning}
+                onClick={() => router.push('/pos/products')}
+              />
+              <MetricCard
+                label="Audit Entries (24h)"
+                value={String(data.control.auditEntriesLast24h)}
+                sub="Logged sensitive actions in last day."
+                severity="neutral"
+                onClick={() => router.push('/ledger/audit')}
+              />
+              <MetricCard
+                label="JE Posted Today"
+                value={String(data.volume.jesToday)}
+                sub="Cross-reference with expected daily volume."
+                severity="neutral"
+              />
+            </div>
+          </section>
+
+          {/* Methodology footer */}
+          <div className="text-xs text-muted-foreground border-t border-border pt-4 leading-relaxed space-y-1">
+            <p><strong>How we compute these.</strong> Process metrics are derived live from the database — no caching. DSO/DPO are weighted averages over the last 90 days of paid invoices/bills. Event Lag is the average time from event creation to JE creation across the last 24 hours. Severity thresholds (good / warn / bad) are tunable per tenant — current values are sensible defaults for an MSME.</p>
+            <p>For account-level financials (revenue by GL account, expense balances) see <button onClick={() => router.push('/ledger/trial-balance')} className="underline hover:text-foreground">Trial Balance</button>, <button onClick={() => router.push('/ledger/pl-statement')} className="underline hover:text-foreground">Income Statement</button>, and <button onClick={() => router.push('/ledger/balance-sheet')} className="underline hover:text-foreground">Balance Sheet</button>.</p>
           </div>
         </div>
-
-        {/* Revenue & Expense breakdown */}
-        {pl && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <AccountBreakdown title="Revenue"  accounts={pl.revenueAccounts}  total={pl.totalRevenue}  color="teal" />
-            <AccountBreakdown title="Expenses" accounts={pl.expenseAccounts}  total={pl.totalExpenses} color="rose" />
-          </div>
-        )}
-
-        {plLoading && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {[0, 1].map((i) => (
-              <div key={i} className="bg-background rounded-xl border border-border p-5">
-                <div className="h-4 w-24 bg-muted rounded animate-pulse mb-4" />
-                {[0, 1, 2].map((j) => (
-                  <div key={j} className="flex justify-between mb-3">
-                    <div className="h-3 w-40 bg-muted rounded animate-pulse" />
-                    <div className="h-3 w-20 bg-muted rounded animate-pulse" />
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Sub-components ──────────────────────────────────────────────────────────────
-
-function KpiCard({
-  label, value, icon: Icon, accentColor, accentBg,
-  valueColor, badge,
-}: {
-  label: string;
-  value: string | null;
-  icon: React.ElementType;
-  accentColor: string;
-  accentBg: string;
-  valueColor?: string;
-  badge?: string;
-}) {
-  return (
-    <div className="bg-background rounded-xl border border-border p-3 sm:p-5 flex flex-col justify-between min-h-[96px]">
-      <div className="flex items-start justify-between mb-2">
-        <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center shrink-0"
-          style={{ background: accentBg }}>
-          <Icon className="h-4 w-4" style={{ color: accentColor }} />
-        </div>
-        {badge && (
-          <span
-            className="text-xs font-bold px-1.5 py-0.5 rounded-md"
-            style={{ background: accentBg, color: accentColor }}
-          >
-            {badge}
-          </span>
-        )}
-      </div>
-      <div>
-        <p className="text-[11px] sm:text-xs font-medium text-muted-foreground mb-0.5">{label}</p>
-        {value === null ? (
-          <div className="h-6 w-24 bg-muted rounded animate-pulse" />
-        ) : (
-          <p className={`text-base sm:text-xl md:text-2xl font-bold leading-tight truncate ${valueColor ?? 'text-foreground'}`}>
-            {value}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StatBadge({ icon: Icon, label, count, color }: {
-  icon: React.ElementType;
-  label: string;
-  count: number;
-  color: 'amber' | 'teal' | 'rose';
-}) {
-  const styles = {
-    amber: { bg: 'bg-amber-50 dark:bg-amber-900/20', text: 'text-amber-700 dark:text-amber-400', icon: 'text-amber-500 dark:text-amber-400' },
-    teal:  { bg: 'bg-teal-50 dark:bg-teal-900/20',   text: 'text-teal-700 dark:text-teal-400',   icon: 'text-teal-500 dark:text-teal-400'   },
-    rose:  { bg: 'bg-rose-50 dark:bg-rose-900/20',   text: 'text-rose-700 dark:text-rose-400',   icon: 'text-rose-500 dark:text-rose-400'   },
-  }[color];
-
-  return (
-    <div className={`${styles.bg} rounded-lg px-3 py-3 flex flex-col items-center gap-1.5`}>
-      <Icon className={`h-5 w-5 ${styles.icon}`} />
-      <span className={`text-2xl font-bold ${styles.text}`}>{count}</span>
-      <span className={`text-xs font-medium ${styles.text} opacity-80`}>{label}</span>
-    </div>
-  );
-}
-
-function ProcessButton({ onDone }: { onDone: () => void }) {
-  const [loading, setLoading] = useState(false);
-  const [result, setResult]   = useState<string | null>(null);
-
-  async function process() {
-    setLoading(true);
-    setResult(null);
-    try {
-      const { data } = await api.post('/accounting/events/process-all');
-      setResult(`${data.synced} synced · ${data.failed} failed · ${data.skipped} skipped`);
-      onDone();
-    } catch {
-      setResult('Error processing events');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="flex items-center gap-3 shrink-0">
-      {result && <p className="text-xs text-amber-700 dark:text-amber-300 font-medium">{result}</p>}
-      <button
-        onClick={process}
-        disabled={loading}
-        className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60 shrink-0"
-      >
-        <Zap className="h-3.5 w-3.5" />
-        {loading ? 'Processing…' : 'Process All'}
-      </button>
-    </div>
-  );
-}
-
-function AccountBreakdown({ title, accounts, total, color }: {
-  title: string;
-  accounts: { code: string; name: string; balance: number }[];
-  total: number;
-  color: 'teal' | 'rose';
-}) {
-  const textColor = color === 'teal' ? 'text-teal-700 dark:text-teal-400' : 'text-rose-700 dark:text-rose-400';
-  const barColor  = color === 'teal' ? 'bg-teal-500' : 'bg-rose-500';
-
-  return (
-    <div className="bg-background rounded-xl border border-border overflow-hidden">
-      <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-        <h2 className={`text-sm font-semibold ${textColor}`}>{title}</h2>
-        <span className="text-sm font-bold text-foreground">{fmtPeso(total)}</span>
-      </div>
-      <div className="px-5 py-3">
-        {accounts.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic py-2">No transactions this period</p>
-        ) : (
-          <div className="space-y-2.5">
-            {accounts.map((a) => (
-              <div key={a.code} className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-xs font-mono text-muted-foreground shrink-0">{a.code}</span>
-                  <span className="text-sm text-foreground truncate">{a.name}</span>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${barColor} rounded-full`}
-                      style={{ width: total > 0 ? `${Math.min((a.balance / total) * 100, 100)}%` : '0%' }}
-                    />
-                  </div>
-                  <span className="text-sm font-medium text-foreground w-24 text-right">{fmtPeso(a.balance)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

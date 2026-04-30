@@ -60,20 +60,84 @@ const SECTIONS: HelpSection[] = [
   // ─────────────────────────────────────────────────────────────────────────
   {
     id: 'dashboard',
-    title: 'Dashboard',
+    title: 'Dashboard (Operations Health)',
     icon: 'guide',
-    description: 'High-level KPIs for the period.',
+    description: 'Process metrics for the accounting team — NOT financial KPIs.',
     items: [
       {
         q: 'What does the dashboard show?',
         a: (
+          <p>
+            Process-health metrics for ledger ops: how fast events are flowing, whether the books balance, what
+            needs attention. It&apos;s NOT financial reporting — for revenue, profit, and balances see Trial Balance,
+            Income Statement, and Balance Sheet. The dashboard is grouped into four sections:
+          </p>
+        ),
+      },
+      {
+        q: 'Timeliness section — what do these numbers mean?',
+        a: (
           <ul className="list-disc pl-5 space-y-1">
-            <li>Total revenue, expenses, gross profit, net income for the selected period.</li>
-            <li>AR aging summary (open receivables by overdue bucket).</li>
-            <li>AP aging summary (open payables by overdue bucket).</li>
-            <li>Cash position (sum of all cash GL accounts).</li>
-            <li>Top customers and top vendors by activity.</li>
+            <li><strong>POS → JE Lag</strong> — average time from a POS event being created to its JE being posted. Target: under 1 minute. The cron picks up PENDING events every minute, so anything higher means the cron is failing or queue is overloaded.</li>
+            <li><strong>Pending Events</strong> — current backlog. Should be near 0 most of the time.</li>
+            <li><strong>Failed Events</strong> — events that errored. Each one needs manual triage in the Event Queue page.</li>
+            <li><strong>DSO (Days Sales Outstanding)</strong> — weighted average days from invoice to cash, last 90 days. Target: ≤ 30. Higher means slow collections.</li>
+            <li><strong>DPO (Days Payable Outstanding)</strong> — weighted average days from bill to payment. Target: ≤ 30 (don&apos;t pay too late or vendors get angry).</li>
+            <li><strong>Last Period Close</strong> — days since the most recent monthly close. Target: ≤ 35. Higher means month-end is overdue.</li>
           </ul>
+        ),
+      },
+      {
+        q: 'Accuracy section — what should I check daily?',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>Trial Balance</strong> — should always read &ldquo;Balanced&rdquo;. If it shows OFF, click to investigate. Usually caused by a one-sided JE, a failed import, or a manual entry that wasn&apos;t a true double-entry.</li>
+            <li><strong>Voids (30d)</strong> — count + percentage of all orders. Target: under 2%. High void rate is a red flag — possible cashier error, fraud, or system bug.</li>
+            <li><strong>Period Reopens (90d)</strong> — every reopen is logged. Target: 0. Auditors flag tenants with frequent reopens because it suggests the close process isn&apos;t rigorous.</li>
+          </ul>
+        ),
+      },
+      {
+        q: 'Volume section — what\'s the point?',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>JEs Today / This Month</strong> — basic activity counters. Sudden drops mean the system stopped processing.</li>
+            <li><strong>Events (24h)</strong> — auto-posted POS events. Should roughly match expected sales velocity.</li>
+            <li><strong>Open AR / AP</strong> — outstanding balances + count. Click to drill into Customer Billing or Vendor Bills.</li>
+            <li><strong>Offline Syncs (24h)</strong> — POS orders posted from the offline queue. High count = network issues at the till.</li>
+          </ul>
+        ),
+      },
+      {
+        q: 'Control section — what does each metric mean?',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>Pending Claims</strong> — expense claims awaiting your approval. High count = bottleneck.</li>
+            <li><strong>SOD Overrides (30d)</strong> — times an owner overrode a Segregation-of-Duties warning when assigning permissions. Target: 0. Each override is logged with reason.</li>
+            <li><strong>Products Missing Cost</strong> — active products with no cost price. Each one breaks COGS posting on its sales, overstating profit. Target: 0.</li>
+            <li><strong>Audit Entries (24h)</strong> — total logged sensitive actions. Spike = unusual activity, worth a glance.</li>
+          </ul>
+        ),
+      },
+      {
+        q: 'How are severity colours decided?',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><span className="text-emerald-500 font-medium">Green</span> = within target (e.g. lag ≤ 1m, voids ≤ 2%, missing cost = 0).</li>
+            <li><span className="text-amber-500 font-medium">Amber</span> = warning (e.g. lag 1-10m, voids 2-5%, 1-5 missing cost).</li>
+            <li><span className="text-red-500 font-medium">Red</span> = needs intervention (e.g. lag &gt; 10m, voids &gt; 5%, 5+ missing cost).</li>
+            <li>Thresholds are sensible MSME defaults; per-tenant tuning is on the roadmap.</li>
+          </ul>
+        ),
+      },
+      {
+        q: 'The dashboard auto-refreshes — how often?',
+        a: (
+          <p>
+            Every 60 seconds. Click <strong>Refresh</strong> to force an immediate update. The &ldquo;Updated HH:MM:SS&rdquo;
+            timestamp shows when the data was last computed. All metrics are derived live from the database — no caching
+            means numbers are always current, but very-busy tenants may see slightly slower load.
+          </p>
         ),
       },
     ],

@@ -30,6 +30,7 @@ import { DocumentsModule } from './documents/documents.module';
 import { ExpenseClaimsModule } from './expense-claims/expense-claims.module';
 import { NumberingModule } from './numbering/numbering.module';
 import { AiModule } from './ai/ai.module';
+import { LedgerMetricsModule } from './ledger-metrics/ledger-metrics.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -66,6 +67,7 @@ import { HealthController } from './health/health.controller';
     ExpenseClaimsModule,
     NumberingModule,
     AiModule,
+    LedgerMetricsModule,
   ],
 })
 export class AppModule {}

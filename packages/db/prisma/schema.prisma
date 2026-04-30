@@ -524,6 +524,11 @@ model User {
   /// Time-limited token for self-service password reset (expires in 1 hour)
   passwordResetToken       String?        @unique
   passwordResetTokenExpiry DateTime?
+  /// Bcrypt-hashed 4-6 digit PIN for supervisor void overrides at the till.
+  /// Only meaningful for users with VOID_DIRECT_ROLES (SALES_LEAD,
+  /// BRANCH_MANAGER, BUSINESS_OWNER). Cashiers can have one set but it
+  /// won't be accepted by /auth/verify-supervisor-pin.
+  supervisorPinHash        String?
   /// RBAC: persona template the user was created from (e.g. "CASHIER_COOK").
   /// Reference into packages/shared-types/src/personas.ts; null for legacy users.
   personaKey               String?

@@ -5,7 +5,7 @@ import {
   Settings, Building2, Users, ArrowLeft, Lock,
   Plus, X, CheckCircle2, XCircle, RotateCcw,
   ChevronDown, Shield, FileText, AlertTriangle, Info,
-  KeyRound, Eye, EyeOff,
+  KeyRound, Eye, EyeOff, ShieldCheck,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -756,6 +756,11 @@ export default function SettingsPage() {
                 until you sign out or your access token expires (15 minutes).
               </p>
             </div>
+
+            {/* Supervisor PIN — for void-authority roles only */}
+            {(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'] as const).includes(
+              user?.role as 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'SALES_LEAD',
+            ) && <SupervisorPinCard />}
           </div>
         )}
 
@@ -997,6 +1002,86 @@ export default function SettingsPage() {
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
+
+function SupervisorPinCard() {
+  const [currentPw, setCurrentPw] = useState('');
+  const [pin, setPin]             = useState('');
+  const [confirmPin, setConfirm]  = useState('');
+  const [saving, setSaving]       = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!/^\d{4,6}$/.test(pin)) { toast.error('PIN must be 4-6 digits.'); return; }
+    if (pin !== confirmPin)     { toast.error('PINs do not match.'); return; }
+    if (!currentPw)             { toast.error('Enter your current password to confirm.'); return; }
+    setSaving(true);
+    try {
+      await api.post('/auth/set-supervisor-pin', { currentPassword: currentPw, newPin: pin });
+      toast.success('Supervisor PIN updated. Use it at any cashier till to authorise voids.');
+      setCurrentPw(''); setPin(''); setConfirm('');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg ?? 'Failed to set PIN.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="rounded-xl border border-border bg-card p-4 space-y-4">
+      <div className="flex items-center gap-2">
+        <ShieldCheck className="w-4 h-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold text-foreground">Supervisor PIN</h3>
+      </div>
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        Set a 4-6 digit PIN that you&apos;ll type into a cashier&apos;s screen to authorise their voids.
+        The cashier never sees the PIN — they hand you the device, you enter it,
+        you hand it back. The void is logged with both your names. Confirm with your
+        login password to prevent someone with a stolen session from setting a PIN.
+      </p>
+      <Field label="Current Login Password" required>
+        <input
+          type="password"
+          value={currentPw}
+          onChange={(e) => setCurrentPw(e.target.value)}
+          className={INPUT_CLS}
+          autoComplete="current-password"
+        />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="New PIN (4-6 digits)" required>
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={6}
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+            className={`${INPUT_CLS} text-center text-lg tracking-[0.4em] font-bold`}
+            placeholder="• • • •"
+            autoComplete="off"
+          />
+        </Field>
+        <Field label="Confirm PIN" required>
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={6}
+            value={confirmPin}
+            onChange={(e) => setConfirm(e.target.value.replace(/\D/g, ''))}
+            className={`${INPUT_CLS} text-center text-lg tracking-[0.4em] font-bold`}
+            placeholder="• • • •"
+            autoComplete="off"
+          />
+        </Field>
+      </div>
+      <div className="flex justify-end">
+        <button type="submit" disabled={saving} className={BTN_PRIMARY}>
+          {saving ? 'Saving…' : 'Set Supervisor PIN'}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
   return (

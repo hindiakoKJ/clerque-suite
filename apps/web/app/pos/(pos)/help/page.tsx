@@ -228,15 +228,49 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'Voiding a completed order',
+        q: 'Voiding a completed order (cashier with supervisor PIN)',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
-            <li>Go to the <strong>Orders</strong> page in the sidebar.</li>
-            <li>Find the order, tap it, then tap <strong>Void</strong>.</li>
-            <li>If you&apos;re a CASHIER, a supervisor (Sales Lead or Branch Manager) must enter their PIN. This is a required Segregation of Duties check.</li>
-            <li>Enter a reason. The void is logged with both your name and the supervisor&apos;s name.</li>
-            <li>The journal entry is reversed. Inventory is restocked.</li>
+            <li>Sidebar → <strong>Orders</strong>. Find the order. Tap <strong>Void</strong>.</li>
+            <li>Enter the void reason (required, free text).</li>
+            <li>If you&apos;re a CASHIER, a yellow <strong>Supervisor authorisation required</strong> box appears with a PIN input.</li>
+            <li>Hand the device to your manager (Sales Lead, Branch Manager, or Owner). They tap their 4-6 digit PIN into the box.</li>
+            <li>Tap <strong>Confirm Void</strong>. System verifies the PIN, identifies the supervisor, and logs the void with both names.</li>
+            <li>The journal entry is reversed. Inventory is restocked. Audit log captures: order #, reason, cashier name, supervisor name, timestamp.</li>
           </ol>
+        ),
+      },
+      {
+        q: 'I\'m a Sales Lead / Manager / Owner — do I need a PIN?',
+        a: (
+          <p>
+            No. Direct-void roles (Sales Lead, Branch Manager, Business Owner, Super Admin) skip the PIN field
+            entirely. Just enter the reason and confirm. The void is recorded under your own name.
+          </p>
+        ),
+      },
+      {
+        q: 'How does my supervisor set up their PIN?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Supervisor signs in to Clerque (any app).</li>
+            <li>Sidebar → <strong>Settings</strong> → <strong>Security</strong> tab.</li>
+            <li>Scroll to <strong>Supervisor PIN</strong> card.</li>
+            <li>Enter their current login password (confirmation), then a 4-6 digit PIN twice.</li>
+            <li>Save. The PIN is hashed and stored. They can use it at any cashier&apos;s till in their tenant.</li>
+            <li>To change or rotate, repeat the process.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'I tried the PIN and it says &ldquo;Invalid PIN&rdquo;.',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li>Make sure the supervisor has set a PIN in Settings → Security.</li>
+            <li>The supervisor&apos;s role must be Sales Lead, Branch Manager, or Owner — Cashier PINs are silently rejected.</li>
+            <li>The supervisor must be active (not deactivated) and in your tenant.</li>
+            <li>If still failing, the supervisor can reset their PIN at Settings → Security.</li>
+          </ul>
         ),
       },
     ],

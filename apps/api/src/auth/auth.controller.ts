@@ -119,4 +119,50 @@ export class AuthController {
     }
     await this.authService.resetPassword(body.token, body.newPassword);
   }
+
+  /**
+   * POST /auth/verify-supervisor-pin
+   * Used at the cashier till to authorise a void. The cashier is logged in;
+   * the supervisor enters their PIN on the cashier's screen. The endpoint
+   * looks up which supervisor (in the SAME tenant, with VOID_DIRECT role)
+   * owns this PIN and returns their identity for the void to record.
+   *
+   * Request:  { pin: "1234" }
+   * Returns:  { userId, name, role }  (200)
+   * Errors:   401 if no matching supervisor found
+   *
+   * The endpoint requires JWT auth so we know which tenant to scope the PIN
+   * lookup to — prevents cross-tenant PIN reuse.
+   */
+  @Post('verify-supervisor-pin')
+  @HttpCode(HttpStatus.OK)
+  async verifySupervisorPin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { pin?: string },
+  ) {
+    if (!body.pin) throw new BadRequestException('pin is required.');
+    return this.authService.verifySupervisorPin(user.tenantId!, body.pin);
+  }
+
+  /**
+   * POST /auth/set-supervisor-pin
+   * Set or change the current user's supervisor PIN. Self-service only —
+   * supervisors set their own PIN, never delegated to admin (they could
+   * then impersonate). Requires the user's current login password to
+   * confirm identity (defence against stolen-session PIN takeover).
+   *
+   * Request:  { currentPassword: "...", newPin: "1234" }
+   * Returns:  204
+   */
+  @Post('set-supervisor-pin')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async setSupervisorPin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { currentPassword?: string; newPin?: string },
+  ) {
+    if (!body.currentPassword || !body.newPin) {
+      throw new BadRequestException('currentPassword and newPin are required.');
+    }
+    await this.authService.setSupervisorPin(user.sub, body.currentPassword, body.newPin);
+  }
 }

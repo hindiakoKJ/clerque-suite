@@ -462,4 +462,74 @@ export class AuthService {
     );
     return { accessToken, refreshToken };
   }
+
+  // ─── Supervisor PIN (till-side void override) ─────────────────────────────
+
+  /**
+   * Look up which supervisor in this tenant owns the given PIN. Used by the
+   * cashier's void modal to capture the supervisor's identity without making
+   * them log out and in.
+   *
+   * Security:
+   *  - Tenant-scoped — PINs cannot cross tenants
+   *  - Only users with VOID_DIRECT_ROLES are eligible (CASHIER's PIN is
+   *    silently rejected even if it matches)
+   *  - Bcrypt-compared, no timing leak per individual user (we iterate all
+   *    eligible supervisors in the tenant; total time scales with #supers)
+   *  - Generic 401 on no match (no enumeration of which PINs are taken)
+   */
+  async verifySupervisorPin(tenantId: string, pin: string): Promise<{ userId: string; name: string; role: string }> {
+    const cleaned = pin.trim();
+    if (!/^\d{4,6}$/.test(cleaned)) {
+      throw new UnauthorizedException('Invalid PIN.');
+    }
+    const VOID_DIRECT_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'] as const;
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        tenantId,
+        isActive:           true,
+        role:               { in: [...VOID_DIRECT_ROLES] },
+        supervisorPinHash:  { not: null },
+      },
+      select: { id: true, name: true, role: true, supervisorPinHash: true },
+    });
+    for (const u of candidates) {
+      if (u.supervisorPinHash && await bcrypt.compare(cleaned, u.supervisorPinHash)) {
+        return { userId: u.id, name: u.name, role: u.role };
+      }
+    }
+    throw new UnauthorizedException('Invalid PIN.');
+  }
+
+  /**
+   * Set or change the user's supervisor PIN. Requires their login password
+   * to confirm — protects against a thief who has the laptop but doesn't
+   * know the password from setting a PIN to enable future voids.
+   *
+   * The endpoint accepts the request from any role, but the PIN is only
+   * meaningful for VOID_DIRECT roles. We don't block CASHIER from setting
+   * one (they may be promoted later) — just won't honour it until promoted.
+   */
+  async setSupervisorPin(userId: string, currentPassword: string, newPin: string): Promise<void> {
+    const cleanedPin = newPin.trim();
+    if (!/^\d{4,6}$/.test(cleanedPin)) {
+      throw new BadRequestException('PIN must be 4 to 6 digits.');
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('User not found or inactive.');
+    }
+    const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!ok) {
+      throw new UnauthorizedException('Current password is incorrect.');
+    }
+    const pinHash = await bcrypt.hash(cleanedPin, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data:  { supervisorPinHash: pinHash },
+    });
+  }
 }

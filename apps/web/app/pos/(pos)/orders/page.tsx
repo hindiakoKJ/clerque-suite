@@ -45,9 +45,19 @@ export default function OrdersPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [voidModal, setVoidModal] = useState<Order | null>(null);
   const [voidReason, setVoidReason] = useState('');
+  const [voidPin, setVoidPin] = useState('');
   const [voiding, setVoiding] = useState(false);
 
-  const canVoid = user?.role === 'BUSINESS_OWNER' || user?.role === 'BRANCH_MANAGER' || user?.role === 'SUPER_ADMIN';
+  // Cashiers can INITIATE a void but a supervisor must enter their PIN.
+  // Direct-void roles (Owner / Branch Manager / Sales Lead / Super Admin)
+  // skip the PIN step.
+  const canInitiateVoid =
+    user?.role === 'CASHIER' || user?.role === 'SALES_LEAD' ||
+    user?.role === 'BRANCH_MANAGER' || user?.role === 'BUSINESS_OWNER' ||
+    user?.role === 'SUPER_ADMIN';
+  const needsSupervisorPin = user?.role === 'CASHIER';
+  // Backwards-compat alias for existing UI bindings below.
+  const canVoid = canInitiateVoid;
 
   const { data: orders = [], isLoading } = useQuery<Order[]>({
     queryKey: ['orders', user?.branchId],
@@ -65,15 +75,44 @@ export default function OrdersPage() {
 
   async function handleVoid() {
     if (!voidModal || !voidReason.trim()) { toast.error('Please enter a void reason.'); return; }
+    if (needsSupervisorPin && !/^\d{4,6}$/.test(voidPin.trim())) {
+      toast.error('Supervisor PIN must be 4-6 digits.');
+      return;
+    }
     setVoiding(true);
     try {
-      await api.post(`/orders/${voidModal.id}/void`, { reason: voidReason.trim() });
-      toast.success(`Order ${voidModal.orderNumber} voided.`);
+      let supervisorId: string | undefined;
+      let supervisorName: string | undefined;
+
+      // Cashier path: verify the supervisor's PIN first to get their userId,
+      // then attach to the void call. The backend re-validates everything.
+      if (needsSupervisorPin) {
+        try {
+          const { data } = await api.post('/auth/verify-supervisor-pin', { pin: voidPin.trim() });
+          supervisorId   = data.userId;
+          supervisorName = data.name;
+        } catch (e: unknown) {
+          const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+          toast.error(msg ?? 'Supervisor PIN rejected.');
+          return;
+        }
+      }
+
+      await api.post(`/orders/${voidModal.id}/void`, {
+        reason:       voidReason.trim(),
+        supervisorId,
+      });
+      toast.success(
+        supervisorName
+          ? `Order ${voidModal.orderNumber} voided — authorised by ${supervisorName}.`
+          : `Order ${voidModal.orderNumber} voided.`,
+      );
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
       qc.invalidateQueries({ queryKey: ['products-pos'] });
       setVoidModal(null);
       setVoidReason('');
+      setVoidPin('');
     } catch (err: unknown) {
       toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to void order.');
     } finally {
@@ -278,10 +317,33 @@ export default function OrdersPage() {
                   autoFocus
                 />
               </div>
+
+              {needsSupervisorPin && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+                  <div className="text-xs font-medium text-amber-900">
+                    Supervisor authorisation required
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-snug">
+                    Hand the device to your manager. They enter their 4-6 digit PIN
+                    here. The void is logged with both your names.
+                  </p>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    pattern="\d{4,6}"
+                    maxLength={6}
+                    autoComplete="off"
+                    value={voidPin}
+                    onChange={(e) => setVoidPin(e.target.value.replace(/\D/g, ''))}
+                    className="w-full h-11 text-center text-xl tracking-[0.5em] font-bold border border-amber-300 bg-white text-amber-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    placeholder="• • • •"
+                  />
+                </div>
+              )}
             </div>
             <div className="px-6 pb-5 flex gap-3">
               <button
-                onClick={() => { setVoidModal(null); setVoidReason(''); }}
+                onClick={() => { setVoidModal(null); setVoidReason(''); setVoidPin(''); }}
                 className="flex-1 border border-border text-muted-foreground rounded-xl py-2 text-sm font-medium hover:bg-muted transition-colors"
               >
                 Cancel

@@ -17,9 +17,18 @@ async function runSeed(logger: Logger) {
     const SLUG = 'demo';
     const EMAIL = 'admin@demo.com';
 
+    // Always ensure the demo tenant has a generous AI quota so admin@demo.com
+    // can demo JE Drafter / Smart Account Picker / JE Guide regardless of tier.
+    // Idempotent — safe to run on every boot. updateMany returns 0 if the
+    // tenant doesn't exist yet (handled by the upsert below).
+    await prisma.tenant.updateMany({
+      where: { slug: SLUG },
+      data:  { aiQuotaOverride: 9999 },
+    });
+
     // Fast-exit: skip seed entirely if demo tenant already exists
     const count = await prisma.tenant.count({ where: { slug: SLUG } });
-    if (count > 0) { logger.log('Seed: demo tenant exists — skipped', 'Bootstrap'); return; }
+    if (count > 0) { logger.log('Seed: demo tenant exists — AI quota refreshed, skipped user create', 'Bootstrap'); return; }
 
     const tenant = await prisma.tenant.upsert({
       where: { slug: SLUG },
@@ -28,6 +37,7 @@ async function runSeed(logger: Logger) {
         name: 'Demo Business', slug: SLUG,
         businessType: 'RETAIL', status: 'ACTIVE',
         tier: 'TIER_1', branchQuota: 3, cashierSeatQuota: 5,
+        aiQuotaOverride: 9999,
       },
     });
 

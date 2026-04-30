@@ -120,7 +120,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
             placeholder="Search by name, SKU, or barcode  (try: 3x latte)"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className={`w-full pl-9 ${multiplier > 1 ? 'pr-16' : 'pr-4'} h-10 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow`}
+            className={`w-full pl-10 ${multiplier > 1 ? 'pr-16' : 'pr-4'} h-11 sm:h-12 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow`}
           />
           {multiplier > 1 && (
             <span
@@ -136,7 +136,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
           <button
             onClick={() => setActiveCat(null)}
             className={cn(
-              'shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
+              'shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-colors',
               !activeCat
                 ? 'text-white'
                 : 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
@@ -150,7 +150,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
               key={cat.id}
               onClick={() => setActiveCat(cat.id)}
               className={cn(
-                'shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
+                'shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-colors',
                 activeCat === cat.id
                   ? 'text-white'
                   : 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
@@ -176,7 +176,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
             No products found
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
             {filtered.map((p) => {
               const inv = p.inventory?.[0];
               const stock = inv?.quantity != null ? Number(inv.quantity) : null;
@@ -189,7 +189,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                   onClick={() => handleAdd(p)}
                   disabled={isOut}
                   className={cn(
-                    'group relative flex flex-col items-start p-3 rounded-xl border hover:shadow-md active:scale-95 transition-all text-left',
+                    'group relative flex flex-col items-start p-2.5 sm:p-3 rounded-xl border hover:shadow-md active:scale-95 transition-all text-left min-h-[160px] sm:min-h-[180px]',
                     isOut
                       ? 'bg-muted border-border opacity-60 cursor-not-allowed'
                       : isLow
@@ -197,9 +197,9 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                       : 'bg-card border-border hover:border-[var(--accent)]/40',
                   )}
                 >
-                  {/* Image tile — falls back to category emoji when no imageUrl */}
+                  {/* Image tile — prominent for tablet/touch, falls back to category emoji */}
                   <div className={cn(
-                    'w-full h-12 rounded-lg flex items-center justify-center mb-2 transition-colors overflow-hidden',
+                    'w-full aspect-square rounded-lg flex items-center justify-center mb-2 transition-colors overflow-hidden',
                     isLow
                       ? 'bg-amber-500/10 group-hover:bg-amber-500/15'
                       : 'bg-[var(--accent-soft)] group-hover:bg-[var(--accent-soft)]/80',
@@ -211,26 +211,24 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                         alt={p.name}
                         className="w-full h-full object-cover"
                         onError={(e) => {
-                          // Hide on load failure → fallback to emoji is already
-                          // behind the img; just hide the broken image.
                           (e.currentTarget as HTMLImageElement).style.display = 'none';
                         }}
                       />
                     ) : (
-                      <span className="text-2xl">
+                      <span className="text-3xl sm:text-4xl">
                         {p.category?.name === 'Beverages' ? '☕' :
                          p.category?.name === 'Food' ? '🍱' : '📦'}
                       </span>
                     )}
                   </div>
 
-                  <p className="text-xs font-medium text-foreground leading-tight line-clamp-2">{p.name}</p>
-                  <p className="text-sm font-bold mt-1" style={{ color: 'var(--accent)' }}>{formatPeso(Number(p.price))}</p>
+                  <p className="text-xs sm:text-sm font-medium text-foreground leading-tight line-clamp-2">{p.name}</p>
+                  <p className="text-sm sm:text-base font-bold mt-auto pt-1" style={{ color: 'var(--accent)' }}>{formatPeso(Number(p.price))}</p>
 
                   {/* Stock badge */}
                   {stock !== null && (
                     <span className={cn(
-                      'absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded-full font-semibold',
+                      'absolute top-2 right-2 text-[10px] sm:text-xs px-1.5 py-0.5 rounded-full font-semibold',
                       isOut
                         ? 'bg-muted text-muted-foreground'
                         : isLow

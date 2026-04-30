@@ -197,17 +197,31 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                       : 'bg-card border-border hover:border-[var(--accent)]/40',
                   )}
                 >
-                  {/* Icon tile */}
+                  {/* Image tile — falls back to category emoji when no imageUrl */}
                   <div className={cn(
-                    'w-full h-12 rounded-lg flex items-center justify-center mb-2 transition-colors',
+                    'w-full h-12 rounded-lg flex items-center justify-center mb-2 transition-colors overflow-hidden',
                     isLow
                       ? 'bg-amber-500/10 group-hover:bg-amber-500/15'
                       : 'bg-[var(--accent-soft)] group-hover:bg-[var(--accent-soft)]/80',
                   )}>
-                    <span className="text-2xl">
-                      {p.category?.name === 'Beverages' ? '☕' :
-                       p.category?.name === 'Food' ? '🍱' : '📦'}
-                    </span>
+                    {p.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={p.imageUrl}
+                        alt={p.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          // Hide on load failure → fallback to emoji is already
+                          // behind the img; just hide the broken image.
+                          (e.currentTarget as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <span className="text-2xl">
+                        {p.category?.name === 'Beverages' ? '☕' :
+                         p.category?.name === 'Food' ? '🍱' : '📦'}
+                      </span>
+                    )}
                   </div>
 
                   <p className="text-xs font-medium text-foreground leading-tight line-clamp-2">{p.name}</p>

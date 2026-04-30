@@ -32,12 +32,14 @@ interface Product {
   description?: string;
   inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
   bomItems?: Array<{ rawMaterialId: string; quantity: number; rawMaterial?: { id: string; name: string; unit: string } }>;
+  imageUrl?: string | null;
 }
 
 const EMPTY_FORM = {
   name: '', sku: '', barcode: '', description: '', categoryId: '',
   price: '', costPrice: '', isVatable: true, unitOfMeasureId: '',
   inventoryMode: 'UNIT_BASED' as 'UNIT_BASED' | 'RECIPE_BASED',
+  imageUrl: '',
 };
 
 const INPUT_CLS =
@@ -134,6 +136,7 @@ export default function ProductsPage() {
       isVatable: p.isVatable,
       unitOfMeasureId: p.unitOfMeasureId ?? '',
       inventoryMode: p.inventoryMode ?? 'UNIT_BASED',
+      imageUrl: p.imageUrl ?? '',
     });
     setRecipe([]);
 
@@ -196,6 +199,7 @@ export default function ProductsPage() {
         isVatable: form.isVatable,
         unitOfMeasureId: form.unitOfMeasureId || undefined,
         inventoryMode: form.inventoryMode,
+        imageUrl: form.imageUrl.trim() || undefined,
         // On create: send BOM inline
         ...(modal === 'create' && bomItems.length > 0 ? { bomItems } : {}),
       };
@@ -652,6 +656,42 @@ export default function ProductsPage() {
                     Required — used to compute COGS &amp; gross profit on every sale.
                     For recipe items, enter the summed raw-material cost.
                   </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Product Image (URL)</label>
+                <div className="flex gap-2 items-start">
+                  {form.imageUrl ? (
+                    <div className="w-16 h-16 rounded-lg border border-border overflow-hidden bg-muted shrink-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={form.imageUrl}
+                        alt="Preview"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-16 h-16 rounded-lg border border-dashed border-border bg-muted/30 shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center px-1">
+                      No image
+                    </div>
+                  )}
+                  <div className="flex-1">
+                    <input
+                      type="url"
+                      value={form.imageUrl}
+                      onChange={(e) => setForm((f) => ({ ...f, imageUrl: e.target.value }))}
+                      className={INPUT_CLS}
+                      placeholder="https://… (paste image URL)"
+                    />
+                    <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
+                      Optional. Paste a public image URL — it appears as a tile on the cashier terminal.
+                      Direct file upload coming soon (cloud storage setup pending).
+                    </p>
+                  </div>
                 </div>
               </div>
 

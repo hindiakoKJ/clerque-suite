@@ -87,6 +87,17 @@ export class CreateProductDto {
   @Min(0)
   costPrice: number;
 
+  /**
+   * Optional product image. Accepts a public URL (e.g. CDN, supplier site,
+   * Google Drive direct link). File-upload backed by cloud storage is on
+   * the roadmap; for now the form lets the operator paste a URL.
+   */
+  @ApiPropertyOptional({ example: 'https://cdn.example.com/iced-latte.jpg' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  imageUrl?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsEnum(INVENTORY_MODES)

@@ -37,6 +37,13 @@ interface AppShellProps {
   appName: string;
   brandName?: string;
   headerRight?: React.ReactNode;
+  /**
+   * Custom widget rendered in the empty space between the nav items and
+   * the sign-out / user info footer. Used by POS to put a live clock
+   * there (so cashiers always see the time without leaving the till).
+   * Hidden when the sidebar is collapsed.
+   */
+  sidebarExtra?: React.ReactNode;
   /** When provided, a Sign Out button is rendered in the sidebar footer and mobile nav. */
   onSignOut?: () => void;
 }
@@ -48,6 +55,7 @@ export function AppShell({
   appName,
   brandName = 'Clerque',  // "Clerque Counter", "Clerque Ledger", "Clerque Sync"
   headerRight,
+  sidebarExtra,
   onSignOut,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -174,8 +182,13 @@ export function AppShell({
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto overflow-x-hidden">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col">
           <NavList />
+          {sidebarExtra && !collapsed && (
+            <div className="mt-auto px-2 pb-2">
+              {sidebarExtra}
+            </div>
+          )}
         </div>
 
         <div className="p-2 border-t border-border shrink-0 space-y-1">

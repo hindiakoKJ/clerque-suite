@@ -55,4 +55,9 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   unitOfMeasureId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  imageUrl?: string;
 }

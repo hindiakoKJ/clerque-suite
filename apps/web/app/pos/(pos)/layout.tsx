@@ -6,6 +6,7 @@ import {
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
 } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
+import { ClockWidget } from '@/components/pos/ClockWidget';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
 import { ShiftGate } from '@/components/pos/ShiftGate';
 import { CloseShiftModal } from '@/components/pos/CloseShiftModal';
@@ -265,6 +266,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         logoIcon={ShoppingCart}
         appName="Counter"
         headerRight={headerRight}
+        sidebarExtra={<ClockWidget />}
         onSignOut={handleLogout}
       >
         <OfflineBanner />

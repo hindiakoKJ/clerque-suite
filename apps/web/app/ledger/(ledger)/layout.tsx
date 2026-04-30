@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -88,7 +88,9 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     makeLedgerNavItem('/ledger/periods',       'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role),
     makeLedgerNavItem('/ledger/bir',           'Tax Estimation',     FileText,        BIR_ROLES,        role, isBirRegistered),
     makeLedgerNavItem('/ledger/ap/expenses',   'Payables (AP)',      TrendingDown,    AP_ROLES,         role),
+    makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role),
     makeLedgerNavItem('/ledger/ar/invoices',   'Receivables (AR)',   TrendingUp,      AR_ROLES,         role),
+    makeLedgerNavItem('/ledger/ar/billing',    'Customer Billing',   FileSpreadsheet, AR_ROLES,         role),
     makeLedgerNavItem('/ledger/audit',            'Audit Log',          ShieldCheck,     AUDIT_ROLES,             role),
     makeLedgerNavItem('/ledger/expense-approvals','Expense Approvals',  ClipboardCheck,  EXPENSE_APPROVAL_ROLES,  role),
   ].filter((item) => !item.disabled || item.disabledReason?.startsWith('Requires'));

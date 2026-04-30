@@ -13,8 +13,15 @@ import { RecordCollectionDto } from './dto/record-collection.dto';
 const READ_ROLES       = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
 const COLLECTION_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT'] as const;
 
+/**
+ * Legacy AR controller — POS-only "Outstanding Sales" feature for charge-tab
+ * orders (T2+ tier). Treats POS Orders as the AR document.
+ *
+ * Mounted under /ar/pos/* to keep the path namespace clear of the formal
+ * back-office ARInvoicesController which lives at /ar/invoices.
+ */
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Controller('ar')
+@Controller('ar/pos')
 export class ArController {
   constructor(private readonly svc: ArService) {}
 

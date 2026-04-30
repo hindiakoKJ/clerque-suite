@@ -67,7 +67,7 @@ export default function AgingPage() {
 
   const { data, isLoading } = useQuery<AgingResponse>({
     queryKey: ['ar-aging'],
-    queryFn:  () => api.get('/ar/aging').then((r) => r.data),
+    queryFn:  () => api.get('/ar/pos/aging').then((r) => r.data),
     enabled:  !!user,
   });
 

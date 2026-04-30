@@ -116,7 +116,7 @@ function CollectModal({
     }
     setSaving(true);
     try {
-      await api.post(`/ar/invoices/${invoice.id}/collect`, {
+      await api.post(`/ar/pos/invoices/${invoice.id}/collect`, {
         amount:        amt,
         paymentMethod,
         reference:     reference.trim() || undefined,
@@ -259,13 +259,13 @@ export default function InvoicesPage() {
 
   const { data, isLoading } = useQuery<InvoiceListResponse>({
     queryKey: ['ar-invoices', tab, customerId, from, to, page],
-    queryFn:  () => api.get(`/ar/invoices?${queryParams()}`).then((r) => r.data),
+    queryFn:  () => api.get(`/ar/pos/invoices?${queryParams()}`).then((r) => r.data),
     enabled:  !!user,
   });
 
   const { data: summary } = useQuery<ArSummary>({
     queryKey: ['ar-summary'],
-    queryFn:  () => api.get('/ar/summary').then((r) => r.data),
+    queryFn:  () => api.get('/ar/pos/summary').then((r) => r.data),
     enabled:  !!user,
   });
 

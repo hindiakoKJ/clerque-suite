@@ -51,6 +51,17 @@ export class AccountsController {
   }
 
   /**
+   * Balance Sheet as of a date. Same access set as Trial Balance —
+   * Bookkeeper + External Auditor included since this is a published
+   * statement, not internal management info.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  @Get('balance-sheet')
+  balanceSheet(@CurrentUser() user: JwtPayload, @Query('asOf') asOf?: string) {
+    return this.svc.getBalanceSheet(user.tenantId!, asOf);
+  }
+
+  /**
    * Account ledger drill-down (FBL3N equivalent).
    * Bookkeeper included — they review individual GL movements.
    * External Auditor included — read-only audit trail access.

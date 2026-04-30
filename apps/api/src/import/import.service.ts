@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface ImportResult {
@@ -974,5 +975,198 @@ export class ImportService {
     }
 
     return { products, inventory };
+  }
+
+  // ── Customers Import (AR master) ────────────────────────────────────────
+  // Columns: Name*, TIN, Address, Email, Phone, Credit Term Days, Credit Limit, Notes
+
+  async importCustomers(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
+    const rows = await this.parseFile(file);
+    const headerIdx = this.findHeaderRow(rows, ['Name*', 'Name']);
+    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (rows.length <= dataStart)
+      throw new BadRequestException('File must have a header row and at least one data row.');
+
+    const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
+    let dataRows = rows.slice(dataStart);
+    if (dataRows.length > 0) {
+      const looksLikeHints = isNaN(parseFloat(dataRows[0][5] ?? '')) && (dataRows[0][0] ?? '').toLowerCase().includes('required');
+      if (looksLikeHints) dataRows = dataRows.slice(1);
+    }
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNum = dataStart + i + 2;
+      const [name, tin, address, email, phone, termsStr, limitStr, notes] = dataRows[i];
+      if (!name?.trim()) { result.skipped++; continue; }
+
+      const creditTermDays = termsStr ? parseInt(termsStr, 10) : 0;
+      if (termsStr && (isNaN(creditTermDays) || creditTermDays < 0)) {
+        result.errors.push({ row: rowNum, message: `Invalid credit term days: "${termsStr}"` });
+        continue;
+      }
+      const creditLimit = limitStr ? parseFloat(limitStr) : null;
+      if (limitStr && (isNaN(creditLimit!) || creditLimit! < 0)) {
+        result.errors.push({ row: rowNum, message: `Invalid credit limit: "${limitStr}"` });
+        continue;
+      }
+
+      try {
+        const existing = await this.prisma.customer.findFirst({
+          where: { tenantId, name: name.trim() },
+        });
+        const data = {
+          tenantId,
+          name:           name.trim(),
+          tin:            tin?.trim()     || null,
+          address:        address?.trim() || null,
+          contactEmail:   email?.trim()   || null,
+          contactPhone:   phone?.trim()   || null,
+          creditTermDays: creditTermDays || 0,
+          creditLimit:    creditLimit != null ? new Prisma.Decimal(creditLimit) : null,
+          notes:          notes?.trim()  || null,
+          isActive:       true,
+        };
+        if (existing) {
+          await this.prisma.customer.update({ where: { id: existing.id }, data });
+          result.updated++;
+        } else {
+          await this.prisma.customer.create({ data });
+          result.imported++;
+        }
+      } catch (err) {
+        result.errors.push({ row: rowNum, message: (err as Error).message ?? 'Unknown error' });
+      }
+    }
+    return result;
+  }
+
+  async customersTemplate(): Promise<Buffer> {
+    return this.makeTemplate(
+      'Customers',
+      ['Name*', 'TIN', 'Address', 'Email', 'Phone', 'Credit Term Days', 'Credit Limit', 'Notes'],
+      [
+        ['ABC Trading Inc.',     '123-456-789-000', '123 EDSA, Quezon City', 'ar@abc.ph',   '0917-1234567', '30',  '500000', 'B2B reseller'],
+        ['Reyes Bakery',         '',                'Brgy. San Roque, Pasig', '',           '0922-9876543', '15',  '50000',  'Daily bread orders'],
+        ['Walk-in (Anonymous)',  '',                '',                       '',           '',             '0',   '',       'For one-off cash sales'],
+      ],
+      {
+        title: 'Clerque — Customers Import Template (AR Master)',
+        instructions: [
+          'How to use:',
+          '  1. Add one row per customer. Name is required and must be unique within your tenant.',
+          '  2. Existing customers (matched by exact Name) are updated; new names create new records.',
+          '  3. TIN is optional but required for VAT-registered B2B customers (12-digit format).',
+          '  4. Credit Term Days: 0 = cash on delivery; 15/30/60 = net days. Defaults to customer\'s billing terms in AR Billing.',
+          '  5. Credit Limit: max outstanding receivable (₱). Leave blank for no limit. Used for over-limit warnings.',
+          '  6. Save as .xlsx (or .csv). Upload via Ledger → Receivables → Customers → Import.',
+        ],
+        columnHints: [
+          'Required. Unique within tenant.',
+          'Optional. PH 12-digit TIN.',
+          'Optional. Free text.',
+          'Optional. Email format.',
+          'Optional. Mobile or landline.',
+          'Optional. Net days for billing terms.',
+          'Optional. Max receivable (₱).',
+          'Optional. Free text.',
+        ],
+      },
+    );
+  }
+
+  // ── Vendors Import (AP master) ──────────────────────────────────────────
+  // Columns: Name*, TIN, Address, Email, Phone, Default ATC Code, Default WHT Rate, Notes
+
+  async importVendors(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
+    const rows = await this.parseFile(file);
+    const headerIdx = this.findHeaderRow(rows, ['Name*', 'Name']);
+    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (rows.length <= dataStart)
+      throw new BadRequestException('File must have a header row and at least one data row.');
+
+    const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
+    let dataRows = rows.slice(dataStart);
+    if (dataRows.length > 0) {
+      const looksLikeHints = (dataRows[0][0] ?? '').toLowerCase().includes('required');
+      if (looksLikeHints) dataRows = dataRows.slice(1);
+    }
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNum = dataStart + i + 2;
+      const [name, tin, address, email, phone, atcCode, whtRateStr, notes] = dataRows[i];
+      if (!name?.trim()) { result.skipped++; continue; }
+
+      let whtRate: number | null = null;
+      if (whtRateStr && whtRateStr.trim()) {
+        whtRate = parseFloat(whtRateStr);
+        if (isNaN(whtRate) || whtRate < 0 || whtRate > 1) {
+          result.errors.push({ row: rowNum, message: `Invalid WHT rate: "${whtRateStr}". Use decimal (0.05 for 5%).` });
+          continue;
+        }
+      }
+
+      try {
+        const existing = await this.prisma.vendor.findFirst({
+          where: { tenantId, name: name.trim() },
+        });
+        const data = {
+          tenantId,
+          name:           name.trim(),
+          tin:            tin?.trim()     || null,
+          address:        address?.trim() || null,
+          contactEmail:   email?.trim()   || null,
+          contactPhone:   phone?.trim()   || null,
+          defaultAtcCode: atcCode?.trim() || null,
+          defaultWhtRate: whtRate != null ? new Prisma.Decimal(whtRate) : null,
+          notes:          notes?.trim()  || null,
+          isActive:       true,
+        };
+        if (existing) {
+          await this.prisma.vendor.update({ where: { id: existing.id }, data });
+          result.updated++;
+        } else {
+          await this.prisma.vendor.create({ data });
+          result.imported++;
+        }
+      } catch (err) {
+        result.errors.push({ row: rowNum, message: (err as Error).message ?? 'Unknown error' });
+      }
+    }
+    return result;
+  }
+
+  async vendorsTemplate(): Promise<Buffer> {
+    return this.makeTemplate(
+      'Vendors',
+      ['Name*', 'TIN', 'Address', 'Email', 'Phone', 'Default ATC Code', 'Default WHT Rate', 'Notes'],
+      [
+        ['Globe Telecom',          '000-727-419-000', 'BGC, Taguig',        'ar@globe.com.ph', '02-7300-1010', 'WC158', '0.02', 'Internet provider — 2% EWT on services'],
+        ['Manila Electric Company','000-101-528-000', 'Ortigas, Pasig',     '',                '02-1622',      'WC100', '0.05', 'Electricity — 5% EWT on rentals'],
+        ['Suki Lending Corp.',     '987-654-321-000', '',                   '',                '',             'WI160', '0.05', 'Office space landlord'],
+      ],
+      {
+        title: 'Clerque — Vendors Import Template (AP Master)',
+        instructions: [
+          'How to use:',
+          '  1. Add one row per vendor (supplier, utility, landlord, contractor, etc.). Name must be unique within your tenant.',
+          '  2. Existing vendors (matched by exact Name) are updated; new names create new records.',
+          '  3. TIN is required when issuing 2307 to the vendor at year-end (12-digit format).',
+          '  4. Default ATC Code: BIR Alphanumeric Tax Code, e.g. WC158 (goods 1%), WC160 (services 2%), WI160 (rentals 5%).',
+          '  5. Default WHT Rate: decimal — 0.01 = 1%, 0.02 = 2%, 0.05 = 5%, 0.10 = 10%, 0.15 = 15%.',
+          '  6. These defaults pre-fill when you create a new AP Bill — you can still override per bill.',
+          '  7. Save as .xlsx (or .csv). Upload via Ledger → Payables → Vendors → Import.',
+        ],
+        columnHints: [
+          'Required. Unique within tenant.',
+          'Optional. PH 12-digit TIN. Needed for 2307.',
+          'Optional. Free text.',
+          'Optional. Email format.',
+          'Optional. Mobile or landline.',
+          'Optional. WC158/WC160/WI160/WI010/WI011.',
+          'Optional. 0-1 (e.g. 0.05 for 5%).',
+          'Optional. Free text.',
+        ],
+      },
+    );
   }
 }

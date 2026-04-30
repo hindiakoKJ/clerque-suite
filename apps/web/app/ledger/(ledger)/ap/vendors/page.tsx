@@ -2,12 +2,13 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Search, X, Building2, ChevronDown, CheckCircle2, XCircle,
+  Plus, Search, X, Building2, ChevronDown, CheckCircle2, XCircle, Upload,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { ImportModal } from '@/components/ui/ImportModal';
 import {
   Dialog,
   DialogContent,
@@ -240,6 +241,7 @@ export default function VendorsPage() {
   const canWrite = user?.role ? WRITE_ROLES.has(user.role) : false;
 
   const [search, setSearch] = useState('');
+  const [showImport, setShowImport] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
   const [modalVendor, setModalVendor] = useState<Vendor | null | 'new'>(null);
 
@@ -278,9 +280,14 @@ export default function VendorsPage() {
           </p>
         </div>
         {canWrite && (
-          <Button onClick={() => setModalVendor('new')} className="self-start sm:self-auto">
-            <Plus className="h-4 w-4 mr-1.5" /> New Vendor
-          </Button>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <Button variant="outline" onClick={() => setShowImport(true)}>
+              <Upload className="h-4 w-4 mr-1.5" /> Import
+            </Button>
+            <Button onClick={() => setModalVendor('new')}>
+              <Plus className="h-4 w-4 mr-1.5" /> New Vendor
+            </Button>
+          </div>
         )}
       </div>
 
@@ -423,6 +430,19 @@ export default function VendorsPage() {
           onSaved={handleSaved}
         />
       )}
+
+      <ImportModal
+        open={showImport}
+        title="Import Vendors"
+        description="Upload a spreadsheet to bulk-create or update vendors (AP master). Vendors are matched by exact Name."
+        templateUrl="/api/v1/import/template/vendors"
+        uploadUrl="/import/vendors"
+        onClose={() => setShowImport(false)}
+        onSuccess={() => {
+          qc.invalidateQueries({ queryKey: ['vendors'] });
+          setShowImport(false);
+        }}
+      />
     </div>
   );
 }

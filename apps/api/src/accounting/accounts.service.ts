@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AccountType, NormalBalance, PostingControl } from '@prisma/client';
+import { AccountType, NormalBalance, PostingControl, Prisma } from '@prisma/client';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 export { CreateAccountDto, UpdateAccountDto };
@@ -608,5 +608,88 @@ export class AccountsService {
     }
 
     return { from, to, revenueAccounts, expenseAccounts, totalRevenue, totalExpenses, netIncome: totalRevenue - totalExpenses };
+  }
+
+  /**
+   * Balance Sheet as of a date. Returns Assets / Liabilities / Equity with
+   * retained-earnings derived as the sum of all P&L (revenue − expense)
+   * since inception through `asOf`. Standard accounting equation:
+   *   Assets = Liabilities + Equity (incl. retained earnings)
+   */
+  async getBalanceSheet(tenantId: string, asOf?: string) {
+    const cutoff = asOf ? new Date(asOf) : new Date();
+    const cutoffEnd = new Date(cutoff);
+    cutoffEnd.setHours(23, 59, 59, 999);
+
+    const jeFilter = {
+      tenantId,
+      status: 'POSTED',
+      OR: [
+        { postingDate: { lte: cutoffEnd } },
+        { postingDate: null, date: { lte: cutoffEnd } },
+      ],
+    };
+
+    // Fetch every active account with summed lines through asOf
+    const accounts = await this.prisma.account.findMany({
+      where: { tenantId, isActive: true },
+      orderBy: [{ type: 'asc' }, { code: 'asc' }],
+      include: {
+        journalLines: {
+          where: { journalEntry: jeFilter as Prisma.JournalEntryWhereInput },
+          select: { debit: true, credit: true },
+        },
+      },
+    });
+
+    type Row = { id: string; code: string; name: string; balance: number };
+    const assets:      Row[] = [];
+    const liabilities: Row[] = [];
+    const equity:      Row[] = [];
+    let totalAssets = 0;
+    let totalLiabilities = 0;
+    let totalEquity = 0;
+    let retainedEarnings = 0;
+
+    for (const acct of accounts) {
+      const debit  = acct.journalLines.reduce((s, l) => s + Number(l.debit),  0);
+      const credit = acct.journalLines.reduce((s, l) => s + Number(l.credit), 0);
+      const bal = acct.normalBalance === 'DEBIT' ? debit - credit : credit - debit;
+      const row = { id: acct.id, code: acct.code, name: acct.name, balance: bal };
+      if (acct.type === 'ASSET')        { assets.push(row);      totalAssets      += bal; }
+      else if (acct.type === 'LIABILITY'){ liabilities.push(row); totalLiabilities += bal; }
+      else if (acct.type === 'EQUITY')   { equity.push(row);      totalEquity      += bal; }
+      else if (acct.type === 'REVENUE')  { retainedEarnings      += bal; }
+      else if (acct.type === 'EXPENSE')  { retainedEarnings      -= bal; }
+    }
+
+    // Append retained earnings as a synthetic equity row so the equation
+    // balances. (Persisting this requires a closing-period entry to 3xxx,
+    // which we do separately via period close — not yet automated.)
+    if (retainedEarnings !== 0) {
+      equity.push({
+        id: 'retained-earnings-synthetic',
+        code: '3900',
+        name: 'Retained Earnings (current period)',
+        balance: retainedEarnings,
+      });
+      totalEquity += retainedEarnings;
+    }
+
+    const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
+    const balanced = Math.abs(totalAssets - totalLiabilitiesAndEquity) < 0.005; // ₱0.005 tolerance
+
+    return {
+      asOf: cutoff.toISOString().slice(0, 10),
+      assets,
+      liabilities,
+      equity,
+      totalAssets,
+      totalLiabilities,
+      totalEquity,
+      totalLiabilitiesAndEquity,
+      retainedEarnings,
+      balanced,
+    };
   }
 }

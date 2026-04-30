@@ -604,6 +604,7 @@ export default function APBillsPage() {
   const user = useAuthStore((s) => s.user);
   const qc   = useQueryClient();
   const [statusFilter, setStatusFilter] = useState<BillStatus | ''>('');
+  const [overdueOnly, setOverdueOnly] = useState(false);
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<APBill | null>(null);
 
@@ -612,9 +613,10 @@ export default function APBillsPage() {
 
   const params = new URLSearchParams();
   if (statusFilter) params.set('status', statusFilter);
+  if (overdueOnly)  params.set('onlyOverdue', 'true');
 
   const { data: list, isLoading } = useQuery<ListResponse>({
-    queryKey: ['ap-bills-list', statusFilter],
+    queryKey: ['ap-bills-list', statusFilter, overdueOnly],
     queryFn:  () => api.get(`/ap/bills?${params.toString()}`).then((r) => r.data),
     enabled:  !!user,
   });
@@ -666,30 +668,42 @@ export default function APBillsPage() {
 
       {aging && aging.total > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-          <div className="rounded-lg border border-border bg-background px-3 py-2">
+          <button onClick={() => { setStatusFilter(''); setOverdueOnly(false); }}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-left hover:border-foreground/40 transition">
             <div className="text-xs text-muted-foreground">Net Payable</div>
             <div className="text-base font-semibold">{formatPeso(aging.total)}</div>
-          </div>
-          <div className="rounded-lg border border-border bg-background px-3 py-2">
+          </button>
+          <button onClick={() => { setStatusFilter('OPEN'); setOverdueOnly(false); }}
+            className="rounded-lg border border-border bg-background px-3 py-2 text-left hover:border-foreground/40 transition">
             <div className="text-xs text-muted-foreground">Not yet due</div>
-            <div className="text-base font-semibold text-foreground">{formatPeso(aging.notDue)}</div>
-          </div>
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-            <div className="text-xs text-amber-800">1-30 days</div>
+            <div className="text-base font-semibold">{formatPeso(aging.notDue)}</div>
+          </button>
+          <button onClick={() => { setStatusFilter(''); setOverdueOnly(true); }}
+            className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left hover:border-amber-400 transition">
+            <div className="text-xs text-amber-800">Overdue 1-30</div>
             <div className="text-base font-semibold text-amber-900">{formatPeso(aging.bucket1_30)}</div>
-          </div>
-          <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2">
-            <div className="text-xs text-orange-800">31-60 days</div>
+          </button>
+          <button onClick={() => { setStatusFilter(''); setOverdueOnly(true); }}
+            className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-left hover:border-orange-400 transition">
+            <div className="text-xs text-orange-800">Overdue 31-60</div>
             <div className="text-base font-semibold text-orange-900">{formatPeso(aging.bucket31_60)}</div>
-          </div>
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-            <div className="text-xs text-red-800">61-90 days</div>
+          </button>
+          <button onClick={() => { setStatusFilter(''); setOverdueOnly(true); }}
+            className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-left hover:border-red-400 transition">
+            <div className="text-xs text-red-800">Overdue 61-90</div>
             <div className="text-base font-semibold text-red-900">{formatPeso(aging.bucket61_90)}</div>
-          </div>
-          <div className="rounded-lg border border-red-300 bg-red-100 px-3 py-2">
-            <div className="text-xs text-red-900">90+ days</div>
+          </button>
+          <button onClick={() => { setStatusFilter(''); setOverdueOnly(true); }}
+            className="rounded-lg border border-red-300 bg-red-100 px-3 py-2 text-left hover:border-red-500 transition">
+            <div className="text-xs text-red-900">Overdue 90+</div>
             <div className="text-base font-semibold text-red-900">{formatPeso(aging.bucket90plus)}</div>
-          </div>
+          </button>
+        </div>
+      )}
+      {overdueOnly && (
+        <div className="text-xs text-muted-foreground -mt-2">
+          Showing overdue only.
+          <button onClick={() => setOverdueOnly(false)} className="ml-2 underline">Clear filter</button>
         </div>
       )}
 

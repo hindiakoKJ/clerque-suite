@@ -1,11 +1,12 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, X, Pencil, Users, ChevronRight, Search } from 'lucide-react';
+import { Plus, X, Pencil, Users, ChevronRight, Search, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { ImportModal } from '@/components/ui/ImportModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -273,6 +274,7 @@ export default function CustomersPage() {
 
   const [search,       setSearch]       = useState('');
   const [filterActive, setFilterActive] = useState<'' | 'true' | 'false'>('');
+  const [showImport,   setShowImport]   = useState(false);
   const [showModal,    setShowModal]    = useState(false);
   const [editTarget,   setEditTarget]   = useState<Customer | null>(null);
 
@@ -314,13 +316,21 @@ export default function CustomersPage() {
           <p className="text-sm text-muted-foreground mt-1">{customers.length} customers</p>
         </div>
         {canWrite && (
-          <button
-            onClick={openCreate}
-            className="flex items-center gap-1.5 h-9 px-4 text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity whitespace-nowrap self-start sm:self-auto"
-            style={{ background: 'var(--accent)' }}
-          >
-            <Plus className="w-4 h-4" /> New Customer
-          </button>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-1.5 h-9 px-3 border border-border text-sm font-medium rounded-lg hover:bg-muted transition-colors whitespace-nowrap"
+            >
+              <Upload className="w-4 h-4" /> Import
+            </button>
+            <button
+              onClick={openCreate}
+              className="flex items-center gap-1.5 h-9 px-4 text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity whitespace-nowrap"
+              style={{ background: 'var(--accent)' }}
+            >
+              <Plus className="w-4 h-4" /> New Customer
+            </button>
+          </div>
         )}
       </div>
 
@@ -451,6 +461,19 @@ export default function CustomersPage() {
       {showModal && (
         <CustomerModal editing={editTarget} onClose={() => setShowModal(false)} onSaved={onSaved} />
       )}
+
+      <ImportModal
+        open={showImport}
+        title="Import Customers"
+        description="Upload a spreadsheet to bulk-create or update customers (AR master). Customers are matched by exact Name."
+        templateUrl="/api/v1/import/template/customers"
+        uploadUrl="/import/customers"
+        onClose={() => setShowImport(false)}
+        onSuccess={() => {
+          qc.invalidateQueries({ queryKey: ['ar-customers'] });
+          setShowImport(false);
+        }}
+      />
     </div>
   );
 }

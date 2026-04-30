@@ -157,4 +157,38 @@ export class ImportController {
     });
     res.send(buf);
   }
+
+  // ── Customers (AR master) ──────────────────────────────────────────────
+  @Post('customers')
+  @UseInterceptors(FileInterceptor('file'))
+  importCustomers(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importCustomers(file, req.user.tenantId!);
+  }
+  @Get('template/customers')
+  async customersTemplate(@Res() res: Response) {
+    const buf = await this.importService.customersTemplate();
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-customers-template.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  // ── Vendors (AP master) ────────────────────────────────────────────────
+  @Post('vendors')
+  @UseInterceptors(FileInterceptor('file'))
+  importVendors(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importVendors(file, req.user.tenantId!);
+  }
+  @Get('template/vendors')
+  async vendorsTemplate(@Res() res: Response) {
+    const buf = await this.importService.vendorsTemplate();
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-vendors-template.xlsx"',
+    });
+    res.send(buf);
+  }
 }

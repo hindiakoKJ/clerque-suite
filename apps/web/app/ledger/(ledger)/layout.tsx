@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -107,10 +107,12 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     makeLedgerNavItem('/ledger/events',        'Event Queue',        Zap,             EVENT_ROLES,      role),
 
     // ── Period Close & Reports ──────────────────────────────────────────────
-    makeLedgerNavItem('/ledger/periods',       'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role,
+    makeLedgerNavItem('/ledger/periods',         'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role,
       { sectionStart: 'Period & Reports' }),
-    makeLedgerNavItem('/ledger/trial-balance', 'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role),
-    makeLedgerNavItem('/ledger/bir',           'Tax Estimation',     FileText,        BIR_ROLES,        role,
+    makeLedgerNavItem('/ledger/trial-balance',   'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role),
+    makeLedgerNavItem('/ledger/pl-statement',    'Income Statement',   BarChart3,       PERIODS_ROLES,    role),
+    makeLedgerNavItem('/ledger/balance-sheet',   'Balance Sheet',      Scale,           TRIAL_BAL_ROLES,  role),
+    makeLedgerNavItem('/ledger/bir',             'Tax Estimation',     FileText,        BIR_ROLES,        role,
       { extraCondition: isBirRegistered }),
 
     // ── Audit ───────────────────────────────────────────────────────────────

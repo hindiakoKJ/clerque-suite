@@ -166,6 +166,10 @@ export default function ProductsPage() {
 
   async function handleSave() {
     if (!form.name.trim() || !form.price) { toast.error('Name and price are required.'); return; }
+    if (form.costPrice === '' || form.costPrice == null) {
+      toast.error('Cost Price is required for accurate gross-profit reporting. Enter 0 if intentionally free.');
+      return;
+    }
 
     // Validate recipe rows if RECIPE_BASED
     const isRecipeBased = form.inventoryMode === 'RECIPE_BASED';
@@ -188,7 +192,7 @@ export default function ProductsPage() {
         description: form.description.trim() || undefined,
         categoryId: form.categoryId || undefined,
         price: parseFloat(form.price),
-        costPrice: form.costPrice ? parseFloat(form.costPrice) : undefined,
+        costPrice: parseFloat(form.costPrice),
         isVatable: form.isVatable,
         unitOfMeasureId: form.unitOfMeasureId || undefined,
         inventoryMode: form.inventoryMode,
@@ -634,14 +638,20 @@ export default function ProductsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">Cost Price (₱)</label>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Cost Price (₱) <span className="text-red-400">*</span>
+                  </label>
                   <input
                     type="number" min="0" step="0.01"
                     value={form.costPrice}
                     onChange={(e) => setForm((f) => ({ ...f, costPrice: e.target.value }))}
                     className={INPUT_CLS}
-                    placeholder="Optional"
+                    placeholder="0.00"
                   />
+                  <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
+                    Required — used to compute COGS &amp; gross profit on every sale.
+                    For recipe items, enter the summed raw-material cost.
+                  </p>
                 </div>
               </div>
 

@@ -1,9 +1,11 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 import {
   ShoppingCart, TrendingUp, Ban, CreditCard,
   ChevronLeft, ChevronRight, RefreshCw, Tag,
+  Wallet, Percent, AlertTriangle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -52,7 +54,20 @@ interface DailyReport {
   byPaymentMethod: { method: string; totalAmount: number; orderCount: number }[];
   topProducts: { productId: string; productName: string; quantitySold: number; revenue: number }[];
   byHour: { hour: number; orderCount: number; revenue: number }[];
+  totalCogs: number;
+  grossProfit: number;
+  grossMargin: number;
+  itemsMissingCost: { lineCount: number; revenueLeak: number };
 }
+
+interface MissingCostProduct {
+  id: string;
+  name: string;
+  sku: string | null;
+  price: string | number;
+  category: { name: string } | null;
+}
+interface MissingCostResponse { count: number; products: MissingCostProduct[]; }
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
@@ -65,6 +80,14 @@ export default function DashboardPage() {
       api.get(`/reports/daily?branchId=${branchId}&date=${date}`).then((r) => r.data),
     enabled: !!branchId,
     staleTime: 60_000,
+  });
+
+  // Products with no cost price — silently skip COGS, breaking gross-profit reporting
+  const { data: missingCost } = useQuery<MissingCostResponse>({
+    queryKey: ['products-missing-cost'],
+    queryFn:  () => api.get('/products/missing-cost').then((r) => r.data),
+    enabled:  !!user,
+    staleTime: 5 * 60_000,
   });
 
   const maxHourRevenue = Math.max(...(data?.byHour.map((h) => h.revenue) ?? [1]), 1);
@@ -111,6 +134,83 @@ export default function DashboardPage() {
         </div>
       ) : !data ? null : (
         <div className="flex-1 p-4 sm:p-6 space-y-4 sm:space-y-6">
+
+          {/* ── Profit-accuracy warning ── */}
+          {((missingCost?.count ?? 0) > 0 || data.itemsMissingCost.lineCount > 0) && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm text-amber-900">
+                <div className="font-semibold mb-1">Profit reporting accuracy at risk</div>
+                {(missingCost?.count ?? 0) > 0 && (
+                  <p className="leading-snug">
+                    <strong>{missingCost!.count}</strong> active product{missingCost!.count === 1 ? ' has' : 's have'} no cost price set.
+                    Sales of these products record revenue but skip COGS — gross profit will be overstated.
+                  </p>
+                )}
+                {data.itemsMissingCost.lineCount > 0 && (
+                  <p className="leading-snug mt-1">
+                    Today: <strong>{data.itemsMissingCost.lineCount}</strong> sold line{data.itemsMissingCost.lineCount === 1 ? '' : 's'} had no cost recorded
+                    ({formatPeso(data.itemsMissingCost.revenueLeak)} of revenue without a matching cost).
+                  </p>
+                )}
+                <Link href="/pos/products" className="inline-block mt-2 text-amber-800 underline font-medium hover:text-amber-900">
+                  Fix products now →
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {/* ── Profitability row ── */}
+          <div>
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              Profitability {date === todayPH() ? '(today)' : `(${date})`}
+            </h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+              {[
+                {
+                  icon: Wallet,
+                  label: 'Gross Profit',
+                  value: formatPeso(data.grossProfit),
+                  sub: `Revenue − COGS`,
+                  color: 'hsl(142 76% 36%)',
+                  accent: true,
+                },
+                {
+                  icon: TrendingUp,
+                  label: 'Cost of Goods Sold',
+                  value: formatPeso(data.totalCogs),
+                  sub: data.itemsMissingCost.lineCount > 0
+                    ? `${data.itemsMissingCost.lineCount} line(s) untracked`
+                    : 'Booked to GL 5010',
+                  color: 'hsl(0 72% 51%)',
+                },
+                {
+                  icon: Percent,
+                  label: 'Gross Margin',
+                  value: `${(data.grossMargin * 100).toFixed(1)}%`,
+                  sub: data.grossMargin > 0
+                    ? `₱${(data.grossProfit / Math.max(data.totalOrders, 1)).toFixed(2)} / order`
+                    : '—',
+                  color: 'hsl(43 96% 56%)',
+                },
+              ].map((card) => (
+                <div
+                  key={card.label}
+                  className="bg-background rounded-lg border border-border border-l-4 p-3 sm:p-4 flex flex-col justify-between min-h-[88px]"
+                  style={{ borderLeftColor: card.accent ? 'var(--accent)' : card.color }}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                      {card.label}
+                    </span>
+                    <card.icon className="w-4 h-4" style={{ color: card.color }} />
+                  </div>
+                  <div className="text-xl sm:text-2xl font-bold text-foreground">{card.value}</div>
+                  <div className="text-[11px] text-muted-foreground mt-1">{card.sub}</div>
+                </div>
+              ))}
+            </div>
+          </div>
 
           {/* ── Top products strip cards ── */}
           {data.topProducts.length > 0 && (

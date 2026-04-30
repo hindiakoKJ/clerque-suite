@@ -31,6 +31,18 @@ export interface SalesSummary {
   byPaymentMethod: PaymentBreakdown[];
   topProducts: TopProduct[];
   byHour: HourlyBreakdown[];
+  /** Sum of (qty × costPrice) for all sold items that had a costPrice set. */
+  totalCogs: number;
+  /** Net of VAT, then minus COGS. The "true profit" number. */
+  grossProfit: number;
+  /** grossProfit / netRevenue, as a 0-1 fraction. 0 if revenue=0. */
+  grossMargin: number;
+  /**
+   * Items sold without a costPrice on the snapshot. Their revenue is
+   * counted but COGS is not — meaning grossProfit is overstated. The UI
+   * should warn whenever this is > 0.
+   */
+  itemsMissingCost: { lineCount: number; revenueLeak: number };
 }
 
 export interface DailyReport extends SalesSummary {
@@ -149,6 +161,37 @@ export class ReportsService {
     const totalOrders = completed.length;
     const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
+    // ── COGS / Gross Profit ─────────────────────────────────────────────────
+    // Walk every sold line. If costPrice is present, add (qty × cost) to COGS.
+    // If costPrice is NULL on a sold line, count it as a "leak" — its revenue
+    // shows up in grossProfit without an offsetting cost, overstating margin.
+    let totalCogs = 0;
+    let netRevenue = 0;
+    let leakLines = 0;
+    let leakRevenue = 0;
+    for (const order of completed) {
+      const orderVat = Number(order.vatAmount ?? 0);
+      const orderTotal = Number(order.totalAmount);
+      // Pro-rate the order's net (ex-VAT) total across line items by lineTotal share
+      const orderLineSum = order.items.reduce((s, i) => s + Number(i.lineTotal), 0) || 1;
+      for (const item of order.items) {
+        const lineRevGross = Number(item.lineTotal);
+        // Net-of-VAT share for this line (only meaningful if order had VAT)
+        const lineNet = orderTotal > 0
+          ? lineRevGross - (orderVat * (lineRevGross / orderLineSum))
+          : lineRevGross;
+        netRevenue += lineNet;
+        if (item.costPrice != null) {
+          totalCogs += Number(item.quantity) * Number(item.costPrice);
+        } else {
+          leakLines  += 1;
+          leakRevenue += lineRevGross;
+        }
+      }
+    }
+    const grossProfit = netRevenue - totalCogs;
+    const grossMargin = netRevenue > 0 ? grossProfit / netRevenue : 0;
+
     // Payment method breakdown
     const methodMap = new Map<string, { totalAmount: number; orderCount: number }>();
     for (const order of completed) {
@@ -219,6 +262,10 @@ export class ReportsService {
       byPaymentMethod,
       topProducts,
       byHour,
+      totalCogs,
+      grossProfit,
+      grossMargin,
+      itemsMissingCost: { lineCount: leakLines, revenueLeak: leakRevenue },
     };
   }
 

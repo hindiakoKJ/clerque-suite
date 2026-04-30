@@ -44,6 +44,16 @@ export class ProductsController {
     return this.productsService.findByBarcode(user.tenantId!, barcode);
   }
 
+  /**
+   * Products with no cost price set — these silently break gross-profit
+   * reporting because no COGS is posted when they sell. Owner-facing audit
+   * list, used by the POS Dashboard "fix me" card.
+   */
+  @Get('missing-cost')
+  findMissingCost(@CurrentUser() user: JwtPayload) {
+    return this.productsService.findMissingCost(user.tenantId!);
+  }
+
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.productsService.findOne(user.tenantId!, id);

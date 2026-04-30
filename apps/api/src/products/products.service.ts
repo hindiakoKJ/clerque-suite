@@ -191,6 +191,26 @@ export class ProductsService {
   }
 
   // Used by POS terminal — optimized for speed; includes modifier groups
+  /**
+   * Products with no costPrice set. These break COGS reporting silently —
+   * sales register revenue but no cost, overstating gross profit.
+   * Returns active products only (deactivated ones can't be sold anyway).
+   */
+  async findMissingCost(tenantId: string) {
+    const products = await this.prisma.product.findMany({
+      where:   { tenantId, isActive: true, costPrice: null },
+      select:  {
+        id: true, name: true, sku: true, price: true,
+        category: { select: { name: true } },
+      },
+      orderBy: [{ category: { name: 'asc' } }, { name: 'asc' }],
+    });
+    return {
+      count:    products.length,
+      products,
+    };
+  }
+
   findForPos(tenantId: string, branchId: string) {
     return this.prisma.product.findMany({
       where: { tenantId, isActive: true },

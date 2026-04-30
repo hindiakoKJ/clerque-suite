@@ -76,11 +76,16 @@ export class CreateProductDto {
   @Min(0)
   price: number;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  /**
+   * Unit cost — REQUIRED. Drives COGS posting on every sale, which is
+   * required for accurate gross-profit reporting and BIR compliance.
+   * Setting this to 0 is allowed (e.g. complimentary items) but the field
+   * must be provided explicitly so the operator confirms there's no margin.
+   */
+  @ApiProperty({ example: 60.00, description: 'Unit cost (₱). Drives COGS — required.' })
   @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
-  costPrice?: number;
+  costPrice: number;
 
   @ApiPropertyOptional()
   @IsOptional()

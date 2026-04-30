@@ -17,13 +17,21 @@ async function runSeed(logger: Logger) {
     const SLUG = 'demo';
     const EMAIL = 'admin@demo.com';
 
-    // Always ensure the demo tenant has a generous AI quota so admin@demo.com
-    // can demo JE Drafter / Smart Account Picker / JE Guide regardless of tier.
+    // Always refresh demo tenant flags so admin@demo.com can demo every
+    // feature regardless of tier:
+    //   - aiQuotaOverride: AI features (JE Drafter / Account Picker / Guide)
+    //   - isBirRegistered + taxStatus: Tax Estimation page + VAT calculations
+    //   - isVatRegistered: legacy boolean kept in sync with taxStatus
     // Idempotent — safe to run on every boot. updateMany returns 0 if the
     // tenant doesn't exist yet (handled by the upsert below).
     await prisma.tenant.updateMany({
       where: { slug: SLUG },
-      data:  { aiQuotaOverride: 9999 },
+      data:  {
+        aiQuotaOverride: 9999,
+        isBirRegistered: true,
+        isVatRegistered: true,
+        taxStatus:       'VAT',
+      },
     });
 
     // Fast-exit: skip seed entirely if demo tenant already exists
@@ -38,6 +46,9 @@ async function runSeed(logger: Logger) {
         businessType: 'RETAIL', status: 'ACTIVE',
         tier: 'TIER_1', branchQuota: 3, cashierSeatQuota: 5,
         aiQuotaOverride: 9999,
+        isBirRegistered: true,
+        isVatRegistered: true,
+        taxStatus:       'VAT',
       },
     });
 

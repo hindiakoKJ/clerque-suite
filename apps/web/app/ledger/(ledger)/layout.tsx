@@ -36,11 +36,13 @@ function inLedgerRoles(role: string | undefined | null, set: readonly string[]) 
 function makeLedgerNavItem(
   href: string, label: string, icon: React.ElementType,
   allowedRoles: readonly string[], role: string | undefined | null,
-  extraCondition = true,
+  opts: { extraCondition?: boolean; sectionStart?: string } = {},
 ): NavItem {
+  const extraCondition = opts.extraCondition ?? true;
   const hasAccess = extraCondition && inLedgerRoles(role, allowedRoles);
   return {
     href, label, icon,
+    sectionStart: opts.sectionStart,
     disabled: !hasAccess,
     disabledReason: !extraCondition
       ? 'Requires BIR registration — enable in Settings → BIR & Tax'
@@ -79,20 +81,41 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
   // The BIR Tax item also requires isBirRegistered — shown grayed out with a
   // setup hint when the tenant hasn't configured BIR registration yet.
   const navItems: NavItem[] = [
-    makeLedgerNavItem('/ledger/dashboard',     'Dashboard',          LayoutDashboard, DASHBOARD_ROLES,  role),
-    makeLedgerNavItem('/ledger/accounts',      'Chart of Accounts',  ListOrdered,     ACCOUNTS_ROLES,   role),
-    makeLedgerNavItem('/ledger/trial-balance', 'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role),
+    // ── Overview ────────────────────────────────────────────────────────────
+    makeLedgerNavItem('/ledger/dashboard',     'Dashboard',          LayoutDashboard, DASHBOARD_ROLES,  role,
+      { sectionStart: 'Overview' }),
+
+    // ── Receivables (sub-ledger) ────────────────────────────────────────────
+    makeLedgerNavItem('/ledger/ar/billing',    'Customer Billing',   FileSpreadsheet, AR_ROLES,         role,
+      { sectionStart: 'Receivables' }),
+    makeLedgerNavItem('/ledger/ar/invoices',   'POS Collections',    TrendingUp,      AR_ROLES,         role),
+
+    // ── Payables (sub-ledger) ───────────────────────────────────────────────
+    makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role,
+      { sectionStart: 'Payables' }),
+    makeLedgerNavItem('/ledger/ap/expenses',   'Expense Claims',     TrendingDown,    AP_ROLES,         role),
+    makeLedgerNavItem('/ledger/expense-approvals', 'Expense Approvals', ClipboardCheck, EXPENSE_APPROVAL_ROLES, role),
+
+    // ── Cash & Bank ─────────────────────────────────────────────────────────
+    makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role,
+      { sectionStart: 'Cash & Bank' }),
+
+    // ── General Ledger ──────────────────────────────────────────────────────
+    makeLedgerNavItem('/ledger/accounts',      'Chart of Accounts',  ListOrdered,     ACCOUNTS_ROLES,   role,
+      { sectionStart: 'General Ledger' }),
     makeLedgerNavItem('/ledger/journal',       'Journal Entries',    BookMarked,      JOURNAL_ROLES,    role),
     makeLedgerNavItem('/ledger/events',        'Event Queue',        Zap,             EVENT_ROLES,      role),
-    makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role),
-    makeLedgerNavItem('/ledger/periods',       'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role),
-    makeLedgerNavItem('/ledger/bir',           'Tax Estimation',     FileText,        BIR_ROLES,        role, isBirRegistered),
-    makeLedgerNavItem('/ledger/ap/expenses',   'Payables (AP)',      TrendingDown,    AP_ROLES,         role),
-    makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role),
-    makeLedgerNavItem('/ledger/ar/invoices',   'Receivables (AR)',   TrendingUp,      AR_ROLES,         role),
-    makeLedgerNavItem('/ledger/ar/billing',    'Customer Billing',   FileSpreadsheet, AR_ROLES,         role),
-    makeLedgerNavItem('/ledger/audit',            'Audit Log',          ShieldCheck,     AUDIT_ROLES,             role),
-    makeLedgerNavItem('/ledger/expense-approvals','Expense Approvals',  ClipboardCheck,  EXPENSE_APPROVAL_ROLES,  role),
+
+    // ── Period Close & Reports ──────────────────────────────────────────────
+    makeLedgerNavItem('/ledger/periods',       'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role,
+      { sectionStart: 'Period & Reports' }),
+    makeLedgerNavItem('/ledger/trial-balance', 'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role),
+    makeLedgerNavItem('/ledger/bir',           'Tax Estimation',     FileText,        BIR_ROLES,        role,
+      { extraCondition: isBirRegistered }),
+
+    // ── Audit ───────────────────────────────────────────────────────────────
+    makeLedgerNavItem('/ledger/audit',         'Audit Log',          ShieldCheck,     AUDIT_ROLES,      role,
+      { sectionStart: 'Audit' }),
   ].filter((item) => !item.disabled || item.disabledReason?.startsWith('Requires'));
 
   return (

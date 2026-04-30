@@ -22,6 +22,12 @@ export interface NavItem {
   disabled?: boolean;
   /** Tooltip shown on hover when disabled (e.g. "Requires Branch Manager or above") */
   disabledReason?: string;
+  /**
+   * If set, a small section header is rendered above this item — used to
+   * group nav items into sections (e.g. "Transactions", "General Ledger").
+   * Hidden when the sidebar is collapsed.
+   */
+  sectionStart?: string;
 }
 
 interface AppShellProps {
@@ -70,56 +76,75 @@ export function AppShell({
   function NavList({ onItemClick }: { onItemClick?: () => void }) {
     return (
       <nav className="flex flex-col gap-0.5 p-2">
-        {navItems.map(({ href, label, icon: Icon, badge, disabled, disabledReason }) => {
+        {navItems.map((item, idx) => {
+          const { href, label, icon: Icon, badge, disabled, disabledReason, sectionStart } = item;
           const active = !disabled && (pathname === href || pathname.startsWith(href + '/'));
           const tooltip = collapsed
             ? disabled ? `${label} — ${disabledReason ?? 'No access for your role'}` : label
             : disabled ? (disabledReason ?? 'No access for your role') : undefined;
 
+          const sectionHeader = sectionStart && !collapsed ? (
+            <div
+              key={`section-${idx}`}
+              className={cn(
+                'px-3 text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider',
+                idx === 0 ? 'pt-1 pb-1.5' : 'pt-3 pb-1.5 mt-1 border-t border-border/40',
+              )}
+            >
+              {sectionStart}
+            </div>
+          ) : sectionStart && collapsed && idx > 0 ? (
+            <div key={`section-${idx}`} className="my-1 mx-2 border-t border-border/40" />
+          ) : null;
+
           // Disabled: visible but non-interactive dimmed row
           if (disabled) {
             return (
-              <div
-                key={href}
-                title={tooltip}
-                className={cn(
-                  'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium w-full',
-                  'text-muted-foreground/40 cursor-not-allowed select-none',
-                  collapsed && 'justify-center px-2',
-                )}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                {!collapsed && <span className="truncate flex-1">{label}</span>}
-                {!collapsed && <Lock className="h-3 w-3 shrink-0 opacity-50" />}
-              </div>
+              <React.Fragment key={href}>
+                {sectionHeader}
+                <div
+                  title={tooltip}
+                  className={cn(
+                    'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium w-full',
+                    'text-muted-foreground/40 cursor-not-allowed select-none',
+                    collapsed && 'justify-center px-2',
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {!collapsed && <span className="truncate flex-1">{label}</span>}
+                  {!collapsed && <Lock className="h-3 w-3 shrink-0 opacity-50" />}
+                </div>
+              </React.Fragment>
             );
           }
 
           return (
-            <Link
-              key={href}
-              href={href}
-              onClick={onItemClick}
-              className={cn(
-                'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors w-full text-left',
-                active
-                  ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                collapsed && 'justify-center px-2',
-              )}
-              title={tooltip}
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              {!collapsed && <span className="truncate flex-1">{label}</span>}
-              {badge != null && badge > 0 && !collapsed && (
-                <span className="ml-auto bg-amber-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 leading-none">
-                  {badge > 99 ? '99+' : badge}
-                </span>
-              )}
-              {badge != null && badge > 0 && collapsed && (
-                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
-              )}
-            </Link>
+            <React.Fragment key={href}>
+              {sectionHeader}
+              <Link
+                href={href}
+                onClick={onItemClick}
+                className={cn(
+                  'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors w-full text-left',
+                  active
+                    ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                  collapsed && 'justify-center px-2',
+                )}
+                title={tooltip}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                {!collapsed && <span className="truncate flex-1">{label}</span>}
+                {badge != null && badge > 0 && !collapsed && (
+                  <span className="ml-auto bg-amber-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 leading-none">
+                    {badge > 99 ? '99+' : badge}
+                  </span>
+                )}
+                {badge != null && badge > 0 && collapsed && (
+                  <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-500" />
+                )}
+              </Link>
+            </React.Fragment>
           );
         })}
       </nav>

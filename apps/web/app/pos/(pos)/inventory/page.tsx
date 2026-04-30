@@ -78,6 +78,7 @@ export default function InventoryPage() {
   const [editThreshold, setEditThreshold] = useState<{ id: string; value: string } | null>(null);
   const [savingThreshold, setSavingThreshold] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showSetupPack, setShowSetupPack] = useState(false);
 
   // ── Ingredient state ───────────────────────────────────────────────────────
   const [matModal, setMatModal] = useState<'create' | 'edit' | 'receive' | null>(null);
@@ -254,13 +255,24 @@ export default function InventoryPage() {
                 Low stock only
               </button>
               {canEdit && (
-                <button
-                  onClick={() => setShowImport(true)}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Import
-                </button>
+                <>
+                  <button
+                    onClick={() => setShowSetupPack(true)}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-white hover:opacity-90 transition-colors"
+                    style={{ background: 'var(--accent)' }}
+                    title="One-shot import: products + opening stock in a single workbook"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Setup Pack
+                  </button>
+                  <button
+                    onClick={() => setShowImport(true)}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Import Stock
+                  </button>
+                </>
               )}
             </>
           )}
@@ -697,6 +709,21 @@ export default function InventoryPage() {
         onSuccess={() => {
           invalidate();
           setShowImport(false);
+        }}
+      />
+
+      {/* Setup Pack — combined products + inventory import */}
+      <ImportModal
+        open={showSetupPack}
+        title="Setup Pack — Products + Opening Stock"
+        description="One workbook, two sheets. Stand up your full catalog and starting inventory in a single upload. Download the template, fill both sheets, then upload here. Products are created/updated first; inventory quantities are then set for the current branch."
+        templateUrl="/api/v1/import/template/setup-pack"
+        uploadUrl="/import/setup-pack"
+        extraParams={branchId ? { branchId } : undefined}
+        onClose={() => setShowSetupPack(false)}
+        onSuccess={() => {
+          invalidate();
+          setShowSetupPack(false);
         }}
       />
     </div>

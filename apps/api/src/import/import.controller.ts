@@ -127,4 +127,34 @@ export class ImportController {
     });
     res.send(buf);
   }
+
+  // ── Setup Pack: one upload to seed Products + Inventory ────────────────
+  @Post('setup-pack')
+  @UseInterceptors(FileInterceptor('file'))
+  importSetupPack(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthRequest,
+    @Query('branchId') branchId: string,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    if (!branchId)
+      throw new BadRequestException('branchId query param is required.');
+    return this.importService.importSetupPack(
+      file,
+      req.user.tenantId!,
+      branchId,
+    );
+  }
+
+  @Get('template/setup-pack')
+  async setupPackTemplate(@Res() res: Response) {
+    const buf = await this.importService.setupPackTemplate();
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition':
+        'attachment; filename="clerque-setup-pack.xlsx"',
+    });
+    res.send(buf);
+  }
 }

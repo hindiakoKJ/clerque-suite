@@ -13,56 +13,152 @@ export interface ImportResult {
 export class ImportService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // ── Helper: parse xlsx or csv buffer into row arrays ──
+  // ── Helper: parse xlsx or csv buffer into row arrays (first sheet only) ──
   private async parseFile(file: Express.Multer.File): Promise<string[][]> {
+    const all = await this.parseAllSheets(file);
+    const first = all.values().next().value;
+    return first ?? [];
+  }
+
+  /**
+   * Parse all sheets of an xlsx (or the single CSV "sheet") into a Map of
+   * sheetName → rows. Used by the Setup Pack importer which expects multiple
+   * sheets in one file.
+   */
+  private async parseAllSheets(file: Express.Multer.File): Promise<Map<string, string[][]>> {
     const ext = file.originalname.split('.').pop()?.toLowerCase();
+    const result = new Map<string, string[][]>();
     if (ext === 'csv') {
       const text = file.buffer.toString('utf-8');
-      return text
+      result.set('Sheet1', text
         .split('\n')
         .filter((l) => l.trim())
-        .map((l) => l.split(',').map((c) => c.trim().replace(/^"|"$/g, '')));
+        .map((l) => l.split(',').map((c) => c.trim().replace(/^"|"$/g, ''))));
+      return result;
     }
-    // xlsx
     const wb = new ExcelJS.Workbook();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await wb.xlsx.load(file.buffer as any);
-    const ws = wb.worksheets[0];
-    const rows: string[][] = [];
-    ws.eachRow((row) => {
-      rows.push(
-        (row.values as (string | number | null | undefined)[])
-          .slice(1)
-          .map((v) => (v == null ? '' : String(v))),
-      );
-    });
-    return rows;
+    for (const ws of wb.worksheets) {
+      const rows: string[][] = [];
+      ws.eachRow((row) => {
+        rows.push(
+          (row.values as (string | number | null | undefined)[])
+            .slice(1)
+            .map((v) => (v == null ? '' : String(v))),
+        );
+      });
+      result.set(ws.name, rows);
+    }
+    return result;
+  }
+
+  /**
+   * Find the index of the header row in a parsed sheet by matching the
+   * first column against a known value (case-insensitive, trimmed). Returns
+   * -1 if not found. Used so templates can include title + instruction
+   * rows above the headers without breaking the importer.
+   */
+  private findHeaderRow(rows: string[][], firstColMatchers: string[]): number {
+    const norm = (s: string) => (s ?? '').trim().toLowerCase();
+    const targets = firstColMatchers.map(norm);
+    for (let i = 0; i < rows.length; i++) {
+      if (targets.includes(norm(rows[i][0] ?? ''))) return i;
+    }
+    return -1;
   }
 
   // ── Helper: generate Excel template buffer ──
+  /**
+   * Build a self-documenting Excel template.
+   *
+   * Layout:
+   *   Row 1            — title (merged across all columns)
+   *   Row 2-N          — instruction lines (gray, italic)
+   *   Row N+1          — blank separator
+   *   Row N+2          — column headers (dark fill, accent text)
+   *   Row N+3          — column descriptions / format hints (italic, gray)
+   *   Row N+4..        — sample data rows
+   *
+   * Required columns are marked with "*" in the header by convention.
+   */
   private async makeTemplate(
     sheetName: string,
     headers: string[],
     sampleRows: string[][],
+    opts: {
+      title?:           string;
+      instructions?:    string[];
+      columnHints?:     string[];   // same length as headers
+    } = {},
   ): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Clerque';
     const ws = wb.addWorksheet(sheetName);
-    // Header row
-    ws.addRow(headers);
-    ws.getRow(1).font = { bold: true };
-    ws.getRow(1).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF1E293B' },
+
+    let cursor = 1;
+    const colCount = headers.length;
+    const lastColLetter = String.fromCharCode(64 + colCount); // A-Z only — fine for our widths
+
+    // ── Title ───────────────────────────────────────────────────────────────
+    if (opts.title) {
+      ws.mergeCells(`A${cursor}:${lastColLetter}${cursor}`);
+      const c = ws.getCell(`A${cursor}`);
+      c.value = opts.title;
+      c.font  = { bold: true, size: 14, color: { argb: 'FF8B5E3C' } };
+      c.alignment = { vertical: 'middle' };
+      ws.getRow(cursor).height = 22;
+      cursor++;
+    }
+
+    // ── Instructions ───────────────────────────────────────────────────────
+    if (opts.instructions?.length) {
+      for (const line of opts.instructions) {
+        ws.mergeCells(`A${cursor}:${lastColLetter}${cursor}`);
+        const c = ws.getCell(`A${cursor}`);
+        c.value = line;
+        c.font  = { italic: true, color: { argb: 'FF666666' }, size: 10 };
+        c.alignment = { wrapText: true, vertical: 'top' };
+        cursor++;
+      }
+      // Blank separator row
+      cursor++;
+    }
+
+    // ── Header row ──────────────────────────────────────────────────────────
+    const headerRowIdx = cursor;
+    ws.getRow(cursor).values = headers;
+    ws.getRow(cursor).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    ws.getRow(cursor).fill = {
+      type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF8B5E3C' },
     };
-    ws.getRow(1).font = { bold: true, color: { argb: 'FF00D1FF' } };
-    // Sample rows
-    sampleRows.forEach((r) => ws.addRow(r));
-    // Auto-width
-    headers.forEach((_, i) => {
-      ws.getColumn(i + 1).width = 20;
-    });
+    ws.getRow(cursor).alignment = { vertical: 'middle', horizontal: 'left' };
+    ws.getRow(cursor).height = 20;
+    cursor++;
+
+    // ── Column hints ───────────────────────────────────────────────────────
+    if (opts.columnHints?.length) {
+      ws.getRow(cursor).values = opts.columnHints;
+      ws.getRow(cursor).font = { italic: true, color: { argb: 'FF888888' }, size: 9 };
+      ws.getRow(cursor).fill = {
+        type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F1EC' },
+      };
+      cursor++;
+    }
+
+    // ── Sample data rows ───────────────────────────────────────────────────
+    for (const r of sampleRows) {
+      ws.getRow(cursor).values = r;
+      cursor++;
+    }
+
+    // ── Column widths ──────────────────────────────────────────────────────
+    headers.forEach((_, i) => { ws.getColumn(i + 1).width = 22; });
+
+    // Freeze panes below the header so the user can scroll data without
+    // losing context.
+    ws.views = [{ state: 'frozen', ySplit: opts.columnHints ? headerRowIdx + 1 : headerRowIdx }];
+
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
@@ -73,7 +169,19 @@ export class ImportService {
     tenantId: string,
   ): Promise<ImportResult> {
     const rows = await this.parseFile(file);
-    if (rows.length < 2)
+    return this.importProductsFromRows(rows, tenantId);
+  }
+
+  private async importProductsFromRows(
+    rows: string[][],
+    tenantId: string,
+  ): Promise<ImportResult> {
+    // Skip the title + instructions block on our self-documenting templates
+    // by locating the header row, then start data after the optional hint row.
+    const headerIdx = this.findHeaderRow(rows, ['Name*', 'Name']);
+    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
+
+    if (rows.length <= dataStart)
       throw new BadRequestException(
         'File must have a header row and at least one data row.',
       );
@@ -84,7 +192,14 @@ export class ImportService {
       skipped: 0,
       errors: [],
     };
-    const dataRows = rows.slice(1); // skip header
+    let dataRows = rows.slice(dataStart);
+
+    // Optional column-hints row (italic gray under the header). If row 1 of
+    // dataRows looks like a hints row (no numeric Price), skip it.
+    if (dataRows.length > 0) {
+      const priceCellLooksNumeric = !isNaN(parseFloat(dataRows[0][2] ?? ''));
+      if (!priceCellLooksNumeric) dataRows = dataRows.slice(1);
+    }
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = i + 2;
@@ -103,7 +218,23 @@ export class ImportService {
         });
         continue;
       }
-      const costPrice = parseFloat(costStr) || 0;
+      // Cost Price is REQUIRED — drives COGS posting.
+      // Empty / non-numeric is rejected. Explicit 0 is allowed (free items).
+      if (costStr == null || costStr === '' || costStr.trim?.() === '') {
+        result.errors.push({
+          row: rowNum,
+          message: 'Cost Price is required (column 4). Enter 0 only if the item is genuinely free.',
+        });
+        continue;
+      }
+      const costPrice = parseFloat(costStr);
+      if (isNaN(costPrice) || costPrice < 0) {
+        result.errors.push({
+          row: rowNum,
+          message: `Invalid Cost Price: "${costStr}". Must be a number ≥ 0.`,
+        });
+        continue;
+      }
       const isVatable = ['y', 'yes', '1', 'true'].includes(
         (vatStr || '').toLowerCase(),
       );
@@ -185,23 +316,39 @@ export class ImportService {
         'Name*',
         'Category',
         'Price*',
-        'Cost Price',
+        'Cost Price*',
         'VAT (Y/N)',
         'Barcode',
         'Description',
       ],
       [
-        [
-          'Garlic Rice',
-          'Food',
-          '35',
-          '12',
-          'Y',
-          '',
-          'Steamed garlic fried rice',
-        ],
-        ['Bottled Water', 'Drinks', '20', '8', 'N', '123456789', '500ml'],
+        ['Garlic Rice',     'Food',    '35',  '12',  'Y', '',           'Steamed garlic fried rice'],
+        ['Bottled Water',   'Drinks',  '20',  '8',   'N', '4806507000123', '500ml'],
+        ['Iced Latte 16oz', 'Drinks',  '110', '35',  'Y', '',           'Espresso + cold milk + ice'],
+        ['Plain Donut',     'Bakery',  '25',  '9',   'N', '',           'Sugar-glazed cake donut'],
       ],
+      {
+        title: 'Clerque — Product Master Import Template',
+        instructions: [
+          'How to use:',
+          '  1. Fill the rows below the headers. Remove the sample rows when you\'re ready.',
+          '  2. Columns marked with * are required. Existing products are matched by Name (or Barcode if provided) and updated.',
+          '  3. Cost Price is REQUIRED. It drives COGS posting on every sale. Enter 0 for complimentary items.',
+          '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
+          '  5. Category — if it doesn\'t exist yet, Clerque creates it. Use consistent spelling across rows.',
+          '  6. Save as .xlsx (or .csv). Upload via POS → Products → Import.',
+          'Tip: After import, head to Inventory and import opening stock for each branch using the Inventory template.',
+        ],
+        columnHints: [
+          'Required. Unique within tenant.',
+          'Optional. Auto-creates if new.',
+          'Required. Selling price (₱).',
+          'REQUIRED. Unit cost (₱) for COGS.',
+          'Y or N. Default N.',
+          'Optional. EAN-13 / UPC etc.',
+          'Optional. Free text.',
+        ],
+      },
     );
   }
 
@@ -213,7 +360,19 @@ export class ImportService {
     branchId: string,
   ): Promise<ImportResult> {
     const rows = await this.parseFile(file);
-    if (rows.length < 2)
+    return this.importInventoryFromRows(rows, tenantId, branchId);
+  }
+
+  private async importInventoryFromRows(
+    rows: string[][],
+    tenantId: string,
+    branchId: string,
+  ): Promise<ImportResult> {
+    const headerIdx = this.findHeaderRow(rows, [
+      'Product Name or Barcode*', 'Product Name*', 'Product Name',
+    ]);
+    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (rows.length <= dataStart)
       throw new BadRequestException(
         'File must have a header row and at least one data row.',
       );
@@ -224,7 +383,12 @@ export class ImportService {
       skipped: 0,
       errors: [],
     };
-    const dataRows = rows.slice(1);
+    let dataRows = rows.slice(dataStart);
+    // Skip optional hints row (qty cell isn't numeric)
+    if (dataRows.length > 0) {
+      const qtyLooksNumeric = !isNaN(parseFloat(dataRows[0][1] ?? ''));
+      if (!qtyLooksNumeric) dataRows = dataRows.slice(1);
+    }
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = i + 2;
@@ -308,11 +472,31 @@ export class ImportService {
   async inventoryTemplate(): Promise<Buffer> {
     return this.makeTemplate(
       'Inventory',
-      ['Product Name*', 'Quantity*', 'Low Stock Alert'],
+      ['Product Name or Barcode*', 'Quantity on Hand*', 'Low Stock Alert'],
       [
-        ['Garlic Rice', '100', '10'],
-        ['Bottled Water', '200', '20'],
+        ['Garlic Rice',      '100', '10'],
+        ['Bottled Water',    '200', '20'],
+        ['4806507000123',    '50',  '5'],   // matched by barcode
+        ['Iced Latte 16oz',  '0',   ''],    // SKU exists but no opening stock yet
       ],
+      {
+        title: 'Clerque — Opening Inventory Import Template',
+        instructions: [
+          'How to use:',
+          '  1. Set the branch in Clerque BEFORE running this import (POS → Inventory → pick branch).',
+          '  2. Each row updates the on-hand quantity for one product at the selected branch.',
+          '  3. Match by Product Name OR Barcode — the import tries both. Spelling must match the product master exactly.',
+          '  4. Quantity replaces (not adds to) the current quantity. Use 0 if you have no stock.',
+          '  5. Low Stock Alert is the threshold below which the dashboard flags re-ordering. Optional; leave blank to disable.',
+          '  6. Save as .xlsx (or .csv). Upload via POS → Inventory → Import.',
+          'Tip: Run the Products import FIRST so all SKUs exist; then this Inventory import sets opening balances.',
+        ],
+        columnHints: [
+          'Required. Must match an existing product.',
+          'Required. Number ≥ 0.',
+          'Optional. Re-order trigger.',
+        ],
+      },
     );
   }
 
@@ -652,5 +836,143 @@ export class ImportService {
         ],
       ],
     );
+  }
+
+  // ── Setup Pack: Products + Inventory in ONE workbook ────────────────────
+  // Two sheets ("Products", "Inventory"). Run BOTH imports atomically per
+  // sheet so a new tenant can stand up their entire catalog in one upload.
+
+  /**
+   * Generate the Setup Pack template — one .xlsx with two sheets:
+   *   Sheet 1: "Products"  — same as the standalone Products template
+   *   Sheet 2: "Inventory" — same as the standalone Inventory template
+   * Plus a leading "Read Me" sheet explaining the two-step flow.
+   */
+  async setupPackTemplate(): Promise<Buffer> {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+
+    // ── Read Me sheet ──
+    const readme = wb.addWorksheet('Read Me');
+    readme.mergeCells('A1:F1');
+    const t = readme.getCell('A1');
+    t.value = 'Clerque — Business Setup Pack';
+    t.font  = { bold: true, size: 16, color: { argb: 'FF8B5E3C' } };
+    readme.getRow(1).height = 26;
+    const lines = [
+      '',
+      'This single file lets you stand up your product catalog and opening stock in one upload.',
+      '',
+      'Step 1 — Fill the "Products" sheet with every SKU you sell.',
+      '         Required: Name, Selling Price, Cost Price.',
+      '         Cost Price drives gross profit reporting — DO NOT leave it blank.',
+      '',
+      'Step 2 — Fill the "Inventory" sheet with the on-hand quantity for each product at this branch.',
+      '         Match by Product Name or Barcode. The quantity overwrites whatever is currently recorded.',
+      '',
+      'Step 3 — Save. Go to POS → Inventory → "Import Setup Pack" → upload this file.',
+      '         Clerque will (a) create/update your products from sheet 1, then (b) set opening stock from sheet 2.',
+      '',
+      'Notes:',
+      '  • Categories are auto-created if they don\'t exist.',
+      '  • VAT column is Y/N. Most retail items in PH = Y (VAT-able).',
+      '  • If you have multiple branches, run this for each branch (switch branch in POS first).',
+      '  • Errors per row are reported back so you can fix and re-upload — safe to re-run.',
+    ];
+    for (const line of lines) {
+      readme.addRow([line]);
+    }
+    readme.getColumn(1).width = 110;
+    for (let i = 2; i <= readme.rowCount; i++) {
+      readme.getRow(i).font = { color: { argb: 'FF333333' }, size: 11 };
+      readme.getRow(i).alignment = { wrapText: true };
+    }
+
+    // ── Products sheet ──
+    const productsBuf = await this.productsTemplate();
+    const productsWb = new ExcelJS.Workbook();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await productsWb.xlsx.load(productsBuf as any);
+    const productsSheet = productsWb.worksheets[0];
+    const ws1 = wb.addWorksheet('Products');
+    productsSheet.eachRow((row, rowIdx) => {
+      const newRow = ws1.getRow(rowIdx);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      newRow.values = row.values as any;
+      // copy basic styling
+      newRow.font      = row.font;
+      newRow.fill      = row.fill;
+      newRow.alignment = row.alignment;
+      newRow.height    = row.height;
+    });
+    productsSheet.columns.forEach((col, i) => {
+      ws1.getColumn(i + 1).width = col.width ?? 20;
+    });
+    ws1.views = productsSheet.views;
+
+    // ── Inventory sheet ──
+    const invBuf = await this.inventoryTemplate();
+    const invWb = new ExcelJS.Workbook();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await invWb.xlsx.load(invBuf as any);
+    const invSheet = invWb.worksheets[0];
+    const ws2 = wb.addWorksheet('Inventory');
+    invSheet.eachRow((row, rowIdx) => {
+      const newRow = ws2.getRow(rowIdx);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      newRow.values = row.values as any;
+      newRow.font      = row.font;
+      newRow.fill      = row.fill;
+      newRow.alignment = row.alignment;
+      newRow.height    = row.height;
+    });
+    invSheet.columns.forEach((col, i) => {
+      ws2.getColumn(i + 1).width = col.width ?? 20;
+    });
+    ws2.views = invSheet.views;
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /**
+   * Run the Setup Pack import: parse both sheets and call the per-sheet
+   * importers in order (Products first so the SKUs exist before Inventory
+   * tries to look them up). Returns a combined report.
+   */
+  async importSetupPack(
+    file: Express.Multer.File,
+    tenantId: string,
+    branchId: string,
+  ): Promise<{
+    products:  ImportResult & { notIncluded: boolean };
+    inventory: ImportResult & { notIncluded: boolean };
+  }> {
+    const sheets = await this.parseAllSheets(file);
+    const productsRows  = sheets.get('Products')  ?? sheets.get('products')  ?? null;
+    const inventoryRows = sheets.get('Inventory') ?? sheets.get('inventory') ?? null;
+
+    if (!productsRows && !inventoryRows) {
+      throw new BadRequestException(
+        'Setup Pack must contain at least a "Products" or "Inventory" sheet.',
+      );
+    }
+
+    let products: ImportResult & { notIncluded: boolean } = {
+      imported: 0, updated: 0, skipped: 0, errors: [], notIncluded: true,
+    };
+    let inventory: ImportResult & { notIncluded: boolean } = {
+      imported: 0, updated: 0, skipped: 0, errors: [], notIncluded: true,
+    };
+
+    if (productsRows) {
+      const r = await this.importProductsFromRows(productsRows, tenantId);
+      products = { ...r, notIncluded: false };
+    }
+    if (inventoryRows) {
+      const r = await this.importInventoryFromRows(inventoryRows, tenantId, branchId);
+      inventory = { ...r, notIncluded: false };
+    }
+
+    return { products, inventory };
   }
 }

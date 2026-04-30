@@ -28,6 +28,7 @@ import { ImportModule } from './import/import.module';
 import { MailModule } from './mail/mail.module';
 import { DocumentsModule } from './documents/documents.module';
 import { ExpenseClaimsModule } from './expense-claims/expense-claims.module';
+import { NumberingModule } from './numbering/numbering.module';
 import { AiModule } from './ai/ai.module';
 import { HealthController } from './health/health.controller';
 
@@ -63,6 +64,7 @@ import { HealthController } from './health/health.controller';
     MailModule,
     DocumentsModule,
     ExpenseClaimsModule,
+    NumberingModule,
     AiModule,
   ],
 })

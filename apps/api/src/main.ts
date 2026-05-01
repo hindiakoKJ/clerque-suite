@@ -34,10 +34,8 @@ async function runSeed(logger: Logger) {
       },
     });
 
-    // Fast-exit: skip seed entirely if demo tenant already exists
-    const count = await prisma.tenant.count({ where: { slug: SLUG } });
-    if (count > 0) { logger.log('Seed: demo tenant exists — AI quota refreshed, skipped user create', 'Bootstrap'); return; }
-
+    // Always upsert the demo tenant so flags + existence are guaranteed
+    // for both first-boot (creates) and subsequent boots (no-op).
     const tenant = await prisma.tenant.upsert({
       where: { slug: SLUG },
       update: {},
@@ -58,66 +56,89 @@ async function runSeed(logger: Logger) {
       create: { id: `seed-branch-${tenant.id}`, tenantId: tenant.id, name: 'Main Branch', isActive: true },
     });
 
-    const existing = await prisma.user.findFirst({ where: { tenantId: tenant.id, email: EMAIL } });
-    if (!existing) {
-      const hash = await bcrypt.hash('Admin1234!', 12);
+    // Idempotent user seeder — runs every boot. Each user is created only
+    // if missing. Adding new users to this list later (after the demo
+    // tenant exists) will still create them on the next deploy.
+    async function ensureUser(args: {
+      email: string;
+      password: string;
+      name: string;
+      role: 'SUPER_ADMIN' | 'BUSINESS_OWNER' | 'CASHIER';
+      branchId: string | null;
+      access: Array<{ appCode: 'POS' | 'LEDGER' | 'PAYROLL'; level: 'FULL' | 'OPERATOR' | 'READ_ONLY' | 'CLOCK_ONLY' | 'NONE' }>;
+      // For SUPER_ADMIN, lookup is global (email only) — they shouldn't be
+      // confused with a tenant-scoped user with the same email in another tenant
+      globalLookup?: boolean;
+    }) {
+      const where = args.globalLookup
+        ? { email: args.email }
+        : { tenantId: tenant.id, email: args.email };
+      const existing = await prisma.user.findFirst({ where });
+      if (existing) {
+        // Bring access up-to-date if missing (cheap)
+        return existing;
+      }
+      const hash = await bcrypt.hash(args.password, 12);
       await prisma.user.create({
         data: {
-          tenantId: tenant.id, branchId: branch.id, email: EMAIL,
-          passwordHash: hash, name: 'Admin', role: 'BUSINESS_OWNER', isActive: true,
-          appAccess: { create: [
-            { appCode: 'POS',     level: 'FULL' },
-            { appCode: 'LEDGER',  level: 'FULL' },
-            { appCode: 'PAYROLL', level: 'FULL' },
-          ]},
+          tenantId: tenant.id,
+          branchId: args.branchId,
+          email:    args.email,
+          passwordHash: hash,
+          name:     args.name,
+          role:     args.role,
+          isActive: true,
+          appAccess: { create: args.access },
         },
       });
-      logger.log(`Seed: created admin@demo.com (tenant: ${SLUG})`, 'Bootstrap');
-    } else {
-      logger.log(`Seed: demo tenant already exists — skipped`, 'Bootstrap');
+      logger.log(`Seed: created ${args.email} (${args.role})`, 'Bootstrap');
     }
 
-    // Super Admin — for the Clerque Console (cross-tenant ops).
-    // Created as a member of the demo tenant for convenience, but the
-    // SUPER_ADMIN role grants platform-wide access regardless of which
-    // tenant they belong to. Email is the recognisable login.
-    const superEmail = 'super@clerque.test';
-    const superExists = await prisma.user.findFirst({ where: { email: superEmail } });
-    if (!superExists) {
-      const hash = await bcrypt.hash('Super1234!', 12);
-      await prisma.user.create({
-        data: {
-          tenantId: tenant.id, branchId: null, email: superEmail,
-          passwordHash: hash, name: 'Platform Super Admin',
-          role: 'SUPER_ADMIN', isActive: true,
-          appAccess: { create: [
-            { appCode: 'POS',     level: 'FULL' },
-            { appCode: 'LEDGER',  level: 'FULL' },
-            { appCode: 'PAYROLL', level: 'FULL' },
-          ]},
-        },
-      });
-      logger.log(`Seed: created ${superEmail} (SUPER_ADMIN — Clerque Console access)`, 'Bootstrap');
-    }
+    // 1) Tenant owner — admin@demo.com
+    await ensureUser({
+      email: EMAIL,
+      password: 'Admin1234!',
+      name: 'Admin',
+      role: 'BUSINESS_OWNER',
+      branchId: branch.id,
+      access: [
+        { appCode: 'POS',     level: 'FULL' },
+        { appCode: 'LEDGER',  level: 'FULL' },
+        { appCode: 'PAYROLL', level: 'FULL' },
+      ],
+    });
 
-    // Cashier
-    const cashierEmail = 'cashier@demo.com';
-    const cashierExists = await prisma.user.findFirst({ where: { tenantId: tenant.id, email: cashierEmail } });
-    if (!cashierExists) {
-      const hash = await bcrypt.hash('Cashier1234!', 12);
-      await prisma.user.create({
-        data: {
-          tenantId: tenant.id, branchId: branch.id, email: cashierEmail,
-          passwordHash: hash, name: 'Demo Cashier', role: 'CASHIER', isActive: true,
-          appAccess: { create: [
-            { appCode: 'POS',     level: 'OPERATOR' },
-            { appCode: 'LEDGER',  level: 'NONE' },
-            { appCode: 'PAYROLL', level: 'CLOCK_ONLY' },
-          ]},
-        },
-      });
-      logger.log(`Seed: created cashier@demo.com`, 'Bootstrap');
-    }
+    // 2) Platform super admin — super@clerque.test (Clerque Console access)
+    //    Lives inside the demo tenant by convention; SUPER_ADMIN role bypasses
+    //    tenant scoping at the auth layer. globalLookup so we don't create
+    //    duplicates if the email exists in another tenant.
+    await ensureUser({
+      email: 'super@clerque.test',
+      password: 'Super1234!',
+      name: 'Platform Super Admin',
+      role: 'SUPER_ADMIN',
+      branchId: null,
+      access: [
+        { appCode: 'POS',     level: 'FULL' },
+        { appCode: 'LEDGER',  level: 'FULL' },
+        { appCode: 'PAYROLL', level: 'FULL' },
+      ],
+      globalLookup: true,
+    });
+
+    // 3) Demo cashier — cashier@demo.com
+    await ensureUser({
+      email: 'cashier@demo.com',
+      password: 'Cashier1234!',
+      name: 'Demo Cashier',
+      role: 'CASHIER',
+      branchId: branch.id,
+      access: [
+        { appCode: 'POS',     level: 'OPERATOR' },
+        { appCode: 'LEDGER',  level: 'NONE' },
+        { appCode: 'PAYROLL', level: 'CLOCK_ONLY' },
+      ],
+    });
   } catch (err) {
     logger.error(`Seed failed (non-fatal): ${(err as Error).message}`, 'Bootstrap');
   } finally {

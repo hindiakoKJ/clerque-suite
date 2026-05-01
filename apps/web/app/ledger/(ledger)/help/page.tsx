@@ -462,16 +462,34 @@ const SECTIONS: HelpSection[] = [
     description: 'Formal AP bills with WHT 2307 support.',
     items: [
       {
-        q: 'How do I record a vendor bill?',
+        q: 'How do I record a vendor bill (keyboard-first power form)?',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
-            <li>Payables → <strong>Vendor Bills</strong> → <strong>+ New Bill</strong>.</li>
-            <li>Pick the vendor. If it&apos;s a withholding-tax vendor, the default ATC + WHT rate auto-fills.</li>
-            <li>Enter bill date, vendor SI / OR number, terms, optional description.</li>
-            <li>Add line items: each picks an expense account (or asset for capex), qty, unit price, VAT amount.</li>
-            <li>If WHT applies, enter the WHT amount in the highlighted block. Pick the BIR ATC code (WC158, WI160, etc.).</li>
-            <li>Save DRAFT, review, then <strong>Post</strong>.</li>
+            <li>Payables → <strong>Vendor Bills</strong> → <strong>+ New Bill</strong>. The full-page posting form opens with vendor field auto-focused.</li>
+            <li>Tab through the header: Vendor → Bill Date → Vendor SI/OR → Terms → Reference → Description.</li>
+            <li>Tab once more to enter the lines grid. For each line: pick Account → Tab → Description → Tab → Qty → Tab → Unit Price → Tab → VAT → Tab.</li>
+            <li>Press <kbd className="px-1 rounded bg-muted">Enter</kbd> on the last cell to instantly add a new row and jump to its Account field.</li>
+            <li>Tab into the WHT block at the bottom. Enter amount + ATC code if applicable. Net Payable updates live.</li>
+            <li>Press <kbd className="px-1 rounded bg-muted">F3</kbd> to validate (shows any errors inline). Fix anything red.</li>
+            <li>Press <kbd className="px-1 rounded bg-muted">F2</kbd> to save as DRAFT (no GL impact yet) — useful if you want to review before posting.</li>
+            <li>Press <kbd className="px-1 rounded bg-muted">F4</kbd> to post directly: saves draft + posts to GL in one shot.</li>
+            <li>Press <kbd className="px-1 rounded bg-muted">Esc</kbd> twice (first blurs current field, second navigates back) — or click Cancel.</li>
           </ol>
+        ),
+      },
+      {
+        q: 'Keyboard shortcut cheat-sheet for the bill form',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><kbd className="px-1 rounded bg-muted">Tab</kbd> / <kbd className="px-1 rounded bg-muted">Shift+Tab</kbd> — move forward / back through fields</li>
+            <li><kbd className="px-1 rounded bg-muted">Enter</kbd> in the last cell of the last row — adds a new row, jumps to its Account field</li>
+            <li><kbd className="px-1 rounded bg-muted">Enter</kbd> in any other line cell — moves to next column / next row</li>
+            <li><kbd className="px-1 rounded bg-muted">F2</kbd> — Save as Draft (no GL impact)</li>
+            <li><kbd className="px-1 rounded bg-muted">F3</kbd> — Validate (highlights errors, no save)</li>
+            <li><kbd className="px-1 rounded bg-muted">F4</kbd> — Save + Post (creates GL JE)</li>
+            <li><kbd className="px-1 rounded bg-muted">Esc</kbd> — blur current field</li>
+            <li>Hide the shortcut bar via the &ldquo;Hide shortcuts&rdquo; toggle in the top-right.</li>
+          </ul>
         ),
       },
       {

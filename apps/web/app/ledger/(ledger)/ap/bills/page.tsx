@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Receipt, Plus, X, Send, Ban, DollarSign, ChevronRight, Trash2,
@@ -659,10 +660,10 @@ export default function APBillsPage() {
           </p>
         </div>
         {canWrite && (
-          <button onClick={() => setCreating(true)}
+          <Link href="/ledger/ap/bills/new"
             className="h-10 px-4 rounded-lg bg-[var(--accent)] text-white text-sm font-medium flex items-center gap-2">
             <Plus className="w-4 h-4" /> New Bill
-          </button>
+          </Link>
         )}
       </div>
 

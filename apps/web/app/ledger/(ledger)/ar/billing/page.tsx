@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   FileText, Plus, X, Send, Ban, DollarSign, ChevronRight, Trash2,
@@ -639,10 +640,10 @@ export default function ARBillingPage() {
           </p>
         </div>
         {canWrite && (
-          <button onClick={() => setCreating(true)}
+          <Link href="/ledger/ar/billing/new"
             className="h-10 px-4 rounded-lg bg-[var(--accent)] text-white text-sm font-medium flex items-center gap-2">
             <Plus className="w-4 h-4" /> New Invoice
-          </button>
+          </Link>
         )}
       </div>
 

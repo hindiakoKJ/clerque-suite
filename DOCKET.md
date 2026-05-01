@@ -35,7 +35,6 @@
 |---|---|
 | **AP Bills modal — dead code** | Old `CreateBillModal` is still in `apps/web/app/ledger/(ledger)/ap/bills/page.tsx`. New users go to Oracle-style form at `/ap/bills/new`. Modal can be deleted once we've confirmed the new form works in prod for a week |
 | **CC-2 branch scoping propagation** | Helper `effectiveBranchId()` is wired into `GET /orders` only. Needs to also be applied to: `/inventory` listing, `/products` listing, `/reports/daily`, `/reports/shift`. Small sweep across 4 files |
-| **AR Billing — Oracle-style form** | Symmetry with AP. AR invoice creation still uses a modal at `/ledger/ar/billing`. Could mirror the keyboard-first form pattern for AR/AP parity |
 | **Mobile responsiveness sweep** | Drawer footer fixed (commit 93453bc), but I haven't audited every page for tablet/phone layout. Pages worth checking: report pages, the AP bill grid, the bank-recon two-column layout |
 
 ---
@@ -80,7 +79,8 @@
 
 | Commit | What |
 |---|---|
-| (this) | Notification producers wired — daily 3am Manila cron creates low-stock, AR/AP overdue, and period-close-reminder notifications. The bell now actually has things in it. |
+| (this) | AR Oracle-style power form — `/ledger/ar/billing/new` keyboard-first invoice posting. Mirrors the AP form (Tab/Enter/F2/F3/F4) without the WHT block. Replaces the cramped modal. |
+| 9650c8e | Notification producers wired — daily 3am Manila cron creates low-stock, AR/AP overdue, and period-close-reminder notifications. The bell now actually has things in it. |
 | a9dfa08 | LED-2 Cash Flow Statement (indirect method) + LED-5 bucket-precise aging drill-down. |
 | 7f5073d | POS-3 Item-level refund — OrderItem.refundedQty + OrderItemRefund audit table + POST /orders/:orderId/items/:itemId/refund. UI: Refund button per line in expanded order detail; modal with qty/reason/method/restock + supervisor PIN co-auth for cashiers. Pro-rated refund amount + proportional GL reversal event. |
 | 642e889 | POS-2 Moving-Average Cost (WAC) — InventoryItem.avgCost + WAC recompute on costed receipts + COGS uses avgCost (fallback to product.costPrice). UI: unit-cost field on Stock Adjust modal. |

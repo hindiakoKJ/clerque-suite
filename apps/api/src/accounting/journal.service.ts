@@ -95,10 +95,26 @@ export class JournalService {
 
     // 2. Period lock guard (skip for DRAFTs — they're not yet posted)
     //    Period lock uses postingDate; falls back to document date if not set.
-    const status = dto.saveDraft ? 'DRAFT' : 'POSTED';
+    let status: 'DRAFT' | 'PENDING_APPROVAL' | 'POSTED' = dto.saveDraft ? 'DRAFT' : 'POSTED';
     const postingDate = new Date(dto.postingDate ?? dto.date);
     if (status === 'POSTED') {
       await this.periods.assertDateIsOpen(tenantId, postingDate);
+    }
+
+    // 3. JE approval threshold — only checked for MANUAL source attempting to
+    //    POST directly. Drafts skip; system/AR/AP-sourced entries skip.
+    if (status === 'POSTED' && source === 'MANUAL') {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { jeApprovalThreshold: true },
+      });
+      const threshold = Number(tenant?.jeApprovalThreshold ?? 0);
+      if (threshold > 0) {
+        const totalDebit = dto.lines.reduce((s, l) => s + Number(l.debit ?? 0), 0);
+        if (totalDebit >= threshold) {
+          status = 'PENDING_APPROVAL';
+        }
+      }
     }
 
     const entryNumber = await this.nextEntryNumber(tenantId);
@@ -169,6 +185,64 @@ export class JournalService {
         lines: { include: { account: { select: { code: true, name: true } } } },
       },
     });
+  }
+
+  // ── Approve a PENDING_APPROVAL entry ────────────────────────────────────────
+  /**
+   * Move a JE from PENDING_APPROVAL → POSTED. Approver must be different
+   * from the entry's creator (Segregation of Duties); enforced unless
+   * the approver is BUSINESS_OWNER (tenant owner can self-approve their
+   * own large entries — they're the final authority).
+   */
+  async approveEntry(tenantId: string, id: string, approverId: string, approverRole: string) {
+    const entry = await this.prisma.journalEntry.findFirst({
+      where:   { id, tenantId },
+      select:  { id: true, status: true, createdBy: true, postingDate: true, date: true },
+    });
+    if (!entry) throw new NotFoundException('Journal entry not found');
+    if (entry.status !== 'PENDING_APPROVAL') {
+      throw new BadRequestException(`Entry is ${entry.status} — only PENDING_APPROVAL entries can be approved.`);
+    }
+    if (entry.createdBy === approverId && approverRole !== 'BUSINESS_OWNER' && approverRole !== 'SUPER_ADMIN') {
+      throw new ForbiddenException(
+        'Segregation of Duties — the approver cannot be the same person who created the entry. Have a different supervisor approve.',
+      );
+    }
+    // Re-check period lock at approval time (could have closed since draft)
+    await this.periods.assertDateIsOpen(tenantId, entry.postingDate ?? entry.date);
+
+    await this.prisma.journalEntry.updateMany({
+      where: { id, tenantId, status: 'PENDING_APPROVAL' },
+      data:  {
+        status:       'POSTED',
+        approvedById: approverId,
+        approvedAt:   new Date(),
+        postedBy:     approverId,
+        postedAt:     new Date(),
+      },
+    });
+    return this.prisma.journalEntry.findFirst({
+      where: { id, tenantId },
+      include: { lines: { include: { account: { select: { code: true, name: true } } } } },
+    });
+  }
+
+  /** Reject a PENDING_APPROVAL entry — moves it back to DRAFT with a reason. */
+  async rejectEntry(tenantId: string, id: string, approverId: string, reason: string) {
+    if (!reason?.trim()) throw new BadRequestException('Rejection reason is required.');
+    const entry = await this.prisma.journalEntry.findFirst({
+      where:  { id, tenantId },
+      select: { id: true, status: true },
+    });
+    if (!entry) throw new NotFoundException('Journal entry not found');
+    if (entry.status !== 'PENDING_APPROVAL') {
+      throw new BadRequestException(`Entry is ${entry.status} — only PENDING_APPROVAL entries can be rejected.`);
+    }
+    await this.prisma.journalEntry.updateMany({
+      where: { id, tenantId, status: 'PENDING_APPROVAL' },
+      data:  { status: 'DRAFT', rejectionReason: reason.trim(), approvedById: approverId, approvedAt: new Date() },
+    });
+    return this.prisma.journalEntry.findFirst({ where: { id, tenantId } });
   }
 
   // ── Reverse a POSTED entry ──────────────────────────────────────────────────

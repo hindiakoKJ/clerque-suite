@@ -33,6 +33,7 @@ import { AiModule } from './ai/ai.module';
 import { LedgerMetricsModule } from './ledger-metrics/ledger-metrics.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { BankReconciliationModule } from './bank-recon/bank-recon.module';
+import { JournalTemplatesModule } from './journal-templates/journal-templates.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -72,6 +73,7 @@ import { HealthController } from './health/health.controller';
     LedgerMetricsModule,
     NotificationsModule,
     BankReconciliationModule,
+    JournalTemplatesModule,
   ],
 })
 export class AppModule {}

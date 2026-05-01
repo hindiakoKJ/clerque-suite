@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { BusinessType, AccountingMethod } from '@prisma/client';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
@@ -531,5 +532,39 @@ export class TenantService {
     });
     if (!branch) throw new ForbiddenException('Branch not found in this tenant');
     return branch;
+  }
+
+  // ── Ledger thresholds (JE approval + dashboard severity) ─────────────────
+
+  async getLedgerThresholds(tenantId: string) {
+    const t = await this.prisma.tenant.findUniqueOrThrow({
+      where:  { id: tenantId },
+      select: { jeApprovalThreshold: true, metricsThresholds: true },
+    });
+    return {
+      jeApprovalThreshold: Number(t.jeApprovalThreshold),
+      metricsThresholds:   (t.metricsThresholds ?? null) as Record<string, number> | null,
+    };
+  }
+
+  async updateLedgerThresholds(
+    tenantId: string,
+    body: { jeApprovalThreshold?: number; metricsThresholds?: Record<string, number> },
+  ) {
+    if (body.jeApprovalThreshold != null && body.jeApprovalThreshold < 0) {
+      throw new ForbiddenException('JE approval threshold must be 0 or more (0 = no approval gate).');
+    }
+    return this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        ...(body.jeApprovalThreshold != null
+          ? { jeApprovalThreshold: new Prisma.Decimal(body.jeApprovalThreshold) }
+          : {}),
+        ...(body.metricsThresholds !== undefined
+          ? { metricsThresholds: (body.metricsThresholds as Prisma.InputJsonValue) }
+          : {}),
+      },
+      select: { jeApprovalThreshold: true, metricsThresholds: true },
+    });
   }
 }

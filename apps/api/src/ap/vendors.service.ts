@@ -115,4 +115,109 @@ export class VendorsService {
     if (!vendor) throw new NotFoundException('Vendor not found');
     return this.prisma.vendor.update({ where: { id }, data: { isActive: false } });
   }
+
+  /**
+   * FBL1N — Vendor Ledger Explorer.
+   * Returns chronologically ordered list of every AP transaction touching
+   * this vendor: bills posted, payments made, voids. With running balance.
+   *
+   * Each entry has a sign:
+   *   + (credit) = we owe the vendor more (bill posted)
+   *   − (debit)  = we paid them down (payment) or void
+   *
+   * Note: For AP we conventionally show the vendor balance as a credit
+   * balance (positive = we owe). The signs below maintain that convention.
+   */
+  async getLedger(tenantId: string, vendorId: string, opts: { from?: string; to?: string } = {}) {
+    const vendor = await this.prisma.vendor.findFirstOrThrow({
+      where:  { id: vendorId, tenantId },
+      select: { id: true, name: true, tin: true, defaultAtcCode: true, defaultWhtRate: true },
+    });
+
+    const dateFilter = opts.from || opts.to ? {
+      ...(opts.from ? { gte: new Date(opts.from) } : {}),
+      ...(opts.to   ? { lte: new Date(opts.to)   } : {}),
+    } : undefined;
+
+    type Movement = {
+      date:        string;
+      kind:        'BILL' | 'PAYMENT' | 'VOID';
+      reference:   string;
+      description: string;
+      debit:       number;  // payments + voids
+      credit:      number;  // bills
+      balance:     number;
+    };
+
+    const movements: Omit<Movement, 'balance'>[] = [];
+
+    const bills = await this.prisma.aPBill.findMany({
+      where:  { tenantId, vendorId, ...(dateFilter ? { billDate: dateFilter } : {}) },
+      select: { id: true, billNumber: true, billDate: true, totalAmount: true, whtAmount: true,
+                vendorBillRef: true, status: true, description: true, voidedAt: true },
+      orderBy: { billDate: 'asc' },
+    });
+    for (const b of bills) {
+      const netPayable = Number(b.totalAmount) - Number(b.whtAmount);
+      if (b.status !== 'VOIDED' && b.status !== 'CANCELLED' && b.status !== 'DRAFT') {
+        movements.push({
+          date:        b.billDate.toISOString(),
+          kind:        'BILL',
+          reference:   b.billNumber,
+          description: b.description ?? `Bill ${b.billNumber}${b.vendorBillRef ? ` · SI: ${b.vendorBillRef}` : ''}`,
+          debit:       0,
+          credit:      netPayable,
+        });
+      }
+      if (b.status === 'VOIDED' && b.voidedAt) {
+        movements.push({
+          date:        b.voidedAt.toISOString(),
+          kind:        'VOID',
+          reference:   `VOID ${b.billNumber}`,
+          description: `Voided bill ${b.billNumber}`,
+          debit:       netPayable,
+          credit:      0,
+        });
+      }
+    }
+
+    const payments = await this.prisma.aPPayment.findMany({
+      where:  { tenantId, vendorId, ...(dateFilter ? { paymentDate: dateFilter } : {}) },
+      select: { id: true, paymentNumber: true, paymentDate: true, totalAmount: true, method: true, reference: true,
+                applications: { select: { appliedAmount: true } } },
+      orderBy: { paymentDate: 'asc' },
+    });
+    for (const p of payments) {
+      const applied = p.applications.reduce((s, a) => s + Number(a.appliedAmount), 0);
+      if (applied > 0) {
+        movements.push({
+          date:        p.paymentDate.toISOString(),
+          kind:        'PAYMENT',
+          reference:   p.paymentNumber,
+          description: `Payment ${p.method}${p.reference ? ` · ${p.reference}` : ''}`,
+          debit:       applied,
+          credit:      0,
+        });
+      }
+    }
+
+    movements.sort((a, b) => a.date.localeCompare(b.date));
+
+    let balance = 0;
+    const out: Movement[] = movements.map((m) => {
+      balance += m.credit - m.debit; // credit-balance convention for AP
+      return { ...m, balance };
+    });
+
+    return {
+      vendor,
+      from: opts.from ?? null,
+      to:   opts.to   ?? null,
+      openingBalance: 0,
+      closingBalance: balance,
+      movements: out,
+      totalDebit:  out.reduce((s, m) => s + m.debit,  0),
+      totalCredit: out.reduce((s, m) => s + m.credit, 0),
+    };
+  }
 }

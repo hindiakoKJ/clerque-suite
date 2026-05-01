@@ -128,4 +128,130 @@ export class CustomersService {
 
     return Math.round(total * 100) / 100;
   }
+
+  /**
+   * FBL5N — Customer Ledger Explorer.
+   * Returns chronologically ordered list of every AR transaction touching
+   * this customer: formal invoices (post + void), payments, charge-tab POS
+   * orders, and payment applications. With running balance.
+   *
+   * Each entry has a sign:
+   *   + (debit)  = customer owes us more (invoice posted)
+   *   − (credit) = customer paid down their balance (payment applied / void / refund)
+   */
+  async getLedger(tenantId: string, customerId: string, opts: { from?: string; to?: string } = {}) {
+    const customer = await this.prisma.customer.findFirstOrThrow({
+      where:  { id: customerId, tenantId },
+      select: { id: true, name: true, tin: true, creditTermDays: true, creditLimit: true },
+    });
+
+    const dateFilter = opts.from || opts.to ? {
+      ...(opts.from ? { gte: new Date(opts.from) } : {}),
+      ...(opts.to   ? { lte: new Date(opts.to) }   : {}),
+    } : undefined;
+
+    type Movement = {
+      date:        string;
+      kind:        'INVOICE' | 'PAYMENT' | 'POS_CHARGE' | 'VOID';
+      reference:   string;
+      description: string;
+      debit:       number;
+      credit:      number;
+      balance:     number; // filled at the end
+    };
+
+    const movements: Omit<Movement, 'balance'>[] = [];
+
+    // Formal invoices (debit when status != VOIDED)
+    const invoices = await this.prisma.aRInvoice.findMany({
+      where: { tenantId, customerId, ...(dateFilter ? { invoiceDate: dateFilter } : {}) },
+      select: { id: true, invoiceNumber: true, invoiceDate: true, totalAmount: true, status: true, description: true, voidedAt: true },
+      orderBy: { invoiceDate: 'asc' },
+    });
+    for (const inv of invoices) {
+      if (inv.status !== 'VOIDED' && inv.status !== 'CANCELLED' && inv.status !== 'DRAFT') {
+        movements.push({
+          date:        inv.invoiceDate.toISOString(),
+          kind:        'INVOICE',
+          reference:   inv.invoiceNumber,
+          description: inv.description ?? `Invoice ${inv.invoiceNumber}`,
+          debit:       Number(inv.totalAmount),
+          credit:      0,
+        });
+      }
+      if (inv.status === 'VOIDED' && inv.voidedAt) {
+        movements.push({
+          date:        inv.voidedAt.toISOString(),
+          kind:        'VOID',
+          reference:   `VOID ${inv.invoiceNumber}`,
+          description: `Voided invoice ${inv.invoiceNumber}`,
+          debit:       0,
+          credit:      Number(inv.totalAmount),
+        });
+      }
+    }
+
+    // Payments — applied amounts only (allocated to invoices; unallocated kept as floats)
+    const payments = await this.prisma.aRPayment.findMany({
+      where: { tenantId, customerId, ...(dateFilter ? { paymentDate: dateFilter } : {}) },
+      select: { id: true, paymentNumber: true, paymentDate: true, totalAmount: true, method: true, reference: true,
+                applications: { select: { appliedAmount: true } } },
+      orderBy: { paymentDate: 'asc' },
+    });
+    for (const p of payments) {
+      const applied = p.applications.reduce((s, a) => s + Number(a.appliedAmount), 0);
+      if (applied > 0) {
+        movements.push({
+          date:        p.paymentDate.toISOString(),
+          kind:        'PAYMENT',
+          reference:   p.paymentNumber,
+          description: `Payment ${p.method}${p.reference ? ` · ${p.reference}` : ''}`,
+          debit:       0,
+          credit:      applied,
+        });
+      }
+    }
+
+    // POS charge-tab orders (legacy)
+    const posOrders = await this.prisma.order.findMany({
+      where:  { tenantId, customerId, invoiceType: 'CHARGE', status: { in: ['COMPLETED', 'OPEN'] }, ...(dateFilter ? { createdAt: dateFilter } : {}) },
+      select: { id: true, orderNumber: true, createdAt: true, totalAmount: true, payments: { select: { amount: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const o of posOrders) {
+      const collected = o.payments.reduce((s, p) => s + Number(p.amount), 0);
+      const remaining = Number(o.totalAmount) - collected;
+      if (remaining > 0) {
+        movements.push({
+          date:        o.createdAt.toISOString(),
+          kind:        'POS_CHARGE',
+          reference:   o.orderNumber,
+          description: `POS charge tab — ${o.orderNumber}`,
+          debit:       remaining,
+          credit:      0,
+        });
+      }
+    }
+
+    // Sort chronologically
+    movements.sort((a, b) => a.date.localeCompare(b.date));
+
+    // Compute running balance
+    let balance = 0;
+    const out: Movement[] = movements.map((m) => {
+      balance += m.debit - m.credit;
+      return { ...m, balance };
+    });
+
+    return {
+      customer,
+      from:    opts.from ?? null,
+      to:      opts.to   ?? null,
+      openingBalance: 0, // simplified: we always start at 0 for now (full historical sum on load)
+      closingBalance: balance,
+      movements: out,
+      totalDebit:  out.reduce((s, m) => s + m.debit,  0),
+      totalCredit: out.reduce((s, m) => s + m.credit, 0),
+    };
+  }
 }

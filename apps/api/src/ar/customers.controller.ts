@@ -34,6 +34,19 @@ export class CustomersController {
     return this.svc.findAll(user.tenantId, { search, isActive: active });
   }
 
+  /** FBL5N — Customer Ledger Explorer drill-down. */
+  @Roles(...READ_ROLES)
+  @Get(':id/ledger')
+  getLedger(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Query('from') from?: string,
+    @Query('to')   to?:   string,
+  ) {
+    if (!user.tenantId) throw new ForbiddenException('Tenant context required');
+    return this.svc.getLedger(user.tenantId, id, { from, to });
+  }
+
   @Roles(...READ_ROLES)
   @Get(':id')
   findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

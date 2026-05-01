@@ -58,6 +58,18 @@ export class VendorsController {
     return this.expensesService.getAging(user.tenantId!);
   }
 
+  /** FBL1N — Vendor Ledger Explorer drill-down. */
+  @Get(':id/ledger')
+  @Roles(...AP_READ_ROLES)
+  getLedger(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Query('from') from?: string,
+    @Query('to')   to?:   string,
+  ) {
+    return this.vendorsService.getLedger(user.tenantId!, id, { from, to });
+  }
+
   @Get(':id')
   @Roles(...AP_READ_ROLES)
   findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {

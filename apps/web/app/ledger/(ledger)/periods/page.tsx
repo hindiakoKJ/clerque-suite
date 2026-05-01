@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarClock, Lock, LockOpen, Plus, X, AlertTriangle,
@@ -571,13 +572,23 @@ function PeriodRow({
 
           {isOwner && (
             <div className="flex justify-end gap-2 pt-1">
+              {isOpen && (
+                <Link
+                  href={`/ledger/periods/${period.id}/close`}
+                  className="flex items-center gap-1.5 text-xs font-medium text-foreground border border-border hover:bg-muted px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  Close with Checklist (CLOCO)
+                </Link>
+              )}
               {isOpen && onClose && (
                 <button
                   onClick={onClose}
                   className="flex items-center gap-1.5 text-xs font-medium text-red-600 hover:text-red-700 border border-red-400/30 hover:bg-red-500/5 px-3 py-1.5 rounded-lg transition-colors"
+                  title="Skip the checklist and close immediately (no auto-checks)"
                 >
                   <Lock className="w-3.5 h-3.5" />
-                  Close Period
+                  Quick Close
                 </button>
               )}
               {!isOpen && onReopen && (

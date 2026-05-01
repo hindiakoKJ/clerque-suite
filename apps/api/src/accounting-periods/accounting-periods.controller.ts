@@ -34,6 +34,17 @@ export class AccountingPeriodsController {
     return this.periodsService.list(user.tenantId!);
   }
 
+  /**
+   * Period-Close Checklist (CLOCO) — auto-evaluated pre-close checks.
+   * Returns each check's status (PASS/FAIL/MANUAL/N_A) so the UI can show
+   * a guided close flow.
+   */
+  @Roles('ACCOUNTANT', 'FINANCE_LEAD', 'BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Get(':id/checklist')
+  checklist(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.periodsService.getCloseChecklist(user.tenantId!, id);
+  }
+
   @Roles('BUSINESS_OWNER')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() body: CreatePeriodDto) {

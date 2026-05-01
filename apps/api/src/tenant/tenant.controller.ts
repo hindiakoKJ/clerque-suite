@@ -144,4 +144,22 @@ export class TenantController {
       ipAddress,
     );
   }
+
+  /** Update Ledger ops + JE approval thresholds (Owner only). */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Patch('ledger-thresholds')
+  @HttpCode(HttpStatus.OK)
+  updateLedgerThresholds(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { jeApprovalThreshold?: number; metricsThresholds?: Record<string, number> },
+  ) {
+    return this.tenantService.updateLedgerThresholds(user.tenantId!, body);
+  }
+
+  /** Read-only fetch — used by Settings page + Dashboard. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER')
+  @Get('ledger-thresholds')
+  getLedgerThresholds(@CurrentUser() user: JwtPayload) {
+    return this.tenantService.getLedgerThresholds(user.tenantId!);
+  }
 }

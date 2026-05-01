@@ -263,6 +263,7 @@ enum NormalBalance {
 
 enum JournalEntryStatus {
   DRAFT
+  PENDING_APPROVAL  // entry exceeds tenant.jeApprovalThreshold; awaiting sign-off
   POSTED
   VOIDED
 }
@@ -420,6 +421,19 @@ model Tenant {
   documentSequences   DocumentNumberSequence[]
   notifications       Notification[]
   bankReconciliations BankReconciliation[]
+  journalTemplates    JournalTemplate[]
+  /// Per-tenant tunable severity thresholds for the Ledger ops dashboard.
+  /// JSON shape (keys all numbers, optional):
+  ///   { eventLagWarnMs, eventLagBadMs, pendingEventsWarn, failedEventsWarn,
+  ///     dsoWarn, dsoBad, dpoWarn, dpoBad, voidRateWarn, voidRateBad,
+  ///     closeAgeWarn, closeAgeBad }
+  /// Null/empty = use the system defaults defined in the dashboard page.
+  metricsThresholds   Json?
+  /// JE approval threshold — when total absolute debit on a manual JE
+  /// exceeds this amount, the JE is held in PENDING_APPROVAL until an
+  /// authorised user (Owner / Finance Lead) approves it. 0 = no approval
+  /// (everything posts directly). Default ₱50,000.
+  jeApprovalThreshold Decimal             @default(50000) @db.Decimal(14, 2)
 
   @@map("tenants")
 }
@@ -1228,6 +1242,14 @@ model JournalEntry {
   createdBy         String?
   postedBy          String?            // userId who approved DRAFT → POSTED
   postedAt          DateTime?
+  /// Approval workflow — set when the entry's gross amount exceeded the
+  /// tenant's jeApprovalThreshold and was held for sign-off. Approver
+  /// must be Owner / Finance Lead / Super Admin (different from poster
+  /// where possible, for SOD).
+  approvedById      String?
+  approvedAt        DateTime?
+  /// Optional rejection reason (set when an approver rejects a pending JE)
+  rejectionReason   String?
   /// Points to the JE this entry is reversing (set on the reversal JE)
   reversalOfId      String?            @unique
   createdAt         DateTime           @default(now())
@@ -2336,4 +2358,43 @@ model BankReconciliationItem {
 
   @@index([reconciliationId, isMatched])
   @@map("bank_reconciliation_items")
+}
+
+/// Recurring/template Journal Entries — for monthly accruals, depreciation,
+/// utility-allocation patterns. Each template stores a JE skeleton (lines as
+/// JSON) and an optional cron-style schedule.
+///
+/// Two modes:
+///   - One-shot: schedule null, user instantiates manually via "Generate now"
+///   - Recurring: schedule + nextRunAt set; scheduler creates the JE on each tick
+enum JournalTemplateFrequency {
+  MANUAL       // never auto-runs; user clicks "Generate now"
+  DAILY
+  WEEKLY
+  MONTHLY      // most common — accruals, depreciation
+  QUARTERLY
+  YEARLY
+}
+
+model JournalTemplate {
+  id            String                   @id @default(cuid())
+  tenantId      String
+  name          String
+  description   String?
+  /// Lines as JSON: [{accountId, debit?, credit?, description?}, ...]
+  /// Must balance (Σ debit = Σ credit) at instantiation time.
+  lines         Json
+  frequency     JournalTemplateFrequency @default(MANUAL)
+  /// Next scheduled run (auto-set on save when frequency != MANUAL)
+  nextRunAt     DateTime?
+  lastRunAt     DateTime?
+  isActive      Boolean                  @default(true)
+  createdById   String
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  tenant        Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isActive, nextRunAt])
+  @@map("journal_templates")
 }

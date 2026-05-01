@@ -49,7 +49,6 @@
 - **Multi-currency / FX engine** — schema has currency stub fields but no FX rate or conversion engine
 
 ### Power-user features
-- **FBL1N / FBL5N equivalents** — Vendor Ledger Explorer / Customer Balance Tracker (SAP-style drill-downs by vendor/customer)
 - **T&E OCR / WhatsApp integration** — submit expense via chat
 - **Promotions engine** — `Promotion` model exists in schema; no controller / UI / cart logic
 - **POS-side PIN reset for cashiers** — cashier locked out → supervisor PIN-resets at the till
@@ -58,7 +57,6 @@
 - **Capacitor / Play Store standalone POS app** — mobile freemium tier with local SQLite
 - **Multi-tenant SUPER_ADMIN console** — manage all tenants from one screen
 - **Customer self-service tier upgrades** — UI shows upgrade CTA; backend payment+tier-flip flow not built
-- **Per-tenant tunable severity thresholds** — Ledger dashboard thresholds (target DSO, lag, void rate) currently hardcoded
 - **Granular branch-level write scoping** — beyond CC-2 read scoping; e.g. "User X can void in Branch A but not B"
 
 ---
@@ -79,7 +77,8 @@
 
 | Commit | What |
 |---|---|
-| (this) | AR Oracle-style power form — `/ledger/ar/billing/new` keyboard-first invoice posting. Mirrors the AP form (Tab/Enter/F2/F3/F4) without the WHT block. Replaces the cramped modal. |
+| (this) | **Last 2% of Ledger shipped together**: FBL1N + FBL5N drill-down endpoints (vendor/customer ledger explorers); JE approval workflow (PENDING_APPROVAL status, jeApprovalThreshold per tenant, `/journal/:id/approve` + `/reject`, SOD enforced); Period-Close Checklist (CLOCO) with 9 auto-evaluated checks + 2 manual attestations at `/ledger/periods/[id]/close`; recurring/template JEs (`JournalTemplate` model + scheduler at 4am Manila daily + `/journal-templates` CRUD); per-tenant tunable severity thresholds (`Tenant.metricsThresholds` + `/tenant/ledger-thresholds`). |
+| dbfeefe | AR Oracle-style power form — `/ledger/ar/billing/new` keyboard-first invoice posting. |
 | 9650c8e | Notification producers wired — daily 3am Manila cron creates low-stock, AR/AP overdue, and period-close-reminder notifications. The bell now actually has things in it. |
 | a9dfa08 | LED-2 Cash Flow Statement (indirect method) + LED-5 bucket-precise aging drill-down. |
 | 7f5073d | POS-3 Item-level refund — OrderItem.refundedQty + OrderItemRefund audit table + POST /orders/:orderId/items/:itemId/refund. UI: Refund button per line in expanded order detail; modal with qty/reason/method/restock + supervisor PIN co-auth for cashiers. Pro-rated refund amount + proportional GL reversal event. |

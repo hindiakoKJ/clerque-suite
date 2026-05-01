@@ -62,6 +62,30 @@ export class JournalController {
   }
 
   /**
+   * Approve a PENDING_APPROVAL entry. Triggered when JE total exceeds the
+   * tenant's jeApprovalThreshold. Owner / Finance Lead only — and (SOD)
+   * the approver cannot be the same person who created the entry.
+   */
+  @Patch(':id/approve')
+  @Roles('BUSINESS_OWNER', 'FINANCE_LEAD', 'SUPER_ADMIN')
+  @HttpCode(HttpStatus.OK)
+  approve(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.svc.approveEntry(user.tenantId!, id, user.sub, user.role);
+  }
+
+  /** Reject a PENDING_APPROVAL entry — sends it back to DRAFT with a reason. */
+  @Patch(':id/reject')
+  @Roles('BUSINESS_OWNER', 'FINANCE_LEAD', 'SUPER_ADMIN')
+  @HttpCode(HttpStatus.OK)
+  reject(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.svc.rejectEntry(user.tenantId!, id, user.sub, body.reason ?? '');
+  }
+
+  /**
    * GET /accounting/journal/import/template
    * Generates a tenant-specific .xlsx template (with the actual COA seeded
    * as a reference sheet) for the user to download, fill, and re-upload.

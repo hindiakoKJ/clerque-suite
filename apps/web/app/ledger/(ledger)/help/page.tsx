@@ -769,11 +769,26 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'Other BIR forms (2551Q, EWT, SAWT, 2307)?',
+        q: 'How do I generate BIR 2307 certificates for my vendors?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Sidebar → <strong>Tax Estimation</strong>. Pick the year + quarter.</li>
+            <li>Scroll to <strong>BIR Form 2307 — Per-Vendor Certificates</strong>.</li>
+            <li>The list shows every vendor with WHT bills in that period: TIN, ATC code, bill count, total tax base, total withheld.</li>
+            <li>Tap the <strong>2307.xlsx</strong> button beside any vendor to download a printable Excel version of their 2307 certificate.</li>
+            <li>Toggle <strong>Annual ({"{YYYY}"})</strong> at the top-right to switch from per-quarter to whole-year aggregation. Use annual mode at year-end before BIR alphalist filing.</li>
+            <li>Print, sign, and hand to the vendor. They use it as a tax credit when filing their ITR.</li>
+            <li>The Excel includes payor info (your business + TIN), payee info (vendor), monthly tax base + withheld breakdown by ATC code, and a signature line.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'Other BIR forms (2551Q, EWT summary, SAWT alphalist)?',
         a: (
           <p>
-            On the roadmap (LED-3 and LED-4 in BACKLOG.md). 2307 is highest priority — vendors expect their
-            withholding tax certificates at year-end.
+            All implemented today. 2551Q is auto-shown when your tax status is NON_VAT. EWT/SAWT alphalist is the
+            section right above 2307. Books of Account (Sales Book, Purchase Book, Cash Disbursements Book) export
+            from the Books section. OR sequential numbering audit is at the bottom of the page.
           </p>
         ),
       },

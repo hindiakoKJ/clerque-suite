@@ -182,4 +182,47 @@ export class BirController {
     });
     res.send(buf);
   }
+
+  // ── BIR 2307 (Certificate of Creditable Tax Withheld) ────────────────────
+  @Get('2307/vendors')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'BOOKKEEPER')
+  list2307Vendors(
+    @CurrentUser() user: JwtPayload,
+    @Query('year')    year:    string,
+    @Query('quarter') quarter: string,
+  ) {
+    const q = quarter ? Number(quarter) as 1 | 2 | 3 | 4 : null;
+    return this.svc.list2307VendorsForPeriod(user.tenantId!, Number(year), q);
+  }
+
+  @Get('2307/data')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'BOOKKEEPER')
+  get2307Data(
+    @CurrentUser() user: JwtPayload,
+    @Query('vendorId') vendorId: string,
+    @Query('year')     year:     string,
+    @Query('quarter')  quarter:  string,
+  ) {
+    const q = quarter ? Number(quarter) as 1 | 2 | 3 | 4 : null;
+    return this.svc.get2307Data(user.tenantId!, vendorId, Number(year), q);
+  }
+
+  @Get('2307/excel')
+  @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'AP_ACCOUNTANT')
+  async get2307Excel(
+    @CurrentUser() user: JwtPayload,
+    @Query('vendorId') vendorId: string,
+    @Query('year')     year:     string,
+    @Query('quarter')  quarter:  string,
+    @Res() res: Response,
+  ) {
+    const q = quarter ? Number(quarter) as 1 | 2 | 3 | 4 : null;
+    const buf = await this.svc.generate2307Excel(user.tenantId!, vendorId, Number(year), q);
+    const periodTag = q ? `Q${q}-${year}` : year;
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="BIR-2307-${periodTag}-${vendorId}.xlsx"`,
+    });
+    res.send(buf);
+  }
 }

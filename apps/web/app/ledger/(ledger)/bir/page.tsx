@@ -599,6 +599,116 @@ function SectionEwtSawt({ year, quarter }: { year: number; quarter: Quarter }) {
   );
 }
 
+// ── Sub-component: BIR 2307 per-vendor certificates ─────────────────────────
+
+interface Vendor2307Row {
+  vendorId:       string;
+  vendorName:     string;
+  vendorTin:      string | null;
+  defaultAtcCode: string | null;
+  billCount:      number;
+  totalTaxBase:   number;
+  totalWithheld:  number;
+}
+
+function Section2307({ year, quarter }: { year: number; quarter: Quarter }) {
+  // null quarter → whole year (annual mode, useful at year-end before BIR alphalist)
+  const [annualMode, setAnnualMode] = useState(false);
+  const effectiveQuarter = annualMode ? null : quarter;
+
+  const params = new URLSearchParams({ year: String(year) });
+  if (effectiveQuarter) params.set('quarter', String(effectiveQuarter));
+
+  const { data, isLoading, error } = useQuery<Vendor2307Row[]>({
+    queryKey: ['bir-2307-vendors', year, effectiveQuarter],
+    queryFn:  () => api.get(`/bir/2307/vendors?${params.toString()}`).then((r) => r.data),
+  });
+
+  function downloadFor(vendorId: string) {
+    // Use authenticated download utility
+    const tokenized = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/bir/2307/excel?vendorId=${vendorId}&year=${year}${effectiveQuarter ? `&quarter=${effectiveQuarter}` : ''}`;
+    downloadAuthFile(`/bir/2307/excel?vendorId=${vendorId}&year=${year}${effectiveQuarter ? `&quarter=${effectiveQuarter}` : ''}`,
+      `BIR-2307-${effectiveQuarter ? `Q${effectiveQuarter}-${year}` : year}-${vendorId}.xlsx`);
+    void tokenized; // silence unused warning, keeps the comment readable
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-5 py-4 border-b border-border flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="font-semibold text-foreground">BIR Form 2307 — Per-Vendor Certificates</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Issue one 2307 to each vendor at year-end (or per quarter) summarising the EWT you withheld on their behalf.
+            Vendor uses it as a tax credit when filing their ITR.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input type="checkbox" checked={annualMode} onChange={(e) => setAnnualMode(e.target.checked)} />
+          Annual ({year})
+        </label>
+      </div>
+
+      {isLoading && <div className="px-5 py-6 text-sm text-muted-foreground">Loading vendor list…</div>}
+      {error && (
+        <div className="px-5 py-6 text-sm text-red-500">
+          {(error as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to load 2307 vendor list.'}
+        </div>
+      )}
+
+      {data && (
+        <div className="p-5">
+          {data.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No WHT bills posted in this {effectiveQuarter ? 'quarter' : 'year'}. Issue 2307s only when there&apos;s WHT withheld.
+            </p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs uppercase text-muted-foreground border-b border-border">
+                  <th className="pb-2 text-left font-semibold">Vendor</th>
+                  <th className="pb-2 text-left font-semibold w-32">TIN</th>
+                  <th className="pb-2 text-left font-semibold w-20">ATC</th>
+                  <th className="pb-2 text-right font-semibold w-16">Bills</th>
+                  <th className="pb-2 text-right font-semibold w-32">Tax Base</th>
+                  <th className="pb-2 text-right font-semibold w-32">Withheld</th>
+                  <th className="pb-2 text-right font-semibold w-32"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {data.map((v) => (
+                  <tr key={v.vendorId}>
+                    <td className="py-2 text-foreground font-medium">{v.vendorName}</td>
+                    <td className="py-2 font-mono text-xs text-muted-foreground">{v.vendorTin ?? '—'}</td>
+                    <td className="py-2 font-mono text-xs text-muted-foreground">{v.defaultAtcCode ?? '—'}</td>
+                    <td className="py-2 text-right text-muted-foreground">{v.billCount}</td>
+                    <td className="py-2 text-right font-mono">{fmtPeso(v.totalTaxBase)}</td>
+                    <td className="py-2 text-right font-mono font-semibold text-amber-600">{fmtPeso(v.totalWithheld)}</td>
+                    <td className="py-2 text-right">
+                      <button
+                        onClick={() => downloadFor(v.vendorId)}
+                        className="inline-flex items-center gap-1 h-8 px-3 rounded-md border border-border bg-background text-xs font-medium hover:bg-muted transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" /> 2307.xlsx
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                <tr className="font-semibold bg-amber-50/50 dark:bg-amber-500/5">
+                  <td colSpan={5} className="py-2 text-right">Total</td>
+                  <td className="py-2 text-right font-mono text-amber-700 dark:text-amber-400">
+                    {fmtPeso(data.reduce((s, v) => s + v.totalWithheld, 0))}
+                  </td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Sub-component: Books of Account ─────────────────────────────────────────
 
 const MONTH_LABELS = [
@@ -804,8 +914,11 @@ export default function BirPage() {
       {/* 1701Q — quarterly income tax for all BIR-registered tenants */}
       <Section1701Q year={year} quarter={quarter} />
 
-      {/* ── EWT / SAWT — Form 2307 ────────────────────────────────────────── */}
+      {/* ── EWT / SAWT summary ─────────────────────────────────────────────── */}
       <SectionEwtSawt year={year} quarter={quarter} />
+
+      {/* ── Per-vendor 2307 certificates (NEW backbone) ───────────────────── */}
+      <Section2307 year={year} quarter={quarter} />
 
       {/* ── OR Sequential Numbering ───────────────────────────────────────── */}
       <SectionOrSequence isOwner={isOwner} />

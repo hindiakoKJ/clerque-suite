@@ -666,4 +666,303 @@ export class BirService {
       generatedAt:       new Date().toISOString(),
     };
   }
+
+  // ── BIR 2307 — Certificate of Creditable Tax Withheld at Source ──────────
+  //
+  // Per RR No. 2-98 + later amendments. We issue this to each vendor at year-end
+  // (or per-quarter) summarising the Expanded Withholding Tax (EWT) we withheld
+  // on their behalf so they can claim it as a tax credit.
+  //
+  // Structure: per vendor, summarized by ATC code, broken into monthly rows
+  // (BIR 2307 has 3 rows for a quarter, one per month).
+
+  async get2307Data(
+    tenantId: string,
+    vendorId: string,
+    year: number,
+    quarter: 1 | 2 | 3 | 4 | null,
+  ) {
+    await this.assertBirRegistered(tenantId);
+
+    let from: Date, to: Date;
+    if (quarter) {
+      const b = quarterBounds(year, quarter);
+      from = b.from; to = b.to;
+    } else {
+      from = new Date(Date.UTC(year, 0, 1));
+      to   = new Date(Date.UTC(year, 11, 31, 23, 59, 59));
+    }
+
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where:  { id: tenantId },
+      select: { businessName: true, name: true, tinNumber: true, registeredAddress: true },
+    });
+    const vendor = await this.prisma.vendor.findFirstOrThrow({
+      where:  { id: vendorId, tenantId },
+      select: { name: true, tin: true, address: true, defaultAtcCode: true },
+    });
+
+    // Pull every posted bill for this vendor in the period that had WHT
+    const bills = await this.prisma.aPBill.findMany({
+      where: {
+        tenantId, vendorId,
+        billDate: { gte: from, lte: to },
+        status:   { in: ['OPEN', 'PARTIALLY_PAID', 'PAID'] },
+        whtAmount: { gt: 0 },
+      },
+      select: {
+        billDate: true, totalAmount: true, whtAmount: true, whtAtcCode: true,
+        subtotal: true, vatAmount: true,
+      },
+      orderBy: { billDate: 'asc' },
+    });
+
+    // Aggregate by ATC code → array of { atcCode, monthBreakdown }
+    interface AtcRow {
+      atcCode:        string;
+      months:         Map<number, { taxBase: number; taxWithheld: number }>;
+      totalTaxBase:   number;
+      totalWithheld:  number;
+    }
+    const atcMap = new Map<string, AtcRow>();
+
+    for (const b of bills) {
+      const atc = b.whtAtcCode || vendor.defaultAtcCode || 'UNCATEGORISED';
+      const monthIdx = b.billDate.getUTCMonth(); // 0..11
+      let row = atcMap.get(atc);
+      if (!row) {
+        row = { atcCode: atc, months: new Map(), totalTaxBase: 0, totalWithheld: 0 };
+        atcMap.set(atc, row);
+      }
+      // Tax base (BIR 2307 column 5) = subtotal (gross of VAT excluded)
+      // simplification: use subtotal which we already excluded VAT from in APBill
+      const base = Number(b.subtotal);
+      const wht  = Number(b.whtAmount);
+      const m = row.months.get(monthIdx) ?? { taxBase: 0, taxWithheld: 0 };
+      m.taxBase     += base;
+      m.taxWithheld += wht;
+      row.months.set(monthIdx, m);
+      row.totalTaxBase  += base;
+      row.totalWithheld += wht;
+    }
+
+    const atcRows = Array.from(atcMap.values()).map((r) => ({
+      atcCode:        r.atcCode,
+      months: Array.from(r.months.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([month, v]) => ({ month, taxBase: v.taxBase, taxWithheld: v.taxWithheld })),
+      totalTaxBase:   r.totalTaxBase,
+      totalWithheld:  r.totalWithheld,
+    }));
+
+    return {
+      year, quarter,
+      periodFrom: toIso(from), periodTo: toIso(to),
+      payor: {
+        registeredName: tenant.businessName ?? tenant.name,
+        tin:            tenant.tinNumber ?? '',
+        address:        tenant.registeredAddress ?? '',
+      },
+      payee: {
+        registeredName: vendor.name,
+        tin:            vendor.tin ?? '',
+        address:        vendor.address ?? '',
+      },
+      atcRows,
+      grandTotalTaxBase:  bills.reduce((s, b) => s + Number(b.subtotal), 0),
+      grandTotalWithheld: bills.reduce((s, b) => s + Number(b.whtAmount), 0),
+      billCount:          bills.length,
+      generatedAt:        new Date().toISOString(),
+    };
+  }
+
+  /** Generate the 2307 as an Excel workbook formatted for printing. */
+  async generate2307Excel(
+    tenantId: string,
+    vendorId: string,
+    year: number,
+    quarter: 1 | 2 | 3 | 4 | null,
+  ): Promise<Buffer> {
+    const data = await this.get2307Data(tenantId, vendorId, year, quarter);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+    const ws = wb.addWorksheet('BIR 2307', { pageSetup: { paperSize: 9 /* A4 */, orientation: 'portrait' } });
+
+    // Title
+    ws.mergeCells('A1:F1');
+    ws.getCell('A1').value = 'BIR FORM 2307';
+    ws.getCell('A1').font  = { bold: true, size: 14, color: { argb: 'FF000000' } };
+    ws.getCell('A1').alignment = { horizontal: 'center' };
+
+    ws.mergeCells('A2:F2');
+    ws.getCell('A2').value = 'Certificate of Creditable Tax Withheld at Source';
+    ws.getCell('A2').font  = { bold: true, size: 11 };
+    ws.getCell('A2').alignment = { horizontal: 'center' };
+
+    ws.mergeCells('A3:F3');
+    ws.getCell('A3').value =
+      data.quarter
+        ? `For the Quarter Ending: Q${data.quarter} ${data.year} (${data.periodFrom} – ${data.periodTo})`
+        : `For the Year ${data.year} (${data.periodFrom} – ${data.periodTo})`;
+    ws.getCell('A3').alignment = { horizontal: 'center' };
+
+    let row = 5;
+    // Payor block
+    ws.getCell(`A${row}`).value = 'Payor (Withholding Agent)';
+    ws.getCell(`A${row}`).font  = { bold: true };
+    row++;
+    ws.getCell(`A${row}`).value = 'Registered Name:';
+    ws.getCell(`B${row}`).value = data.payor.registeredName;
+    row++;
+    ws.getCell(`A${row}`).value = 'TIN:';
+    ws.getCell(`B${row}`).value = data.payor.tin;
+    row++;
+    ws.getCell(`A${row}`).value = 'Address:';
+    ws.getCell(`B${row}`).value = data.payor.address;
+    row += 2;
+
+    // Payee block
+    ws.getCell(`A${row}`).value = 'Payee (Vendor)';
+    ws.getCell(`A${row}`).font  = { bold: true };
+    row++;
+    ws.getCell(`A${row}`).value = 'Registered Name:';
+    ws.getCell(`B${row}`).value = data.payee.registeredName;
+    row++;
+    ws.getCell(`A${row}`).value = 'TIN:';
+    ws.getCell(`B${row}`).value = data.payee.tin;
+    row++;
+    ws.getCell(`A${row}`).value = 'Address:';
+    ws.getCell(`B${row}`).value = data.payee.address;
+    row += 2;
+
+    // Income payments + tax withheld table
+    const headerRow = row;
+    const headers = ['ATC', 'Income Payments Subject to EWT', '1st Month', '2nd Month', '3rd Month', 'Total', 'Tax Withheld'];
+    headers.forEach((h, i) => {
+      const cell = ws.getCell(headerRow, i + 1);
+      cell.value = h;
+      cell.font  = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    ws.getRow(headerRow).height = 30;
+    row++;
+
+    // Determine the 3 month indexes for the period
+    const monthIdxs: number[] = data.quarter
+      ? [(data.quarter - 1) * 3, (data.quarter - 1) * 3 + 1, (data.quarter - 1) * 3 + 2]
+      : [0, 1, 2]; // for whole-year, default to Jan-Mar (year mode is mostly used as a workaround)
+
+    // Body rows
+    for (const atc of data.atcRows) {
+      const monthsByIdx = new Map(atc.months.map((m) => [m.month, m]));
+      const m1 = monthsByIdx.get(monthIdxs[0])?.taxBase ?? 0;
+      const m2 = monthsByIdx.get(monthIdxs[1])?.taxBase ?? 0;
+      const m3 = monthsByIdx.get(monthIdxs[2])?.taxBase ?? 0;
+      const cells: (string | number)[] = [
+        atc.atcCode,
+        '',
+        m1, m2, m3,
+        atc.totalTaxBase,
+        atc.totalWithheld,
+      ];
+      cells.forEach((v, i) => {
+        const cell = ws.getCell(row, i + 1);
+        cell.value = v;
+        if (i >= 2) cell.numFmt = '#,##0.00';
+        cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      row++;
+    }
+
+    // Grand total row
+    const totalCells: (string | number)[] = [
+      '', 'GRAND TOTAL', '', '', '',
+      data.grandTotalTaxBase,
+      data.grandTotalWithheld,
+    ];
+    totalCells.forEach((v, i) => {
+      const cell = ws.getCell(row, i + 1);
+      cell.value = v;
+      cell.font  = { bold: true };
+      if (i >= 2) cell.numFmt = '#,##0.00';
+      cell.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+      cell.border = { top: { style: 'medium' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    row += 3;
+
+    // Signature lines
+    ws.getCell(`A${row}`).value = 'Signature of Withholding Agent / Authorised Representative:';
+    ws.getCell(`A${row}`).font  = { italic: true, color: { argb: 'FF666666' } };
+    row += 3;
+    ws.getCell(`A${row}`).value = '___________________________________';
+    row++;
+    ws.getCell(`A${row}`).value = 'Printed Name + Position + Date';
+    ws.getCell(`A${row}`).font  = { italic: true, color: { argb: 'FF666666' } };
+
+    // Footer note
+    row += 3;
+    ws.mergeCells(`A${row}:G${row}`);
+    ws.getCell(`A${row}`).value = `Generated by Clerque on ${new Date(data.generatedAt).toLocaleString('en-PH')}. ` +
+      `Bills counted: ${data.billCount}. ` +
+      `This Excel is auto-prepared from your AP records — review against vendor copies before issuing.`;
+    ws.getCell(`A${row}`).font = { italic: true, size: 9, color: { argb: 'FF666666' } };
+    ws.getCell(`A${row}`).alignment = { wrapText: true };
+
+    // Column widths
+    ws.getColumn(1).width = 12;
+    ws.getColumn(2).width = 32;
+    ws.getColumn(3).width = 14;
+    ws.getColumn(4).width = 14;
+    ws.getColumn(5).width = 14;
+    ws.getColumn(6).width = 16;
+    ws.getColumn(7).width = 16;
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /** Vendors that have any WHT bills in the requested period — for the picker UI. */
+  async list2307VendorsForPeriod(
+    tenantId: string,
+    year: number,
+    quarter: 1 | 2 | 3 | 4 | null,
+  ) {
+    await this.assertBirRegistered(tenantId);
+    let from: Date, to: Date;
+    if (quarter) {
+      const b = quarterBounds(year, quarter);
+      from = b.from; to = b.to;
+    } else {
+      from = new Date(Date.UTC(year, 0, 1));
+      to   = new Date(Date.UTC(year, 11, 31, 23, 59, 59));
+    }
+    const grouped = await this.prisma.aPBill.groupBy({
+      by: ['vendorId'],
+      where: {
+        tenantId,
+        billDate: { gte: from, lte: to },
+        status:   { in: ['OPEN', 'PARTIALLY_PAID', 'PAID'] },
+        whtAmount: { gt: 0 },
+      },
+      _sum:   { whtAmount: true, subtotal: true },
+      _count: { id: true },
+    });
+    const vendorIds = grouped.map((g) => g.vendorId);
+    const vendors = await this.prisma.vendor.findMany({
+      where: { tenantId, id: { in: vendorIds } },
+      select: { id: true, name: true, tin: true, defaultAtcCode: true },
+    });
+    const byId = new Map(vendors.map((v) => [v.id, v]));
+    return grouped.map((g) => ({
+      vendorId:       g.vendorId,
+      vendorName:     byId.get(g.vendorId)?.name ?? '(deleted)',
+      vendorTin:      byId.get(g.vendorId)?.tin ?? null,
+      defaultAtcCode: byId.get(g.vendorId)?.defaultAtcCode ?? null,
+      billCount:      g._count.id,
+      totalTaxBase:   Number(g._sum.subtotal ?? 0),
+      totalWithheld:  Number(g._sum.whtAmount ?? 0),
+    })).sort((a, b) => b.totalWithheld - a.totalWithheld);
+  }
 }

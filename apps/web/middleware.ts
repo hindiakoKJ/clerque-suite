@@ -3,12 +3,28 @@ import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { levelValue } from '@repo/shared-types';
 
-/* ─── Route → required access ────────────────────────────────────────────── */
+/**
+ * Multi-tenant + multi-domain routing middleware.
+ *
+ * Hostname-based gating:
+ *   • console.* hostnames  → ONLY /admin/* and /login allowed.
+ *                            All tenant apps (/pos, /ledger, /payroll) are
+ *                            blocked → redirected to /admin (or /login).
+ *   • everything else      → Tenant apps allowed. /admin is BLOCKED →
+ *                            redirected to /select (so customers visiting
+ *                            clerque.hnscorpph.com never see Console).
+ *
+ * Detection: if the hostname starts with `console.` we treat it as the
+ * platform-admin entrypoint. Local dev (`localhost`, `127.0.0.1`) is
+ * treated as the tenant domain unless an explicit ?host=console query is
+ * supplied (kept simple — devs can hit /admin directly without DNS).
+ */
+
 const APP_RULES: Array<{
   prefix: string;
   app: 'POS' | 'LEDGER' | 'PAYROLL';
   minLevel: Parameters<typeof levelValue>[0];
-  clockOnlyRedirect?: string; // redirect clock-only users here instead of /select
+  clockOnlyRedirect?: string;
 }> = [
   { prefix: '/pos',     app: 'POS',     minLevel: 'OPERATOR' },
   { prefix: '/ledger',  app: 'LEDGER',  minLevel: 'READ_ONLY' },
@@ -18,33 +34,38 @@ const APP_RULES: Array<{
 const PUBLIC_PATHS = ['/', '/login', '/select'];
 
 function getToken(req: NextRequest): string | null {
-  // Tokens live in Zustand's persisted localStorage key `app-auth`.
-  // Middleware runs on the edge and cannot read localStorage, so we use
-  // a lightweight cookie mirror: on login, the client sets a `app-session`
-  // cookie containing just the access token (httpOnly=false so JS can set it).
   return req.cookies.get('app-session')?.value ?? null;
+}
+
+function isConsoleHost(hostname: string): boolean {
+  // Production: `console.hnscorpph.com` (or any `console.<anything>`)
+  // Vercel preview: `console-<branch>-<team>.vercel.app` not auto-detected
+  //   (use ?host=console query to force Console mode in previews)
+  return hostname.toLowerCase().startsWith('console.');
 }
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  const hostname = req.headers.get('host') ?? req.nextUrl.hostname;
+  const consoleMode =
+    isConsoleHost(hostname) ||
+    req.nextUrl.searchParams.get('host') === 'console';
 
-  // Always allow public paths and Next.js internals
+  // Public + Next.js internals always allowed
   if (PUBLIC_PATHS.some((p) => pathname === p) || pathname.startsWith('/_next') || pathname.startsWith('/api')) {
     return NextResponse.next();
   }
 
-  // Demo path is fully public — no auth needed.  The /demo/* routes are
-  // self-contained client-side pages that read from useDemoStore directly.
-  // They never touch the real backend.  This bypass is path-based only
-  // (NOT cookie-based) so real users with a stale demo cookie cannot use
-  // it to bypass auth on /pos, /ledger, /payroll routes.
+  // Demo path public (test-demo, sessionStorage-only)
   if (pathname.startsWith('/demo')) {
     return NextResponse.next();
   }
 
   const token = getToken(req);
 
-  // Not authenticated → redirect to login, preserving intended destination
+  // Not authenticated → login. On console subdomain, after login, super-admins
+  // land on /admin. On main domain, regular users land on /select per the
+  // existing flow.
   if (!token) {
     const loginUrl = req.nextUrl.clone();
     loginUrl.pathname = '/login';
@@ -52,7 +73,6 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Decode token (no verification — API handles that; middleware just checks access)
   let user: JwtPayload;
   try {
     user = jwtDecode<JwtPayload>(token);
@@ -62,10 +82,42 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Super admin bypasses all app checks
+  // ── Hostname-based hard gating ──────────────────────────────────────────
+  if (consoleMode) {
+    // On the console subdomain, only /admin/* is permitted.
+    if (!pathname.startsWith('/admin')) {
+      // Super-admin: silently send them to the Console dashboard.
+      // Anyone else: send to /login (they shouldn't be on this subdomain).
+      const dest = req.nextUrl.clone();
+      dest.pathname = user.isSuperAdmin ? '/admin/dashboard' : '/login';
+      dest.search = '';
+      return NextResponse.redirect(dest);
+    }
+    // /admin requires super-admin (defence-in-depth — backend also enforces).
+    if (!user.isSuperAdmin) {
+      const loginUrl = req.nextUrl.clone();
+      loginUrl.pathname = '/login';
+      loginUrl.search = '';
+      return NextResponse.redirect(loginUrl);
+    }
+    return NextResponse.next();
+  } else {
+    // On the main (tenant) domain, /admin/* is hidden — even from super-admins.
+    // Super-admins must use the console subdomain to reach Console.
+    // (We allow them to land on /select on the main domain so they can
+    //  optionally view tenant apps as themselves.)
+    if (pathname.startsWith('/admin')) {
+      const dest = req.nextUrl.clone();
+      dest.pathname = '/select';
+      dest.search = '';
+      return NextResponse.redirect(dest);
+    }
+  }
+
+  // Super admin (on tenant domain) bypasses tenant app checks too
   if (user.isSuperAdmin) return NextResponse.next();
 
-  // Check app-specific access rules
+  // Tenant app access checks
   for (const rule of APP_RULES) {
     if (!pathname.startsWith(rule.prefix)) continue;
 
@@ -75,11 +127,9 @@ export function middleware(req: NextRequest) {
     const requiredValue = levelValue(rule.minLevel);
 
     if (userValue < requiredValue) {
-      // No access at all → app selector
       return NextResponse.redirect(new URL('/select', req.url));
     }
 
-    // CLOCK_ONLY users in payroll: only allow clock, payslips, and attendance pages
     const CLOCK_ONLY_ALLOWED = ['/payroll/clock', '/payroll/payslips', '/payroll/attendance'];
     if (rule.clockOnlyRedirect && level === 'CLOCK_ONLY' && !CLOCK_ONLY_ALLOWED.some((p) => pathname.startsWith(p))) {
       return NextResponse.redirect(new URL(rule.clockOnlyRedirect, req.url));

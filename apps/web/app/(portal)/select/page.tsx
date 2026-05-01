@@ -130,6 +130,15 @@ export default function SelectPage() {
     if (!accessToken) router.replace('/login');
   }, [accessToken, router]);
 
+  // If we're on the console subdomain, super-admins go straight to /admin.
+  // (Middleware also enforces this, but routing here avoids a flash.)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.location.hostname.startsWith('console.') && user?.isSuperAdmin) {
+      router.replace('/admin');
+    }
+  }, [user, router]);
+
   useEffect(() => {
     if (onlyApp) router.replace(onlyApp.resolvedRoute);
   }, [onlyApp, router]);

@@ -143,11 +143,15 @@ async function bootstrap() {
 
   app.use(compression());
 
-  // Allow configured origins + always allow the known production domain
+  // Allow configured origins + always allow the known production domains.
+  // clerque.hnscorpph.com → tenant-facing apps (POS / Ledger / Sync).
+  // console.hnscorpph.com → platform-wide super-admin (Clerque Console).
+  // Both share the same Next.js deployment + this same backend.
   const allowedOrigins = [
     ...(process.env.ALLOWED_ORIGINS?.split(',') ?? []),
     'http://localhost:3000',
     'https://clerque.hnscorpph.com',
+    'https://console.hnscorpph.com',
   ];
   app.enableCors({ origin: allowedOrigins, credentials: true });
 

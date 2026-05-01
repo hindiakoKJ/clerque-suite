@@ -205,7 +205,10 @@ export class AuthService {
       tenantId,
       branchId,
       role:            role as JwtPayload['role'],
-      isSuperAdmin:    false,
+      // SUPER_ADMIN role unlocks the Console; treat it as platform-wide admin.
+      // (We previously hard-coded false here — that meant role=SUPER_ADMIN users
+      //  couldn't reach /admin via normal login.)
+      isSuperAdmin:    role === 'SUPER_ADMIN',
       appAccess,
       taxStatus,
       isVatRegistered: flags.isVatRegistered,

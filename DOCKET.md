@@ -110,7 +110,8 @@
 
 | Commit | What |
 |---|---|
-| (this) | **Last 2% of Ledger shipped together**: FBL1N + FBL5N drill-down endpoints (vendor/customer ledger explorers); JE approval workflow (PENDING_APPROVAL status, jeApprovalThreshold per tenant, `/journal/:id/approve` + `/reject`, SOD enforced); Period-Close Checklist (CLOCO) with 9 auto-evaluated checks + 2 manual attestations at `/ledger/periods/[id]/close`; recurring/template JEs (`JournalTemplate` model + scheduler at 4am Manila daily + `/journal-templates` CRUD); per-tenant tunable severity thresholds (`Tenant.metricsThresholds` + `/tenant/ledger-thresholds`). |
+| (this) | **Clerque Console** (4th app — internal admin) MVP. Backend: AdminModule + SuperAdminGuard, `/admin/metrics`, `/admin/tenants` (list + detail), `/admin/tenants/:id/status`/`/tier`/`/ai-override`, `/admin/failed-events`. Frontend: magenta-themed shell + Dashboard + Tenants list + Tenant detail (with status / tier / AI override controls) + Failed Events page. Bootstrap seed adds `super@clerque.test / Super1234!` as SUPER_ADMIN. Login now sets `isSuperAdmin: true` when role is SUPER_ADMIN. /select shows Console card to super-admins on top of the regular apps. Payroll moved to next-week sprint per user. |
+| 306c57d | Last 2% of Ledger shipped: FBL1N/5N + JE approval + CLOCO + recurring JEs + tunable thresholds. |
 | dbfeefe | AR Oracle-style power form — `/ledger/ar/billing/new` keyboard-first invoice posting. |
 | 9650c8e | Notification producers wired — daily 3am Manila cron creates low-stock, AR/AP overdue, and period-close-reminder notifications. The bell now actually has things in it. |
 | a9dfa08 | LED-2 Cash Flow Statement (indirect method) + LED-5 bucket-precise aging drill-down. |

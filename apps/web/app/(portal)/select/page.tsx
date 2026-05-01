@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShoppingCart, BookOpen, Users, Lock, ArrowRight } from 'lucide-react';
+import { ShoppingCart, BookOpen, Users, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import type { AccessLevel } from '@repo/shared-types';
 import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
@@ -63,6 +63,8 @@ function routeForApp(
   app: AppCard,
   level: AccessLevel | 'NONE' | undefined,
 ): string {
+  // Console (SUPER_ADMIN) → always /admin regardless of `id` shim
+  if (app.name === 'Console') return '/admin';
   if (app.id === 'payroll') {
     if (level === 'CLOCK_ONLY' || level === 'READ_ONLY') return '/payroll/clock';
     return '/payroll/dashboard';
@@ -88,9 +90,32 @@ export default function SelectPage() {
   // ── Compute accessible apps with role-aware routes (BEFORE any early
   // return — React requires hooks in stable call-order across renders).
   type AppCardWithRoute = AppCard & { resolvedRoute: string };
+
+  // SUPER_ADMIN gets a synthetic "Console" card on top of the real apps.
+  const baseApps: AppCard[] = user?.isSuperAdmin
+    ? [
+        {
+          id:          'pos' as const, // unused; routing handled by resolvedRoute
+          name:        'Console',
+          description: 'Platform-wide admin: tenants, metrics, failed events, AI overrides.',
+          Icon:        ShieldCheck,
+          accent:      'hsl(330 70% 45%)',
+          accentDark:  'hsl(330 70% 55%)',
+          route:       '/admin',
+          minLevel:    'NONE' as AccessLevel,
+        },
+        ...APPS,
+      ]
+    : APPS;
+
   const accessible: AppCardWithRoute[] = user
-    ? APPS
-        .filter((app) => hasAccess(app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL', app.minLevel))
+    ? baseApps
+        .filter((app) =>
+          // Console card always visible to super admins; others require app access
+          app.name === 'Console'
+            ? !!user.isSuperAdmin
+            : hasAccess(app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL', app.minLevel)
+        )
         .map((app) => {
           const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
           const level = user.appAccess.find((a) => a.app === code)?.level;

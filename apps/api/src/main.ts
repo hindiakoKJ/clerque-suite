@@ -77,6 +77,29 @@ async function runSeed(logger: Logger) {
       logger.log(`Seed: demo tenant already exists — skipped`, 'Bootstrap');
     }
 
+    // Super Admin — for the Clerque Console (cross-tenant ops).
+    // Created as a member of the demo tenant for convenience, but the
+    // SUPER_ADMIN role grants platform-wide access regardless of which
+    // tenant they belong to. Email is the recognisable login.
+    const superEmail = 'super@clerque.test';
+    const superExists = await prisma.user.findFirst({ where: { email: superEmail } });
+    if (!superExists) {
+      const hash = await bcrypt.hash('Super1234!', 12);
+      await prisma.user.create({
+        data: {
+          tenantId: tenant.id, branchId: null, email: superEmail,
+          passwordHash: hash, name: 'Platform Super Admin',
+          role: 'SUPER_ADMIN', isActive: true,
+          appAccess: { create: [
+            { appCode: 'POS',     level: 'FULL' },
+            { appCode: 'LEDGER',  level: 'FULL' },
+            { appCode: 'PAYROLL', level: 'FULL' },
+          ]},
+        },
+      });
+      logger.log(`Seed: created ${superEmail} (SUPER_ADMIN — Clerque Console access)`, 'Bootstrap');
+    }
+
     // Cashier
     const cashierEmail = 'cashier@demo.com';
     const cashierExists = await prisma.user.findFirst({ where: { tenantId: tenant.id, email: cashierEmail } });

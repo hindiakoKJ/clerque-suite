@@ -11,6 +11,7 @@ import {
   NotFoundException,
   InternalServerErrorException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { effectiveBranchId } from '../common/branch-scope';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -129,5 +130,43 @@ export class OrdersController {
     return this.ordersService.void(
       user.tenantId!, id, user.sub, user.role, body.reason, body.supervisorId,
     );
+  }
+
+  /**
+   * Item-level refund — refund N units of a single OrderItem.
+   * Same SOD rules as void: cashiers need supervisor PIN.
+   *
+   * Body: { quantity, reason, refundMethod, restock, supervisorId? }
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Post(':orderId/items/:itemId/refund')
+  @HttpCode(HttpStatus.OK)
+  refundItem(
+    @CurrentUser() user: JwtPayload,
+    @Param('orderId') orderId: string,
+    @Param('itemId')  itemId:  string,
+    @Body() body: {
+      quantity:      number;
+      reason:        string;
+      refundMethod:  string;
+      restock?:      boolean;
+      supervisorId?: string;
+    },
+  ) {
+    // Same SOD as void — cashier must provide supervisorId
+    const VOID_DIRECT_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD', 'SUPER_ADMIN'];
+    if (!VOID_DIRECT_ROLES.includes(user.role) && !body.supervisorId) {
+      throw new BadRequestException('Cashiers must provide a supervisorId to authorise an item refund.');
+    }
+    return this.ordersService.refundItem({
+      tenantId:     user.tenantId!,
+      orderId,
+      orderItemId:  itemId,
+      quantity:     body.quantity,
+      reason:       body.reason,
+      refundMethod: body.refundMethod,
+      restock:      body.restock ?? true,
+      refundedById: body.supervisorId ?? user.sub,
+    });
   }
 }

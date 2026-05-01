@@ -10,7 +10,25 @@ import DocumentAttachments from '@/components/shared/DocumentAttachments';
 import { Spinner } from '@/components/ui/Spinner';
 
 interface Payment { method: string; amount: number | string; reference?: string; }
-interface OrderItem { productName: string; quantity: number | string; unitPrice: number | string; lineTotal: number | string; }
+interface ItemRefund {
+  id:           string;
+  quantity:     number | string;
+  refundAmount: number | string;
+  reason:       string;
+  refundMethod: string;
+  restocked:    boolean;
+  createdAt:    string;
+  refundedBy?:  { id: string; name: string };
+}
+interface OrderItem {
+  id?:           string;
+  productName:   string;
+  quantity:      number | string;
+  unitPrice:     number | string;
+  lineTotal:     number | string;
+  refundedQty?:  number | string;
+  refunds?:      ItemRefund[];
+}
 interface Order {
   id: string;
   orderNumber: string;
@@ -49,6 +67,15 @@ export default function OrdersPage() {
   const [voidPin, setVoidPin] = useState('');
   const [voiding, setVoiding] = useState(false);
 
+  // Item-level refund state
+  const [refundCtx, setRefundCtx] = useState<{ order: Order; item: OrderItem } | null>(null);
+  const [refundQty, setRefundQty] = useState('1');
+  const [refundReason, setRefundReason] = useState('');
+  const [refundMethod, setRefundMethod] = useState('CASH');
+  const [refundRestock, setRefundRestock] = useState(true);
+  const [refundPin, setRefundPin] = useState('');
+  const [refunding, setRefunding] = useState(false);
+
   // Cashiers can INITIATE a void but a supervisor must enter their PIN.
   // Direct-void roles (Owner / Branch Manager / Sales Lead / Super Admin)
   // skip the PIN step.
@@ -73,6 +100,47 @@ export default function OrdersPage() {
       o.orderNumber.toLowerCase().includes(search.toLowerCase()) ||
       (o.createdBy?.name ?? '').toLowerCase().includes(search.toLowerCase()),
   );
+
+  async function handleRefund() {
+    if (!refundCtx) return;
+    const qty = parseFloat(refundQty);
+    if (!qty || qty <= 0) { toast.error('Enter a quantity to refund.'); return; }
+    if (!refundReason.trim()) { toast.error('Reason is required.'); return; }
+    if (needsSupervisorPin && !/^\d{4,6}$/.test(refundPin.trim())) {
+      toast.error('Supervisor PIN must be 4-6 digits.'); return;
+    }
+    setRefunding(true);
+    try {
+      let supervisorId: string | undefined;
+      if (needsSupervisorPin) {
+        try {
+          const { data } = await api.post('/auth/verify-supervisor-pin', { pin: refundPin.trim() });
+          supervisorId = data.userId;
+        } catch (e: unknown) {
+          const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+          toast.error(msg ?? 'Supervisor PIN rejected.');
+          return;
+        }
+      }
+      await api.post(`/orders/${refundCtx.order.id}/items/${refundCtx.item.id}/refund`, {
+        quantity:     qty,
+        reason:       refundReason.trim(),
+        refundMethod,
+        restock:      refundRestock,
+        supervisorId,
+      });
+      toast.success(`Refunded ${qty} of ${refundCtx.item.productName}.`);
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+      qc.invalidateQueries({ queryKey: ['products-pos'] });
+      setRefundCtx(null);
+      setRefundQty('1'); setRefundReason(''); setRefundPin(''); setRefundMethod('CASH'); setRefundRestock(true);
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Refund failed.');
+    } finally {
+      setRefunding(false);
+    }
+  }
 
   async function handleVoid() {
     if (!voidModal || !voidReason.trim()) { toast.error('Please enter a void reason.'); return; }
@@ -235,17 +303,50 @@ export default function OrdersPage() {
                                     <th className="text-right pb-1 text-muted-foreground font-medium">Qty</th>
                                     <th className="text-right pb-1 text-muted-foreground font-medium">Unit</th>
                                     <th className="text-right pb-1 text-muted-foreground font-medium">Total</th>
+                                    {canVoid && o.status === 'COMPLETED' && (
+                                      <th className="text-right pb-1 text-muted-foreground font-medium w-20"></th>
+                                    )}
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {o.items.map((item, i) => (
-                                    <tr key={i} className="border-b border-border/50">
-                                      <td className="py-1 text-foreground">{item.productName}</td>
-                                      <td className="py-1 text-right text-muted-foreground">{Number(item.quantity)}</td>
-                                      <td className="py-1 text-right text-muted-foreground">{formatPeso(Number(item.unitPrice))}</td>
-                                      <td className="py-1 text-right font-medium text-foreground">{formatPeso(Number(item.lineTotal))}</td>
-                                    </tr>
-                                  ))}
+                                  {o.items.map((item, i) => {
+                                    const refundedQty = Number(item.refundedQty ?? 0);
+                                    const remaining   = Number(item.quantity) - refundedQty;
+                                    const fullyRefunded = remaining <= 0.0001;
+                                    return (
+                                      <tr key={i} className={`border-b border-border/50 ${fullyRefunded ? 'opacity-50' : ''}`}>
+                                        <td className="py-1 text-foreground">
+                                          {item.productName}
+                                          {refundedQty > 0 && (
+                                            <span className="ml-2 text-[10px] text-amber-600">
+                                              {refundedQty} refunded
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="py-1 text-right text-muted-foreground">{Number(item.quantity)}</td>
+                                        <td className="py-1 text-right text-muted-foreground">{formatPeso(Number(item.unitPrice))}</td>
+                                        <td className="py-1 text-right font-medium text-foreground">{formatPeso(Number(item.lineTotal))}</td>
+                                        {canVoid && o.status === 'COMPLETED' && (
+                                          <td className="py-1 text-right">
+                                            {item.id && !fullyRefunded ? (
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setRefundCtx({ order: o, item });
+                                                  setRefundQty(String(Math.min(1, remaining)));
+                                                  setRefundReason('');
+                                                  setRefundPin('');
+                                                }}
+                                                className="text-[10px] text-amber-600 hover:text-amber-700 underline"
+                                              >
+                                                Refund
+                                              </button>
+                                            ) : null}
+                                          </td>
+                                        )}
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
@@ -360,6 +461,113 @@ export default function OrdersPage() {
           </div>
         </div>
       )}
+
+      {/* Item refund modal */}
+      {refundCtx && (() => {
+        const item = refundCtx.item;
+        const refundedQty = Number(item.refundedQty ?? 0);
+        const remaining = Number(item.quantity) - refundedQty;
+        const qty = parseFloat(refundQty) || 0;
+        const proRated = qty > 0 ? (qty / Number(item.quantity)) * Number(item.lineTotal) : 0;
+        return (
+          <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4">
+            <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm">
+              <div className="px-6 py-4 border-b border-border">
+                <h2 className="font-semibold text-foreground">Refund Item</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {refundCtx.order.orderNumber} · {item.productName}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Sold: {Number(item.quantity)} · Already refunded: {refundedQty} · Remaining: {remaining}
+                </p>
+              </div>
+
+              <div className="p-6 space-y-3">
+                <div className="bg-amber-500/10 border border-amber-300 rounded-xl p-3 text-xs text-amber-800">
+                  ⚠️ Refunds reverse a portion of revenue + COGS. The customer must be paid back the
+                  amount shown. Inventory restock is optional (uncheck if the item is unsellable).
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Quantity to refund *</label>
+                  <input
+                    type="number" step="0.01" min={0.01} max={remaining}
+                    value={refundQty}
+                    onChange={(e) => setRefundQty(e.target.value)}
+                    className="w-full h-10 px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    autoFocus
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Pro-rated refund amount: <strong>{formatPeso(proRated)}</strong>
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Reason *</label>
+                  <textarea
+                    value={refundReason}
+                    onChange={(e) => setRefundReason(e.target.value)}
+                    rows={2}
+                    className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none"
+                    placeholder="e.g. Customer changed mind, item damaged, wrong size…"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Refund method *</label>
+                  <select
+                    value={refundMethod}
+                    onChange={(e) => setRefundMethod(e.target.value)}
+                    className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm"
+                  >
+                    <option value="CASH">Cash</option>
+                    <option value="GCASH_PERSONAL">GCash (personal)</option>
+                    <option value="GCASH_BUSINESS">GCash (business)</option>
+                    <option value="MAYA_PERSONAL">Maya (personal)</option>
+                    <option value="MAYA_BUSINESS">Maya (business)</option>
+                    <option value="QR_PH">QR Ph / Bank Transfer</option>
+                  </select>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <input type="checkbox" checked={refundRestock} onChange={(e) => setRefundRestock(e.target.checked)} />
+                  Restock inventory (uncheck for damaged / unsellable items)
+                </label>
+
+                {needsSupervisorPin && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+                    <div className="text-xs font-medium text-amber-900">Supervisor authorisation required</div>
+                    <input
+                      type="password" inputMode="numeric" pattern="\d{4,6}" maxLength={6}
+                      autoComplete="off"
+                      value={refundPin}
+                      onChange={(e) => setRefundPin(e.target.value.replace(/\D/g, ''))}
+                      className="w-full h-11 text-center text-xl tracking-[0.5em] font-bold border border-amber-300 bg-white text-amber-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      placeholder="• • • •"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="px-6 pb-5 flex gap-3">
+                <button
+                  onClick={() => { setRefundCtx(null); setRefundQty('1'); setRefundReason(''); setRefundPin(''); }}
+                  className="flex-1 border border-border text-muted-foreground rounded-xl py-2 text-sm font-medium hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRefund}
+                  disabled={refunding || !refundReason.trim() || qty <= 0 || qty > remaining + 0.0001}
+                  className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl py-2 text-sm font-medium transition-colors"
+                >
+                  {refunding ? 'Refunding…' : 'Confirm Refund'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

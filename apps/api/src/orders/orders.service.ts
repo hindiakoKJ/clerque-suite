@@ -428,7 +428,12 @@ export class OrdersService {
     const order = await this.prisma.order.findFirst({
       where: { id, tenantId },
       include: {
-        items: { include: { modifiers: true } },
+        items: {
+          include: {
+            modifiers: true,
+            refunds: { include: { refundedBy: { select: { id: true, name: true } } }, orderBy: { createdAt: 'desc' } },
+          },
+        },
         payments: true,
         discounts: true,
         createdBy: { select: { id: true, name: true } },
@@ -437,6 +442,135 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException('Order not found');
     return order;
+  }
+
+  // ─── Item-level refund (partial void) ────────────────────────────────────
+  /**
+   * Refund N units of a single OrderItem. Validates qty ≤ remaining,
+   * increments OrderItem.refundedQty, optionally restocks inventory,
+   * creates an OrderItemRefund audit row, and queues a proportional
+   * REVERSAL accounting event so the GL reflects the give-back.
+   *
+   * Rules:
+   *  - Order must be COMPLETED (can't refund a draft / voided order)
+   *  - Quantity must be > 0 and ≤ (item.quantity - item.refundedQty)
+   *  - CASHIER triggers; SOD supervisor PIN co-auth checked at controller level
+   *    (matches the void flow)
+   */
+  async refundItem(args: {
+    tenantId:      string;
+    orderId:       string;
+    orderItemId:   string;
+    quantity:      number;
+    reason:        string;
+    refundMethod:  string;
+    restock:       boolean;
+    refundedById:  string;
+  }) {
+    const { tenantId, orderId, orderItemId, quantity, reason, refundMethod, restock, refundedById } = args;
+
+    if (quantity <= 0) throw new BadRequestException('Refund quantity must be positive.');
+    if (!reason?.trim()) throw new BadRequestException('Refund reason is required.');
+
+    return this.prisma.$transaction(async (tx) => {
+      const item = await tx.orderItem.findFirst({
+        where: { id: orderItemId, orderId, order: { tenantId } },
+        include: { order: true, product: { select: { id: true, costPrice: true, name: true } } },
+      });
+      if (!item) throw new NotFoundException('Order item not found.');
+      if (item.order.status !== 'COMPLETED') {
+        throw new BadRequestException(`Cannot refund — order is ${item.order.status}.`);
+      }
+
+      const alreadyRefunded = Number(item.refundedQty);
+      const remaining = Number(item.quantity) - alreadyRefunded;
+      if (quantity > remaining + 0.0001) {
+        throw new BadRequestException(`Only ${remaining} unit(s) remaining to refund on this line.`);
+      }
+
+      // Pro-rated refund amount: refunded qty / total qty × lineTotal (incl VAT)
+      const refundAmount = (quantity / Number(item.quantity)) * Number(item.lineTotal);
+
+      // Increment refundedQty + create audit row
+      await tx.orderItem.update({
+        where: { id: orderItemId },
+        data:  { refundedQty: new Prisma.Decimal(alreadyRefunded + quantity) },
+      });
+
+      const refundRow = await tx.orderItemRefund.create({
+        data: {
+          orderItemId,
+          quantity:     new Prisma.Decimal(quantity),
+          refundAmount: new Prisma.Decimal(refundAmount.toFixed(2)),
+          reason:       reason.trim(),
+          refundMethod: refundMethod as Prisma.OrderItemRefundCreateInput['refundMethod'],
+          restocked:    restock,
+          refundedById,
+        },
+      });
+
+      // Inventory restock — only if requested and the order had a branchId
+      if (restock && item.order.branchId) {
+        const inv = await tx.inventoryItem.findFirst({
+          where: { tenantId, branchId: item.order.branchId, productId: item.productId },
+          select: { id: true, quantity: true },
+        });
+        if (inv) {
+          const before = Number(inv.quantity);
+          const after  = before + quantity;
+          await tx.inventoryItem.update({
+            where: { id: inv.id },
+            data:  { quantity: new Prisma.Decimal(after) },
+          });
+          await tx.inventoryLog.create({
+            data: {
+              tenantId,
+              branchId:       item.order.branchId,
+              productId:      item.productId,
+              type:           InventoryLogType.STOCK_IN,
+              quantity:       new Prisma.Decimal(quantity),
+              quantityBefore: new Prisma.Decimal(before),
+              quantityAfter:  new Prisma.Decimal(after),
+              reason:         `Refund — Order ${item.order.orderNumber}`,
+              referenceId:    refundRow.id,
+              createdById:    refundedById,
+            },
+          });
+        }
+      }
+
+      // Queue a partial reversal accounting event. The journal processor
+      // posts: DR Sales (proportional) / DR Output VAT / CR Cash (or AR)
+      // and, if restock=true, DR Inventory / CR COGS proportionally.
+      await tx.accountingEvent.create({
+        data: {
+          tenantId,
+          orderId,
+          type:    'VOID', // reuses the existing reversal handler
+          status:  'PENDING',
+          payload: {
+            mode:           'ITEM_REFUND',
+            orderId,
+            orderItemId,
+            refundQty:      quantity,
+            originalQty:    Number(item.quantity),
+            refundAmount,
+            refundMethod,
+            restocked:      restock,
+            reason:         reason.trim(),
+          } as unknown as Prisma.JsonObject,
+        },
+      });
+
+      return {
+        refundId:        refundRow.id,
+        orderItemId,
+        refundAmount,
+        quantityRefunded: quantity,
+        totalRefundedQty: alreadyRefunded + quantity,
+        remainingQty:    Number(item.quantity) - (alreadyRefunded + quantity),
+      };
+    });
   }
 
   // ─── Bulk sync from offline queue ────────────────────────────────────────

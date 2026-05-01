@@ -21,7 +21,6 @@
 | ID | Item | Why deferred |
 |---|---|---|
 | **POS-1** | Cloudinary file upload for product images | Needs your Cloudinary account credentials before I can wire signed-upload endpoint |
-| **POS-3** | Item-level refund (partial void) | Today only full-order void. UI + schema for `OrderItem.refundedQty` + audit table + proportional JE reversal. ~2 hours |
 | **POS-4** | Tablet kiosk mode polish | 56px-everywhere touch sizing; primary buttons hidden-scrollbar polish |
 | **POS-5** | Customer e-receipt via email/SMS | Needs email transport — same dependency as CC-3 |
 | **CC-3** | End-user password reset flow | Needs email transport (Resend / SendGrid / AWS SES) — pick one and provide API key |
@@ -84,7 +83,8 @@
 
 | Commit | What |
 |---|---|
-| (this) | POS-2 Moving-Average Cost (WAC) — InventoryItem.avgCost + WAC recompute on costed receipts + COGS uses avgCost (fallback to product.costPrice). UI: unit-cost field on Stock Adjust modal. |
+| (this) | POS-3 Item-level refund — OrderItem.refundedQty + OrderItemRefund audit table + POST /orders/:orderId/items/:itemId/refund. UI: Refund button per line in expanded order detail; modal with qty/reason/method/restock + supervisor PIN co-auth for cashiers. Pro-rated refund amount + proportional GL reversal event. |
+| 642e889 | POS-2 Moving-Average Cost (WAC) — InventoryItem.avgCost + WAC recompute on costed receipts + COGS uses avgCost (fallback to product.costPrice). UI: unit-cost field on Stock Adjust modal. |
 | dec271e | Page-level spinners + global error boundary |
 | 5090f6f | DOCKET.md as the single worklist source of truth |
 | 93453bc | Mobile drawer Help/Settings footer |

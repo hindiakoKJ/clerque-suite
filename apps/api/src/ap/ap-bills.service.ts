@@ -298,6 +298,8 @@ export class APBillsService {
       to?:          string;
       onlyOpen?:    boolean;
       onlyOverdue?: boolean;
+      /** "1-30" | "31-60" | "61-90" | "90+" — bucket-precise aging filter */
+      dueBucket?:   '1-30' | '31-60' | '61-90' | '90+';
     },
   ) {
     const page     = opts.page     ?? 1;
@@ -314,6 +316,20 @@ export class APBillsService {
     if (opts.onlyOverdue) {
       where.status  = { in: ['OPEN', 'PARTIALLY_PAID'] };
       where.dueDate = { lt: new Date() };
+    }
+    if (opts.dueBucket) {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const day = 86_400_000;
+      const t = today.getTime();
+      let from: Date, to: Date;
+      switch (opts.dueBucket) {
+        case '1-30':  from = new Date(t - 30 * day); to = new Date(t - 1  * day); break;
+        case '31-60': from = new Date(t - 60 * day); to = new Date(t - 31 * day); break;
+        case '61-90': from = new Date(t - 90 * day); to = new Date(t - 61 * day); break;
+        case '90+':   from = new Date(0);            to = new Date(t - 91 * day); break;
+      }
+      where.status  = { in: ['OPEN', 'PARTIALLY_PAID'] };
+      where.dueDate = { gte: from, lte: to };
     }
 
     const [data, total] = await Promise.all([

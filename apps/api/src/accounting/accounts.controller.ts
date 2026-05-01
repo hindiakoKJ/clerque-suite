@@ -62,6 +62,21 @@ export class AccountsController {
   }
 
   /**
+   * Cash Flow Statement (indirect method) for a date range.
+   * Same access set as P&L — restricted to management + finance roles.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BRANCH_MANAGER', 'FINANCE_LEAD')
+  @Get('cash-flow')
+  cashFlow(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to')   to:   string,
+  ) {
+    const now = new Date().toISOString().split('T')[0];
+    return this.svc.getCashFlow(user.tenantId!, from ?? now, to ?? now);
+  }
+
+  /**
    * Account ledger drill-down (FBL3N equivalent).
    * Bookkeeper included — they review individual GL movements.
    * External Auditor included — read-only audit trail access.

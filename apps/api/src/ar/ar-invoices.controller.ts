@@ -31,6 +31,7 @@ export class ARInvoicesController {
     @Query('to')          to?:          string,
     @Query('onlyOpen')    onlyOpen?:    string,
     @Query('onlyOverdue') onlyOverdue?: string,
+    @Query('dueBucket')   dueBucket?:   string,
   ) {
     return this.svc.findAll(user.tenantId!, {
       page:        page     ? Number(page)     : undefined,
@@ -40,6 +41,9 @@ export class ARInvoicesController {
       from, to,
       onlyOpen:    onlyOpen    === 'true',
       onlyOverdue: onlyOverdue === 'true',
+      dueBucket:   (['1-30', '31-60', '61-90', '90+'] as const).includes(dueBucket as never)
+        ? (dueBucket as '1-30' | '31-60' | '61-90' | '90+')
+        : undefined,
     });
   }
 

@@ -36,6 +36,25 @@ import { AccountingPeriodsService } from '../accounting-periods/accounting-perio
 import { NumberingService } from '../numbering/numbering.service';
 import { Prisma, InvoiceStatus, type TaxStatus } from '@prisma/client';
 
+/**
+ * Convert an aging bucket string to a dueDate range relative to "today".
+ * Buckets count days PAST DUE — i.e. earlier dates fall into deeper buckets.
+ *   "1-30"  → due 1 to 30 days ago
+ *   "31-60" → due 31 to 60 days ago
+ *   "61-90" → due 61 to 90 days ago
+ *   "90+"   → due more than 90 days ago
+ */
+function bucketToDateRange(today: Date, bucket: '1-30' | '31-60' | '61-90' | '90+'): { from: Date; to: Date } {
+  const day = 86_400_000;
+  const t = today.getTime();
+  switch (bucket) {
+    case '1-30':  return { from: new Date(t - 30  * day), to: new Date(t - 1 * day) };
+    case '31-60': return { from: new Date(t - 60  * day), to: new Date(t - 31 * day) };
+    case '61-90': return { from: new Date(t - 90  * day), to: new Date(t - 61 * day) };
+    case '90+':   return { from: new Date(0),             to: new Date(t - 91 * day) };
+  }
+}
+
 interface InvoiceLineInput {
   accountId:   string;
   description?: string;
@@ -351,6 +370,8 @@ export class ARInvoicesService {
       to?:         string;     // postingDate <= to
       onlyOpen?:   boolean;    // shortcut: status in OPEN, PARTIALLY_PAID
       onlyOverdue?: boolean;   // open + dueDate < today
+      /** "1-30" | "31-60" | "61-90" | "90+" — bucket-precise aging filter */
+      dueBucket?:  '1-30' | '31-60' | '61-90' | '90+';
     },
   ) {
     const page     = opts.page     ?? 1;
@@ -365,6 +386,13 @@ export class ARInvoicesService {
     if (opts.onlyOverdue) {
       where.status   = { in: ['OPEN', 'PARTIALLY_PAID'] };
       where.dueDate  = { lt: new Date() };
+    }
+    // Bucket-precise aging: forces onlyOpen + a dueDate range matching the bucket
+    if (opts.dueBucket) {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const range = bucketToDateRange(today, opts.dueBucket);
+      where.status  = { in: ['OPEN', 'PARTIALLY_PAID'] };
+      where.dueDate = { gte: range.from, lte: range.to };
     }
 
     const [data, total] = await Promise.all([

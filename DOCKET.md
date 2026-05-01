@@ -25,8 +25,6 @@
 | **POS-5** | Customer e-receipt via email/SMS | Needs email transport — same dependency as CC-3 |
 | **CC-3** | End-user password reset flow | Needs email transport (Resend / SendGrid / AWS SES) — pick one and provide API key |
 | **CC-5** | 10-year data archival / retention | Needs storage-strategy decision (S3 cold storage? Railway volume?) — research first |
-| **LED-2** | Cash Flow Statement | Required for BIR audit. Derivable from P&L + Balance Sheet movements via indirect method |
-| **LED-5** | Bucket-precise aging drill-down | Currently overdue-only; per-bucket (e.g. "show only 60-90 days") needs `dueBucket` query param |
 | **Payroll module** | Full payroll engine + PH gov tables + payslip PDF + bank file + 2316 + employee/timesheet imports | 2-3 week dedicated sprint |
 
 ---
@@ -83,7 +81,8 @@
 
 | Commit | What |
 |---|---|
-| (this) | POS-3 Item-level refund — OrderItem.refundedQty + OrderItemRefund audit table + POST /orders/:orderId/items/:itemId/refund. UI: Refund button per line in expanded order detail; modal with qty/reason/method/restock + supervisor PIN co-auth for cashiers. Pro-rated refund amount + proportional GL reversal event. |
+| (this) | LED-2 Cash Flow Statement (indirect method) + LED-5 bucket-precise aging drill-down. Endpoints: GET /accounting/accounts/cash-flow, GET /ar/invoices and GET /ap/bills now accept `dueBucket=1-30\|31-60\|61-90\|90+`. New page /ledger/cash-flow with sectioned operating/investing/financing + reconciliation banner. Aging cards on Billing/Bills now filter precisely instead of "all overdue". |
+| 7f5073d | POS-3 Item-level refund — OrderItem.refundedQty + OrderItemRefund audit table + POST /orders/:orderId/items/:itemId/refund. UI: Refund button per line in expanded order detail; modal with qty/reason/method/restock + supervisor PIN co-auth for cashiers. Pro-rated refund amount + proportional GL reversal event. |
 | 642e889 | POS-2 Moving-Average Cost (WAC) — InventoryItem.avgCost + WAC recompute on costed receipts + COGS uses avgCost (fallback to product.costPrice). UI: unit-cost field on Stock Adjust modal. |
 | dec271e | Page-level spinners + global error boundary |
 | 5090f6f | DOCKET.md as the single worklist source of truth |

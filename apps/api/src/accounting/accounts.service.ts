@@ -692,4 +692,149 @@ export class AccountsService {
       balanced,
     };
   }
+
+  /**
+   * Cash Flow Statement (indirect method).
+   *
+   * Net Income (from P&L)
+   *   ± Working capital changes (AR, inventory, AP, accruals, etc.)
+   * = Net Cash from Operating
+   *   ± PPE / intangibles changes
+   * = Net Cash from Investing
+   *   ± Long-term debt + equity (excl. retained earnings)
+   * = Net Cash from Financing
+   *
+   * Sum all three = Net change in cash
+   * Add opening cash balance = Ending cash balance (must match BS).
+   *
+   * Account categorisation by code:
+   *   1000-1099  Cash            → starting + ending balance (excluded from sections)
+   *   1100-1299  AR              → Operating
+   *   1300-1499  Inventory       → Operating
+   *   1500-1799  Prepay/other    → Operating
+   *   1800-1899  PPE             → Investing
+   *   1900-1999  Intangibles     → Investing
+   *   2000-2099  AP              → Operating
+   *   2100-2299  Tax payables    → Operating
+   *   2300-2499  Accrued ST      → Operating
+   *   2500-2999  Long-term debt  → Financing
+   *   3000-3899  Owner equity    → Financing
+   *   3900+      Retained Earn   → already captured via Net Income (excluded)
+   *   4xxx-8xxx  P&L accounts    → already captured via Net Income (excluded)
+   */
+  async getCashFlow(tenantId: string, periodStart: string, periodEnd: string) {
+    // Get balance at start (day before periodStart) and at end
+    const startCutoff = new Date(periodStart);
+    startCutoff.setDate(startCutoff.getDate() - 1);
+    startCutoff.setHours(23, 59, 59, 999);
+    const endCutoff = new Date(periodEnd);
+    endCutoff.setHours(23, 59, 59, 999);
+
+    // Pull every account's balance at both dates (one query, fetch all journal lines for accounts)
+    const accounts = await this.prisma.account.findMany({
+      where: { tenantId, isActive: true },
+      orderBy: [{ code: 'asc' }],
+      include: {
+        journalLines: {
+          where: {
+            journalEntry: {
+              tenantId,
+              status: 'POSTED',
+              OR: [
+                { postingDate: { lte: endCutoff } },
+                { postingDate: null, date: { lte: endCutoff } },
+              ],
+            },
+          },
+          select: {
+            debit: true, credit: true,
+            journalEntry: { select: { date: true, postingDate: true } },
+          },
+        },
+      },
+    });
+
+    function balanceAsOf(acct: typeof accounts[number], cutoff: Date): number {
+      let debit = 0, credit = 0;
+      for (const l of acct.journalLines) {
+        const lineDate = l.journalEntry.postingDate ?? l.journalEntry.date;
+        if (lineDate.getTime() > cutoff.getTime()) continue;
+        debit  += Number(l.debit);
+        credit += Number(l.credit);
+      }
+      return acct.normalBalance === 'DEBIT' ? debit - credit : credit - debit;
+    }
+
+    // Get net income from P&L for the period
+    const pl = await this.getPLSummary(tenantId, periodStart, periodEnd);
+    const netIncome = pl.netIncome;
+
+    type Section = { label: string; code: string; name: string; delta: number; effectOnCash: number };
+    const operating:  Section[] = [];
+    const investing:  Section[] = [];
+    const financing:  Section[] = [];
+    let openingCash = 0;
+    let endingCash  = 0;
+
+    for (const a of accounts) {
+      const code = parseInt(a.code, 10);
+      if (isNaN(code)) continue;
+      const startBal = balanceAsOf(a, startCutoff);
+      const endBal   = balanceAsOf(a, endCutoff);
+      const delta = endBal - startBal;
+
+      // Cash accounts (1000-1099) — track separately, exclude from sections
+      if (code >= 1000 && code < 1100) {
+        openingCash += startBal;
+        endingCash  += endBal;
+        continue;
+      }
+      // P&L accounts already captured in net income — skip
+      if (code >= 4000) continue;
+      // Retained earnings — already in net income flow, skip
+      if (code >= 3900 && code < 4000) continue;
+
+      // Effect on cash:
+      //  - For ASSET accounts: an INCREASE consumes cash (negative effect)
+      //  - For LIABILITY/EQUITY accounts: an INCREASE provides cash (positive effect)
+      const effectOnCash = a.normalBalance === 'DEBIT' ? -delta : delta;
+      if (Math.abs(delta) < 0.005) continue; // skip dust
+
+      const section = { label: '', code: a.code, name: a.name, delta, effectOnCash };
+
+      if (code >= 1100 && code < 1800) {
+        operating.push({ ...section, label: 'Working capital change' });
+      } else if (code >= 1800 && code < 2000) {
+        investing.push({ ...section, label: 'PPE / Intangibles' });
+      } else if (code >= 2000 && code < 2500) {
+        operating.push({ ...section, label: 'Working capital change' });
+      } else if (code >= 2500 && code < 3000) {
+        financing.push({ ...section, label: 'Long-term debt' });
+      } else if (code >= 3000 && code < 3900) {
+        financing.push({ ...section, label: 'Owner equity' });
+      }
+    }
+
+    const operatingTotal = netIncome + operating.reduce((s, r) => s + r.effectOnCash, 0);
+    const investingTotal = investing.reduce((s, r) => s + r.effectOnCash, 0);
+    const financingTotal = financing.reduce((s, r) => s + r.effectOnCash, 0);
+    const netChange      = operatingTotal + investingTotal + financingTotal;
+    const reconciles     = Math.abs((openingCash + netChange) - endingCash) < 0.50; // ₱0.50 tolerance
+
+    return {
+      periodStart,
+      periodEnd,
+      netIncome,
+      operating,
+      operatingTotal,
+      investing,
+      investingTotal,
+      financing,
+      financingTotal,
+      netChange,
+      openingCash,
+      endingCash,
+      reconciles,
+    };
+  }
 }

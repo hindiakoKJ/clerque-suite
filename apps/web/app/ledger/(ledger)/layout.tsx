@@ -113,6 +113,7 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     makeLedgerNavItem('/ledger/trial-balance',   'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role),
     makeLedgerNavItem('/ledger/pl-statement',    'Income Statement',   BarChart3,       PERIODS_ROLES,    role),
     makeLedgerNavItem('/ledger/balance-sheet',   'Balance Sheet',      Scale,           TRIAL_BAL_ROLES,  role),
+    makeLedgerNavItem('/ledger/cash-flow',       'Cash Flow Statement', BarChart3,      PERIODS_ROLES,    role),
     makeLedgerNavItem('/ledger/bir',             'Tax Estimation',     FileText,        BIR_ROLES,        role,
       { extraCondition: isBirRegistered }),
 

@@ -3,13 +3,13 @@
 import { useState, useEffect, type ElementType } from 'react';
 import {
   Eye, EyeOff, ArrowRight,
-  ShoppingCart, BookOpen, Users, Wifi, WifiOff, Check,
+  ShoppingCart, BookOpen, Users, ShieldCheck, Wifi, WifiOff, Check,
   Sun, Moon, Lock, Hash, Delete,
 } from 'lucide-react';
 
 /* ─── Product registry ─────────────────────────────────────────────────── */
 
-export type AppProduct = 'pos' | 'ledger' | 'payroll';
+export type AppProduct = 'pos' | 'ledger' | 'payroll' | 'console';
 
 interface ProductConfig {
   name: string;
@@ -68,6 +68,21 @@ const PRODUCTS: Record<AppProduct, ProductConfig> = {
     ],
     showOffline: false,
     shadowClass: 'shadow-violet-500/20',
+  },
+  console: {
+    name: 'Console',
+    Icon: ShieldCheck,
+    accent: 'hsl(330 70% 45%)',
+    accentDark: 'hsl(330 70% 60%)',
+    heroWords: ['Platform admin.', 'Restricted access.'],
+    sub: 'Clerque Console — cross-tenant operations, metrics, and support tools. SUPER_ADMIN only.',
+    features: [
+      'Tenant management + tier overrides',
+      'Platform-wide metrics + AI cost tracking',
+      'Failed-event triage across all tenants',
+    ],
+    showOffline: false,
+    shadowClass: 'shadow-pink-500/20',
   },
 };
 

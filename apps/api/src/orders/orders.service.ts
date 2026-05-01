@@ -151,16 +151,26 @@ export class OrdersService {
       // Read current stock → compute new quantity → write back inside the
       // same interactive transaction so Postgres serialises concurrent writes
       // to the same row at the DB level.
+      // Captures the per-product avgCost (Moving-Average Cost / WAC) for the
+      // COGS event built after this loop. Falls back to item.costPrice (the
+      // snapshot from the till) when avgCost isn't set.
+      const avgCostByProduct = new Map<string, number>();
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
 
         const invItem = await tx.inventoryItem.findFirst({
           where: { tenantId, branchId: payload.branchId, productId: item.productId },
-          select: { id: true, quantity: true },
+          select: { id: true, quantity: true, avgCost: true },
         });
 
         // No inventory record, or already at zero — skip deduction and log
         if (!invItem || Number(invItem.quantity) <= 0) continue;
+
+        // Capture WAC for the COGS event (built after this loop). Falls back
+        // to the product-snapshot cost if no avgCost is set.
+        if (invItem.avgCost != null) {
+          avgCostByProduct.set(item.productId, Number(invItem.avgCost));
+        }
 
         const qtyBefore = Number(invItem.quantity);
         const qtyAfter  = Math.max(qtyBefore - soldQty, 0);
@@ -223,13 +233,21 @@ export class OrdersService {
             orderId: order.id,
             branchId: payload.branchId,
             lines: payload.items
-              .filter((i) => i.costPrice != null)
-              .map((i) => ({
-                productId: i.productId,
-                quantity: i.quantity,
-                unitCost: i.costPrice,
-                totalCost: Number(i.quantity) * Number(i.costPrice),
-              })),
+              .map((i) => {
+                // Prefer Moving-Average Cost from inventory (set on costed
+                // receipts). Fall back to the till's snapshot of costPrice.
+                const wac = avgCostByProduct.get(i.productId);
+                const unitCost = wac ?? (i.costPrice != null ? Number(i.costPrice) : null);
+                if (unitCost == null) return null;
+                return {
+                  productId:    i.productId,
+                  quantity:     i.quantity,
+                  unitCost,
+                  totalCost:    Number(i.quantity) * unitCost,
+                  costMethod:   wac != null ? 'WAC' : 'SNAPSHOT',
+                };
+              })
+              .filter((line): line is NonNullable<typeof line> => line !== null),
           } as unknown as Prisma.JsonObject,
         },
       });

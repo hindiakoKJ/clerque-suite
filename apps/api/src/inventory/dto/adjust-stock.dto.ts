@@ -42,4 +42,15 @@ export class AdjustStockDto {
   @IsString()
   @MaxLength(1000)
   note?: string;
+
+  /**
+   * Per-unit cost for this receipt. Drives Moving-Average Cost (WAC):
+   *   newAvg = (oldQty × oldAvg + receivedQty × unitCost) / (oldQty + receivedQty)
+   * Used only on positive-quantity STOCK_IN / INITIAL receipts. If omitted,
+   * we fall back to Product.costPrice — same behaviour as before WAC.
+   */
+  @ApiPropertyOptional({ example: 60.00, description: 'Unit cost (₱) for this receipt — drives WAC.' })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 4 })
+  unitCost?: number;
 }

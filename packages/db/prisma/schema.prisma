@@ -761,6 +761,11 @@ model InventoryItem {
   branchId      String
   productId     String
   quantity      Decimal  @db.Decimal(12, 4)
+  /// Moving-Average Cost (WAC). Recomputed on every positive-qty receipt
+  /// when a unitCost is supplied. Drives COGS posting at sale time, replacing
+  /// the older "snapshot of Product.costPrice" model. Null until the first
+  /// costed receipt — sales fall back to product.costPrice in that case.
+  avgCost       Decimal? @db.Decimal(12, 4)
   lowStockAlert Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

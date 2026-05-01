@@ -111,7 +111,7 @@ export class InventoryService {
   // ─── Adjust stock ─────────────────────────────────────────────────────────
 
   async adjust(tenantId: string, createdById: string, dto: AdjustStockDto) {
-    const { productId, branchId, quantity, type, reason, note } = dto;
+    const { productId, branchId, quantity, type, reason, note, unitCost } = dto;
 
     // Verify product belongs to tenant
     const product = await this.prisma.product.findFirst({
@@ -130,12 +130,31 @@ export class InventoryService {
 
       const quantityBefore = existing ? Number(existing.quantity) : 0;
       const quantityAfter = quantityBefore + quantity;
+      const oldAvgCost = existing?.avgCost ? Number(existing.avgCost) : null;
 
       if (quantityAfter < 0) {
         throw new BadRequestException(
           `Stock would go negative (current: ${quantityBefore}, adjustment: ${quantity})`,
         );
       }
+
+      // ── Moving-Average Cost recompute ──────────────────────────────────
+      // Only run on positive-qty receipts where the operator gave us a
+      // unit cost (e.g. supplier delivery). Stockouts, write-offs and
+      // adjustments don't change avgCost.
+      let newAvgCost: number | null = oldAvgCost;
+      if (quantity > 0 && unitCost != null && unitCost >= 0) {
+        if (quantityBefore <= 0 || oldAvgCost == null) {
+          // First-ever costed receipt or restocking from zero — avgCost = unitCost
+          newAvgCost = unitCost;
+        } else {
+          // Weighted average: (oldQty × oldAvg + receivedQty × receivedCost) / total
+          newAvgCost = (quantityBefore * oldAvgCost + quantity * unitCost) / quantityAfter;
+        }
+      }
+      // If quantity drops to exactly 0, reset avgCost to null so the next
+      // receipt can establish a fresh baseline (avoids carrying stale costs)
+      if (quantityAfter === 0) newAvgCost = null;
 
       const item = await tx.inventoryItem.upsert({
         where: { branchId_productId: { branchId, productId } },
@@ -144,9 +163,11 @@ export class InventoryService {
           branchId,
           productId,
           quantity: new Prisma.Decimal(quantityAfter),
+          avgCost:  newAvgCost != null ? new Prisma.Decimal(newAvgCost) : null,
         },
         update: {
           quantity: new Prisma.Decimal(quantityAfter),
+          avgCost:  newAvgCost != null ? new Prisma.Decimal(newAvgCost) : null,
         },
       });
 

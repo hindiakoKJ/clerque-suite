@@ -20,8 +20,10 @@
 
 | ID | Item | Why deferred |
 |---|---|---|
-| **POS-2** | Moving-Average Cost (WAC) for inventory | Bigger schema change — 1-2 days. Specific-cost works for stable categories; WAC matters for volatile (produce, FX-imported) |
 | **POS-1** | Cloudinary file upload for product images | Needs your Cloudinary account credentials before I can wire signed-upload endpoint |
+| **POS-3** | Item-level refund (partial void) | Today only full-order void. UI + schema for `OrderItem.refundedQty` + audit table + proportional JE reversal. ~2 hours |
+| **POS-4** | Tablet kiosk mode polish | 56px-everywhere touch sizing; primary buttons hidden-scrollbar polish |
+| **POS-5** | Customer e-receipt via email/SMS | Needs email transport — same dependency as CC-3 |
 | **CC-3** | End-user password reset flow | Needs email transport (Resend / SendGrid / AWS SES) — pick one and provide API key |
 | **CC-5** | 10-year data archival / retention | Needs storage-strategy decision (S3 cold storage? Railway volume?) — research first |
 | **LED-2** | Cash Flow Statement | Required for BIR audit. Derivable from P&L + Balance Sheet movements via indirect method |
@@ -70,13 +72,11 @@
 
 | ID | Severity | File | Issue |
 |---|---|---|---|
-| BUG 2 | High | `apps/web/app/(pos)/layout.tsx` | "Shift closed" toast fires even when EOD report fetch fails — user loses report |
-| BUG 3 | High | `apps/web/lib/pos/sync.ts` | Failed offline sync orders retry indefinitely with no max threshold |
-| BUG 4 | High | `apps/api/src/auth/auth.controller.ts` | JWT refresh uses `decode()` instead of `verify()` — signature not checked at decode |
 | BUG 5 | Medium | `apps/api/src/prisma/prisma.service.ts` | Silent DB startup failure — health endpoint returns ok regardless |
 | BUG 6 | Medium | `apps/api/src/users/users.service.ts` | Role changes don't invalidate sessions (mitigated for MDM toggle only) |
 | BUG 7 | Medium | `apps/api/src/orders/orders.controller.ts` | Missing try-catch on `GET /orders` and `GET /orders/:id` |
-| BUG 8 | Low | `apps/web/app/(pos)/orders/page.tsx` | Void missing user feedback on failure |
+
+> BUGs 2, 3, 4, 8 verified fixed in code (warning toast on EOD fetch fail, MAX_RETRIES=5 in sync, refresh uses jwt.verify, void shows toast on error). Cleaned 2026-05-02.
 
 ---
 
@@ -84,6 +84,9 @@
 
 | Commit | What |
 |---|---|
+| (this) | POS-2 Moving-Average Cost (WAC) — InventoryItem.avgCost + WAC recompute on costed receipts + COGS uses avgCost (fallback to product.costPrice). UI: unit-cost field on Stock Adjust modal. |
+| dec271e | Page-level spinners + global error boundary |
+| 5090f6f | DOCKET.md as the single worklist source of truth |
 | 93453bc | Mobile drawer Help/Settings footer |
 | f1a4ec1 | LED-1 Bank Reconciliation + CC-1 Notifications + CC-4 Tenant Export + CC-2 partial branch scoping |
 | dcedb67 | Oracle EBS R12-style AP bill posting form |

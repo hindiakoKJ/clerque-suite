@@ -34,6 +34,7 @@ export function StockAdjustModal({
 }: StockAdjustModalProps) {
   const [direction, setDirection] = useState<AdjustType>('STOCK_IN');
   const [qtyStr, setQtyStr] = useState('');
+  const [unitCostStr, setUnitCostStr] = useState('');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
@@ -49,6 +50,7 @@ export function StockAdjustModal({
     if (newQty < 0) { setError('Stock cannot go below zero.'); return; }
     setLoading(true);
     try {
+      const unitCost = parseFloat(unitCostStr);
       await api.post('/inventory/adjust', {
         productId,
         branchId,
@@ -56,6 +58,10 @@ export function StockAdjustModal({
         type: direction,
         reason,
         note: note || undefined,
+        // Only send unitCost on positive-qty receipts (STOCK_IN)
+        unitCost: direction === 'STOCK_IN' && qty > 0 && !isNaN(unitCost) && unitCost >= 0
+          ? unitCost
+          : undefined,
       });
       onSuccess();
       onClose();
@@ -71,7 +77,7 @@ export function StockAdjustModal({
 
   function handleClose() {
     if (loading) return;
-    setQtyStr(''); setReason(''); setNote(''); setError('');
+    setQtyStr(''); setUnitCostStr(''); setReason(''); setNote(''); setError('');
     onClose();
   }
 
@@ -131,6 +137,28 @@ export function StockAdjustModal({
               autoFocus
             />
           </div>
+
+          {/* Unit Cost — only for STOCK_IN, drives Moving-Average Cost */}
+          {direction === 'STOCK_IN' && (
+            <div>
+              <label className="text-xs text-muted-foreground font-medium">
+                Unit Cost (₱) <span className="text-[10px] text-muted-foreground/70">— optional, drives gross-profit accuracy</span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={unitCostStr}
+                onChange={(e) => setUnitCostStr(e.target.value)}
+                placeholder="What you paid this delivery"
+                className="mt-1 w-full h-9 rounded-lg border border-border bg-input text-foreground placeholder:text-muted-foreground px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              />
+              <p className="mt-1 text-[10px] text-muted-foreground leading-snug">
+                When set, your COGS uses Moving-Average Cost going forward — handles
+                volatile-cost items (produce, FX-imported goods) accurately.
+              </p>
+            </div>
+          )}
 
           {/* Reason */}
           <div>

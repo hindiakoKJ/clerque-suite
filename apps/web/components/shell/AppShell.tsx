@@ -289,7 +289,7 @@ export function AppShell({
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
 
-      <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName} onSignOut={onSignOut}>
+      <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName} helpHref={helpHref} onSignOut={onSignOut}>
         <NavList onItemClick={() => setMobileOpen(false)} />
       </MobileNavSheet>
     </div>

@@ -54,7 +54,40 @@
 - **POS-side PIN reset for cashiers** — cashier locked out → supervisor PIN-resets at the till
 
 ### Platform / admin
-- **Capacitor / Play Store standalone POS app** — mobile freemium tier with local SQLite
+- **Counter as a standalone Android app (Play Store)** — strategic priority,
+  not yet started.
+
+  **What user wants:** Clerque Counter as its own native Android app on
+  Google Play, operable independent of the web Suite. PWA-on-Android works
+  today via "Add to Home Screen", but a real Play Store presence is the
+  long-term target.
+
+  **Two product paths to pick from when we resume:**
+
+  *Path A — Cloud-tethered wrapper.* Capacitor wraps the existing
+  Next.js POS, same multi-tenant cloud backend, same login. Easiest
+  build (~1 week + Google review). Owner uses the same Clerque tenant
+  on web and mobile interchangeably.
+
+  *Path B — Standalone freemium with local SQLite.* A simpler product,
+  no login required, runs entirely on the device. Free tier capped at
+  N sales/month; Pro tier unlocks unlimited + cloud sync to a Clerque
+  Suite tenant if/when the operator graduates to web. Different schema
+  (no multi-tenancy), different binary, separate Play Store listing
+  ("Clerque Counter Lite" or similar). Higher-impact for the backyard
+  / sari-sari segment that doesn't need accounting.
+
+  **Estimate** *if Path A*: 1 week build + 3-7 day Google review.
+  **Estimate** *if Path B*: 2-3 weeks (separate codebase + freemium gate
+  + sync-on-upgrade flow).
+
+  **Blockers to start:**
+  1. Decision: Path A or Path B (or both as separate SKUs?)
+  2. $25 Google Play Developer account
+  3. Privacy policy hosted on a public URL
+  4. App icon + store-listing screenshots
+  5. Native plugins to wire (Bluetooth printer, camera barcode scanner,
+     local notifications)
 - **Multi-tenant SUPER_ADMIN console** — manage all tenants from one screen
 - **Customer self-service tier upgrades** — UI shows upgrade CTA; backend payment+tier-flip flow not built
 - **Granular branch-level write scoping** — beyond CC-2 read scoping; e.g. "User X can void in Branch A but not B"

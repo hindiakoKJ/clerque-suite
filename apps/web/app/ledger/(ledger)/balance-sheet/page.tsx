@@ -5,6 +5,7 @@ import { Scale, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
+import { Spinner } from '@/components/ui/Spinner';
 
 interface Row {
   id:      string;
@@ -132,7 +133,7 @@ export default function BalanceSheetPage() {
       </div>
 
       {isLoading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading…</div>
+        <Spinner size="lg" message="Computing balance sheet…" />
       ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 text-red-800 px-4 py-3 text-sm">
           Failed to load Balance Sheet.

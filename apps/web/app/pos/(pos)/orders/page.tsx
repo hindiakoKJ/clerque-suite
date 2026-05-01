@@ -7,6 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import DocumentAttachments from '@/components/shared/DocumentAttachments';
+import { Spinner } from '@/components/ui/Spinner';
 
 interface Payment { method: string; amount: number | string; reference?: string; }
 interface OrderItem { productName: string; quantity: number | string; unitPrice: number | string; lineTotal: number | string; }
@@ -138,7 +139,7 @@ export default function OrdersPage() {
       </div>
 
       {isLoading ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
+        <div className="flex-1 flex items-center justify-center"><Spinner size="lg" message="Loading orders…" /></div>
       ) : filtered.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
           <Receipt className="h-10 w-10 opacity-30" />

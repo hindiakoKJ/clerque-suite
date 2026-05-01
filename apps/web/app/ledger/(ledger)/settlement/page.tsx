@@ -8,6 +8,7 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
+import { Spinner } from '@/components/ui/Spinner';
 import { toast } from 'sonner';
 
 type SettlementStatus = 'PENDING' | 'SETTLED' | 'RECONCILED' | 'DISPUTED';
@@ -194,7 +195,7 @@ export default function SettlementPage() {
 
         {/* Batch table */}
         {isLoading ? (
-          <div className="text-center text-muted-foreground text-sm py-12">Loading…</div>
+          <Spinner size="lg" message="Loading settlement batches…" />
         ) : batches.length === 0 ? (
           <div className="text-center text-muted-foreground text-sm py-12">
             <Banknote className="h-8 w-8 mx-auto mb-2 opacity-30" />

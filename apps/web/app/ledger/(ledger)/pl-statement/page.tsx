@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { downloadAuthFile } from '@/lib/utils';
+import { Spinner } from '@/components/ui/Spinner';
 
 interface Row {
   id:      string;
@@ -147,7 +148,7 @@ export default function PLStatementPage() {
       </div>
 
       {isLoading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading…</div>
+        <Spinner size="lg" message="Computing income statement…" />
       ) : error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 text-red-800 px-4 py-3 text-sm">
           Failed to load P&amp;L. Check that the period contains posted journal entries.

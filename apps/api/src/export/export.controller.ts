@@ -7,6 +7,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ExportService } from './export.service';
+import { TenantExportService } from './tenant-export.service';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -25,7 +26,23 @@ function sendXlsx(res: Response, buffer: Buffer, filename: string) {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN')
 export class ExportController {
-  constructor(private readonly svc: ExportService) {}
+  constructor(
+    private readonly svc: ExportService,
+    private readonly tenantExport: TenantExportService,
+  ) {}
+
+  /**
+   * GET /export/tenant-all
+   * One-click "download everything I have" — Excel with one sheet per
+   * table. Owner only — sensitive enough that we don't expose it to
+   * accountants by default. Sensitive fields stripped.
+   */
+  @Get('tenant-all')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  async exportTenantAll(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const { buffer, filename } = await this.tenantExport.exportAllData(user.tenantId!);
+    sendXlsx(res, buffer, filename);
+  }
 
   /**
    * GET /export/trial-balance?asOf=YYYY-MM-DD

@@ -10,7 +10,9 @@ import {
   HttpStatus,
   NotFoundException,
   InternalServerErrorException,
+  ForbiddenException,
 } from '@nestjs/common';
+import { effectiveBranchId } from '../common/branch-scope';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -63,9 +65,13 @@ export class OrdersController {
     @Query('shiftId') shiftId?: string,
   ) {
     try {
-      return await this.ordersService.findAll(user.tenantId!, branchId, shiftId);
+      // Branch-scoped roles (CASHIER, SALES_LEAD, BRANCH_MANAGER, etc.) are
+      // forced to their own branchId — owners/accountants see whatever they ask for.
+      const scoped = effectiveBranchId(user, branchId);
+      return await this.ordersService.findAll(user.tenantId!, scoped, shiftId);
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
+      if (err instanceof ForbiddenException) throw err;
       throw new InternalServerErrorException('Failed to retrieve orders');
     }
   }

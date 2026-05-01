@@ -418,6 +418,8 @@ model Tenant {
   apBills             APBill[]
   apPayments          APPayment[]
   documentSequences   DocumentNumberSequence[]
+  notifications       Notification[]
+  bankReconciliations BankReconciliation[]
 
   @@map("tenants")
 }
@@ -555,6 +557,8 @@ model User {
   discountsAuthorized  OrderDiscount[] @relation("AuthorizedByUser")
   timeEntries          TimeEntry[]
   payslips             Payslip[]
+  notifications        Notification[]
+  bankReconciliations  BankReconciliation[]
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -1161,6 +1165,7 @@ model Account {
   journalLines   JournalLine[]
   arInvoiceLines ARInvoiceLine[]
   apBillLines    APBillLine[]
+  bankReconciliations BankReconciliation[]
 
   @@unique([tenantId, code])
   @@index([tenantId, type])
@@ -2204,4 +2209,96 @@ model ExpenseClaimSequence {
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("expense_claim_sequences")
+}
+
+/// In-app notifications for users.
+/// kind drives icon + colour; link is an optional in-app deep link
+/// ("/ledger/events" etc.) that the bell-dropdown navigates to.
+enum NotificationKind {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  tenantId  String
+  /// Null = tenant-wide broadcast (every user sees it)
+  userId    String?
+  kind      NotificationKind @default(INFO)
+  title     String
+  body      String?
+  /// Optional in-app route to navigate to on click
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId],   references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, readAt])
+  @@index([tenantId, createdAt])
+  @@map("notifications")
+}
+
+/// Bank reconciliation — match a bank statement to GL cash account entries.
+enum BankReconciliationStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+model BankReconciliation {
+  id             String                       @id @default(cuid())
+  tenantId       String
+  /// GL cash account being reconciled (1010, 1020, etc.)
+  accountId      String
+  /// Statement period
+  periodStart    DateTime
+  periodEnd      DateTime
+  /// Closing balance per the bank statement (what the bank says)
+  bankBalance    Decimal                      @db.Decimal(14, 2)
+  /// Closing balance per the GL as of periodEnd (what our books say)
+  glBalance      Decimal                      @db.Decimal(14, 2)
+  /// Sum of matched amounts; books are reconciled when this == bankBalance + adjustments
+  matchedAmount  Decimal                      @default(0) @db.Decimal(14, 2)
+  /// Free-text reconciling adjustments (outstanding checks, deposits in transit, fees)
+  notes          String?
+  status         BankReconciliationStatus     @default(IN_PROGRESS)
+  preparedById   String
+  completedAt    DateTime?
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+
+  tenant         Tenant                       @relation(fields: [tenantId],     references: [id], onDelete: Cascade)
+  account        Account                      @relation(fields: [accountId],    references: [id])
+  preparedBy     User                         @relation(fields: [preparedById], references: [id])
+  items          BankReconciliationItem[]
+
+  @@index([tenantId, accountId, periodEnd])
+  @@map("bank_reconciliations")
+}
+
+/// One line on a bank reconciliation — either a statement row, a JE line, or both (matched).
+model BankReconciliationItem {
+  id                String              @id @default(cuid())
+  reconciliationId  String
+  /// "STATEMENT" = bank statement line (usually unmatched at first)
+  /// "JE_LINE"   = our journal line for the period
+  /// "MATCHED"   = statement matched to one or more JE lines
+  itemType          String
+  /// Bank statement details (when itemType STATEMENT or MATCHED)
+  statementDate     DateTime?
+  statementDesc     String?
+  statementAmount   Decimal?            @db.Decimal(14, 2)
+  /// JE-line reference (when itemType JE_LINE or MATCHED)
+  journalLineId     String?
+  isMatched         Boolean             @default(false)
+  notes             String?
+  createdAt         DateTime            @default(now())
+
+  reconciliation BankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+
+  @@index([reconciliationId, isMatched])
+  @@map("bank_reconciliation_items")
 }

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { downloadAuthFile } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 
@@ -424,6 +425,24 @@ export default function SettingsPage() {
                 <InfoRow label="Subscription Tier" value={profile?.tier?.replace('TIER_', 'Tier ') ?? '—'} />
               </div>
             </div>
+
+            {/* Export everything (Owner only) */}
+            {isOwner && (
+              <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-foreground">Data Export</h3>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Download every record we hold for your business — products, customers, vendors, orders, journal entries,
+                  invoices, bills, audit log, etc. — as a single Excel workbook with one sheet per table. Sensitive fields
+                  (password hashes, 2FA secrets, supervisor PIN hashes) are stripped. Treat the file as confidential.
+                </p>
+                <button
+                  onClick={() => downloadAuthFile('/export/tenant-all', 'clerque-export.xlsx')}
+                  className="text-sm border border-border rounded-lg px-4 py-2 hover:bg-muted transition-colors"
+                >
+                  Download all my data (.xlsx)
+                </button>
+              </div>
+            )}
           </div>
         )}
 

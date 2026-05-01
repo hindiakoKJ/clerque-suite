@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut, Lock, HelpCircle } from 'lucide-react';
+import { NotificationBell } from './NotificationBell';
 import { cn } from '@/lib/utils';
 import { MobileNavSheet } from './MobileNavSheet';
 import { toggleTheme } from '@/components/portal/AppLoginPage';
@@ -274,6 +275,7 @@ export function AppShell({
           <div className="hidden md:block" />
           <div className="flex items-center gap-1">
             {headerRight}
+            <NotificationBell />
             <button
               onClick={toggleTheme}
               aria-label="Toggle dark mode"

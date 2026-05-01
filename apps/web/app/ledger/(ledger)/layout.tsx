@@ -99,6 +99,7 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     // ── Cash & Bank ─────────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role,
       { sectionStart: 'Cash & Bank' }),
+    makeLedgerNavItem('/ledger/bank-recon',    'Bank Reconciliation', Banknote,       PERIODS_ROLES,    role),
 
     // ── General Ledger ──────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/accounts',      'Chart of Accounts',  ListOrdered,     ACCOUNTS_ROLES,   role,

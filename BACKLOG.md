@@ -53,17 +53,13 @@ takes too much vertical space, side-cart is cramped.
 
 ## High Priority — Ledger
 
-### LED-1 · Bank Reconciliation
-**Status:** Not started. Settlement page covers digital wallet
-reconciliation but not bank-statement matching.
-**Problem:** owner can't reconcile a printed bank statement against
-posted JE lines for accounts 1010/1020. Required for monthly close.
-**Solution:** new `/ledger/bank-recon` page:
-- Upload bank statement (CSV / Excel)
-- Match each statement line to JE journal-line(s) by amount + date
-- Mark matched, flag unmatched as "outstanding deposits/checks"
-- Generate Bank Reconciliation Statement PDF
-**Estimate:** 1 day.
+### LED-1 · Bank Reconciliation ✅ SHIPPED
+Page at `/ledger/bank-recon` lets accountants pick a cash/bank GL
+account + period, see all posted JE lines, paste/upload statement
+rows, manually match each statement row to a JE line, save as draft
+or mark complete. Schema: `BankReconciliation` + `BankReconciliationItem`.
+History of past reconciliations listed at the bottom of the page.
+PDF export deferred — the data is captured and reportable from Excel.
 
 ### LED-2 · Cash Flow Statement
 **Status:** Not started.
@@ -110,29 +106,25 @@ invoices 31-60 days past due") not yet wired.
 
 ## High Priority — Cross-cutting
 
-### CC-1 · In-app Notifications (no email yet)
-**Status:** Not started.
-**Why:** owners need alerts for low-stock, overdue invoices,
-period-close reminders, SOD violations, expense approvals. Email is the
-common channel; in-app is the MVP.
-**Solution:**
-- Schema: `Notification { id, tenantId, userId, type, payload, readAt, createdAt }`
-- API: `GET /notifications` (paginated, with unread count), `PATCH /:id/read`
-- Frontend: bell icon in AppShell header, dropdown on click, redirect to
-  source on item click
-- Producers: low-stock check (cron), AR/AP aging cron, period-close
-  reminder cron, SOD-override audit hook
-**Estimate:** 1 day.
+### CC-1 · In-app Notifications (no email yet) ✅ SHIPPED
+Schema `Notification { tenantId, userId?, kind, title, body, link, readAt }`
+plus full API (`GET /notifications`, `/count`, `PATCH /:id/read`,
+`/read-all`). Bell icon with unread badge in every app's header,
+dropdown lists last 20, click marks read + navigates to deep link.
+Polls `/count` every 60 seconds. Producers (cron jobs for low-stock /
+AR/AP overdue / period-close reminders) are stubs — wire as needed.
 
-### CC-2 · Multi-branch User Scoping
-**Status:** Not started. All staff are tenant-wide.
-**Problem:** for multi-branch tenants (Tier 4+), Owner wants
-`Cashier-A` to only sell at Branch 1, not Branch 2.
-**Solution:** add `User.branchId` (already exists) into the auth chain:
-- JWT carries `allowedBranchIds: string[]` (one or more)
-- Middleware blocks `/pos?branch=X` if `X` not in list
-- POS page reads from `allowedBranchIds[0]` if user has only one
-**Estimate:** 1 day.
+### CC-2 · Multi-branch User Scoping ⚠️ PARTIAL
+Helper `effectiveBranchId(user, requestedBranchId)` in
+`apps/api/src/common/branch-scope.ts` — branch-scoped roles (CASHIER,
+SALES_LEAD, BRANCH_MANAGER, MDM, WAREHOUSE_STAFF, GENERAL_EMPLOYEE)
+get auto-forced to their own `User.branchId`; cross-branch query
+attempts → 403. Owner-tier roles (BUSINESS_OWNER, SUPER_ADMIN,
+ACCOUNTANT, FINANCE_LEAD, EXTERNAL_AUDITOR) bypass.
+
+Wired into: `GET /orders`. **Still to wire:** `/inventory`, `/products`
+listing, `/reports/daily`, `/reports/shift`. Each uses its own service
+method — propagation is a small sweep but spread across files.
 
 ### CC-3 · End-user Password Reset
 **Status:** Only admin reset works today.
@@ -143,16 +135,18 @@ common channel; in-app is the MVP.
 - `/reset-password?token=…` page consumes token + new password
 **Estimate:** half day. Requires email transport (Resend / SendGrid).
 
-### CC-4 · Tenant Data Export (one-click backup)
-**Status:** Not started.
-**Problem:** owner can't pull a complete data dump for backup or
-audit handover.
-**Solution:** `POST /tenant/export` runs a job that:
-- Streams every table (orders, products, invoices, bills, journal
-  entries, accounts, users, etc.) into a single zipped Excel workbook
-- Returns a signed download URL valid for 24h
-- Job runs in BullMQ background (large tenants > 100k rows)
-**Estimate:** 1 day.
+### CC-4 · Tenant Data Export ✅ SHIPPED
+`GET /export/tenant-all` (Owner only) returns a single .xlsx with one
+sheet per table — Tenant, Branches, Users, AppAccess, Customers,
+Vendors, Categories, Products, Inventory, RawMaterials, ProductBOM,
+Orders, OrderItems, OrderPayments, Accounts, JournalEntries,
+JournalLines, AccountingPeriods, ARInvoices, ARInvoiceLines,
+ARPayments, APBills, APBillLines, APPayments, ExpenseClaims,
+ExpenseClaimItems, Settlements, AuditLog, AccountingEvents. Sensitive
+fields stripped (passwordHash, refreshTokenHash, twoFactorSecret,
+supervisorPinHash, passwordResetToken). Synchronous (fast for MSME);
+async/BullMQ deferred until first 100k+ row tenant. Button on Settings
+→ Profile tab → "Download all my data".
 
 ### CC-5 · 10-year Data Retention / Archival
 **Status:** Not started.

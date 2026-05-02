@@ -278,6 +278,11 @@ export class OrdersService {
       });
 
       return order;
+    }, {
+      // BOM deduction iterates N items × M ingredients with individual DB round-trips
+      // to Railway Postgres. Default 5s timeout is too short — raise to 30s.
+      maxWait: 10_000,
+      timeout: 30_000,
     });
   }
 

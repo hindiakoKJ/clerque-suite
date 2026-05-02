@@ -555,10 +555,19 @@ export class AdminService {
 
     const scenario = DEMO_SCENARIOS[scenarioKey];
 
-    // ── 1. Wipe existing POS + event data ─────────────────────────────────
-    // Order matters: events → orders (cascade: items, payments) → inventory → products → categories
+    // ── 1. Wipe existing POS + accounting data ────────────────────────────
+    // FK dependency order (most-dependent first):
+    //   JournalLine   → JournalEntry (cascade)
+    //   JournalEntry  → AccountingEvent (Restrict — must delete JE first)
+    //   AccountingEvent → Order (Restrict — must delete event first)
+    //   Order         → OrderItem / OrderPayment (cascade)
+    //   InventoryLog  → Product (Restrict — delete before product)
+    //   InventoryItem → Product (Restrict — delete before product)
+    //   Product       → Category (Restrict — delete before category)
+
+    await this.prisma.journalEntry.deleteMany({ where: { tenantId } }); // cascades JournalLines
     await this.prisma.accountingEvent.deleteMany({ where: { tenantId } });
-    await this.prisma.order.deleteMany({ where: { tenantId } });
+    await this.prisma.order.deleteMany({ where: { tenantId } });        // cascades items, payments, discounts
     await this.prisma.inventoryLog.deleteMany({ where: { tenantId } });
     await this.prisma.inventoryItem.deleteMany({ where: { tenantId } });
     await this.prisma.product.deleteMany({ where: { tenantId } });

@@ -20,11 +20,26 @@ export interface DemoCategory {
   products:  DemoProduct[];
 }
 
+export interface DemoRawMaterial {
+  name:      string;
+  unit:      string;   // 'g', 'ml', 'pc', 'kg', etc.
+  costPrice: number;   // per unit cost
+  stockQty:  number;   // demo starting quantity
+}
+
+export interface DemoBomItem {
+  productName:      string;  // must match DemoProduct.name
+  rawMaterialName:  string;  // must match DemoRawMaterial.name
+  quantity:         number;  // amount consumed per 1 unit sold
+}
+
 export interface DemoScenario {
   label:        string;
   businessType: 'FNB' | 'RETAIL' | 'SERVICE' | 'MFG';
   taxStatus:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
   categories:   DemoCategory[];
+  rawMaterials?: DemoRawMaterial[];
+  bomItems?:     DemoBomItem[];
 }
 
 export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
@@ -77,6 +92,58 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
           { name: 'French Fries',      description: 'Crispy shoestring fries with aioli', price: 135, costPrice: 40, isVatable: true },
         ],
       },
+    ],
+
+    rawMaterials: [
+      { name: 'Espresso Beans',      unit: 'g',   costPrice: 2.50, stockQty: 5000  },
+      { name: 'Fresh Milk',          unit: 'ml',  costPrice: 0.12, stockQty: 20000 },
+      { name: 'Oat Milk',            unit: 'ml',  costPrice: 0.35, stockQty: 10000 },
+      { name: 'Matcha Powder',       unit: 'g',   costPrice: 3.50, stockQty: 1000  },
+      { name: 'Chocolate Syrup',     unit: 'ml',  costPrice: 0.25, stockQty: 5000  },
+      { name: 'Caramel Syrup',       unit: 'ml',  costPrice: 0.22, stockQty: 5000  },
+      { name: 'Cup 12oz (hot)',       unit: 'pc',  costPrice: 4.00, stockQty: 500   },
+      { name: 'Cup 16oz (cold)',      unit: 'pc',  costPrice: 5.50, stockQty: 500   },
+    ],
+
+    bomItems: [
+      // ─── Hot Drinks ────────────────────────────────────────────────────────
+      { productName: 'Americano',     rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Americano',     rawMaterialName: 'Cup 12oz (hot)',   quantity: 1   },
+      { productName: 'Latte',         rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Latte',         rawMaterialName: 'Fresh Milk',      quantity: 150 },
+      { productName: 'Latte',         rawMaterialName: 'Cup 12oz (hot)',   quantity: 1   },
+      { productName: 'Cappuccino',    rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Cappuccino',    rawMaterialName: 'Fresh Milk',      quantity: 100 },
+      { productName: 'Cappuccino',    rawMaterialName: 'Cup 12oz (hot)',   quantity: 1   },
+      { productName: 'Mocha',         rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Mocha',         rawMaterialName: 'Fresh Milk',      quantity: 120 },
+      { productName: 'Mocha',         rawMaterialName: 'Chocolate Syrup', quantity: 20  },
+      { productName: 'Mocha',         rawMaterialName: 'Cup 12oz (hot)',   quantity: 1   },
+      { productName: 'Flat White',    rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Flat White',    rawMaterialName: 'Fresh Milk',      quantity: 130 },
+      { productName: 'Flat White',    rawMaterialName: 'Cup 12oz (hot)',   quantity: 1   },
+      { productName: 'Hot Chocolate', rawMaterialName: 'Chocolate Syrup', quantity: 30  },
+      { productName: 'Hot Chocolate', rawMaterialName: 'Fresh Milk',      quantity: 180 },
+      { productName: 'Hot Chocolate', rawMaterialName: 'Cup 12oz (hot)',   quantity: 1   },
+      { productName: 'Matcha Latte',  rawMaterialName: 'Matcha Powder',   quantity: 5   },
+      { productName: 'Matcha Latte',  rawMaterialName: 'Fresh Milk',      quantity: 150 },
+      { productName: 'Matcha Latte',  rawMaterialName: 'Cup 12oz (hot)',   quantity: 1   },
+      // ─── Cold Drinks ───────────────────────────────────────────────────────
+      { productName: 'Iced Americano',     rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Iced Americano',     rawMaterialName: 'Cup 16oz (cold)',  quantity: 1   },
+      { productName: 'Iced Latte',         rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Iced Latte',         rawMaterialName: 'Fresh Milk',      quantity: 150 },
+      { productName: 'Iced Latte',         rawMaterialName: 'Cup 16oz (cold)',  quantity: 1   },
+      { productName: 'Caramel Frappe',     rawMaterialName: 'Espresso Beans',  quantity: 18  },
+      { productName: 'Caramel Frappe',     rawMaterialName: 'Fresh Milk',      quantity: 200 },
+      { productName: 'Caramel Frappe',     rawMaterialName: 'Caramel Syrup',   quantity: 20  },
+      { productName: 'Caramel Frappe',     rawMaterialName: 'Cup 16oz (cold)',  quantity: 1   },
+      { productName: 'Matcha Frappe',      rawMaterialName: 'Matcha Powder',   quantity: 5   },
+      { productName: 'Matcha Frappe',      rawMaterialName: 'Oat Milk',        quantity: 200 },
+      { productName: 'Matcha Frappe',      rawMaterialName: 'Cup 16oz (cold)',  quantity: 1   },
+      { productName: 'Mango Smoothie',     rawMaterialName: 'Fresh Milk',      quantity: 150 },
+      { productName: 'Mango Smoothie',     rawMaterialName: 'Cup 16oz (cold)',  quantity: 1   },
+      { productName: 'Strawberry Lemonade',rawMaterialName: 'Cup 16oz (cold)',  quantity: 1   },
     ],
   },
 

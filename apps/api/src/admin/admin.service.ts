@@ -579,8 +579,11 @@ export class AdminService {
     await this.prisma.order.deleteMany({ where: { tenantId } });        // cascades items, payments, discounts
     await this.prisma.inventoryLog.deleteMany({ where: { tenantId } });
     await this.prisma.inventoryItem.deleteMany({ where: { tenantId } });
-    await this.prisma.product.deleteMany({ where: { tenantId } });
+    await this.prisma.product.deleteMany({ where: { tenantId } });      // cascades BomItems (onDelete: Cascade)
     await this.prisma.category.deleteMany({ where: { tenantId } });
+    // Raw materials: BomItems already gone (cascaded above) so RawMaterial delete is safe.
+    // RawMaterialInventory cascades from RawMaterial so it auto-deletes.
+    await this.prisma.rawMaterial.deleteMany({ where: { tenantId } });
 
     // ── 2. Update tenant profile to match scenario ─────────────────────────
     await this.prisma.tenant.update({
@@ -631,7 +634,46 @@ export class AdminService {
       }
     }
 
-    // ── 4. Generate realistic historical orders (last 7 days) ─────────────
+    // ── 4. Seed raw materials + BOM (F&B scenarios only) ──────────────────
+    const rawMaterialMap = new Map<string, string>(); // name → id
+
+    if (scenario.rawMaterials?.length) {
+      for (const rm of scenario.rawMaterials) {
+        const rawMaterial = await this.prisma.rawMaterial.create({
+          data: {
+            tenantId,
+            name:      rm.name,
+            unit:      rm.unit,
+            costPrice: rm.costPrice,
+            isActive:  true,
+          },
+        });
+        rawMaterialMap.set(rm.name, rawMaterial.id);
+
+        // Seed starting inventory for this ingredient
+        await this.prisma.rawMaterialInventory.create({
+          data: {
+            tenantId,
+            branchId,
+            rawMaterialId: rawMaterial.id,
+            quantity:      rm.stockQty,
+          },
+        });
+      }
+    }
+
+    if (scenario.bomItems?.length) {
+      for (const bom of scenario.bomItems) {
+        const productId     = productMap.get(bom.productName)?.id;
+        const rawMaterialId = rawMaterialMap.get(bom.rawMaterialName);
+        if (!productId || !rawMaterialId) continue;
+        await this.prisma.bomItem.create({
+          data: { productId, rawMaterialId, quantity: bom.quantity },
+        });
+      }
+    }
+
+    // ── 5. Generate realistic historical orders (last 7 days) ─────────────
     const catalog     = allProducts(scenario);
     const orderCount  = 20;
     const isVat       = scenario.taxStatus === 'VAT';

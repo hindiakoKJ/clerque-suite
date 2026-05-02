@@ -196,6 +196,31 @@ export class OrdersService {
         });
       }
 
+      // ── Raw material ingredient deduction via BOM ────────────────────────
+      // For every sold item, look up its bill-of-materials and deduct the
+      // corresponding raw material inventory at the branch level.
+      for (const item of payload.items) {
+        const soldQty = Number(item.quantity);
+        const bomItems = await tx.bomItem.findMany({
+          where:  { productId: item.productId },
+          select: { rawMaterialId: true, quantity: true },
+        });
+
+        for (const bom of bomItems) {
+          const consumeQty = Number(bom.quantity) * soldQty;
+          const rmInv = await tx.rawMaterialInventory.findUnique({
+            where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
+          });
+          if (!rmInv) continue;
+          const before = Number(rmInv.quantity);
+          const after  = Math.max(before - consumeQty, 0);
+          await tx.rawMaterialInventory.update({
+            where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
+            data:  { quantity: new Prisma.Decimal(after) },
+          });
+        }
+      }
+
       // Queue AccountingEvents
       await tx.accountingEvent.create({
         data: {

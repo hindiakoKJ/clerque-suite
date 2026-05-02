@@ -35,7 +35,8 @@ export interface DemoBomItem {
 
 export interface DemoScenario {
   label:        string;
-  businessType: 'FNB' | 'RETAIL' | 'SERVICE' | 'MFG';
+  /** Must match the BusinessType enum in schema.prisma exactly. */
+  businessType: 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
   taxStatus:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
   categories:   DemoCategory[];
   rawMaterials?: DemoRawMaterial[];
@@ -46,7 +47,7 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
 
   COFFEE_SHOP: {
     label: 'Coffee Shop (Brew & Co.)',
-    businessType: 'FNB',
+    businessType: 'COFFEE_SHOP',
     taxStatus: 'VAT',
     categories: [
       {
@@ -149,7 +150,7 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
 
   BAKERY: {
     label: 'Bakery (La Panaderia)',
-    businessType: 'FNB',
+    businessType: 'BAKERY',
     taxStatus: 'NON_VAT',
     categories: [
       {
@@ -204,7 +205,7 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
 
   SARI_SARI: {
     label: 'Sari-Sari Store (Corner Mart)',
-    businessType: 'RETAIL',
+    businessType: 'RETAIL',  // RETAIL is a valid BusinessType enum value
     taxStatus: 'UNREGISTERED',
     categories: [
       {
@@ -263,7 +264,7 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
 
   RESTAURANT: {
     label: 'Filipino Restaurant (Casa de Manila)',
-    businessType: 'FNB',
+    businessType: 'RESTAURANT',
     taxStatus: 'VAT',
     categories: [
       {
@@ -328,7 +329,7 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
 
   BOUTIQUE: {
     label: 'Fashion Boutique (Luxe MNL)',
-    businessType: 'RETAIL',
+    businessType: 'RETAIL',  // RETAIL is a valid BusinessType enum value
     taxStatus: 'VAT',
     categories: [
       {

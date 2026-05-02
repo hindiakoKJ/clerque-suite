@@ -49,7 +49,22 @@ interface TenantUser {
 
 const STATUS_OPTIONS  = ['ACTIVE', 'GRACE', 'SUSPENDED'] as const;
 const TIER_OPTIONS    = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'] as const;
-const BIZ_TYPES       = ['FNB', 'RETAIL', 'SERVICE', 'MFG'] as const;
+// BusinessType must exactly match the Prisma enum values in schema.prisma
+const BIZ_TYPES = [
+  'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING',
+  'RETAIL', 'SERVICE', 'MANUFACTURING',
+] as const;
+const BIZ_LABEL: Record<string, string> = {
+  COFFEE_SHOP:   'Coffee Shop / Café',
+  RESTAURANT:    'Restaurant',
+  BAKERY:        'Bakery / Pastry',
+  FOOD_STALL:    'Food Stall / Carinderia',
+  BAR_LOUNGE:    'Bar / Lounge',
+  CATERING:      'Catering',
+  RETAIL:        'Retail',
+  SERVICE:       'Service',
+  MANUFACTURING: 'Manufacturing',
+};
 const TAX_STATUSES    = ['VAT', 'NON_VAT', 'UNREGISTERED'] as const;
 const ROLES = [
   'BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER', 'SALES_LEAD',
@@ -59,11 +74,11 @@ const ROLES = [
 ] as const;
 
 const DEMO_SCENARIOS = [
-  { key: 'COFFEE_SHOP', label: 'Coffee Shop (Brew & Co.)',           biz: 'FNB',    tax: 'VAT'          },
-  { key: 'BAKERY',      label: 'Bakery (La Panaderia)',              biz: 'FNB',    tax: 'NON_VAT'       },
-  { key: 'SARI_SARI',   label: 'Sari-Sari Store (Corner Mart)',      biz: 'RETAIL', tax: 'UNREGISTERED'  },
-  { key: 'RESTAURANT',  label: 'Filipino Restaurant (Casa de Manila)', biz: 'FNB',  tax: 'VAT'          },
-  { key: 'BOUTIQUE',    label: 'Fashion Boutique (Luxe MNL)',         biz: 'RETAIL', tax: 'VAT'          },
+  { key: 'COFFEE_SHOP', label: 'Coffee Shop (Brew & Co.)',            biz: 'F&B',    tax: 'VAT'         },
+  { key: 'BAKERY',      label: 'Bakery (La Panaderia)',               biz: 'F&B',    tax: 'NON_VAT'     },
+  { key: 'SARI_SARI',   label: 'Sari-Sari Store (Corner Mart)',       biz: 'Retail', tax: 'UNREGISTERED' },
+  { key: 'RESTAURANT',  label: 'Filipino Restaurant (Casa de Manila)', biz: 'F&B',   tax: 'VAT'         },
+  { key: 'BOUTIQUE',    label: 'Fashion Boutique (Luxe MNL)',          biz: 'Retail', tax: 'VAT'         },
 ] as const;
 
 const STATUS_BADGE: Record<string, string> = {
@@ -170,7 +185,7 @@ function EditProfileModal({ tenant, onClose, onSaved }: {
               <label className="block text-xs text-muted-foreground mb-1">Business Type</label>
               <select value={form.businessType} onChange={(e) => set('businessType', e.target.value)}
                 className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm">
-                {BIZ_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+                {BIZ_TYPES.map((b) => <option key={b} value={b}>{BIZ_LABEL[b] ?? b}</option>)}
               </select>
             </div>
             <div>

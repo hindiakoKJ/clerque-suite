@@ -40,7 +40,8 @@ export interface AddUserDto {
 export interface UpdateTenantProfileDto {
   name?:           string;
   businessName?:   string | null;
-  businessType?:   'FNB' | 'RETAIL' | 'SERVICE' | 'MFG';
+  /** Must match the BusinessType enum in schema.prisma exactly. */
+  businessType?:   'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
   taxStatus?:      'VAT' | 'NON_VAT' | 'UNREGISTERED';
   tinNumber?:      string | null;
   isBirRegistered?: boolean;

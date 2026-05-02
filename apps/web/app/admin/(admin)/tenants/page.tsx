@@ -27,7 +27,7 @@ const STATUS_BADGE: Record<string, string> = {
   SUSPENDED: 'bg-red-100 text-red-700',
 };
 
-const BUSINESS_TYPES = ['RETAIL', 'FNB', 'SERVICE', 'MFG'] as const;
+const BUSINESS_TYPES = ['COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'RETAIL', 'SERVICE', 'MANUFACTURING'] as const;
 const TIERS = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'] as const;
 const ROLES = [
   'BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER', 'SALES_LEAD',

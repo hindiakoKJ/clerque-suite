@@ -11,9 +11,9 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
-import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_APP_ACCESS } from '@repo/shared-types';
+import { DEMO_SCENARIOS, ScenarioKey, allProducts } from './demo-scenarios';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +35,19 @@ export interface AddUserDto {
   email:   string;
   role:    string;
   pinCode?: string;
+}
+
+export interface UpdateTenantProfileDto {
+  name?:           string;
+  businessName?:   string | null;
+  businessType?:   'FNB' | 'RETAIL' | 'SERVICE' | 'MFG';
+  taxStatus?:      'VAT' | 'NON_VAT' | 'UNREGISTERED';
+  tinNumber?:      string | null;
+  isBirRegistered?: boolean;
+  contactEmail?:   string | null;
+  contactPhone?:   string | null;
+  address?:        string | null;
+  isDemoTenant?:   boolean;
 }
 
 @Injectable()
@@ -198,8 +211,10 @@ export class AdminService {
         data: {
           name:         dto.name.trim(),
           slug,
-          businessType: dto.businessType,
-          tier:         dto.tier,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          businessType: dto.businessType as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tier:         dto.tier as any,
           contactEmail: dto.contactEmail?.trim() ?? dto.ownerEmail.trim(),
           contactPhone: dto.contactPhone?.trim() ?? null,
           status:       'ACTIVE',
@@ -224,8 +239,10 @@ export class AdminService {
           isActive:     true,
           appAccess: {
             create: appAccess.map((a: { app: string; level: string }) => ({
-              appCode: a.app,
-              level:   a.level,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              appCode: a.app as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              level:   a.level as any,
             })),
           },
         },
@@ -307,24 +324,26 @@ export class AdminService {
 
     const generatedPassword = this.generatePassword();
     const passwordHash = await bcrypt.hash(generatedPassword, 12);
-    const pinHash = dto.pinCode ? await bcrypt.hash(dto.pinCode, 10) : null;
+    const supervisorPinHash = dto.pinCode ? await bcrypt.hash(dto.pinCode, 10) : null;
 
     const appAccess = DEFAULT_APP_ACCESS[dto.role as keyof typeof DEFAULT_APP_ACCESS] ?? [];
 
     const user = await this.prisma.user.create({
       data: {
         tenantId,
-        branchId:    t.branches[0]?.id ?? null,
-        name:        dto.name.trim(),
-        email:       dto.email.toLowerCase().trim(),
+        branchId:         t.branches[0]?.id ?? null,
+        name:             dto.name.trim(),
+        email:            dto.email.toLowerCase().trim(),
         passwordHash,
-        pinHash,
+        supervisorPinHash,
         role:        dto.role as Prisma.UserCreateInput['role'],
         isActive:    true,
         appAccess: {
           create: appAccess.map((a: { app: string; level: string }) => ({
-            appCode: a.app,
-            level:   a.level,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            appCode: a.app as any,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            level:   a.level as any,
           })),
         },
       },
@@ -477,6 +496,238 @@ export class AdminService {
     });
     await this.logAction({ actor, tenantId, tenantSlug: t.slug, action: 'AI_OVERRIDE_SET', detail: { quotaOverride, addonType } });
     return t;
+  }
+
+  // ─── Tenant profile update ───────────────────────────────────────────────
+
+  async updateTenantProfile(tenantId: string, dto: UpdateTenantProfileDto, actor: ConsoleActor) {
+    const t = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { id: true, slug: true },
+    });
+    if (!t) throw new NotFoundException('Tenant not found.');
+
+    const data: Prisma.TenantUpdateInput = {};
+    if (dto.name          !== undefined) data.name          = dto.name?.trim() || undefined;
+    if (dto.businessName  !== undefined) data.businessName  = dto.businessName?.trim() ?? null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (dto.businessType  !== undefined) data.businessType  = dto.businessType as any;
+    if (dto.taxStatus     !== undefined) data.taxStatus     = dto.taxStatus as Prisma.TenantUpdateInput['taxStatus'];
+    if (dto.tinNumber     !== undefined) data.tinNumber     = dto.tinNumber?.trim() ?? null;
+    if (dto.isBirRegistered !== undefined) data.isBirRegistered = dto.isBirRegistered;
+    if (dto.contactEmail  !== undefined) data.contactEmail  = dto.contactEmail?.trim() ?? null;
+    if (dto.contactPhone  !== undefined) data.contactPhone  = dto.contactPhone?.trim() ?? null;
+    if (dto.address       !== undefined) data.address       = dto.address?.trim() ?? null;
+    if (dto.isDemoTenant  !== undefined) data.isDemoTenant  = dto.isDemoTenant;
+
+    const updated = await this.prisma.tenant.update({
+      where:  { id: tenantId },
+      data,
+      select: { id: true, slug: true, name: true, businessType: true, taxStatus: true },
+    });
+
+    await this.logAction({
+      actor,
+      tenantId,
+      tenantSlug: t.slug,
+      action:  'PROFILE_UPDATED',
+      detail:  { fields: Object.keys(dto) },
+    });
+
+    return updated;
+  }
+
+  // ─── Demo data reset ──────────────────────────────────────────────────────
+
+  async resetDemoData(tenantId: string, scenarioKey: ScenarioKey, actor: ConsoleActor) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: {
+        id: true, slug: true,
+        branches: { take: 1, orderBy: { createdAt: 'asc' }, select: { id: true } },
+        users:    { take: 1, orderBy: { createdAt: 'asc' }, select: { id: true } },
+      },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+
+    const branchId = tenant.branches[0]?.id;
+    if (!branchId) throw new BadRequestException('Tenant has no branch — cannot seed demo data.');
+
+    const scenario = DEMO_SCENARIOS[scenarioKey];
+
+    // ── 1. Wipe existing POS + event data ─────────────────────────────────
+    // Order matters: events → orders (cascade: items, payments) → inventory → products → categories
+    await this.prisma.accountingEvent.deleteMany({ where: { tenantId } });
+    await this.prisma.order.deleteMany({ where: { tenantId } });
+    await this.prisma.inventoryLog.deleteMany({ where: { tenantId } });
+    await this.prisma.inventoryItem.deleteMany({ where: { tenantId } });
+    await this.prisma.product.deleteMany({ where: { tenantId } });
+    await this.prisma.category.deleteMany({ where: { tenantId } });
+
+    // ── 2. Update tenant profile to match scenario ─────────────────────────
+    await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        businessType: scenario.businessType as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        taxStatus:    scenario.taxStatus as any,
+        isDemoTenant: true,
+      },
+    });
+
+    // ── 3. Seed categories + products ─────────────────────────────────────
+    const productMap = new Map<string, { id: string; price: number; isVatable: boolean }>();
+
+    for (const cat of scenario.categories) {
+      const category = await this.prisma.category.create({
+        data: { tenantId, name: cat.name, sortOrder: cat.sortOrder, isActive: true },
+      });
+
+      for (const prod of cat.products) {
+        const product = await this.prisma.product.create({
+          data: {
+            tenantId,
+            categoryId:  category.id,
+            name:        prod.name,
+            description: prod.description,
+            price:       prod.price,
+            costPrice:   prod.costPrice ?? null,
+            isVatable:   prod.isVatable,
+            isActive:    true,
+          },
+        });
+
+        productMap.set(prod.name, { id: product.id, price: prod.price, isVatable: prod.isVatable });
+
+        // Seed generous demo stock
+        await this.prisma.inventoryItem.create({
+          data: {
+            tenantId,
+            branchId,
+            productId:     product.id,
+            quantity:      100,
+            lowStockAlert: 10,
+          },
+        });
+      }
+    }
+
+    // ── 4. Generate realistic historical orders (last 7 days) ─────────────
+    const catalog     = allProducts(scenario);
+    const orderCount  = 20;
+    const isVat       = scenario.taxStatus === 'VAT';
+    const VAT_DIVISOR = 1.12;
+
+    for (let i = 0; i < orderCount; i++) {
+      const daysAgo  = Math.floor(Math.random() * 7);
+      // Spread throughout a business day (08:00–21:00 = 13 hr window)
+      const secOffset = daysAgo * 86400 + Math.floor(Math.random() * 46800) + 28800;
+      const orderDate = new Date(Date.now() - secOffset * 1000);
+
+      const itemCount  = Math.floor(Math.random() * 3) + 1;
+      const pickedItems: Array<{ name: string; price: number; isVatable: boolean; qty: number }> = [];
+
+      for (let j = 0; j < itemCount; j++) {
+        const p   = catalog[Math.floor(Math.random() * catalog.length)];
+        const qty = Math.floor(Math.random() * 3) + 1;
+        pickedItems.push({ name: p.name, price: p.price, isVatable: p.isVatable, qty });
+      }
+
+      let subtotal = 0;
+      const lineItems: Array<{
+        productId:     string;
+        productName:   string;
+        unitPrice:     number;
+        quantity:      number;
+        lineTotal:     number;
+        isVatable:     boolean;
+        vatAmount:     number;
+        discountAmount: number;
+        taxType:       'VAT_12' | 'VAT_EXEMPT';
+      }> = [];
+
+      for (const item of pickedItems) {
+        const info = productMap.get(item.name);
+        if (!info) continue;
+
+        const lineTotal = item.price * item.qty;
+        subtotal += lineTotal;
+        const lineVat = isVat && item.isVatable
+          ? Math.round((lineTotal / VAT_DIVISOR) * 0.12 * 100) / 100
+          : 0;
+
+        lineItems.push({
+          productId:     info.id,
+          productName:   item.name,
+          unitPrice:     item.price,
+          quantity:      item.qty,
+          lineTotal,
+          isVatable:     item.isVatable,
+          vatAmount:     lineVat,
+          discountAmount: 0,
+          taxType:       (isVat && item.isVatable) ? 'VAT_12' : 'VAT_EXEMPT',
+        });
+      }
+
+      if (lineItems.length === 0) continue;
+
+      const vatAmount = lineItems.reduce((s, l) => s + l.vatAmount, 0);
+      const orderNumber = `DEMO-${String(i + 1).padStart(4, '0')}`;
+
+      await this.prisma.order.create({
+        data: {
+          tenantId,
+          branchId,
+          orderNumber,
+          status:        'COMPLETED',
+          subtotal,
+          discountAmount: 0,
+          vatAmount,
+          totalAmount:   subtotal,
+          completedAt:   orderDate,
+          createdAt:     orderDate,
+          taxType:       isVat ? 'VAT_12' : 'VAT_EXEMPT',
+          items: {
+            create: lineItems.map((l) => ({
+              productId:     l.productId,
+              productName:   l.productName,
+              unitPrice:     l.unitPrice,
+              quantity:      l.quantity,
+              lineTotal:     l.lineTotal,
+              discountAmount: l.discountAmount,
+              vatAmount:     l.vatAmount,
+              isVatable:     l.isVatable,
+              taxType:       l.taxType,
+            })),
+          },
+          payments: {
+            create: [{ method: 'CASH', amount: subtotal }],
+          },
+        },
+      });
+    }
+
+    await this.logAction({
+      actor,
+      tenantId,
+      tenantSlug: tenant.slug,
+      action:  'DEMO_RESET',
+      detail:  {
+        scenario:        scenarioKey,
+        label:           scenario.label,
+        ordersGenerated: orderCount,
+        productsSeeded:  catalog.length,
+      },
+    });
+
+    return {
+      scenario:        scenario.label,
+      businessType:    scenario.businessType,
+      taxStatus:       scenario.taxStatus,
+      productsSeeded:  catalog.length,
+      ordersGenerated: orderCount,
+    };
   }
 
   // ─── Failed events ────────────────────────────────────────────────────────

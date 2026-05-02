@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Building2, Users, Plus, RotateCcw, LogOut,
   ShieldOff, ShieldCheck, Eye, EyeOff, X, AlertTriangle,
-  CheckCircle, Clock, Copy,
+  CheckCircle, Clock, Copy, Pencil, FlaskConical, RefreshCw,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -47,13 +47,23 @@ interface TenantUser {
   createdAt:      string;
 }
 
-const STATUS_OPTIONS = ['ACTIVE', 'GRACE', 'SUSPENDED'] as const;
-const TIER_OPTIONS   = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'] as const;
+const STATUS_OPTIONS  = ['ACTIVE', 'GRACE', 'SUSPENDED'] as const;
+const TIER_OPTIONS    = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'] as const;
+const BIZ_TYPES       = ['FNB', 'RETAIL', 'SERVICE', 'MFG'] as const;
+const TAX_STATUSES    = ['VAT', 'NON_VAT', 'UNREGISTERED'] as const;
 const ROLES = [
   'BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER', 'SALES_LEAD',
   'BOOKKEEPER', 'ACCOUNTANT', 'FINANCE_LEAD', 'PAYROLL_MASTER',
   'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE', 'EXTERNAL_AUDITOR',
   'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
+] as const;
+
+const DEMO_SCENARIOS = [
+  { key: 'COFFEE_SHOP', label: 'Coffee Shop (Brew & Co.)',           biz: 'FNB',    tax: 'VAT'          },
+  { key: 'BAKERY',      label: 'Bakery (La Panaderia)',              biz: 'FNB',    tax: 'NON_VAT'       },
+  { key: 'SARI_SARI',   label: 'Sari-Sari Store (Corner Mart)',      biz: 'RETAIL', tax: 'UNREGISTERED'  },
+  { key: 'RESTAURANT',  label: 'Filipino Restaurant (Casa de Manila)', biz: 'FNB',  tax: 'VAT'          },
+  { key: 'BOUTIQUE',    label: 'Fashion Boutique (Luxe MNL)',         biz: 'RETAIL', tax: 'VAT'          },
 ] as const;
 
 const STATUS_BADGE: Record<string, string> = {
@@ -87,6 +97,227 @@ function timeAgo(iso: string | null) {
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`;
   const days = Math.floor(ms / 86_400_000);
   return days <= 30 ? `${days}d ago` : `${Math.floor(days / 30)}mo ago`;
+}
+
+// ─── Edit Profile Modal ──────────────────────────────────────────────────────
+
+function EditProfileModal({ tenant, onClose, onSaved }: {
+  tenant: TenantDetail;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+    name:           tenant.name,
+    businessName:   tenant.businessName ?? '',
+    businessType:   tenant.businessType,
+    taxStatus:      tenant.taxStatus,
+    tinNumber:      tenant.tinNumber ?? '',
+    isBirRegistered: tenant.isBirRegistered,
+    contactEmail:   tenant.contactEmail ?? '',
+    contactPhone:   tenant.contactPhone ?? '',
+    address:        tenant.address ?? '',
+    isDemoTenant:   tenant.isDemoTenant,
+  });
+  const [busy, setBusy] = useState(false);
+  const set = (k: string, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }));
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api.patch(`/admin/tenants/${tenant.id}/profile`, {
+        name:           form.name.trim() || undefined,
+        businessName:   form.businessName.trim() || null,
+        businessType:   form.businessType,
+        taxStatus:      form.taxStatus,
+        tinNumber:      form.tinNumber.trim() || null,
+        isBirRegistered: form.isBirRegistered,
+        contactEmail:   form.contactEmail.trim() || null,
+        contactPhone:   form.contactPhone.trim() || null,
+        address:        form.address.trim() || null,
+        isDemoTenant:   form.isDemoTenant,
+      });
+      toast.success('Tenant profile updated.');
+      onSaved();
+      onClose();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg ?? 'Failed to update profile.');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto">
+      <div className="bg-background rounded-xl border border-border shadow-xl w-full max-w-lg my-4">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <h2 className="font-semibold text-sm">Edit Tenant Profile</h2>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <form onSubmit={submit} className="p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Business Name (Display)</label>
+              <input value={form.name} onChange={(e) => set('name', e.target.value)}
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Registered Business Name</label>
+              <input value={form.businessName} onChange={(e) => set('businessName', e.target.value)}
+                placeholder="For BIR receipts"
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Business Type</label>
+              <select value={form.businessType} onChange={(e) => set('businessType', e.target.value)}
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm">
+                {BIZ_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Tax Status</label>
+              <select value={form.taxStatus} onChange={(e) => set('taxStatus', e.target.value)}
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm">
+                {TAX_STATUSES.map((t) => <option key={t} value={t}>{t.replace('_', '-')}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">TIN</label>
+              <input value={form.tinNumber} onChange={(e) => set('tinNumber', e.target.value)}
+                placeholder="000-000-000-000"
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm font-mono" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Contact Email</label>
+              <input type="email" value={form.contactEmail} onChange={(e) => set('contactEmail', e.target.value)}
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Contact Phone</label>
+              <input value={form.contactPhone} onChange={(e) => set('contactPhone', e.target.value)}
+                placeholder="+63 9xx xxx xxxx"
+                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">Address</label>
+            <input value={form.address} onChange={(e) => set('address', e.target.value)}
+              placeholder="Street, City, Province"
+              className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm" />
+          </div>
+          {/* Toggles */}
+          <div className="flex flex-wrap items-center gap-4 pt-1">
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+              <input type="checkbox" checked={form.isBirRegistered}
+                onChange={(e) => set('isBirRegistered', e.target.checked)}
+                className="w-3.5 h-3.5 rounded" />
+              BIR Registered
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+              <input type="checkbox" checked={form.isDemoTenant}
+                onChange={(e) => set('isDemoTenant', e.target.checked)}
+                className="w-3.5 h-3.5 rounded" />
+              Demo Tenant
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-2 border-t border-border">
+            <button type="button" onClick={onClose}
+              className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted">Cancel</button>
+            <button type="submit" disabled={busy}
+              className="h-9 px-4 rounded-md text-sm font-medium text-white disabled:opacity-50"
+              style={{ background: 'var(--accent)' }}>
+              {busy ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Demo Reset Modal ────────────────────────────────────────────────────────
+
+function DemoResetModal({ tenantId, onClose, onDone }: {
+  tenantId: string;
+  onClose:  () => void;
+  onDone:   (result: { scenario: string; productsSeeded: number; ordersGenerated: number }) => void;
+}) {
+  const [scenario, setScenario] = useState<string>(DEMO_SCENARIOS[0].key);
+  const [busy, setBusy] = useState(false);
+  const picked = DEMO_SCENARIOS.find((s) => s.key === scenario)!;
+
+  async function confirm() {
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/admin/tenants/${tenantId}/reset-demo`, { scenario });
+      onDone(data);
+      onClose();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg ?? 'Demo reset failed.');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-background rounded-xl border border-border shadow-xl w-full max-w-md">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <h2 className="font-semibold text-sm flex items-center gap-2">
+            <FlaskConical className="w-4 h-4 text-fuchsia-500" />
+            Reset Demo Data
+          </h2>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="p-4 space-y-4">
+          {/* Destructive warning */}
+          <div className="rounded-lg border border-red-300/60 bg-red-50 dark:bg-red-950/30 p-3 text-xs text-red-700 dark:text-red-400 space-y-1">
+            <p className="font-semibold">⚠ Destructive — this cannot be undone.</p>
+            <p>All existing orders, products, categories, and inventory will be wiped and replaced with fresh demo data for the selected business type.</p>
+          </div>
+
+          {/* Scenario picker */}
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1.5">Choose a business scenario</label>
+            <div className="space-y-2">
+              {DEMO_SCENARIOS.map((s) => (
+                <label key={s.key}
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors
+                    ${scenario === s.key
+                      ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                      : 'border-border hover:bg-muted/40'}`}>
+                  <input type="radio" name="scenario" value={s.key}
+                    checked={scenario === s.key} onChange={() => setScenario(s.key)}
+                    className="mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{s.label}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      {s.biz} · {s.tax.replace('_', '-')}
+                    </p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="text-xs text-muted-foreground bg-muted/40 rounded-md p-2.5 space-y-0.5">
+            <p>✓ Categories &amp; products seeded from real PH market prices</p>
+            <p>✓ 20 historical orders spread across the last 7 days</p>
+            <p>✓ Tenant businessType → <strong>{picked.biz}</strong> · taxStatus → <strong>{picked.tax.replace('_', '-')}</strong></p>
+            <p>✓ Tenant flagged as Demo Tenant</p>
+          </div>
+
+          <div className="flex justify-end gap-2 border-t border-border pt-3">
+            <button onClick={onClose}
+              className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted">Cancel</button>
+            <button onClick={confirm} disabled={busy}
+              className="h-9 px-4 rounded-md text-sm font-medium text-white disabled:opacity-50 flex items-center gap-1.5"
+              style={{ background: 'hsl(300 65% 45%)' }}>
+              {busy ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Resetting…</> : '🔄 Reset Demo Data'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Add User Modal ──────────────────────────────────────────────────────────
@@ -283,12 +514,14 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
   const router = useRouter();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const [showAddUser, setShowAddUser] = useState(false);
+  const [showAddUser,    setShowAddUser]    = useState(false);
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showDemoReset,  setShowDemoReset]  = useState(false);
   const [pwModal, setPwModal] = useState<{ password: string; email: string } | null>(null);
 
   const isSuper = !!(user?.isSuperAdmin || user?.role === 'SUPER_ADMIN');
 
-  const { data: tenant, isLoading: tenantLoading } = useQuery<TenantDetail>({
+  const { data: tenant, isLoading: tenantLoading, refetch: refetchTenant } = useQuery<TenantDetail>({
     queryKey: ['admin-tenant-detail', id],
     queryFn:  () => api.get(`/admin/tenants/${id}`).then((r) => r.data),
     enabled:  isSuper,
@@ -302,24 +535,29 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
 
   if (tenantLoading || !tenant) return <Spinner size="lg" message="Loading tenant…" />;
 
+  function invalidateTenant() {
+    qc.invalidateQueries({ queryKey: ['admin-tenant-detail', id] });
+    qc.invalidateQueries({ queryKey: ['admin-tenants'] });
+  }
+
   async function patchTenant(path: string, body: object, label: string) {
     setBusy(true);
     try {
       await api.patch(`/admin/tenants/${id}/${path}`, body);
       toast.success(`${label} updated.`);
-      qc.invalidateQueries({ queryKey: ['admin-tenant-detail', id] });
-      qc.invalidateQueries({ queryKey: ['admin-tenants'] });
+      invalidateTenant();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
       toast.error(msg ?? `Failed to update ${label}`);
     } finally { setBusy(false); }
   }
 
-  const lockedCount = users?.filter((u) => u.isLocked).length ?? 0;
+  const lockedCount   = users?.filter((u) => u.isLocked).length ?? 0;
   const inactiveCount = users?.filter((u) => !u.isActive).length ?? 0;
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
+      {/* Modals */}
       {showAddUser && (
         <AddUserModal tenantId={id} onClose={() => setShowAddUser(false)}
           onCreated={(r) => {
@@ -331,6 +569,24 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
           }} />
       )}
       {pwModal && <PasswordModal password={pwModal.password} email={pwModal.email} onClose={() => setPwModal(null)} />}
+      {showEditProfile && (
+        <EditProfileModal
+          tenant={tenant}
+          onClose={() => setShowEditProfile(false)}
+          onSaved={() => { invalidateTenant(); refetchTenant(); }}
+        />
+      )}
+      {showDemoReset && (
+        <DemoResetModal
+          tenantId={id}
+          onClose={() => setShowDemoReset(false)}
+          onDone={(result) => {
+            toast.success(`Demo reset done — ${result.productsSeeded} products + ${result.ordersGenerated} orders seeded for ${result.scenario}.`);
+            invalidateTenant();
+            refetchTenant();
+          }}
+        />
+      )}
 
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
@@ -373,12 +629,19 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
 
         {/* Tenant Profile */}
         <div className="lg:col-span-2 rounded-lg border border-border bg-background p-4">
-          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Tenant Profile</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tenant Profile</h2>
+            <button
+              onClick={() => setShowEditProfile(true)}
+              className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-border text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition">
+              <Pencil className="w-3 h-3" /> Edit
+            </button>
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
             <Field label="Business Name"  value={tenant.businessName ?? tenant.name} />
             <Field label="Company Code"   value={tenant.slug} mono />
             <Field label="Business Type"  value={tenant.businessType} />
-            <Field label="Tax Status"     value={tenant.taxStatus} />
+            <Field label="Tax Status"     value={tenant.taxStatus.replace('_', '-')} />
             <Field label="BIR Registered" value={tenant.isBirRegistered ? 'Yes' : 'No'} />
             <Field label="TIN"            value={tenant.tinNumber ?? '—'} mono />
             <Field label="Contact Email"  value={tenant.contactEmail ?? '—'} />
@@ -432,6 +695,23 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
               disabled={busy}
               className="w-full h-8 px-2 rounded-md border border-border bg-background text-xs" />
             <p className="text-[10px] text-muted-foreground mt-1">0 = kill switch · blank = tier default</p>
+          </div>
+
+          {/* Demo Data Reset */}
+          <div className="rounded-lg border border-fuchsia-200/60 bg-fuchsia-50/40 dark:bg-fuchsia-950/20 p-4">
+            <div className="flex items-center gap-1.5 mb-1">
+              <FlaskConical className="w-3.5 h-3.5 text-fuchsia-600" />
+              <h2 className="text-xs font-semibold text-fuchsia-700 dark:text-fuchsia-400 uppercase tracking-wider">Demo Data</h2>
+            </div>
+            <p className="text-[11px] text-muted-foreground mb-3">
+              Wipe and reseed with realistic PH MSME data for any business type. Use for demos and client presentations.
+            </p>
+            <button
+              onClick={() => setShowDemoReset(true)}
+              className="w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border border-fuchsia-300/60 text-fuchsia-700 dark:text-fuchsia-400 hover:bg-fuchsia-100 dark:hover:bg-fuchsia-900/30 transition">
+              <RefreshCw className="w-3 h-3" />
+              Reset Demo Data…
+            </button>
           </div>
         </div>
       </div>

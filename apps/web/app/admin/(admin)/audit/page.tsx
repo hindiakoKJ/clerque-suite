@@ -29,6 +29,8 @@ const ACTION_BADGE: Record<string, string> = {
   TIER_CHANGED:    'bg-violet-100 text-violet-700',
   STATUS_CHANGED:  'bg-pink-100 text-pink-700',
   AI_OVERRIDE_SET: 'bg-indigo-100 text-indigo-700',
+  PROFILE_UPDATED: 'bg-sky-100 text-sky-700',
+  DEMO_RESET:      'bg-fuchsia-100 text-fuchsia-700',
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -42,6 +44,8 @@ const ACTION_LABEL: Record<string, string> = {
   TIER_CHANGED:    'Tier Changed',
   STATUS_CHANGED:  'Status Changed',
   AI_OVERRIDE_SET: 'AI Override Set',
+  PROFILE_UPDATED: 'Profile Updated',
+  DEMO_RESET:      'Demo Reset',
 };
 
 const PAGE_SIZE = 50;

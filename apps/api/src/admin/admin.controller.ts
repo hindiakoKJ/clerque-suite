@@ -5,7 +5,8 @@ import {
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SuperAdminGuard } from './admin.guard';
-import { AdminService, CreateTenantDto, AddUserDto } from './admin.service';
+import { AdminService, CreateTenantDto, AddUserDto, UpdateTenantProfileDto } from './admin.service';
+import type { ScenarioKey } from './demo-scenarios';
 import type { JwtPayload } from '@repo/shared-types';
 
 /** Extract the super-admin actor from the JWT for ConsoleLog. */
@@ -79,6 +80,26 @@ export class AdminController {
     @Body() body: { quotaOverride: number | null; addonType: string | null },
   ) {
     return this.svc.setAiOverride(id, body.quotaOverride, body.addonType, actor(req));
+  }
+
+  @Patch('tenants/:id/profile')
+  @HttpCode(HttpStatus.OK)
+  updateProfile(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+    @Body() dto: UpdateTenantProfileDto,
+  ) {
+    return this.svc.updateTenantProfile(id, dto, actor(req));
+  }
+
+  @Post('tenants/:id/reset-demo')
+  @HttpCode(HttpStatus.OK)
+  resetDemo(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+    @Body() body: { scenario: ScenarioKey },
+  ) {
+    return this.svc.resetDemoData(id, body.scenario, actor(req));
   }
 
   // ─── Tenant users ─────────────────────────────────────────────────────────

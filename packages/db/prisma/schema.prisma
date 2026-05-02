@@ -496,6 +496,8 @@ enum ConsoleAction {
   TIER_CHANGED
   STATUS_CHANGED
   AI_OVERRIDE_SET
+  PROFILE_UPDATED
+  DEMO_RESET
 }
 
 /// Immutable audit trail of every action taken in the Clerque Console.

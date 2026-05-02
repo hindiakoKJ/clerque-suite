@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3 } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -99,7 +99,7 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     // ── Cash & Bank ─────────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role,
       { sectionStart: 'Cash & Bank' }),
-    makeLedgerNavItem('/ledger/bank-recon',    'Bank Reconciliation', Banknote,       PERIODS_ROLES,    role),
+    makeLedgerNavItem('/ledger/bank-recon',    'Bank Reconciliation', Landmark,       PERIODS_ROLES,    role),
 
     // ── General Ledger ──────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/accounts',      'Chart of Accounts',  ListOrdered,     ACCOUNTS_ROLES,   role,

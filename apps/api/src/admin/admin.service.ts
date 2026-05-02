@@ -22,7 +22,7 @@ type ConsoleActor = { email: string };
 export interface CreateTenantDto {
   name:          string;
   slug:          string;
-  businessType:  'FNB' | 'RETAIL' | 'SERVICE' | 'MFG';
+  businessType:  'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
   tier:          'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5' | 'TIER_6';
   ownerName:     string;
   ownerEmail:    string;

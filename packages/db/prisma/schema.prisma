@@ -764,10 +764,13 @@ model RawMaterial {
   name        String
   /// Unit of measure for this ingredient (g, ml, pc, kg, etc.)
   unit        String   @default("g")
-  costPrice   Decimal? @db.Decimal(12, 4)
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  costPrice     Decimal? @db.Decimal(12, 4)
+  /// Minimum stock level — system flags the ingredient as low when any branch
+  /// falls below this quantity (same unit as the ingredient itself).
+  lowStockAlert Decimal? @db.Decimal(12, 4)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   tenant           Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   bomItems         BomItem[]

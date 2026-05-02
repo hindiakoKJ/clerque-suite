@@ -264,15 +264,26 @@ export class InventoryService {
 
   // ─── Raw Materials (F&B ingredient library) ───────────────────────────────
 
-  async listRawMaterials(tenantId: string, includeInactive = false) {
+  async listRawMaterials(tenantId: string, includeInactive = false, branchId?: string) {
     const items = await this.prisma.rawMaterial.findMany({
       where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
       orderBy: { name: 'asc' },
+      include: branchId
+        ? { inventory: { where: { branchId }, select: { quantity: true } } }
+        : false,
     });
-    return items.map((m) => ({
-      ...m,
-      costPrice: m.costPrice != null ? Number(m.costPrice) : null,
-    }));
+    return items.map((m) => {
+      const invRow   = 'inventory' in m && Array.isArray(m.inventory) ? m.inventory[0] : undefined;
+      const stockQty = invRow != null ? Number(invRow.quantity) : null;
+      const alert    = m.lowStockAlert != null ? Number(m.lowStockAlert) : null;
+      return {
+        ...m,
+        costPrice:     m.costPrice     != null ? Number(m.costPrice)     : null,
+        lowStockAlert: alert,
+        stockQty,
+        isLowStock: stockQty != null && alert != null && stockQty <= alert,
+      };
+    });
   }
 
   async createRawMaterial(tenantId: string, dto: CreateRawMaterialDto) {
@@ -287,20 +298,28 @@ export class InventoryService {
     return { ...item, costPrice: item.costPrice != null ? Number(item.costPrice) : null };
   }
 
-  async updateRawMaterial(tenantId: string, id: string, dto: Partial<CreateRawMaterialDto> & { isActive?: boolean }) {
+  async updateRawMaterial(tenantId: string, id: string, dto: Partial<CreateRawMaterialDto> & { isActive?: boolean; lowStockAlert?: number | null }) {
     const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Raw material not found');
 
     const updated = await this.prisma.rawMaterial.update({
       where: { id },
       data: {
-        ...(dto.name != null ? { name: dto.name } : {}),
-        ...(dto.unit != null ? { unit: dto.unit } : {}),
-        ...(dto.costPrice != null ? { costPrice: new Prisma.Decimal(dto.costPrice) } : {}),
-        ...(dto.isActive != null ? { isActive: dto.isActive } : {}),
+        ...(dto.name          != null ? { name:          dto.name }                              : {}),
+        ...(dto.unit          != null ? { unit:          dto.unit }                              : {}),
+        ...(dto.costPrice     != null ? { costPrice:     new Prisma.Decimal(dto.costPrice) }     : {}),
+        ...(dto.isActive      != null ? { isActive:      dto.isActive }                          : {}),
+        // null explicitly clears the alert; undefined means "not provided — leave alone"
+        ...(dto.lowStockAlert !== undefined
+          ? { lowStockAlert: dto.lowStockAlert != null ? new Prisma.Decimal(dto.lowStockAlert) : null }
+          : {}),
       },
     });
-    return { ...updated, costPrice: updated.costPrice != null ? Number(updated.costPrice) : null };
+    return {
+      ...updated,
+      costPrice:     updated.costPrice     != null ? Number(updated.costPrice)     : null,
+      lowStockAlert: updated.lowStockAlert != null ? Number(updated.lowStockAlert) : null,
+    };
   }
 
   /** Add incoming stock for a raw material (supplier delivery). Applies WAC cost update. */

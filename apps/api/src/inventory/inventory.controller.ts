@@ -94,8 +94,12 @@ export class InventoryController {
   listRawMaterials(
     @CurrentUser() user: JwtPayload,
     @Query('includeInactive') includeInactive?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.inventoryService.listRawMaterials(user.tenantId!, includeInactive === 'true');
+    // Prefer explicit branchId query param; fall back to the user's own branch.
+    // This lets the Inventory page pass the currently-selected branch.
+    const branch = branchId ?? user.branchId ?? undefined;
+    return this.inventoryService.listRawMaterials(user.tenantId!, includeInactive === 'true', branch);
   }
 
   /** Raw material stock levels for a branch */

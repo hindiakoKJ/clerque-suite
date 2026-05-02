@@ -46,8 +46,11 @@ interface RawMaterial {
   id: string;
   name: string;
   unit: string;
-  costPrice: number | null;
-  isActive: boolean;
+  costPrice:     number | null;
+  lowStockAlert: number | null;
+  stockQty:      number | null;  // current stock at the selected branch
+  isLowStock:    boolean;
+  isActive:      boolean;
 }
 
 interface Branch { id: string; name: string; }
@@ -75,15 +78,17 @@ export default function InventoryPage() {
   const [filterLow, setFilterLow] = useState(false);
   const [page, setPage] = useState(1);
   const [adjustTarget, setAdjustTarget] = useState<InventoryRow | null>(null);
-  const [editThreshold, setEditThreshold] = useState<{ id: string; value: string } | null>(null);
-  const [savingThreshold, setSavingThreshold] = useState(false);
+  const [editThreshold,    setEditThreshold]    = useState<{ id: string; value: string } | null>(null);
+  const [savingThreshold,  setSavingThreshold]  = useState(false);
+  const [editMatThreshold, setEditMatThreshold] = useState<{ id: string; value: string } | null>(null);
+  const [savingMatThreshold, setSavingMatThreshold] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showSetupPack, setShowSetupPack] = useState(false);
 
   // ── Ingredient state ───────────────────────────────────────────────────────
   const [matModal, setMatModal] = useState<'create' | 'edit' | 'receive' | null>(null);
   const [editingMat, setEditingMat] = useState<RawMaterial | null>(null);
-  const [matForm, setMatForm] = useState({ name: '', unit: 'g', costPrice: '' });
+  const [matForm, setMatForm] = useState({ name: '', unit: 'g', costPrice: '', lowStockAlert: '' });
   const [receiveForm, setReceiveForm] = useState({ branchId: '', quantity: '', costPrice: '', note: '' });
   const [matSaving, setMatSaving] = useState(false);
 
@@ -111,10 +116,11 @@ export default function InventoryPage() {
   });
 
   const { data: rawMaterials = [], isLoading: matsLoading } = useQuery<RawMaterial[]>({
-    queryKey: ['raw-materials'],
-    queryFn: () => api.get('/inventory/raw-materials').then((r) => r.data),
-    enabled: isFnb && activeTab === 'ingredients',
-    staleTime: 60_000,
+    queryKey: ['raw-materials', branchId],
+    queryFn: () =>
+      api.get('/inventory/raw-materials', { params: { branchId } }).then((r) => r.data),
+    enabled: isFnb && activeTab === 'ingredients' && !!branchId,
+    staleTime: 30_000,
   });
 
   const { data: branches = [] } = useQuery<Branch[]>({
@@ -154,16 +160,36 @@ export default function InventoryPage() {
     }
   }
 
+  async function saveMatThreshold(mat: RawMaterial, rawValue: string) {
+    const val = rawValue.trim() === '' ? null : parseFloat(rawValue);
+    if (val !== null && (isNaN(val) || val < 0)) return;
+    setSavingMatThreshold(true);
+    try {
+      await api.patch(`/inventory/raw-materials/${mat.id}`, { lowStockAlert: val });
+      qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
+    } catch {
+      toast.error('Failed to save alert threshold.');
+    } finally {
+      setSavingMatThreshold(false);
+      setEditMatThreshold(null);
+    }
+  }
+
   // ── Ingredient CRUD ────────────────────────────────────────────────────────
 
   function openCreateMat() {
-    setMatForm({ name: '', unit: 'g', costPrice: '' });
+    setMatForm({ name: '', unit: 'g', costPrice: '', lowStockAlert: '' });
     setEditingMat(null);
     setMatModal('create');
   }
 
   function openEditMat(m: RawMaterial) {
-    setMatForm({ name: m.name, unit: m.unit, costPrice: m.costPrice != null ? String(m.costPrice) : '' });
+    setMatForm({
+      name:          m.name,
+      unit:          m.unit,
+      costPrice:     m.costPrice     != null ? String(m.costPrice)     : '',
+      lowStockAlert: m.lowStockAlert != null ? String(m.lowStockAlert) : '',
+    });
     setEditingMat(m);
     setMatModal('edit');
   }
@@ -180,9 +206,10 @@ export default function InventoryPage() {
     setMatSaving(true);
     try {
       const payload = {
-        name: matForm.name.trim(),
-        unit: matForm.unit.trim(),
-        costPrice: matForm.costPrice ? parseFloat(matForm.costPrice) : undefined,
+        name:          matForm.name.trim(),
+        unit:          matForm.unit.trim(),
+        costPrice:     matForm.costPrice     ? parseFloat(matForm.costPrice)     : undefined,
+        lowStockAlert: matForm.lowStockAlert ? parseFloat(matForm.lowStockAlert) : null,
       };
       if (matModal === 'create') {
         await api.post('/inventory/raw-materials', payload);
@@ -473,11 +500,13 @@ export default function InventoryPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[400px]">
+              <table className="w-full text-sm min-w-[640px]">
                 <thead className="bg-muted/50 text-xs text-muted-foreground uppercase tracking-wide border-b border-border sticky top-0">
                   <tr>
                     <th className="px-6 py-3 text-left font-semibold">Ingredient</th>
                     <th className="px-4 py-3 text-center font-semibold">Unit</th>
+                    <th className="px-4 py-3 text-right font-semibold">Stock</th>
+                    <th className="px-4 py-3 text-right font-semibold">Alert at</th>
                     <th className="px-4 py-3 text-right font-semibold">Cost / Unit</th>
                     <th className="px-4 py-3 text-center font-semibold">Status</th>
                     {canEdit && <th className="px-4 py-3 text-right font-semibold">Actions</th>}
@@ -489,13 +518,75 @@ export default function InventoryPage() {
                       key={m.id}
                       className={`hover:bg-muted/40 transition-colors ${!m.isActive ? 'opacity-50' : ''}`}
                     >
-                      <td className="px-6 py-3 font-medium text-foreground">{m.name}</td>
+                      {/* Name + low-stock badge */}
+                      <td className="px-6 py-3 font-medium text-foreground">
+                        <div className="flex items-center gap-2">
+                          {m.name}
+                          {m.isLowStock && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                              <AlertTriangle className="h-2.5 w-2.5" />
+                              Low
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Unit */}
                       <td className="px-4 py-3 text-center">
                         <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded text-muted-foreground">{m.unit}</span>
                       </td>
+
+                      {/* Current stock */}
+                      <td className={`px-4 py-3 text-right tabular-nums font-semibold ${
+                        m.isLowStock ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'
+                      }`}>
+                        {m.stockQty != null
+                          ? `${m.stockQty.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${m.unit}`
+                          : <span className="text-muted-foreground font-normal">—</span>
+                        }
+                      </td>
+
+                      {/* Low-stock alert threshold (inline edit) */}
+                      <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                        {canEdit && editMatThreshold?.id === m.id ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              autoFocus
+                              value={editMatThreshold.value}
+                              onChange={(e) => setEditMatThreshold({ id: m.id, value: e.target.value })}
+                              onBlur={() => saveMatThreshold(m, editMatThreshold.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter')  saveMatThreshold(m, editMatThreshold.value);
+                                if (e.key === 'Escape') setEditMatThreshold(null);
+                              }}
+                              disabled={savingMatThreshold}
+                              className="w-20 text-right border border-[var(--accent)] bg-background rounded px-2 py-0.5 text-xs text-foreground focus:outline-none"
+                            />
+                            <span className="text-xs text-muted-foreground">{m.unit}</span>
+                          </div>
+                        ) : (
+                          <span
+                            className={`cursor-pointer hover:text-foreground transition-colors ${canEdit ? 'hover:underline underline-offset-2' : ''}`}
+                            title={canEdit ? 'Click to set low-stock alert' : undefined}
+                            onClick={() => canEdit && setEditMatThreshold({ id: m.id, value: m.lowStockAlert != null ? String(m.lowStockAlert) : '' })}
+                          >
+                            {m.lowStockAlert != null
+                              ? `${m.lowStockAlert} ${m.unit}`
+                              : <span className="text-muted-foreground/50">—</span>
+                            }
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Cost / unit */}
                       <td className="px-4 py-3 text-right text-muted-foreground tabular-nums text-sm">
                         {m.costPrice != null ? `₱${m.costPrice.toFixed(4)}/${m.unit}` : '—'}
                       </td>
+
+                      {/* Active badge */}
                       <td className="px-4 py-3 text-center">
                         <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                           m.isActive
@@ -505,6 +596,8 @@ export default function InventoryPage() {
                           {m.isActive ? 'ACTIVE' : 'INACTIVE'}
                         </span>
                       </td>
+
+                      {/* Actions */}
                       {canEdit && (
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-2">
@@ -580,9 +673,21 @@ export default function InventoryPage() {
                   />
                 </div>
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                Cost per unit is used for COGS calculation. You can update it later when receiving stock.
-              </p>
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">
+                  Low-stock alert (in {matForm.unit || 'units'})
+                </label>
+                <input
+                  type="number" min="0" step="any"
+                  value={matForm.lowStockAlert}
+                  onChange={(e) => setMatForm((f) => ({ ...f, lowStockAlert: e.target.value }))}
+                  className={INPUT_CLS}
+                  placeholder="e.g. 500"
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  The ingredient row turns amber and shows a ⚠ badge when stock falls below this number. Leave blank to disable.
+                </p>
+              </div>
             </div>
             <div className="px-6 pb-5 flex gap-3">
               <button

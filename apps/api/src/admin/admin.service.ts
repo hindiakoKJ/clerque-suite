@@ -7,7 +7,7 @@
  */
 
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException,
+  Injectable, NotFoundException, BadRequestException, ConflictException, Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -52,6 +52,7 @@ export interface UpdateTenantProfileDto {
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
   constructor(private prisma: PrismaService) {}
 
   // ─── Internal helpers ────────────────────────────────────────────────────
@@ -564,6 +565,8 @@ export class AdminService {
 
     const scenario = DEMO_SCENARIOS[scenarioKey];
 
+    try {
+
     // ── 1. Wipe existing POS + accounting data ────────────────────────────
     // FK dependency order (most-dependent first):
     //   JournalLine   → JournalEntry (cascade)
@@ -788,6 +791,12 @@ export class AdminService {
       productsSeeded:  catalog.length,
       ordersGenerated: orderCount,
     };
+
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`resetDemoData failed for tenant ${tenantId} / scenario ${scenarioKey}: ${msg}`, err instanceof Error ? err.stack : undefined);
+      throw new BadRequestException(`Demo reset failed: ${msg.slice(0, 300)}`);
+    }
   }
 
   // ─── Failed events ────────────────────────────────────────────────────────

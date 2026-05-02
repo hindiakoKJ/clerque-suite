@@ -483,6 +483,44 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+// ─── Console Audit Log ────────────────────────────────────────────────────────
+
+enum ConsoleAction {
+  TENANT_CREATED
+  USER_CREATED
+  PASSWORD_RESET
+  ACCOUNT_UNLOCKED
+  FORCE_LOGOUT
+  USER_DEACTIVATED
+  USER_REACTIVATED
+  TIER_CHANGED
+  STATUS_CHANGED
+  AI_OVERRIDE_SET
+}
+
+/// Immutable audit trail of every action taken in the Clerque Console.
+/// Written by AdminService; never deleted; read by /admin/console-log.
+model ConsoleLog {
+  id              String        @id @default(cuid())
+  /// Super-admin email — denormalised for audit readability even if the
+  /// super-admin record is later removed.
+  superAdminEmail String
+  /// Affected tenant (null for platform-level actions).
+  tenantId        String?
+  tenantSlug      String?
+  /// Affected user (null for tenant-only actions).
+  userId          String?
+  userEmail       String?
+  action          ConsoleAction
+  /// Extra context: old/new values, reason, notes.
+  detail          Json?
+  createdAt       DateTime      @default(now())
+
+  @@index([tenantId])
+  @@index([createdAt])
+  @@map("console_logs")
+}
+
 // ─── Branch ───────────────────────────────────────────────────────────────────
 
 model Branch {

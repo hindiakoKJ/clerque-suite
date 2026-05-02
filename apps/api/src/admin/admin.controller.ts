@@ -1,10 +1,17 @@
 import {
-  Controller, Get, Patch, Post, Param, Body, Query, UseGuards, HttpCode, HttpStatus,
+  Controller, Get, Patch, Post, Param, Body, Query,
+  UseGuards, HttpCode, HttpStatus, Request,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SuperAdminGuard } from './admin.guard';
-import { AdminService } from './admin.service';
+import { AdminService, CreateTenantDto, AddUserDto } from './admin.service';
+import type { JwtPayload } from '@repo/shared-types';
+
+/** Extract the super-admin actor from the JWT for ConsoleLog. */
+function actor(req: { user: JwtPayload }) {
+  return { email: req.user.name ?? req.user.sub };
+}
 
 @ApiTags('Admin (Console)')
 @ApiBearerAuth('access-token')
@@ -13,10 +20,14 @@ import { AdminService } from './admin.service';
 export class AdminController {
   constructor(private svc: AdminService) {}
 
+  // ─── Platform metrics ─────────────────────────────────────────────────────
+
   @Get('metrics')
   metrics() {
     return this.svc.getPlatformMetrics();
   }
+
+  // ─── Tenant list + create ─────────────────────────────────────────────────
 
   @Get('tenants')
   listTenants(
@@ -27,6 +38,14 @@ export class AdminController {
     return this.svc.listTenants({ search, status, tier });
   }
 
+  @Post('tenants')
+  @HttpCode(HttpStatus.CREATED)
+  createTenant(@Request() req: { user: JwtPayload }, @Body() dto: CreateTenantDto) {
+    return this.svc.createTenant(dto, actor(req));
+  }
+
+  // ─── Tenant detail + actions ──────────────────────────────────────────────
+
   @Get('tenants/:id')
   tenantDetail(@Param('id') id: string) {
     return this.svc.getTenantDetail(id);
@@ -35,32 +54,95 @@ export class AdminController {
   @Patch('tenants/:id/status')
   @HttpCode(HttpStatus.OK)
   setStatus(
+    @Request() req: { user: JwtPayload },
     @Param('id') id: string,
     @Body() body: { status: 'ACTIVE' | 'GRACE' | 'SUSPENDED' },
   ) {
-    return this.svc.setTenantStatus(id, body.status);
+    return this.svc.setTenantStatus(id, body.status, actor(req));
   }
 
   @Patch('tenants/:id/tier')
   @HttpCode(HttpStatus.OK)
   setTier(
+    @Request() req: { user: JwtPayload },
     @Param('id') id: string,
-    @Body() body: { tier: 'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5' | 'TIER_6' },
+    @Body() body: { tier: string },
   ) {
-    return this.svc.setTenantTier(id, body.tier);
+    return this.svc.setTenantTier(id, body.tier, actor(req));
   }
 
   @Patch('tenants/:id/ai-override')
   @HttpCode(HttpStatus.OK)
   setAiOverride(
+    @Request() req: { user: JwtPayload },
     @Param('id') id: string,
     @Body() body: { quotaOverride: number | null; addonType: string | null },
   ) {
-    return this.svc.setAiOverride(id, body.quotaOverride, body.addonType);
+    return this.svc.setAiOverride(id, body.quotaOverride, body.addonType, actor(req));
   }
+
+  // ─── Tenant users ─────────────────────────────────────────────────────────
+
+  @Get('tenants/:id/users')
+  listTenantUsers(@Param('id') id: string) {
+    return this.svc.listTenantUsers(id);
+  }
+
+  @Post('tenants/:id/users')
+  @HttpCode(HttpStatus.CREATED)
+  addUserToTenant(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+    @Body() dto: AddUserDto,
+  ) {
+    return this.svc.addUserToTenant(id, dto, actor(req));
+  }
+
+  // ─── User actions ─────────────────────────────────────────────────────────
+
+  @Post('users/:id/reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Request() req: { user: JwtPayload }, @Param('id') id: string) {
+    return this.svc.resetUserPassword(id, actor(req));
+  }
+
+  @Post('users/:id/clear-lockout')
+  @HttpCode(HttpStatus.OK)
+  clearLockout(@Request() req: { user: JwtPayload }, @Param('id') id: string) {
+    return this.svc.clearLockout(id, actor(req));
+  }
+
+  @Post('users/:id/force-logout')
+  @HttpCode(HttpStatus.OK)
+  forceLogout(@Request() req: { user: JwtPayload }, @Param('id') id: string) {
+    return this.svc.forceLogout(id, actor(req));
+  }
+
+  @Patch('users/:id/toggle-active')
+  @HttpCode(HttpStatus.OK)
+  toggleActive(@Request() req: { user: JwtPayload }, @Param('id') id: string) {
+    return this.svc.toggleUserActive(id, actor(req));
+  }
+
+  // ─── Failed events ────────────────────────────────────────────────────────
 
   @Get('failed-events')
   failedEvents(@Query('limit') limit?: string) {
     return this.svc.listFailedEvents({ limit: limit ? Number(limit) : undefined });
+  }
+
+  // ─── Console audit log ────────────────────────────────────────────────────
+
+  @Get('console-log')
+  consoleLog(
+    @Query('tenantId') tenantId?: string,
+    @Query('limit')    limit?:    string,
+    @Query('offset')   offset?:   string,
+  ) {
+    return this.svc.listConsoleLogs({
+      tenantId,
+      limit:  limit  ? Number(limit)  : undefined,
+      offset: offset ? Number(offset) : undefined,
+    });
   }
 }

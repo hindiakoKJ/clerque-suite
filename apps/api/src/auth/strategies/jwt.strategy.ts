@@ -15,18 +15,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload): Promise<JwtPayload> {
-    if (payload.isSuperAdmin) {
-      const admin = await this.prisma.superAdmin.findUnique({ where: { id: payload.sub } });
-      if (!admin) throw new UnauthorizedException();
-      return payload;
-    }
-
+    // All principals (including SUPER_ADMIN) are stored in the User table.
+    // The legacy SuperAdmin model is not used for JWT validation — super-admins
+    // are seeded as Users with role='SUPER_ADMIN' and isSuperAdmin=true in the JWT.
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: { id: true, isActive: true },
     });
     if (!user || !user.isActive) throw new UnauthorizedException();
-
     return payload;
   }
 }

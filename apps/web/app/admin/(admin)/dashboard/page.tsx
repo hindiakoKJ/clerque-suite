@@ -63,7 +63,7 @@ export default function AdminDashboard() {
   const { data, isLoading } = useQuery<PlatformMetrics>({
     queryKey: ['admin-metrics'],
     queryFn:  () => api.get('/admin/metrics').then((r) => r.data),
-    enabled:  !!user?.isSuperAdmin,
+    enabled:  !!(user?.isSuperAdmin || user?.role === 'SUPER_ADMIN'),
     refetchInterval: 60_000,
   });
 

@@ -12,7 +12,11 @@ import type { JwtPayload } from '@repo/shared-types';
 export class SuperAdminGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
     const user = ctx.switchToHttp().getRequest().user as JwtPayload | undefined;
-    if (!user?.isSuperAdmin) {
+    // Accept both the explicit isSuperAdmin flag and the SUPER_ADMIN role.
+    // This is resilient to JWTs minted before the auth.service fix (which
+    // set isSuperAdmin=true for SUPER_ADMIN role).
+    const isSuper = user?.isSuperAdmin === true || user?.role === 'SUPER_ADMIN';
+    if (!isSuper) {
       throw new ForbiddenException('Clerque Console is restricted to platform super-admins.');
     }
     return true;

@@ -25,7 +25,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   // Hard guard: only super-admins reach this layout.
   useEffect(() => {
-    if (user && !user.isSuperAdmin) {
+    if (user && !(user.isSuperAdmin || user.role === 'SUPER_ADMIN')) {
       router.replace('/select');
     }
   }, [user, router]);
@@ -38,7 +38,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     router.push('/login');
   }
 
-  if (!user || !user.isSuperAdmin) return null;
+  if (!user || !(user.isSuperAdmin || user.role === 'SUPER_ADMIN')) return null;
 
   const navItems: NavItem[] = [
     { href: '/admin/dashboard', label: 'Dashboard',     icon: LayoutDashboard },

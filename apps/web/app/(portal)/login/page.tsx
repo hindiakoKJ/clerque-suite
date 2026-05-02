@@ -66,7 +66,8 @@ function LoginInner() {
       // depth) get bounced back to login.
       const next = searchParams.get('next');
       if (isConsoleHost) {
-        router.push(user.isSuperAdmin ? '/admin/dashboard' : '/login');
+        const isSuper = user.isSuperAdmin === true || user.role === 'SUPER_ADMIN';
+        router.push(isSuper ? '/admin/dashboard' : '/login');
       } else if (next) {
         router.push(next);
       } else if (appParam && appParam !== 'console' && VALID_PRODUCTS.includes(appParam)) {

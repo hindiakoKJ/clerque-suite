@@ -92,7 +92,9 @@ export default function SelectPage() {
   type AppCardWithRoute = AppCard & { resolvedRoute: string };
 
   // SUPER_ADMIN gets a synthetic "Console" card on top of the real apps.
-  const baseApps: AppCard[] = user?.isSuperAdmin
+  // Treat SUPER_ADMIN role as super-admin even if isSuperAdmin flag missing
+  const isSuper = !!user && (user.isSuperAdmin === true || user.role === 'SUPER_ADMIN');
+  const baseApps: AppCard[] = isSuper
     ? [
         {
           id:          'pos' as const, // unused; routing handled by resolvedRoute
@@ -113,7 +115,7 @@ export default function SelectPage() {
         .filter((app) =>
           // Console card always visible to super admins; others require app access
           app.name === 'Console'
-            ? !!user.isSuperAdmin
+            ? isSuper
             : hasAccess(app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL', app.minLevel)
         )
         .map((app) => {
@@ -134,10 +136,10 @@ export default function SelectPage() {
   // (Middleware also enforces this, but routing here avoids a flash.)
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (window.location.hostname.startsWith('console.') && user?.isSuperAdmin) {
+    if (window.location.hostname.startsWith('console.') && isSuper) {
       router.replace('/admin');
     }
-  }, [user, router]);
+  }, [isSuper, router]);
 
   useEffect(() => {
     if (onlyApp) router.replace(onlyApp.resolvedRoute);

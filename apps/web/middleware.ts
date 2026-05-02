@@ -82,6 +82,11 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
+  // Treat role=SUPER_ADMIN as super-admin even if `isSuperAdmin` flag wasn't
+  // populated (older JWTs minted before the auth.service fix). This makes
+  // the middleware resilient to schema/token version drift.
+  const isSuper = user.isSuperAdmin === true || user.role === 'SUPER_ADMIN';
+
   // ── Hostname-based hard gating ──────────────────────────────────────────
   if (consoleMode) {
     // On the console subdomain, only /admin/* is permitted.
@@ -89,12 +94,12 @@ export function middleware(req: NextRequest) {
       // Super-admin: silently send them to the Console dashboard.
       // Anyone else: send to /login (they shouldn't be on this subdomain).
       const dest = req.nextUrl.clone();
-      dest.pathname = user.isSuperAdmin ? '/admin/dashboard' : '/login';
+      dest.pathname = isSuper ? '/admin/dashboard' : '/login';
       dest.search = '';
       return NextResponse.redirect(dest);
     }
     // /admin requires super-admin (defence-in-depth — backend also enforces).
-    if (!user.isSuperAdmin) {
+    if (!isSuper) {
       const loginUrl = req.nextUrl.clone();
       loginUrl.pathname = '/login';
       loginUrl.search = '';
@@ -115,7 +120,7 @@ export function middleware(req: NextRequest) {
   }
 
   // Super admin (on tenant domain) bypasses tenant app checks too
-  if (user.isSuperAdmin) return NextResponse.next();
+  if (isSuper) return NextResponse.next();
 
   // Tenant app access checks
   for (const rule of APP_RULES) {

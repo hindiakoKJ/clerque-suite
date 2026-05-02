@@ -268,9 +268,9 @@ export class InventoryService {
     const items = await this.prisma.rawMaterial.findMany({
       where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
       orderBy: { name: 'asc' },
-      include: branchId
-        ? { inventory: { where: { branchId }, select: { quantity: true } } }
-        : false,
+      ...(branchId
+        ? { include: { inventory: { where: { branchId }, select: { quantity: true } } } }
+        : {}),
     });
     return items.map((m) => {
       const invRow   = 'inventory' in m && Array.isArray(m.inventory) ? m.inventory[0] : undefined;

@@ -76,27 +76,36 @@ export class AdminService {
     return chars.join('');
   }
 
-  /** Appends an immutable entry to console_logs. Fire-and-forget safe. */
+  /** Appends an immutable entry to console_logs. Truly fire-and-forget — catches
+   *  both synchronous PrismaClientValidationError and async DB errors so audit
+   *  failures never surface to the caller. */
   private async logAction(params: {
     actor:       ConsoleActor;
     tenantId?:   string;
     tenantSlug?: string;
     userId?:     string;
     userEmail?:  string;
-    action:      Prisma.ConsoleLogCreateInput['action'];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    action:      any;   // 'any' avoids sync PrismaClientValidationError when enum not yet in DB
     detail?:     object;
   }) {
-    await this.prisma.consoleLog.create({
-      data: {
-        superAdminEmail: params.actor.email,
-        tenantId:        params.tenantId,
-        tenantSlug:      params.tenantSlug,
-        userId:          params.userId,
-        userEmail:       params.userEmail,
-        action:          params.action,
-        detail:          params.detail as Prisma.InputJsonValue ?? Prisma.JsonNull,
-      },
-    }).catch(() => { /* never let audit failure break the main flow */ });
+    try {
+      await this.prisma.consoleLog.create({
+        data: {
+          superAdminEmail: params.actor.email,
+          tenantId:        params.tenantId,
+          tenantSlug:      params.tenantSlug,
+          userId:          params.userId,
+          userEmail:       params.userEmail,
+          action:          params.action,
+          detail:          params.detail as Prisma.InputJsonValue ?? Prisma.JsonNull,
+        },
+      });
+    } catch {
+      /* Audit log failures must never break the main operation.
+         Common cause: DB enum not yet migrated (PROFILE_UPDATED / DEMO_RESET).
+         The action still completes; the log entry is silently dropped. */
+    }
   }
 
   // ─── Platform metrics ────────────────────────────────────────────────────

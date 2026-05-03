@@ -22,6 +22,8 @@ import { db } from '@/lib/pos/db';
 import { computeVat } from '@/lib/pos/utils';
 import { dispatchOrderToStations, toastDispatchSummary } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { useCustomerDisplaySync } from '@/hooks/pos/useCustomerDisplaySync';
+import { publishCustomerDisplay, resetCustomerDisplay } from '@/lib/pos/customer-display-channel';
 import type { CachedProduct, CachedCategory } from '@/lib/pos/db';
 
 export default function PosTerminal() {
@@ -49,6 +51,11 @@ export default function PosTerminal() {
   // Only F&B-tier coffee shops have non-empty stations; for everyone else this
   // is a no-op (dispatch sees zero stations with hasPrinter, prints nothing extra).
   const { stations: floorStations, printers: floorPrinters } = useFloorLayout();
+
+  // Customer-facing display sync — publishes cart updates to /pos/customer-display
+  // (open in another window/tablet). No-op when the tenant doesn't have a
+  // customer display configured. Hook handles dedupe + WELCOME on empty cart.
+  useCustomerDisplaySync();
 
   // ── Promotions: auto-apply best deal per cart line ──────────────────────
   // Track only lineKey + quantity so applyPromoDiscounts() (which modifies itemDiscount)
@@ -363,6 +370,24 @@ export default function PosTerminal() {
           console.warn('Station ticket dispatch failed:', dispatchErr);
         }
       }
+
+      // ── Customer-facing display: show "Salamat" payment-complete state ──
+      // Cashier-side cart was cleared (clearCart() above). Customer screen
+      // shows the thank-you for ~8 seconds before reverting to WELCOME.
+      publishCustomerDisplay({
+        type: 'PAYMENT_COMPLETE',
+        lines: receiptBase.lines.map((l) => ({
+          productName: l.productName,
+          quantity:    l.quantity,
+          unitPrice:   l.unitPrice,
+          lineTotal:   l.lineTotal,
+        })),
+        subtotal: sub,
+        discount: disc,
+        vatAmount: vat,
+        total,
+      });
+      setTimeout(() => resetCustomerDisplay(), 8_000);
     } catch (err: unknown) {
       const isNetworkError =
         (err as { code?: string })?.code === 'ERR_NETWORK' ||

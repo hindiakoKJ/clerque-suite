@@ -4,7 +4,9 @@ import { useRouter, usePathname } from 'next/navigation';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
+  Monitor,
 } from 'lucide-react';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { ClockWidget } from '@/components/pos/ClockWidget';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
@@ -76,6 +78,8 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   const { user, accessToken, clear } = useAuthStore();
   const { activeShift, clearShift } = useShiftStore();
   const { pendingCount, isSyncing, triggerSync } = usePendingSync();
+  // Customer-facing display flag — drives the "Open Display" header button
+  const { hasCustomerDisplay } = useFloorLayout();
 
   const [showCloseShift,      setShowCloseShift]      = useState(false);
   const [showCashOut,         setShowCashOut]         = useState(false);
@@ -235,6 +239,25 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         >
           <Wallet className="h-3.5 w-3.5" />
           Cash Out
+        </button>
+      )}
+
+      {/* Open the customer-facing display in a new window — only when the
+          tenant has it configured (CS_2+, or CS_1 with toggle on). */}
+      {hasCustomerDisplay && (
+        <button
+          onClick={() => {
+            window.open(
+              '/pos/customer-display',
+              'clerque-customer-display',
+              'noopener,noreferrer,width=1280,height=800',
+            );
+          }}
+          className="hidden sm:flex items-center gap-1.5 text-xs text-blue-700 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 rounded-md px-2.5 py-1.5 transition-colors"
+          title="Open the customer-facing display in a new window"
+        >
+          <Monitor className="h-3.5 w-3.5" />
+          Customer Display
         </button>
       )}
 

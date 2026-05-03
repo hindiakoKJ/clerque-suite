@@ -20,6 +20,8 @@ import { useBarcodeScanner } from '@/hooks/pos/useBarcodeScanner';
 import { api } from '@/lib/api';
 import { db } from '@/lib/pos/db';
 import { computeVat } from '@/lib/pos/utils';
+import { dispatchOrderToStations, toastDispatchSummary } from '@/lib/pos/printer-dispatch';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
 import type { CachedProduct, CachedCategory } from '@/lib/pos/db';
 
 export default function PosTerminal() {
@@ -42,6 +44,11 @@ export default function PosTerminal() {
   const activeBranchId = branchId ?? user?.branchId ?? '';
   const tenantId       = user?.tenantId ?? '';
   const cartCount      = lines.reduce((s, l) => s + l.quantity, 0);
+
+  // Floor layout — used to split orders to station printers (kitchen / bar tickets).
+  // Only F&B-tier coffee shops have non-empty stations; for everyone else this
+  // is a no-op (dispatch sees zero stations with hasPrinter, prints nothing extra).
+  const { stations: floorStations, printers: floorPrinters } = useFloorLayout();
 
   // ── Promotions: auto-apply best deal per cart line ──────────────────────
   // Track only lineKey + quantity so applyPromoDiscounts() (which modifies itemDiscount)
@@ -325,6 +332,37 @@ export default function PosTerminal() {
       // Refresh stock immediately so this tablet sees the deduction.
       // Other tablets refetch on their next 15s poll cycle.
       queryClient.invalidateQueries({ queryKey: ['products-pos', activeBranchId] });
+
+      // ── Dispatch station tickets (Sprint 3 Phase B) ─────────────────────
+      // For coffee shops on CS_3+, this prints "Bar" / "Kitchen" tickets to
+      // their respective printers. For CS_1/CS_2 / non-F&B, the dispatcher
+      // sees zero printer-bearing stations and silently no-ops.
+      // Failures are toasted but never block the sale.
+      if (floorStations.length > 0) {
+        try {
+          const dispatchResults = await dispatchOrderToStations({
+            order: {
+              orderNumber: order.orderNumber,
+              completedAt: orderPayload.createdAt,
+              items: lines.map((l) => ({
+                productName: l.product.name,
+                quantity:    l.quantity,
+                categoryId:  l.product.categoryId ?? null,
+                modifiers:   l.modifiers?.map((m) => ({ optionName: m.optionName })),
+              })),
+            },
+            stations: floorStations,
+            printers: floorPrinters,
+            // Web Serial printer not currently exposed here; Phase 3B follow-up
+            // will wire it via usePrinterStore. RawBT path handles the common case.
+            webSerialPrinter: null,
+          });
+          toastDispatchSummary(dispatchResults);
+        } catch (dispatchErr) {
+          // Should not throw (dispatch swallows errors), but defensively...
+          console.warn('Station ticket dispatch failed:', dispatchErr);
+        }
+      }
     } catch (err: unknown) {
       const isNetworkError =
         (err as { code?: string })?.code === 'ERR_NETWORK' ||

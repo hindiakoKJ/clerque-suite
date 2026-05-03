@@ -6,8 +6,9 @@ import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SuperAdminGuard } from './admin.guard';
 import { AdminService, CreateTenantDto, AddUserDto, UpdateTenantProfileDto } from './admin.service';
+import { LayoutsService } from '../layouts/layouts.service';
 import type { ScenarioKey } from './demo-scenarios';
-import type { JwtPayload } from '@repo/shared-types';
+import type { JwtPayload, CoffeeShopTier } from '@repo/shared-types';
 
 /** Extract the super-admin actor from the JWT for ConsoleLog. */
 function actor(req: { user: JwtPayload }) {
@@ -19,7 +20,10 @@ function actor(req: { user: JwtPayload }) {
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
 @Controller('admin')
 export class AdminController {
-  constructor(private svc: AdminService) {}
+  constructor(
+    private svc: AdminService,
+    private layouts: LayoutsService,
+  ) {}
 
   // ─── Platform metrics ─────────────────────────────────────────────────────
 
@@ -90,6 +94,22 @@ export class AdminController {
     @Body() dto: UpdateTenantProfileDto,
   ) {
     return this.svc.updateTenantProfile(id, dto, actor(req));
+  }
+
+  /**
+   * Sales-controlled coffee-shop tier upgrade. Provisions stations,
+   * printers, and terminals for the chosen CS tier on the target tenant.
+   * Idempotent — preserves owner-renamed stations.
+   */
+  @Patch('tenants/:id/coffee-shop-tier')
+  @HttpCode(HttpStatus.OK)
+  applyCoffeeShopTier(
+    @Param('id') id: string,
+    @Body() body: { tier: CoffeeShopTier; customerDisplayOverride?: boolean },
+  ) {
+    return this.layouts.applyCoffeeShopTier(id, body.tier, {
+      customerDisplayOverride: body.customerDisplayOverride,
+    });
   }
 
   @Post('tenants/:id/reset-demo')

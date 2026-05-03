@@ -12,17 +12,26 @@ const INPUT_CLS =
   'w-full border border-border bg-background text-foreground placeholder:text-muted-foreground rounded-lg px-3 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow';
 
 interface OpenShiftModalProps {
-  onOpen: (openingCash: number, notes?: string) => Promise<void>;
+  onOpen: (openingCash: number, notes?: string, terminalId?: string) => Promise<void>;
   cashierName: string;
+  /**
+   * Available terminals for the tenant. When more than one is supplied, the
+   * cashier must pick which terminal they're at (for multi-POS setups —
+   * CS_4 / CS_5). When the array is empty or has one item, the picker is
+   * skipped and that one terminal is auto-selected.
+   */
+  terminals?: Array<{ id: string; name: string; code: string }>;
 }
 
-export function OpenShiftModal({ onOpen, cashierName }: OpenShiftModalProps) {
+export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShiftModalProps) {
   const [mode, setMode] = useState<'simple' | 'denomination'>('simple');
   const [simpleAmount, setSimpleAmount] = useState('');
   const [counts, setCounts] = useState<Record<number, number>>({});
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [terminalId, setTerminalId] = useState<string>(terminals.length === 1 ? terminals[0].id : '');
+  const showTerminalPicker = terminals.length > 1;
 
   const denomTotal = [...BILL_DENOMINATIONS, ...COIN_DENOMINATIONS].reduce(
     (sum, d) => sum + d * (counts[d] ?? 0),
@@ -40,9 +49,13 @@ export function OpenShiftModal({ onOpen, cashierName }: OpenShiftModalProps) {
 
   async function handleSubmit() {
     if (openingCash < 0) { setError('Opening cash cannot be negative.'); return; }
+    if (showTerminalPicker && !terminalId) {
+      setError('Please pick a terminal for this shift.');
+      return;
+    }
     setLoading(true);
     try {
-      await onOpen(openingCash, notes || undefined);
+      await onOpen(openingCash, notes || undefined, terminalId || undefined);
     } catch (err: unknown) {
       setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to open shift.');
     } finally {
@@ -66,6 +79,31 @@ export function OpenShiftModal({ onOpen, cashierName }: OpenShiftModalProps) {
             Welcome, <span className="font-medium text-foreground">{cashierName}</span>. Enter the
             opening cash before starting your shift.
           </p>
+
+          {/* Terminal picker — multi-POS tiers (CS_4 / CS_5) only */}
+          {showTerminalPicker && (
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                Which terminal are you at?
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {terminals.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTerminalId(t.id)}
+                    className={`py-2.5 rounded-lg border text-sm font-medium transition-colors ${
+                      terminalId === t.id
+                        ? 'text-white border-transparent'
+                        : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
+                    }`}
+                    style={terminalId === t.id ? { background: 'var(--accent)' } : undefined}
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Mode toggle */}
           <div className="flex rounded-lg border border-border overflow-hidden text-xs font-medium">

@@ -44,6 +44,7 @@ export class ShiftsController {
       body.branchId,
       body.openingCash,
       body.notes,
+      body.terminalId,
     );
   }
 

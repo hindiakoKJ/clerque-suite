@@ -61,9 +61,21 @@ export class ShiftsService {
     branchId: string,
     openingCash: number,
     notes?: string,
+    terminalId?: string,
   ) {
     // Verify branch belongs to tenant (CRITICAL-2 fix — prevents cross-tenant branch injection)
     await this.assertBranchBelongsToTenant(tenantId, branchId);
+
+    // Verify terminal belongs to tenant if supplied (Sprint 3 — multi-terminal)
+    if (terminalId) {
+      const term = await this.prisma.terminal.findFirst({
+        where: { id: terminalId, tenantId },
+        select: { id: true },
+      });
+      if (!term) {
+        throw new BadRequestException('Selected terminal does not belong to your organization.');
+      }
+    }
 
     // Idempotent within the same calendar day (Asia/Manila / PH timezone):
     // - Same-day open shift → return it (cashier re-opening the page mid-shift)
@@ -91,6 +103,7 @@ export class ShiftsService {
         tenantId,
         branchId,
         cashierId,
+        terminalId: terminalId ?? null,
         openingCash: new Prisma.Decimal(openingCash),
         notes,
       },

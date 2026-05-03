@@ -60,6 +60,8 @@ export interface ShiftReport extends SalesSummary {
     closingCashExpected: number | null;
     variance: number | null;
     notes: string | null;
+    /** Sprint 3 — terminal this shift opened on (POS-01, POS-02, ...). */
+    terminal: { id: string; name: string; code: string } | null;
   };
   /** Cash leaving the till during the shift (paid-outs + drops). */
   cashOuts: Array<{
@@ -103,6 +105,10 @@ export class ReportsService {
   async getShiftReport(tenantId: string, shiftId: string): Promise<ShiftReport> {
     const shift = await this.prisma.shift.findFirst({
       where: { id: shiftId, tenantId },
+      // Sprint 3 — include the terminal so the EOD report can show which
+      // POS the shift opened on. Falls back to legacy "POS-XXXX" label
+      // when terminalId is null (shifts opened before multi-terminal).
+      include: { terminal: { select: { id: true, name: true, code: true } } },
     });
     if (!shift) throw new NotFoundException('Shift not found');
 
@@ -137,6 +143,9 @@ export class ReportsService {
         closingCashExpected: shift.closingCashExpected ? Number(shift.closingCashExpected) : null,
         variance: shift.variance ? Number(shift.variance) : null,
         notes: shift.notes,
+        terminal: shift.terminal
+          ? { id: shift.terminal.id, name: shift.terminal.name, code: shift.terminal.code }
+          : null,
       },
       cashOuts: cashOuts.map((c) => ({
         id:        c.id,

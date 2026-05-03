@@ -194,6 +194,9 @@ export class AdminService {
         tinNumber: true, businessName: true,
         isDemoTenant: true, signupSource: true, createdAt: true,
         aiAddonType: true, aiQuotaOverride: true, aiAddonExpiresAt: true,
+        // Sprint 3 — surface coffee-shop floor-layout tier in the Console
+        coffeeShopTier: true,
+        hasCustomerDisplay: true,
         _count: { select: { users: true, branches: true, products: true } },
       },
     });

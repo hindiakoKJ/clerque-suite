@@ -6,8 +6,18 @@ export async function fetchActiveShift(branchId: string): Promise<ActiveShift | 
   return data ?? null;
 }
 
-export async function openShift(branchId: string, openingCash: number, notes?: string): Promise<ActiveShift> {
-  const { data } = await api.post('/shifts', { branchId, openingCash, notes });
+export async function openShift(
+  branchId: string,
+  openingCash: number,
+  notes?: string,
+  terminalId?: string,
+): Promise<ActiveShift> {
+  const { data } = await api.post('/shifts', {
+    branchId,
+    openingCash,
+    notes,
+    ...(terminalId ? { terminalId } : {}),
+  });
   return data as ActiveShift;
 }
 

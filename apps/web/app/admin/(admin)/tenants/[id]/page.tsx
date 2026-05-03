@@ -32,6 +32,8 @@ interface TenantDetail {
   aiAddonType:  string | null;
   aiQuotaOverride: number | null;
   aiAddonExpiresAt: string | null;
+  /** Sprint 3 — coffee-shop floor-layout tier (only meaningful when businessType=COFFEE_SHOP) */
+  coffeeShopTier?: 'CS_1' | 'CS_2' | 'CS_3' | 'CS_4' | 'CS_5' | null;
   _count: { users: number; branches: number; products: number };
 }
 
@@ -696,6 +698,49 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
               {TIER_OPTIONS.map((t) => <option key={t} value={t}>{t.replace('TIER_', 'Tier ')}</option>)}
             </select>
           </div>
+
+          {/* Coffee Shop Floor Layout — only relevant for COFFEE_SHOP tenants */}
+          {tenant.businessType === 'COFFEE_SHOP' && (
+            <div className="rounded-lg border border-amber-200/60 bg-amber-50/40 dark:bg-amber-950/20 p-4">
+              <h2 className="text-xs font-semibold text-amber-800 dark:text-amber-400 uppercase tracking-wider mb-2">
+                ☕ Floor Layout
+              </h2>
+              <p className="text-[11px] text-muted-foreground mb-2">
+                Sales-controlled. Provisions stations, printers, and terminals.
+                Idempotent — preserves owner-renamed stations.
+              </p>
+              <p className="text-xs text-muted-foreground mb-2">
+                Current: <span className="font-mono font-medium text-foreground">{tenant.coffeeShopTier ?? 'Not set'}</span>
+              </p>
+              <select
+                disabled={busy}
+                value={tenant.coffeeShopTier ?? ''}
+                onChange={async (e) => {
+                  const tier = e.target.value;
+                  if (!tier) return;
+                  if (!confirm(`Apply ${tier} layout to this tenant? This will provision stations and printers.`)) return;
+                  try {
+                    setBusy(true);
+                    await api.patch(`/admin/tenants/${tenant.id}/coffee-shop-tier`, { tier });
+                    toast.success(`Layout set to ${tier}.`);
+                    qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] });
+                  } catch (err: unknown) {
+                    toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to apply layout.');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="w-full h-8 px-2 rounded-md border border-border bg-background text-xs"
+              >
+                <option value="">— choose tier —</option>
+                <option value="CS_1">CS-1 — Solo Counter</option>
+                <option value="CS_2">CS-2 — Counter + Display</option>
+                <option value="CS_3">CS-3 — Counter + Bar</option>
+                <option value="CS_4">CS-4 — Bar + Kitchen</option>
+                <option value="CS_5">CS-5 — Multi-Station Chain</option>
+              </select>
+            </div>
+          )}
 
           {/* AI */}
           <div className="rounded-lg border border-border bg-background p-4">

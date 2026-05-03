@@ -37,6 +37,8 @@ export interface ShiftReportData {
     closingCashExpected: number | null;
     variance: number | null;
     notes: string | null;
+    /** Terminal this shift opened on. Null for legacy shifts. */
+    terminal?: { id: string; name: string; code: string } | null;
   };
   totalOrders: number;
   voidCount: number;
@@ -117,9 +119,9 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
   const userName = useAuthStore((s) => s.user?.name);
   // Cashier view = no revenue, no top products. Manager/owner = full report.
   const isCashierView = userRole != null && CASHIER_ONLY_ROLES.has(userRole);
-  // Short terminal label until proper Terminal IDs ship in Phase B
-  // (uses the last 4 chars of the shift id as a stable identifier).
-  const terminalLabel = `POS-${shift.id.slice(-4).toUpperCase()}`;
+  // Sprint 3 — prefer the real terminal name (POS-01, POS-02, ...) when set.
+  // Falls back to the legacy "POS-XXXX" shift-id label for older shifts.
+  const terminalLabel = shift.terminal?.name ?? `POS-${shift.id.slice(-4).toUpperCase()}`;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>

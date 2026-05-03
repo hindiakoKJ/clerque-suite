@@ -5,6 +5,7 @@ import { useShiftStore } from '@/store/pos/shift';
 import { fetchActiveShift, openShift, getShiftSummary } from '@/lib/pos/shifts';
 import { OpenShiftModal } from './OpenShiftModal';
 import { db } from '@/lib/pos/db';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
 
 /** Roles that supervise the POS but do not operate the register. */
 const SUPERVISOR_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SUPER_ADMIN', 'FINANCE_LEAD',
@@ -18,6 +19,7 @@ interface ShiftGateProps {
 export function ShiftGate({ children }: ShiftGateProps) {
   const user = useAuthStore((s) => s.user);
   const { activeShift, setActiveShift } = useShiftStore();
+  const { terminals } = useFloorLayout();
   const [checking, setChecking] = useState(true);
 
   // Supervisors bypass the shift gate entirely — they are not cashiers.
@@ -121,8 +123,8 @@ export function ShiftGate({ children }: ShiftGateProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.sub]);
 
-  async function handleOpenShift(openingCash: number, notes?: string) {
-    const shift = await openShift(branchId, openingCash, notes);
+  async function handleOpenShift(openingCash: number, notes?: string, terminalId?: string) {
+    const shift = await openShift(branchId, openingCash, notes, terminalId);
     const withSummary = await getShiftSummary(shift.id);
     setActiveShift(withSummary);
     // Cache in Dexie
@@ -162,6 +164,7 @@ export function ShiftGate({ children }: ShiftGateProps) {
       <OpenShiftModal
         cashierName={user?.name || user?.sub || 'Cashier'}
         onOpen={handleOpenShift}
+        terminals={terminals.map((t) => ({ id: t.id, name: t.name, code: t.code }))}
       />
     );
   }

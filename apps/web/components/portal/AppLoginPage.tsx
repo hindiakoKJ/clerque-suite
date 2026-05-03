@@ -246,9 +246,9 @@ export function AppLoginPage({
         <div className="flex gap-4 text-xs text-muted-foreground">
           <span>Clerque {p.name} · v1.0.0</span>
           <span className="ml-auto flex gap-3">
-            <a href="#" className="hover:underline">Terms</a>
-            <a href="#" className="hover:underline">Privacy</a>
-            <a href="#" className="hover:underline">Support</a>
+            <a href="/legal/terms" className="hover:underline">Terms</a>
+            <a href="/legal/privacy" className="hover:underline">Privacy</a>
+            <a href="mailto:support@hnscorpph.com" className="hover:underline">Support</a>
           </span>
         </div>
       </div>
@@ -509,6 +509,13 @@ export function AppLoginPage({
               <a href="#" className="font-medium text-foreground hover:underline">
                 Contact your admin
               </a>
+            </p>
+
+            {/* Consent acknowledgment — DPA & contract law compliance */}
+            <p className="text-center text-[10px] leading-relaxed text-muted-foreground">
+              By signing in, you agree to our{' '}
+              <a href="/legal/terms" className="underline hover:text-foreground">Terms of Service</a>{' '}and{' '}
+              <a href="/legal/privacy" className="underline hover:text-foreground">Privacy Policy</a>.
             </p>
           </form>
         </div>

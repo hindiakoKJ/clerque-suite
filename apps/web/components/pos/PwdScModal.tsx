@@ -275,6 +275,17 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
               </p>
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
+
+            {/* Data Privacy notice — RA 10173 (Data Privacy Act) compliance.
+                Cashier should ensure customer is aware before recording sensitive ID data. */}
+            <div className="bg-muted/40 border border-border rounded-lg px-3 py-2 mt-2">
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                <span className="font-semibold text-foreground">Data Privacy Notice:</span>{' '}
+                The ID number and holder name are collected as required by RA 9994 / RA 7277 for
+                discount audit and BIR compliance, and retained for 10 years per NIRC §235.
+                Treated as sensitive personal information under RA 10173.
+              </p>
+            </div>
           </div>
         </div>
 

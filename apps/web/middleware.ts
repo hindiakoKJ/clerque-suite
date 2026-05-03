@@ -31,7 +31,11 @@ const APP_RULES: Array<{
   { prefix: '/payroll', app: 'PAYROLL', minLevel: 'CLOCK_ONLY', clockOnlyRedirect: '/payroll/clock' },
 ];
 
+// Public paths — accessible without authentication.
+// /legal/* (privacy policy, terms of service) must be reachable from the
+// unauthenticated login page footer for Data Privacy Act compliance.
 const PUBLIC_PATHS = ['/', '/login', '/select'];
+const PUBLIC_PREFIXES = ['/legal', '/forgot-password', '/reset-password'];
 
 function getToken(req: NextRequest): string | null {
   return req.cookies.get('app-session')?.value ?? null;
@@ -52,7 +56,12 @@ export function middleware(req: NextRequest) {
     req.nextUrl.searchParams.get('host') === 'console';
 
   // Public + Next.js internals always allowed
-  if (PUBLIC_PATHS.some((p) => pathname === p) || pathname.startsWith('/_next') || pathname.startsWith('/api')) {
+  if (
+    PUBLIC_PATHS.some((p) => pathname === p) ||
+    PUBLIC_PREFIXES.some((p) => pathname.startsWith(p)) ||
+    pathname.startsWith('/_next') ||
+    pathname.startsWith('/api')
+  ) {
     return NextResponse.next();
   }
 

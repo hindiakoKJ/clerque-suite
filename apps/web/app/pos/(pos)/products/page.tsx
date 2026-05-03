@@ -1,12 +1,13 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload } from 'lucide-react';
+import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload, AlertTriangle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import { ModifierGroupModal } from '@/components/pos/ModifierGroupModal';
+import { StockAdjustModal } from '@/components/pos/StockAdjustModal';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { isFnbType } from '@repo/shared-types';
 import { ImportModal } from '@/components/ui/ImportModal';
@@ -74,7 +75,19 @@ export default function ProductsPage() {
   const isFnb = isFnbType(tenantProfile?.businessType);
 
   const [modifierTarget, setModifierTarget] = useState<Product | null>(null);
-  const [showImport, setShowImport] = useState(false);
+  const [showImport,    setShowImport]    = useState(false);
+  const [showSetupPack, setShowSetupPack] = useState(false);
+
+  // Stock management state (added so admin/owner can manage product stock from this page)
+  const [adjustTarget, setAdjustTarget] = useState<{
+    productId: string;
+    productName: string;
+    quantity: number;
+    branchId: string;
+  } | null>(null);
+  const [filterLow, setFilterLow] = useState(false);
+
+  const userBranchId = user?.branchId ?? '';
 
   const { data: products = [], isLoading } = useQuery<Product[]>({
     queryKey: ['products', showInactive],
@@ -112,6 +125,28 @@ export default function ProductsPage() {
     enabled: !!user && !!modal && isFnb,
     staleTime: 60_000,
   });
+
+  // Stock levels for the current branch — joined into product rows below.
+  // Pulls all rows (no pagination) so the productId-keyed map covers every visible product.
+  interface InventoryStockRow {
+    id: string;
+    productId: string;
+    branchId: string;
+    quantity: number;
+    lowStockAlert: number | null;
+    isLowStock: boolean;
+  }
+  const { data: stockResponse } = useQuery<{ data: InventoryStockRow[] }>({
+    queryKey: ['inventory', userBranchId, 'all'],
+    queryFn: () =>
+      api.get(`/inventory?branchId=${userBranchId}&page=1`).then((r) => r.data),
+    enabled: !!userBranchId,
+    staleTime: 15_000,
+  });
+  const stockByProductId = (stockResponse?.data ?? []).reduce<Record<string, InventoryStockRow>>(
+    (acc, row) => { acc[row.productId] = row; return acc; },
+    {},
+  );
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['products'] });
@@ -276,11 +311,13 @@ export default function ProductsPage() {
     }
   }
 
-  const filtered = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      (p.sku ?? '').toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered = products
+    .filter(
+      (p) =>
+        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        (p.sku ?? '').toLowerCase().includes(search.toLowerCase()),
+    )
+    .filter((p) => !filterLow || stockByProductId[p.id]?.isLowStock);
 
   return (
     <div className="flex flex-col h-full bg-muted/30 overflow-auto">
@@ -317,8 +354,28 @@ export default function ProductsPage() {
               {showInactive ? 'All (incl. inactive)' : 'Active only'}
             </button>
           )}
+          <button
+            onClick={() => setFilterLow(!filterLow)}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition-colors whitespace-nowrap ${
+              filterLow
+                ? 'bg-amber-500 text-white'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+            }`}
+            title="Show only products with stock at or below the alert level"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Low stock
+          </button>
           {canManage && (
             <>
+              <button
+                onClick={() => setShowSetupPack(true)}
+                className="flex items-center gap-1.5 text-xs border border-border bg-background text-foreground hover:bg-muted rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
+                title="One-shot import: products + opening stock in a single workbook"
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Setup Pack
+              </button>
               <button
                 onClick={() => setShowImport(true)}
                 className="flex items-center gap-1.5 text-xs border border-border bg-background text-foreground hover:bg-muted rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
@@ -360,13 +417,13 @@ export default function ProductsPage() {
             <table className="w-full text-sm min-w-[640px]">
               <thead className="sticky top-0 bg-background border-b border-border">
                 <tr>
-                  {['Name', 'SKU', 'Category', 'Price', 'Cost', 'UOM', 'VAT', 'Status', ...(isFnb ? ['Recipe'] : []), ...(isFnb && canManage ? ['Modifiers'] : []), 'Actions'].map((h, i, arr) => (
+                  {['Name', 'SKU', 'Category', 'Price', 'Cost', 'Stock', 'UOM', 'VAT', 'Status', ...(isFnb ? ['Recipe'] : []), ...(isFnb && canManage ? ['Modifiers'] : []), 'Actions'].map((h, i, arr) => (
                     <th
                       key={h}
                       className={`py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide ${
                         i === 0 ? 'text-left px-6' :
                         i === arr.length - 1 ? 'text-right px-6' :
-                        ['Price','Cost'].includes(h) ? 'text-right px-4' :
+                        ['Price','Cost','Stock'].includes(h) ? 'text-right px-4' :
                         ['VAT','Status','Modifiers','UOM','Recipe'].includes(h) ? 'text-center px-4' :
                         'text-left px-4'
                       }`}
@@ -390,6 +447,21 @@ export default function ProductsPage() {
                     </td>
                     <td className="px-4 py-3 text-right text-muted-foreground">
                       {p.costPrice != null ? formatPeso(Number(p.costPrice)) : '—'}
+                    </td>
+                    {/* Stock — joined from inventory query above */}
+                    <td className="px-4 py-3 text-right tabular-nums">
+                      {(() => {
+                        const stock = stockByProductId[p.id];
+                        if (!stock) return <span className="text-muted-foreground/40 text-xs">—</span>;
+                        return (
+                          <div className="flex items-center justify-end gap-1.5">
+                            {stock.isLowStock && <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                            <span className={`font-semibold ${stock.isLowStock ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
+                              {stock.quantity}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-center text-xs text-muted-foreground font-mono">
                       {p.unitOfMeasure?.abbreviation ?? '—'}
@@ -438,6 +510,23 @@ export default function ProductsPage() {
 
                     <td className="px-6 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        {canManage && p.inventoryMode !== 'RECIPE_BASED' && (
+                          <button
+                            onClick={() => {
+                              const stock = stockByProductId[p.id];
+                              setAdjustTarget({
+                                productId:   p.id,
+                                productName: p.name,
+                                quantity:    stock?.quantity ?? 0,
+                                branchId:    userBranchId,
+                              });
+                            }}
+                            className="text-muted-foreground hover:text-[var(--accent)] transition-colors"
+                            title="Adjust stock"
+                          >
+                            <Warehouse className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                         {canManage && (
                           <button
                             onClick={() => openEdit(p)}
@@ -555,6 +644,34 @@ export default function ProductsPage() {
         uploadUrl="/import/products"
         onSuccess={() => invalidate()}
       />
+
+      {/* Setup Pack — combined products + opening stock import */}
+      <ImportModal
+        open={showSetupPack}
+        onClose={() => setShowSetupPack(false)}
+        title="Setup Pack — Products + Opening Stock"
+        description="One workbook, two sheets. Stand up your full catalog and starting inventory in a single upload. Download the template, fill both sheets, then upload here."
+        templateUrl="/api/v1/import/template/setup-pack"
+        uploadUrl="/import/setup-pack"
+        extraParams={userBranchId ? { branchId: userBranchId } : undefined}
+        onSuccess={() => invalidate()}
+      />
+
+      {/* Stock Adjust Modal — opens from the Warehouse icon next to a product */}
+      {adjustTarget && (
+        <StockAdjustModal
+          open={!!adjustTarget}
+          productId={adjustTarget.productId}
+          productName={adjustTarget.productName}
+          currentQty={adjustTarget.quantity}
+          branchId={adjustTarget.branchId}
+          onClose={() => setAdjustTarget(null)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['inventory', userBranchId] });
+            setAdjustTarget(null);
+          }}
+        />
+      )}
 
       {/* Create / Edit Modal */}
       {modal && (

@@ -139,7 +139,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,      role),
     makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,        role),
     makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,      role),
-    makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES,     role),
+    makeNavItem('/pos/inventory',    'Ingredients', ClipboardList,   INVENTORY_ROLES,     role),
     makeNavItem('/pos/staff',        'Staff',       Users,           STAFF_ROLES,         role),
     makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
     makeNavItem('/pos/promotions',   'Promotions',  Tag,             PROMOTIONS_ROLES,    role),

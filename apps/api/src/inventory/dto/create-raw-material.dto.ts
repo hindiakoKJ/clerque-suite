@@ -17,4 +17,10 @@ export class CreateRawMaterialDto {
   @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
   costPrice?: number;
+
+  /** Stock level below which the ingredient is flagged as low (same unit as ingredient). */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0)
+  lowStockAlert?: number | null;
 }

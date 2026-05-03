@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, MaxLength, IsDateString, IsIn } from 'class-validator';
 
 export class ReceiveRawMaterialDto {
   @IsString()
@@ -19,4 +19,28 @@ export class ReceiveRawMaterialDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+
+  /**
+   * Receipt date (defaults to today). Cashier can backdate to invoice/delivery
+   * date. Period-lock is enforced — backdating into a closed period is rejected.
+   */
+  @IsOptional()
+  @IsDateString()
+  receivedAt?: string;
+
+  /**
+   * How was this delivery paid? Drives the credit side of the journal entry:
+   *   - CASH         → Cr 1010 Cash on Hand   (default — most common MSME path)
+   *   - CREDIT       → Cr 2010 Accounts Payable (for accrual / Net-30 suppliers)
+   *   - OWNER_FUNDED → Cr 3010 Owner's Capital (owner stocked from personal funds)
+   */
+  @IsOptional()
+  @IsIn(['CASH', 'CREDIT', 'OWNER_FUNDED'])
+  paymentMethod?: 'CASH' | 'CREDIT' | 'OWNER_FUNDED';
+
+  /** Optional reference (PO number, supplier invoice number, DR number, etc.) */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  referenceNumber?: string;
 }

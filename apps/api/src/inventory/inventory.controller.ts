@@ -70,6 +70,30 @@ export class InventoryController {
     );
   }
 
+  /**
+   * All stock movements — finished goods AND raw materials — for the branch.
+   * Used by the Stock Movements page (the "show me everything that happened
+   * to my inventory" audit view).
+   */
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'ACCOUNTANT', 'BOOKKEEPER', 'SUPER_ADMIN')
+  @Get('movements')
+  getMovements(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId?: string,
+    @Query('from') from?: string,
+    @Query('to')   to?: string,
+    @Query('kind') kind?: 'PRODUCT' | 'RAW_MATERIAL' | 'ALL',
+    @Query('limit') limit?: string,
+  ) {
+    return this.inventoryService.getAllMovements(user.tenantId!, {
+      branchId: branchId ?? user.branchId ?? undefined,
+      from,
+      to,
+      kind: kind ?? 'ALL',
+      limit: limit ? Math.min(500, parseInt(limit)) : 200,
+    });
+  }
+
   /** Manual stock-in / stock-out / adjustment — WAREHOUSE_STAFF is the new gatekeeper */
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
   @Post('adjust')

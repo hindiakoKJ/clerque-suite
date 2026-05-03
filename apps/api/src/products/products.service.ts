@@ -211,13 +211,31 @@ export class ProductsService {
     };
   }
 
-  findForPos(tenantId: string, branchId: string) {
-    return this.prisma.product.findMany({
+  /**
+   * POS terminal product feed.
+   *
+   * For UNIT_BASED products, stock = InventoryItem.quantity at this branch
+   * (the same as before).
+   *
+   * For RECIPE_BASED products (F&B drinks/dishes), there is no finished-goods
+   * stock — instead we compute "maxProducible" = MIN(ingredient.stock / bom.qty)
+   * across all BOM lines. When chocolate syrup runs out, every drink that uses
+   * chocolate syrup automatically shows "0 left" because it's a derived value.
+   *
+   * The terminal uses this number to:
+   *   - Show "X left" badge on each tile
+   *   - Gray out tiles where maxProducible = 0 (cannot be sold)
+   *   - Show amber "Low" badge when below the product's lowStockAlert
+   */
+  async findForPos(tenantId: string, branchId: string) {
+    const products = await this.prisma.product.findMany({
       where: { tenantId, isActive: true },
       include: {
         category: { select: { id: true, name: true } },
         variants: { where: { isActive: true } },
         inventory: { where: { branchId }, select: { quantity: true, lowStockAlert: true } },
+        // BOM lines so we can compute maxProducible for RECIPE_BASED items
+        bomItems: { select: { rawMaterialId: true, quantity: true } },
         modifierGroups: {
           include: {
             modifierGroup: {
@@ -230,6 +248,66 @@ export class ProductsService {
         },
       },
       orderBy: [{ category: { sortOrder: 'asc' } }, { name: 'asc' }],
+    });
+
+    // Collect every raw-material id referenced by any recipe in one query
+    const allRawMaterialIds = new Set<string>();
+    for (const p of products) {
+      if (p.inventoryMode === 'RECIPE_BASED') {
+        for (const b of p.bomItems) allRawMaterialIds.add(b.rawMaterialId);
+      }
+    }
+
+    let rmStockMap = new Map<string, number>();
+    if (allRawMaterialIds.size > 0 && branchId) {
+      const rmInventory = await this.prisma.rawMaterialInventory.findMany({
+        where: {
+          branchId,
+          rawMaterialId: { in: Array.from(allRawMaterialIds) },
+        },
+        select: { rawMaterialId: true, quantity: true },
+      });
+      rmStockMap = new Map(rmInventory.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+    }
+
+    return products.map((p) => {
+      let maxProducible: number | null = null;
+
+      if (p.inventoryMode === 'RECIPE_BASED') {
+        // No BOM at all → cannot produce; treat as 0 so cashier can't sell it.
+        if (p.bomItems.length === 0) {
+          maxProducible = 0;
+        } else {
+          // Limiting ingredient = the one that yields the lowest producible count.
+          let min = Number.POSITIVE_INFINITY;
+          for (const bom of p.bomItems) {
+            const stock = rmStockMap.get(bom.rawMaterialId) ?? 0;
+            const perUnit = Number(bom.quantity);
+            if (perUnit <= 0) continue;
+            const producible = Math.floor(stock / perUnit);
+            if (producible < min) min = producible;
+          }
+          maxProducible = min === Number.POSITIVE_INFINITY ? 0 : min;
+        }
+      } else {
+        // UNIT_BASED: same as before — finished-goods inventory at branch.
+        const inv = p.inventory[0];
+        maxProducible = inv ? Number(inv.quantity) : null;
+      }
+
+      const lowStockAlert = p.inventory[0]?.lowStockAlert ?? null;
+      const isLowStock =
+        maxProducible != null &&
+        ((lowStockAlert != null && maxProducible <= lowStockAlert) ||
+         (lowStockAlert == null && maxProducible <= 5)); // sensible default for recipes
+      const isOutOfStock = maxProducible === 0;
+
+      return {
+        ...p,
+        maxProducible,
+        isLowStock,
+        isOutOfStock,
+      };
     });
   }
 }

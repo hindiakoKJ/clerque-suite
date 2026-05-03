@@ -2,8 +2,9 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, Plus, Pencil, FlaskConical,
+  AlertTriangle, Plus, Pencil, FlaskConical, History,
 } from 'lucide-react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
@@ -47,7 +48,15 @@ export default function InventoryPage() {
   const [matModal,   setMatModal]   = useState<'create' | 'edit' | 'receive' | null>(null);
   const [editingMat, setEditingMat] = useState<RawMaterial | null>(null);
   const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', costPrice: '', lowStockAlert: '' });
-  const [receiveForm,setReceiveForm]= useState({ branchId: '', quantity: '', costPrice: '', note: '' });
+  const [receiveForm,setReceiveForm]= useState({
+    branchId: '',
+    quantity: '',
+    costPrice: '',
+    note: '',
+    referenceNumber: '',
+    paymentMethod: 'CASH' as 'CASH' | 'CREDIT' | 'OWNER_FUNDED',
+    receivedAt: new Date().toISOString().slice(0, 10),  // YYYY-MM-DD, today by default
+  });
   const [matSaving,  setMatSaving]  = useState(false);
 
   // Inline edit threshold state
@@ -115,7 +124,15 @@ export default function InventoryPage() {
 
   function openReceiveMat(m: RawMaterial) {
     setEditingMat(m);
-    setReceiveForm({ branchId: '', quantity: '', costPrice: String(m.costPrice ?? ''), note: '' });
+    setReceiveForm({
+      branchId: '',
+      quantity: '',
+      costPrice: String(m.costPrice ?? ''),
+      note: '',
+      referenceNumber: '',
+      paymentMethod: 'CASH',
+      receivedAt: new Date().toISOString().slice(0, 10),
+    });
     setMatModal('receive');
   }
 
@@ -154,10 +171,13 @@ export default function InventoryPage() {
     setMatSaving(true);
     try {
       await api.post(`/inventory/raw-materials/${editingMat.id}/receive`, {
-        branchId: receiveForm.branchId,
-        quantity: qty,
-        costPrice: receiveForm.costPrice ? parseFloat(receiveForm.costPrice) : undefined,
-        note: receiveForm.note.trim() || undefined,
+        branchId:        receiveForm.branchId,
+        quantity:        qty,
+        costPrice:       receiveForm.costPrice ? parseFloat(receiveForm.costPrice) : undefined,
+        note:            receiveForm.note.trim() || undefined,
+        referenceNumber: receiveForm.referenceNumber.trim() || undefined,
+        paymentMethod:   receiveForm.paymentMethod,
+        receivedAt:      new Date(receiveForm.receivedAt).toISOString(),
       });
       toast.success(`${qty} ${editingMat.unit} of "${editingMat.name}" received.`);
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
@@ -206,6 +226,14 @@ export default function InventoryPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href="/pos/inventory/movements"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title="Full audit trail of stock movements"
+          >
+            <History className="h-3.5 w-3.5" />
+            Movement Log
+          </Link>
           <button
             onClick={() => setFilterLow(!filterLow)}
             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition-colors ${
@@ -509,6 +537,40 @@ export default function InventoryPage() {
                   />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Receipt date <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={receiveForm.receivedAt}
+                    onChange={(e) => setReceiveForm((f) => ({ ...f, receivedAt: e.target.value }))}
+                    className={INPUT_CLS}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Paid by</label>
+                  <select
+                    value={receiveForm.paymentMethod}
+                    onChange={(e) => setReceiveForm((f) => ({ ...f, paymentMethod: e.target.value as 'CASH' | 'CREDIT' | 'OWNER_FUNDED' }))}
+                    className={INPUT_CLS}
+                  >
+                    <option value="CASH">Cash</option>
+                    <option value="CREDIT">Credit / Net-30</option>
+                    <option value="OWNER_FUNDED">Owner funds</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Reference (PO / DR / Invoice #)</label>
+                <input
+                  value={receiveForm.referenceNumber}
+                  onChange={(e) => setReceiveForm((f) => ({ ...f, referenceNumber: e.target.value }))}
+                  className={INPUT_CLS}
+                  placeholder="e.g. INV-12345"
+                />
+              </div>
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">Note (optional)</label>
                 <input
@@ -519,7 +581,7 @@ export default function InventoryPage() {
                 />
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Entering a cost per unit will update the Weighted Average Cost for COGS calculation.
+                A journal entry will be posted automatically (Dr Inventory / Cr {receiveForm.paymentMethod === 'CASH' ? 'Cash' : receiveForm.paymentMethod === 'CREDIT' ? 'Accounts Payable' : 'Owner&rsquo;s Capital'}). Entering a cost per unit also updates the Weighted Average Cost.
               </p>
             </div>
             <div className="px-6 pb-5 flex gap-3">

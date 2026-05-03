@@ -44,6 +44,16 @@ interface Product {
   categoryId?: string | null;
   category?: { id: string; name: string } | null;
   inventory?: { quantity: string | number; lowStockAlert?: number | null }[];
+  /** Whether this product is RECIPE_BASED (made from ingredients) or UNIT_BASED. */
+  inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
+  /**
+   * Max sellable units right now — for UNIT_BASED, this is finished-goods stock.
+   * For RECIPE_BASED, it's MIN(rawMaterial.stock / bom.qty) across all ingredients.
+   * Updates instantly when ingredients are sold or received.
+   */
+  maxProducible?: number | null;
+  isLowStock?: boolean;
+  isOutOfStock?: boolean;
   imageUrl?: string | null;
   modifierGroups?: ProductModifierGroup[];
 }
@@ -178,11 +188,17 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
             {filtered.map((p) => {
-              const inv = p.inventory?.[0];
-              const stock = inv?.quantity != null ? Number(inv.quantity) : null;
-              const threshold = inv?.lowStockAlert ?? null;
-              const isLow = stock !== null && threshold !== null && stock <= threshold;
-              const isOut = stock === 0;
+              // Prefer the server-computed maxProducible (handles both unit-based
+              // products and recipe-based dishes uniformly). Fall back to the
+              // legacy inventory array for any older payload during transition.
+              const stock =
+                p.maxProducible !== undefined && p.maxProducible !== null
+                  ? p.maxProducible
+                  : p.inventory?.[0]?.quantity != null
+                    ? Number(p.inventory[0].quantity)
+                    : null;
+              const isLow = p.isLowStock ?? false;
+              const isOut = p.isOutOfStock ?? stock === 0;
               return (
                 <button
                   key={p.id}
@@ -225,7 +241,9 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                   <p className="text-xs sm:text-sm font-medium text-foreground leading-tight line-clamp-2">{p.name}</p>
                   <p className="text-sm sm:text-base font-bold mt-auto pt-1" style={{ color: 'var(--accent)' }}>{formatPeso(Number(p.price))}</p>
 
-                  {/* Stock badge */}
+                  {/* Stock badge — shows "X left" so cashier knows max sellable units.
+                      For recipe-based products, this is computed from ingredients
+                      and updates instantly when ingredients are consumed. */}
                   {stock !== null && (
                     <span className={cn(
                       'absolute top-2 right-2 text-[10px] sm:text-xs px-1.5 py-0.5 rounded-full font-semibold',
@@ -235,7 +253,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                         ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                         : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
                     )}>
-                      {isOut ? 'OUT' : isLow ? `LOW·${stock}` : stock}
+                      {isOut ? 'OUT' : isLow ? `LOW · ${stock}` : `${stock} left`}
                     </span>
                   )}
                 </button>

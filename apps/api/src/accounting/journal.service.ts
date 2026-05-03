@@ -323,7 +323,16 @@ export class JournalService {
     const payload = event.payload as Record<string, unknown>;
     const lines: LineInput[] = [];
     let description = '';
-    const date = (event.createdAt ?? new Date()).toISOString().split('T')[0];
+    // Prefer the business date in the payload over the event creation timestamp.
+    // Inventory receipts may be backdated to the supplier-invoice date — and
+    // those journal entries should post to the period of the actual receipt,
+    // not whenever the system happened to process the event.
+    const businessDate =
+      (typeof payload['receivedAt']  === 'string' && payload['receivedAt']) ||
+      (typeof payload['completedAt'] === 'string' && payload['completedAt']) ||
+      undefined;
+    const date = (businessDate ? new Date(businessDate) : (event.createdAt ?? new Date()))
+      .toISOString().split('T')[0];
 
     try {
       if (event.type === 'SALE') {
@@ -383,6 +392,12 @@ export class JournalService {
         const adjustmentType = String(payload['adjustmentType'] ?? '');
         const productName    = String(payload['productName']    ?? 'Product');
         const reason         = payload['reason'] ? String(payload['reason']) : null;
+        // New: paymentMethod determines the credit account for stock receipts.
+        //   - CASH         → 1010 Cash on Hand          (default for raw material receipts — most common)
+        //   - CREDIT       → 2010 Accounts Payable      (Net-30 supplier accrual)
+        //   - OWNER_FUNDED → 3010 Owner's Capital       (legacy default + when owner funds stock personally)
+        const paymentMethod  = String(payload['paymentMethod'] ?? 'OWNER_FUNDED');
+        const refNumber      = payload['referenceNumber'] ? String(payload['referenceNumber']) : null;
 
         // Skip zero-value entries (no cost price set on product)
         if (totalValue === 0) {
@@ -393,14 +408,22 @@ export class JournalService {
           return { skipped: true };
         }
 
-        description = `Inventory ${adjustmentType.toLowerCase().replace('_', ' ')}: ${productName}${reason ? ` — ${reason}` : ''}`;
+        const refSuffix = refNumber ? ` (Ref ${refNumber})` : '';
+        description = `Inventory ${adjustmentType.toLowerCase().replace(/_/g, ' ')}: ${productName}${reason ? ` — ${reason}` : ''}${refSuffix}`;
 
         if (quantity > 0) {
-          // Stock increase: DR Merchandise Inventory / CR Owner's Capital
-          // (Owner's Capital is the default source for manual stock additions;
-          //  for supplier purchases this will move to AP when AP module is built.)
+          // Stock increase: DR Merchandise Inventory / CR (Cash | AP | Owner's Capital).
+          const creditAccount =
+            paymentMethod === 'CASH'   ? '1010' :  // Cash on Hand — supplier paid in cash today
+            paymentMethod === 'CREDIT' ? '2010' :  // Accounts Payable — Net-30 / accrual
+                                         '3010';   // Owner's Capital — owner funded the stock
+          const creditDescription =
+            paymentMethod === 'CASH'   ? `Cash purchase — ${productName}` :
+            paymentMethod === 'CREDIT' ? `Supplier credit — ${productName}` :
+                                         'Owner equity — inventory funded';
+
           lines.push({ accountId: await getAccount('1050'), debit:  totalValue, description: `Stock received: ${productName}` });
-          lines.push({ accountId: await getAccount('3010'), credit: totalValue, description: 'Owner equity — inventory funded' });
+          lines.push({ accountId: await getAccount(creditAccount), credit: totalValue, description: creditDescription });
         } else {
           // Stock reduction / write-off: DR COGS / CR Merchandise Inventory
           const absValue = Math.abs(totalValue);

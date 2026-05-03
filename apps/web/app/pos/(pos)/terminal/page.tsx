@@ -89,6 +89,10 @@ export default function PosTerminal() {
   }, [promotions, lineFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Products (write-through to Dexie) ──────────────────────────────────
+  // Poll every 15s while online so a sale on tablet POS-01 reflects on POS-02
+  // within ~15 seconds (Iced Mocha sold here → chocolate syrup drops there →
+  // Hot Mocha shows fewer "left" automatically). We also invalidate this query
+  // immediately after our own checkout for instant local feedback.
   const { data: products = [], isLoading: loadingProducts } = useQuery<CachedProduct[]>({
     queryKey: ['products-pos', activeBranchId],
     queryFn: async () => {
@@ -107,7 +111,10 @@ export default function PosTerminal() {
       return cached;
     },
     enabled: !!activeBranchId,
-    staleTime: 60_000,
+    staleTime: 10_000,                    // serve cache for 10s, then refetch on next access
+    refetchInterval: isOnline ? 15_000 : false,
+    refetchIntervalInBackground: false,   // pause polling when tab not visible (saves battery)
+    refetchOnWindowFocus: true,           // refresh when cashier comes back to tab
     retry: isOnline ? 3 : false,
   });
 
@@ -294,6 +301,9 @@ export default function PosTerminal() {
       clearCart();
       playSound('success');
       toast.success(`Order #${order.orderNumber} completed`);
+      // Refresh stock immediately so this tablet sees the deduction.
+      // Other tablets refetch on their next 15s poll cycle.
+      queryClient.invalidateQueries({ queryKey: ['products-pos', activeBranchId] });
     } catch (err: unknown) {
       const isNetworkError =
         (err as { code?: string })?.code === 'ERR_NETWORK' ||

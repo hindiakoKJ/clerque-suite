@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
@@ -8,9 +9,33 @@ import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 
 export { AdjustStockDto, SetThresholdDto, CreateRawMaterialDto, ReceiveRawMaterialDto };
 
+/** A unified stock-movement entry returned by getAllMovements(). */
+export interface StockMovement {
+  id:                string;
+  kind:              'PRODUCT' | 'RAW_MATERIAL';
+  occurredAt:        string;
+  type:              string;
+  itemName:          string;
+  unit:              string | null;
+  quantity:          number;       // signed: positive in, negative out
+  quantityBefore:    number | null;
+  quantityAfter:     number | null;
+  branchId:          string | null;
+  reason:            string | null;
+  reference:         string | null; // order # for sales, supplier ref for receipts
+  createdById:       string | null;
+  createdByName:     string | null;
+  paymentMethod:     string | null;
+  totalValue:        number | null;
+  accountingEventId: string | null;
+}
+
 @Injectable()
 export class InventoryService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private periods: AccountingPeriodsService,
+  ) {}
 
   // ─── List inventory for a branch ─────────────────────────────────────────
 
@@ -262,6 +287,127 @@ export class InventoryService {
     }));
   }
 
+  /**
+   * Combined stock-movement log across both finished goods (InventoryLog) and
+   * raw material receipts (sourced from AccountingEvents of type
+   * INVENTORY_ADJUSTMENT with kind='RAW_MATERIAL_RECEIPT').
+   *
+   * Returns a unified, chronologically-sorted list with a consistent shape so
+   * the Stock Movements page can render product and ingredient activity in one
+   * timeline.
+   */
+  async getAllMovements(
+    tenantId: string,
+    opts: {
+      branchId?: string;
+      from?:    string;
+      to?:      string;
+      kind:     'PRODUCT' | 'RAW_MATERIAL' | 'ALL';
+      limit:    number;
+    },
+  ): Promise<StockMovement[]> {
+    const { branchId, from, to, kind, limit } = opts;
+    const fromDate = from ? new Date(from) : undefined;
+    const toDate   = to   ? new Date(to)   : undefined;
+
+    const results: StockMovement[] = [];
+
+    // ── Finished-goods movements (InventoryLog) ────────────────────────────
+    if (kind === 'PRODUCT' || kind === 'ALL') {
+      const productLogs = await this.prisma.inventoryLog.findMany({
+        where: {
+          tenantId,
+          ...(branchId ? { branchId } : {}),
+          ...(fromDate || toDate
+            ? { createdAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
+            : {}),
+        },
+        include: {
+          product: { select: { name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      });
+
+      // Resolve cashier names in one batch (no Prisma relation defined for createdById)
+      const userIds = [...new Set(productLogs.map((l) => l.createdById).filter(Boolean))] as string[];
+      const users = userIds.length
+        ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } })
+        : [];
+      const userMap = Object.fromEntries(users.map((u) => [u.id, u.name]));
+
+      for (const log of productLogs) {
+        results.push({
+          id:             log.id,
+          kind:           'PRODUCT',
+          occurredAt:     log.createdAt.toISOString(),
+          type:           log.type,
+          itemName:       log.product?.name ?? 'Unknown product',
+          unit:           null,
+          quantity:       Number(log.quantity),
+          quantityBefore: Number(log.quantityBefore),
+          quantityAfter:  Number(log.quantityAfter),
+          branchId:       log.branchId,
+          reason:         log.reason,
+          reference:      log.referenceId,
+          createdById:    log.createdById ?? null,
+          createdByName:  log.createdById ? (userMap[log.createdById] ?? null) : null,
+          paymentMethod:  null,
+          totalValue:     null,
+          accountingEventId: null,
+        });
+      }
+    }
+
+    // ── Raw-material receipts (sourced from AccountingEvent payloads) ──────
+    if (kind === 'RAW_MATERIAL' || kind === 'ALL') {
+      const events = await this.prisma.accountingEvent.findMany({
+        where: {
+          tenantId,
+          type: 'INVENTORY_ADJUSTMENT',
+          ...(fromDate || toDate
+            ? { createdAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
+            : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      });
+
+      for (const ev of events) {
+        const p = ev.payload as Record<string, unknown> | null;
+        if (!p) continue;
+        if (p['kind'] !== 'RAW_MATERIAL_RECEIPT') continue;
+        if (branchId && p['branchId'] && p['branchId'] !== branchId) continue;
+
+        const occurredAt = (typeof p['receivedAt'] === 'string' ? p['receivedAt'] : ev.createdAt.toISOString());
+
+        results.push({
+          id:             ev.id,
+          kind:           'RAW_MATERIAL',
+          occurredAt,
+          type:           'STOCK_IN',
+          itemName:       String(p['rawMaterialName'] ?? p['productName'] ?? 'Ingredient'),
+          unit:           typeof p['unit'] === 'string' ? p['unit'] : null,
+          quantity:       Number(p['quantity'] ?? 0),
+          quantityBefore: null,
+          quantityAfter:  null,
+          branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
+          reason:         typeof p['note'] === 'string' ? p['note'] : null,
+          reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
+          createdById:    null,
+          createdByName:  null,
+          paymentMethod:  typeof p['paymentMethod'] === 'string' ? p['paymentMethod'] : null,
+          totalValue:     Number(p['totalValue'] ?? 0),
+          accountingEventId: ev.id,
+        });
+      }
+    }
+
+    // Merge and sort by occurredAt desc, then cap to the requested limit.
+    results.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+    return results.slice(0, limit);
+  }
+
   // ─── Raw Materials (F&B ingredient library) ───────────────────────────────
 
   async listRawMaterials(tenantId: string, includeInactive = false, branchId?: string) {
@@ -322,7 +468,18 @@ export class InventoryService {
     };
   }
 
-  /** Add incoming stock for a raw material (supplier delivery). Applies WAC cost update. */
+  /**
+   * Add incoming stock for a raw material (supplier delivery).
+   *
+   * Three things happen atomically:
+   *   1. RawMaterialInventory.quantity is incremented at the branch level.
+   *   2. Weighted-Average Cost (WAC) is updated if the receipt carries a unit cost.
+   *   3. A queued AccountingEvent is created so the journal posts a stock-receipt
+   *      entry: Dr 1050 Inventory / Cr (Cash | AP | Owner's Capital) based on
+   *      the receipt's `paymentMethod`.
+   *
+   * Period lock is enforced — backdating into a closed period is rejected.
+   */
   async receiveRawMaterial(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto) {
     const material = await this.prisma.rawMaterial.findFirst({
       where: { id: rawMaterialId, tenantId },
@@ -331,6 +488,17 @@ export class InventoryService {
 
     // Verify branch belongs to tenant
     await this.assertBranchBelongsToTenant(tenantId, dto.branchId);
+
+    // Resolve receipt date — defaults to now, allows backdating to invoice date.
+    const receivedAt = dto.receivedAt ? new Date(dto.receivedAt) : new Date();
+    if (Number.isNaN(receivedAt.getTime())) {
+      throw new BadRequestException('receivedAt is not a valid date.');
+    }
+
+    // Period-lock check before doing any writes.
+    await this.periods.assertDateIsOpen(tenantId, receivedAt);
+
+    const paymentMethod = dto.paymentMethod ?? 'CASH';
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.rawMaterialInventory.findUnique({
@@ -352,8 +520,9 @@ export class InventoryService {
       });
 
       // WAC cost update: if new cost price provided, update material cost
+      let unitCost = material.costPrice ? Number(material.costPrice) : 0;
       if (dto.costPrice != null) {
-        const oldCost    = material.costPrice ? Number(material.costPrice) : 0;
+        const oldCost    = unitCost;
         const totalOldValue  = qtyBefore * oldCost;
         const totalNewValue  = dto.quantity * dto.costPrice;
         const newWac = qtyAfter > 0
@@ -364,6 +533,43 @@ export class InventoryService {
           where: { id: rawMaterialId },
           data: { costPrice: new Prisma.Decimal(newWac) },
         });
+        unitCost = dto.costPrice; // value this delivery at its own cost
+      }
+
+      // Total value for the journal entry = (this delivery's qty) × (unit cost).
+      // We use the delivery cost (or current WAC if no cost specified) — NOT the
+      // post-WAC blended cost — so the journal value matches the actual money
+      // changing hands today.
+      const totalValue = dto.quantity * unitCost;
+
+      // Queue accounting event — only if there's a value to record.
+      // Zero-cost receipts (free samples, no cost set) are skipped at journal time.
+      if (totalValue > 0) {
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type: 'INVENTORY_ADJUSTMENT',
+            status: 'PENDING',
+            payload: {
+              kind:           'RAW_MATERIAL_RECEIPT',
+              rawMaterialId,
+              rawMaterialName: material.name,
+              unit:           material.unit,
+              quantity:       dto.quantity,        // positive — stock IN
+              unitCost,
+              totalValue,
+              paymentMethod,
+              receivedAt:     receivedAt.toISOString(),
+              referenceNumber: dto.referenceNumber ?? null,
+              note:           dto.note ?? null,
+              branchId:       dto.branchId,
+              // Legacy fields the existing journal handler reads
+              productName:    material.name,
+              adjustmentType: 'RAW_MATERIAL_RECEIPT',
+              reason:         dto.note ?? dto.referenceNumber ?? null,
+            } as unknown as Prisma.JsonObject,
+          },
+        });
       }
 
       return {
@@ -372,6 +578,9 @@ export class InventoryService {
         quantityBefore: qtyBefore,
         quantityAfter: qtyAfter,
         quantity: dto.quantity,
+        receivedAt: receivedAt.toISOString(),
+        paymentMethod,
+        totalValue,
       };
     });
   }

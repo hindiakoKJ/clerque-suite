@@ -17,7 +17,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { CartLine, CartDiscount } from '@/store/pos/cart';
+import type { CartLine, CartDiscount, AdditionalPwdScEntry } from '@/store/pos/cart';
 
 const PARK_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -29,6 +29,13 @@ export interface ParkedSale {
   shiftId: string | null;
   lines: CartLine[];
   orderDiscount: CartDiscount | null;
+  /**
+   * Additional PWD/SC entries (2nd-5th in a shared meal). Persisted across
+   * park/recall so a paused multi-PWD order doesn't lose the extra IDs.
+   * Optional for backward-compat with parked sales saved before this field
+   * was added.
+   */
+  additionalPwdScEntries?: AdditionalPwdScEntry[];
   totalAmount: number; // cached for the recall list (no need to recompute)
   itemCount: number;
 }

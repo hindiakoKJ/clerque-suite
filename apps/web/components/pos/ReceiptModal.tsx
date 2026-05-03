@@ -306,6 +306,9 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
         isOffline:        data.isOffline,
         pwdScIdRef:       data.pwdScIdRef,
         pwdScIdOwnerName: data.pwdScIdOwnerName,
+        // Additional PWD/SC IDs (entries 2-5 for shared meals) — printed
+        // per-entry on the thermal receipt for BIR audit completeness.
+        additionalPwdScEntries: data.additionalPwdScEntries,
         // BIR compliance fields — read from auth store (set at login from JWT)
         taxStatus,
         tinNumber,

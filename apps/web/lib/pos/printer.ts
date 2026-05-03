@@ -94,6 +94,17 @@ export interface PrintReceiptData {
   isOffline?:       boolean;
   pwdScIdRef?:      string;
   pwdScIdOwnerName?: string;
+  /**
+   * Additional PWD/SC IDs (entries 2-5) when multiple qualified individuals
+   * share the same order. Each carries its own ID, name, and savings, so
+   * the printed receipt has the full BIR audit trail per RA 9994 / RA 7277.
+   */
+  additionalPwdScEntries?: Array<{
+    type:        'PWD' | 'SENIOR_CITIZEN';
+    idRef:       string;
+    idOwnerName: string;
+    savings:     number;
+  }>;
   // ── BIR compliance fields (RR No. 1-2026) ──────────────────────────────────
   taxStatus?:         'VAT' | 'NON_VAT' | 'UNREGISTERED';
   tinNumber?:         string | null;
@@ -261,6 +272,16 @@ function buildReceipt(data: PrintReceiptData): Uint8Array {
     }
     if (data.pwdScIdOwnerName) p(txt(`  ID Holder: ${data.pwdScIdOwnerName}`));
     if (data.pwdScIdRef)       p(txt(`  ID No.: ${data.pwdScIdRef}`));
+    // Additional PWD/SC IDs on the same order — print each on its own
+    // line so BIR auditors see every qualified individual.
+    if (data.additionalPwdScEntries && data.additionalPwdScEntries.length > 0) {
+      for (const e of data.additionalPwdScEntries) {
+        const tag = e.type === 'PWD' ? 'PWD' : 'Sen';
+        p(txt(`  + ${tag}: ${e.idOwnerName}`));
+        p(txt(`    ID No.: ${e.idRef}`));
+        parts.push(twoCol(`    Savings`, `-${fmtPeso(e.savings)}`), C.lf);
+      }
+    }
   } else if (data.discountAmount > 0) {
     parts.push(twoCol('Discount', `-${fmtPeso(data.discountAmount)}`), C.lf);
   }

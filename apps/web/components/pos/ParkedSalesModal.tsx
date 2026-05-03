@@ -54,6 +54,10 @@ export function ParkedSalesModal({ open, onClose }: ParkedSalesModalProps) {
     useCartStore.setState({
       lines: sale.lines,
       orderDiscount: sale.orderDiscount,
+      // Restore multi-PWD entries so a paused shared-meal order survives
+      // the park/recall cycle. Older parked sales (saved before this field
+      // existed) get an empty array — graceful degradation.
+      additionalPwdScEntries: sale.additionalPwdScEntries ?? [],
       branchId: sale.branchId,
       shiftId: sale.shiftId,
     });

@@ -40,12 +40,30 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
 
   // Cashier must explicitly choose which item(s) get the discount.
   // Default is empty — nothing selected — so no accidental blanket discounts.
+  // Stores the cart's actual lineKey strings (so they match what the store uses).
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
+  // Lines already claimed by ANOTHER PWD/SC on this order.
+  // Excluded from the selectable list so the same item isn't double-discounted.
+  const claimedLineKeys = useMemo(() => {
+    const set = new Set<string>();
+    if (isAdditional && orderDiscount?.selectedLineKeys) {
+      orderDiscount.selectedLineKeys.forEach((k) => set.add(k));
+    }
+    additionalEntries.forEach((e) => e.selectedLineKeys.forEach((k) => set.add(k)));
+    return set;
+  }, [isAdditional, orderDiscount, additionalEntries]);
+
+  // Selectable lines = cart lines NOT yet claimed by any other PWD/SC.
+  // For the FIRST PWD, this is the entire cart.
+  const selectableLines = useMemo(
+    () => lines.filter((l) => !claimedLineKeys.has(l.lineKey)),
+    [lines, claimedLineKeys],
+  );
+
   const lineKeys = useMemo(
-    () => lines.map((l) => `${l.product.id}-${l.variantId ?? ''}`),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [lines],
+    () => selectableLines.map((l) => l.lineKey),
+    [selectableLines],
   );
 
   // When modal opens, clear selection and reset form fields
@@ -70,12 +88,11 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
   // If qty is 3, only 1 unit is discounted; the remaining 2 pay full price.
   const selectedSubtotal = useMemo(
     () =>
-      lines.reduce((sum, l) => {
-        const key = `${l.product.id}-${l.variantId ?? ''}`;
+      selectableLines.reduce((sum, l) => {
         // Always use 1 unit regardless of quantity
-        return selected.has(key) ? sum + (l.unitPrice - l.itemDiscount) * 1 : sum;
+        return selected.has(l.lineKey) ? sum + (l.unitPrice - l.itemDiscount) * 1 : sum;
       }, 0),
-    [lines, selected],
+    [selectableLines, selected],
   );
 
   // Live discount preview — routes to correct engine based on tenant tax status
@@ -95,15 +112,25 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
       return;
     }
 
+    const claimed = Array.from(selected);
+
     if (isAdditional) {
-      // Adding the 2nd..5th PWD/SC — always pass the explicit selectedSubtotal,
-      // since the cart already has another PWD/SC claiming part of the order.
-      addAdditionalPwdSc(type, idRef.trim(), idOwnerName.trim(), selectedSubtotal);
+      // Adding the 2nd..5th PWD/SC — pass explicit subtotal AND the line keys
+      // claimed so the store can prevent double-claiming and accurately compute
+      // the unclaimed VAT slice.
+      addAdditionalPwdSc(type, idRef.trim(), idOwnerName.trim(), selectedSubtotal, claimed);
     } else {
-      // First PWD/SC: if ALL items are selected, pass undefined so the store
-      // uses the full cart subtotal as the basis (the existing single-PWD path).
+      // First PWD/SC: if ALL selectable items were chosen, pass undefined so
+      // the store uses the legacy "covers entire cart" path (preserves the
+      // single-PWD behaviour clients already trust).
       const allSelected = selected.size === lineKeys.length;
-      applyPwdSc(type, idRef.trim(), idOwnerName.trim(), allSelected ? undefined : selectedSubtotal);
+      applyPwdSc(
+        type,
+        idRef.trim(),
+        idOwnerName.trim(),
+        allSelected ? undefined : selectedSubtotal,
+        allSelected ? undefined : claimed,
+      );
     }
     onClose();
   }
@@ -185,12 +212,16 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
               </div>
             </div>
             <div className="border border-border rounded-lg divide-y divide-border max-h-44 overflow-y-auto">
-              {lines.map((l) => {
-                const key = `${l.product.id}-${l.variantId ?? ''}`;
-                const checked = selected.has(key);
+              {selectableLines.length === 0 ? (
+                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                  All items in this order have already been claimed by another PWD/Senior.
+                </div>
+              ) : (
+                selectableLines.map((l) => {
+                const checked = selected.has(l.lineKey);
                 return (
                   <label
-                    key={key}
+                    key={l.lineKey}
                     className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${
                       checked ? ACCENT_SOFT_BG : 'bg-card hover:bg-secondary/50'
                     }`}
@@ -198,7 +229,7 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                     <input
                       type="checkbox"
                       checked={checked}
-                      onChange={() => toggleLine(key)}
+                      onChange={() => toggleLine(l.lineKey)}
                       className="h-4 w-4 shrink-0 accent-[var(--accent)]"
                     />
                     <div className="flex-1 min-w-0">
@@ -219,8 +250,14 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                     </span>
                   </label>
                 );
-              })}
+                })
+              )}
             </div>
+            {claimedLineKeys.size > 0 && (
+              <p className="text-[10px] text-muted-foreground/70 mt-1.5 italic">
+                {claimedLineKeys.size} item{claimedLineKeys.size !== 1 ? 's' : ''} already claimed by another PWD/Senior — hidden from this list.
+              </p>
+            )}
           </div>
 
           {/* Live preview */}

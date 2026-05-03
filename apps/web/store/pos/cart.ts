@@ -45,6 +45,13 @@ export interface CartDiscount {
   percent?: number;
   idRef?: string;
   idOwnerName?: string;
+  /**
+   * Cart line keys claimed by this PWD/SC. Empty array means the discount
+   * covers the entire cart (legacy "all items" path). Used to prevent
+   * double-claiming when additional PWDs/SCs are added later.
+   * Only meaningful when type is PWD or SENIOR_CITIZEN.
+   */
+  selectedLineKeys?: string[];
   /** Free-text reason — required for CASHIER_APPLIED / MANAGER_OVERRIDE; logged on receipt + journal */
   reason?: string;
 }
@@ -64,6 +71,8 @@ export interface AdditionalPwdScEntry {
   type: 'PWD' | 'SENIOR_CITIZEN';
   idRef: string;
   idOwnerName: string;
+  /** Cart line keys claimed by this PWD/SC. Always non-empty for additional entries. */
+  selectedLineKeys: string[];
   /** Subtotal of THIS PWD/SC's selected items (before discount) */
   selectedSubtotal: number;
   /** 20% of the VAT-exclusive base for this PWD's items */
@@ -113,13 +122,34 @@ interface CartState {
    * @param selectedSubtotal Optional: subtotal of only the selected (discountable) items.
    *                         If omitted the entire cart subtotal is used.
    */
-  applyPwdSc: (type: 'PWD' | 'SENIOR_CITIZEN', idRef: string, idOwnerName: string, selectedSubtotal?: number) => void;
+  /**
+   * Apply the FIRST PWD/SC discount.
+   * @param selectedLineKeys Cart line keys this PWD claimed. When omitted, the
+   *                          legacy "covers the whole cart" path is used.
+   * @param selectedSubtotal Subtotal of selected items. When omitted, the full
+   *                          cart subtotal is used.
+   */
+  applyPwdSc: (
+    type: 'PWD' | 'SENIOR_CITIZEN',
+    idRef: string,
+    idOwnerName: string,
+    selectedSubtotal?: number,
+    selectedLineKeys?: string[],
+  ) => void;
   /**
    * Add a SECOND through FIFTH PWD/SC discount on top of an existing one.
-   * Throws (silently no-ops) when there's no first PWD/SC yet, or when
-   * the cap (MAX_PWD_SC_PER_ORDER) is reached.
+   * Silently no-ops when there's no first PWD/SC yet, or when the cap
+   * (MAX_PWD_SC_PER_ORDER) is reached. selectedLineKeys must list the
+   * cart lines this PWD claims (and they must NOT already be claimed
+   * by another PWD on the same order).
    */
-  addAdditionalPwdSc: (type: 'PWD' | 'SENIOR_CITIZEN', idRef: string, idOwnerName: string, selectedSubtotal: number) => void;
+  addAdditionalPwdSc: (
+    type: 'PWD' | 'SENIOR_CITIZEN',
+    idRef: string,
+    idOwnerName: string,
+    selectedSubtotal: number,
+    selectedLineKeys: string[],
+  ) => void;
   removeAdditionalPwdSc: (index: number) => void;
   /**
    * Manual cashier-applied whole-cart discount.
@@ -234,7 +264,7 @@ export const useCartStore = create<CartState>()(
     });
   },
 
-  applyPwdSc: (type, idRef, idOwnerName, selectedSubtotal) => {
+  applyPwdSc: (type, idRef, idOwnerName, selectedSubtotal, selectedLineKeys) => {
     const { taxStatus } = get();
     const fullSubtotal  = get().subtotal();
     const basis         = selectedSubtotal ?? fullSubtotal;
@@ -262,19 +292,30 @@ export const useCartStore = create<CartState>()(
         percent: 20,
         idRef,
         idOwnerName,
+        selectedLineKeys: selectedLineKeys ?? [],
       },
       // Reset any additional PWD/SC entries when starting fresh.
       additionalPwdScEntries: [],
     });
   },
 
-  addAdditionalPwdSc: (type, idRef, idOwnerName, selectedSubtotal) => {
+  addAdditionalPwdSc: (type, idRef, idOwnerName, selectedSubtotal, selectedLineKeys) => {
     const { taxStatus, orderDiscount, additionalPwdScEntries } = get();
     // Must have a first PWD/SC already applied
     if (!orderDiscount || (orderDiscount.type !== 'PWD' && orderDiscount.type !== 'SENIOR_CITIZEN')) return;
     // Hard cap: 5 IDs total per order (1 in orderDiscount + 4 additional)
     if (additionalPwdScEntries.length >= MAX_PWD_SC_PER_ORDER - 1) return;
     if (selectedSubtotal <= 0) return;
+    if (!selectedLineKeys || selectedLineKeys.length === 0) return;
+
+    // Defensive: drop any line keys that are already claimed by another PWD.
+    // The modal should already filter these out, but guard at the store too.
+    const claimedKeys = new Set<string>([
+      ...(orderDiscount.selectedLineKeys ?? []),
+      ...additionalPwdScEntries.flatMap((e) => e.selectedLineKeys),
+    ]);
+    const dedupedKeys = selectedLineKeys.filter((k) => !claimedKeys.has(k));
+    if (dedupedKeys.length === 0) return;
 
     const { vatExclusiveBase, discountOnBase, vatOnDiscounted, totalSavings } =
       computeDiscount(selectedSubtotal, taxStatus);
@@ -286,6 +327,7 @@ export const useCartStore = create<CartState>()(
           type,
           idRef,
           idOwnerName,
+          selectedLineKeys: dedupedKeys,
           selectedSubtotal,
           discountOnBase,
           vatExclusiveBase,
@@ -346,19 +388,34 @@ export const useCartStore = create<CartState>()(
 
     const isPwdSc = orderDiscount?.type === 'PWD' || orderDiscount?.type === 'SENIOR_CITIZEN';
     if (isPwdSc && orderDiscount) {
-      // VAT structure with multiple PWDs:
-      //   - Each PWD entry's vatOnDiscounted = VAT on their discounted slice (3% effective)
-      //   - vatOnUnselected = VAT on items NOT claimed by ANY PWD (full 12%)
-      //   - Additional PWDs contribute their own vatOnDiscounted; the
-      //     "unselected" pool shrinks as more PWDs claim more items.
-      //   - Recompute the unselected slice: full subtotal MINUS all claimed
-      //     subtotals (first PWD vatExclusiveBase + each additional's selectedSubtotal).
-      const totalSubtotal = lines.reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0);
-      const claimed =
-        (orderDiscount.vatExclusiveBase * 1.12) +  // first PWD's pre-VAT base → grossed up to compare to subtotal
-        additionalPwdScEntries.reduce((sum, e) => sum + e.selectedSubtotal, 0);
-      const unclaimedSubtotal = Math.max(0, totalSubtotal - claimed);
-      const vatOnUnclaimed = unclaimedSubtotal > 0 ? computeVat(unclaimedSubtotal).vat : 0;
+      // VAT structure with one or more PWDs:
+      //   - Each PWD pays VAT only on their own discounted slice (effective ~3%)
+      //   - Items claimed by NO PWD pay full 12% VAT
+      //
+      // The "no double-claim" guarantee is enforced upstream (in the modal +
+      // the addAdditionalPwdSc dedupe). Here we trust selectedLineKeys is
+      // disjoint across entries and compute the unclaimed slice precisely
+      // by line keys — no approximation, no gross-up math.
+      const claimed = new Set<string>([
+        ...(orderDiscount.selectedLineKeys ?? []),
+        ...additionalPwdScEntries.flatMap((e) => e.selectedLineKeys),
+      ]);
+
+      // Edge case: legacy "covers entire cart" (selectedLineKeys is empty AND
+      // there are no additional entries) — preserve original behaviour.
+      if (claimed.size === 0 && additionalPwdScEntries.length === 0) {
+        return orderDiscount.vatOnDiscounted + (orderDiscount.vatOnUnselected ?? 0);
+      }
+
+      // Unclaimed subtotal = sum of vatable lines NOT in any PWD's claim list.
+      // (Non-vatable items collect zero VAT regardless of who claimed them.)
+      const unclaimedVatableSubtotal = lines
+        .filter((l) => l.product.isVatable && !claimed.has(l.lineKey))
+        .reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0);
+      const vatOnUnclaimed = unclaimedVatableSubtotal > 0
+        ? computeVat(unclaimedVatableSubtotal).vat
+        : 0;
+
       const additionalVatOnDiscounted = additionalPwdScEntries.reduce((sum, e) => sum + e.vatOnDiscounted, 0);
       return orderDiscount.vatOnDiscounted + additionalVatOnDiscounted + vatOnUnclaimed;
     }

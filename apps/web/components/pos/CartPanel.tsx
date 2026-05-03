@@ -48,6 +48,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
       shiftId,
       lines,
       orderDiscount,
+      additionalPwdScEntries,
       totalAmount: total,
       itemCount,
     });

@@ -785,12 +785,29 @@ export class AdminService {
       },
     });
 
+    // Sprint 3 — auto-apply CS_4 to the Coffee Shop demo so the demo tenant
+    // boots straight into a "Café with Bar + Kitchen" floor layout (the
+    // client's actual setup). Other scenarios skip layout provisioning.
+    let layoutTier: string | null = null;
+    if (scenario.businessType === 'COFFEE_SHOP') {
+      try {
+        await this.prisma.tenant.update({
+          where: { id: tenantId },
+          data:  { coffeeShopTier: 'CS_4' as any, hasCustomerDisplay: true },
+        });
+        layoutTier = 'CS_4';
+      } catch (err) {
+        this.logger.warn(`Failed to apply CS_4 layout to demo tenant ${tenantId}: ${err}`);
+      }
+    }
+
     return {
       scenario:        scenario.label,
       businessType:    scenario.businessType,
       taxStatus:       scenario.taxStatus,
       productsSeeded:  catalog.length,
       ordersGenerated: orderCount,
+      layoutTier,
     };
 
     } catch (err) {

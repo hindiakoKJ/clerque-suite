@@ -35,6 +35,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { BankReconciliationModule } from './bank-recon/bank-recon.module';
 import { JournalTemplatesModule } from './journal-templates/journal-templates.module';
 import { AdminModule } from './admin/admin.module';
+import { LayoutsModule } from './layouts/layouts.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -76,6 +77,7 @@ import { HealthController } from './health/health.controller';
     BankReconciliationModule,
     JournalTemplatesModule,
     AdminModule,
+    LayoutsModule,
   ],
 })
 export class AppModule {}

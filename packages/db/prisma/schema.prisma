@@ -14,28 +14,28 @@ datasource db {
 enum UserRole {
   // ── Administrative ──────────────────────────────────────────────────────────
   SUPER_ADMIN
-  BUSINESS_OWNER       // Full access; the only role that can assign MDM / PAYROLL_MASTER
+  BUSINESS_OWNER // Full access; the only role that can assign MDM / PAYROLL_MASTER
 
   // ── Operations ──────────────────────────────────────────────────────────────
-  BRANCH_MANAGER       // Branch-level operations; subset of BUSINESS_OWNER rights
+  BRANCH_MANAGER // Branch-level operations; subset of BUSINESS_OWNER rights
 
   // ── Sales & Revenue ─────────────────────────────────────────────────────────
-  SALES_LEAD           // Sales + void/discount authority; supervises cashiers
-  CASHIER              // Sales only; voids require SALES_LEAD / BUSINESS_OWNER co-auth
-  AR_ACCOUNTANT        // Accounts Receivable / Collections (Phase 4 — AR module)
+  SALES_LEAD // Sales + void/discount authority; supervises cashiers
+  CASHIER // Sales only; voids require SALES_LEAD / BUSINESS_OWNER co-auth
+  AR_ACCOUNTANT // Accounts Receivable / Collections (Phase 4 — AR module)
 
   // ── Expenditure & Inventory ──────────────────────────────────────────────────
-  AP_ACCOUNTANT        // Accounts Payable / Supplier Bills (Phase 4 — AP module)
-  MDM                  // Master Data Manager — products/prices/suppliers; assigned by OWNER only
-  WAREHOUSE_STAFF      // Stock movement / inventory adjustments; no financial access
+  AP_ACCOUNTANT // Accounts Payable / Supplier Bills (Phase 4 — AP module)
+  MDM // Master Data Manager — products/prices/suppliers; assigned by OWNER only
+  WAREHOUSE_STAFF // Stock movement / inventory adjustments; no financial access
 
   // ── Finance & Compliance ─────────────────────────────────────────────────────
-  FINANCE_LEAD         // Bank reconciliation / cash-flow reports; no payroll
-  BOOKKEEPER           // Journal entries / GL; no payroll; no price edits
-  PAYROLL_MASTER       // Salaries / payroll runs; exclusive salary column access
-  ACCOUNTANT           // Legacy — full ledger read; no payroll
-  GENERAL_EMPLOYEE     // Clock-in/out only
-  EXTERNAL_AUDITOR     // Read-only compliance view; no writes anywhere
+  FINANCE_LEAD // Bank reconciliation / cash-flow reports; no payroll
+  BOOKKEEPER // Journal entries / GL; no payroll; no price edits
+  PAYROLL_MASTER // Salaries / payroll runs; exclusive salary column access
+  ACCOUNTANT // Legacy — full ledger read; no payroll
+  GENERAL_EMPLOYEE // Clock-in/out only
+  EXTERNAL_AUDITOR // Read-only compliance view; no writes anywhere
 }
 
 /// Which application the access entry refers to
@@ -60,16 +60,16 @@ enum AccessLevel {
 /// Non-F&B group: RETAIL, SERVICE, MANUFACTURING
 enum BusinessType {
   // ── Food & Beverage ──────────────────────────────────────────────────────
-  COFFEE_SHOP    // Café, milk tea, coffee kiosk (legacy value — kept for backward compat)
-  RESTAURANT     // Dine-in or takeout restaurant
-  BAKERY         // Bakery, pastry shop, cake shop
-  FOOD_STALL     // Carinderia, turo-turo, market stall
-  BAR_LOUNGE     // Bar, lounge, nightspot with food/drinks
-  CATERING       // Catering / events food service
+  COFFEE_SHOP // Café, milk tea, coffee kiosk (legacy value — kept for backward compat)
+  RESTAURANT // Dine-in or takeout restaurant
+  BAKERY // Bakery, pastry shop, cake shop
+  FOOD_STALL // Carinderia, turo-turo, market stall
+  BAR_LOUNGE // Bar, lounge, nightspot with food/drinks
+  CATERING // Catering / events food service
   // ── Non-F&B ──────────────────────────────────────────────────────────────
-  RETAIL         // Convenience store, boutique, product-based shop
-  SERVICE        // Salon, clinic, laundry, repair, any service-based
-  MANUFACTURING  // Fabrication, construction, BOM / bill-of-materials workflows
+  RETAIL // Convenience store, boutique, product-based shop
+  SERVICE // Salon, clinic, laundry, repair, any service-based
+  MANUFACTURING // Fabrication, construction, BOM / bill-of-materials workflows
 }
 
 enum TenantStatus {
@@ -99,9 +99,9 @@ enum SignupSource {
 /// TIER_5 includes 200 prompts/mo without buying; addon stacks on top.
 /// TIER_6 includes 500 prompts/mo without buying; addon stacks on top.
 enum AiAddonType {
-  STARTER_50    // 50 prompts/mo for ₱250
-  STANDARD_200  // 200 prompts/mo for ₱600
-  PRO_500       // 500 prompts/mo for ₱1,400
+  STARTER_50 // 50 prompts/mo for ₱250
+  STANDARD_200 // 200 prompts/mo for ₱600
+  PRO_500 // 500 prompts/mo for ₱1,400
 }
 
 enum EmploymentType {
@@ -172,10 +172,10 @@ enum InvoiceType {
 }
 
 enum SettlementStatus {
-  PENDING     // transactions collected, not yet settled to bank
-  SETTLED     // bank receipt confirmed
-  RECONCILED  // matched to bank statement line
-  DISPUTED    // amount mismatch — under investigation
+  PENDING // transactions collected, not yet settled to bank
+  SETTLED // bank receipt confirmed
+  RECONCILED // matched to bank statement line
+  DISPUTED // amount mismatch — under investigation
 }
 
 enum AccountingPeriodStatus {
@@ -263,7 +263,7 @@ enum NormalBalance {
 
 enum JournalEntryStatus {
   DRAFT
-  PENDING_APPROVAL  // entry exceeds tenant.jeApprovalThreshold; awaiting sign-off
+  PENDING_APPROVAL // entry exceeds tenant.jeApprovalThreshold; awaiting sign-off
   POSTED
   VOIDED
 }
@@ -271,18 +271,18 @@ enum JournalEntryStatus {
 /// Controls who is allowed to post to this account.
 /// OPEN = manual JEs allowed; others = sub-ledger or system only.
 enum PostingControl {
-  OPEN        // Accountant / Business Owner can post via manual JE
-  AP_ONLY     // Only AP module service may post (Phase 4)
-  AR_ONLY     // Only AR module service may post (Phase 5)
+  OPEN // Accountant / Business Owner can post via manual JE
+  AP_ONLY // Only AP module service may post (Phase 4)
+  AR_ONLY // Only AR module service may post (Phase 5)
   SYSTEM_ONLY // Only the @Cron event processor may post (Sales, COGS, VAT)
 }
 
 /// Tracks which subsystem originated a journal entry.
 enum JournalSource {
-  MANUAL  // posted by a human via the JE screen
-  SYSTEM  // posted by the accounting event queue (@Cron)
-  AP      // posted by the AP module (Phase 4)
-  AR      // posted by the AR module (Phase 5)
+  MANUAL // posted by a human via the JE screen
+  SYSTEM // posted by the accounting event queue (@Cron)
+  AP // posted by the AP module (Phase 4)
+  AR // posted by the AR module (Phase 5)
 }
 
 // ─── Super Admin ──────────────────────────────────────────────────────────────
@@ -295,22 +295,22 @@ model SuperAdmin {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  sessions     SuperAdminSession[]
+  sessions SuperAdminSession[]
 
   @@map("super_admins")
 }
 
 model SuperAdminSession {
-  id           String   @id @default(cuid())
+  id           String        @id @default(cuid())
   superAdminId String
-  tokenHash    String   @unique
+  tokenHash    String        @unique
   deviceInfo   String?
   ipAddress    String?
   status       SessionStatus @default(ACTIVE)
   expiresAt    DateTime
-  createdAt    DateTime @default(now())
+  createdAt    DateTime      @default(now())
 
-  superAdmin   SuperAdmin @relation(fields: [superAdminId], references: [id], onDelete: Cascade)
+  superAdmin SuperAdmin @relation(fields: [superAdminId], references: [id], onDelete: Cascade)
 
   @@map("super_admin_sessions")
 }
@@ -322,7 +322,7 @@ model Tenant {
   name                     String
   slug                     String           @unique
   businessType             BusinessType     @default(RETAIL)
-  tin                      String?          // Legacy field; use tinNumber going forward
+  tin                      String? // Legacy field; use tinNumber going forward
   /// BIR Tax Identification Number — format: 000-000-000-00000 (15 chars with dashes)
   tinNumber                String?
   /// Business name exactly as it appears on the BIR Certificate of Registration
@@ -433,13 +433,37 @@ model Tenant {
   /// exceeds this amount, the JE is held in PENDING_APPROVAL until an
   /// authorised user (Owner / Finance Lead) approves it. 0 = no approval
   /// (everything posts directly). Default ₱50,000.
-  jeApprovalThreshold Decimal             @default(50000) @db.Decimal(14, 2)
+  jeApprovalThreshold Decimal                  @default(50000) @db.Decimal(14, 2)
+  /// Coffee shop floor-layout tier (CS_1..CS_5) — only used when businessType
+  /// is COFFEE_SHOP. Controls the canonical station/printer/display setup.
+  /// Null until the owner picks a layout in the setup wizard.
+  /// Sales-controlled — owners cannot self-upgrade (per architectural decision).
+  coffeeShopTier      CoffeeShopTier?
+  /// Optional customer-facing display toggle — meaningful only for CS_1
+  /// (where the canonical setup has no customer display). Other tiers have
+  /// it included by definition; this flag is ignored for them.
+  hasCustomerDisplay  Boolean                  @default(false)
+
+  // Sprint 3 — Floor Layout relations
+  stations  Station[]
+  printers  Printer[]
+  terminals Terminal[]
 
   @@map("tenants")
 }
 
+/// Coffee Shop Operational Layout tier — see packages/shared-types/src/layouts.ts
+/// for the structural template per tier. Locked in Sprint 3.
+enum CoffeeShopTier {
+  CS_1
+  CS_2
+  CS_3
+  CS_4
+  CS_5
+}
+
 model SubscriptionLog {
-  id          String   @id @default(cuid())
+  id          String            @id @default(cuid())
   tenantId    String
   action      String
   tierFrom    SubscriptionTier?
@@ -447,9 +471,9 @@ model SubscriptionLog {
   expiresAt   DateTime?
   notes       String?
   performedBy String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime          @default(now())
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("subscription_logs")
 }
@@ -475,7 +499,7 @@ model AuditLog {
   ipAddress   String?
   createdAt   DateTime    @default(now())
 
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, action])
   @@index([tenantId, entityType, entityId])
@@ -526,23 +550,23 @@ model ConsoleLog {
 // ─── Branch ───────────────────────────────────────────────────────────────────
 
 model Branch {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String
-  address     String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  users       User[]
-  inventory   InventoryItem[]
-  orders      Order[]
-  shifts      Shift[]
-  arInvoices  ARInvoice[]
-  arPayments  ARPayment[]
-  apBills     APBill[]
-  apPayments  APPayment[]
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users      User[]
+  inventory  InventoryItem[]
+  orders     Order[]
+  shifts     Shift[]
+  arInvoices ARInvoice[]
+  arPayments ARPayment[]
+  apBills    APBill[]
+  apPayments APPayment[]
 
   @@map("branches")
 }
@@ -550,31 +574,31 @@ model Branch {
 // ─── User ─────────────────────────────────────────────────────────────────────
 
 model User {
-  id                   String         @id @default(cuid())
-  tenantId             String
-  branchId             String?
-  email                String
-  passwordHash         String
-  name                 String
-  role                 UserRole
-  employmentType       EmploymentType @default(REGULAR)
-  salaryType           SalaryType?
-  salaryRate           Decimal?       @db.Decimal(12, 2)
-  shiftStart           String?
-  shiftEnd             String?
-  sssNumber            String?
-  philhealthNumber     String?
-  pagibigNumber        String?
-  tin                  String?
-  photo                String?
-  kioskPin             String?
+  id                       String         @id @default(cuid())
+  tenantId                 String
+  branchId                 String?
+  email                    String
+  passwordHash             String
+  name                     String
+  role                     UserRole
+  employmentType           EmploymentType @default(REGULAR)
+  salaryType               SalaryType?
+  salaryRate               Decimal?       @db.Decimal(12, 2)
+  shiftStart               String?
+  shiftEnd                 String?
+  sssNumber                String?
+  philhealthNumber         String?
+  pagibigNumber            String?
+  tin                      String?
+  photo                    String?
+  kioskPin                 String?
   /// Mobile / contact number for HR records
-  phone                String?
+  phone                    String?
   /// Job title / position (e.g. "Barista", "Shift Supervisor")
-  position             String?
-  isActive             Boolean        @default(true)
-  hiredAt              DateTime?
-  separatedAt          DateTime?
+  position                 String?
+  isActive                 Boolean        @default(true)
+  hiredAt                  DateTime?
+  separatedAt              DateTime?
   enable2fa                Boolean        @default(false)
   twoFactorSecret          String?
   /// Time-limited token for self-service password reset (expires in 1 hour)
@@ -597,23 +621,23 @@ model User {
   /// Recorded when the owner explicitly accepts a yellow SOD warning.
   sodOverrides             Json?
   createdAt                DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  updatedAt                DateTime       @updatedAt
 
-  tenant               Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch               Branch?        @relation(fields: [branchId], references: [id])
-  sessions             UserSession[]
-  trustedDevices       TrustedDevice[]
-  loginLogs            LoginLog[]
-  appAccess            UserAppAccess[]
-  ordersAsCreator      Order[]        @relation("CreatedByUser")
-  ordersAsUpdatedBy    Order[]        @relation("UpdatedByUser")
-  ordersAsVoidedBy     Order[]        @relation("VoidedByUser")
-  discountsAuthorized  OrderDiscount[] @relation("AuthorizedByUser")
-  timeEntries          TimeEntry[]
-  payslips             Payslip[]
-  notifications        Notification[]
-  bankReconciliations  BankReconciliation[]
-  orderItemRefunds     OrderItemRefund[]
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch              Branch?              @relation(fields: [branchId], references: [id])
+  sessions            UserSession[]
+  trustedDevices      TrustedDevice[]
+  loginLogs           LoginLog[]
+  appAccess           UserAppAccess[]
+  ordersAsCreator     Order[]              @relation("CreatedByUser")
+  ordersAsUpdatedBy   Order[]              @relation("UpdatedByUser")
+  ordersAsVoidedBy    Order[]              @relation("VoidedByUser")
+  discountsAuthorized OrderDiscount[]      @relation("AuthorizedByUser")
+  timeEntries         TimeEntry[]
+  payslips            Payslip[]
+  notifications       Notification[]
+  bankReconciliations BankReconciliation[]
+  orderItemRefunds    OrderItemRefund[]
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -628,7 +652,7 @@ model UserAppAccess {
   appCode AppCode
   level   AccessLevel @default(NONE)
 
-  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, appCode])
   @@map("user_app_access")
@@ -646,7 +670,7 @@ model UserSession {
   createdAt         DateTime      @default(now())
   lastUsedAt        DateTime      @default(now())
 
-  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("user_sessions")
@@ -659,24 +683,24 @@ model TrustedDevice {
   deviceInfo        String?
   trustedAt         DateTime @default(now())
 
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, deviceFingerprint])
   @@map("trusted_devices")
 }
 
 model LoginLog {
-  id           String   @id @default(cuid())
-  userId       String?
-  tenantId     String?
-  email        String
-  success      Boolean
-  reason       String?
-  ipAddress    String?
-  deviceInfo   String?
-  createdAt    DateTime @default(now())
+  id         String   @id @default(cuid())
+  userId     String?
+  tenantId   String?
+  email      String
+  success    Boolean
+  reason     String?
+  ipAddress  String?
+  deviceInfo String?
+  createdAt  DateTime @default(now())
 
-  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@map("login_logs")
@@ -685,47 +709,52 @@ model LoginLog {
 // ─── Product Catalog ──────────────────────────────────────────────────────────
 
 model Category {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   tenantId    String
   name        String
   description String?
-  sortOrder   Int       @default(0)
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  /// Sprint 3 — which station prepares this category's items.
+  /// Null = goes to receipt printer only (no separate station ticket).
+  stationId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  products    Product[]
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products Product[]
+  station  Station?  @relation("CategoryStation", fields: [stationId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, sortOrder])
+  @@index([stationId])
   @@map("categories")
 }
 
 model Product {
-  id             String        @id @default(cuid())
-  tenantId       String
-  categoryId     String?
-  name           String
-  description    String?
+  id              String        @id @default(cuid())
+  tenantId        String
+  categoryId      String?
+  name            String
+  description     String?
   /// Internal Stock-Keeping Unit — unique per tenant when set
-  sku            String?
+  sku             String?
   /// Barcode (EAN-13, UPC-A, QR, etc.) — for scanner integration and BIR inventory audit
-  barcode        String?
-  imageUrl       String?
-  price          Decimal       @db.Decimal(12, 2)
-  costPrice      Decimal?      @db.Decimal(12, 2)
-  inventoryMode  InventoryMode @default(UNIT_BASED)
+  barcode         String?
+  imageUrl        String?
+  price           Decimal       @db.Decimal(12, 2)
+  costPrice       Decimal?      @db.Decimal(12, 2)
+  inventoryMode   InventoryMode @default(UNIT_BASED)
   /// Whether this item carries 12% VAT. Drives taxType on OrderItem at checkout.
-  isVatable      Boolean       @default(true)
-  isActive       Boolean       @default(true)
+  isVatable       Boolean       @default(true)
+  isActive        Boolean       @default(true)
   /// Unit of Measure for this product (PC, KG, BOX, LITER, etc.)
   unitOfMeasureId String?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  category       Category?     @relation(fields: [categoryId], references: [id])
-  unitOfMeasure  UnitOfMeasure? @relation(fields: [unitOfMeasureId], references: [id])
+  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category       Category?              @relation(fields: [categoryId], references: [id])
+  unitOfMeasure  UnitOfMeasure?         @relation(fields: [unitOfMeasureId], references: [id])
   variants       ProductVariant[]
   inventory      InventoryItem[]
   inventoryLogs  InventoryLog[]
@@ -740,14 +769,14 @@ model Product {
 }
 
 model ProductVariant {
-  id          String    @id @default(cuid())
-  productId   String
-  name        String
-  sku         String?
-  price       Decimal?  @db.Decimal(12, 2)
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  productId String
+  name      String
+  sku       String?
+  price     Decimal? @db.Decimal(12, 2)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   product         Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
   orderItems      OrderItem[]
@@ -759,11 +788,11 @@ model ProductVariant {
 // ─── Raw Materials & BOM ──────────────────────────────────────────────────────
 
 model RawMaterial {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String
+  id            String   @id @default(cuid())
+  tenantId      String
+  name          String
   /// Unit of measure for this ingredient (g, ml, pc, kg, etc.)
-  unit        String   @default("g")
+  unit          String   @default("g")
   costPrice     Decimal? @db.Decimal(12, 4)
   /// Minimum stock level — system flags the ingredient as low when any branch
   /// falls below this quantity (same unit as the ingredient itself).
@@ -772,10 +801,10 @@ model RawMaterial {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  tenant           Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bomItems         BomItem[]
-  variantBomItems  VariantBomItem[]
-  inventory        RawMaterialInventory[]
+  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bomItems        BomItem[]
+  variantBomItems VariantBomItem[]
+  inventory       RawMaterialInventory[]
 
   @@index([tenantId, isActive])
   @@map("raw_materials")
@@ -785,27 +814,27 @@ model RawMaterial {
 /// Example: ProductVariant "Large Iced Americano" → espresso beans 25g, water 180ml.
 /// Overrides or supplements the product-level BomItem for that variant.
 model VariantBomItem {
-  id            String         @id @default(cuid())
+  id            String  @id @default(cuid())
   variantId     String
   rawMaterialId String
   /// How much of the raw material is consumed per unit of this variant
-  quantity      Decimal        @db.Decimal(12, 4)
+  quantity      Decimal @db.Decimal(12, 4)
 
-  variant       ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  rawMaterial   RawMaterial    @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
+  variant     ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial    @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
 
   @@unique([variantId, rawMaterialId])
   @@map("variant_bom_items")
 }
 
 model BomItem {
-  id            String      @id @default(cuid())
+  id            String  @id @default(cuid())
   productId     String
   rawMaterialId String
-  quantity      Decimal     @db.Decimal(12, 4)
+  quantity      Decimal @db.Decimal(12, 4)
 
-  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
-  rawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
+  product     Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
 
   @@unique([productId, rawMaterialId])
   @@map("bom_items")
@@ -828,23 +857,23 @@ model InventoryItem {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  branch        Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([branchId, productId])
   @@map("inventory_items")
 }
 
 model RawMaterialInventory {
-  id            String      @id @default(cuid())
+  id            String   @id @default(cuid())
   tenantId      String
   branchId      String
   rawMaterialId String
-  quantity      Decimal     @db.Decimal(12, 4)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  quantity      Decimal  @db.Decimal(12, 4)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  rawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
 
   @@unique([branchId, rawMaterialId])
   @@map("raw_material_inventory")
@@ -865,7 +894,7 @@ model InventoryLog {
   createdById    String?
   createdAt      DateTime         @default(now())
 
-  product        Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, branchId])
   @@index([productId])
@@ -891,11 +920,11 @@ model Promotion {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  products         PromotionProduct[]
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products PromotionProduct[]
 
   @@index([tenantId, isActive])
-  @@index([tenantId, isActive, startDate, endDate])   // promo rules engine: active + date-range filter
+  @@index([tenantId, isActive, startDate, endDate]) // promo rules engine: active + date-range filter
   @@map("promotions")
 }
 
@@ -903,27 +932,27 @@ model PromotionProduct {
   promotionId String
   productId   String
 
-  promotion   Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
-  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@id([promotionId, productId])
   @@map("promotion_products")
 }
 
 model DiscountTypeConfig {
-  id                   String   @id @default(cuid())
-  tenantId             String
-  name                 String
-  defaultPercent       Decimal? @db.Decimal(5, 2)
-  defaultFixed         Decimal? @db.Decimal(12, 2)
-  requiresManagerAuth  Boolean  @default(false)
-  appliesAtItemLevel   Boolean  @default(true)
-  appliesAtOrderLevel  Boolean  @default(true)
-  isActive             Boolean  @default(true)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  tenantId            String
+  name                String
+  defaultPercent      Decimal? @db.Decimal(5, 2)
+  defaultFixed        Decimal? @db.Decimal(12, 2)
+  requiresManagerAuth Boolean  @default(false)
+  appliesAtItemLevel  Boolean  @default(true)
+  appliesAtOrderLevel Boolean  @default(true)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("discount_type_configs")
 }
@@ -931,16 +960,16 @@ model DiscountTypeConfig {
 // ─── Payment Channel Config ───────────────────────────────────────────────────
 
 model PaymentChannelConfig {
-  id          String        @id @default(cuid())
-  tenantId    String
-  method      PaymentMethod
-  isEnabled   Boolean       @default(true)
-  isBusiness  Boolean       @default(false)
-  mdrRate     Decimal?      @db.Decimal(5, 4)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id         String        @id @default(cuid())
+  tenantId   String
+  method     PaymentMethod
+  isEnabled  Boolean       @default(true)
+  isBusiness Boolean       @default(false)
+  mdrRate    Decimal?      @db.Decimal(5, 4)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
 
-  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, method])
   @@map("payment_channel_configs")
@@ -949,67 +978,67 @@ model PaymentChannelConfig {
 // ─── Orders ───────────────────────────────────────────────────────────────────
 
 model Order {
-  id               String        @id @default(cuid())
+  id               String      @id @default(cuid())
   tenantId         String
   branchId         String
   shiftId          String?
   orderNumber      String
-  status           OrderStatus   @default(OPEN)
-  subtotal         Decimal       @db.Decimal(12, 2)
-  discountAmount   Decimal       @db.Decimal(12, 2) @default(0)
-  vatAmount        Decimal       @db.Decimal(12, 2) @default(0)
-  totalAmount      Decimal       @db.Decimal(12, 2)
-  isPwdScDiscount  Boolean       @default(false)
+  status           OrderStatus @default(OPEN)
+  subtotal         Decimal     @db.Decimal(12, 2)
+  discountAmount   Decimal     @default(0) @db.Decimal(12, 2)
+  vatAmount        Decimal     @default(0) @db.Decimal(12, 2)
+  totalAmount      Decimal     @db.Decimal(12, 2)
+  isPwdScDiscount  Boolean     @default(false)
   pwdScIdRef       String?
   pwdScIdOwnerName String?
   notes            String?
-  clientUuid       String?       @unique
+  clientUuid       String?     @unique
 
   // ── BIR CAS Audit: Invoice Classification ─────────────────────────────────
   /// How payment is settled at POS.
   /// CASH_SALE = paid immediately; CHARGE = on-account (B2B / corporate).
-  invoiceType      InvoiceType   @default(CASH_SALE)
+  invoiceType InvoiceType @default(CASH_SALE)
   /// Dominant tax classification for the order.
   /// Individual line items may override this with their own taxType.
-  taxType          TaxType       @default(VAT_12)
+  taxType     TaxType     @default(VAT_12)
 
   // ── BIR CAS Audit: B2B Customer Fields (AR) ───────────────────────────────
   // Required per RR No. 1-2026 for invoices issued to registered businesses.
   // Walk-in / anonymous retail sales leave all three null.
   /// FK to the Customer master (AR sub-ledger). Null for walk-in / anonymous sales.
-  customerId       String?
+  customerId      String?
   /// Business name of the corporate buyer (for B2B invoices)
-  customerName     String?
+  customerName    String?
   /// BIR TIN of the corporate buyer — required for valid input VAT claim (format: 000-000-000)
-  customerTin      String?
+  customerTin     String?
   /// Registered address of the corporate buyer — required for invoices > ₱1,000
-  customerAddress  String?
+  customerAddress String?
   /// Due date for credit (CHARGE) sales — set to createdAt + Customer.creditTermDays.
   /// Null for CASH_SALE. Drives AR aging buckets.
-  dueDate          DateTime?
+  dueDate         DateTime?
 
   // ── Audit Trail ────────────────────────────────────────────────────────────
-  createdById      String?
+  createdById       String?
   /// Last user to modify this record (role change, void, correction)
-  updatedById      String?
-  voidedById       String?    // The supervisor who authorized the void (SALES_LEAD / OWNER)
-  voidInitiatedById String?   // The cashier who requested the void (null if supervisor voided directly)
-  voidedAt         DateTime?
-  voidReason       String?
-  completedAt      DateTime?
+  updatedById       String?
+  voidedById        String? // The supervisor who authorized the void (SALES_LEAD / OWNER)
+  voidInitiatedById String? // The cashier who requested the void (null if supervisor voided directly)
+  voidedAt          DateTime?
+  voidReason        String?
+  completedAt       DateTime?
   /// Soft-delete timestamp — set on void/correction; NULL means active.
   /// BIR requirement: invoice numbers must never have gaps; hard delete is forbidden.
-  deletedAt        DateTime?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch           Branch        @relation(fields: [branchId], references: [id])
-  shift            Shift?        @relation(fields: [shiftId], references: [id])
-  customer         Customer?     @relation(fields: [customerId], references: [id])
-  createdBy        User?         @relation("CreatedByUser", fields: [createdById], references: [id])
-  updatedBy        User?         @relation("UpdatedByUser", fields: [updatedById], references: [id])
-  voidedBy         User?         @relation("VoidedByUser", fields: [voidedById], references: [id])
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch           Branch            @relation(fields: [branchId], references: [id])
+  shift            Shift?            @relation(fields: [shiftId], references: [id])
+  customer         Customer?         @relation(fields: [customerId], references: [id])
+  createdBy        User?             @relation("CreatedByUser", fields: [createdById], references: [id])
+  updatedBy        User?             @relation("UpdatedByUser", fields: [updatedById], references: [id])
+  voidedBy         User?             @relation("VoidedByUser", fields: [voidedById], references: [id])
   items            OrderItem[]
   payments         OrderPayment[]
   discounts        OrderDiscount[]
@@ -1018,39 +1047,39 @@ model Order {
   @@unique([tenantId, orderNumber])
   @@index([tenantId, createdAt])
   @@index([branchId, status])
-  @@index([tenantId, deletedAt])   // soft-delete filter: WHERE deleted_at IS NULL
-  @@index([branchId, deletedAt])   // branch-scoped active-order queries
-  @@index([tenantId, customerId])  // AR: customer ledger queries
-  @@index([tenantId, dueDate])     // AR aging: due-date range scans
+  @@index([tenantId, deletedAt]) // soft-delete filter: WHERE deleted_at IS NULL
+  @@index([branchId, deletedAt]) // branch-scoped active-order queries
+  @@index([tenantId, customerId]) // AR: customer ledger queries
+  @@index([tenantId, dueDate]) // AR aging: due-date range scans
   @@map("orders")
 }
 
 model OrderItem {
-  id             String          @id @default(cuid())
+  id             String   @id @default(cuid())
   orderId        String
   productId      String
   variantId      String?
   productName    String
-  unitPrice      Decimal         @db.Decimal(12, 2)
-  quantity       Decimal         @db.Decimal(12, 4)
-  discountAmount Decimal         @db.Decimal(12, 2) @default(0)
-  vatAmount      Decimal         @db.Decimal(12, 2) @default(0)
-  lineTotal      Decimal         @db.Decimal(12, 2)
-  costPrice      Decimal?        @db.Decimal(12, 2)
-  isVatable      Boolean         @default(true)
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  quantity       Decimal  @db.Decimal(12, 4)
+  discountAmount Decimal  @default(0) @db.Decimal(12, 2)
+  vatAmount      Decimal  @default(0) @db.Decimal(12, 2)
+  lineTotal      Decimal  @db.Decimal(12, 2)
+  costPrice      Decimal? @db.Decimal(12, 2)
+  isVatable      Boolean  @default(true)
   /// BIR per-line tax classification. Overrides the order-level taxType for this line.
   /// VAT_12 = standard 12%; VAT_EXEMPT = exempt by law; ZERO_RATED = 0% (exports/PEZA).
-  taxType        TaxType         @default(VAT_12)
+  taxType        TaxType  @default(VAT_12)
   notes          String?
   /// Running total of refunded quantity. 0 = no refund; equal to quantity = fully refunded.
   /// Source of truth: increment via OrderItemRefund event creation.
-  refundedQty    Decimal         @default(0) @db.Decimal(12, 4)
+  refundedQty    Decimal  @default(0) @db.Decimal(12, 4)
 
-  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product        Product         @relation(fields: [productId], references: [id])
-  variant        ProductVariant? @relation(fields: [variantId], references: [id])
-  modifiers      OrderItemModifier[]
-  refunds        OrderItemRefund[]
+  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product             @relation(fields: [productId], references: [id])
+  variant   ProductVariant?     @relation(fields: [variantId], references: [id])
+  modifiers OrderItemModifier[]
+  refunds   OrderItemRefund[]
 
   @@index([orderId])
   @@map("order_items")
@@ -1059,40 +1088,40 @@ model OrderItem {
 /// Audit trail for partial item refunds. Each row is one refund event
 /// against a single order line. Inventory is restocked optionally.
 model OrderItemRefund {
-  id             String       @id @default(cuid())
-  orderItemId    String
+  id           String        @id @default(cuid())
+  orderItemId  String
   /// Quantity refunded in this event (positive)
-  quantity       Decimal      @db.Decimal(12, 4)
+  quantity     Decimal       @db.Decimal(12, 4)
   /// Cash refund amount = pro-rated lineTotal portion (incl. VAT)
-  refundAmount   Decimal      @db.Decimal(12, 2)
-  reason         String
+  refundAmount Decimal       @db.Decimal(12, 2)
+  reason       String
   /// How was the customer refunded — same enum as payment methods
-  refundMethod   PaymentMethod
+  refundMethod PaymentMethod
   /// Did the operator put the items back on the shelf? If yes, inventory
   /// was incremented and a proportional COGS reversal was posted.
-  restocked      Boolean      @default(true)
-  refundedById   String
-  createdAt      DateTime     @default(now())
+  restocked    Boolean       @default(true)
+  refundedById String
+  createdAt    DateTime      @default(now())
 
-  orderItem      OrderItem    @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-  refundedBy     User         @relation(fields: [refundedById], references: [id])
+  orderItem  OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  refundedBy User      @relation(fields: [refundedById], references: [id])
 
   @@index([orderItemId, createdAt])
   @@map("order_item_refunds")
 }
 
 model OrderPayment {
-  id               String            @id @default(cuid())
-  orderId          String
-  method           PaymentMethod
-  amount           Decimal           @db.Decimal(12, 2)
-  reference        String?
-  createdAt        DateTime          @default(now())
+  id        String        @id @default(cuid())
+  orderId   String
+  method    PaymentMethod
+  amount    Decimal       @db.Decimal(12, 2)
+  reference String?
+  createdAt DateTime      @default(now())
 
-  order            Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  settlementItem   SettlementItem?
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  settlementItem SettlementItem?
 
-  @@index([orderId])   // settlement unmatched-payment lookup
+  @@index([orderId]) // settlement unmatched-payment lookup
   @@map("order_payments")
 }
 
@@ -1114,10 +1143,10 @@ model OrderDiscount {
   pwdScIdOwnerName String?
   createdAt        DateTime     @default(now())
 
-  order            Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  authorizedBy     User?        @relation("AuthorizedByUser", fields: [authorizedById], references: [id])
+  order        Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  authorizedBy User? @relation("AuthorizedByUser", fields: [authorizedById], references: [id])
 
-  @@index([orderId])   // order detail fetch includes discounts
+  @@index([orderId]) // order detail fetch includes discounts
   @@map("order_discounts")
 }
 
@@ -1127,6 +1156,9 @@ model Shift {
   id                  String    @id @default(cuid())
   tenantId            String
   branchId            String
+  /// Sprint 3 — terminal this shift opened on (POS-01, POS-02, etc.).
+  /// Null for legacy shifts opened before multi-terminal support.
+  terminalId          String?
   cashierId           String
   openingCash         Decimal   @db.Decimal(12, 2)
   closingCashDeclared Decimal?  @db.Decimal(12, 2)
@@ -1136,13 +1168,15 @@ model Shift {
   closedAt            DateTime?
   notes               String?
 
-  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch              Branch    @relation(fields: [branchId], references: [id])
-  orders              Order[]
-  cashOuts            ShiftCashOut[]
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch   Branch         @relation(fields: [branchId], references: [id])
+  terminal Terminal?      @relation(fields: [terminalId], references: [id], onDelete: SetNull)
+  orders   Order[]
+  cashOuts ShiftCashOut[]
 
   @@index([tenantId, branchId])
-  @@index([branchId, closedAt])   // getActive(): WHERE branchId = X AND closedAt IS NULL
+  @@index([branchId, closedAt]) // getActive(): WHERE branchId = X AND closedAt IS NULL
+  @@index([terminalId, closedAt]) // per-terminal Z-Read queries
   @@map("shifts")
 }
 
@@ -1154,21 +1188,21 @@ model Shift {
 /// we do NOT recompute or normalise across providers. If pricing changes,
 /// historical rows keep their original cost.
 model AiUsage {
-  id            String   @id @default(cuid())
-  tenantId      String
-  userId        String?
+  id           String   @id @default(cuid())
+  tenantId     String
+  userId       String?
   /// Stable action key, e.g. 'receipt_ocr' | 'je_drafter' | 'time_anomaly'.
   /// New actions can be added without a migration.
-  action        String
-  provider      String   @default("anthropic")
-  model         String
-  inputTokens   Int      @default(0)
-  outputTokens  Int      @default(0)
-  costUsd       Decimal  @default(0) @db.Decimal(12, 6)
-  success       Boolean  @default(true)
-  errorMessage  String?
-  durationMs    Int      @default(0)
-  createdAt     DateTime @default(now())
+  action       String
+  provider     String   @default("anthropic")
+  model        String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  costUsd      Decimal  @default(0) @db.Decimal(12, 6)
+  success      Boolean  @default(true)
+  errorMessage String?
+  durationMs   Int      @default(0)
+  createdAt    DateTime @default(now())
 
   @@index([tenantId, createdAt])
   @@index([tenantId, action, createdAt])
@@ -1191,24 +1225,24 @@ enum CashOutType {
 }
 
 model ShiftCashOut {
-  id              String       @id @default(cuid())
+  id              String      @id @default(cuid())
   tenantId        String
   branchId        String
   shiftId         String
   type            CashOutType
-  amount          Decimal      @db.Decimal(12, 2)
-  reason          String       // free-text, ≥10 chars validated at DTO
-  category        String?      // 'supplies' | 'delivery' | 'fuel' | 'change_fund' | 'other' | etc.
-  receiptPhotoUrl String?      // optional snap of the receipt; OCR-fillable
+  amount          Decimal     @db.Decimal(12, 2)
+  reason          String // free-text, ≥10 chars validated at DTO
+  category        String? // 'supplies' | 'delivery' | 'fuel' | 'change_fund' | 'other' | etc.
+  receiptPhotoUrl String? // optional snap of the receipt; OCR-fillable
   /// User who recorded the cash-out (typically the cashier on shift)
   createdById     String
   /// Optional manager who approved an above-threshold paid-out (PIN co-auth)
   approvedById    String?
   /// AI-assisted flag — set when receipt OCR pre-filled the form
-  aiAssisted      Boolean      @default(false)
-  createdAt       DateTime     @default(now())
+  aiAssisted      Boolean     @default(false)
+  createdAt       DateTime    @default(now())
 
-  shift           Shift        @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, shiftId])
   @@index([branchId, createdAt])
@@ -1230,12 +1264,12 @@ model AccountingEvent {
   createdAt  DateTime              @default(now())
   updatedAt  DateTime              @updatedAt
 
-  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  order        Order?              @relation(fields: [orderId], references: [id])
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order        Order?        @relation(fields: [orderId], references: [id])
   journalEntry JournalEntry?
 
   @@index([tenantId, status])
-  @@index([tenantId, status, createdAt])   // CRON processor: PENDING events ordered by age
+  @@index([tenantId, status, createdAt]) // CRON processor: PENDING events ordered by age
   @@map("accounting_events")
 }
 
@@ -1256,12 +1290,12 @@ model Account {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  parent         Account?        @relation("AccountHierarchy", fields: [parentId], references: [id])
-  children       Account[]       @relation("AccountHierarchy")
-  journalLines   JournalLine[]
-  arInvoiceLines ARInvoiceLine[]
-  apBillLines    APBillLine[]
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent              Account?             @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children            Account[]            @relation("AccountHierarchy")
+  journalLines        JournalLine[]
+  arInvoiceLines      ARInvoiceLine[]
+  apBillLines         APBillLine[]
   bankReconciliations BankReconciliation[]
 
   @@unique([tenantId, code])
@@ -1288,7 +1322,7 @@ model JournalEntry {
   status            JournalEntryStatus @default(POSTED)
   source            JournalSource      @default(MANUAL)
   createdBy         String?
-  postedBy          String?            // userId who approved DRAFT → POSTED
+  postedBy          String? // userId who approved DRAFT → POSTED
   postedAt          DateTime?
   /// Approval workflow — set when the entry's gross amount exceeded the
   /// tenant's jeApprovalThreshold and was held for sign-off. Approver
@@ -1303,19 +1337,19 @@ model JournalEntry {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
-  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  accountingEvent   AccountingEvent?   @relation(fields: [accountingEventId], references: [id])
-  lines             JournalLine[]
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accountingEvent AccountingEvent? @relation(fields: [accountingEventId], references: [id])
+  lines           JournalLine[]
   /// The original entry that this JE reverses
-  reversalOf        JournalEntry?      @relation("JEReversals", fields: [reversalOfId], references: [id])
+  reversalOf      JournalEntry?    @relation("JEReversals", fields: [reversalOfId], references: [id])
   /// The reversal entry created for this JE (if any)
-  reversedBy        JournalEntry?      @relation("JEReversals")
+  reversedBy      JournalEntry?    @relation("JEReversals")
   /// AR/AP back-references — at most one is non-null per JE (a JE is created
   /// by exactly one document type: invoice post, bill post, or payment).
-  arInvoice         ARInvoice?         @relation("ARInvoiceJE")
-  arPayment         ARPayment?         @relation("ARPaymentJE")
-  apBill            APBill?            @relation("APBillJE")
-  apPayment         APPayment?         @relation("APPaymentJE")
+  arInvoice       ARInvoice?       @relation("ARInvoiceJE")
+  arPayment       ARPayment?       @relation("ARPaymentJE")
+  apBill          APBill?          @relation("APBillJE")
+  apPayment       APPayment?       @relation("APPaymentJE")
 
   @@index([tenantId, postingDate])
   @@index([tenantId, date])
@@ -1324,20 +1358,20 @@ model JournalEntry {
 }
 
 model JournalLine {
-  id             String       @id @default(cuid())
+  id             String   @id @default(cuid())
   journalEntryId String
   accountId      String
   description    String?
-  debit          Decimal      @default(0) @db.Decimal(14, 2)
-  credit         Decimal      @default(0) @db.Decimal(14, 2)
+  debit          Decimal  @default(0) @db.Decimal(14, 2)
+  credit         Decimal  @default(0) @db.Decimal(14, 2)
   /// Transaction currency (future FX support). Always "PHP" until multi-currency is enabled.
-  currency       String       @default("PHP")
+  currency       String   @default("PHP")
   /// Exchange rate to PHP functional currency. Always 1 until FX engine is built.
-  exchangeRate   Decimal      @default(1) @db.Decimal(12, 6)
-  createdAt      DateTime     @default(now())
+  exchangeRate   Decimal  @default(1) @db.Decimal(12, 6)
+  createdAt      DateTime @default(now())
 
-  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
-  account        Account      @relation(fields: [accountId], references: [id])
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account      Account      @relation(fields: [accountId], references: [id])
 
   @@index([journalEntryId])
   @@index([accountId])
@@ -1360,9 +1394,9 @@ model ModifierGroup {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  options     ModifierOption[]
-  products    ProductModifierGroup[]
+  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  options  ModifierOption[]
+  products ProductModifierGroup[]
 
   @@index([tenantId])
   @@map("modifier_groups")
@@ -1402,13 +1436,13 @@ model ProductModifierGroup {
 
 /// Snapshot of the modifier chosen at sale time — never re-queried from option table
 model OrderItemModifier {
-  id               String   @id @default(cuid())
+  id               String  @id @default(cuid())
   orderItemId      String
   modifierGroupId  String
   modifierOptionId String
   groupName        String
   optionName       String
-  priceAdjustment  Decimal  @db.Decimal(12, 2)
+  priceAdjustment  Decimal @db.Decimal(12, 2)
 
   orderItem      OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
   modifierOption ModifierOption @relation(fields: [modifierOptionId], references: [id])
@@ -1446,26 +1480,26 @@ model UnitOfMeasure {
 /// a lump sum to the merchant's bank account 1–3 business days later.
 /// One SettlementBatch = one bank credit entry.
 model SettlementBatch {
-  id                String           @id @default(cuid())
-  tenantId          String
-  branchId          String
-  method            PaymentMethod    // GCASH_BUSINESS, MAYA_BUSINESS, QR_PH, etc.
-  referenceNumber   String?          // Gateway's own batch/settlement reference
-  expectedAmount    Decimal          @db.Decimal(12, 2) // Sum of transactions in batch
-  actualAmount      Decimal?         @db.Decimal(12, 2) // Amount that actually arrived in bank
-  variance          Decimal?         @db.Decimal(12, 2) // actualAmount - expectedAmount
-  periodStart       DateTime         // Earliest transaction date in this batch
-  periodEnd         DateTime         // Latest transaction date in this batch
-  settledAt         DateTime?        // When bank credit was received
-  bankReference     String?          // Bank transaction reference / OR number
-  status            SettlementStatus @default(PENDING)
-  notes             String?
-  reconciledById    String?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  id              String           @id @default(cuid())
+  tenantId        String
+  branchId        String
+  method          PaymentMethod // GCASH_BUSINESS, MAYA_BUSINESS, QR_PH, etc.
+  referenceNumber String? // Gateway's own batch/settlement reference
+  expectedAmount  Decimal          @db.Decimal(12, 2) // Sum of transactions in batch
+  actualAmount    Decimal?         @db.Decimal(12, 2) // Amount that actually arrived in bank
+  variance        Decimal?         @db.Decimal(12, 2) // actualAmount - expectedAmount
+  periodStart     DateTime // Earliest transaction date in this batch
+  periodEnd       DateTime // Latest transaction date in this batch
+  settledAt       DateTime? // When bank credit was received
+  bankReference   String? // Bank transaction reference / OR number
+  status          SettlementStatus @default(PENDING)
+  notes           String?
+  reconciledById  String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
-  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  items             SettlementItem[]
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  SettlementItem[]
 
   @@index([tenantId, status])
   @@index([tenantId, method, periodStart])
@@ -1475,15 +1509,15 @@ model SettlementBatch {
 /// Links one OrderPayment to a SettlementBatch — the line-item level.
 /// One GCash payment from a customer = one SettlementItem inside a batch.
 model SettlementItem {
-  id                String          @id @default(cuid())
+  id                String   @id @default(cuid())
   settlementBatchId String
-  orderPaymentId    String          @unique  // one payment can only be in one batch
-  amount            Decimal         @db.Decimal(12, 2)
-  transactionRef    String?         // Gateway transaction reference for this specific payment
-  createdAt         DateTime        @default(now())
+  orderPaymentId    String   @unique // one payment can only be in one batch
+  amount            Decimal  @db.Decimal(12, 2)
+  transactionRef    String? // Gateway transaction reference for this specific payment
+  createdAt         DateTime @default(now())
 
-  batch             SettlementBatch @relation(fields: [settlementBatchId], references: [id], onDelete: Cascade)
-  orderPayment      OrderPayment    @relation(fields: [orderPaymentId], references: [id])
+  batch        SettlementBatch @relation(fields: [settlementBatchId], references: [id], onDelete: Cascade)
+  orderPayment OrderPayment    @relation(fields: [orderPaymentId], references: [id])
 
   @@index([settlementBatchId])
   @@map("settlement_items")
@@ -1501,27 +1535,27 @@ model SettlementItem {
 ///   - Both actions are mirrored to the AuditLog for BIR/CAS compliance.
 ///   - No postings (journal entries or order sync) can land in a CLOSED period.
 model AccountingPeriod {
-  id             String                 @id @default(cuid())
-  tenantId       String
-  name           String                 // e.g. "April 2026"
-  startDate      DateTime
-  endDate        DateTime
-  status         AccountingPeriodStatus @default(OPEN)
+  id           String                 @id @default(cuid())
+  tenantId     String
+  name         String // e.g. "April 2026"
+  startDate    DateTime
+  endDate      DateTime
+  status       AccountingPeriodStatus @default(OPEN)
   /// User who last closed this period. Never nulled on reopen — preserved as a historical fact.
-  closedById     String?
-  closedAt       DateTime?
+  closedById   String?
+  closedAt     DateTime?
   /// User who last reopened this period (null if never reopened).
-  reopenedById   String?
-  reopenedAt     DateTime?
+  reopenedById String?
+  reopenedAt   DateTime?
   /// Mandatory justification written by the Business Owner when reopening.
-  reopenReason   String?
+  reopenReason String?
   /// How many times this period has been reopened. BIR auditors flag counts > 0 for review.
-  reopenCount    Int                    @default(0)
-  notes          String?
-  createdAt      DateTime               @default(now())
-  updatedAt      DateTime               @updatedAt
+  reopenCount  Int                    @default(0)
+  notes        String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
 
-  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, startDate])
   @@index([tenantId, status])
@@ -1532,33 +1566,33 @@ model AccountingPeriod {
 // One record per branch per calendar date. Never updated after creation.
 // Mirrors the physical Z-Reading printout required by BIR CAS accreditation.
 model ZReadLog {
-  id              String    @id @default(cuid())
-  tenantId        String
-  branchId        String
+  id             String   @id @default(cuid())
+  tenantId       String
+  branchId       String
   /// Calendar date of the sales day (local PH time, stored as midnight UTC+8)
-  date            DateTime  @db.Date
+  date           DateTime @db.Date
   /// Total completed (non-voided) orders for the day
-  totalOrders     Int
+  totalOrders    Int
   /// Total voided orders for the day
-  voidCount       Int
+  voidCount      Int
   /// Gross sales before any discounts (sum of order.subtotal)
-  grossSales      Decimal   @db.Decimal(15, 4)
+  grossSales     Decimal  @db.Decimal(15, 4)
   /// Net sales after all discounts (sum of order.totalAmount for completed orders)
-  netSales        Decimal   @db.Decimal(15, 4)
+  netSales       Decimal  @db.Decimal(15, 4)
   /// Total VAT collected (0 for UNREGISTERED and NON_VAT tenants)
-  vatAmount       Decimal   @db.Decimal(15, 4)
+  vatAmount      Decimal  @db.Decimal(15, 4)
   /// Total discount amount applied
-  discountAmount  Decimal   @db.Decimal(15, 4)
+  discountAmount Decimal  @db.Decimal(15, 4)
   /// Cash payments total
-  cashAmount      Decimal   @db.Decimal(15, 4)
+  cashAmount     Decimal  @db.Decimal(15, 4)
   /// Non-cash (card, e-wallet, etc.) payments total
-  nonCashAmount   Decimal   @db.Decimal(15, 4)
+  nonCashAmount  Decimal  @db.Decimal(15, 4)
   /// Who triggered this Z-Read (system cron = null, manual = userId)
-  generatedById   String?
+  generatedById  String?
   /// Insert timestamp — immutable anchor for audit
-  createdAt       DateTime  @default(now())
+  createdAt      DateTime @default(now())
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// One Z-Read per branch per day — uniqueness enforced at DB level
   @@unique([branchId, date])
@@ -1569,29 +1603,29 @@ model ZReadLog {
 // ─── X-Read Log (shift-level tamper-proof totals) ────────────────────────────
 // One record per shift. Never updated after creation.
 model XReadLog {
-  id              String    @id @default(cuid())
-  tenantId        String
-  branchId        String
-  shiftId         String    @unique
+  id             String   @id @default(cuid())
+  tenantId       String
+  branchId       String
+  shiftId        String   @unique
   /// Shift open timestamp
-  openedAt        DateTime
+  openedAt       DateTime
   /// Shift close timestamp
-  closedAt        DateTime
-  totalOrders     Int
-  voidCount       Int
-  grossSales      Decimal   @db.Decimal(15, 4)
-  netSales        Decimal   @db.Decimal(15, 4)
-  vatAmount       Decimal   @db.Decimal(15, 4)
-  discountAmount  Decimal   @db.Decimal(15, 4)
-  cashAmount      Decimal   @db.Decimal(15, 4)
-  nonCashAmount   Decimal   @db.Decimal(15, 4)
-  openingCash     Decimal   @db.Decimal(15, 4)
-  closingCash     Decimal   @db.Decimal(15, 4)
-  cashVariance    Decimal   @db.Decimal(15, 4)
-  generatedById   String?
-  createdAt       DateTime  @default(now())
+  closedAt       DateTime
+  totalOrders    Int
+  voidCount      Int
+  grossSales     Decimal  @db.Decimal(15, 4)
+  netSales       Decimal  @db.Decimal(15, 4)
+  vatAmount      Decimal  @db.Decimal(15, 4)
+  discountAmount Decimal  @db.Decimal(15, 4)
+  cashAmount     Decimal  @db.Decimal(15, 4)
+  nonCashAmount  Decimal  @db.Decimal(15, 4)
+  openingCash    Decimal  @db.Decimal(15, 4)
+  closingCash    Decimal  @db.Decimal(15, 4)
+  cashVariance   Decimal  @db.Decimal(15, 4)
+  generatedById  String?
+  createdAt      DateTime @default(now())
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, closedAt])
   @@map("x_read_logs")
@@ -1613,30 +1647,30 @@ model XReadLog {
 /// Master list of vendors/suppliers.
 /// Required for BIR Form 1601-EQ (withholding tax return) and input VAT claims.
 model Vendor {
-  id              String    @id @default(cuid())
-  tenantId        String
+  id             String   @id @default(cuid())
+  tenantId       String
   /// Legal business name as registered with BIR
-  name            String
+  name           String
   /// Vendor's BIR TIN — required for valid input VAT claim (format: 000-000-000-000)
-  tin             String?
+  tin            String?
   /// Vendor's BIR-registered address — required for input VAT documentation
-  address         String?
-  contactEmail    String?
-  contactPhone    String?
+  address        String?
+  contactEmail   String?
+  contactPhone   String?
   /// Default ATC (Alphanumeric Tax Code) for withholding on payments to this vendor.
   /// Examples: WI160 = rentals (5%), WI010 = professional fees (10/15%), WI040 = services (2%)
-  defaultAtcCode  String?
+  defaultAtcCode String?
   /// Default WHT rate for this vendor (as decimal, e.g. 0.05 = 5%)
-  defaultWhtRate  Decimal?  @db.Decimal(5, 4)
-  isActive        Boolean   @default(true)
-  notes           String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  defaultWhtRate Decimal? @db.Decimal(5, 4)
+  isActive       Boolean  @default(true)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  expenses        ExpenseEntry[]
-  bills           APBill[]
-  payments        APPayment[]
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses ExpenseEntry[]
+  bills    APBill[]
+  payments APPayment[]
 
   @@index([tenantId, tin])
   @@index([tenantId, isActive])
@@ -1647,7 +1681,7 @@ model Vendor {
 /// Connects to the GL via AccountingEvent → JournalEntry.
 /// BIR CAS requirement: every outgoing payment with WHT must be traceable.
 model ExpenseEntry {
-  id              String    @id @default(cuid())
+  id              String        @id @default(cuid())
   tenantId        String
   branchId        String?
   vendorId        String?
@@ -1656,19 +1690,19 @@ model ExpenseEntry {
   /// Date the expense was incurred (document date)
   expenseDate     DateTime
   /// Gross amount before withholding (the invoice face value)
-  grossAmount     Decimal   @db.Decimal(14, 2)
+  grossAmount     Decimal       @db.Decimal(14, 2)
   /// BIR Alphanumeric Tax Code — classifies the nature of the payment for 1601-EQ.
   /// Must match the ATC on the BIR withholding tax certificate (2307).
   atcCode         String?
   /// WHT rate applied (e.g., 0.05 = 5%). Pulled from Vendor.defaultWhtRate or manually set.
-  whtRate         Decimal?  @db.Decimal(5, 4)
+  whtRate         Decimal?      @db.Decimal(5, 4)
   /// Computed withholding tax amount (grossAmount × whtRate).
   /// This is the amount remitted to BIR — held back from the vendor payment.
-  whtAmount       Decimal   @db.Decimal(14, 2) @default(0)
+  whtAmount       Decimal       @default(0) @db.Decimal(14, 2)
   /// Net amount actually paid to the vendor (grossAmount − whtAmount).
-  netAmount       Decimal   @db.Decimal(14, 2)
+  netAmount       Decimal       @db.Decimal(14, 2)
   /// Input VAT on this purchase (for VAT-registered tenants claiming input tax).
-  inputVat        Decimal   @db.Decimal(14, 2) @default(0)
+  inputVat        Decimal       @default(0) @db.Decimal(14, 2)
   /// Reference document number (vendor invoice #, receipt #, OR #)
   referenceNumber String?
   /// When the vendor bill is due — drives AP aging buckets (0-30, 31-60, 61-90, 90+)
@@ -1676,18 +1710,18 @@ model ExpenseEntry {
   /// When payment was actually remitted to the vendor
   paidAt          DateTime?
   /// Amount paid to vendor (= netAmount for full payment; < netAmount for partial)
-  paidAmount      Decimal?  @db.Decimal(14, 2)
+  paidAmount      Decimal?      @db.Decimal(14, 2)
   /// Bank reference, check number, or e-wallet transaction ID for the payment
   paymentRef      String?
   status          ExpenseStatus @default(DRAFT)
   notes           String?
   createdById     String?
   updatedById     String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  vendor          Vendor?   @relation(fields: [vendorId], references: [id])
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendor Vendor? @relation(fields: [vendorId], references: [id])
 
   @@index([tenantId, expenseDate])
   @@index([tenantId, status])
@@ -1696,9 +1730,9 @@ model ExpenseEntry {
 }
 
 enum ExpenseStatus {
-  DRAFT     // Entered but not yet posted to ledger
-  POSTED    // Journal entry created; locked from editing
-  VOIDED    // Cancelled; WHT refund/credit memo may be required
+  DRAFT // Entered but not yet posted to ledger
+  POSTED // Journal entry created; locked from editing
+  VOIDED // Cancelled; WHT refund/credit memo may be required
 }
 
 // ─── AR — Customer Master ─────────────────────────────────────────────────────
@@ -1706,29 +1740,29 @@ enum ExpenseStatus {
 /// Customer / corporate account for B2B credit sales (AR sub-ledger).
 /// Walk-in / retail customers are anonymous — no Customer record needed.
 model Customer {
-  id              String    @id @default(cuid())
-  tenantId        String
+  id             String   @id @default(cuid())
+  tenantId       String
   /// Legal business name as registered with BIR
-  name            String
+  name           String
   /// BIR TIN — required for valid B2B invoice per RR No. 1-2026
-  tin             String?
+  tin            String?
   /// BIR-registered address — required for invoices above ₱1,000
-  address         String?
-  contactEmail    String?
-  contactPhone    String?
+  address        String?
+  contactEmail   String?
+  contactPhone   String?
   /// Payment term in calendar days. 0 = cash; 30 = Net 30; 60 = Net 60.
-  creditTermDays  Int       @default(0)
+  creditTermDays Int      @default(0)
   /// Maximum outstanding AR balance allowed. NULL = no limit.
-  creditLimit     Decimal?  @db.Decimal(14, 2)
-  notes           String?
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  creditLimit    Decimal? @db.Decimal(14, 2)
+  notes          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  orders          Order[]
-  invoices        ARInvoice[]
-  payments        ARPayment[]
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders   Order[]
+  invoices ARInvoice[]
+  payments ARPayment[]
 
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
@@ -1742,12 +1776,12 @@ model Customer {
 // invoice document with proper status tracking.
 
 enum InvoiceStatus {
-  DRAFT          // not yet posted; no GL impact
-  OPEN           // posted, no payments
+  DRAFT // not yet posted; no GL impact
+  OPEN // posted, no payments
   PARTIALLY_PAID // some payment applied, balance > 0
-  PAID           // fully paid, balance = 0
-  CANCELLED      // never posted, retained for audit
-  VOIDED         // posted then reversed; reversal JE created
+  PAID // fully paid, balance = 0
+  CANCELLED // never posted, retained for audit
+  VOIDED // posted then reversed; reversal JE created
 }
 
 /// Customer invoice — the "you owe us" document.
@@ -1755,80 +1789,80 @@ enum InvoiceStatus {
 /// Status transitions: DRAFT → OPEN → PARTIALLY_PAID → PAID
 ///                     OPEN → CANCELLED (if never posted) or VOIDED (post then reverse).
 model ARInvoice {
-  id              String          @id @default(cuid())
-  tenantId        String
-  branchId        String?
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
 
   /// User-visible invoice number, tenant-scoped sequence.
-  invoiceNumber   String
+  invoiceNumber String
   /// Customer's PO# or our external reference.
-  reference       String?
+  reference     String?
 
-  customerId      String
+  customerId String
 
   /// Document Date — when the sale happened.
-  invoiceDate     DateTime
+  invoiceDate DateTime
   /// Posting Date — drives accounting period.
-  postingDate     DateTime
+  postingDate DateTime
   /// Computed at create: invoiceDate + termsDays (or override).
-  dueDate         DateTime
+  dueDate     DateTime
   /// Net days. 0 = cash; 30 = Net 30; copied from customer at create unless overridden.
-  termsDays       Int             @default(0)
+  termsDays   Int      @default(0)
 
-  subtotal        Decimal         @db.Decimal(14, 2)
-  vatAmount       Decimal         @db.Decimal(14, 2) @default(0)
-  totalAmount     Decimal         @db.Decimal(14, 2)
+  subtotal      Decimal @db.Decimal(14, 2)
+  vatAmount     Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount   Decimal @db.Decimal(14, 2)
   /// Sum of applied payments. Updated on every ARPaymentApplication change.
-  paidAmount      Decimal         @db.Decimal(14, 2) @default(0)
+  paidAmount    Decimal @default(0) @db.Decimal(14, 2)
   /// Computed: totalAmount - paidAmount. Stored for query speed in aging reports.
-  balanceAmount   Decimal         @db.Decimal(14, 2)
+  balanceAmount Decimal @db.Decimal(14, 2)
 
-  status          InvoiceStatus   @default(DRAFT)
+  status InvoiceStatus @default(DRAFT)
 
-  description     String?
-  notes           String?
-  createdById     String
-  postedById      String?
-  postedAt        DateTime?
-  voidedById      String?
-  voidedAt        DateTime?
-  voidReason      String?
+  description String?
+  notes       String?
+  createdById String
+  postedById  String?
+  postedAt    DateTime?
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
 
   /// JE created on POST. Null while DRAFT.
-  journalEntryId  String?         @unique
+  journalEntryId String? @unique
 
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch          Branch?         @relation(fields: [branchId], references: [id])
-  customer        Customer        @relation(fields: [customerId], references: [id])
-  journalEntry    JournalEntry?   @relation("ARInvoiceJE", fields: [journalEntryId], references: [id])
-  lines           ARInvoiceLine[]
-  applications    ARPaymentApplication[]
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                @relation(fields: [branchId], references: [id])
+  customer     Customer               @relation(fields: [customerId], references: [id])
+  journalEntry JournalEntry?          @relation("ARInvoiceJE", fields: [journalEntryId], references: [id])
+  lines        ARInvoiceLine[]
+  applications ARPaymentApplication[]
 
   @@unique([tenantId, invoiceNumber])
   @@index([tenantId, customerId, status])
-  @@index([tenantId, status, dueDate])         // FBL5N-style: open items past due
+  @@index([tenantId, status, dueDate]) // FBL5N-style: open items past due
   @@index([tenantId, postingDate])
   @@map("ar_invoices")
 }
 
 model ARInvoiceLine {
-  id             String      @id @default(cuid())
-  invoiceId      String
+  id          String   @id @default(cuid())
+  invoiceId   String
   /// GL account to credit on POST (Revenue, Service Income, etc.).
-  accountId      String
-  description    String?
-  quantity       Decimal     @db.Decimal(14, 4) @default(1)
-  unitPrice      Decimal     @db.Decimal(14, 2)
+  accountId   String
+  description String?
+  quantity    Decimal  @default(1) @db.Decimal(14, 4)
+  unitPrice   Decimal  @db.Decimal(14, 2)
   /// Per-line VAT amount (for invoices with mixed VATable/non-VATable).
-  taxAmount      Decimal     @db.Decimal(14, 2) @default(0)
-  lineTotal      Decimal     @db.Decimal(14, 2)
-  createdAt      DateTime    @default(now())
+  taxAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
 
-  invoice        ARInvoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  account        Account     @relation(fields: [accountId], references: [id])
+  invoice ARInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  account Account   @relation(fields: [accountId], references: [id])
 
   @@index([invoiceId])
   @@map("ar_invoice_lines")
@@ -1837,39 +1871,39 @@ model ARInvoiceLine {
 /// Customer payment received. May apply to one or many invoices via ARPaymentApplication.
 /// Unapplied portion = unallocated credit (customer paid more than billed; sits as credit).
 model ARPayment {
-  id              String          @id @default(cuid())
-  tenantId        String
-  branchId        String?
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
 
-  paymentNumber   String          // tenant-scoped sequence
-  customerId      String
-  paymentDate     DateTime
-  postingDate     DateTime
+  paymentNumber String // tenant-scoped sequence
+  customerId    String
+  paymentDate   DateTime
+  postingDate   DateTime
 
-  method          PaymentMethod   // CASH | GCASH_BUSINESS | etc. (reuses POS enum)
-  reference       String?         // OR#, check#, GCash ref
-  totalAmount     Decimal         @db.Decimal(14, 2)
-  appliedAmount   Decimal         @db.Decimal(14, 2) @default(0)
+  method          PaymentMethod // CASH | GCASH_BUSINESS | etc. (reuses POS enum)
+  reference       String? // OR#, check#, GCash ref
+  totalAmount     Decimal       @db.Decimal(14, 2)
+  appliedAmount   Decimal       @default(0) @db.Decimal(14, 2)
   /// totalAmount - appliedAmount. Sits as customer credit when > 0.
-  unappliedAmount Decimal         @db.Decimal(14, 2)
+  unappliedAmount Decimal       @db.Decimal(14, 2)
 
-  description     String?
-  notes           String?
-  createdById     String
-  voidedById      String?
-  voidedAt        DateTime?
-  voidReason      String?
+  description String?
+  notes       String?
+  createdById String
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
 
-  journalEntryId  String?         @unique
+  journalEntryId String? @unique
 
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch          Branch?         @relation(fields: [branchId], references: [id])
-  customer        Customer        @relation(fields: [customerId], references: [id])
-  journalEntry    JournalEntry?   @relation("ARPaymentJE", fields: [journalEntryId], references: [id])
-  applications    ARPaymentApplication[]
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                @relation(fields: [branchId], references: [id])
+  customer     Customer               @relation(fields: [customerId], references: [id])
+  journalEntry JournalEntry?          @relation("ARPaymentJE", fields: [journalEntryId], references: [id])
+  applications ARPaymentApplication[]
 
   @@unique([tenantId, paymentNumber])
   @@index([tenantId, customerId])
@@ -1880,14 +1914,14 @@ model ARPayment {
 /// Junction: one payment can apply to N invoices, one invoice can receive N payments.
 /// On insert/update/delete, recompute the invoice's paidAmount + status.
 model ARPaymentApplication {
-  id            String     @id @default(cuid())
+  id            String   @id @default(cuid())
   paymentId     String
   invoiceId     String
-  appliedAmount Decimal    @db.Decimal(14, 2)
-  appliedAt     DateTime   @default(now())
+  appliedAmount Decimal  @db.Decimal(14, 2)
+  appliedAt     DateTime @default(now())
 
-  payment       ARPayment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  invoice       ARInvoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment ARPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice ARInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@unique([paymentId, invoiceId])
   @@index([invoiceId])
@@ -1908,115 +1942,115 @@ enum BillStatus {
 /// Vendor bill — the "we owe them" document.
 /// On POST, creates a JE: DR Expense/Asset, CR AP Payables (+ optional WHT split).
 model APBill {
-  id              String          @id @default(cuid())
-  tenantId        String
-  branchId        String?
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
 
   /// Our internal bill number, tenant-scoped sequence.
-  billNumber      String
+  billNumber    String
   /// Vendor's invoice number printed on their document we received.
-  vendorBillRef   String?
+  vendorBillRef String?
   /// Our PO# or external reference.
-  reference       String?
+  reference     String?
 
-  vendorId        String
+  vendorId String
 
-  billDate        DateTime
-  postingDate     DateTime
-  dueDate         DateTime
-  termsDays       Int             @default(0)
+  billDate    DateTime
+  postingDate DateTime
+  dueDate     DateTime
+  termsDays   Int      @default(0)
 
-  subtotal        Decimal         @db.Decimal(14, 2)
-  vatAmount       Decimal         @db.Decimal(14, 2) @default(0)
+  subtotal      Decimal @db.Decimal(14, 2)
+  vatAmount     Decimal @default(0) @db.Decimal(14, 2)
   /// Withholding tax withheld on payment (PH-specific). Reduces the cash outflow.
-  whtAmount       Decimal         @db.Decimal(14, 2) @default(0)
-  whtAtcCode      String?         // ATC: WI160 (rentals 5%), WI010 (prof fees 10/15%), WI040 (services 2%)
-  totalAmount     Decimal         @db.Decimal(14, 2)
-  paidAmount      Decimal         @db.Decimal(14, 2) @default(0)
-  balanceAmount   Decimal         @db.Decimal(14, 2)
+  whtAmount     Decimal @default(0) @db.Decimal(14, 2)
+  whtAtcCode    String? // ATC: WI160 (rentals 5%), WI010 (prof fees 10/15%), WI040 (services 2%)
+  totalAmount   Decimal @db.Decimal(14, 2)
+  paidAmount    Decimal @default(0) @db.Decimal(14, 2)
+  balanceAmount Decimal @db.Decimal(14, 2)
 
-  status          BillStatus      @default(DRAFT)
+  status BillStatus @default(DRAFT)
 
-  description     String?
-  notes           String?
-  createdById     String
-  postedById      String?
-  postedAt        DateTime?
-  voidedById      String?
-  voidedAt        DateTime?
-  voidReason      String?
+  description String?
+  notes       String?
+  createdById String
+  postedById  String?
+  postedAt    DateTime?
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
 
-  journalEntryId  String?         @unique
+  journalEntryId String? @unique
 
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch          Branch?         @relation(fields: [branchId], references: [id])
-  vendor          Vendor          @relation(fields: [vendorId], references: [id])
-  journalEntry    JournalEntry?   @relation("APBillJE", fields: [journalEntryId], references: [id])
-  lines           APBillLine[]
-  applications    APPaymentApplication[]
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                @relation(fields: [branchId], references: [id])
+  vendor       Vendor                 @relation(fields: [vendorId], references: [id])
+  journalEntry JournalEntry?          @relation("APBillJE", fields: [journalEntryId], references: [id])
+  lines        APBillLine[]
+  applications APPaymentApplication[]
 
   @@unique([tenantId, billNumber])
   @@index([tenantId, vendorId, status])
-  @@index([tenantId, status, dueDate])         // FBL1N-style: open items past due
+  @@index([tenantId, status, dueDate]) // FBL1N-style: open items past due
   @@index([tenantId, postingDate])
   @@map("ap_bills")
 }
 
 model APBillLine {
-  id             String     @id @default(cuid())
-  billId         String
+  id          String   @id @default(cuid())
+  billId      String
   /// GL account to debit on POST (expense or asset).
-  accountId      String
-  description    String?
-  quantity       Decimal    @db.Decimal(14, 4) @default(1)
-  unitPrice      Decimal    @db.Decimal(14, 2)
-  taxAmount      Decimal    @db.Decimal(14, 2) @default(0)
-  lineTotal      Decimal    @db.Decimal(14, 2)
-  createdAt      DateTime   @default(now())
+  accountId   String
+  description String?
+  quantity    Decimal  @default(1) @db.Decimal(14, 4)
+  unitPrice   Decimal  @db.Decimal(14, 2)
+  taxAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
 
-  bill           APBill     @relation(fields: [billId], references: [id], onDelete: Cascade)
-  account        Account    @relation(fields: [accountId], references: [id])
+  bill    APBill  @relation(fields: [billId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id])
 
   @@index([billId])
   @@map("ap_bill_lines")
 }
 
 model APPayment {
-  id              String          @id @default(cuid())
-  tenantId        String
-  branchId        String?
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
 
-  paymentNumber   String
-  vendorId        String
-  paymentDate     DateTime
-  postingDate     DateTime
+  paymentNumber String
+  vendorId      String
+  paymentDate   DateTime
+  postingDate   DateTime
 
   method          PaymentMethod
   reference       String?
-  totalAmount     Decimal         @db.Decimal(14, 2)
-  appliedAmount   Decimal         @db.Decimal(14, 2) @default(0)
-  unappliedAmount Decimal         @db.Decimal(14, 2)
+  totalAmount     Decimal       @db.Decimal(14, 2)
+  appliedAmount   Decimal       @default(0) @db.Decimal(14, 2)
+  unappliedAmount Decimal       @db.Decimal(14, 2)
 
-  description     String?
-  notes           String?
-  createdById     String
-  voidedById      String?
-  voidedAt        DateTime?
-  voidReason      String?
+  description String?
+  notes       String?
+  createdById String
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
 
-  journalEntryId  String?         @unique
+  journalEntryId String? @unique
 
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch          Branch?         @relation(fields: [branchId], references: [id])
-  vendor          Vendor          @relation(fields: [vendorId], references: [id])
-  journalEntry    JournalEntry?   @relation("APPaymentJE", fields: [journalEntryId], references: [id])
-  applications    APPaymentApplication[]
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                @relation(fields: [branchId], references: [id])
+  vendor       Vendor                 @relation(fields: [vendorId], references: [id])
+  journalEntry JournalEntry?          @relation("APPaymentJE", fields: [journalEntryId], references: [id])
+  applications APPaymentApplication[]
 
   @@unique([tenantId, paymentNumber])
   @@index([tenantId, vendorId])
@@ -2025,14 +2059,14 @@ model APPayment {
 }
 
 model APPaymentApplication {
-  id            String     @id @default(cuid())
+  id            String   @id @default(cuid())
   paymentId     String
   billId        String
-  appliedAmount Decimal    @db.Decimal(14, 2)
-  appliedAt     DateTime   @default(now())
+  appliedAmount Decimal  @db.Decimal(14, 2)
+  appliedAt     DateTime @default(now())
 
-  payment       APPayment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  bill          APBill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  payment APPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  bill    APBill    @relation(fields: [billId], references: [id], onDelete: Cascade)
 
   @@unique([paymentId, billId])
   @@index([billId])
@@ -2058,28 +2092,28 @@ enum SequenceResetPolicy {
 /// monthly/yearly reset. Format string supports {YYYY} {YY} {MM} {####} tokens.
 /// Default format if null: prefix + zero-padded counter (padding chars).
 model DocumentNumberSequence {
-  id           String              @id @default(cuid())
-  tenantId     String
-  type         SequenceType
+  id          String              @id @default(cuid())
+  tenantId    String
+  type        SequenceType
   /// Null = tenant-wide. Non-null = per-branch numbering (some tenants want
   /// distinct invoice ranges per location for BIR compliance).
-  branchId     String?
-  prefix       String              @default("")
+  branchId    String?
+  prefix      String              @default("")
   /// Optional formatter, e.g. "INV-{YYYY}-{####}" → "INV-2026-0001"
   /// {YYYY} = 4-digit year, {YY} = 2-digit year, {MM} = 2-digit month,
   /// {####} = zero-padded counter (digits = padding).
-  format       String?
-  padding      Int                 @default(4)
-  counter      Int                 @default(0)
+  format      String?
+  padding     Int                 @default(4)
+  counter     Int                 @default(0)
   /// Last reset date for monthly/yearly sequences. Used by NumberingService
   /// to decide whether the next call should reset the counter.
-  lastResetAt  DateTime?
-  resetPolicy  SequenceResetPolicy @default(NEVER)
+  lastResetAt DateTime?
+  resetPolicy SequenceResetPolicy @default(NEVER)
 
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, type, branchId])
   @@map("document_number_sequences")
@@ -2106,7 +2140,7 @@ model TimeEntry {
   createdAt  DateTime        @default(now())
   updatedAt  DateTime        @updatedAt
 
-  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, clockIn])
   @@index([tenantId, userId, clockIn])
@@ -2116,24 +2150,24 @@ model TimeEntry {
 
 /// A payroll processing batch covering a specific period for all employees.
 model PayRun {
-  id            String       @id @default(cuid())
-  tenantId      String
-  label         String
-  periodStart   DateTime
-  periodEnd     DateTime
-  frequency     PayFrequency @default(SEMI_MONTHLY)
-  status        PayRunStatus @default(DRAFT)
-  totalGross    Decimal      @default(0) @db.Decimal(14, 2)
-  totalDeductions Decimal    @default(0) @db.Decimal(14, 2)
-  totalNet      Decimal      @default(0) @db.Decimal(14, 2)
-  employeeCount Int          @default(0)
-  processedAt   DateTime?
-  processedById String?
-  notes         String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  payslips      Payslip[]
+  id              String       @id @default(cuid())
+  tenantId        String
+  label           String
+  periodStart     DateTime
+  periodEnd       DateTime
+  frequency       PayFrequency @default(SEMI_MONTHLY)
+  status          PayRunStatus @default(DRAFT)
+  totalGross      Decimal      @default(0) @db.Decimal(14, 2)
+  totalDeductions Decimal      @default(0) @db.Decimal(14, 2)
+  totalNet        Decimal      @default(0) @db.Decimal(14, 2)
+  employeeCount   Int          @default(0)
+  processedAt     DateTime?
+  processedById   String?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payslips        Payslip[]
 
   @@index([tenantId, status])
   @@index([tenantId, periodStart])
@@ -2175,10 +2209,10 @@ model Payslip {
 
 /// Time-tracking punch status
 enum TimeEntryStatus {
-  OPEN      // Clocked in; no clock-out yet
-  CLOSED    // Clock-out recorded; ready for payroll processing
-  APPROVED  // Approved by manager / payroll master
-  REJECTED  // Disputed entry; will not be paid
+  OPEN // Clocked in; no clock-out yet
+  CLOSED // Clock-out recorded; ready for payroll processing
+  APPROVED // Approved by manager / payroll master
+  REJECTED // Disputed entry; will not be paid
 }
 
 enum PayFrequency {
@@ -2216,7 +2250,7 @@ model Document {
   uploadedById String?
   createdAt    DateTime @default(now())
 
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, entityType, entityId])
   @@index([tenantId, createdAt])
@@ -2239,7 +2273,7 @@ model OrSequence {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("or_sequences")
 }
@@ -2247,11 +2281,11 @@ model OrSequence {
 // ─── Phase 10 — Travel & Expense Claims ──────────────────────────────────────
 
 enum ExpenseClaimStatus {
-  DRAFT       // Employee filling in; not yet submitted
-  SUBMITTED   // Submitted for manager approval
-  APPROVED    // Manager approved; ready for payment
-  REJECTED    // Manager rejected with reason
-  PAID        // Reimbursed to employee
+  DRAFT // Employee filling in; not yet submitted
+  SUBMITTED // Submitted for manager approval
+  APPROVED // Manager approved; ready for payment
+  REJECTED // Manager rejected with reason
+  PAID // Reimbursed to employee
 }
 
 /// An employee expense claim (meals, transport, accommodation, supplies, etc.)
@@ -2275,8 +2309,8 @@ model ExpenseClaim {
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
 
-  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  items         ExpenseClaimItem[]
+  tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  ExpenseClaimItem[]
 
   @@unique([tenantId, claimNumber])
   @@index([tenantId, status])
@@ -2286,18 +2320,18 @@ model ExpenseClaim {
 
 /// One line item within an expense claim.
 model ExpenseClaimItem {
-  id          String       @id @default(cuid())
+  id          String   @id @default(cuid())
   claimId     String
   /// Category: "Meals", "Transport", "Accommodation", "Supplies", "Communication", "Other"
   category    String
   description String
-  amount      Decimal      @db.Decimal(14, 2)
+  amount      Decimal  @db.Decimal(14, 2)
   receiptDate DateTime
   /// Receipt / OR number from the vendor
   receiptRef  String?
-  createdAt   DateTime     @default(now())
+  createdAt   DateTime @default(now())
 
-  claim       ExpenseClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  claim ExpenseClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
 
   @@index([claimId])
   @@map("expense_claim_items")
@@ -2311,7 +2345,7 @@ model ExpenseClaimSequence {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("expense_claim_sequences")
 }
@@ -2340,7 +2374,7 @@ model Notification {
   createdAt DateTime         @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user   User?  @relation(fields: [userId],   references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, userId, readAt])
   @@index([tenantId, createdAt])
@@ -2354,31 +2388,31 @@ enum BankReconciliationStatus {
 }
 
 model BankReconciliation {
-  id             String                       @id @default(cuid())
-  tenantId       String
+  id            String                   @id @default(cuid())
+  tenantId      String
   /// GL cash account being reconciled (1010, 1020, etc.)
-  accountId      String
+  accountId     String
   /// Statement period
-  periodStart    DateTime
-  periodEnd      DateTime
+  periodStart   DateTime
+  periodEnd     DateTime
   /// Closing balance per the bank statement (what the bank says)
-  bankBalance    Decimal                      @db.Decimal(14, 2)
+  bankBalance   Decimal                  @db.Decimal(14, 2)
   /// Closing balance per the GL as of periodEnd (what our books say)
-  glBalance      Decimal                      @db.Decimal(14, 2)
+  glBalance     Decimal                  @db.Decimal(14, 2)
   /// Sum of matched amounts; books are reconciled when this == bankBalance + adjustments
-  matchedAmount  Decimal                      @default(0) @db.Decimal(14, 2)
+  matchedAmount Decimal                  @default(0) @db.Decimal(14, 2)
   /// Free-text reconciling adjustments (outstanding checks, deposits in transit, fees)
-  notes          String?
-  status         BankReconciliationStatus     @default(IN_PROGRESS)
-  preparedById   String
-  completedAt    DateTime?
-  createdAt      DateTime                     @default(now())
-  updatedAt      DateTime                     @updatedAt
+  notes         String?
+  status        BankReconciliationStatus @default(IN_PROGRESS)
+  preparedById  String
+  completedAt   DateTime?
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
 
-  tenant         Tenant                       @relation(fields: [tenantId],     references: [id], onDelete: Cascade)
-  account        Account                      @relation(fields: [accountId],    references: [id])
-  preparedBy     User                         @relation(fields: [preparedById], references: [id])
-  items          BankReconciliationItem[]
+  tenant     Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account    Account                  @relation(fields: [accountId], references: [id])
+  preparedBy User                     @relation(fields: [preparedById], references: [id])
+  items      BankReconciliationItem[]
 
   @@index([tenantId, accountId, periodEnd])
   @@map("bank_reconciliations")
@@ -2386,21 +2420,21 @@ model BankReconciliation {
 
 /// One line on a bank reconciliation — either a statement row, a JE line, or both (matched).
 model BankReconciliationItem {
-  id                String              @id @default(cuid())
-  reconciliationId  String
+  id               String    @id @default(cuid())
+  reconciliationId String
   /// "STATEMENT" = bank statement line (usually unmatched at first)
   /// "JE_LINE"   = our journal line for the period
   /// "MATCHED"   = statement matched to one or more JE lines
-  itemType          String
+  itemType         String
   /// Bank statement details (when itemType STATEMENT or MATCHED)
-  statementDate     DateTime?
-  statementDesc     String?
-  statementAmount   Decimal?            @db.Decimal(14, 2)
+  statementDate    DateTime?
+  statementDesc    String?
+  statementAmount  Decimal?  @db.Decimal(14, 2)
   /// JE-line reference (when itemType JE_LINE or MATCHED)
-  journalLineId     String?
-  isMatched         Boolean             @default(false)
-  notes             String?
-  createdAt         DateTime            @default(now())
+  journalLineId    String?
+  isMatched        Boolean   @default(false)
+  notes            String?
+  createdAt        DateTime  @default(now())
 
   reconciliation BankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
 
@@ -2416,33 +2450,154 @@ model BankReconciliationItem {
 ///   - One-shot: schedule null, user instantiates manually via "Generate now"
 ///   - Recurring: schedule + nextRunAt set; scheduler creates the JE on each tick
 enum JournalTemplateFrequency {
-  MANUAL       // never auto-runs; user clicks "Generate now"
+  MANUAL // never auto-runs; user clicks "Generate now"
   DAILY
   WEEKLY
-  MONTHLY      // most common — accruals, depreciation
+  MONTHLY // most common — accruals, depreciation
   QUARTERLY
   YEARLY
 }
 
 model JournalTemplate {
-  id            String                   @id @default(cuid())
-  tenantId      String
-  name          String
-  description   String?
+  id          String                   @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
   /// Lines as JSON: [{accountId, debit?, credit?, description?}, ...]
   /// Must balance (Σ debit = Σ credit) at instantiation time.
-  lines         Json
-  frequency     JournalTemplateFrequency @default(MANUAL)
+  lines       Json
+  frequency   JournalTemplateFrequency @default(MANUAL)
   /// Next scheduled run (auto-set on save when frequency != MANUAL)
-  nextRunAt     DateTime?
-  lastRunAt     DateTime?
-  isActive      Boolean                  @default(true)
-  createdById   String
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
+  nextRunAt   DateTime?
+  lastRunAt   DateTime?
+  isActive    Boolean                  @default(true)
+  createdById String
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
 
-  tenant        Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, isActive, nextRunAt])
   @@map("journal_templates")
+}
+
+// ─── Sprint 3: Floor Layouts (Stations, Printers, Terminals) ─────────────────
+
+/**
+ * A station is a logical prep area where ordered items are routed for
+ * preparation. Auto-provisioned from the tenant's `coffeeShopTier` template.
+ * Locked structure: owner can rename (`name`), enable/disable KDS, and assign
+ * categories/printers — but cannot add or remove stations beyond the template.
+ */
+model Station {
+  id         String      @id @default(cuid())
+  tenantId   String
+  branchId   String?
+  /// Station archetype (COUNTER / BAR / KITCHEN / HOT_BAR / COLD_BAR / PASTRY_PASS)
+  /// — see packages/shared-types/src/layouts.ts
+  kind       StationKind
+  /// User-facing name. Defaults to the kind's defaultName but renameable.
+  name       String
+  /// Display order in setup screens / KDS lists.
+  sortOrder  Int         @default(0)
+  /// Whether this station has a Kitchen Display Screen (KDS).
+  hasKds     Boolean     @default(false)
+  /// Whether this station drives its own printer (separate from receipt printer).
+  hasPrinter Boolean     @default(false)
+  /// Optional printer assignment. When null, items still print to the receipt
+  /// printer only (no separate ticket). Tier upgrades may auto-attach a printer.
+  printerId  String?
+  isActive   Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  printer    Printer?   @relation(fields: [printerId], references: [id], onDelete: SetNull)
+  /// Categories that route to this station (drinks → BAR, food → KITCHEN, etc.)
+  categories Category[] @relation("CategoryStation")
+
+  @@index([tenantId, branchId])
+  @@index([printerId])
+  @@map("stations")
+}
+
+enum StationKind {
+  COUNTER
+  BAR
+  KITCHEN
+  HOT_BAR
+  COLD_BAR
+  PASTRY_PASS
+}
+
+/**
+ * A printer registered to the tenant. Multiple stations + the receipt path
+ * can share a single Printer record. Bluetooth printers are addressed via the
+ * RawBT bridge URL scheme (rawbt://) on Android tablets; network printers via
+ * direct TCP connection.
+ */
+model Printer {
+  id             String           @id @default(cuid())
+  tenantId       String
+  branchId       String?
+  /// User-facing label (e.g., "Receipt Printer", "Bar Printer").
+  name           String
+  /// Manufacturer + model (e.g., "Epson TM-T20", "Xprinter XP-58"). Free text.
+  model          String?
+  /// Connection method.
+  interface      PrinterInterface @default(BLUETOOTH_RAWBT)
+  /// For NETWORK: IPv4/host. For BLUETOOTH_RAWBT: paired device name or MAC.
+  address        String?
+  /// Paper width in mm. 58 (small thermal) or 80 (full thermal). Defaults to 80.
+  paperWidthMm   Int              @default(80)
+  /// Role hints — drives which jobs route here automatically.
+  printsReceipts Boolean          @default(true)
+  printsOrders   Boolean          @default(false) // station tickets — set true for kitchen/bar
+  isActive       Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stations Station[]
+
+  @@index([tenantId, branchId])
+  @@map("printers")
+}
+
+enum PrinterInterface {
+  /// Network printer — TCP/IP at the supplied address (most reliable).
+  NETWORK
+  /// Bluetooth via RawBT Android bridge — uses rawbt:// URL scheme.
+  /// Requires RawBT app installed on the printing tablet.
+  BLUETOOTH_RAWBT
+  /// USB-attached via the OS print dialog (browser-mediated, less reliable).
+  USB
+  /// Native Bluetooth — only available in the Capacitor Android wrap.
+  BLUETOOTH_NATIVE
+}
+
+/**
+ * A cashier terminal (POS-01, POS-02, drive-thru, kiosk).
+ * Multi-terminal tiers (CS_4, CS_5) auto-provision multiple Terminal rows.
+ * Used for per-terminal Z-Reads and shift identification.
+ */
+model Terminal {
+  id        String   @id @default(cuid())
+  tenantId  String
+  branchId  String?
+  /// User-facing label (POS-01, POS-02, Drive-Thru, Kiosk-A, etc.)
+  name      String
+  /// Internal code — short string for receipts ("POS01"). Auto-generated
+  /// from name on create; editable.
+  code      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shifts Shift[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, branchId])
+  @@map("terminals")
 }

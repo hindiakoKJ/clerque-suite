@@ -131,6 +131,13 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
 
   const role = user?.role;
 
+  // ── Counter role suffix ────────────────────────────────────────────────────
+  // Shown after "Counter" in the sidebar header so users always know whose
+  // session they're in. Useful when admin and cashier are both on the same
+  // shop floor on different tablets — the label tells you at a glance.
+  // Binary distinction: anyone who operates the till = Cashier, otherwise Admin.
+  const roleLabel: string = inRoles(role, TERMINAL_ROLES) ? 'Cashier' : 'Admin';
+
   // Build nav — ALL items are shown to every POS user.
   // Items the current role cannot access appear grayed-out with a lock icon.
   // Backend guards remain the authoritative enforcement layer.
@@ -264,7 +271,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       <AppShell
         navItems={navItems}
         logoIcon={ShoppingCart}
-        appName="Counter"
+        appName={`Counter · ${roleLabel}`}
         headerRight={headerRight}
         sidebarExtra={<ClockWidget />}
         helpHref="/pos/help"

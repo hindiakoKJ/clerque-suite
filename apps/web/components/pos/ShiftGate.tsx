@@ -5,7 +5,6 @@ import { useShiftStore } from '@/store/pos/shift';
 import { fetchActiveShift, openShift, getShiftSummary } from '@/lib/pos/shifts';
 import { OpenShiftModal } from './OpenShiftModal';
 import { db } from '@/lib/pos/db';
-import { ShieldCheck } from 'lucide-react';
 
 /** Roles that supervise the POS but do not operate the register. */
 const SUPERVISOR_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SUPER_ADMIN', 'FINANCE_LEAD',
@@ -151,22 +150,11 @@ export function ShiftGate({ children }: ShiftGateProps) {
   // Return null to avoid flashing the OpenShiftModal for a single render frame.
   if (!user) return null;
 
-  // Supervisors: bypass shift gate — render children directly with an info banner
+  // Supervisors: bypass shift gate — render children directly.
+  // (The role label in the sidebar header — "Counter · Admin" — already
+  // signals the supervisor context, no banner needed.)
   if (isSupervisor) {
-    return (
-      <>
-        {/* Supervisor mode indicator — shown only when no active shift */}
-        {!activeShift && (
-          <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-amber-500/8 border-b border-amber-200/40 dark:border-amber-800/30">
-            <ShieldCheck className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-            <p className="text-xs text-amber-700 dark:text-amber-300">
-              Supervisor view — no shift open. Cashiers can start a shift from the Terminal page.
-            </p>
-          </div>
-        )}
-        {children}
-      </>
-    );
+    return <>{children}</>;
   }
 
   if (!activeShift) {

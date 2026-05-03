@@ -20,7 +20,7 @@ interface CartPanelProps {
 }
 
 export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartPanelProps) {
-  const { lines, orderDiscount, taxStatus, isVatRegistered, branchId, shiftId, removeItem, updateQty, removeOrderDiscount, clearCart, subtotal, totalDiscount, vatAmount, grandTotal } =
+  const { lines, orderDiscount, additionalPwdScEntries, taxStatus, isVatRegistered, branchId, shiftId, removeItem, updateQty, removeOrderDiscount, removeAdditionalPwdSc, clearCart, subtotal, totalDiscount, vatAmount, grandTotal } =
     useCartStore();
   const parkSale       = useParkedSalesStore((s) => s.add);
   const parkedCount    = useParkedSalesStore((s) => s.sales.length);
@@ -215,6 +215,9 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                 <span className="text-purple-500 font-medium flex items-center gap-1">
                   <Tag className="h-3 w-3" />
                   {orderDiscount.label} (20%)
+                  {orderDiscount.idOwnerName && (
+                    <span className="text-muted-foreground font-normal">— {orderDiscount.idOwnerName}</span>
+                  )}
                 </span>
                 <button onClick={removeOrderDiscount} className="text-muted-foreground/40 hover:text-red-500">
                   <Trash2 className="h-3 w-3" />
@@ -241,6 +244,49 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                   <span>-{formatPeso(orderDiscount.totalSavings)}</span>
                 </div>
               </div>
+
+              {/* Additional PWD/SC entries (2nd-5th in a shared meal) */}
+              {additionalPwdScEntries.map((e, idx) => (
+                <div key={idx} className="bg-purple-500/5 rounded-lg px-2.5 py-2 mt-2 space-y-1 text-[11px] border border-purple-400/20">
+                  <div className="flex items-center justify-between">
+                    <span className="text-purple-500 font-medium">
+                      {e.type === 'PWD' ? 'PWD' : 'Senior'} #{idx + 2}
+                      <span className="text-muted-foreground font-normal ml-1">— {e.idOwnerName}</span>
+                    </span>
+                    <button
+                      onClick={() => removeAdditionalPwdSc(idx)}
+                      aria-label="Remove this PWD/SC"
+                      className="text-muted-foreground/40 hover:text-red-500"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>{isVatRegistered ? 'VAT-excl. base' : 'Gross base'}</span>
+                    <span>{formatPeso(e.vatExclusiveBase)}</span>
+                  </div>
+                  <div className="flex justify-between font-medium text-purple-500">
+                    <span>Savings</span>
+                    <span>-{formatPeso(e.totalSavings)}</span>
+                  </div>
+                </div>
+              ))}
+
+              {/* Add-another button — visible until cap is reached */}
+              {additionalPwdScEntries.length < 4 && (
+                <button
+                  onClick={onApplyPwdSc}
+                  className="w-full mt-1 flex items-center justify-center gap-1.5 text-[11px] text-purple-500 hover:text-purple-400 font-medium py-1 border border-dashed border-purple-400/30 rounded-lg"
+                >
+                  <Tag className="h-3 w-3" />
+                  Add another PWD / Senior in this order
+                </button>
+              )}
+              {additionalPwdScEntries.length >= 4 && (
+                <p className="text-[10px] text-muted-foreground italic text-center pt-1">
+                  Maximum of 5 PWD/Senior IDs per order reached.
+                </p>
+              )}
             </div>
           )}
 

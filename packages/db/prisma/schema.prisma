@@ -1107,6 +1107,11 @@ model OrderDiscount {
   discountFixed    Decimal?     @db.Decimal(12, 2)
   discountAmount   Decimal      @db.Decimal(12, 2)
   reason           String?
+  /// PWD/SC ID — only set when discountType is PWD or SENIOR_CITIZEN.
+  /// Multiple OrderDiscount rows on the same order = multiple PWDs/SCs sharing the meal,
+  /// each with their own ID & cardholder name (BIR audit requires this trail).
+  pwdScIdRef       String?
+  pwdScIdOwnerName String?
   createdAt        DateTime     @default(now())
 
   order            Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)

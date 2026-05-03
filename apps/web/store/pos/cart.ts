@@ -49,9 +49,43 @@ export interface CartDiscount {
   reason?: string;
 }
 
+/**
+ * Additional PWD/SC entry — used when multiple qualified individuals share
+ * a single order. The first PWD/SC always lives in `orderDiscount`; entries
+ * 2..5 are appended to `additionalPwdScEntries`.
+ *
+ * Per BIR (RR 7-2010 + practical interpretation), the 20% discount is a
+ * right of each qualified individual, not per receipt — so a group of
+ * seniors can each claim 20% on their own portion of a shared meal.
+ *
+ * Capped at 5 entries total per order (industry-standard interpretation).
+ */
+export interface AdditionalPwdScEntry {
+  type: 'PWD' | 'SENIOR_CITIZEN';
+  idRef: string;
+  idOwnerName: string;
+  /** Subtotal of THIS PWD/SC's selected items (before discount) */
+  selectedSubtotal: number;
+  /** 20% of the VAT-exclusive base for this PWD's items */
+  discountOnBase: number;
+  vatExclusiveBase: number;
+  /** VAT on this PWD's discounted items (zero for non-VAT tenants) */
+  vatOnDiscounted: number;
+  /** Total reduction vs original (discountOnBase + VAT relief) */
+  totalSavings: number;
+}
+
+/** Hard cap on PWD/SC IDs per single order. */
+export const MAX_PWD_SC_PER_ORDER = 5;
+
 interface CartState {
   lines: CartLine[];
   orderDiscount: CartDiscount | null;
+  /**
+   * Additional PWD/SC entries beyond the first (which lives in orderDiscount).
+   * Empty array = single-PWD or no-PWD case (the common path).
+   */
+  additionalPwdScEntries: AdditionalPwdScEntry[];
   branchId: string | null;
   shiftId: string | null;
   /** Tenant BIR tax classification. Set at login from JWT; drives all tax & discount logic. */
@@ -81,6 +115,13 @@ interface CartState {
    */
   applyPwdSc: (type: 'PWD' | 'SENIOR_CITIZEN', idRef: string, idOwnerName: string, selectedSubtotal?: number) => void;
   /**
+   * Add a SECOND through FIFTH PWD/SC discount on top of an existing one.
+   * Throws (silently no-ops) when there's no first PWD/SC yet, or when
+   * the cap (MAX_PWD_SC_PER_ORDER) is reached.
+   */
+  addAdditionalPwdSc: (type: 'PWD' | 'SENIOR_CITIZEN', idRef: string, idOwnerName: string, selectedSubtotal: number) => void;
+  removeAdditionalPwdSc: (index: number) => void;
+  /**
    * Manual cashier-applied whole-cart discount.
    * @param value     Either a percent (1-100) or a fixed peso amount.
    * @param isPercent true → value is a percent of subtotal; false → value is a fixed peso amount.
@@ -102,6 +143,7 @@ export const useCartStore = create<CartState>()(
     (set, get) => ({
   lines: [],
   orderDiscount: null,
+  additionalPwdScEntries: [],
   branchId: null,
   shiftId: null,
   taxStatus: 'UNREGISTERED', // safe default; overwritten by setTenantFlags() on auth hydration
@@ -134,7 +176,11 @@ export const useCartStore = create<CartState>()(
   removeItem: (lineKey) => {
     set((state) => {
       const nextLines = state.lines.filter((l) => l.lineKey !== lineKey);
-      return { lines: nextLines, orderDiscount: nextLines.length === 0 ? null : state.orderDiscount };
+      return {
+        lines: nextLines,
+        orderDiscount:          nextLines.length === 0 ? null : state.orderDiscount,
+        additionalPwdScEntries: nextLines.length === 0 ? []   : state.additionalPwdScEntries,
+      };
     });
   },
 
@@ -217,7 +263,43 @@ export const useCartStore = create<CartState>()(
         idRef,
         idOwnerName,
       },
+      // Reset any additional PWD/SC entries when starting fresh.
+      additionalPwdScEntries: [],
     });
+  },
+
+  addAdditionalPwdSc: (type, idRef, idOwnerName, selectedSubtotal) => {
+    const { taxStatus, orderDiscount, additionalPwdScEntries } = get();
+    // Must have a first PWD/SC already applied
+    if (!orderDiscount || (orderDiscount.type !== 'PWD' && orderDiscount.type !== 'SENIOR_CITIZEN')) return;
+    // Hard cap: 5 IDs total per order (1 in orderDiscount + 4 additional)
+    if (additionalPwdScEntries.length >= MAX_PWD_SC_PER_ORDER - 1) return;
+    if (selectedSubtotal <= 0) return;
+
+    const { vatExclusiveBase, discountOnBase, vatOnDiscounted, totalSavings } =
+      computeDiscount(selectedSubtotal, taxStatus);
+
+    set({
+      additionalPwdScEntries: [
+        ...additionalPwdScEntries,
+        {
+          type,
+          idRef,
+          idOwnerName,
+          selectedSubtotal,
+          discountOnBase,
+          vatExclusiveBase,
+          vatOnDiscounted,
+          totalSavings,
+        },
+      ],
+    });
+  },
+
+  removeAdditionalPwdSc: (index) => {
+    set((state) => ({
+      additionalPwdScEntries: state.additionalPwdScEntries.filter((_, i) => i !== index),
+    }));
   },
 
   applyManualDiscount: (value, isPercent, reason) => {
@@ -244,26 +326,41 @@ export const useCartStore = create<CartState>()(
     });
   },
 
-  removeOrderDiscount: () => set({ orderDiscount: null }),
-  clearCart: () => set({ lines: [], orderDiscount: null }),
+  removeOrderDiscount: () => set({ orderDiscount: null, additionalPwdScEntries: [] }),
+  clearCart: () => set({ lines: [], orderDiscount: null, additionalPwdScEntries: [] }),
 
   subtotal: () => get().lines.reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0),
 
   totalDiscount: () => {
-    const { lines, orderDiscount } = get();
+    const { lines, orderDiscount, additionalPwdScEntries } = get();
     const itemDiscounts = lines.reduce((sum, l) => sum + l.itemDiscount * l.quantity, 0);
-    return itemDiscounts + (orderDiscount?.discountOnBase ?? 0);
+    const additional = additionalPwdScEntries.reduce((sum, e) => sum + e.discountOnBase, 0);
+    return itemDiscounts + (orderDiscount?.discountOnBase ?? 0) + additional;
   },
 
   vatAmount: () => {
-    const { lines, orderDiscount, taxStatus } = get();
+    const { lines, orderDiscount, additionalPwdScEntries, taxStatus } = get();
 
     // Only VAT-registered tenants collect 12% VAT
     if (taxStatus !== 'VAT') return 0;
 
     const isPwdSc = orderDiscount?.type === 'PWD' || orderDiscount?.type === 'SENIOR_CITIZEN';
     if (isPwdSc && orderDiscount) {
-      return orderDiscount.vatOnDiscounted + (orderDiscount.vatOnUnselected ?? 0);
+      // VAT structure with multiple PWDs:
+      //   - Each PWD entry's vatOnDiscounted = VAT on their discounted slice (3% effective)
+      //   - vatOnUnselected = VAT on items NOT claimed by ANY PWD (full 12%)
+      //   - Additional PWDs contribute their own vatOnDiscounted; the
+      //     "unselected" pool shrinks as more PWDs claim more items.
+      //   - Recompute the unselected slice: full subtotal MINUS all claimed
+      //     subtotals (first PWD vatExclusiveBase + each additional's selectedSubtotal).
+      const totalSubtotal = lines.reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0);
+      const claimed =
+        (orderDiscount.vatExclusiveBase * 1.12) +  // first PWD's pre-VAT base → grossed up to compare to subtotal
+        additionalPwdScEntries.reduce((sum, e) => sum + e.selectedSubtotal, 0);
+      const unclaimedSubtotal = Math.max(0, totalSubtotal - claimed);
+      const vatOnUnclaimed = unclaimedSubtotal > 0 ? computeVat(unclaimedSubtotal).vat : 0;
+      const additionalVatOnDiscounted = additionalPwdScEntries.reduce((sum, e) => sum + e.vatOnDiscounted, 0);
+      return orderDiscount.vatOnDiscounted + additionalVatOnDiscounted + vatOnUnclaimed;
     }
     // Compute VAT only on vatable lines, proportionally reduced by any order-level discount.
     // Using some() then applying the full subtotal was wrong for mixed-vatable carts — it
@@ -280,7 +377,11 @@ export const useCartStore = create<CartState>()(
     return computeVat(vatableAmount).vat;
   },
 
-  grandTotal: () => get().subtotal() - (get().orderDiscount?.totalSavings ?? 0),
+  grandTotal: () => {
+    const { subtotal, orderDiscount, additionalPwdScEntries } = get();
+    const additionalSavings = additionalPwdScEntries.reduce((sum, e) => sum + e.totalSavings, 0);
+    return subtotal() - (orderDiscount?.totalSavings ?? 0) - additionalSavings;
+  },
     }),
     {
       name: 'clerque-cart',
@@ -292,6 +393,7 @@ export const useCartStore = create<CartState>()(
       partialize: (state) => ({
         lines: state.lines,
         orderDiscount: state.orderDiscount,
+        additionalPwdScEntries: state.additionalPwdScEntries,
         branchId: state.branchId,
         shiftId: state.shiftId,
         // taxStatus / isVatRegistered intentionally NOT persisted — they

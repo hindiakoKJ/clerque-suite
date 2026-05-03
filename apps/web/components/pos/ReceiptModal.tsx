@@ -72,6 +72,16 @@ export interface ReceiptData {
   isPwdScDiscount:  boolean;
   pwdScIdRef?:      string;
   pwdScIdOwnerName?: string;
+  /**
+   * Additional PWD/SC IDs (entries 2-5) when multiple qualified individuals
+   * share an order. Empty/undefined when only one PWD/SC was applied.
+   */
+  additionalPwdScEntries?: Array<{
+    type:        'PWD' | 'SENIOR_CITIZEN';
+    idRef:       string;
+    idOwnerName: string;
+    savings:     number;
+  }>;
   completedAt:      string;
   branchName?:      string;
   isOffline?:       boolean;
@@ -482,6 +492,17 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 )}
                 {data.pwdScIdRef && (
                   <div className="text-gray-400 text-[10px]">ID No.: {data.pwdScIdRef}</div>
+                )}
+                {/* Additional PWD/SC IDs in this same order (BIR audit trail). */}
+                {data.additionalPwdScEntries && data.additionalPwdScEntries.length > 0 && (
+                  <div className="mt-1 pt-1 border-t border-dashed border-gray-300/30 space-y-1">
+                    {data.additionalPwdScEntries.map((e, i) => (
+                      <div key={i} className="text-gray-400 text-[10px]">
+                        <div>+ {e.type === 'PWD' ? 'PWD' : 'Senior'}: {e.idOwnerName}</div>
+                        <div className="ml-3">ID No.: {e.idRef} · Savings −{formatPeso(e.savings)}</div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </>
             ) : data.discountAmount > 0 ? (

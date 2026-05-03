@@ -89,4 +89,8 @@ export interface OfflineDiscount {
   discountAmount: number;
   reason?: string;
   authorizedById?: string;
+  /** PWD/SC ID — only set when discountType is PWD or SENIOR_CITIZEN. */
+  pwdScIdRef?: string;
+  /** PWD/SC cardholder name — only set when discountType is PWD or SENIOR_CITIZEN. */
+  pwdScIdOwnerName?: string;
 }

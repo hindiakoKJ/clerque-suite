@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { Menu, ChevronLeft, ChevronRight, Sun, Moon, Settings, LogOut, Lock, HelpCircle } from 'lucide-react';
 import { NotificationBell } from './NotificationBell';
+import { SessionChangedBanner } from './SessionChangedBanner';
 import { cn } from '@/lib/utils';
 import { MobileNavSheet } from './MobileNavSheet';
 import { toggleTheme } from '@/components/portal/AppLoginPage';
@@ -286,6 +287,7 @@ export function AppShell({
           </div>
         </header>
 
+        <SessionChangedBanner />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
 

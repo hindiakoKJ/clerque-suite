@@ -5,8 +5,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { printer } from '@/lib/pos/printer';
 import { usePrinterStore } from '@/store/pos/printer';
+import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 import { formatPeso } from '@/lib/utils';
+
+// Roles that operate the till — they see ONLY cash movements at end of shift,
+// not total revenue or top products. Owners/managers see the full report.
+// (Sensitive business data — revenue, average ticket, top products — should
+//  not surface to the cashier; this is a Segregation-of-Duties boundary.)
+const CASHIER_ONLY_ROLES = new Set(['CASHIER', 'SALES_LEAD']);
 
 const METHOD_LABELS: Record<string, string> = {
   CASH: 'Cash',
@@ -106,6 +113,13 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
 
   const { shift } = data;
   const variance = shift.variance ?? 0;
+  const userRole = useAuthStore((s) => s.user?.role);
+  const userName = useAuthStore((s) => s.user?.name);
+  // Cashier view = no revenue, no top products. Manager/owner = full report.
+  const isCashierView = userRole != null && CASHIER_ONLY_ROLES.has(userRole);
+  // Short terminal label until proper Terminal IDs ship in Phase B
+  // (uses the last 4 chars of the shift id as a stable identifier).
+  const terminalLabel = `POS-${shift.id.slice(-4).toUpperCase()}`;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -129,45 +143,69 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
         <div className="px-6 pb-6">
           <div ref={printRef} className="font-mono text-xs space-y-0.5">
             <h1 className="text-sm font-bold text-center">END-OF-SHIFT REPORT</h1>
+            <p className="text-center text-gray-500 text-[10px]">{terminalLabel}{userName ? ` · ${userName}` : ''}</p>
             <p className="text-center text-gray-500 text-[10px] mb-3">
               {fmt(shift.openedAt)} → {fmt(shift.closedAt)}
             </p>
 
             <hr className="border-dashed border-gray-200 my-2" />
 
-            {/* Sales summary */}
-            <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Sales Summary</p>
-            <div className="space-y-1">
-              {[
-                ['Total Orders', data.totalOrders],
-                ['Void / Cancelled', data.voidCount],
-                ['Avg. Order Value', formatPeso(data.avgOrderValue)],
-              ].map(([label, value]) => (
-                <div key={String(label)} className="flex justify-between text-xs">
-                  <span className="text-gray-500">{label}</span>
-                  <span className="font-medium">{value}</span>
+            {/* ── Sales summary (manager/owner view only) ──────────────────────── */}
+            {!isCashierView && (
+              <>
+                <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Sales Summary</p>
+                <div className="space-y-1">
+                  {[
+                    ['Total Orders', data.totalOrders],
+                    ['Void / Cancelled', data.voidCount],
+                    ['Avg. Order Value', formatPeso(data.avgOrderValue)],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="flex justify-between text-xs">
+                      <span className="text-gray-500">{label}</span>
+                      <span className="font-medium">{value}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between font-bold text-sm mt-1 pt-1 border-t border-gray-100">
+                    <span>Total Revenue</span>
+                    <span style={{ color: 'var(--accent)' }}>{formatPeso(data.totalRevenue)}</span>
+                  </div>
                 </div>
-              ))}
-              <div className="flex justify-between font-bold text-sm mt-1 pt-1 border-t border-gray-100">
-                <span>Total Revenue</span>
-                <span style={{ color: 'var(--accent)' }}>{formatPeso(data.totalRevenue)}</span>
-              </div>
-            </div>
 
-            <hr className="border-dashed border-gray-200 my-3" />
+                <hr className="border-dashed border-gray-200 my-3" />
 
-            {/* Payment breakdown */}
-            <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Payment Methods</p>
-            <div className="space-y-1">
-              {data.byPaymentMethod.map((p) => (
-                <div key={p.method} className="flex justify-between text-xs">
-                  <span className="text-gray-500">{METHOD_LABELS[p.method] ?? p.method}</span>
-                  <span className="font-medium">{formatPeso(p.totalAmount)}</span>
+                {/* Full payment breakdown — owner/manager see all methods + amounts */}
+                <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Payment Methods</p>
+                <div className="space-y-1">
+                  {data.byPaymentMethod.map((p) => (
+                    <div key={p.method} className="flex justify-between text-xs">
+                      <span className="text-gray-500">{METHOD_LABELS[p.method] ?? p.method}</span>
+                      <span className="font-medium">{formatPeso(p.totalAmount)}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
 
-            <hr className="border-dashed border-gray-200 my-3" />
+                <hr className="border-dashed border-gray-200 my-3" />
+              </>
+            )}
+
+            {/* Cashier view counts only — the front-of-house operational numbers
+                they need to balance their drawer (no revenue exposure). */}
+            {isCashierView && (
+              <>
+                <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Shift Activity</p>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Total Orders</span>
+                    <span className="font-medium">{data.totalOrders}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Voids / Cancelled</span>
+                    <span className="font-medium">{data.voidCount}</span>
+                  </div>
+                </div>
+                <hr className="border-dashed border-gray-200 my-3" />
+              </>
+            )}
 
             {/* Cash-outs (paid-outs + drops) — shown before reconciliation */}
             {data.cashOuts && data.cashOuts.length > 0 && (
@@ -229,8 +267,8 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
               )}
             </div>
 
-            {/* Top products */}
-            {data.topProducts.length > 0 && (
+            {/* Top products — manager/owner view only (cashier doesn't see revenue) */}
+            {!isCashierView && data.topProducts.length > 0 && (
               <>
                 <hr className="border-dashed border-gray-200 my-3" />
                 <p className="font-bold text-[11px] uppercase text-gray-500 tracking-wide mb-1">Top Products</p>

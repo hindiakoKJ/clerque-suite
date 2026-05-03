@@ -134,13 +134,16 @@ export class OrdersService {
           },
           discounts: {
             create: payload.discounts.map((d) => ({
-              discountType: d.discountType,
+              discountType:     d.discountType,
               discountConfigId: d.discountConfigId,
-              discountPercent: d.discountPercent != null ? new Prisma.Decimal(d.discountPercent) : undefined,
-              discountFixed: d.discountFixed != null ? new Prisma.Decimal(d.discountFixed) : undefined,
-              discountAmount: new Prisma.Decimal(d.discountAmount),
-              reason: d.reason,
-              authorizedById: d.authorizedById,
+              discountPercent:  d.discountPercent != null ? new Prisma.Decimal(d.discountPercent) : undefined,
+              discountFixed:    d.discountFixed   != null ? new Prisma.Decimal(d.discountFixed)   : undefined,
+              discountAmount:   new Prisma.Decimal(d.discountAmount),
+              reason:           d.reason,
+              authorizedById:   d.authorizedById,
+              // Per-PWD/SC ID (allows multiple senior/PWD customers to share one order).
+              pwdScIdRef:       d.pwdScIdRef       ?? undefined,
+              pwdScIdOwnerName: d.pwdScIdOwnerName ?? undefined,
             })),
           },
         },

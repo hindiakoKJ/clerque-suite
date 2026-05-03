@@ -23,10 +23,20 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
   const [idOwnerName, setIdOwnerName] = useState('');
   const [error, setError] = useState('');
 
-  const lines      = useCartStore((s) => s.lines);
-  const applyPwdSc = useCartStore((s) => s.applyPwdSc);
-  const taxStatus  = useCartStore((s) => s.taxStatus);
-  const isVat      = taxStatus === 'VAT';
+  const lines                 = useCartStore((s) => s.lines);
+  const orderDiscount         = useCartStore((s) => s.orderDiscount);
+  const additionalEntries     = useCartStore((s) => s.additionalPwdScEntries);
+  const applyPwdSc            = useCartStore((s) => s.applyPwdSc);
+  const addAdditionalPwdSc    = useCartStore((s) => s.addAdditionalPwdSc);
+  const taxStatus             = useCartStore((s) => s.taxStatus);
+  const isVat                 = taxStatus === 'VAT';
+
+  // The modal serves two scenarios:
+  //   1. First PWD/SC of the order (orderDiscount is null or non-PWD type)
+  //   2. Additional PWD/SC #2..#5 (orderDiscount already holds a PWD entry)
+  const isAdditional =
+    orderDiscount?.type === 'PWD' || orderDiscount?.type === 'SENIOR_CITIZEN';
+  const totalExisting = (isAdditional ? 1 : 0) + additionalEntries.length;
 
   // Cashier must explicitly choose which item(s) get the discount.
   // Default is empty — nothing selected — so no accidental blanket discounts.
@@ -85,9 +95,16 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
       return;
     }
 
-    // If ALL items are selected, pass undefined so the store uses the full cart subtotal
-    const allSelected = selected.size === lineKeys.length;
-    applyPwdSc(type, idRef.trim(), idOwnerName.trim(), allSelected ? undefined : selectedSubtotal);
+    if (isAdditional) {
+      // Adding the 2nd..5th PWD/SC — always pass the explicit selectedSubtotal,
+      // since the cart already has another PWD/SC claiming part of the order.
+      addAdditionalPwdSc(type, idRef.trim(), idOwnerName.trim(), selectedSubtotal);
+    } else {
+      // First PWD/SC: if ALL items are selected, pass undefined so the store
+      // uses the full cart subtotal as the basis (the existing single-PWD path).
+      const allSelected = selected.size === lineKeys.length;
+      applyPwdSc(type, idRef.trim(), idOwnerName.trim(), allSelected ? undefined : selectedSubtotal);
+    }
     onClose();
   }
 
@@ -102,7 +119,11 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>PWD / Senior Citizen Discount</DialogTitle>
+          <DialogTitle>
+            {isAdditional
+              ? `Add PWD / Senior #${totalExisting + 1}`
+              : 'PWD / Senior Citizen Discount'}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="px-6 py-4 space-y-4">

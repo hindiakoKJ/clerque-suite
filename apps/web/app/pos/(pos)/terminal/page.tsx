@@ -37,7 +37,7 @@ export default function PosTerminal() {
   const user      = useAuthStore((s) => s.user);
   const branchId  = useCartStore((s) => s.branchId);
   const taxStatus = useCartStore((s) => s.taxStatus);
-  const { lines, orderDiscount, grandTotal, vatAmount, subtotal, totalDiscount, clearCart, applyPromoDiscounts, addItem } = useCartStore();
+  const { lines, orderDiscount, additionalPwdScEntries, grandTotal, vatAmount, subtotal, totalDiscount, clearCart, applyPromoDiscounts, addItem } = useCartStore();
 
   const activeBranchId = branchId ?? user?.branchId ?? '';
   const tenantId       = user?.tenantId ?? '';
@@ -217,7 +217,22 @@ export default function PosTerminal() {
             : taxStatus === 'VAT'
               ? `${orderDiscount.label} — 20% of VAT-excl base ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`
               : `${orderDiscount.label} — 20% of gross ₱${orderDiscount.vatExclusiveBase.toFixed(2)}`,
+          // Carries the first PWD/SC ID; subsequent IDs come from additionalPwdScEntries below.
+          pwdScIdRef:       (orderDiscount.type === 'PWD' || orderDiscount.type === 'SENIOR_CITIZEN') ? orderDiscount.idRef       : undefined,
+          pwdScIdOwnerName: (orderDiscount.type === 'PWD' || orderDiscount.type === 'SENIOR_CITIZEN') ? orderDiscount.idOwnerName : undefined,
         }] : []),
+        // Additional PWD/SC entries — one OrderDiscount row each so BIR audit
+        // sees every qualified individual on the same order.
+        ...additionalPwdScEntries.map((e) => ({
+          discountType:    e.type,
+          discountAmount:  e.discountOnBase,
+          discountPercent: 20,
+          reason: taxStatus === 'VAT'
+            ? `${e.type === 'PWD' ? 'PWD' : 'Senior'} ${e.idOwnerName} — 20% of VAT-excl base ₱${e.vatExclusiveBase.toFixed(2)}`
+            : `${e.type === 'PWD' ? 'PWD' : 'Senior'} ${e.idOwnerName} — 20% of gross ₱${e.vatExclusiveBase.toFixed(2)}`,
+          pwdScIdRef:       e.idRef,
+          pwdScIdOwnerName: e.idOwnerName,
+        })),
       ],
       subtotal: sub,
       discountAmount: disc,
@@ -257,6 +272,12 @@ export default function PosTerminal() {
       isPwdScDiscount: orderPayload.isPwdScDiscount,
       pwdScIdRef: orderPayload.pwdScIdRef,
       pwdScIdOwnerName: orderPayload.pwdScIdOwnerName,
+      additionalPwdScEntries: additionalPwdScEntries.map((e) => ({
+        type:        e.type,
+        idRef:       e.idRef,
+        idOwnerName: e.idOwnerName,
+        savings:     e.totalSavings,
+      })),
       completedAt: orderPayload.createdAt,
       // B2B customer fields forwarded to receipt display
       invoiceType:     b2b?.invoiceType,

@@ -1,19 +1,26 @@
 'use client';
 
+import { api } from '@/lib/api';
+
 /**
- * Customer Display channel — same-device dual-monitor cart mirror.
+ * Customer Display channel — multi-topology cart mirror.
  *
- * Strategy:
- *   1. BroadcastChannel API for same-browser-window dual-monitor setups.
- *      The cashier tablet and customer tablet are different windows in
- *      the same browser → BroadcastChannel sync is instant + free.
- *   2. localStorage fallback for browsers that lack BroadcastChannel
- *      (older Safari/iOS). Slightly slower (~16ms throttle) but works.
+ * Layered strategy (each layer adds coverage, never replaces a previous one):
  *
- * For cross-device sync (cashier on Tablet A, customer on Tablet B), the
- * two tablets must share the same network — Phase 3D adds a small
- * websocket bridge for that. For now, BroadcastChannel handles the
- * common case (both screens off the same Chrome instance).
+ *   1. BroadcastChannel API   — same browser, different windows. Instant,
+ *                               zero network. Best UX when both screens are
+ *                               off the same Chrome instance.
+ *   2. localStorage fallback  — same origin, no BroadcastChannel support
+ *                               (older Safari). Storage event fires across
+ *                               tabs in the same browser profile.
+ *   3. Server-mediated relay  — DIFFERENT browser profiles or DIFFERENT
+ *                               devices. POST snapshot to the API; customer
+ *                               screen polls every 1s. Phase 3E.
+ *
+ * The cashier-side `publishCustomerDisplay()` writes to all 3 layers in
+ * parallel. The customer-side `subscribeCustomerDisplay()` reads from all
+ * 3, dedupes by sequence, and renders the freshest. Net effect: it Just
+ * Works in every topology — single browser, two profiles, two tablets.
  */
 
 const CHANNEL_NAME = 'clerque-customer-display';
@@ -84,8 +91,14 @@ let localSeq = 0;
 
 /**
  * Post a state update from the cashier-side terminal.
- * Both BroadcastChannel and localStorage receive the same payload so a
- * customer display in any matching tab/window picks it up.
+ * Writes to all 3 channels in parallel:
+ *   1. BroadcastChannel (same browser)
+ *   2. localStorage (cross-window same browser)
+ *   3. Server relay POST /customer-display/state (cross-device, cross-profile)
+ *
+ * The third path is fire-and-forget — failure (offline, slow API) is
+ * silently swallowed because the local channels usually carry the message
+ * and the customer screen will catch up on its next 1s poll anyway.
  */
 export function publishCustomerDisplay(state: Omit<CustomerDisplayState, 'seq' | 'ts'>): void {
   if (typeof window === 'undefined') return;
@@ -109,20 +122,44 @@ export function publishCustomerDisplay(state: Omit<CustomerDisplayState, 'seq' |
   } catch {
     // localStorage may throw in private mode — non-fatal
   }
+
+  // Server relay — covers cross-device + cross-profile cases.
+  // Don't await; UI shouldn't block on this.
+  api.post('/customer-display/state', {
+    type:           payload.type,
+    lines:          payload.lines,
+    subtotal:       payload.subtotal,
+    discount:       payload.discount,
+    vatAmount:      payload.vatAmount,
+    total:          payload.total,
+    amountTendered: payload.amountTendered,
+    changeDue:      payload.changeDue,
+    cashierName:    payload.cashierName,
+    branchName:     payload.branchName,
+    businessName:   payload.businessName,
+  }).catch(() => { /* swallow — local channels usually carry the message */ });
 }
 
 /**
  * Subscribe to customer-display updates. Receives the latest state on
  * subscription (from localStorage cache) so the screen never starts blank.
  *
+ * @param onUpdate Called with each new state.
+ * @param opts.cashierId  When set, polls the server relay for THIS cashier's
+ *                         feed (used when cashier and customer are on different
+ *                         devices/profiles). When null, the customer screen
+ *                         only receives same-browser updates via BroadcastChannel
+ *                         + localStorage.
+ *
  * Returns an unsubscribe function.
  */
 export function subscribeCustomerDisplay(
   onUpdate: (state: CustomerDisplayState) => void,
+  opts: { cashierId?: string | null; pollIntervalMs?: number } = {},
 ): () => void {
   if (typeof window === 'undefined') return () => {};
 
-  // Immediate hydration from localStorage cache
+  // Immediate hydration from localStorage cache (same-browser case)
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -140,19 +177,19 @@ export function subscribeCustomerDisplay(
     onUpdate({ ...EMPTY_STATE, ts: Date.now() });
   }
 
-  // Live updates via BroadcastChannel
+  // Live updates via BroadcastChannel (same browser instant path)
   let lastSeq = 0;
+  let lastServerSeq = 0;
   const ch = getChannel();
   const onMessage = (e: MessageEvent<CustomerDisplayState>) => {
     const next = e.data;
-    if (next.seq <= lastSeq) return;     // ignore stale / out-of-order
+    if (next.seq <= lastSeq) return;
     lastSeq = next.seq;
     onUpdate(next);
   };
   ch?.addEventListener('message', onMessage);
 
-  // Also listen to storage events so cross-window-but-same-domain
-  // updates work even where BroadcastChannel is unavailable.
+  // localStorage event — fallback for browsers without BroadcastChannel.
   const onStorage = (e: StorageEvent) => {
     if (e.key !== STORAGE_KEY || !e.newValue) return;
     try {
@@ -166,9 +203,65 @@ export function subscribeCustomerDisplay(
   };
   window.addEventListener('storage', onStorage);
 
+  // Server-mediated polling — cross-device / cross-profile path.
+  // When cashierId is provided, poll GET /customer-display/state every 1s.
+  // The server returns the latest snapshot keyed by tenantId+cashierId.
+  const pollIntervalMs = opts.pollIntervalMs ?? 1000;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  if (opts.cashierId) {
+    const cashierId = opts.cashierId;
+    const tick = async () => {
+      try {
+        const { data } = await api.get<{
+          exists: boolean;
+          seq?: number;
+          type?: CustomerDisplayState['type'];
+          lines?: CustomerDisplayState['lines'];
+          subtotal?: number;
+          discount?: number;
+          vatAmount?: number;
+          total?: number;
+          amountTendered?: number;
+          changeDue?: number;
+          cashierName?: string;
+          branchName?: string;
+          businessName?: string;
+        }>(`/customer-display/state?cashierId=${encodeURIComponent(cashierId)}`);
+        if (!data.exists) return;
+        const seq = data.seq ?? 0;
+        if (seq <= lastServerSeq) return;
+        lastServerSeq = seq;
+        const state: CustomerDisplayState = {
+          type:        data.type ?? 'WELCOME',
+          lines:       data.lines ?? [],
+          subtotal:    data.subtotal ?? 0,
+          discount:    data.discount ?? 0,
+          vatAmount:   data.vatAmount ?? 0,
+          total:       data.total ?? 0,
+          amountTendered: data.amountTendered,
+          changeDue:      data.changeDue,
+          cashierName:    data.cashierName,
+          branchName:     data.branchName,
+          businessName:   data.businessName,
+          seq:            seq,
+          ts:             Date.now(),
+        };
+        // Bump local seq so BroadcastChannel updates from this point on
+        // continue to win when both paths deliver the same payload.
+        if (state.seq > lastSeq) lastSeq = state.seq;
+        onUpdate(state);
+      } catch {
+        // Network blip — ignore, next tick will retry.
+      }
+    };
+    void tick();                               // immediate first tick
+    pollTimer = setInterval(tick, pollIntervalMs);
+  }
+
   return () => {
     ch?.removeEventListener('message', onMessage);
     window.removeEventListener('storage', onStorage);
+    if (pollTimer) clearInterval(pollTimer);
   };
 }
 

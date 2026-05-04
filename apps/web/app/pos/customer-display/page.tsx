@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Coffee, Sparkles, Receipt, ShoppingCart } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
@@ -21,12 +22,24 @@ const EMPTY: CustomerDisplayState = {
 
 export default function CustomerDisplayPage() {
   const tenantBusinessName = useAuthStore((s) => s.user?.businessName ?? null);
-  const [state, setState] = useState<CustomerDisplayState>(EMPTY);
+  const userId             = useAuthStore((s) => s.user?.sub ?? null);
+  const searchParams       = useSearchParams();
+  const [state, setState]  = useState<CustomerDisplayState>(EMPTY);
+
+  // Cross-device sync: poll the server relay using the cashier's user id.
+  // The cashier (publisher) and customer (subscriber) typically share the
+  // same login, so user.sub is the same on both sides — perfect key.
+  // Override via ?cashier=<id> for wall-mounted screens watching a specific
+  // POS terminal.
+  const cashierId = searchParams.get('cashier') ?? userId;
 
   useEffect(() => {
-    const unsubscribe = subscribeCustomerDisplay(setState);
+    const unsubscribe = subscribeCustomerDisplay(setState, {
+      cashierId,
+      pollIntervalMs: 1000,
+    });
     return unsubscribe;
-  }, []);
+  }, [cashierId]);
 
   const businessName = state.businessName ?? tenantBusinessName ?? 'Welcome';
 

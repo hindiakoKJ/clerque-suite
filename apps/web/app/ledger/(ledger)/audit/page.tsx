@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ShieldCheck, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
-  Filter, AlertTriangle, Clock,
+  Filter, AlertTriangle, Clock, Building2, User as UserIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -22,6 +22,13 @@ interface AuditRecord {
   performedBy: string | null;
   ipAddress:   string | null;
   createdAt:   string;
+  /**
+   * 'TENANT' = your own staff did this
+   * 'PLATFORM' = HNS Corp PH platform admin (e.g. for support, tier change, etc.)
+   * Showing platform admin actions transparently is a trust commitment —
+   * tenants always know when the platform operator touched their account.
+   */
+  source?:     'TENANT' | 'PLATFORM';
 }
 
 interface PagedResponse {
@@ -153,12 +160,21 @@ export default function AuditLogPage() {
       </div>
 
       {/* Warning banner */}
-      <div className="px-4 sm:px-6 pt-4 shrink-0">
+      <div className="px-4 sm:px-6 pt-4 shrink-0 space-y-2">
         <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/8 px-4 py-3">
           <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
           <p className="text-xs text-amber-700 dark:text-amber-400">
             Audit records are <strong>immutable</strong> — they cannot be edited or deleted.
             This log is required for BIR CAS (Computerized Accounting System) accreditation.
+          </p>
+        </div>
+        <div className="flex items-start gap-2.5 rounded-lg border border-blue-500/30 bg-blue-500/8 px-4 py-3">
+          <Building2 className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-blue-700 dark:text-blue-400">
+            <strong>Platform transparency:</strong> any action performed on your account by an
+            HNS Corp PH platform admin (e.g. tier upgrade, support intervention) appears here
+            with a <span className="font-semibold">Platform</span> badge — so you always know
+            when the platform operator touched your data.
           </p>
         </div>
       </div>
@@ -202,12 +218,13 @@ export default function AuditLogPage() {
                       const isOpen = expanded === rec.id;
                       const meta   = ACTION_LABELS[rec.action];
                       const hasDiff = rec.before || rec.after;
+                      const isPlatform = rec.source === 'PLATFORM';
                       return (
                         <>
                           <tr
                             key={rec.id}
                             onClick={() => hasDiff && setExpanded(isOpen ? null : rec.id)}
-                            className={`transition-colors ${hasDiff ? 'cursor-pointer hover:bg-muted/30' : ''}`}
+                            className={`transition-colors ${hasDiff ? 'cursor-pointer hover:bg-muted/30' : ''} ${isPlatform ? 'bg-blue-500/[0.03]' : ''}`}
                           >
                             <td className="px-4 py-3 text-muted-foreground">
                               {hasDiff && (
@@ -223,9 +240,17 @@ export default function AuditLogPage() {
                               </div>
                             </td>
                             <td className="px-4 py-3 whitespace-nowrap">
-                              <Badge tone={meta?.tone ?? 'default'}>
-                                {meta?.label ?? rec.action}
-                              </Badge>
+                              <div className="flex items-center gap-1.5">
+                                <Badge tone={meta?.tone ?? 'default'}>
+                                  {meta?.label ?? rec.action}
+                                </Badge>
+                                {isPlatform && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                                    <Building2 className="h-2.5 w-2.5" />
+                                    PLATFORM
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
                               <span className="font-medium text-foreground">{rec.entityType}</span>
@@ -235,6 +260,12 @@ export default function AuditLogPage() {
                             </td>
                             <td className="px-4 py-3 text-xs text-muted-foreground max-w-[240px] truncate">
                               {rec.description ?? '—'}
+                              {isPlatform && rec.performedBy && (
+                                <span className="ml-1 inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+                                  <UserIcon className="h-2.5 w-2.5" />
+                                  {rec.performedBy}
+                                </span>
+                              )}
                             </td>
                             <td className="px-4 py-3 text-xs font-mono text-muted-foreground">
                               {rec.ipAddress ?? '—'}

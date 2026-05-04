@@ -112,28 +112,48 @@ export class AdminService {
 
   // ─── Platform metrics ────────────────────────────────────────────────────
 
+  /**
+   * Platform-level operational metrics for the SUPER_ADMIN Console.
+   *
+   * Privacy principle: this dashboard intentionally exposes ZERO tenant
+   * financial data (revenue, orders, AR/AP balances). Showing tenants'
+   * money to the platform operator erodes trust — a coffee shop owner
+   * would (rightly) ask "you can see how much I make?" and the answer
+   * should be "we don't look".
+   *
+   * What we DO surface, organized by concern:
+   *   - Tenant footprint: how many tenants, by status, by tier, active users
+   *   - Operational health: failed events, locked accounts, sync issues
+   *   - Platform cost: AI spend (our cost, not theirs) — gated behind a
+   *     show/hide toggle on the frontend so it can be hidden during demos.
+   */
   async getPlatformMetrics() {
     const now = new Date();
+    const day1  = new Date(now.getTime() -      24 * 60 * 60 * 1000);
     const day7  = new Date(now.getTime() -  7 * 24 * 60 * 60 * 1000);
     const day30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const [
       tenantsByStatus, tenantsByTier,
       activeLast7d, activeLast30d,
-      totalUsers, totalOrders30d, totalRevenue30d,
-      totalArInvoices, totalApBills,
-      failedEvents, totalAiSpend30d,
+      totalUsers,
+      // Operational health signals — everything below is platform-side.
+      failedEvents, pendingEvents,
+      recentLoginFailures, recentSignupsLast7d,
+      sessionsLast24h,
+      totalAiSpend30d,
     ] = await Promise.all([
       this.prisma.tenant.groupBy({ by: ['status'], _count: true }),
       this.prisma.tenant.groupBy({ by: ['tier'],   _count: true }),
       this.prisma.tenant.count({ where: { users: { some: { sessions: { some: { lastUsedAt: { gte: day7  } } } } } } }).catch(() => 0),
       this.prisma.tenant.count({ where: { users: { some: { sessions: { some: { lastUsedAt: { gte: day30 } } } } } } }).catch(() => 0),
       this.prisma.user.count({ where: { isActive: true } }),
-      this.prisma.order.count({ where: { status: 'COMPLETED', completedAt: { gte: day30 } } }),
-      this.prisma.order.aggregate({ where: { status: 'COMPLETED', completedAt: { gte: day30 } }, _sum: { totalAmount: true } }),
-      this.prisma.aRInvoice.count({ where: { status: { in: ['OPEN', 'PARTIALLY_PAID'] } } }).catch(() => 0),
-      this.prisma.aPBill.count({ where: { status: { in: ['OPEN', 'PARTIALLY_PAID'] } } }).catch(() => 0),
       this.prisma.accountingEvent.count({ where: { status: 'FAILED' } }).catch(() => 0),
+      this.prisma.accountingEvent.count({ where: { status: 'PENDING', createdAt: { lte: new Date(now.getTime() - 5 * 60 * 1000) } } }).catch(() => 0),
+      // Failed login attempts in last 24h — proxy for brute-force / credential-stuffing
+      this.prisma.loginLog.count({ where: { success: false, createdAt: { gte: day1 } } }).catch(() => 0),
+      this.prisma.tenant.count({ where: { createdAt: { gte: day7 } } }),
+      this.prisma.userSession.count({ where: { lastUsedAt: { gte: day1 } } }).catch(() => 0),
       this.prisma.aiUsage.aggregate({ where: { createdAt: { gte: day30 } }, _sum: { costUsd: true } }).catch(() => ({ _sum: { costUsd: null } })),
     ]);
 
@@ -144,15 +164,24 @@ export class AdminService {
         byStatus:     tenantsByStatus.map((r) => ({ status: r.status, count: r._count })),
         byTier:       tenantsByTier.map((r) => ({ tier: r.tier, count: r._count })),
         activeLast7d, activeLast30d,
+        recentSignupsLast7d,
       },
-      users:    { totalActive: totalUsers },
-      activity: {
-        ordersLast30d:  totalOrders30d,
-        revenueLast30d: Number(totalRevenue30d._sum.totalAmount ?? 0),
-        openArInvoices: totalArInvoices,
-        openApBills:    totalApBills,
+      users:    {
+        totalActive: totalUsers,
+        sessionsLast24h,
+        /** Failed login attempts in last 24h — proxy for brute-force activity. */
+        failedLoginsLast24h: recentLoginFailures,
+      },
+      // Operational signals only — no tenant money in here.
+      operations: {
+        /** Stuck POS accounting events — manual triage needed. */
         failedEvents,
-        aiSpendUsd30d:  Number(totalAiSpend30d._sum.costUsd ?? 0),
+        /** Events that haven't been processed for 5+ minutes — possible queue lag. */
+        pendingEvents,
+      },
+      /** Platform-side AI cost (Anthropic API). Hidden by default in the UI. */
+      platformCost: {
+        aiSpendUsd30d: Number(totalAiSpend30d._sum.costUsd ?? 0),
       },
     };
   }

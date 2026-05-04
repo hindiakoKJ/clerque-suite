@@ -1,10 +1,13 @@
 'use client';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Building2, Users, ShoppingCart, TrendingUp, AlertTriangle, Sparkles } from 'lucide-react';
+import {
+  Building2, Users, AlertTriangle, Sparkles, Eye, EyeOff,
+  ShieldAlert, Clock, UserPlus, Activity,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { formatPeso } from '@/lib/utils';
 import { Spinner } from '@/components/ui/Spinner';
 
 interface PlatformMetrics {
@@ -15,14 +18,18 @@ interface PlatformMetrics {
     byTier:   { tier: string;   count: number }[];
     activeLast7d:  number;
     activeLast30d: number;
+    recentSignupsLast7d: number;
   };
-  users: { totalActive: number };
-  activity: {
-    ordersLast30d: number;
-    revenueLast30d: number;
-    openArInvoices: number;
-    openApBills: number;
+  users: {
+    totalActive: number;
+    sessionsLast24h: number;
+    failedLoginsLast24h: number;
+  };
+  operations: {
     failedEvents: number;
+    pendingEvents: number;
+  };
+  platformCost: {
     aiSpendUsd30d: number;
   };
 }
@@ -60,6 +67,10 @@ export default function AdminDashboard() {
   const user = useAuthStore((s) => s.user);
   const router = useRouter();
 
+  // AI cost is hidden by default — toggleable, doesn't persist (per-session
+  // privacy, in case the screen is being shared during a sales demo).
+  const [showAiCost, setShowAiCost] = useState(false);
+
   const { data, isLoading } = useQuery<PlatformMetrics>({
     queryKey: ['admin-metrics'],
     queryFn:  () => api.get('/admin/metrics').then((r) => r.data),
@@ -77,10 +88,12 @@ export default function AdminDashboard() {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold">Platform Overview</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Cross-tenant operational metrics. All times in UTC; refresh every 60s.
+          Operational metrics only. Tenant financial data is intentionally not surfaced here —
+          we don&apos;t look at our customers&apos; money.
         </p>
       </div>
 
+      {/* ── Tenant Footprint ──────────────────────────────────────────────── */}
       <section>
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Tenant Footprint</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -99,22 +112,22 @@ export default function AdminDashboard() {
             severity={data.tenants.activeLast7d === 0 ? 'warn' : 'good'}
           />
           <StatCard
+            label="New signups (7d)"
+            value={String(data.tenants.recentSignupsLast7d)}
+            sub="Tenants created in last 7 days"
+            icon={UserPlus}
+            severity={data.tenants.recentSignupsLast7d > 0 ? 'good' : 'neutral'}
+          />
+          <StatCard
             label="Total users"
             value={String(data.users.totalActive)}
             sub="Active accounts across all tenants"
             icon={Users}
           />
-          <StatCard
-            label="Failed events"
-            value={String(data.activity.failedEvents)}
-            sub="Stuck POS events needing triage"
-            icon={AlertTriangle}
-            severity={data.activity.failedEvents === 0 ? 'good' : data.activity.failedEvents <= 5 ? 'warn' : 'bad'}
-            onClick={() => router.push('/admin/events')}
-          />
         </div>
       </section>
 
+      {/* ── Tier distribution ─────────────────────────────────────────────── */}
       <section>
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Tiers</h2>
         <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
@@ -127,45 +140,101 @@ export default function AdminDashboard() {
         </div>
       </section>
 
+      {/* ── Operational Health ────────────────────────────────────────────── */}
       <section>
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Activity (last 30 days)</h2>
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Operational Health</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard
-            label="Orders"
-            value={data.activity.ordersLast30d.toLocaleString()}
-            sub="Completed POS sales across all tenants"
-            icon={ShoppingCart}
+            label="Failed events"
+            value={String(data.operations.failedEvents)}
+            sub="Stuck POS events needing triage"
+            icon={AlertTriangle}
+            severity={data.operations.failedEvents === 0 ? 'good' : data.operations.failedEvents <= 5 ? 'warn' : 'bad'}
+            onClick={() => router.push('/admin/events')}
           />
           <StatCard
-            label="Revenue"
-            value={formatPeso(data.activity.revenueLast30d)}
-            sub="Sum of completed-order totals"
-            icon={TrendingUp}
+            label="Pending events"
+            value={String(data.operations.pendingEvents)}
+            sub="Unprocessed for 5+ minutes — possible queue lag"
+            icon={Clock}
+            severity={data.operations.pendingEvents === 0 ? 'good' : data.operations.pendingEvents <= 10 ? 'warn' : 'bad'}
+            onClick={() => router.push('/admin/events')}
           />
           <StatCard
-            label="Open AR"
-            value={String(data.activity.openArInvoices)}
-            sub="Formal invoices awaiting payment"
-            icon={TrendingUp}
+            label="Failed logins (24h)"
+            value={String(data.users.failedLoginsLast24h)}
+            sub="Possible brute-force / credential-stuffing"
+            icon={ShieldAlert}
+            severity={
+              data.users.failedLoginsLast24h === 0 ? 'good' :
+              data.users.failedLoginsLast24h <= 20 ? 'warn' : 'bad'
+            }
           />
           <StatCard
-            label="Open AP"
-            value={String(data.activity.openApBills)}
-            sub="Vendor bills awaiting payment"
-            icon={TrendingUp}
+            label="Sessions (24h)"
+            value={String(data.users.sessionsLast24h)}
+            sub="Active user sessions in last 24 hours"
+            icon={Activity}
           />
         </div>
       </section>
 
+      {/* ── Platform Cost (hidden by default) ─────────────────────────────── */}
       <section>
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">AI Cost (last 30 days)</h2>
-        <div className="rounded-lg border border-border bg-background p-4">
-          <div className="text-3xl font-bold tabular-nums">${data.activity.aiSpendUsd30d.toFixed(4)} USD</div>
-          <p className="text-xs text-muted-foreground mt-1">
-            Total Anthropic API cost for JE Drafter / Smart Picker / JE Guide / Receipt OCR across all tenants.
-            Recoup via AI add-on packages (₱250–₱1,400 / mo per tier).
-          </p>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Platform Cost (last 30 days)
+          </h2>
+          <button
+            onClick={() => setShowAiCost((v) => !v)}
+            className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            title={showAiCost ? 'Hide cost (good for screen sharing)' : 'Reveal cost'}
+          >
+            {showAiCost ? (
+              <>
+                <EyeOff className="w-3 h-3" />
+                Hide
+              </>
+            ) : (
+              <>
+                <Eye className="w-3 h-3" />
+                Show
+              </>
+            )}
+          </button>
         </div>
+        <div className="rounded-lg border border-border bg-background p-4">
+          {showAiCost ? (
+            <>
+              <div className="text-3xl font-bold tabular-nums">
+                ${data.platformCost.aiSpendUsd30d.toFixed(4)} USD
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Anthropic API cost for AI features (JE Drafter, Smart Picker, Receipt OCR) across all tenants.
+                This is OUR cost — recouped via AI add-on packages (₱250–₱1,400/mo per tier).
+              </p>
+            </>
+          ) : (
+            <div className="flex items-center gap-3">
+              <span className="text-2xl tabular-nums tracking-widest text-muted-foreground/70">••••••</span>
+              <p className="text-xs text-muted-foreground italic">
+                Hidden. Click <span className="font-medium">Show</span> to reveal.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ── Privacy notice — explicit so anyone reading the code or the screen knows the why */}
+      <section className="rounded-lg border border-border bg-muted/30 px-4 py-3">
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          <span className="font-semibold text-foreground">Privacy by design:</span>{' '}
+          The Platform Console intentionally does not display tenant revenue, order counts,
+          AR/AP balances, or any financial figures. Cross-tenant financial visibility is
+          available only to the tenant owners themselves, never to us. If a support case
+          requires inspecting a tenant&apos;s data, an explicit JIT-access workflow (with
+          audit trail) is required.
+        </p>
       </section>
 
       <div className="text-xs text-muted-foreground">

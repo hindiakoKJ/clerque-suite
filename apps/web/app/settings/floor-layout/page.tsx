@@ -253,13 +253,25 @@ export default function FloorLayoutSettingsPage() {
                   )}
                 </div>
 
-                {/* KDS flag */}
+                {/* KDS flag + open-screen link */}
                 {s.hasKds && (
-                  <div className="mt-2">
+                  <div className="mt-2 flex items-center gap-2">
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
                       <Monitor className="h-2.5 w-2.5" />
                       KDS Enabled
                     </span>
+                    <button
+                      onClick={() => {
+                        window.open(
+                          `/pos/station/${s.id}`,
+                          `clerque-station-${s.id}`,
+                          'noopener,noreferrer,width=1280,height=800',
+                        );
+                      }}
+                      className="text-[11px] font-medium text-[var(--accent)] hover:underline"
+                    >
+                      Open station screen →
+                    </button>
                   </div>
                 )}
               </div>

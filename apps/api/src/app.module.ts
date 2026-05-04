@@ -37,6 +37,7 @@ import { JournalTemplatesModule } from './journal-templates/journal-templates.mo
 import { AdminModule } from './admin/admin.module';
 import { LayoutsModule } from './layouts/layouts.module';
 import { CustomerDisplayModule } from './customer-display/customer-display.module';
+import { KdsModule } from './kds/kds.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -80,6 +81,7 @@ import { HealthController } from './health/health.controller';
     AdminModule,
     LayoutsModule,
     CustomerDisplayModule,
+    KdsModule,
   ],
 })
 export class AppModule {}

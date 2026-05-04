@@ -1076,6 +1076,15 @@ model OrderItem {
   /// Source of truth: increment via OrderItemRefund event creation.
   refundedQty    Decimal  @default(0) @db.Decimal(12, 4)
 
+  /// Sprint 5 — KDS state machine for kitchen/bar stations.
+  /// PENDING (default) → READY (bumped by chef/barista) → SERVED (delivered).
+  /// Only meaningful when the parent product's category routes to a station.
+  prepStatus     PrepStatus  @default(PENDING)
+  /// When the station bumped this item to READY (audit + lead-time analytics).
+  readyAt        DateTime?
+  /// When the runner/cashier marked it as delivered.
+  servedAt       DateTime?
+
   order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product   Product             @relation(fields: [productId], references: [id])
   variant   ProductVariant?     @relation(fields: [variantId], references: [id])
@@ -1084,6 +1093,12 @@ model OrderItem {
 
   @@index([orderId])
   @@map("order_items")
+}
+
+enum PrepStatus {
+  PENDING
+  READY
+  SERVED
 }
 
 /// Audit trail for partial item refunds. Each row is one refund event

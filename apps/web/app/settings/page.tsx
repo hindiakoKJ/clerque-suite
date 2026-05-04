@@ -29,6 +29,10 @@ interface TenantProfile {
   contactPhone: string | null;
   status: string;
   tier: string;
+  // Sprint 4A + 6 — costing settings
+  valuationMethod?:     'WAC' | 'FIFO' | null;
+  firstTransactionAt?:  string | null;
+  overheadRatePerUnit?: number | string | null;
 }
 
 interface StaffUser {
@@ -415,6 +419,11 @@ export default function SettingsPage() {
                 </p>
               )}
             </div>
+
+            {/* ── Inventory Costing (Sprint 4A + Sprint 6) ────────────────────── */}
+            {isOwner && profile && (
+              <CostingCard profile={profile} qc={qc} />
+            )}
 
             {/* Read-only system info */}
             <div className="rounded-xl border border-border bg-card p-4 space-y-3">
@@ -1137,6 +1146,167 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
         </div>
         <div className="px-5 py-4">{children}</div>
       </div>
+    </div>
+  );
+}
+
+// ── Costing Card (Sprint 4A: WAC/FIFO + Sprint 6: Manufacturing Overhead) ─────
+
+function CostingCard({
+  profile,
+  qc,
+}: {
+  profile: TenantProfile;
+  qc: ReturnType<typeof useQueryClient>;
+}) {
+  const isManufacturing = profile.businessType === 'MANUFACTURING';
+  const isLocked = !!profile.firstTransactionAt;
+
+  const [valMethod, setValMethod] = useState<'WAC' | 'FIFO'>(
+    (profile.valuationMethod as 'WAC' | 'FIFO') ?? 'WAC',
+  );
+  const [overhead, setOverhead] = useState<string>(
+    profile.overheadRatePerUnit != null ? String(profile.overheadRatePerUnit) : '',
+  );
+  const [savingMethod, setSavingMethod] = useState(false);
+  const [savingOH, setSavingOH] = useState(false);
+
+  async function saveMethod() {
+    if (isLocked) return;
+    setSavingMethod(true);
+    try {
+      await api.patch('/tenant/valuation-method', { method: valMethod });
+      toast.success(`Valuation method set to ${valMethod}.`);
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message ?? 'Failed to update valuation method.');
+    } finally {
+      setSavingMethod(false);
+    }
+  }
+
+  async function saveOverhead() {
+    setSavingOH(true);
+    try {
+      const ratePerUnit = overhead.trim() === '' ? null : parseFloat(overhead);
+      if (ratePerUnit != null && (Number.isNaN(ratePerUnit) || ratePerUnit < 0)) {
+        toast.error('Overhead rate must be a non-negative number.');
+        return;
+      }
+      await api.patch('/tenant/overhead-rate', { ratePerUnit });
+      toast.success(ratePerUnit == null ? 'Overhead allocation cleared.' : 'Overhead rate saved.');
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message ?? 'Failed to update overhead rate.');
+    } finally {
+      setSavingOH(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-5">
+      <div className="flex items-center gap-2">
+        <Shield className="w-4 h-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold text-foreground">Inventory Costing</h3>
+      </div>
+
+      {/* Valuation method */}
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-muted-foreground">
+          Valuation method
+          {isLocked && (
+            <span className="ml-2 inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600">
+              LOCKED
+            </span>
+          )}
+        </label>
+        <div className="flex gap-2">
+          {(['WAC', 'FIFO'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => !isLocked && setValMethod(m)}
+              disabled={isLocked}
+              className={`flex-1 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
+                valMethod === m
+                  ? 'border-transparent text-white'
+                  : 'border-border text-muted-foreground hover:bg-secondary'
+              } ${isLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
+              style={valMethod === m ? { background: 'var(--accent)' } : undefined}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          <strong className="text-foreground">WAC</strong> (default): running weighted-average cost.
+          Simpler, smoother COGS — recommended for most cafés / restaurants.<br />
+          <strong className="text-foreground">FIFO</strong>: oldest inventory consumed first. More
+          accurate for perishables, required by some auditors. Both are PFRS-compliant.
+        </p>
+        {isLocked ? (
+          <p className="text-[11px] text-amber-600 leading-relaxed">
+            Locked — first transaction posted on{' '}
+            {new Date(profile.firstTransactionAt!).toLocaleDateString('en-PH')}. Switching mid-stream
+            would produce inconsistent COGS. Contact support to plan a clean cutover at fiscal year-end.
+          </p>
+        ) : (
+          valMethod !== (profile.valuationMethod ?? 'WAC') && (
+            <button
+              onClick={saveMethod}
+              disabled={savingMethod}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-50"
+              style={{ background: 'var(--accent)' }}
+            >
+              {savingMethod ? 'Saving…' : `Save ${valMethod}`}
+            </button>
+          )
+        )}
+      </div>
+
+      {/* Manufacturing overhead — visible only for MANUFACTURING tenants */}
+      {isManufacturing && (
+        <div className="pt-4 border-t border-border space-y-2">
+          <label className="text-xs font-medium text-muted-foreground">
+            Manufacturing overhead (₱ per unit produced)
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="number"
+              min={0}
+              step="0.0001"
+              value={overhead}
+              onChange={(e) => setOverhead(e.target.value)}
+              placeholder="e.g. 2.50"
+              className="flex-1 h-9 px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            />
+            <button
+              onClick={saveOverhead}
+              disabled={savingOH}
+              className="text-xs font-semibold px-4 rounded-lg text-white disabled:opacity-50"
+              style={{ background: 'var(--accent)' }}
+            >
+              {savingOH ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            Adds factory overhead (utilities, depreciation, indirect labor) to COGS using full
+            absorption costing. Set this only when your accountant confirms the rate. Leave blank to
+            clear (utilities revert to OpEx).
+          </p>
+        </div>
+      )}
+
+      {!isManufacturing && (
+        <div className="pt-4 border-t border-border">
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            <strong className="text-foreground">Why electricity isn't in COGS:</strong> Per PFRS for
+            SMEs §13.10, F&B and retail businesses record utilities and rent as Operating Expenses,
+            not Cost of Goods Sold. Including them would distort your gross margin in either direction
+            depending on month-to-month usage. They appear under OpEx in your Income Statement.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

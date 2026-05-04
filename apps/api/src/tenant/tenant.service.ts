@@ -412,6 +412,8 @@ export class TenantService {
         minNumber: true,
         inventoryMode: true,
         valuationMethod: true,
+        firstTransactionAt: true,         // Sprint 4A — locks valuationMethod once set
+        overheadRatePerUnit: true,        // Sprint 6 — manufacturing overhead
         hasTimeMonitoring: true,
         hasBirForms: true,
       },

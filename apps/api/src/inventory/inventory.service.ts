@@ -500,6 +500,24 @@ export class InventoryService {
 
     const paymentMethod = dto.paymentMethod ?? 'CASH';
 
+    // Sprint 4B — CREDIT receipts require a vendor so the resulting AP Bill
+    // can be tracked. Verify ownership of the vendor up-front to avoid
+    // cross-tenant injection.
+    if (paymentMethod === 'CREDIT') {
+      if (!dto.vendorId) {
+        throw new BadRequestException(
+          'A vendor is required when paying on credit. Pick a supplier or switch to cash.',
+        );
+      }
+      const vendor = await this.prisma.vendor.findFirst({
+        where: { id: dto.vendorId, tenantId },
+        select: { id: true },
+      });
+      if (!vendor) {
+        throw new BadRequestException('Vendor not found in your organization.');
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.rawMaterialInventory.findUnique({
         where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
@@ -589,6 +607,55 @@ export class InventoryService {
               adjustmentType: 'RAW_MATERIAL_RECEIPT',
               reason:         dto.note ?? dto.referenceNumber ?? null,
             } as unknown as Prisma.JsonObject,
+          },
+        });
+      }
+
+      // Sprint 4B — when paying on credit, create a formal AP Bill so the
+      // tenant can pay it later through /ledger/ap/bills + /ap/payments.
+      // The journal entry above already credits 2010 Accounts Payable
+      // (general ledger); this Bill record is the SUB-ledger that lets us
+      // age the obligation by vendor and match payments to specific bills.
+      if (paymentMethod === 'CREDIT' && totalValue > 0 && dto.vendorId) {
+        const termsDays = dto.termsDays ?? 30;
+        const dueDate   = new Date(receivedAt.getTime() + termsDays * 24 * 60 * 60 * 1000);
+
+        // Generate a tenant-scoped bill number. Cheap counter — find max
+        // and increment. Race-safe enough because we're inside the receive
+        // transaction; the @@unique([tenantId, billNumber]) index is the
+        // final guard if two cashiers receive simultaneously.
+        const lastBill = await tx.aPBill.findFirst({
+          where:   { tenantId },
+          orderBy: { createdAt: 'desc' },
+          select:  { billNumber: true },
+        });
+        const nextNum = lastBill?.billNumber
+          ? (parseInt(lastBill.billNumber.replace(/\D/g, ''), 10) || 0) + 1
+          : 1;
+        const billNumber = `BILL-${String(nextNum).padStart(6, '0')}`;
+
+        await tx.aPBill.create({
+          data: {
+            tenantId,
+            branchId:      dto.branchId,
+            billNumber,
+            vendorBillRef: dto.referenceNumber ?? null,
+            reference:     dto.referenceNumber ?? null,
+            vendorId:      dto.vendorId,
+            billDate:      receivedAt,
+            postingDate:   receivedAt,
+            dueDate,
+            termsDays,
+            subtotal:      new Prisma.Decimal(totalValue),
+            vatAmount:     new Prisma.Decimal(0),
+            whtAmount:     new Prisma.Decimal(0),
+            totalAmount:   new Prisma.Decimal(totalValue),
+            paidAmount:    new Prisma.Decimal(0),
+            balanceAmount: new Prisma.Decimal(totalValue),
+            status:        'OPEN',
+            description:   `Stock receipt: ${dto.quantity} ${material.unit} ${material.name}`,
+            notes:         dto.note ?? null,
+            createdById:   'system-receive',
           },
         });
       }

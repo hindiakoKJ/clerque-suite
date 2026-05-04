@@ -43,4 +43,21 @@ export class ReceiveRawMaterialDto {
   @IsString()
   @MaxLength(100)
   referenceNumber?: string;
+
+  /**
+   * Vendor (supplier) — required when paymentMethod is CREDIT (a Bill needs
+   * a vendor to track AR). Optional for CASH / OWNER_FUNDED.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  vendorId?: string;
+
+  /**
+   * Days until the bill is due (Net terms). Defaults to 30 when paymentMethod
+   * is CREDIT. Ignored otherwise.
+   */
+  @IsOptional()
+  @IsNumber()
+  termsDays?: number;
 }

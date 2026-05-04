@@ -56,6 +56,8 @@ export default function InventoryPage() {
     referenceNumber: '',
     paymentMethod: 'CASH' as 'CASH' | 'CREDIT' | 'OWNER_FUNDED',
     receivedAt: new Date().toISOString().slice(0, 10),  // YYYY-MM-DD, today by default
+    vendorId: '',
+    termsDays: '30',
   });
   const [matSaving,  setMatSaving]  = useState(false);
 
@@ -81,6 +83,15 @@ export default function InventoryPage() {
     queryFn: () => api.get('/tenant/branches').then((r) => r.data),
     enabled: !!matModal && matModal === 'receive',
     staleTime: 120_000,
+  });
+
+  // Vendors — only fetched when receiving on credit
+  interface Vendor { id: string; name: string; }
+  const { data: vendors = [] } = useQuery<Vendor[]>({
+    queryKey: ['vendors-pos-receive'],
+    queryFn: () => api.get('/ap/vendors').then((r) => r.data),
+    enabled: matModal === 'receive' && receiveForm.paymentMethod === 'CREDIT',
+    staleTime: 60_000,
   });
 
   // Filter the displayed list when "Low only" is on
@@ -132,6 +143,8 @@ export default function InventoryPage() {
       referenceNumber: '',
       paymentMethod: 'CASH',
       receivedAt: new Date().toISOString().slice(0, 10),
+      vendorId: '',
+      termsDays: '30',
     });
     setMatModal('receive');
   }
@@ -178,6 +191,10 @@ export default function InventoryPage() {
         referenceNumber: receiveForm.referenceNumber.trim() || undefined,
         paymentMethod:   receiveForm.paymentMethod,
         receivedAt:      new Date(receiveForm.receivedAt).toISOString(),
+        ...(receiveForm.paymentMethod === 'CREDIT' ? {
+          vendorId:  receiveForm.vendorId,
+          termsDays: parseInt(receiveForm.termsDays, 10) || 30,
+        } : {}),
       });
       toast.success(`${qty} ${editingMat.unit} of "${editingMat.name}" received.`);
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
@@ -562,6 +579,42 @@ export default function InventoryPage() {
                   </select>
                 </div>
               </div>
+
+              {/* Vendor picker + terms — only when paying on credit */}
+              {receiveForm.paymentMethod === 'CREDIT' && (
+                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-border/40">
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">
+                      Vendor <span className="text-red-400">*</span>
+                    </label>
+                    <select
+                      value={receiveForm.vendorId}
+                      onChange={(e) => setReceiveForm((f) => ({ ...f, vendorId: e.target.value }))}
+                      className={INPUT_CLS}
+                    >
+                      <option value="">— Select vendor —</option>
+                      {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                    </select>
+                    {vendors.length === 0 && (
+                      <p className="text-[10px] text-amber-600 mt-1">
+                        No vendors yet. Add one under Ledger → Vendors.
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">
+                      Terms (days)
+                    </label>
+                    <input
+                      type="number" min="1" max="365"
+                      value={receiveForm.termsDays}
+                      onChange={(e) => setReceiveForm((f) => ({ ...f, termsDays: e.target.value }))}
+                      className={INPUT_CLS}
+                      placeholder="30"
+                    />
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">Reference (PO / DR / Invoice #)</label>
                 <input
@@ -581,7 +634,9 @@ export default function InventoryPage() {
                 />
               </div>
               <p className="text-[11px] text-muted-foreground">
-                A journal entry will be posted automatically (Dr Inventory / Cr {receiveForm.paymentMethod === 'CASH' ? 'Cash' : receiveForm.paymentMethod === 'CREDIT' ? 'Accounts Payable' : 'Owner&rsquo;s Capital'}). Entering a cost per unit also updates the Weighted Average Cost.
+                A journal entry will be posted automatically (Dr Inventory / Cr {receiveForm.paymentMethod === 'CASH' ? 'Cash' : receiveForm.paymentMethod === 'CREDIT' ? 'Accounts Payable' : 'Owner&rsquo;s Capital'}).
+                {receiveForm.paymentMethod === 'CREDIT' && ' A vendor Bill will also be created — track and pay it under Ledger → Vendor Bills.'}
+                {' '}Entering a cost per unit also updates the Weighted Average Cost.
               </p>
             </div>
             <div className="px-6 pb-5 flex gap-3">

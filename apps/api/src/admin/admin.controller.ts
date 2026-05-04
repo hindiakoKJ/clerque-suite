@@ -112,6 +112,23 @@ export class AdminController {
     });
   }
 
+  /**
+   * Clear ALL data for a tenant — wipes products, categories, ingredients,
+   * orders, journal entries, accounting events. Preserves the tenant
+   * record, users, branches, and floor layout. Used for onboarding when
+   * a tenant wants to clear sample data and build their own catalog.
+   *
+   * This is more aggressive than reset-demo (which re-seeds scenario data).
+   */
+  @Post('tenants/:id/clear-data')
+  @HttpCode(HttpStatus.OK)
+  clearTenantData(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+  ) {
+    return this.svc.clearAllTenantData(id, actor(req));
+  }
+
   @Post('tenants/:id/reset-demo')
   @HttpCode(HttpStatus.OK)
   resetDemo(

@@ -773,6 +773,38 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
               Reset Demo Data…
             </button>
           </div>
+
+          {/* Clear All Data — empty slate, no re-seed */}
+          <div className="rounded-lg border border-red-200/60 bg-red-50/40 dark:bg-red-950/20 p-4">
+            <div className="flex items-center gap-1.5 mb-1">
+              <ShieldOff className="w-3.5 h-3.5 text-red-600" />
+              <h2 className="text-xs font-semibold text-red-700 dark:text-red-400 uppercase tracking-wider">Clear All Data</h2>
+            </div>
+            <p className="text-[11px] text-muted-foreground mb-3">
+              Empty slate — wipes products, ingredients, orders, journal entries.
+              Keeps tenant, users, branches, floor layout. Use when onboarding
+              a real tenant who wants to start clean.
+            </p>
+            <button
+              onClick={async () => {
+                if (!confirm('Wipe ALL products, ingredients, orders, and journal entries for this tenant? Users + branches + layout will be preserved. Cannot be undone.')) return;
+                try {
+                  setBusy(true);
+                  await api.post(`/admin/tenants/${tenant.id}/clear-data`);
+                  toast.success('All data cleared. Tenant now has an empty slate.');
+                  qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] });
+                } catch (err: unknown) {
+                  toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to clear data.');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border border-red-300/60 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 transition disabled:opacity-50">
+              <ShieldOff className="w-3 h-3" />
+              Clear All Data…
+            </button>
+          </div>
         </div>
       </div>
 

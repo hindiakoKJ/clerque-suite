@@ -820,6 +820,53 @@ export class AdminService {
     }
   }
 
+  // ─── Clear all data (no re-seed) ──────────────────────────────────────────
+
+  /**
+   * Wipes all transactional + catalog data for a tenant but PRESERVES:
+   *   - The tenant record itself (name, slug, tier, tax settings, BIR config)
+   *   - Users (admin, cashiers, staff accounts)
+   *   - Branches (so the tenant still has somewhere to operate)
+   *   - Floor layout (stations, printers, terminals from Sprint 3)
+   *
+   * Different from resetDemoData(): no scenario seeding — the tenant ends up
+   * with an empty product catalog, no ingredients, no orders, no journal
+   * entries. Owner can then build their own catalog from scratch.
+   *
+   * Useful when a tenant onboards and wants to clear sample data before
+   * entering real products.
+   */
+  async clearAllTenantData(tenantId: string, actor: ConsoleActor) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, slug: true },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+
+    try {
+      // FK dependency order — same chain as resetDemoData's wipe step.
+      await this.prisma.journalEntry.deleteMany({ where: { tenantId } });
+      await this.prisma.accountingEvent.deleteMany({ where: { tenantId } });
+      await this.prisma.order.deleteMany({ where: { tenantId } });
+      await this.prisma.inventoryLog.deleteMany({ where: { tenantId } });
+      await this.prisma.inventoryItem.deleteMany({ where: { tenantId } });
+      await this.prisma.product.deleteMany({ where: { tenantId } });
+      await this.prisma.category.deleteMany({ where: { tenantId } });
+      await this.prisma.rawMaterial.deleteMany({ where: { tenantId } });
+
+      this.logger.log(`Cleared all data for tenant ${tenant.slug} (${tenantId}) by ${actor.email}`);
+      return {
+        tenantSlug: tenant.slug,
+        cleared: ['products', 'categories', 'rawMaterials', 'orders', 'inventoryLogs', 'accountingEvents', 'journalEntries'],
+        preserved: ['tenant', 'users', 'branches', 'floorLayout'],
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`clearAllTenantData failed for tenant ${tenantId}: ${msg}`, err instanceof Error ? err.stack : undefined);
+      throw new BadRequestException(`Clear data failed: ${msg.slice(0, 300)}`);
+    }
+  }
+
   // ─── Failed events ────────────────────────────────────────────────────────
 
   async listFailedEvents(opts: { limit?: number } = {}) {

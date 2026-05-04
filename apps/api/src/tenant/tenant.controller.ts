@@ -159,6 +159,20 @@ export class TenantController {
     return this.tenantService.setValuationMethod(user.tenantId!, body.method, user.sub);
   }
 
+  /**
+   * Sprint 6 — Set manufacturing overhead rate (₱ per unit produced).
+   * MANUFACTURING tenants only. Set null to clear.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Patch('overhead-rate')
+  @HttpCode(HttpStatus.OK)
+  setOverheadRate(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { ratePerUnit: number | null },
+  ) {
+    return this.tenantService.setOverheadRate(user.tenantId!, body.ratePerUnit);
+  }
+
   /** Update Ledger ops + JE approval thresholds (Owner only). */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   @Patch('ledger-thresholds')

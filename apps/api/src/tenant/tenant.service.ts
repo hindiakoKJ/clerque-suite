@@ -438,6 +438,40 @@ export class TenantService {
   }
 
   /**
+   * Sprint 6 — Set the manufacturing overhead rate (₱ per unit produced).
+   *
+   * Only meaningful for MANUFACTURING tenants. F&B and retail keep this
+   * null because PFRS for SMEs treats utilities/rent as OpEx (not COGS)
+   * for service-and-merchandising businesses. Setting a non-zero rate on
+   * a non-manufacturing tenant is rejected with a clear message — better
+   * to fail loud than silently mis-state COGS.
+   */
+  async setOverheadRate(tenantId: string, ratePerUnit: number | null) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { businessType: true },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+
+    if (ratePerUnit != null && tenant.businessType !== 'MANUFACTURING') {
+      throw new BadRequestException(
+        'Overhead allocation only applies to MANUFACTURING tenants. ' +
+        'For F&B and retail, utilities and rent should be recorded as ' +
+        'Operating Expenses, not COGS (per PFRS for SMEs).',
+      );
+    }
+    if (ratePerUnit != null && (Number.isNaN(ratePerUnit) || ratePerUnit < 0)) {
+      throw new BadRequestException('Overhead rate must be a non-negative number.');
+    }
+
+    return this.prisma.tenant.update({
+      where: { id: tenantId },
+      data:  { overheadRatePerUnit: ratePerUnit != null ? new Prisma.Decimal(ratePerUnit) : null },
+      select: { overheadRatePerUnit: true },
+    });
+  }
+
+  /**
    * Update inventory valuation method (WAC ↔ FIFO).
    *
    * Locked once a transaction has been posted: changing the method mid-stream

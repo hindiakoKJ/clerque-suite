@@ -439,6 +439,13 @@ model Tenant {
   /// Null until the owner picks a layout in the setup wizard.
   /// Sales-controlled — owners cannot self-upgrade (per architectural decision).
   coffeeShopTier      CoffeeShopTier?
+  /// Sprint 6 — Manufacturing overhead rate applied to COGS at sale time.
+  /// Per unit produced; only used when businessType = MANUFACTURING.
+  /// Null = no overhead allocation (the F&B / retail default — they record
+  /// utilities & rent as Operating Expenses, not COGS, per PFRS for SMEs).
+  /// Set this when the tenant manufactures finished goods and needs full
+  /// absorption costing (Direct Materials + Direct Labor + MOH = COGS).
+  overheadRatePerUnit Decimal?            @db.Decimal(10, 4)
   /// Optional customer-facing display toggle — meaningful only for CS_1
   /// (where the canonical setup has no customer display). Other tiers have
   /// it included by definition; this flag is ignored for them.

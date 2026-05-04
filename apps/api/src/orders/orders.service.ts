@@ -291,6 +291,22 @@ export class OrdersService {
         },
       });
 
+      // Sprint 6 — Manufacturing overhead allocation. Only applied when
+      // businessType is MANUFACTURING and overheadRatePerUnit is set.
+      // Per PFRS for SMEs: F&B / retail tenants record utilities + rent
+      // as OpEx, NOT COGS — so they should leave overheadRatePerUnit null
+      // (the default). Manufacturing tenants under full absorption costing
+      // pull a portion of factory utilities into COGS via this rate.
+      const tenantCostingProfile = await tx.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { businessType: true, overheadRatePerUnit: true },
+      });
+      const overheadRate =
+        tenantCostingProfile?.businessType === 'MANUFACTURING' &&
+        tenantCostingProfile.overheadRatePerUnit != null
+          ? Number(tenantCostingProfile.overheadRatePerUnit)
+          : 0;
+
       await tx.accountingEvent.create({
         data: {
           tenantId,
@@ -300,6 +316,7 @@ export class OrdersService {
           payload: {
             orderId: order.id,
             branchId: payload.branchId,
+            overheadRate,                      // 0 for non-manufacturing tenants
             lines: payload.items
               .map((i) => {
                 // Prefer Moving-Average Cost from inventory (set on costed
@@ -307,11 +324,17 @@ export class OrdersService {
                 const wac = avgCostByProduct.get(i.productId);
                 const unitCost = wac ?? (i.costPrice != null ? Number(i.costPrice) : null);
                 if (unitCost == null) return null;
+                const qty = Number(i.quantity);
+                // Overhead is added per unit produced. For MANUFACTURING, this
+                // shifts a slice of factory utilities into COGS (full absorption).
+                const overhead = overheadRate * qty;
                 return {
                   productId:    i.productId,
                   quantity:     i.quantity,
                   unitCost,
-                  totalCost:    Number(i.quantity) * unitCost,
+                  totalCost:    qty * unitCost + overhead,
+                  directCost:   qty * unitCost,
+                  overhead,
                   costMethod:   wac != null ? 'WAC' : 'SNAPSHOT',
                 };
               })

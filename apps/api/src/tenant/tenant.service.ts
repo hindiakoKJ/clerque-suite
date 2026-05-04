@@ -438,6 +438,62 @@ export class TenantService {
   }
 
   /**
+   * Update inventory valuation method (WAC ↔ FIFO).
+   *
+   * Locked once a transaction has been posted: changing the method mid-stream
+   * produces nonsensical COGS because old transactions were costed under the
+   * previous method. The lock is enforced via Tenant.firstTransactionAt —
+   * which is set the first time an order completes successfully.
+   *
+   * To change the method after lock:
+   *   1. Close out the current fiscal year
+   *   2. Have a CPA review the proposed switch
+   *   3. SUPER_ADMIN clears firstTransactionAt manually via Console
+   * (We don't expose this self-serve — the accounting implications are real.)
+   */
+  async setValuationMethod(
+    tenantId:    string,
+    method:      'WAC' | 'FIFO',
+    performedBy: string,
+  ) {
+    const current = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { valuationMethod: true, firstTransactionAt: true },
+    });
+    if (!current) throw new NotFoundException('Tenant not found.');
+
+    if (current.firstTransactionAt) {
+      throw new BadRequestException(
+        'Valuation method is locked because transactions have already been posted. ' +
+        'Changing it now would produce inconsistent COGS. Contact support to discuss ' +
+        'a clean cutover at fiscal year-end.',
+      );
+    }
+    if (current.valuationMethod === method) {
+      return { valuationMethod: method, unchanged: true };
+    }
+
+    const updated = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data:  { valuationMethod: method },
+      select: { valuationMethod: true },
+    });
+    // Audit (best-effort)
+    await this.audit.log({
+      tenantId,
+      action:      'SETTING_CHANGED',
+      entityType:  'Tenant',
+      entityId:    tenantId,
+      before:      { valuationMethod: current.valuationMethod },
+      after:       { valuationMethod: method },
+      description: `Inventory valuation method changed to ${method}`,
+      performedBy,
+    }).catch(() => undefined);
+
+    return updated;
+  }
+
+  /**
    * Update BIR tax classification, TIN, and accounting method.
    *
    * Rules:

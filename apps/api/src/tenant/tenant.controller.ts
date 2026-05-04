@@ -145,6 +145,20 @@ export class TenantController {
     );
   }
 
+  /**
+   * Update the inventory valuation method (WAC | FIFO).
+   * Locked after the first transaction has been posted.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Patch('valuation-method')
+  @HttpCode(HttpStatus.OK)
+  setValuationMethod(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { method: 'WAC' | 'FIFO' },
+  ) {
+    return this.tenantService.setValuationMethod(user.tenantId!, body.method, user.sub);
+  }
+
   /** Update Ledger ops + JE approval thresholds (Owner only). */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   @Patch('ledger-thresholds')

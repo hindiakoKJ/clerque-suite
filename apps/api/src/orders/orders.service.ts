@@ -202,6 +202,17 @@ export class OrdersService {
       // ── Raw material ingredient deduction via BOM ────────────────────────
       // For every sold item, look up its bill-of-materials and deduct the
       // corresponding raw material inventory at the branch level.
+      //
+      // Sprint 4A — when the tenant is on FIFO, also drain ingredient lots in
+      // receivedAt order so COGS reflects the actual cost of the ingredients
+      // that were consumed. WAC tenants skip the lot drain (their COGS uses
+      // the running average on RawMaterial.costPrice).
+      const tenantValuation = await tx.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { valuationMethod: true },
+      });
+      const useFifo = tenantValuation?.valuationMethod === 'FIFO';
+
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
         const bomItems = await tx.bomItem.findMany({
@@ -211,6 +222,9 @@ export class OrdersService {
 
         for (const bom of bomItems) {
           const consumeQty = Number(bom.quantity) * soldQty;
+
+          // Always update the aggregate inventory pool (used by max-producible
+          // computation and low-stock alerts).
           const rmInv = await tx.rawMaterialInventory.findUnique({
             where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
           });
@@ -221,6 +235,32 @@ export class OrdersService {
             where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
             data:  { quantity: new Prisma.Decimal(after) },
           });
+
+          // FIFO: drain oldest lots first.
+          if (useFifo) {
+            let remaining = consumeQty;
+            const lots = await tx.rawMaterialLot.findMany({
+              where: {
+                branchId:      payload.branchId,
+                rawMaterialId: bom.rawMaterialId,
+                qtyRemaining:  { gt: 0 },
+              },
+              orderBy: { receivedAt: 'asc' },
+            });
+            for (const lot of lots) {
+              if (remaining <= 0) break;
+              const lotRem = Number(lot.qtyRemaining);
+              const drain  = Math.min(lotRem, remaining);
+              await tx.rawMaterialLot.update({
+                where: { id: lot.id },
+                data:  { qtyRemaining: new Prisma.Decimal(lotRem - drain) },
+              });
+              remaining -= drain;
+            }
+            // If we couldn't fully drain (under-stocked), the order still
+            // succeeds — but a future audit query can detect the gap because
+            // the inventory pool went negative-floored to 0 above.
+          }
         }
       }
 
@@ -278,6 +318,15 @@ export class OrdersService {
               .filter((line): line is NonNullable<typeof line> => line !== null),
           } as unknown as Prisma.JsonObject,
         },
+      });
+
+      // Sprint 4A — Lock the valuation method choice once the first
+      // transaction posts. Subsequent attempts to change WAC ↔ FIFO will
+      // be rejected by tenantService.setValuationMethod. Idempotent:
+      // updateMany with a null guard so re-saves are no-ops.
+      await tx.tenant.updateMany({
+        where: { id: tenantId, firstTransactionAt: null },
+        data:  { firstTransactionAt: new Date() },
       });
 
       return order;

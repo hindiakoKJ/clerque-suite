@@ -542,6 +542,27 @@ export class InventoryService {
       // changing hands today.
       const totalValue = dto.quantity * unitCost;
 
+      // Sprint 4A — always create a Lot record on receive, regardless of the
+      // tenant's valuation method. WAC tenants ignore lots (their COGS still
+      // averages via RawMaterial.costPrice); FIFO tenants drain lots in
+      // receivedAt order on consumption. Always-creating decouples the
+      // valuation choice from the data model.
+      if (dto.quantity > 0) {
+        await tx.rawMaterialLot.create({
+          data: {
+            tenantId,
+            branchId:        dto.branchId,
+            rawMaterialId,
+            qtyReceived:     new Prisma.Decimal(dto.quantity),
+            qtyRemaining:    new Prisma.Decimal(dto.quantity),
+            unitCost:        new Prisma.Decimal(unitCost),
+            receivedAt,
+            referenceNumber: dto.referenceNumber ?? null,
+            paymentMethod:   paymentMethod,
+          },
+        });
+      }
+
       // Queue accounting event — only if there's a value to record.
       // Zero-cost receipts (free samples, no cost set) are skipped at journal time.
       if (totalValue > 0) {

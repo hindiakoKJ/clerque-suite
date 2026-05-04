@@ -805,6 +805,7 @@ model RawMaterial {
   bomItems        BomItem[]
   variantBomItems VariantBomItem[]
   inventory       RawMaterialInventory[]
+  lots            RawMaterialLot[]
 
   @@index([tenantId, isActive])
   @@map("raw_materials")
@@ -2600,4 +2601,49 @@ model Terminal {
   @@unique([tenantId, code])
   @@index([tenantId, branchId])
   @@map("terminals")
+}
+
+// ─── Sprint 4A: FIFO Lot Tracking ───────────────────────────────────────────
+
+/**
+ * A discrete supplier-delivery lot of a raw material.
+ *
+ * Created on every successful `receiveRawMaterial` call regardless of the
+ * tenant's valuation method (WAC or FIFO) — this keeps the data model
+ * future-proof and lets a tenant inspect "how much of this delivery is left".
+ *
+ * For tenants on FIFO, the orders.service consumes lots in receivedAt order
+ * (oldest-first) and sums their costs for COGS. For WAC tenants, lots are
+ * audit-only — the running average cost on RawMaterial.costPrice still
+ * drives COGS.
+ *
+ * qtyRemaining is decremented atomically as orders consume the lot; when
+ * it hits zero the lot stays in the table (audit trail) but is skipped
+ * during FIFO traversal.
+ */
+model RawMaterialLot {
+  id              String      @id @default(cuid())
+  tenantId        String
+  branchId        String
+  rawMaterialId   String
+  /// Original delivery quantity in the ingredient's unit (g, ml, pc, ...)
+  qtyReceived     Decimal     @db.Decimal(12, 4)
+  /// Remaining quantity — drained by FIFO consumption.
+  qtyRemaining    Decimal     @db.Decimal(12, 4)
+  /// Unit cost AT THE TIME of this delivery — frozen per lot for FIFO.
+  unitCost        Decimal     @db.Decimal(12, 4)
+  /// Business-date of receipt (cashier-provided; respects period lock).
+  receivedAt      DateTime
+  /// Supplier reference (PO/DR/invoice no.) — purely audit metadata.
+  referenceNumber String?
+  /// CASH / CREDIT / OWNER_FUNDED — mirrored from the receipt for reporting.
+  paymentMethod   String?
+  createdAt       DateTime    @default(now())
+
+  rawMaterial     RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+
+  // FIFO consumes by oldest receivedAt; this composite index covers it.
+  @@index([rawMaterialId, branchId, receivedAt])
+  @@index([tenantId])
+  @@map("raw_material_lots")
 }

@@ -129,6 +129,23 @@ export class AdminController {
     return this.svc.clearAllTenantData(id, actor(req));
   }
 
+  /**
+   * Seed the master coffee-shop ingredient catalogue (~110 items) onto a
+   * tenant — espresso beans, syrups, milks, cups, etc. — with realistic PH
+   * cost prices, opening quantities, and low-stock alert thresholds.
+   *
+   * Idempotent: existing ingredients (by name) are skipped, so re-running
+   * tops up missing items without duplicating.
+   */
+  @Post('tenants/:id/seed-coffee-shop-ingredients')
+  @HttpCode(HttpStatus.OK)
+  seedCoffeeShopIngredients(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+  ) {
+    return this.svc.seedCoffeeShopIngredients(id, actor(req));
+  }
+
   @Post('tenants/:id/reset-demo')
   @HttpCode(HttpStatus.OK)
   resetDemo(

@@ -774,6 +774,50 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
             </button>
           </div>
 
+          {/* Seed Coffee Shop Ingredients */}
+          <div className="rounded-lg border border-amber-200/60 bg-amber-50/40 dark:bg-amber-950/20 p-4">
+            <div className="flex items-center gap-1.5 mb-1">
+              <FlaskConical className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" />
+              <h2 className="text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
+                Coffee Shop Ingredient Pack
+              </h2>
+            </div>
+            <p className="text-[11px] text-muted-foreground mb-3">
+              Insert ~110 master ingredients (coffee beans, milks, syrups, cups, etc.)
+              with PH market cost prices, opening stock, and low-stock alerts.
+              <span className="block mt-1 italic">
+                Idempotent — existing ingredients (by name) are skipped.
+              </span>
+            </p>
+            <button
+              onClick={async () => {
+                if (!confirm('Add the master coffee-shop ingredient catalogue (~110 items) to this tenant? Existing ingredients are skipped (no duplicates).')) return;
+                try {
+                  setBusy(true);
+                  const { data } = await api.post<{ created: number; skipped: number; total: number }>(
+                    `/admin/tenants/${tenant.id}/seed-coffee-shop-ingredients`,
+                  );
+                  toast.success(
+                    `Seed complete: ${data.created} created, ${data.skipped} skipped (${data.total} total).`,
+                  );
+                  qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] });
+                } catch (err: unknown) {
+                  toast.error(
+                    (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+                    ?? 'Failed to seed ingredients.',
+                  );
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border border-amber-300/60 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition disabled:opacity-50"
+            >
+              <FlaskConical className="w-3 h-3" />
+              Seed Ingredients…
+            </button>
+          </div>
+
           {/* Clear All Data — empty slate, no re-seed */}
           <div className="rounded-lg border border-red-200/60 bg-red-50/40 dark:bg-red-950/20 p-4">
             <div className="flex items-center gap-1.5 mb-1">

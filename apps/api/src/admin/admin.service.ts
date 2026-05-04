@@ -14,6 +14,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_APP_ACCESS } from '@repo/shared-types';
 import { DEMO_SCENARIOS, ScenarioKey, allProducts } from './demo-scenarios';
+import { COFFEE_SHOP_INGREDIENTS } from './coffee-shop-ingredients';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -894,6 +895,85 @@ export class AdminService {
       this.logger.error(`clearAllTenantData failed for tenant ${tenantId}: ${msg}`, err instanceof Error ? err.stack : undefined);
       throw new BadRequestException(`Clear data failed: ${msg.slice(0, 300)}`);
     }
+  }
+
+  /**
+   * Seed the master coffee-shop ingredient catalogue onto a tenant.
+   *
+   * Idempotent — ingredients with names that already exist on the tenant are
+   * SKIPPED (so re-running tops up missing items without duplicating). Each
+   * created ingredient also gets an opening-stock RawMaterialInventory row
+   * at the tenant's first branch.
+   *
+   * Returns counts so the Console can show "X created, Y skipped".
+   */
+  async seedCoffeeShopIngredients(tenantId: string, actor: ConsoleActor) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: {
+        id: true, slug: true,
+        branches: { take: 1, orderBy: { createdAt: 'asc' }, select: { id: true } },
+      },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+    const branchId = tenant.branches[0]?.id;
+    if (!branchId) {
+      throw new BadRequestException('Tenant has no branch — create one before seeding ingredients.');
+    }
+
+    // Pull existing ingredient names once for O(1) skip checks.
+    const existing = await this.prisma.rawMaterial.findMany({
+      where:  { tenantId },
+      select: { name: true },
+    });
+    const haveNames = new Set(existing.map((e) => e.name.toLowerCase()));
+
+    let created = 0;
+    let skipped = 0;
+    for (const seed of COFFEE_SHOP_INGREDIENTS) {
+      if (haveNames.has(seed.name.toLowerCase())) {
+        skipped++;
+        continue;
+      }
+      try {
+        const material = await this.prisma.rawMaterial.create({
+          data: {
+            tenantId,
+            name:          seed.name,
+            unit:          seed.unit,
+            costPrice:     new Prisma.Decimal(seed.costPrice),
+            lowStockAlert: seed.lowStockAlert != null
+              ? new Prisma.Decimal(seed.lowStockAlert)
+              : null,
+            isActive: true,
+          },
+        });
+        await this.prisma.rawMaterialInventory.create({
+          data: {
+            tenantId,
+            branchId,
+            rawMaterialId: material.id,
+            quantity:      new Prisma.Decimal(seed.startingQty),
+          },
+        });
+        created++;
+      } catch (err) {
+        this.logger.warn(`Skipping ${seed.name} due to error: ${err}`);
+        skipped++;
+      }
+    }
+
+    this.logger.log(
+      `Seeded coffee-shop ingredients on tenant ${tenant.slug} (${tenantId}): ` +
+      `${created} created, ${skipped} skipped, by ${actor.email}`,
+    );
+
+    return {
+      tenantSlug: tenant.slug,
+      created,
+      skipped,
+      total: COFFEE_SHOP_INGREDIENTS.length,
+    };
   }
 
   // ─── Failed events ────────────────────────────────────────────────────────

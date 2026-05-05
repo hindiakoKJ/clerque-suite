@@ -6,6 +6,7 @@ import {
   ShoppingCart, TrendingUp, Ban, CreditCard,
   ChevronLeft, ChevronRight, RefreshCw, Tag,
   Wallet, Percent, AlertTriangle,
+  Timer, Activity, Hourglass, ArrowRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -81,6 +82,32 @@ export default function DashboardPage() {
     enabled: !!branchId,
     staleTime: 60_000,
   });
+
+  // Sprint 7: lead-time KPIs side-loaded for the strip below Profitability.
+  // Falls through silently if the endpoint isn't available yet (older API).
+  interface OpsStripData {
+    avgSec: number | null;
+    p90Sec: number | null;
+    inFlightCount: number;
+    overTenMinCount: number;
+    completedCount: number;
+  }
+  const { data: opsData } = useQuery<OpsStripData>({
+    queryKey: ['ops-strip', branchId, date],
+    queryFn:  () => api.get('/reports/operations/daily', { params: { branchId, date } }).then((r) => r.data),
+    enabled:  !!branchId,
+    staleTime: 60_000,
+    retry: false, // keep dashboard fast — degrade gracefully if endpoint unavailable
+  });
+
+  // Compact duration formatter mirroring the dedicated ops page.
+  const fmtSec = (sec: number | null): string => {
+    if (sec == null) return '—';
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  };
 
   // Products with no cost price — silently skip COGS, breaking gross-profit reporting
   const { data: missingCost } = useQuery<MissingCostResponse>({
@@ -211,6 +238,74 @@ export default function DashboardPage() {
               ))}
             </div>
           </div>
+
+          {/* ── Operations / Lead Time strip (Sprint 7) ── */}
+          {opsData && (opsData.completedCount > 0 || opsData.inFlightCount > 0) && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Operations · Lead Time {date === todayPH() ? '(today)' : `(${date})`}
+                </h2>
+                <Link
+                  href="/pos/dashboard/operations"
+                  className="inline-flex items-center gap-1 text-xs hover:underline"
+                  style={{ color: 'var(--accent)' }}
+                >
+                  Details
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                {[
+                  {
+                    icon: Timer,
+                    label: 'Avg Lead Time',
+                    value: fmtSec(opsData.avgSec),
+                    sub: `${opsData.completedCount} measured`,
+                    color: 'var(--accent)',
+                    accent: true,
+                  },
+                  {
+                    icon: TrendingUp,
+                    label: 'P90 Lead Time',
+                    value: fmtSec(opsData.p90Sec),
+                    sub: '90% ready in this time',
+                    color: opsData.p90Sec != null && opsData.p90Sec > 600 ? 'hsl(43 96% 56%)' : 'hsl(173 70% 40%)',
+                  },
+                  {
+                    icon: Activity,
+                    label: 'In Flight',
+                    value: String(opsData.inFlightCount),
+                    sub: opsData.inFlightCount === 1 ? 'in production' : 'in production',
+                    color: opsData.inFlightCount > 5 ? 'hsl(43 96% 56%)' : 'hsl(217 91% 55%)',
+                  },
+                  {
+                    icon: Hourglass,
+                    label: 'Over 10 min',
+                    value: String(opsData.overTenMinCount),
+                    sub: opsData.overTenMinCount === 0 ? 'all on time' : 'attention',
+                    color: opsData.overTenMinCount > 0 ? 'hsl(0 72% 51%)' : 'hsl(142 76% 36%)',
+                  },
+                ].map((card) => (
+                  <Link
+                    key={card.label}
+                    href="/pos/dashboard/operations"
+                    className="bg-background rounded-lg border border-border border-l-4 p-3 sm:p-4 flex flex-col justify-between min-h-[88px] hover:bg-muted/40 transition-colors"
+                    style={{ borderLeftColor: card.accent ? 'var(--accent)' : card.color }}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                        {card.label}
+                      </span>
+                      <card.icon className="w-4 h-4" style={{ color: card.color }} />
+                    </div>
+                    <div className="text-xl sm:text-2xl font-bold text-foreground tabular-nums">{card.value}</div>
+                    <div className="text-[11px] text-muted-foreground mt-1">{card.sub}</div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* ── Top products strip cards ── */}
           {data.topProducts.length > 0 && (

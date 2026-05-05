@@ -6,13 +6,17 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
+import { OperationsService } from './operations.service';
 
 @ApiTags('Reports')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('reports')
 export class ReportsController {
-  constructor(private reportsService: ReportsService) {}
+  constructor(
+    private reportsService: ReportsService,
+    private operationsService: OperationsService,
+  ) {}
 
   /**
    * Daily sales summary — powers the POS Dashboard page.
@@ -35,6 +39,32 @@ export class ReportsController {
     const effectiveBranch = branchId ?? user.branchId!;
     const effectiveDate = date ?? this.todayPH();
     return this.reportsService.getDaily(user.tenantId!, effectiveBranch, effectiveDate);
+  }
+
+  /**
+   * Sprint 7 — Daily lead-time KPIs (production wait times).
+   *   - Avg, P50, P90, P95 lead time
+   *   - Counts of orders > 5 min and > 10 min (alarm thresholds)
+   *   - Per-station breakdown (Bar vs Kitchen)
+   *   - Per-product top-10 slowest (process audit candidates)
+   *   - Per-hour breakdown (sparkline data)
+   *   - In-flight count (orders currently PAID, still in production)
+   *
+   * Lead time = readyAt - paidAt for each order. Voids and not-yet-ready
+   * orders are excluded from aggregates but counted separately.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'FINANCE_LEAD')
+  @Get('operations/daily')
+  getDailyOperations(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId: string,
+    @Query('date') date?: string,
+  ) {
+    return this.operationsService.getDailyLeadTime(
+      user.tenantId!,
+      branchId ?? user.branchId!,
+      date ?? this.todayPH(),
+    );
   }
 
   /**

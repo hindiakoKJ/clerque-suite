@@ -377,8 +377,13 @@ export default function PosTerminal() {
       }
 
       // ── Customer-facing display: show "Salamat" payment-complete state ──
-      // Cashier-side cart was cleared (clearCart() above). Customer screen
-      // shows the thank-you for ~8 seconds before reverting to WELCOME.
+      // Sprint 7 two-phase display:
+      //   Phase A (5s):   green "Salamat!" + change due
+      //   Phase B (~30s): amber "Preparing your order" with the order number
+      //   Then back to WELCOME for the next customer.
+      // The customer-display page itself handles the A->B transition based
+      // on time-since-publish; we just publish once with the orderNumber and
+      // reset later.
       publishCustomerDisplay({
         type: 'PAYMENT_COMPLETE',
         lines: receiptBase.lines.map((l) => ({
@@ -391,8 +396,9 @@ export default function PosTerminal() {
         discount: disc,
         vatAmount: vat,
         total,
+        orderNumber: order.orderNumber,
       });
-      setTimeout(() => resetCustomerDisplay(), 8_000);
+      setTimeout(() => resetCustomerDisplay(), 35_000);
     } catch (err: unknown) {
       const isNetworkError =
         (err as { code?: string })?.code === 'ERR_NETWORK' ||

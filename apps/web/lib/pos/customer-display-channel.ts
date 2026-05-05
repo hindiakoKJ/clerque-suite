@@ -51,6 +51,13 @@ export interface CustomerDisplayState {
   /** Set during PAYMENT_COMPLETE — shows "Change due ₱XX.XX". */
   amountTendered?: number;
   changeDue?:      number;
+  /** Sprint 7: order number to show on the PREPARING screen so the customer
+   *  can match their slip when they're called. */
+  orderNumber?:    string;
+  /** Sprint 7: true when the order is in production (PAID, not yet COMPLETED).
+   *  Drives the secondary "We're preparing your order" message after the
+   *  initial Salamat / change-due display. */
+  isPreparing?:    boolean;
   /** Cashier's display name, shown small at the bottom. */
   cashierName?:    string;
   branchName?:     string;

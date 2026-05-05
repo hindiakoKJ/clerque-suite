@@ -1,7 +1,7 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Coffee, Sparkles, Receipt, ShoppingCart } from 'lucide-react';
+import { Coffee, Sparkles, Receipt, ShoppingCart, ChefHat } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import {
@@ -25,6 +25,28 @@ export default function CustomerDisplayPage() {
   const userId             = useAuthStore((s) => s.user?.sub ?? null);
   const searchParams       = useSearchParams();
   const [state, setState]  = useState<CustomerDisplayState>(EMPTY);
+
+  // Sprint 7: two-phase PAYMENT_COMPLETE display.
+  // Phase A (~5s):   green "Salamat!" + change due — the cashier just confirmed payment
+  // Phase B (~30s):  amber "Preparing your order" with order number — gives the
+  //                  customer a comfortable visual while they wait at the counter
+  // After ~35s total, terminal publishes a WELCOME and the screen resets.
+  const [paymentPhase, setPaymentPhase] = useState<'thanks' | 'preparing'>('thanks');
+  const lastPaymentSeq = useRef<number | null>(null);
+  useEffect(() => {
+    if (state.type === 'PAYMENT_COMPLETE') {
+      // Reset phase to 'thanks' on each new payment event (seq changes)
+      if (lastPaymentSeq.current !== state.seq) {
+        lastPaymentSeq.current = state.seq;
+        setPaymentPhase('thanks');
+        const t = setTimeout(() => setPaymentPhase('preparing'), 5_000);
+        return () => clearTimeout(t);
+      }
+    } else {
+      lastPaymentSeq.current = null;
+      setPaymentPhase('thanks');
+    }
+  }, [state.type, state.seq]);
 
   // Cross-device sync: poll the server relay using the cashier's user id.
   // The cashier (publisher) and customer (subscriber) typically share the
@@ -59,8 +81,8 @@ export default function CustomerDisplayPage() {
     );
   }
 
-  // Payment complete — thank you + change due
-  if (state.type === 'PAYMENT_COMPLETE') {
+  // Payment complete — phase A: "Salamat!" + change due (5 seconds)
+  if (state.type === 'PAYMENT_COMPLETE' && paymentPhase === 'thanks') {
     return (
       <div
         className="min-h-screen flex flex-col items-center justify-center p-12 text-center"
@@ -89,7 +111,32 @@ export default function CustomerDisplayPage() {
           )}
         </div>
 
-        <p className="text-emerald-100 text-sm mt-8 italic">Please come again</p>
+        <p className="text-emerald-100 text-sm mt-8 italic">Please wait — we&apos;re preparing your order</p>
+      </div>
+    );
+  }
+
+  // Payment complete — phase B: "Preparing your order" with the order number.
+  // Shown after the change-due display fades. The customer waits at the counter
+  // for their order number to be called when bar/kitchen finishes.
+  if (state.type === 'PAYMENT_COMPLETE' && paymentPhase === 'preparing') {
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center p-12 text-center"
+        style={{ background: 'linear-gradient(135deg, #b45309 0%, #f59e0b 100%)' }}
+      >
+        <ChefHat className="h-20 w-20 text-white mb-6 animate-pulse" />
+        <h1 className="text-5xl sm:text-6xl font-bold text-white mb-3">Preparing your order</h1>
+        <p className="text-amber-50 text-2xl mb-12">Please wait at the counter</p>
+
+        {state.orderNumber && (
+          <div className="bg-white/15 backdrop-blur rounded-2xl px-12 py-10 max-w-md w-full">
+            <p className="text-amber-100 text-lg uppercase tracking-widest mb-3">Order number</p>
+            <p className="text-7xl font-bold text-white tabular-nums">{state.orderNumber}</p>
+          </div>
+        )}
+
+        <p className="text-amber-100 text-sm mt-12 italic">We&apos;ll call your number when it&apos;s ready</p>
       </div>
     );
   }

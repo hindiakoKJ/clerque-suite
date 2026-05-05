@@ -32,9 +32,13 @@ interface OrderItem {
 interface Order {
   id: string;
   orderNumber: string;
-  status: 'COMPLETED' | 'VOIDED';
+  // Sprint 7: PAID = paid, still in production (bar/kitchen). Auto-promotes
+  // to COMPLETED when the last prep item is bumped READY by KDS.
+  status: 'PAID' | 'COMPLETED' | 'VOIDED';
   totalAmount: number | string;
   createdAt: string;
+  paidAt?: string;
+  readyAt?: string;
   completedAt?: string;
   voidedAt?: string;
   voidReason?: string;
@@ -92,7 +96,10 @@ export default function OrdersPage() {
     queryFn: () =>
       api.get(`/orders?branchId=${user!.branchId}`).then((r) => r.data),
     enabled: !!user?.branchId,
-    staleTime: 30_000,
+    staleTime: 15_000,
+    // Poll every 15s while the page is open so PAID->COMPLETED transitions
+    // and the live "PREPARING · Xm" wait counter feel responsive.
+    refetchInterval: 15_000,
   });
 
   const filtered = orders.filter(
@@ -247,7 +254,7 @@ export default function OrdersPage() {
                         {o.orderNumber}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground text-xs">
-                        {fmtDate(o.completedAt ?? o.createdAt)}
+                        {fmtDate(o.paidAt ?? o.completedAt ?? o.createdAt)}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground text-xs">
                         {o.createdBy?.name ?? '—'}
@@ -256,13 +263,33 @@ export default function OrdersPage() {
                         {formatPeso(Number(o.totalAmount))}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                          o.status === 'COMPLETED'
-                            ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                            : 'bg-red-500/10 text-red-500'
-                        }`}>
-                          {o.status}
-                        </span>
+                        {/* Sprint 7: render PAID as amber 'Preparing' with a
+                            tiny live wait-time counter so the cashier can see
+                            at a glance which orders are still in production. */}
+                        {(() => {
+                          if (o.status === 'PAID') {
+                            const paidAt = o.paidAt ? new Date(o.paidAt).getTime() : Date.now();
+                            const waitMin = Math.max(0, Math.floor((Date.now() - paidAt) / 60000));
+                            return (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                PREPARING · {waitMin}m
+                              </span>
+                            );
+                          }
+                          if (o.status === 'COMPLETED') {
+                            return (
+                              <span className="inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400">
+                                COMPLETED
+                              </span>
+                            );
+                          }
+                          return (
+                            <span className="inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full bg-red-500/10 text-red-500">
+                              {o.status}
+                            </span>
+                          );
+                        })()}
                         {o.isPwdScDiscount && (
                           <span className="ml-1 inline-flex items-center text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-500/10 text-purple-500">
                             PWD/SC
@@ -271,7 +298,7 @@ export default function OrdersPage() {
                       </td>
                       {canVoid && (
                         <td className="px-6 py-3 text-right">
-                          {o.status === 'COMPLETED' && (
+                          {(o.status === 'COMPLETED' || o.status === 'PAID') && (
                             <button
                               onClick={(e) => { e.stopPropagation(); setVoidReason(''); setVoidModal(o); }}
                               className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 transition-colors ml-auto"

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, Plus, Pencil, FlaskConical, History,
+  AlertTriangle, Plus, Pencil, FlaskConical, History, BarChart3, ChevronRight,
 } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -244,6 +244,14 @@ export default function InventoryPage() {
         </div>
         <div className="flex items-center gap-2">
           <Link
+            href="/pos/inventory/reports"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title="Stock on Hand · Purchases · Consumption — date-range reports"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Reports
+          </Link>
+          <Link
             href="/pos/inventory/movements"
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title="Full audit trail of stock movements"
@@ -317,17 +325,22 @@ export default function InventoryPage() {
                     key={m.id}
                     className={`hover:bg-muted/40 transition-colors ${!m.isActive ? 'opacity-50' : ''}`}
                   >
-                    {/* Name + low-stock badge */}
-                    <td className="px-6 py-3 font-medium text-foreground">
-                      <div className="flex items-center gap-2">
-                        {m.name}
+                    {/* Name + low-stock badge — clickable to drill down */}
+                    <td className="px-6 py-3 font-medium">
+                      <Link
+                        href={`/pos/inventory/${m.id}`}
+                        className="group inline-flex items-center gap-2 hover:underline"
+                        style={{ color: 'var(--accent)' }}
+                      >
+                        <span>{m.name}</span>
                         {m.isLowStock && (
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
                             <AlertTriangle className="h-2.5 w-2.5" />
                             Low
                           </span>
                         )}
-                      </div>
+                        <ChevronRight className="h-3 w-3 opacity-40 group-hover:opacity-100 transition-opacity" />
+                      </Link>
                     </td>
 
                     {/* Unit */}

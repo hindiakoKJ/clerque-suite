@@ -38,6 +38,7 @@ import { AdminModule } from './admin/admin.module';
 import { LayoutsModule } from './layouts/layouts.module';
 import { CustomerDisplayModule } from './customer-display/customer-display.module';
 import { KdsModule } from './kds/kds.module';
+import { IngredientReportsModule } from './ingredient-reports/ingredient-reports.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -82,6 +83,7 @@ import { HealthController } from './health/health.controller';
     LayoutsModule,
     CustomerDisplayModule,
     KdsModule,
+    IngredientReportsModule,
   ],
 })
 export class AppModule {}

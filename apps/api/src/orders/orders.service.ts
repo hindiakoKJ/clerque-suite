@@ -76,13 +76,33 @@ export class OrdersService {
       // Relies on @@unique([tenantId, orderNumber]) as the final race guard.
       const orderNumber = await this.generateOrderNumberInTx(tx, tenantId);
 
+      // ── Sprint 7: PAID → COMPLETED status flow ────────────────────────────
+      // Determine whether ANY of the order's items will need station prep.
+      // Items go to a station via Product.category.stationId. If no item
+      // routes to any station, there's nothing to wait on — the order skips
+      // the PAID stage entirely and goes straight to COMPLETED at sale time.
+      const productIds = payload.items.map((i) => i.productId);
+      const productsForRouting = productIds.length
+        ? await tx.product.findMany({
+            where:  { id: { in: productIds } },
+            select: { id: true, category: { select: { stationId: true } } },
+          })
+        : [];
+      const hasAnyRoutedItem = productsForRouting.some(
+        (p) => p.category?.stationId != null,
+      );
+      const paidAtTs = new Date(payload.createdAt);
+      const initialStatus: 'PAID' | 'COMPLETED' = hasAnyRoutedItem ? 'PAID' : 'COMPLETED';
+      const initialReadyAt = hasAnyRoutedItem ? null : paidAtTs;
+      const initialCompletedAt = hasAnyRoutedItem ? null : paidAtTs;
+
       const order = await tx.order.create({
         data: {
           tenantId,
           branchId: payload.branchId,
           shiftId: payload.shiftId,
           orderNumber,
-          status: 'COMPLETED',
+          status: initialStatus,
           subtotal: new Prisma.Decimal(payload.subtotal),
           discountAmount: new Prisma.Decimal(payload.discountAmount),
           vatAmount: new Prisma.Decimal(payload.vatAmount),
@@ -92,7 +112,9 @@ export class OrdersService {
           pwdScIdOwnerName: payload.pwdScIdOwnerName,
           clientUuid: payload.clientUuid,
           createdById: cashierId,
-          completedAt: new Date(payload.createdAt),
+          paidAt: paidAtTs,
+          readyAt: initialReadyAt,
+          completedAt: initialCompletedAt,
           // ── BIR CAS: Invoice classification & B2B customer fields ──────────
           invoiceType:     (payload.invoiceType ?? 'CASH_SALE') as any,
           taxType:         (payload.taxType      ?? 'VAT_12')    as any,
@@ -421,16 +443,23 @@ export class OrdersService {
         where: { id: orderId, tenantId },   // tenant-scoped check inside transaction
       });
       if (!order) throw new NotFoundException('Order not found');
-      if (order.status !== 'COMPLETED') {
-        throw new BadRequestException('Only completed orders can be voided');
+      // Sprint 7: voids allowed on PAID (still in production) and COMPLETED orders.
+      // OPEN orders aren't yet finalized — there's nothing to void. VOIDED / RETURNED
+      // orders can't be voided again.
+      if (order.status !== 'PAID' && order.status !== 'COMPLETED') {
+        throw new BadRequestException('Only paid or completed orders can be voided');
       }
 
       const today = new Date();
-      const completedAt = order.completedAt ?? order.createdAt;
+      // Voids are scoped to the same calendar day as the SALE (paidAt), not
+      // the production-complete moment. A drink ordered at 11:55 PM that
+      // didn't get bumped READY until 12:05 AM still belongs to yesterday's
+      // shift for void purposes.
+      const saleDate = order.paidAt ?? order.completedAt ?? order.createdAt;
       if (
-        completedAt.getFullYear() !== today.getFullYear() ||
-        completedAt.getMonth() !== today.getMonth() ||
-        completedAt.getDate() !== today.getDate()
+        saleDate.getFullYear() !== today.getFullYear() ||
+        saleDate.getMonth() !== today.getMonth() ||
+        saleDate.getDate() !== today.getDate()
       ) {
         throw new ForbiddenException('Voids are only allowed on the same day as the sale');
       }

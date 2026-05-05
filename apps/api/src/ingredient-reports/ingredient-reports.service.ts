@@ -83,21 +83,25 @@ export class IngredientReportsService {
       orderNumber:  null,
     }));
 
-    // Consumption — derived from completed orders that include products
-    // whose BOM contains this raw material.
+    // Consumption — derived from paid orders (PAID + COMPLETED) that
+    // include products whose BOM contains this raw material. Sprint 7:
+    // ingredients are deducted at sale-time on the orders.service.create
+    // path, so PAID orders DID consume their ingredients even if the bar
+    // hasn't bumped them ready yet.
     const orders = await this.prisma.order.findMany({
       where: {
         tenantId,
-        status:    'COMPLETED',
+        status:    { in: ['PAID', 'COMPLETED'] },
         deletedAt: null,
         ...(opts.branchId ? { branchId: opts.branchId } : {}),
         ...(fromDate || toDate
-          ? { completedAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
+          ? { paidAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
           : {}),
       },
       select: {
         id:          true,
         orderNumber: true,
+        paidAt:      true,
         completedAt: true,
         branchId:    true,
         items: {
@@ -108,7 +112,7 @@ export class IngredientReportsService {
           },
         },
       },
-      orderBy: { completedAt: 'desc' },
+      orderBy: { paidAt: 'desc' },
     });
 
     // Pre-load all BOM rows for the products that appear in these orders so
@@ -138,7 +142,7 @@ export class IngredientReportsService {
       consumption.push({
         id:           `ord-${order.id}`,
         kind:         'CONSUMPTION',
-        occurredAt:   (order.completedAt ?? new Date()).toISOString(),
+        occurredAt:   (order.paidAt ?? order.completedAt ?? new Date()).toISOString(),
         quantity:     -totalQty, // negative = outflow
         qtyRemaining: 0,
         unitCost:     rm.costPrice != null ? Number(rm.costPrice) : 0,
@@ -267,13 +271,15 @@ export class IngredientReportsService {
       purchasesValByRm.set(lot.rawMaterialId, (purchasesValByRm.get(lot.rawMaterialId) ?? 0) + val);
     }
 
-    // 4. Consumption in range (derived from completed orders × BOM).
+    // 4. Consumption in range (derived from paid orders × BOM). Sprint 7:
+    // PAID orders consumed their ingredients at sale time, so they count
+    // toward consumption even if production hasn't completed.
     const orders = await this.prisma.order.findMany({
       where: {
         tenantId,
-        status:      'COMPLETED',
-        deletedAt:   null,
-        completedAt: { gte: fromDate, lte: toDate },
+        status:    { in: ['PAID', 'COMPLETED'] },
+        deletedAt: null,
+        paidAt:    { gte: fromDate, lte: toDate },
         ...(opts.branchId ? { branchId: opts.branchId } : {}),
       },
       select: {

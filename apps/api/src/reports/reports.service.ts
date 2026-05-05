@@ -87,11 +87,17 @@ export class ReportsService {
     const startOfDay = new Date(`${date}T00:00:00+08:00`);
     const endOfDay = new Date(`${date}T23:59:59.999+08:00`);
 
+    // Sprint 7: Revenue is recognized at PAID time (PFRS § 9 — control
+    // transferred at point-of-sale), not at production-complete time.
+    // Filtering by paidAt captures both PAID-and-still-in-production and
+    // fully-COMPLETED orders for the day. Backfilled paidAt = completedAt
+    // on legacy rows means this is backwards-compatible.
     const orders = await this.prisma.order.findMany({
       where: {
         tenantId,
         branchId,
-        completedAt: { gte: startOfDay, lte: endOfDay },
+        paidAt: { gte: startOfDay, lte: endOfDay },
+        status: { in: ['PAID', 'COMPLETED'] },
       },
       include: { payments: true, items: true },
     });
@@ -301,11 +307,18 @@ export class ReportsService {
     if (existing) return existing;
 
     const orders = await this.prisma.order.findMany({
-      where: { tenantId, branchId, completedAt: { gte: startOfDay, lte: endOfDay } },
+      where: {
+        tenantId,
+        branchId,
+        paidAt: { gte: startOfDay, lte: endOfDay },
+        status: { in: ['PAID', 'COMPLETED', 'VOIDED'] },
+      },
       include: { payments: true, items: true },
     });
 
-    const completed   = orders.filter((o) => o.status === 'COMPLETED');
+    // Sprint 7: PAID-and-COMPLETED both count as "completed sales" for
+    // Z-Read purposes — the customer has paid and revenue is recognized.
+    const completed   = orders.filter((o) => o.status === 'COMPLETED' || o.status === 'PAID');
     const voided      = orders.filter((o) => o.status === 'VOIDED');
     const grossSales  = completed.reduce((s, o) => s + Number(o.subtotal),     0);
     const netSales    = completed.reduce((s, o) => s + Number(o.totalAmount),  0);

@@ -153,6 +153,10 @@ enum PaymentMethod {
 
 enum OrderStatus {
   OPEN
+  /// Sprint 7 — payment received, items still in production at bar/kitchen.
+  /// Transitions to COMPLETED automatically when KDS marks the last prep
+  /// item as READY. Lead time KPI = readyAt - paidAt.
+  PAID
   COMPLETED
   VOIDED
   RETURNED
@@ -1040,6 +1044,14 @@ model Order {
   voidInitiatedById String? // The cashier who requested the void (null if supervisor voided directly)
   voidedAt          DateTime?
   voidReason        String?
+  /// When payment was received and the order entered the production queue.
+  /// For pre-Sprint-7 orders, this is backfilled to equal completedAt.
+  paidAt            DateTime?
+  /// When the LAST prep item on the order was marked READY by KDS — the
+  /// moment the customer's order is physically ready for handoff.
+  /// For orders with no prep items (retail / no station routing), this
+  /// equals paidAt. Lead time KPI = readyAt - paidAt.
+  readyAt           DateTime?
   completedAt       DateTime?
   /// Soft-delete timestamp — set on void/correction; NULL means active.
   /// BIR requirement: invoice numbers must never have gaps; hard delete is forbidden.

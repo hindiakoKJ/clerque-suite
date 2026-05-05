@@ -409,14 +409,16 @@ export class ExportService {
       select: { name: true, taxStatus: true },
     });
 
-    const where: any = { tenantId, status: 'COMPLETED' };
-    if (from) where.completedAt = { ...where.completedAt, gte: new Date(`${from}T00:00:00+08:00`) };
-    if (to)   where.completedAt = { ...where.completedAt, lte: new Date(`${to}T23:59:59.999+08:00`) };
+    // Sprint 7: include PAID orders too (revenue recognized at sale time).
+    // Date range on paidAt, not completedAt.
+    const where: any = { tenantId, status: { in: ['PAID', 'COMPLETED'] } };
+    if (from) where.paidAt = { ...where.paidAt, gte: new Date(`${from}T00:00:00+08:00`) };
+    if (to)   where.paidAt = { ...where.paidAt, lte: new Date(`${to}T23:59:59.999+08:00`) };
 
     const orders = await this.prisma.order.findMany({
       where,
       include: { payments: true },
-      orderBy: { completedAt: 'asc' },
+      orderBy: { paidAt: 'asc' },
     });
 
     const lines: string[] = [];

@@ -407,10 +407,17 @@ export class BirService {
       select: { name: true, tinNumber: true, businessName: true },
     });
 
+    // Sprint 7: BIR audit covers PAID + COMPLETED (revenue-recognized at
+    // point of sale). Date range is on paidAt to capture the actual sale
+    // moment, not when the bar finished bumping the last drink.
     const orders = await this.prisma.order.findMany({
-      where: { tenantId, status: 'COMPLETED', completedAt: { gte: from, lte: to } },
+      where: {
+        tenantId,
+        status: { in: ['PAID', 'COMPLETED'] },
+        paidAt: { gte: from, lte: to },
+      },
       include: { items: true, payments: true },
-      orderBy: { completedAt: 'asc' },
+      orderBy: { paidAt: 'asc' },
     });
 
     const wb = new ExcelJS.Workbook();

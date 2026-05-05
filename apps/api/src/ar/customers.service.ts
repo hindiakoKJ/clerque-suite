@@ -214,7 +214,7 @@ export class CustomersService {
 
     // POS charge-tab orders (legacy)
     const posOrders = await this.prisma.order.findMany({
-      where:  { tenantId, customerId, invoiceType: 'CHARGE', status: { in: ['COMPLETED', 'OPEN'] }, ...(dateFilter ? { createdAt: dateFilter } : {}) },
+      where:  { tenantId, customerId, invoiceType: 'CHARGE', status: { in: ['PAID', 'COMPLETED', 'OPEN'] }, ...(dateFilter ? { createdAt: dateFilter } : {}) },
       select: { id: true, orderNumber: true, createdAt: true, totalAmount: true, payments: { select: { amount: true } } },
       orderBy: { createdAt: 'asc' },
     });

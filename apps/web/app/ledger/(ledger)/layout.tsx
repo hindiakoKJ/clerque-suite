@@ -57,20 +57,21 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
   const role           = user?.role;
 
   // ── App-level guard ────────────────────────────────────────────────────────
-  // Roles with no Ledger-app access (KIOSK_DISPLAY, GENERAL_EMPLOYEE,
-  // CASHIER, etc.) should never see this layout. Without this guard, hitting
-  // /ledger/* directly would render the page with an empty sidebar.
+  // KIOSK_DISPLAY accounts are kiosk-hardware credentials and never belong in
+  // Ledger regardless of what their (potentially stale) UserAppAccess rows
+  // say. Role check first; appAccess check second as a backstop for everyone
+  // else who lacks Ledger.
   useEffect(() => {
     if (!user) return;
+    if (user.role === 'KIOSK_DISPLAY') {
+      router.replace('/pos/select-display');
+      return;
+    }
     const ledgerAccess = user.appAccess.find((a) => a.app === 'LEDGER');
     const hasLedger =
       ledgerAccess && ledgerAccess.level !== 'NONE';
     if (!hasLedger) {
-      if (user.role === 'KIOSK_DISPLAY') {
-        router.replace('/pos/select-display');
-      } else {
-        router.replace('/select');
-      }
+      router.replace('/select');
     }
   }, [user, router]);
 

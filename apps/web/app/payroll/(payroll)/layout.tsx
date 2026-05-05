@@ -49,22 +49,21 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
   const { user, clear } = useAuthStore();
 
   // ── App-level guard ────────────────────────────────────────────────────────
-  // Roles with no Payroll-app access (KIOSK_DISPLAY, AR_ACCOUNTANT, AP_ACCOUNTANT,
-  // BOOKKEEPER, etc.) should never see this layout. Without this guard, hitting
-  // /payroll/clock directly would render the page even though the sidebar would
-  // be empty. Redirect to a sensible home based on what the role can access.
+  // KIOSK_DISPLAY accounts are kiosk-hardware credentials and have NO business
+  // in Payroll regardless of what their (potentially stale) UserAppAccess rows
+  // say. Role check first; appAccess check second as a backstop for everyone
+  // else who lacks Payroll.
   useEffect(() => {
     if (!user) return;
+    if (user.role === 'KIOSK_DISPLAY') {
+      router.replace('/pos/select-display');
+      return;
+    }
     const payrollAccess = user.appAccess.find((a) => a.app === 'PAYROLL');
     const hasPayroll =
       payrollAccess && payrollAccess.level !== 'NONE';
     if (!hasPayroll) {
-      // KIOSK_DISPLAY → station picker; everyone else → app selector
-      if (user.role === 'KIOSK_DISPLAY') {
-        router.replace('/pos/select-display');
-      } else {
-        router.replace('/select');
-      }
+      router.replace('/select');
     }
   }, [user, router]);
 

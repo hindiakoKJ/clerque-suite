@@ -153,8 +153,18 @@ export class AuthService {
     return user;
   }
 
-  /** Load app access rows, falling back to role defaults if none seeded yet */
+  /** Load app access rows, falling back to role defaults if none seeded yet.
+   *
+   * Self-heal: for KIOSK_DISPLAY accounts, ALWAYS use the role defaults
+   * regardless of what's in UserAppAccess. Some early KIOSK_DISPLAY accounts
+   * inherited stale CLOCK_ONLY Payroll rows from when they were
+   * GENERAL_EMPLOYEE — this guarantees the JWT they receive at login matches
+   * the role's defined access level. Same defensive treatment is applied
+   * during the role-change update path; this is the login-time backstop. */
   private async loadAppAccess(userId: string, role: string): Promise<AppAccessEntry[]> {
+    if (role === 'KIOSK_DISPLAY') {
+      return DEFAULT_APP_ACCESS.KIOSK_DISPLAY;
+    }
     const rows = await this.prisma.userAppAccess.findMany({
       where: { userId },
       select: { appCode: true, level: true },

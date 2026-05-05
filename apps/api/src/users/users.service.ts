@@ -31,6 +31,10 @@ export class UsersService {
       where: {
         tenantId,
         ...(branchId ? { branchId } : {}),
+        // SUPER_ADMIN is a platform role, not a tenant role — hide it from
+        // tenant Staff lists. The platform admin can still log in normally;
+        // they're just not listed as "staff" of any individual tenant.
+        role: { not: 'SUPER_ADMIN' },
       },
       select: {
         id: true,

@@ -706,17 +706,41 @@ export default function ProductsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">Category</label>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Category
+                  </label>
                   <select
                     value={form.categoryId}
-                    onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}
+                    onChange={async (e) => {
+                      const v = e.target.value;
+                      if (v === '__new__') {
+                        const name = window.prompt('New category name (e.g. "Coffee", "Pastries")');
+                        if (!name?.trim()) return;
+                        try {
+                          const { data } = await api.post('/categories', { name: name.trim() });
+                          await qc.invalidateQueries({ queryKey: ['categories'] });
+                          setForm((f) => ({ ...f, categoryId: data.id }));
+                          toast.success(`Category "${data.name}" created`);
+                        } catch (err: any) {
+                          toast.error(err?.response?.data?.message ?? 'Could not create category');
+                        }
+                        return;
+                      }
+                      setForm((f) => ({ ...f, categoryId: v }));
+                    }}
                     className={INPUT_CLS}
                   >
                     <option value="">— None —</option>
                     {categories.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
+                    <option value="__new__">+ Create new category…</option>
                   </select>
+                  {categories.length === 0 && (
+                    <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                      No categories yet — pick &ldquo;Create new category…&rdquo; to add one inline.
+                    </p>
+                  )}
                 </div>
               </div>
 

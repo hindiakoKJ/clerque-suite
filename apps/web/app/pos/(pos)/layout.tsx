@@ -4,7 +4,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
-  Monitor,
+  Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
@@ -78,8 +78,11 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   const { user, accessToken, clear } = useAuthStore();
   const { activeShift, clearShift } = useShiftStore();
   const { pendingCount, isSyncing, triggerSync } = usePendingSync();
-  // Customer-facing display flag — drives the "Open Display" header button
-  const { hasCustomerDisplay } = useFloorLayout();
+  // Customer-facing display flag — drives the "Open Display" header button.
+  // `layout` carries the full station list so we can also expose Bar / Kitchen
+  // KDS buttons in the header (they open in a new window for second-screen use).
+  const { hasCustomerDisplay, layout } = useFloorLayout();
+  const kdsStations = (layout?.stations ?? []).filter((s) => s.hasKds);
 
   const [showCloseShift,      setShowCloseShift]      = useState(false);
   const [showCashOut,         setShowCashOut]         = useState(false);
@@ -241,6 +244,35 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
           Cash Out
         </button>
       )}
+
+      {/* Open station KDS displays in a new window — one button per station
+          that has KDS enabled (Bar, Kitchen, etc.). Each station's KDS is a
+          standalone URL — point a tablet at it and it works on its own.
+          No pairing, no sync setup; just sign in once and bookmark. */}
+      {kdsStations.map((station) => {
+        const StationIcon =
+          station.kind === 'BAR' || station.kind === 'HOT_BAR' ? Coffee :
+          station.kind === 'COLD_BAR' ? Snowflake :
+          station.kind === 'KITCHEN' ? ChefHat :
+          station.kind === 'PASTRY_PASS' ? Cake : Store;
+        return (
+          <button
+            key={station.id}
+            onClick={() => {
+              window.open(
+                `/pos/station/${station.id}`,
+                `clerque-kds-${station.id}`,
+                'noopener,noreferrer,width=1280,height=800',
+              );
+            }}
+            className="hidden sm:flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-md px-2.5 py-1.5 transition-colors"
+            title={`Open the ${station.name} display in a new window (or copy the URL onto a tablet)`}
+          >
+            <StationIcon className="h-3.5 w-3.5" />
+            {station.name}
+          </button>
+        );
+      })}
 
       {/* Open the customer-facing display in a new window — only when the
           tenant has it configured (CS_2+, or CS_1 with toggle on). */}

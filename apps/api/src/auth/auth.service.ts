@@ -13,8 +13,11 @@ import { MailService } from '../mail/mail.service';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant } from '@repo/shared-types';
 import type { TaxStatus, TierId, AiAddonType } from '@repo/shared-types';
 
-const ACCESS_EXPIRY = '15m';
-const REFRESH_EXPIRY = '7d';
+// 8h access token = one login covers a full work shift; no mid-shift logouts.
+// Refresh-token rotation still happens silently in the background via the
+// axios refresh interceptor, so security posture is unchanged.
+const ACCESS_EXPIRY = '8h';
+const REFRESH_EXPIRY = '30d';
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
 
@@ -245,7 +248,8 @@ export class AuthService {
     );
 
     const refreshHash = await bcrypt.hash(refreshToken, 10);
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    // Match REFRESH_EXPIRY ('30d') so the DB record and the JWT expire together.
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     await this.prisma.userSession.create({
       data: {

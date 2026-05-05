@@ -114,6 +114,12 @@ const ROLES = [
     label: 'External Auditor',
     desc:  'Read-only view across all modules (POS orders, ledger, inventory). Zero write access.',
   },
+  // ── Service / Display Accounts ───────────────────────────────────────────────
+  {
+    value: 'KIOSK_DISPLAY',
+    label: 'Display / Kiosk',
+    desc:  'For Bar / Kitchen / Customer Display tablets. KDS view + bump only. No till, no Payroll, no Ledger. Does NOT count against your staff cap.',
+  },
 ];
 
 const BUSINESS_TYPE_LABELS: Record<string, string> = {

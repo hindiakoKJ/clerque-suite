@@ -6,7 +6,9 @@ import {
   Plus, X, CheckCircle2, XCircle, RotateCcw,
   ChevronDown, Shield, FileText, AlertTriangle, Info,
   KeyRound, Eye, EyeOff, ShieldCheck,
+  LayoutGrid, CreditCard, ShieldAlert, ChevronRight,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
@@ -300,6 +302,31 @@ export default function SettingsPage() {
       </header>
 
       <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+        {/* Quick links — sub-pages that aren't tabs (each is its own route). */}
+        <section>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Configuration</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <SettingsCard
+              href="/settings/floor-layout"
+              icon={LayoutGrid}
+              title="Floor Layout"
+              desc="Stations, printers, category routing, KDS"
+            />
+            <SettingsCard
+              href="/settings/subscription"
+              icon={CreditCard}
+              title="Subscription"
+              desc="Tier, staff cap, billing, upgrade"
+            />
+            <SettingsCard
+              href="/settings/sod-violations"
+              icon={ShieldAlert}
+              title="SOD Violations"
+              desc="Audit-trail of permission overrides"
+            />
+          </div>
+        </section>
+
         {/* Tab bar */}
         <div className="flex gap-1 bg-muted/40 p-1 rounded-xl w-fit flex-wrap">
           {([
@@ -1308,5 +1335,34 @@ function CostingCard({
         </div>
       )}
     </div>
+  );
+}
+
+// ── Settings card (link to a sub-page) ─────────────────────────────────────
+
+function SettingsCard({
+  href, icon: Icon, title, desc,
+}: {
+  href: string;
+  icon: React.ElementType;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group flex items-start gap-3 rounded-xl border border-border bg-card hover:bg-muted/40 hover:border-[var(--accent)]/40 transition-colors p-3"
+    >
+      <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-[var(--accent-soft)] text-[var(--accent)] shrink-0">
+        <Icon className="w-4 h-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-1">
+          <h3 className="font-semibold text-sm text-foreground truncate">{title}</h3>
+          <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/40 group-hover:text-[var(--accent)] group-hover:translate-x-0.5 transition-all shrink-0" />
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{desc}</p>
+      </div>
+    </Link>
   );
 }

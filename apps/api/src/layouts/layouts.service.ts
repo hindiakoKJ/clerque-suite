@@ -284,6 +284,90 @@ export class LayoutsService {
     });
   }
 
+  /**
+   * Migrate any existing HOT_BAR + COLD_BAR stations into a single BAR.
+   *
+   * Old CS_5 tenants were provisioned with a Hot Bar + Cold Bar split. Most
+   * operators run one bar with two baristas off a shared queue, so the new
+   * canonical CS_5 has just one BAR. This method consolidates an existing
+   * tenant onto the new shape:
+   *
+   *   1. If the tenant already has a BAR station, keep it.
+   *      Otherwise promote the first HOT_BAR (or COLD_BAR) by changing its
+   *      kind to BAR and renaming to "Bar".
+   *   2. Reassign every category that points at HOT_BAR or COLD_BAR to the
+   *      single BAR.
+   *   3. Deactivate the leftover HOT_BAR / COLD_BAR stations (printer
+   *      assignments are preserved on the surviving BAR; orphaned printers
+   *      stay active so they can be reassigned manually).
+   *
+   * Idempotent — running on a tenant that's already consolidated is a no-op.
+   */
+  async consolidateBars(tenantId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const stations = await tx.station.findMany({
+        where:  { tenantId, isActive: true },
+        select: { id: true, kind: true, name: true, printerId: true, hasKds: true, hasPrinter: true },
+      });
+      const bars     = stations.filter((s) => s.kind === 'BAR');
+      const hotBars  = stations.filter((s) => s.kind === 'HOT_BAR');
+      const coldBars = stations.filter((s) => s.kind === 'COLD_BAR');
+
+      // Already consolidated — no Hot/Cold to merge.
+      if (hotBars.length === 0 && coldBars.length === 0) {
+        return {
+          consolidated: false,
+          message:      'Already consolidated — no Hot Bar or Cold Bar stations found.',
+          barId:        bars[0]?.id ?? null,
+          stations,
+        };
+      }
+
+      // Pick or create the surviving Bar.
+      let survivingBarId: string;
+      if (bars.length > 0) {
+        survivingBarId = bars[0].id;
+      } else {
+        // Promote the first HOT_BAR (or COLD_BAR) to BAR.
+        const promote = hotBars[0] ?? coldBars[0];
+        await tx.station.update({
+          where: { id: promote.id },
+          data:  { kind: 'BAR', name: 'Bar' },
+        });
+        survivingBarId = promote.id;
+      }
+
+      // Reassign categories that were routed to any HOT_BAR or COLD_BAR.
+      const obsoleteIds = [
+        ...hotBars.map((s) => s.id),
+        ...coldBars.map((s) => s.id),
+      ].filter((id) => id !== survivingBarId);
+
+      const reroutedCount = obsoleteIds.length
+        ? (await tx.category.updateMany({
+            where: { tenantId, stationId: { in: obsoleteIds } },
+            data:  { stationId: survivingBarId },
+          })).count
+        : 0;
+
+      // Deactivate the obsolete stations.
+      const deactivated = obsoleteIds.length
+        ? (await tx.station.updateMany({
+            where: { id: { in: obsoleteIds } },
+            data:  { isActive: false },
+          })).count
+        : 0;
+
+      return {
+        consolidated:  true,
+        message:       `Merged ${hotBars.length} Hot Bar + ${coldBars.length} Cold Bar station${(hotBars.length + coldBars.length) === 1 ? '' : 's'} into a single Bar.`,
+        barId:         survivingBarId,
+        rerouted:      reroutedCount,
+        deactivated,
+      };
+    });
+  }
+
   /** Toggle CS-1 customer display (no-op on CS-2..CS-5 where it's always on). */
   async setCustomerDisplay(tenantId: string, enabled: boolean) {
     const tenant = await this.prisma.tenant.findUnique({

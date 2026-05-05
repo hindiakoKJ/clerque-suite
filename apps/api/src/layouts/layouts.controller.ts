@@ -81,6 +81,20 @@ export class LayoutsController {
     return this.layouts.setCategoryStation(user.tenantId!, categoryId, dto.stationId);
   }
 
+  /**
+   * Consolidate Hot Bar + Cold Bar into a single Bar.
+   *
+   * For tenants that were provisioned on the old CS_5 template (Hot/Cold
+   * split). Reassigns category routing and deactivates the obsolete
+   * stations. Idempotent.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Post('consolidate-bars')
+  @HttpCode(HttpStatus.OK)
+  consolidateBars(@CurrentUser() user: JwtPayload) {
+    return this.layouts.consolidateBars(user.tenantId!);
+  }
+
   /** CS_1 only — toggle the optional customer-facing display */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   @Patch('customer-display')

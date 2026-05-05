@@ -156,7 +156,38 @@ export default function FloorLayoutSettingsPage() {
 
       {/* Stations */}
       <section className="px-4 sm:px-6 py-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground mb-3">Stations</h2>
+        <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Stations</h2>
+          {canManage && layout.stations.some((s) => s.kind === 'HOT_BAR' || s.kind === 'COLD_BAR') && (
+            <button
+              onClick={async () => {
+                if (!window.confirm(
+                  'Merge Hot Bar + Cold Bar into a single Bar?\n\n' +
+                  'All categories currently routed to Hot Bar or Cold Bar will be reassigned ' +
+                  'to a single Bar station, and the obsolete stations will be deactivated. ' +
+                  'This is recommended — most cafés operate one bar with two baristas off the ' +
+                  'same queue. You can still run a second tablet for capacity by pointing it at ' +
+                  'the Bar station URL.\n\nThis action is reversible only by sales (contact us).',
+                )) return;
+                try {
+                  const { data } = await api.post('/layouts/consolidate-bars');
+                  if (data.consolidated) {
+                    toast.success(data.message);
+                  } else {
+                    toast.info(data.message);
+                  }
+                  qc.invalidateQueries({ queryKey: ['floor-layout'] });
+                } catch (err) {
+                  toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to consolidate.');
+                }
+              }}
+              className="text-xs px-3 py-1.5 rounded-md font-medium border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
+              title="Merge Hot Bar + Cold Bar into a single Bar (reroutes categories, keeps history)"
+            >
+              Merge into single Bar
+            </button>
+          )}
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           {layout.stations.map((s) => {
             const Icon = STATION_ICON[s.kind] ?? Store;

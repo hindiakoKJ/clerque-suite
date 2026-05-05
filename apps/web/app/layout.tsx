@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
@@ -11,6 +11,19 @@ const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono'
 export const metadata: Metadata = {
   title: 'Clerque',
   description: 'Clerque — Counter, Ledger, and Sync for your business.',
+  applicationName: 'Clerque',
+  appleWebApp: {
+    title:   'Clerque',
+    capable: true,
+    statusBarStyle: 'default',
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#8B5E3C' },
+    { media: '(prefers-color-scheme: dark)',  color: '#2C2018' },
+  ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -20,6 +20,7 @@ import {
   RenameStationDto,
   SetCategoryStationDto,
   SetCustomerDisplayDto,
+  UpdatePrinterDto,
 } from './dto';
 
 /**
@@ -86,6 +87,22 @@ export class LayoutsController {
     @Body() dto: SetCategoryStationDto,
   ) {
     return this.layouts.setCategoryStation(user.tenantId!, categoryId, dto.stationId);
+  }
+
+  /**
+   * Update a printer — rename and/or toggle active state.
+   * Inactive printers are silently skipped by the station-ticket dispatcher,
+   * so demo / no-printer setups don't trigger 'RawBT not found' errors.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Patch('printers/:id')
+  @HttpCode(HttpStatus.OK)
+  updatePrinter(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdatePrinterDto,
+  ) {
+    return this.layouts.updatePrinter(user.tenantId!, id, dto);
   }
 
   /**

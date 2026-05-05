@@ -18,7 +18,7 @@ interface LayoutResponse {
     hasKds: boolean;
     hasPrinter: boolean;
     printerId: string | null;
-    printer: { id: string; name: string; interface: string; paperWidthMm: number } | null;
+    printer: { id: string; name: string; interface: string; paperWidthMm: number; isActive: boolean } | null;
     categories: Array<{ id: string; name: string }>;
   }>;
   printers: Array<{

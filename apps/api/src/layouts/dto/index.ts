@@ -36,3 +36,17 @@ export class SetCustomerDisplayDto {
   @IsBoolean()
   enabled: boolean;
 }
+
+/** Update a printer — rename and/or toggle isActive. Both fields optional;
+ *  send only the field(s) you want to change. */
+export class UpdatePrinterDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  name?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}

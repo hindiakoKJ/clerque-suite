@@ -266,6 +266,40 @@ export class LayoutsService {
     });
   }
 
+  /**
+   * Update a printer — rename and/or toggle isActive.
+   *
+   * isActive=false: dispatcher silently skips the printer (no error toast).
+   * Useful for desktop demos where there's no actual printer connected, and
+   * for tenants who don't yet own a station printer.
+   */
+  async updatePrinter(
+    tenantId: string,
+    printerId: string,
+    patch: { name?: string; isActive?: boolean },
+  ) {
+    const existing = await this.prisma.printer.findFirst({
+      where: { id: printerId, tenantId },
+    });
+    if (!existing) throw new NotFoundException('Printer not found.');
+
+    if (patch.name !== undefined) {
+      const trimmed = patch.name.trim();
+      if (trimmed.length === 0 || trimmed.length > 60) {
+        throw new BadRequestException('Printer name must be 1-60 characters.');
+      }
+      patch.name = trimmed;
+    }
+
+    return this.prisma.printer.update({
+      where: { id: printerId },
+      data:  {
+        ...(patch.name     !== undefined ? { name:     patch.name }     : {}),
+        ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+      },
+    });
+  }
+
   /** Assign a category to a station (or null to unroute). */
   async setCategoryStation(tenantId: string, categoryId: string, stationId: string | null) {
     const cat = await this.prisma.category.findFirst({

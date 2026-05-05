@@ -268,15 +268,19 @@ export default function FloorLayoutSettingsPage() {
                   </div>
                 </div>
 
-                {/* Printer assignment */}
+                {/* Printer assignment + toggle + rename */}
                 <div className="mt-3 pt-3 border-t border-border">
                   <p className="text-[11px] text-muted-foreground mb-1">Printer</p>
                   {s.printer ? (
-                    <p className="text-xs text-foreground flex items-center gap-1.5">
-                      <Printer className="h-3 w-3" />
-                      {s.printer.name}
-                      <span className="text-muted-foreground">· {s.printer.paperWidthMm}mm</span>
-                    </p>
+                    <PrinterRow
+                      key={s.printer.id}
+                      id={s.printer.id}
+                      name={s.printer.name}
+                      paperWidthMm={s.printer.paperWidthMm}
+                      isActive={s.printer.isActive}
+                      canManage={canManage}
+                      onChanged={() => qc.invalidateQueries({ queryKey: ['floor-layout'] })}
+                    />
                   ) : s.hasPrinter ? (
                     <p className="text-xs text-amber-600 italic">No printer assigned</p>
                   ) : (
@@ -384,6 +388,113 @@ export default function FloorLayoutSettingsPage() {
             </button>
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+// ─── Printer card with rename + active toggle ───────────────────────────────
+
+function PrinterRow({
+  id, name, paperWidthMm, isActive, canManage, onChanged,
+}: {
+  id: string;
+  name: string;
+  paperWidthMm: number;
+  isActive: boolean;
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft]     = useState(name);
+  const [saving, setSaving]   = useState(false);
+
+  async function save() {
+    const trimmed = draft.trim();
+    if (trimmed.length === 0 || trimmed.length === name.length && trimmed === name) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.patch(`/layouts/printers/${id}`, { name: trimmed });
+      toast.success('Printer renamed.');
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to rename.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleActive() {
+    try {
+      await api.patch(`/layouts/printers/${id}`, { isActive: !isActive });
+      toast.success(isActive ? 'Printer disabled — orders won\'t print to it.' : 'Printer enabled.');
+      onChanged();
+    } catch (err) {
+      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to toggle.');
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <Printer className={`h-3 w-3 ${isActive ? 'text-foreground' : 'text-muted-foreground/40'}`} />
+      {editing ? (
+        <>
+          <input
+            autoFocus
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save();
+              if (e.key === 'Escape') { setDraft(name); setEditing(false); }
+            }}
+            className="text-xs flex-1 min-w-0 border border-[var(--accent)] bg-background rounded px-2 py-1 focus:outline-none"
+          />
+          <button onClick={save} disabled={saving} className="text-emerald-500 hover:text-emerald-600 disabled:opacity-50" title="Save">
+            <Save className="h-3.5 w-3.5" />
+          </button>
+          <button onClick={() => { setDraft(name); setEditing(false); }} className="text-muted-foreground hover:text-red-500" title="Cancel">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </>
+      ) : (
+        <>
+          <span className={`text-xs flex-1 ${isActive ? 'text-foreground' : 'text-muted-foreground/60 line-through'}`}>
+            {name}
+          </span>
+          <span className="text-[10px] text-muted-foreground">{paperWidthMm}mm</span>
+          {canManage && (
+            <button onClick={() => setEditing(true)} className="text-muted-foreground hover:text-[var(--accent)]" title="Rename printer">
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+          {canManage && (
+            <button
+              onClick={toggleActive}
+              role="switch"
+              aria-checked={isActive}
+              title={isActive ? 'Click to disable — orders will skip this printer (no print, no error toast)' : 'Click to enable'}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
+                isActive ? 'bg-[var(--accent)]' : 'bg-muted-foreground/30'
+              }`}
+            >
+              <span
+                className={`inline-block h-3 w-3 rounded-full bg-white shadow transform transition-transform ${
+                  isActive ? 'translate-x-3.5' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          )}
+        </>
+      )}
+      {!isActive && (
+        <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-semibold">
+          off
+        </span>
       )}
     </div>
   );

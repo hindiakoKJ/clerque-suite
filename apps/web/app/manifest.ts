@@ -15,8 +15,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: 'Clerque — Counter, Ledger, and Sync for Philippine MSMEs.',
     start_url:   '/',
     display:     'standalone',
-    background_color: '#EEE9DF', // cream
-    theme_color:      '#8B5E3C', // brown
+    background_color: '#F4ECFB', // light lavender (matches the inner cards)
+    theme_color:      '#7C3AED', // deep purple (matches the icon gradient end)
     orientation: 'any',
     icons: [
       { src: '/icon',  sizes: '32x32',   type: 'image/png' },

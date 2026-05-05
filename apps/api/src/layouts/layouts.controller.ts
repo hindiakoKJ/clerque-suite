@@ -35,8 +35,15 @@ import {
 export class LayoutsController {
   constructor(private readonly layouts: LayoutsService) {}
 
-  /** Read the current layout (for setup wizard + Settings → Floor Layout) */
-  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  /** Read the current layout (for setup wizard + Settings → Floor Layout +
+   *  the kiosk station picker /pos/select-display). KIOSK_DISPLAY needs read
+   *  access to discover which stations to render as picker tiles. CASHIER /
+   *  SALES_LEAD also need it for the POS Terminal header buttons. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+         'CASHIER', 'SALES_LEAD', 'GENERAL_EMPLOYEE',
+         'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD',
+         'BOOKKEEPER', 'ACCOUNTANT', 'PAYROLL_MASTER',
+         'EXTERNAL_AUDITOR', 'KIOSK_DISPLAY')
   @Get()
   getLayout(@CurrentUser() user: JwtPayload) {
     return this.layouts.getLayout(user.tenantId!);

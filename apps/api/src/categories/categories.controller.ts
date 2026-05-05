@@ -6,6 +6,8 @@ import {
   Delete,
   Body,
   Param,
+  HttpCode,
+  HttpStatus,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -35,10 +37,23 @@ export class CategoriesController {
     return this.categoriesService.findOne(user.tenantId!, id);
   }
 
-  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER')
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateCategoryDto) {
     return this.categoriesService.create(user.tenantId!, dto);
+  }
+
+  /**
+   * One-click "Set up coffee shop menu" — seeds 15 standard categories
+   * and auto-routes them to the tenant's existing stations (Bar gets
+   * drinks, Kitchen gets hot food, Pastry Pass gets bakery, Counter
+   * handles retail). Idempotent. OWNER + MDM only.
+   */
+  @Roles('BUSINESS_OWNER', 'MDM')
+  @Post('seed-coffee-shop-defaults')
+  @HttpCode(HttpStatus.OK)
+  seedCoffeeShopDefaults(@CurrentUser() user: JwtPayload) {
+    return this.categoriesService.seedCoffeeShopDefaults(user.tenantId!);
   }
 
   @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER')

@@ -146,6 +146,24 @@ export class AdminController {
     return this.svc.seedCoffeeShopIngredients(id, actor(req));
   }
 
+  /**
+   * Seed the master coffee-shop CATEGORY catalogue + auto-route to stations.
+   *
+   * Creates 15 standard menu categories (Hot Coffee, Cold Coffee, Pastries,
+   * Sandwiches, Mains, etc.) and links each to the right station based on
+   * the tenant's existing floor layout — Bar gets drinks, Kitchen gets hot
+   * food, Pastry Pass gets pre-made bakery, Counter handles retail.
+   * Idempotent: re-runs only fix unrouted categories.
+   */
+  @Post('tenants/:id/seed-coffee-shop-categories')
+  @HttpCode(HttpStatus.OK)
+  seedCoffeeShopCategories(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+  ) {
+    return this.svc.seedCoffeeShopCategories(id, actor(req));
+  }
+
   @Post('tenants/:id/reset-demo')
   @HttpCode(HttpStatus.OK)
   resetDemo(

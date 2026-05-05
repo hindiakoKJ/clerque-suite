@@ -29,8 +29,13 @@ export class ProductsController {
   findAll(
     @CurrentUser() user: JwtPayload,
     @Query('includeInactive') includeInactive?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.productsService.findAll(user.tenantId!, includeInactive === 'true');
+    return this.productsService.findAll(
+      user.tenantId!,
+      includeInactive === 'true',
+      branchId ?? user.branchId ?? undefined,
+    );
   }
 
   @Get('pos')

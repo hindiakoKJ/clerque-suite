@@ -193,24 +193,23 @@ export const COFFEE_SHOP_LAYOUTS: Record<CoffeeShopTier, CoffeeShopLayoutTemplat
   CS_5: {
     tier: 'CS_5',
     name: 'Multi-Station Chain',
-    tagline: 'High-volume operation. Hot/cold drinks split, kitchen, pastry pass.',
+    tagline: 'High-volume operation. One bar, kitchen, pastry pass.',
     examples: ['McCafé', 'Starbucks Reserve', 'hotel cafés', 'mall food court chains'],
     cashierTablets: 3,
     hasCustomerDisplay: true,
     multiTerminal: true,
     queueStrategy: 'SHARED_FIFO',
+    // CS_5 used to split BAR into HOT_BAR + COLD_BAR, but most operators
+    // run one bar with two baristas working off the same queue. We collapsed
+    // to a single BAR station for a simpler operating model — the shared FIFO
+    // queue still handles the volume, and adding a second physical station
+    // is a hardware concern (a second tablet pointed at the same /pos/station/<bar>
+    // URL) rather than a separate Station entity.
     stations: [
       {
-        kind: 'HOT_BAR',
-        defaultName: 'Hot Bar',
-        defaultCategories: ['Hot Coffee', 'Specialty', 'Tea'],
-        hasKds: true,
-        hasPrinter: true,
-      },
-      {
-        kind: 'COLD_BAR',
-        defaultName: 'Cold Bar',
-        defaultCategories: ['Cold Coffee', 'Frappes', 'Iced Drinks'],
+        kind: 'BAR',
+        defaultName: 'Bar',
+        defaultCategories: ['Hot Coffee', 'Cold Coffee', 'Specialty', 'Tea', 'Frappes', 'Iced Drinks'],
         hasKds: true,
         hasPrinter: true,
       },

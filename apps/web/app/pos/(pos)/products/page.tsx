@@ -34,6 +34,10 @@ interface Product {
   inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
   bomItems?: Array<{ rawMaterialId: string; quantity: number; rawMaterial?: { id: string; name: string; unit: string } }>;
   imageUrl?: string | null;
+  // Server-computed: branch-scoped stock. For UNIT_BASED = InventoryItem.quantity.
+  // For RECIPE_BASED = floor(min(rawMatStock / bomQty)) across all BOM lines.
+  stockQty?: number | null;
+  isLowStock?: boolean;
 }
 
 const EMPTY_FORM = {
@@ -90,9 +94,11 @@ export default function ProductsPage() {
   const userBranchId = user?.branchId ?? '';
 
   const { data: products = [], isLoading } = useQuery<Product[]>({
-    queryKey: ['products', showInactive],
+    queryKey: ['products', showInactive, userBranchId],
     queryFn: () =>
-      api.get(`/products?includeInactive=${showInactive}`).then((r) => r.data),
+      api.get(`/products`, {
+        params: { includeInactive: showInactive ? 'true' : 'false', branchId: userBranchId || undefined },
+      }).then((r) => r.data),
     enabled: !!user,
     staleTime: 30_000,
   });
@@ -368,6 +374,37 @@ export default function ProductsPage() {
           </button>
           {canManage && (
             <>
+              {isFnb && (
+                <button
+                  onClick={async () => {
+                    if (!window.confirm(
+                      'Set up the standard coffee-shop menu?\n\n' +
+                      'This creates 15 default categories (Hot Coffee, Cold Coffee, Pastries, Sandwiches, Mains, etc.) ' +
+                      'and routes each to the right station based on your floor layout (Bar, Kitchen, Pastry Pass).\n\n' +
+                      'Existing categories with the same name will be left alone — only missing ones are added. ' +
+                      'You can rename, reorder, or delete any of them after.',
+                    )) return;
+                    try {
+                      const { data } = await api.post('/categories/seed-coffee-shop-defaults');
+                      await qc.invalidateQueries({ queryKey: ['categories'] });
+                      const stationLine = data.stations.length === 0
+                        ? '\nWarning: no stations configured yet — categories were created without routing. Configure your floor layout in Settings to enable station routing.'
+                        : '';
+                      toast.success(
+                        `Menu setup complete: ${data.created} created, ${data.updated} routing-fixed, ${data.skipped} skipped.${stationLine}`,
+                        { duration: 6000 },
+                      );
+                    } catch (err: any) {
+                      toast.error(err?.response?.data?.message ?? 'Could not seed the menu');
+                    }
+                  }}
+                  className="flex items-center gap-1.5 text-xs border border-border bg-background text-foreground hover:bg-muted rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
+                  title="One-click: create 15 standard café categories and auto-route them to your stations"
+                >
+                  <FlaskConical className="h-3.5 w-3.5" />
+                  Setup Menu
+                </button>
+              )}
               <button
                 onClick={() => setShowSetupPack(true)}
                 className="flex items-center gap-1.5 text-xs border border-border bg-background text-foreground hover:bg-muted rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
@@ -448,9 +485,30 @@ export default function ProductsPage() {
                     <td className="px-4 py-3 text-right text-muted-foreground">
                       {p.costPrice != null ? formatPeso(Number(p.costPrice)) : '—'}
                     </td>
-                    {/* Stock — joined from inventory query above */}
+                    {/* Stock — server-computed.
+                        UNIT_BASED → InventoryItem.quantity at this branch.
+                        RECIPE_BASED → max producible from BOM × ingredient stock. */}
                     <td className="px-4 py-3 text-right tabular-nums">
                       {(() => {
+                        // Prefer the server-side computed value (handles RECIPE_BASED correctly).
+                        if (p.stockQty != null) {
+                          const isRecipe = p.inventoryMode === 'RECIPE_BASED';
+                          const isLow = !!p.isLowStock;
+                          return (
+                            <div className="flex items-center justify-end gap-1.5">
+                              {isLow && <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                              <span className={`font-semibold ${isLow ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
+                                {p.stockQty}
+                              </span>
+                              {isRecipe && (
+                                <span className="text-[10px] text-muted-foreground" title="Computed from ingredient stock × recipe">
+                                  max
+                                </span>
+                              )}
+                            </div>
+                          );
+                        }
+                        // Fallback to the older inventory join (defensive)
                         const stock = stockByProductId[p.id];
                         if (!stock) return <span className="text-muted-foreground/40 text-xs">—</span>;
                         return (

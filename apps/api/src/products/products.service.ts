@@ -15,15 +15,84 @@ export { CreateProductDto, UpdateProductDto, CreateVariantDto, CreateBomItemDto 
 export class ProductsService {
   constructor(private prisma: PrismaService) {}
 
-  findAll(tenantId: string, includeInactive = false) {
-    return this.prisma.product.findMany({
+  /**
+   * Management list — used by /pos/products page.
+   *
+   * For UNIT_BASED products: stock = InventoryItem.quantity at the branch.
+   * For RECIPE_BASED products: stock = maxProducible = MIN(rawMatStock / bom.qty)
+   *   across all BOM lines. Same derivation as findForPos() so the management
+   *   table and the cashier terminal agree on what's sellable.
+   *
+   * branchId is optional — when omitted, stock is null (mostly for accountants
+   * / multi-branch supervisors who don't have a branch context).
+   */
+  async findAll(tenantId: string, includeInactive = false, branchId?: string) {
+    const products = await this.prisma.product.findMany({
       where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
       include: {
         category:       { select: { id: true, name: true } },
         variants:       { where: { isActive: true } },
         unitOfMeasure:  { select: { id: true, name: true, abbreviation: true } },
+        inventory:      branchId
+          ? { where: { branchId }, select: { quantity: true, lowStockAlert: true } }
+          : false,
+        bomItems:       { select: { rawMaterialId: true, quantity: true } },
       },
       orderBy: { name: 'asc' },
+    });
+
+    // Pre-load raw-material stock map for any RECIPE_BASED products.
+    let rmStockMap = new Map<string, number>();
+    if (branchId) {
+      const allRmIds = new Set<string>();
+      for (const p of products) {
+        if (p.inventoryMode === 'RECIPE_BASED') {
+          for (const b of p.bomItems) allRmIds.add(b.rawMaterialId);
+        }
+      }
+      if (allRmIds.size > 0) {
+        const rows = await this.prisma.rawMaterialInventory.findMany({
+          where: { branchId, rawMaterialId: { in: Array.from(allRmIds) } },
+          select: { rawMaterialId: true, quantity: true },
+        });
+        rmStockMap = new Map(rows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+      }
+    }
+
+    return products.map((p) => {
+      let stockQty: number | null = null;
+      if (branchId) {
+        if (p.inventoryMode === 'RECIPE_BASED') {
+          if (p.bomItems.length === 0) {
+            stockQty = 0;
+          } else {
+            let min = Number.POSITIVE_INFINITY;
+            for (const bom of p.bomItems) {
+              const stock = rmStockMap.get(bom.rawMaterialId) ?? 0;
+              const perUnit = Number(bom.quantity);
+              if (perUnit <= 0) continue;
+              const producible = Math.floor(stock / perUnit);
+              if (producible < min) min = producible;
+            }
+            stockQty = min === Number.POSITIVE_INFINITY ? 0 : min;
+          }
+        } else {
+          // UNIT_BASED — direct branch inventory
+          const inv = (p as { inventory?: { quantity: unknown }[] }).inventory?.[0];
+          stockQty = inv ? Number(inv.quantity) : null;
+        }
+      }
+      const lowStockAlert = (p as { inventory?: { lowStockAlert: unknown }[] }).inventory?.[0]?.lowStockAlert;
+      const lowAlert = lowStockAlert != null ? Number(lowStockAlert) : null;
+      const isLowStock =
+        stockQty != null &&
+        ((lowAlert != null && stockQty <= lowAlert) ||
+         (lowAlert == null && p.inventoryMode === 'RECIPE_BASED' && stockQty <= 5));
+
+      // Strip the bomItems from the response (frontend doesn't need them here)
+      // and merge in derived fields.
+      const { bomItems: _bom, inventory: _inv, ...rest } = p as { bomItems: unknown; inventory: unknown };
+      return { ...rest, stockQty, isLowStock };
     });
   }
 

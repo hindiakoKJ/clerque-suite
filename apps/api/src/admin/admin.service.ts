@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_APP_ACCESS } from '@repo/shared-types';
 import { DEMO_SCENARIOS, ScenarioKey, allProducts } from './demo-scenarios';
 import { COFFEE_SHOP_INGREDIENTS } from './coffee-shop-ingredients';
+import { COFFEE_SHOP_CATEGORIES } from './coffee-shop-categories';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -973,6 +974,103 @@ export class AdminService {
       created,
       skipped,
       total: COFFEE_SHOP_INGREDIENTS.length,
+    };
+  }
+
+  /**
+   * Seed the master coffee-shop category catalogue onto a tenant.
+   *
+   * Creates 15 standard categories (Hot Coffee, Cold Coffee, Pastries, etc.)
+   * and AUTO-ROUTES each to the right station based on the category's
+   * preferredKind:
+   *   - Drinks  → first BAR station
+   *   - Hot food → first KITCHEN station
+   *   - Pre-made → first PASTRY_PASS station (falls back to BAR if none)
+   *   - Retail   → no station (sells from counter, no prep ticket)
+   *
+   * Idempotent — categories that already exist by name are skipped, but the
+   * stationId on existing categories WILL be updated if it's currently null
+   * (so re-running fixes any unrouted categories).
+   */
+  async seedCoffeeShopCategories(tenantId: string, actor: ConsoleActor) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { id: true, slug: true },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+
+    const stations = await this.prisma.station.findMany({
+      where:  { tenantId },
+      select: { id: true, kind: true, name: true },
+    });
+    // Pick the first station of each kind. Fallbacks: pre-made → bar if no
+    // pastry pass exists; retail → null (no ticket needed).
+    const firstByKind = (k: string) => stations.find((s) => s.kind === k)?.id ?? null;
+    const stationIdFor = (preferredKind: string): string | null => {
+      if (preferredKind === 'BAR')         return firstByKind('BAR') ?? firstByKind('HOT_BAR') ?? firstByKind('COLD_BAR');
+      if (preferredKind === 'KITCHEN')     return firstByKind('KITCHEN');
+      if (preferredKind === 'PASTRY_PASS') return firstByKind('PASTRY_PASS') ?? firstByKind('BAR');
+      if (preferredKind === 'COUNTER')     return firstByKind('COUNTER');
+      return null;
+    };
+
+    const existing = await this.prisma.category.findMany({
+      where:  { tenantId },
+      select: { id: true, name: true, stationId: true },
+    });
+    const byName = new Map<string, { id: string; stationId: string | null }>(
+      existing.map((c) => [c.name.toLowerCase(), { id: c.id, stationId: c.stationId }]),
+    );
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    for (const seed of COFFEE_SHOP_CATEGORIES) {
+      const target = stationIdFor(seed.preferredKind);
+      const found = byName.get(seed.name.toLowerCase());
+      if (found) {
+        // If the existing category has no station and we found a match, fix it.
+        if (!found.stationId && target) {
+          await this.prisma.category.update({
+            where: { id: found.id },
+            data:  { stationId: target },
+          });
+          updated++;
+        } else {
+          skipped++;
+        }
+        continue;
+      }
+      try {
+        await this.prisma.category.create({
+          data: {
+            tenantId,
+            name:        seed.name,
+            description: seed.description,
+            sortOrder:   seed.sortOrder,
+            stationId:   target,
+            isActive:    true,
+          },
+        });
+        created++;
+      } catch (err) {
+        this.logger.warn(`Skipping category ${seed.name} due to error: ${err}`);
+        skipped++;
+      }
+    }
+
+    this.logger.log(
+      `Seeded coffee-shop categories on tenant ${tenant.slug} (${tenantId}): ` +
+      `${created} created, ${updated} routing-fixed, ${skipped} skipped, by ${actor.email}`,
+    );
+
+    return {
+      tenantSlug: tenant.slug,
+      created,
+      updated,
+      skipped,
+      total:    COFFEE_SHOP_CATEGORIES.length,
+      stations: stations.map((s) => ({ id: s.id, kind: s.kind, name: s.name })),
     };
   }
 

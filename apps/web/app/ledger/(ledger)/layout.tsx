@@ -56,6 +56,24 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
   const isBirRegistered = user?.isBirRegistered ?? false;
   const role           = user?.role;
 
+  // ── App-level guard ────────────────────────────────────────────────────────
+  // Roles with no Ledger-app access (KIOSK_DISPLAY, GENERAL_EMPLOYEE,
+  // CASHIER, etc.) should never see this layout. Without this guard, hitting
+  // /ledger/* directly would render the page with an empty sidebar.
+  useEffect(() => {
+    if (!user) return;
+    const ledgerAccess = user.appAccess.find((a) => a.app === 'LEDGER');
+    const hasLedger =
+      ledgerAccess && ledgerAccess.level !== 'NONE';
+    if (!hasLedger) {
+      if (user.role === 'KIOSK_DISPLAY') {
+        router.replace('/pos/select-display');
+      } else {
+        router.replace('/select');
+      }
+    }
+  }, [user, router]);
+
   // Set accent on <html> so Radix Dialog portals (rendered at document.body)
   // also inherit the correct --accent value.
   useEffect(() => {

@@ -105,6 +105,13 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!hydrated || !user) return;
     const r = user.role;
+    // KIOSK_DISPLAY accounts have no business in the cashier shell at all —
+    // they belong on the station picker. Catch them BEFORE the smart-landing
+    // logic so we don't fall through to "no accessible page" stuck state.
+    if (r === 'KIOSK_DISPLAY') {
+      router.replace('/pos/select-display');
+      return;
+    }
     if (
       (pathname === '/pos/terminal' || pathname === '/pos') &&
       !inRoles(r, TERMINAL_ROLES)

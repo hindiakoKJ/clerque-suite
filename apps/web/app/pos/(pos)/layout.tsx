@@ -294,7 +294,8 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       <AppShell
         navItems={navItems}
         logoIcon={ShoppingCart}
-        appName={`Counter · ${roleLabel}`}
+        appName="Counter"
+        roleLabel={roleLabel}
         headerRight={headerRight}
         sidebarExtra={<ClockWidget />}
         helpHref="/pos/help"

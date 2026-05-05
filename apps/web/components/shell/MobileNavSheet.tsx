@@ -12,6 +12,8 @@ interface MobileNavSheetProps {
   logoIcon: React.ElementType;
   appName: string;
   brandName?: string;
+  /** Pill badge — Admin / Cashier / etc. Always visible at the top of the sheet. */
+  roleLabel?: string;
   /** Optional Help & Guide route (per-app). Renders link in the footer when set. */
   helpHref?: string;
   onSignOut?: () => void;
@@ -19,7 +21,7 @@ interface MobileNavSheetProps {
 
 export function MobileNavSheet({
   open, onClose, children, logoIcon: LogoIcon, appName, brandName = 'Clerque',
-  helpHref, onSignOut,
+  roleLabel, helpHref, onSignOut,
 }: MobileNavSheetProps) {
   const user = useAuthStore((s) => s.user);
 
@@ -36,19 +38,30 @@ export function MobileNavSheet({
           className="fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border flex flex-col md:hidden outline-none"
         >
           {/* Header */}
-          <div className="h-14 flex items-center justify-between px-4 border-b border-border shrink-0">
-            <div className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
-                <LogoIcon className="h-4 w-4 text-white" />
+          <div className="px-4 py-2 border-b border-border shrink-0 flex items-start justify-between gap-2">
+            <div className="flex flex-col gap-1.5 min-w-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
+                  <LogoIcon className="h-4 w-4 text-white" />
+                </div>
+                <div className="flex items-baseline gap-1.5 min-w-0">
+                  <span className="font-semibold text-sm tracking-tight text-foreground whitespace-nowrap">{brandName}</span>
+                  <span className="text-muted-foreground text-sm">·</span>
+                  <span className="font-semibold text-sm tracking-tight whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
+                </div>
               </div>
-              <div className="flex items-baseline gap-1.5">
-                <span className="font-semibold text-sm tracking-tight text-foreground">{brandName}</span>
-                <span className="text-muted-foreground text-sm">·</span>
-                <span className="font-semibold text-sm tracking-tight" style={{ color: 'var(--accent)' }}>{appName}</span>
-              </div>
+              {/* Role badge — always visible. */}
+              {roleLabel && (
+                <span
+                  className="self-start inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full text-white whitespace-nowrap"
+                  style={{ background: 'var(--accent)' }}
+                >
+                  {roleLabel}
+                </span>
+              )}
             </div>
             <Dialog.Close asChild>
-              <button className="p-1.5 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
+              <button className="p-1.5 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0 mt-0.5">
                 <X className="h-4 w-4" />
                 <span className="sr-only">Close menu</span>
               </button>

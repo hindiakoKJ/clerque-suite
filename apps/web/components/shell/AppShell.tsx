@@ -38,6 +38,13 @@ interface AppShellProps {
   logoIcon: React.ElementType;
   appName: string;
   brandName?: string;
+  /**
+   * Optional secondary label rendered as a pill badge next to the app name
+   * (e.g. "Admin" / "Cashier"). Always visible — never truncated — across
+   * desktop sidebar, collapsed sidebar, and mobile top bar. Used by the POS
+   * to show whose seat the screen is in (admin vs cashier vs supervisor).
+   */
+  roleLabel?: string;
   headerRight?: React.ReactNode;
   /**
    * Custom widget rendered in the empty space between the nav items and
@@ -61,6 +68,7 @@ export function AppShell({
   logoIcon: LogoIcon,
   appName,
   brandName = 'Clerque',  // "Clerque Counter", "Clerque Ledger", "Clerque Sync"
+  roleLabel,
   headerRight,
   sidebarExtra,
   helpHref,
@@ -177,16 +185,32 @@ export function AppShell({
           collapsed ? 'w-16' : 'w-56',
         )}
       >
-        <div className={cn('h-14 flex items-center border-b border-border shrink-0', collapsed ? 'justify-center px-2' : 'px-4 gap-2.5')}>
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
-            <LogoIcon className="h-4 w-4 text-white" />
-          </div>
-          {!collapsed && (
-            <div className="flex items-baseline gap-1.5 min-w-0 overflow-hidden">
-              <span className="font-semibold text-sm tracking-tight text-foreground whitespace-nowrap">{brandName}</span>
-              <span className="text-muted-foreground text-sm">·</span>
-              <span className="font-semibold text-sm tracking-tight whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
+        <div className={cn(
+          'border-b border-border shrink-0',
+          collapsed ? 'h-14 flex items-center justify-center px-2' : 'px-3 py-2 flex flex-col gap-1.5',
+        )}>
+          <div className={cn('flex items-center gap-2.5', collapsed ? '' : 'min-w-0')}>
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
+              <LogoIcon className="h-4 w-4 text-white" />
             </div>
+            {!collapsed && (
+              <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
+                <span className="font-semibold text-sm tracking-tight text-foreground whitespace-nowrap">{brandName}</span>
+                <span className="text-muted-foreground text-sm">·</span>
+                <span className="font-semibold text-sm tracking-tight whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
+              </div>
+            )}
+          </div>
+          {/* Role badge — always visible on its own line so it never gets clipped
+              regardless of sidebar width. Hidden when sidebar is collapsed (icon
+              only); the mobile top bar carries it on small screens. */}
+          {!collapsed && roleLabel && (
+            <span
+              className="self-start inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full text-white whitespace-nowrap"
+              style={{ background: 'var(--accent)' }}
+            >
+              {roleLabel}
+            </span>
           )}
         </div>
 
@@ -262,15 +286,23 @@ export function AppShell({
       {/* Main column */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         <header className="h-14 bg-card/60 backdrop-blur-sm border-b border-border flex items-center justify-between px-4 shrink-0">
-          <div className="flex items-center gap-3 md:hidden">
-            <button onClick={() => setMobileOpen(true)} className="p-1.5 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
+          <div className="flex items-center gap-2 md:hidden min-w-0">
+            <button onClick={() => setMobileOpen(true)} className="p-1.5 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0">
               <Menu className="h-5 w-5" />
             </button>
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: 'var(--accent)' }}>
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
                 <LogoIcon className="h-3.5 w-3.5 text-white" />
               </div>
-              <span className="font-semibold text-sm" style={{ color: 'var(--accent)' }}>{appName}</span>
+              <span className="font-semibold text-sm whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
+              {roleLabel && (
+                <span
+                  className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full text-white whitespace-nowrap shrink-0"
+                  style={{ background: 'var(--accent)' }}
+                >
+                  {roleLabel}
+                </span>
+              )}
             </div>
           </div>
           <div className="hidden md:block" />
@@ -291,7 +323,7 @@ export function AppShell({
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
 
-      <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName} helpHref={helpHref} onSignOut={onSignOut}>
+      <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName} roleLabel={roleLabel} helpHref={helpHref} onSignOut={onSignOut}>
         <NavList onItemClick={() => setMobileOpen(false)} />
       </MobileNavSheet>
     </div>

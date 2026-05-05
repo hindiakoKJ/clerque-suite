@@ -324,12 +324,17 @@ export default function PosTerminal() {
     }
 
     try {
-      // Tight 3s timeout for the optimistic path: a fast network completes
-      // well under this; a stuck request falls through to the offline-save
-      // catch below, which queues the order locally and surfaces a "saved
-      // offline" receipt with a LOCAL- number. The cashier never stares at
-      // a frozen "Processing…" screen for more than a few seconds.
-      const { data: order } = await api.post('/orders', { order: orderPayload }, { timeout: 3000 });
+      // Order create is a heavy transaction on the backend (auth check,
+      // period lock, tax calc, inventory deduction, BOM drain with FIFO,
+      // SALE + COGS AccountingEvents). On Railway cold-starts + flaky PH
+      // internet it can legitimately take 8-15 seconds. The previous 3s
+      // timeout was way too tight: the order would actually succeed on
+      // the backend but the frontend gave up early, falling into the
+      // offline-save path and creating a duplicate that fails dedup
+      // when it tries to sync. 30s gives the heavy path comfortable
+      // headroom; truly-offline cases fail with ERR_NETWORK in <1s
+      // anyway and never wait the full timeout.
+      const { data: order } = await api.post('/orders', { order: orderPayload }, { timeout: 30000 });
       setShowPayment(false);
       setMobileCartOpen(false);
       setReceiptData({ ...receiptBase, orderId: order.id, orderNumber: order.orderNumber, isOffline: false });

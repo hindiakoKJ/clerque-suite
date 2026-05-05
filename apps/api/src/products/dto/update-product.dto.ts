@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -7,6 +8,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { INVENTORY_MODES } from './create-product.dto';
 
 export class UpdateProductDto {
   @IsOptional()
@@ -60,4 +62,15 @@ export class UpdateProductDto {
   @IsString()
   @MaxLength(2048)
   imageUrl?: string;
+
+  /**
+   * Toggle between UNIT_BASED (finished-goods inventory) and RECIPE_BASED
+   * (BOM-driven, derives stock from raw materials). Updating this on an
+   * existing product is allowed when the product's BOM is empty (UNIT_BASED)
+   * or has BOM entries (RECIPE_BASED) — the products.service handles the
+   * sync between this flag and bomItems independently.
+   */
+  @IsOptional()
+  @IsEnum(INVENTORY_MODES)
+  inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
 }

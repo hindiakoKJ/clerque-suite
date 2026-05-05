@@ -1271,6 +1271,16 @@ function CostingCard({
           <strong className="text-foreground">FIFO</strong>: oldest inventory consumed first. More
           accurate for perishables, required by some auditors. Both are PFRS-compliant.
         </p>
+        {!isLocked && (
+          <div className="flex gap-2 items-start rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
+              <strong>Choose carefully — this is set once.</strong> The valuation method locks
+              automatically the moment you post your first sale, per PFRS for SMEs §13. After that,
+              switching requires support intervention and a fiscal year-end cutover.
+            </p>
+          </div>
+        )}
         {isLocked ? (
           <p className="text-[11px] text-amber-600 leading-relaxed">
             Locked — first transaction posted on{' '}

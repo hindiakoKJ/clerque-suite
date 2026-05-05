@@ -62,9 +62,14 @@ const APPS: AppCard[] = [
 function routeForApp(
   app: AppCard,
   level: AccessLevel | 'NONE' | undefined,
+  role?: string,
 ): string {
   // Console (SUPER_ADMIN) → always /admin regardless of `id` shim
   if (app.name === 'Console') return '/admin';
+  // KIOSK_DISPLAY accounts skip the cashier terminal and go straight to a
+  // station picker — these tablets only run KDS or customer display, never
+  // the till. (Defense in depth: the terminal also enforces TERMINAL_ROLES.)
+  if (role === 'KIOSK_DISPLAY' && app.id === 'pos') return '/pos/select-display';
   if (app.id === 'payroll') {
     if (level === 'CLOCK_ONLY' || level === 'READ_ONLY') return '/payroll/clock';
     return '/payroll/dashboard';
@@ -121,7 +126,7 @@ export default function SelectPage() {
         .map((app) => {
           const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
           const level = user.appAccess.find((a) => a.app === code)?.level;
-          return { ...app, resolvedRoute: routeForApp(app, level) };
+          return { ...app, resolvedRoute: routeForApp(app, level, user.role) };
         })
     : [];
   const onlyApp = accessible.length === 1 ? accessible[0] : null;

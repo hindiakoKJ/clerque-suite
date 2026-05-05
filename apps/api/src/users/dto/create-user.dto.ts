@@ -15,9 +15,18 @@ export const STAFF_ROLES = [
   'BUSINESS_OWNER',
   'MDM',
   'BRANCH_MANAGER',
+  'SALES_LEAD',
   'ACCOUNTANT',
+  'BOOKKEEPER',
+  'FINANCE_LEAD',
+  'PAYROLL_MASTER',
+  'WAREHOUSE_STAFF',
   'CASHIER',
   'GENERAL_EMPLOYEE',
+  'EXTERNAL_AUDITOR',
+  // Service / Display Accounts — kiosk credentials, not real employees.
+  // No Payroll, no Ledger, no Terminal. Excluded from staff cap.
+  'KIOSK_DISPLAY',
 ] as const;
 
 export type StaffRole = (typeof STAFF_ROLES)[number];
@@ -39,7 +48,7 @@ export class CreateUserDto {
   @MaxLength(128)
   password: string;
 
-  @ApiProperty({ enum: ['BUSINESS_OWNER', 'MDM', 'BRANCH_MANAGER', 'ACCOUNTANT', 'CASHIER', 'GENERAL_EMPLOYEE'], example: 'CASHIER' })
+  @ApiProperty({ enum: STAFF_ROLES, example: 'CASHIER' })
   @IsEnum(STAFF_ROLES)
   role: StaffRole;
 

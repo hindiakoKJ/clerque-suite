@@ -31,6 +31,12 @@ export class TierQuotaGuard implements CanActivate {
     if (!user || user.isSuperAdmin) return true; // platform admins bypass
     if (!user.tenantId) return true;             // no tenant scope to check
 
+    // Service / display accounts (KIOSK_DISPLAY) don't take a staff seat —
+    // they're hardware credentials, not real headcount. Skip the quota check
+    // entirely when the role being created is one of these.
+    const newRole = (req.body?.role ?? '').toUpperCase();
+    if (newRole === 'KIOSK_DISPLAY') return true;
+
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: user.tenantId },
       select: { tier: true },
@@ -41,11 +47,13 @@ export class TierQuotaGuard implements CanActivate {
 
     // Count active non-owner staff. BUSINESS_OWNER is the tenant admin and
     // not subject to the cap (multiple co-owners allowed without taking seats).
+    // KIOSK_DISPLAY accounts are also excluded — they're not real employees,
+    // they're credentials for kiosk hardware (KDS tablets, customer displays).
     const currentCount = await this.prisma.user.count({
       where: {
         tenantId: user.tenantId,
         isActive: true,
-        role: { notIn: ['BUSINESS_OWNER', 'SUPER_ADMIN'] },
+        role: { notIn: ['BUSINESS_OWNER', 'SUPER_ADMIN', 'KIOSK_DISPLAY'] },
       },
     });
 

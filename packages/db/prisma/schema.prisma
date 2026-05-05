@@ -36,6 +36,13 @@ enum UserRole {
   ACCOUNTANT // Legacy — full ledger read; no payroll
   GENERAL_EMPLOYEE // Clock-in/out only
   EXTERNAL_AUDITOR // Read-only compliance view; no writes anywhere
+
+  // ── Service / Display Accounts ───────────────────────────────────────────────
+  // Not a real employee — a credential for kiosk hardware (KDS tablet,
+  // customer-facing display, secondary station view). Read/bump-only access
+  // to KDS + customer-display pages. NO Payroll app, NO Ledger app, NO Terminal.
+  // Does NOT count against the tenant's staff cap.
+  KIOSK_DISPLAY
 }
 
 /// Which application the access entry refers to

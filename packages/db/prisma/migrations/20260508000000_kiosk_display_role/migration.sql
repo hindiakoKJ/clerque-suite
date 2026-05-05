@@ -1,0 +1,12 @@
+-- Add KIOSK_DISPLAY service-account role to UserRole enum.
+--
+-- Used for kiosk hardware credentials (Bar KDS tablet, Kitchen KDS tablet,
+-- Customer Display tablet). NOT a real employee role:
+--   - No Payroll app access (no clock-in, no payslip, no expenses)
+--   - No Ledger app access
+--   - No cashier Terminal access
+--   - Excluded from the tenant's tier staff-count cap (TierQuotaGuard)
+--   - Allowed: KDS view + bump (Ready) + serve, Customer Display view
+--
+-- Idempotent — IF NOT EXISTS guard makes re-runs safe.
+ALTER TYPE "UserRole" ADD VALUE IF NOT EXISTS 'KIOSK_DISPLAY';

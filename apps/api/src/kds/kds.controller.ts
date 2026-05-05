@@ -28,7 +28,8 @@ export class KdsController {
 
   /** Pending + recently-bumped items for one station. KDS polls every ~3s. */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER',
-         'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'MDM', 'WAREHOUSE_STAFF')
+         'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'MDM', 'WAREHOUSE_STAFF',
+         'KIOSK_DISPLAY')
   @Get('stations/:id/queue')
   listQueue(@CurrentUser() user: JwtPayload, @Param('id') stationId: string) {
     return this.kds.listStationQueue(user.tenantId!, stationId);
@@ -36,7 +37,8 @@ export class KdsController {
 
   /** Bump an item to READY. */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER',
-         'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'MDM', 'WAREHOUSE_STAFF')
+         'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'MDM', 'WAREHOUSE_STAFF',
+         'KIOSK_DISPLAY')
   @Post('items/:id/bump')
   @HttpCode(HttpStatus.OK)
   bump(@CurrentUser() user: JwtPayload, @Param('id') orderItemId: string) {
@@ -45,7 +47,7 @@ export class KdsController {
 
   /** Mark an item served. */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER',
-         'SUPER_ADMIN', 'GENERAL_EMPLOYEE')
+         'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'KIOSK_DISPLAY')
   @Post('items/:id/serve')
   @HttpCode(HttpStatus.OK)
   serve(@CurrentUser() user: JwtPayload, @Param('id') orderItemId: string) {

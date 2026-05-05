@@ -13,7 +13,8 @@ type StaffRole =
   | 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'SALES_LEAD'
   | 'CASHIER' | 'MDM' | 'WAREHOUSE_STAFF'
   | 'FINANCE_LEAD' | 'BOOKKEEPER' | 'ACCOUNTANT'
-  | 'PAYROLL_MASTER' | 'GENERAL_EMPLOYEE' | 'EXTERNAL_AUDITOR';
+  | 'PAYROLL_MASTER' | 'GENERAL_EMPLOYEE' | 'EXTERNAL_AUDITOR'
+  | 'KIOSK_DISPLAY';
 
 interface Branch { id: string; name: string; }
 interface StaffMember {
@@ -44,6 +45,7 @@ const ROLES: { value: StaffRole; label: string; access: string }[] = [
   { value: 'PAYROLL_MASTER',   label: 'Payroll Master',      access: 'Payroll runs and salary data. Cannot access POS or Ledger.' },
   { value: 'GENERAL_EMPLOYEE', label: 'General Employee',    access: 'Clock-in/out only. No POS or Ledger access.' },
   { value: 'EXTERNAL_AUDITOR', label: 'External Auditor',    access: 'Read-only compliance view across all modules. Zero write access.' },
+  { value: 'KIOSK_DISPLAY',    label: 'Display / Kiosk',     access: 'For Bar / Kitchen / Customer Display tablets. KDS view + bump only. No till, no Payroll. Doesn\'t count against staff cap.' },
 ];
 
 const ROLE_COLORS: Partial<Record<StaffRole, string>> = {
@@ -59,6 +61,7 @@ const ROLE_COLORS: Partial<Record<StaffRole, string>> = {
   PAYROLL_MASTER:   'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
   GENERAL_EMPLOYEE: 'bg-secondary text-secondary-foreground',
   EXTERNAL_AUDITOR: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
+  KIOSK_DISPLAY:    'bg-slate-500/10 text-slate-600 dark:text-slate-400',
 };
 
 const EMPTY_CREATE = {

@@ -18,7 +18,11 @@ export type UserRole =
   | 'PAYROLL_MASTER'   // Salaries / payroll; exclusive salary column access
   | 'ACCOUNTANT'       // Legacy — full ledger read
   | 'GENERAL_EMPLOYEE'
-  | 'EXTERNAL_AUDITOR';
+  | 'EXTERNAL_AUDITOR'
+  // Service / Display Accounts — credentials for kiosk hardware (KDS, customer
+  // display). NOT real employees. No Payroll, no Ledger, no Terminal access.
+  // Excluded from staff cap.
+  | 'KIOSK_DISPLAY';
 
 /* ─── App access ─────────────────────────────────────────────────────────── */
 
@@ -69,6 +73,9 @@ export const DEFAULT_APP_ACCESS: Record<UserRole, AppAccessEntry[]> = {
   ACCOUNTANT:        [{ app: 'POS', level: 'NONE' },      { app: 'LEDGER', level: 'FULL' },      { app: 'PAYROLL', level: 'CLOCK_ONLY' }],
   GENERAL_EMPLOYEE:  [{ app: 'POS', level: 'NONE' },      { app: 'LEDGER', level: 'NONE' },      { app: 'PAYROLL', level: 'CLOCK_ONLY' }],
   EXTERNAL_AUDITOR:  [{ app: 'POS', level: 'READ_ONLY' }, { app: 'LEDGER', level: 'READ_ONLY' }, { app: 'PAYROLL', level: 'NONE' }],
+  // KIOSK_DISPLAY: POS only (read + KDS bump/serve). NO Ledger, NO Payroll —
+  // these tablets aren't real employees, they're hardware credentials.
+  KIOSK_DISPLAY:     [{ app: 'POS', level: 'OPERATOR' },  { app: 'LEDGER', level: 'NONE' },      { app: 'PAYROLL', level: 'NONE' }],
 };
 
 /* ─── JWT ────────────────────────────────────────────────────────────────── */

@@ -75,7 +75,8 @@ enum BusinessType {
   CATERING // Catering / events food service
   // ── Non-F&B ──────────────────────────────────────────────────────────────
   RETAIL // Convenience store, boutique, product-based shop
-  SERVICE // Salon, clinic, laundry, repair, any service-based
+  SERVICE // Salon, clinic, repair, any generic service-based
+  LAUNDRY // Laundromat / wash-dry-fold / dry-clean — first-class vertical
   MANUFACTURING // Fabrication, construction, BOM / bill-of-materials workflows
 }
 
@@ -433,6 +434,7 @@ model Tenant {
   notifications       Notification[]
   bankReconciliations BankReconciliation[]
   journalTemplates    JournalTemplate[]
+  laundryOrders       LaundryOrder[]
   /// Per-tenant tunable severity thresholds for the Ledger ops dashboard.
   /// JSON shape (keys all numbers, optional):
   ///   { eventLagWarnMs, eventLagBadMs, pendingEventsWarn, failedEventsWarn,
@@ -456,7 +458,7 @@ model Tenant {
   /// utilities & rent as Operating Expenses, not COGS, per PFRS for SMEs).
   /// Set this when the tenant manufactures finished goods and needs full
   /// absorption costing (Direct Materials + Direct Labor + MOH = COGS).
-  overheadRatePerUnit Decimal?            @db.Decimal(10, 4)
+  overheadRatePerUnit Decimal?                 @db.Decimal(10, 4)
   /// Optional customer-facing display toggle — meaningful only for CS_1
   /// (where the canonical setup has no customer display). Other tiers have
   /// it included by definition; this flag is ignored for them.
@@ -576,15 +578,16 @@ model Branch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  users      User[]
-  inventory  InventoryItem[]
-  orders     Order[]
-  shifts     Shift[]
-  arInvoices ARInvoice[]
-  arPayments ARPayment[]
-  apBills    APBill[]
-  apPayments APPayment[]
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users         User[]
+  inventory     InventoryItem[]
+  orders        Order[]
+  shifts        Shift[]
+  arInvoices    ARInvoice[]
+  arPayments    ARPayment[]
+  apBills       APBill[]
+  apPayments    APPayment[]
+  laundryOrders LaundryOrder[]
 
   @@map("branches")
 }
@@ -1070,6 +1073,7 @@ model Order {
   payments         OrderPayment[]
   discounts        OrderDiscount[]
   accountingEvents AccountingEvent[]
+  laundryOrder     LaundryOrder?
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId, createdAt])
@@ -1105,11 +1109,11 @@ model OrderItem {
   /// Sprint 5 — KDS state machine for kitchen/bar stations.
   /// PENDING (default) → READY (bumped by chef/barista) → SERVED (delivered).
   /// Only meaningful when the parent product's category routes to a station.
-  prepStatus     PrepStatus  @default(PENDING)
+  prepStatus PrepStatus @default(PENDING)
   /// When the station bumped this item to READY (audit + lead-time analytics).
-  readyAt        DateTime?
+  readyAt    DateTime?
   /// When the runner/cashier marked it as delivered.
-  servedAt       DateTime?
+  servedAt   DateTime?
 
   order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product   Product             @relation(fields: [productId], references: [id])
@@ -1801,10 +1805,11 @@ model Customer {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  orders   Order[]
-  invoices ARInvoice[]
-  payments ARPayment[]
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders        Order[]
+  invoices      ARInvoice[]
+  payments      ARPayment[]
+  laundryOrders LaundryOrder[]
 
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
@@ -2648,43 +2653,123 @@ model Terminal {
 
 /**
  * A discrete supplier-delivery lot of a raw material.
- *
  * Created on every successful `receiveRawMaterial` call regardless of the
  * tenant's valuation method (WAC or FIFO) — this keeps the data model
  * future-proof and lets a tenant inspect "how much of this delivery is left".
- *
  * For tenants on FIFO, the orders.service consumes lots in receivedAt order
  * (oldest-first) and sums their costs for COGS. For WAC tenants, lots are
  * audit-only — the running average cost on RawMaterial.costPrice still
  * drives COGS.
- *
  * qtyRemaining is decremented atomically as orders consume the lot; when
  * it hits zero the lot stays in the table (audit trail) but is skipped
  * during FIFO traversal.
  */
 model RawMaterialLot {
-  id              String      @id @default(cuid())
+  id              String   @id @default(cuid())
   tenantId        String
   branchId        String
   rawMaterialId   String
   /// Original delivery quantity in the ingredient's unit (g, ml, pc, ...)
-  qtyReceived     Decimal     @db.Decimal(12, 4)
+  qtyReceived     Decimal  @db.Decimal(12, 4)
   /// Remaining quantity — drained by FIFO consumption.
-  qtyRemaining    Decimal     @db.Decimal(12, 4)
+  qtyRemaining    Decimal  @db.Decimal(12, 4)
   /// Unit cost AT THE TIME of this delivery — frozen per lot for FIFO.
-  unitCost        Decimal     @db.Decimal(12, 4)
+  unitCost        Decimal  @db.Decimal(12, 4)
   /// Business-date of receipt (cashier-provided; respects period lock).
   receivedAt      DateTime
   /// Supplier reference (PO/DR/invoice no.) — purely audit metadata.
   referenceNumber String?
   /// CASH / CREDIT / OWNER_FUNDED — mirrored from the receipt for reporting.
   paymentMethod   String?
-  createdAt       DateTime    @default(now())
+  createdAt       DateTime @default(now())
 
-  rawMaterial     RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
 
   // FIFO consumes by oldest receivedAt; this composite index covers it.
   @@index([rawMaterialId, branchId, receivedAt])
   @@index([tenantId])
   @@map("raw_material_lots")
+}
+
+// ─── Laundry vertical (BusinessType.LAUNDRY) ─────────────────────────────────
+// First-class workflow for laundromat / wash-dry-fold / dry-clean tenants.
+// Decoupled from Order so the workflow status (RECEIVED → READY) can advance
+// independently of payment. On claim, a POS Order is created so the existing
+// OR / receipt / BIR compliance flow handles the financial side.
+
+enum LaundryServiceType {
+  WASH_FOLD
+  WASH_ONLY
+  DRY_ONLY
+  DRY_CLEAN
+  IRON_ONLY
+  FULL_SERVICE
+}
+
+enum LaundryPricingMode {
+  PER_KG
+  PER_LOAD
+  PER_PIECE
+  PER_GARMENT
+}
+
+enum LaundryOrderStatus {
+  RECEIVED
+  WASHING
+  DRYING
+  FOLDING
+  READY_FOR_PICKUP
+  CLAIMED
+  CANCELLED
+}
+
+model LaundryOrder {
+  id          String             @id @default(cuid())
+  tenantId    String
+  branchId    String
+  customerId  String? // optional walk-in
+  claimNumber String // CLA-2026-000001 (unique per tenant per year)
+  status      LaundryOrderStatus @default(RECEIVED)
+  serviceType LaundryServiceType
+  pricingMode LaundryPricingMode
+  weightKg    Decimal?           @db.Decimal(10, 3)
+  loadCount   Int?
+  pieceCount  Int?
+  unitPrice   Decimal            @db.Decimal(12, 2)
+  totalAmount Decimal            @db.Decimal(12, 2)
+  receivedAt  DateTime           @default(now())
+  promisedAt  DateTime?
+  readyAt     DateTime?
+  claimedAt   DateTime?
+  notes       String?
+  intakeBy    String // userId (creator)
+  releasedBy  String?
+  orderId     String?            @unique // POS Order created on claim
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch   Branch        @relation(fields: [branchId], references: [id])
+  customer Customer?     @relation(fields: [customerId], references: [id])
+  order    Order?        @relation(fields: [orderId], references: [id])
+  items    LaundryItem[]
+
+  @@unique([tenantId, claimNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, branchId, receivedAt])
+  @@map("laundry_orders")
+}
+
+model LaundryItem {
+  id          String  @id @default(cuid())
+  orderId     String
+  garmentType String // "shirt", "jeans", "blanket"
+  quantity    Int     @default(1)
+  condition   String? // intake checklist — "stained", "torn collar"
+  tagNumber   String? // optional physical tag pinned to garment
+
+  laundryOrder LaundryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("laundry_items")
 }

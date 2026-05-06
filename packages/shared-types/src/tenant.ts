@@ -47,6 +47,25 @@ export function isFnbType(businessType: string | null | undefined): boolean {
 }
 
 /**
+ * Laundry vertical — laundromat / wash-dry-fold / dry-clean shops.
+ *
+ * Unlocks the Laundry workflow surface:
+ *   • Intake form (kg/load/piece pricing modes)
+ *   • Workflow queue board (RECEIVED → WASHING → DRYING → FOLDING → READY)
+ *   • Claim ticket print at intake; OR print on claim
+ *   • Garment-level item tracking with intake condition checklist
+ *
+ * Laundry tenants do NOT see F&B features (recipes, modifiers, floor layout).
+ */
+export const LAUNDRY_BUSINESS_TYPES = ['LAUNDRY'] as const;
+
+export type LaundryBusinessType = (typeof LAUNDRY_BUSINESS_TYPES)[number];
+
+export function isLaundryType(businessType: string | null | undefined): boolean {
+  return (LAUNDRY_BUSINESS_TYPES as readonly string[]).includes(businessType ?? '');
+}
+
+/**
  * Accounting method:
  * - ACCRUAL: revenue/expense recognized when earned/incurred (standard for VAT-registered MSMEs)
  * - CASH: recognized when cash moves (simplified; backyard / non-registered businesses)

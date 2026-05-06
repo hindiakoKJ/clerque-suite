@@ -5,8 +5,10 @@ import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
+  Shirt, Sparkles,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { isLaundryType } from '@repo/shared-types';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { ClockWidget } from '@/components/pos/ClockWidget';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
@@ -50,6 +52,9 @@ const UOM_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
 const PROMOTIONS_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM', 'BRANCH_MANAGER'] as const;
 // Pending Sync is operational — only relevant to roles that create offline orders
 const PENDING_SYNC_ROLES = ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER'] as const;
+// Laundry workflow — same realistic crew of a small laundromat as the API guard.
+const LAUNDRY_OPS_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+                              'SALES_LEAD', 'CASHIER', 'GENERAL_EMPLOYEE', 'MDM'] as const;
 // My Expenses moved to /payroll/my-expenses — it's a personal-reimbursement
 // concept (HR territory), not a POS sale-floor concept. POS will instead get
 // a dedicated Cash Paid-Out / Cash Drop feature for till petty-cash.
@@ -112,6 +117,15 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       router.replace('/pos/select-display');
       return;
     }
+    // Laundry tenants don't use /pos/terminal at all — bounce anyone landing
+    // on terminal or root /pos straight to the laundry queue.
+    if (
+      isLaundryType(layout?.tenant?.businessType) &&
+      (pathname === '/pos/terminal' || pathname === '/pos')
+    ) {
+      router.replace('/pos/laundry/queue');
+      return;
+    }
     if (
       (pathname === '/pos/terminal' || pathname === '/pos') &&
       !inRoles(r, TERMINAL_ROLES)
@@ -126,7 +140,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ].find((item) => inRoles(r, item.roles));
       if (firstAccessible) router.replace(firstAccessible.href);
     }
-  }, [hydrated, user, pathname, router]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hydrated, user, pathname, router, layout?.tenant?.businessType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Set accent on <html> so Radix Dialog portals (rendered at document.body)
   // also inherit the correct --accent value in both light and dark mode.
@@ -155,17 +169,36 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // Build nav — ALL items are shown to every POS user.
   // Items the current role cannot access appear grayed-out with a lock icon.
   // Backend guards remain the authoritative enforcement layer.
-  const navItems: NavItem[] = [
-    makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES,     role),
-    makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,      role),
-    makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,        role),
-    makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,      role),
-    makeNavItem('/pos/inventory',    'Ingredients', ClipboardList,   INVENTORY_ROLES,     role),
-    makeNavItem('/pos/staff',        'Staff',       Users,           STAFF_ROLES,         role),
-    makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
-    makeNavItem('/pos/promotions',   'Promotions',  Tag,             PROMOTIONS_ROLES,    role),
-    makeNavItem('/pos/pending',      'Pending Sync',Clock,           PENDING_SYNC_ROLES,  role, pendingCount || undefined),
-  ].filter((item) => !item.disabled);
+  //
+  // For LAUNDRY tenants the workflow centers on Intake/Queue rather than the
+  // F&B Terminal/Ingredients flow, so we swap the catalog-heavy items out.
+  const businessType = layout?.tenant?.businessType;
+  const isLaundry    = isLaundryType(businessType);
+
+  const navItems: NavItem[] = (
+    isLaundry
+      ? [
+          makeNavItem('/pos/dashboard',     'Dashboard',     LayoutDashboard, DASHBOARD_ROLES,    role),
+          makeNavItem('/pos/laundry/intake','Intake',        Sparkles,        LAUNDRY_OPS_ROLES,  role),
+          makeNavItem('/pos/laundry/queue', 'Queue',         Shirt,           LAUNDRY_OPS_ROLES,  role),
+          makeNavItem('/pos/orders',        'Orders',        ShoppingBag,     ORDERS_ROLES,       role),
+          makeNavItem('/pos/products',      'Services',      Package,         PRODUCTS_ROLES,     role),
+          makeNavItem('/pos/staff',         'Staff',         Users,           STAFF_ROLES,        role),
+          makeNavItem('/pos/promotions',    'Promotions',    Tag,             PROMOTIONS_ROLES,   role),
+          makeNavItem('/pos/pending',       'Pending Sync',  Clock,           PENDING_SYNC_ROLES, role, pendingCount || undefined),
+        ]
+      : [
+          makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES,     role),
+          makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,      role),
+          makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,        role),
+          makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,      role),
+          makeNavItem('/pos/inventory',    'Ingredients', ClipboardList,   INVENTORY_ROLES,     role),
+          makeNavItem('/pos/staff',        'Staff',       Users,           STAFF_ROLES,         role),
+          makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
+          makeNavItem('/pos/promotions',   'Promotions',  Tag,             PROMOTIONS_ROLES,    role),
+          makeNavItem('/pos/pending',      'Pending Sync',Clock,           PENDING_SYNC_ROLES,  role, pendingCount || undefined),
+        ]
+  ).filter((item) => !item.disabled);
 
   async function doLogout() {
     const refresh = localStorage.getItem('app-auth');

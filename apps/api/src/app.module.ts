@@ -39,6 +39,7 @@ import { LayoutsModule } from './layouts/layouts.module';
 import { CustomerDisplayModule } from './customer-display/customer-display.module';
 import { KdsModule } from './kds/kds.module';
 import { IngredientReportsModule } from './ingredient-reports/ingredient-reports.module';
+import { LaundryModule } from './laundry/laundry.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -84,6 +85,7 @@ import { HealthController } from './health/health.controller';
     CustomerDisplayModule,
     KdsModule,
     IngredientReportsModule,
+    LaundryModule,
   ],
 })
 export class AppModule {}

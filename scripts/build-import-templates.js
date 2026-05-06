@@ -303,7 +303,60 @@ async function buildAll() {
     },
   );
 
-  // ── 7. Setup Pack (Products + Inventory in one workbook) ──
+  // ── 7. Stock Receipts (raw-material purchases / WAC) ──
+  await makeTemplate(
+    'clerque-stock-receipts-template.xlsx',
+    'Stock Receipts',
+    [
+      'Date* (YYYY-MM-DD)',
+      'Ingredient/Product Name*',
+      'Quantity*',
+      'Unit Cost*',
+      'Branch',
+      'Payment Method',
+      'Vendor',
+      'Reference Number',
+    ],
+    [
+      ['2026-05-01', 'Espresso Beans',   '5',   '500',  'Main Branch', 'CASH',         'Davao Coffee Beans', 'INV-2026-0123'],
+      ['2026-05-02', 'Whole Milk 1L',    '24',  '85',   '',            'CREDIT',       'Suki Dairy',         'DR-4567'],
+      ['2026-05-03', 'Iced Coffee Cups', '100', '4.5',  '',            'OWNER_FUNDED', 'Local Supplier',     ''],
+      ['2026-05-04', 'Sugar Syrup',      '6',   '120',  '',            'CASH',         '',                   ''],
+    ],
+    {
+      title: 'Clerque — Stock Receipts Bulk Import',
+      instructions: [
+        'How to use:',
+        '  1. One row per delivery line. Each row creates a new FIFO lot, updates ingredient stock, and posts',
+        '     a journal entry (Dr 1050 Inventory / Cr Cash/AP/Owner equity based on Payment Method).',
+        '  2. Date is the receipt date — used for FIFO ordering and respects period lock.',
+        '  3. Ingredient/Product Name must match an existing ingredient (raw material). Recipe-based',
+        '     drinks pull cost from their recipe — receiving an ingredient ripples WAC into all products that use it.',
+        '  4. Quantity is in the ingredient\'s native unit (g, ml, pc, etc). Unit Cost is per that unit.',
+        '  5. Branch — leave blank to use your first active branch. Otherwise the exact branch name.',
+        '  6. Payment Method:',
+        '       CASH         — credits 1010 Cash on Hand',
+        '       CREDIT       — credits 2010 Accounts Payable, creates an APBill if Vendor is set',
+        '       OWNER_FUNDED — credits 3010 Owner\'s Capital (default if blank)',
+        '  7. Reference Number is your supplier\'s DR/PO/invoice number — purely for audit traceability.',
+        '     Idempotent: rows with a Reference already used on the same ingredient are skipped on re-upload.',
+        '  8. Save as .xlsx (or .csv). Upload via POS → Inventory → Receive → Bulk Import.',
+        'Tip: For ongoing daily purchases. For Day-1 opening balances use the Inventory template instead.',
+      ],
+      columnHints: [
+        'Required. ISO format.',
+        'Required. Must match existing.',
+        'Required. Number > 0.',
+        'Required. Per-unit cost (₱).',
+        'Optional. Defaults to first branch.',
+        'CASH / CREDIT / OWNER_FUNDED.',
+        'Optional. Required if CREDIT.',
+        'Optional. Idempotency key.',
+      ],
+    },
+  );
+
+  // ── 8. Setup Pack (Products + Inventory in one workbook) ──
   // Multi-sheet workbook — built directly with ExcelJS rather than makeTemplate
   const setupWb = new ExcelJS.Workbook();
   setupWb.creator = 'Clerque';

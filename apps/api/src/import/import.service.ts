@@ -1189,4 +1189,244 @@ export class ImportService {
       },
     );
   }
+
+  // ── Stock Receipts bulk import ────────────────────────────────────────────
+  // Columns: Date*, Ingredient or Product Name*, Quantity*, Unit Cost*, Branch
+  //          (defaults to first branch if blank), Payment Method (CASH/CREDIT/
+  //          OWNER_FUNDED — defaults to OWNER_FUNDED), Vendor, Reference#
+
+  async stockReceiptsTemplate(): Promise<Buffer> {
+    return this.makeTemplate(
+      'Stock Receipts',
+      [
+        'Date* (YYYY-MM-DD)',
+        'Ingredient/Product Name*',
+        'Quantity*',
+        'Unit Cost*',
+        'Branch',
+        'Payment Method',
+        'Vendor',
+        'Reference Number',
+      ],
+      [
+        ['2026-05-01', 'Espresso Beans',  '5',   '500',  'Main Branch', 'CASH',         'Davao Coffee Beans', 'INV-2026-0123'],
+        ['2026-05-02', 'Whole Milk 1L',   '24',  '85',   '',            'CREDIT',       'Suki Dairy',         'DR-4567'],
+        ['2026-05-03', 'Iced Coffee Cups','100', '4.5',  '',            'OWNER_FUNDED', 'Local Supplier',     ''],
+        ['2026-05-04', 'Sugar Syrup',     '6',   '120',  '',            'CASH',         '',                   ''],
+      ],
+      {
+        title: 'Clerque — Stock Receipts Bulk Import',
+        instructions: [
+          'How to use:',
+          '  1. One row per delivery line. Each row creates a new FIFO lot, updates ingredient stock, and posts',
+          '     a journal entry (Dr 1050 Inventory / Cr Cash/AP/Owner equity based on Payment Method).',
+          '  2. Date is the receipt date — used for FIFO ordering and respects period lock.',
+          '  3. Ingredient/Product Name must match an existing ingredient (raw material) or product. Recipe-based',
+          '     drinks pull cost from their recipe — if you receive a finished good (retail), the system updates',
+          '     that product\'s WAC.',
+          '  4. Quantity is in the ingredient\'s/product\'s native unit (g, ml, pc, etc). Unit Cost is per that unit.',
+          '  5. Branch — leave blank to use your first active branch. Otherwise the exact branch name.',
+          '  6. Payment Method:',
+          '       CASH         — credits 1010 Cash on Hand',
+          '       CREDIT       — credits 2010 Accounts Payable, creates an APBill if Vendor is set',
+          '       OWNER_FUNDED — credits 3010 Owner\'s Capital (default if blank)',
+          '  7. Reference Number is your supplier\'s DR/PO/invoice number — purely for audit traceability.',
+          '     Idempotent: rows with a Reference already used on the same ingredient are skipped on re-upload.',
+          '  8. Save as .xlsx (or .csv). Upload via POS → Inventory → Receive → Bulk Import.',
+          'Tip: For ongoing daily purchases. For Day-1 opening balances use the Inventory template instead.',
+        ],
+        columnHints: [
+          'Required. ISO format.',
+          'Required. Must match existing.',
+          'Required. Number > 0.',
+          'Required. Per-unit cost (₱).',
+          'Optional. Defaults to first branch.',
+          'CASH / CREDIT / OWNER_FUNDED.',
+          'Optional. Required if CREDIT.',
+          'Optional. Idempotency key.',
+        ],
+      },
+    );
+  }
+
+  async importStockReceipts(file: Express.Multer.File, tenantId: string, userId: string): Promise<ImportResult> {
+    const rows = await this.parseFile(file);
+    const headerIdx = this.findHeaderRow(rows, ['Date*', 'Date* (YYYY-MM-DD)', 'Date']);
+    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (rows.length <= dataStart) {
+      throw new BadRequestException('File must have a header row and at least one data row.');
+    }
+
+    const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
+    let dataRows = rows.slice(dataStart);
+    if (dataRows.length > 0 && (dataRows[0][0] ?? '').toLowerCase().includes('required')) {
+      dataRows = dataRows.slice(1);
+    }
+
+    // Pre-load tenant's first active branch for default routing.
+    const defaultBranch = await this.prisma.branch.findFirst({
+      where:   { tenantId, isActive: true },
+      orderBy: { createdAt: 'asc' },
+      select:  { id: true, name: true },
+    });
+    if (!defaultBranch) {
+      throw new BadRequestException('Tenant has no active branch. Create one before importing receipts.');
+    }
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNum = dataStart + i + 2;
+      const [dateStr, name, qtyStr, costStr, branchName, paymentMethodRaw, vendorName, refNumber] = dataRows[i];
+      if (!name?.trim()) { result.skipped++; continue; }
+
+      const date = new Date(`${dateStr.trim()}T12:00:00+08:00`);
+      if (isNaN(date.getTime())) {
+        result.errors.push({ row: rowNum, message: `Invalid date: "${dateStr}".` });
+        continue;
+      }
+      const qty = parseFloat(qtyStr);
+      const cost = parseFloat(costStr);
+      if (isNaN(qty) || qty <= 0) {
+        result.errors.push({ row: rowNum, message: `Invalid quantity: "${qtyStr}".` });
+        continue;
+      }
+      if (isNaN(cost) || cost < 0) {
+        result.errors.push({ row: rowNum, message: `Invalid unit cost: "${costStr}".` });
+        continue;
+      }
+
+      const paymentMethod = (paymentMethodRaw?.trim().toUpperCase() || 'OWNER_FUNDED') as 'CASH' | 'CREDIT' | 'OWNER_FUNDED';
+      if (!['CASH', 'CREDIT', 'OWNER_FUNDED'].includes(paymentMethod)) {
+        result.errors.push({ row: rowNum, message: `Invalid payment method: "${paymentMethodRaw}". Use CASH, CREDIT, or OWNER_FUNDED.` });
+        continue;
+      }
+
+      // Resolve branch
+      let branchId = defaultBranch.id;
+      if (branchName?.trim()) {
+        const b = await this.prisma.branch.findFirst({
+          where: { tenantId, name: branchName.trim(), isActive: true },
+        });
+        if (!b) {
+          result.errors.push({ row: rowNum, message: `Branch not found: "${branchName}".` });
+          continue;
+        }
+        branchId = b.id;
+      }
+
+      // Resolve raw material by name
+      const rm = await this.prisma.rawMaterial.findFirst({
+        where: { tenantId, name: name.trim(), isActive: true },
+      });
+      if (!rm) {
+        result.errors.push({ row: rowNum, message: `Ingredient/Product not found: "${name}". Create it first.` });
+        continue;
+      }
+
+      // Idempotency: skip if a lot with this referenceNumber on this rawMaterial already exists.
+      if (refNumber?.trim()) {
+        const dup = await this.prisma.rawMaterialLot.findFirst({
+          where: { tenantId, rawMaterialId: rm.id, referenceNumber: refNumber.trim() },
+        });
+        if (dup) { result.skipped++; continue; }
+      }
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          // Update RawMaterial WAC
+          const oldQty = await tx.rawMaterialInventory.findUnique({
+            where: { branchId_rawMaterialId: { branchId, rawMaterialId: rm.id } },
+            select: { quantity: true },
+          });
+          const oldOnHand = oldQty ? Number(oldQty.quantity) : 0;
+          const newOnHand = oldOnHand + qty;
+
+          // WAC update on RawMaterial
+          const oldWac = rm.costPrice ? Number(rm.costPrice) : 0;
+          const newWac = newOnHand > 0
+            ? ((oldOnHand * oldWac) + (qty * cost)) / newOnHand
+            : cost;
+          await tx.rawMaterial.update({
+            where: { id: rm.id },
+            data:  { costPrice: new Prisma.Decimal(newWac) },
+          });
+
+          // RawMaterialInventory update
+          await tx.rawMaterialInventory.upsert({
+            where:  { branchId_rawMaterialId: { branchId, rawMaterialId: rm.id } },
+            update: { quantity: new Prisma.Decimal(newOnHand) },
+            create: { tenantId, branchId, rawMaterialId: rm.id, quantity: new Prisma.Decimal(newOnHand) },
+          });
+
+          // FIFO lot
+          await tx.rawMaterialLot.create({
+            data: {
+              tenantId,
+              branchId,
+              rawMaterialId:   rm.id,
+              qtyReceived:     new Prisma.Decimal(qty),
+              qtyRemaining:    new Prisma.Decimal(qty),
+              unitCost:        new Prisma.Decimal(cost),
+              receivedAt:      date,
+              referenceNumber: refNumber?.trim() || null,
+              paymentMethod,
+            },
+          });
+
+          // Ripple new WAC into all products that use this ingredient
+          const affectedBom = await tx.bomItem.findMany({
+            where:    { rawMaterialId: rm.id, product: { tenantId } },
+            select:   { productId: true },
+            distinct: ['productId'],
+          });
+          for (const { productId } of affectedBom) {
+            const allBom = await tx.bomItem.findMany({
+              where:  { productId },
+              select: { quantity: true, rawMaterial: { select: { costPrice: true } } },
+            });
+            const newProductCost = allBom.reduce(
+              (sum, b) => sum + (b.rawMaterial?.costPrice != null ? Number(b.rawMaterial.costPrice) : 0) * Number(b.quantity),
+              0,
+            );
+            await tx.product.update({
+              where: { id: productId },
+              data:  { costPrice: new Prisma.Decimal(newProductCost.toFixed(4)) },
+            });
+          }
+
+          // Accounting event for the JE (Dr 1050 / Cr Cash/AP/Owner)
+          const totalValue = qty * cost;
+          await tx.accountingEvent.create({
+            data: {
+              tenantId,
+              type:    'INVENTORY_ADJUSTMENT',
+              status:  'PENDING',
+              payload: {
+                kind:           'RAW_MATERIAL_RECEIPT',
+                rawMaterialId:  rm.id,
+                rawMaterialName: rm.name,
+                productName:    rm.name,
+                adjustmentType: 'STOCK_IN',
+                quantity:       qty,
+                totalValue,
+                costPrice:      cost,
+                paymentMethod,
+                branchId,
+                receivedAt:     date.toISOString(),
+                referenceNumber: refNumber?.trim() || null,
+                vendorName:     vendorName?.trim() || null,
+                source:         'BULK_IMPORT',
+                userId,
+              } as Prisma.JsonObject,
+            },
+          });
+        }, { maxWait: 10_000, timeout: 30_000 });
+
+        result.imported++;
+      } catch (err) {
+        result.errors.push({ row: rowNum, message: (err as Error).message ?? 'Unknown error' });
+      }
+    }
+
+    return result;
+  }
 }

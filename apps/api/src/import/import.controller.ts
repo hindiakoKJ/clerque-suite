@@ -175,6 +175,23 @@ export class ImportController {
     res.send(buf);
   }
 
+  // ── Stock Receipts (raw-material purchases / WAC) ──────────────────────
+  @Post('stock-receipts')
+  @UseInterceptors(FileInterceptor('file'))
+  importStockReceipts(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importStockReceipts(file, req.user.tenantId!, req.user.sub);
+  }
+  @Get('template/stock-receipts')
+  async stockReceiptsTemplate(@Res() res: Response) {
+    const buf = await this.importService.stockReceiptsTemplate();
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-stock-receipts-template.xlsx"',
+    });
+    res.send(buf);
+  }
+
   // ── Vendors (AP master) ────────────────────────────────────────────────
   @Post('vendors')
   @UseInterceptors(FileInterceptor('file'))

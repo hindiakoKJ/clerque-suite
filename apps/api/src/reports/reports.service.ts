@@ -102,7 +102,16 @@ export class ReportsService {
       include: { payments: true, items: true },
     });
 
-    const summary = this.computeSummary(orders);
+    // Sprint 9: SERVICE businesses sell appointments / labor — products
+    // intentionally have no costPrice. The "missing cost" warning that
+    // counts these as revenue leaks is wrong for them. Pass the tenant's
+    // businessType into the summary computation so SERVICE tenants get
+    // a clean dashboard.
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { businessType: true },
+    });
+    const summary = this.computeSummary(orders, tenant?.businessType ?? null);
     return { date, branchId, ...summary };
   }
 
@@ -118,7 +127,7 @@ export class ReportsService {
     });
     if (!shift) throw new NotFoundException('Shift not found');
 
-    const [orders, cashOuts] = await Promise.all([
+    const [orders, cashOuts, tenantInfo] = await Promise.all([
       this.prisma.order.findMany({
         where: { shiftId, tenantId },
         include: { payments: true, items: true },
@@ -128,9 +137,13 @@ export class ReportsService {
         orderBy: { createdAt: 'asc' },
         select:  { id: true, type: true, amount: true, reason: true, category: true, createdAt: true },
       }),
+      this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { businessType: true },
+      }),
     ]);
 
-    const summary = this.computeSummary(orders);
+    const summary = this.computeSummary(orders, tenantInfo?.businessType ?? null);
     let paidOutTotal  = 0;
     let cashDropTotal = 0;
     for (const c of cashOuts) {
@@ -168,18 +181,29 @@ export class ReportsService {
 
   // ─── Private aggregation ──────────────────────────────────────────────────
 
-  private computeSummary(orders: Awaited<ReturnType<typeof this.getOrders>>): SalesSummary {
-    const completed = orders.filter((o) => o.status === 'COMPLETED');
+  private computeSummary(
+    orders: Awaited<ReturnType<typeof this.getOrders>>,
+    businessType?: string | null,
+  ): SalesSummary {
+    // Sprint 7: PAID and COMPLETED both count as "completed sales" — revenue
+    // is recognized at sale time per PFRS § 9.
+    const completed = orders.filter((o) => o.status === 'COMPLETED' || o.status === 'PAID');
     const voided = orders.filter((o) => o.status === 'VOIDED');
 
     const totalRevenue = completed.reduce((s, o) => s + Number(o.totalAmount), 0);
     const totalOrders = completed.length;
     const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
+    // Sprint 9: SERVICE businesses don't have COGS by design — appointments,
+    // haircuts, laundry. costPrice = null is intentional, not a leak.
+    // Skip the missing-cost warning for these tenants entirely.
+    const isServiceBusiness = businessType === 'SERVICE';
+
     // ── COGS / Gross Profit ─────────────────────────────────────────────────
     // Walk every sold line. If costPrice is present, add (qty × cost) to COGS.
     // If costPrice is NULL on a sold line, count it as a "leak" — its revenue
     // shows up in grossProfit without an offsetting cost, overstating margin.
+    // (Skipped for SERVICE businesses where null is the expected state.)
     let totalCogs = 0;
     let netRevenue = 0;
     let leakLines = 0;
@@ -198,10 +222,11 @@ export class ReportsService {
         netRevenue += lineNet;
         if (item.costPrice != null) {
           totalCogs += Number(item.quantity) * Number(item.costPrice);
-        } else {
+        } else if (!isServiceBusiness) {
           leakLines  += 1;
           leakRevenue += lineRevGross;
         }
+        // For SERVICE: null costPrice is fine, no leak counted.
       }
     }
     const grossProfit = netRevenue - totalCogs;

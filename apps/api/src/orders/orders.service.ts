@@ -531,10 +531,28 @@ export class OrdersService {
         },
       });
 
-      // Reverse inventory and log the reversal
+      // ── Reverse inventory + capture restocked cost for COGS reversal ──
+      // Sprint 9 accounting fix: when an order is voided, only items that
+      // were physically restocked (UNIT_BASED finished goods that returned
+      // to the shelf) generate a COGS reversal. RECIPE_BASED items had
+      // their ingredients consumed — the cost stays in COGS as wastage,
+      // matching reality.
+      //
+      // The journal processor needs to know the total cost of restocked
+      // items to post the correct reversal. We accumulate it here and
+      // pass it in the VOID event payload.
       // tenantId added to orderItem query for defense-in-depth (HIGH-3 fix)
-      const items = await tx.orderItem.findMany({ where: { orderId, order: { tenantId } } });
+      const items = await tx.orderItem.findMany({
+        where:   { orderId, order: { tenantId } },
+        include: { product: { select: { inventoryMode: true } } },
+      });
+      let restockedCogsTotal = 0;
       for (const item of items) {
+        // RECIPE_BASED items skip restock entirely — ingredients are waste.
+        // Their cost stays in COGS. (Defense in depth: even if an
+        // InventoryItem somehow exists for a recipe product, don't restock.)
+        if (item.product?.inventoryMode === 'RECIPE_BASED') continue;
+
         const invItem = await tx.inventoryItem.findUnique({
           where: { branchId_productId: { branchId: order.branchId!, productId: item.productId } },
         });
@@ -559,6 +577,18 @@ export class OrdersService {
               createdById: resolvedManagerId,
             },
           });
+          // Accumulate the cost of restocked items for the COGS reversal.
+          // Use the per-item costPrice (snapshot at sale time) × restocked qty.
+          // Falls back to product's current costPrice when item snapshot is null.
+          const itemCost = item.costPrice != null
+            ? Number(item.costPrice)
+            : (await tx.product.findUnique({
+                where:  { id: item.productId },
+                select: { costPrice: true },
+              }))?.costPrice ?? null;
+          if (itemCost != null) {
+            restockedCogsTotal += Number(itemCost) * Number(item.quantity);
+          }
         }
       }
 
@@ -580,6 +610,11 @@ export class OrdersService {
             vatAmount:      Number(order.vatAmount),
             discountAmount: Number(order.discountAmount),
             payments: payments.map((p) => ({ method: p.method, amount: Number(p.amount) })),
+            // Sprint 9: total cost of items physically restocked. Drives the
+            // partial COGS reversal in the journal processor. Zero for café
+            // (recipe ingredients consumed = waste). Equal to the original
+            // COGS for retail (everything goes back on the shelf).
+            restockedCogsTotal,
           } as unknown as Prisma.JsonObject,
         },
       });
@@ -729,6 +764,16 @@ export class OrdersService {
         }
       }
 
+      // Compute the COGS portion attributable to the refunded units, but
+      // only when the items were physically restocked. Recipe items that
+      // can't be restocked (refund only — drink consumed) leave the COGS
+      // intact as wastage. UNIT_BASED items that go back on the shelf
+      // generate a proportional COGS reversal.
+      const itemUnitCost = item.costPrice != null
+        ? Number(item.costPrice)
+        : (item.product?.costPrice != null ? Number(item.product.costPrice) : 0);
+      const restockedCogsAmount = restock ? itemUnitCost * quantity : 0;
+
       // Queue a partial reversal accounting event. The journal processor
       // posts: DR Sales (proportional) / DR Output VAT / CR Cash (or AR)
       // and, if restock=true, DR Inventory / CR COGS proportionally.
@@ -742,11 +787,15 @@ export class OrdersService {
             mode:           'ITEM_REFUND',
             orderId,
             orderItemId,
+            orderNumber:    item.order.orderNumber,
             refundQty:      quantity,
             originalQty:    Number(item.quantity),
             refundAmount,
             refundMethod,
             restocked:      restock,
+            // Sprint 9: pre-computed proportional COGS reversal. Zero for
+            // non-restocked refunds (waste); cost × qty for restocked items.
+            restockedCogsTotal: restockedCogsAmount,
             reason:         reason.trim(),
           } as unknown as Prisma.JsonObject,
         },

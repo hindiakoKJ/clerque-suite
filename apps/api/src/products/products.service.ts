@@ -366,6 +366,17 @@ export class ProductsService {
    * Returns active products only (deactivated ones can't be sold anyway).
    */
   async findMissingCost(tenantId: string) {
+    // Sprint 9: SERVICE businesses (salon, clinic, laundry) sell appointments
+    // that have no COGS by design — costPrice = null is the correct state,
+    // not a leak. Skip the warning entirely for these tenants.
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { businessType: true },
+    });
+    if (tenant?.businessType === 'SERVICE') {
+      return { count: 0, products: [] };
+    }
+
     const products = await this.prisma.product.findMany({
       where:   { tenantId, isActive: true, costPrice: null },
       select:  {

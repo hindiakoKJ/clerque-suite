@@ -362,28 +362,113 @@ export class JournalService {
         lines.push({ accountId: await getAccount('1050'), credit: totalCost, description: 'Inventory deduction' });
 
       } else if (event.type === 'VOID') {
-        const origSale = await this.prisma.accountingEvent.findFirst({
-          where: { orderId: event.orderId ?? '', type: 'SALE', status: 'SYNCED', tenantId },
-          include: { journalEntry: { include: { lines: { include: { account: true } } } } },
-        });
+        // Sprint 9: VOID handler now handles two distinct modes —
+        //   FULL VOID:    payload.mode is undefined; reverses the entire SALE + COGS
+        //   ITEM_REFUND:  payload.mode === 'ITEM_REFUND'; proportional reversal
+        //                 of revenue + VAT + cash for the refunded units, plus
+        //                 a proportional COGS reversal IF items were restocked.
+        const mode = String(payload['mode'] ?? 'FULL_VOID');
+        const isItemRefund = mode === 'ITEM_REFUND';
 
-        description = `Void reversal ${payload['orderId'] ?? event.id}`;
+        description = isItemRefund
+          ? `Item refund ${payload['orderNumber'] ?? payload['orderId'] ?? event.id}`
+          : `Void reversal ${payload['orderId'] ?? event.id}`;
 
-        if (origSale?.journalEntry) {
-          for (const line of origSale.journalEntry.lines) {
+        if (isItemRefund) {
+          // Proportional reversal — refundAmount is pro-rated lineTotal
+          // (incl. VAT) computed by orders.service.refundItem.
+          const refundAmount = Number(payload['refundAmount'] ?? 0);
+          const originalQty  = Number(payload['originalQty']  ?? 1);
+          const refundQty    = Number(payload['refundQty']    ?? 0);
+          if (refundAmount > 0) {
+            // Find the original SALE journal to extract the per-line VAT rate
+            // for proportional reversal. Falls back to a flat 12% allocation
+            // when the original JE isn't available (out-of-order cron).
+            const origSale = await this.prisma.accountingEvent.findFirst({
+              where: { orderId: event.orderId ?? '', type: 'SALE', status: 'SYNCED', tenantId },
+            });
+            const origPayload = (origSale?.payload as Record<string, unknown>) ?? {};
+            const origTotal   = Number(origPayload['totalAmount'] ?? 0);
+            const origVat     = Number(origPayload['vatAmount']   ?? 0);
+            // VAT proportion of the original sale → applied to the refund.
+            const vatRate     = origTotal > 0 ? origVat / origTotal : 0;
+            const refundVat   = refundAmount * vatRate;
+            const refundNet   = refundAmount - refundVat;
+
+            const refundMethod = String(payload['refundMethod'] ?? 'CASH');
+            const cashAccount  = refundMethod === 'CASH' ? '1010' : '1031';
+
+            lines.push({ accountId: await getAccount('4010'),       debit:  refundNet, description: `Refund (${refundQty} of ${originalQty} units)` });
+            if (refundVat > 0) {
+              lines.push({ accountId: await getAccount('2020'),     debit:  refundVat, description: 'Refund - reverse VAT' });
+            }
+            lines.push({ accountId: await getAccount(cashAccount),  credit: refundAmount, description: 'Refund - cash returned' });
+          }
+
+          // Proportional COGS reversal for restocked refunds. Recipe items
+          // pass restockedCogsTotal = 0 (consumed = waste), so this branch
+          // skips automatically for them.
+          const restockedCogsTotal = Number(payload['restockedCogsTotal'] ?? 0);
+          if (restockedCogsTotal > 0) {
             lines.push({
-              accountId: line.accountId,
-              debit:     Number(line.credit),
-              credit:    Number(line.debit),
-              description: `Reversal: ${line.description ?? ''}`,
+              accountId:   await getAccount('1050'),
+              debit:       restockedCogsTotal,
+              description: 'Refund - restock inventory',
+            });
+            lines.push({
+              accountId:   await getAccount('5010'),
+              credit:      restockedCogsTotal,
+              description: 'Refund - reverse COGS (restocked)',
             });
           }
         } else {
-          const total  = Number(payload['totalAmount'] ?? 0);
-          const vatAmt = Number(payload['vatAmount']   ?? 0);
-          lines.push({ accountId: await getAccount('4010'), debit:  total - vatAmt, description: 'Void - reverse revenue' });
-          lines.push({ accountId: await getAccount('2020'), debit:  vatAmt,         description: 'Void - reverse VAT' });
-          lines.push({ accountId: await getAccount('1010'), credit: total,           description: 'Void - reverse cash' });
+          // FULL VOID — reverse the entire SALE + (if applicable) COGS.
+          const origSale = await this.prisma.accountingEvent.findFirst({
+            where: { orderId: event.orderId ?? '', type: 'SALE', status: 'SYNCED', tenantId },
+            include: { journalEntry: { include: { lines: { include: { account: true } } } } },
+          });
+
+          // Step 1: Reverse the SALE journal (revenue + VAT + cash).
+          if (origSale?.journalEntry) {
+            for (const line of origSale.journalEntry.lines) {
+              lines.push({
+                accountId: line.accountId,
+                debit:     Number(line.credit),
+                credit:    Number(line.debit),
+                description: `Reversal: ${line.description ?? ''}`,
+              });
+            }
+          } else {
+            const total  = Number(payload['totalAmount'] ?? 0);
+            const vatAmt = Number(payload['vatAmount']   ?? 0);
+            lines.push({ accountId: await getAccount('4010'), debit:  total - vatAmt, description: 'Void - reverse revenue' });
+            lines.push({ accountId: await getAccount('2020'), debit:  vatAmt,         description: 'Void - reverse VAT' });
+            lines.push({ accountId: await getAccount('1010'), credit: total,           description: 'Void - reverse cash' });
+          }
+
+          // Step 2: Reverse the COGS for items physically restocked.
+          //
+          // Per PFRS § 13: when goods come back to the shelf, the cost of
+          // those goods un-incurs — Cr 5010 COGS / Dr 1050 Inventory.
+          //
+          // Recipe-based F&B items DON'T restock (ingredients consumed = waste),
+          // so their COGS stays. The orders.service.void path computes
+          // restockedCogsTotal = sum of (item.cost × qty) for UNIT_BASED items
+          // only. Recipe items contribute zero, so the reversal is automatically
+          // correct for both business types.
+          const restockedCogsTotal = Number(payload['restockedCogsTotal'] ?? 0);
+          if (restockedCogsTotal > 0) {
+            lines.push({
+              accountId:   await getAccount('1050'),
+              debit:       restockedCogsTotal,
+              description: 'Void - restock inventory',
+            });
+            lines.push({
+              accountId:   await getAccount('5010'),
+              credit:      restockedCogsTotal,
+              description: 'Void - reverse COGS (restocked)',
+            });
+          }
         }
 
       } else if (event.type === 'INVENTORY_ADJUSTMENT') {

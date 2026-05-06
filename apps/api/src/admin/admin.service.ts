@@ -1344,6 +1344,262 @@ export class AdminService {
     };
   }
 
+  // ─── Ledger Demo Tenant bootstrap ────────────────────────────────────────
+  /**
+   * Provisions a SERVICE-business tenant pre-populated with 90 days of
+   * realistic accounting activity: opening capital, monthly office rent,
+   * software subscriptions, AR invoices to two B2B clients with mixed
+   * payment status, AP bills with WHT, and bank deposits. Designed so
+   * Ledger demos look immediately impressive — every report has data.
+   *
+   * Idempotent: re-running tops up missing pieces but never duplicates
+   * (JEs identified by Reference; customers/vendors by Name).
+   */
+  async bootstrapLedgerDemo(actor: ConsoleActor) {
+    const slug         = 'ledgerdemo';
+    const ownerEmail   = 'demo.ledger@clerque.test';
+    const ownerName    = 'Ledger Demo Owner';
+    const tenantName   = 'Acme Consulting (Ledger Demo)';
+
+    let tenant = await this.prisma.tenant.findUnique({ where: { slug } });
+    let generatedPassword: string | null = null;
+
+    if (!tenant) {
+      generatedPassword = this.generatePassword();
+      const passwordHash = await bcrypt.hash(generatedPassword, 12);
+
+      tenant = await this.prisma.$transaction(async (tx) => {
+        const t = await tx.tenant.create({
+          data: {
+            name:         tenantName,
+            slug,
+            businessType: 'SERVICE' as Prisma.TenantCreateInput['businessType'],
+            tier:         'TIER_4' as Prisma.TenantCreateInput['tier'],
+            taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
+            tinNumber:    '009-876-543-000',
+            businessName: 'Acme Consulting Services Inc.',
+            isBirRegistered: true,
+            isDemoTenant: true,
+            contactEmail: ownerEmail,
+            status:       'ACTIVE',
+          },
+        });
+        const branch = await tx.branch.create({
+          data: { tenantId: t.id, name: 'Main Office', isActive: true },
+        });
+        const appAccess = DEFAULT_APP_ACCESS['BUSINESS_OWNER'] ?? [];
+        await tx.user.create({
+          data: {
+            tenantId: t.id,
+            branchId: branch.id,
+            name:     ownerName,
+            email:    ownerEmail.toLowerCase(),
+            passwordHash,
+            role:     'BUSINESS_OWNER',
+            isActive: true,
+            appAccess: {
+              create: appAccess.map((a) => ({
+                appCode: a.app as Prisma.UserAppAccessCreateWithoutUserInput['appCode'],
+                level:   a.level as Prisma.UserAppAccessCreateWithoutUserInput['level'],
+              })),
+            },
+          },
+        });
+        return t;
+      });
+    }
+
+    await this.accounts.seedDefaultAccounts(tenant.id);
+
+    // Resolve account IDs once.
+    const codes = ['1010', '1020', '3010', '4015', '6051', '6148', '6010', '6149', '2010', '6070'];
+    const accounts = await this.prisma.account.findMany({
+      where:  { tenantId: tenant.id, code: { in: codes } },
+      select: { id: true, code: true },
+    });
+    const acct = new Map(accounts.map((a) => [a.code, a.id]));
+
+    // ── Generate dates: 90 days back, monthly anchors ────────────────────
+    const now = new Date();
+    function dateNDaysAgo(n: number): Date {
+      const d = new Date(now);
+      d.setDate(d.getDate() - n);
+      return new Date(`${d.toISOString().slice(0, 10)}T12:00:00+08:00`);
+    }
+    const dateStr = (d: Date) => d.toISOString().slice(0, 10);
+
+    // ── Build 30+ JEs across 90 days for a rich Trial Balance ────────────
+    interface JeSpec {
+      ref:   string;
+      date:  Date;
+      desc:  string;
+      lines: Array<{ accountCode: string; debit?: number; credit?: number; memo?: string }>;
+    }
+    const jes: JeSpec[] = [
+      // Opening capital injection
+      { ref: 'DEMO-OPEN-001', date: dateNDaysAgo(95), desc: 'Initial owner capital injection',
+        lines: [
+          { accountCode: '1020', debit: 500000, memo: 'Opening bank balance' },
+          { accountCode: '3010', credit: 500000, memo: 'Owner founding capital' },
+        ] },
+      // Monthly rent x 3
+      { ref: 'DEMO-RENT-1', date: dateNDaysAgo(75), desc: 'Office rent — month 1',
+        lines: [{ accountCode: '6051', debit: 25000 }, { accountCode: '1020', credit: 25000, memo: 'BDO check' }] },
+      { ref: 'DEMO-RENT-2', date: dateNDaysAgo(45), desc: 'Office rent — month 2',
+        lines: [{ accountCode: '6051', debit: 25000 }, { accountCode: '1020', credit: 25000, memo: 'BDO check' }] },
+      { ref: 'DEMO-RENT-3', date: dateNDaysAgo(15), desc: 'Office rent — month 3',
+        lines: [{ accountCode: '6051', debit: 25000 }, { accountCode: '1020', credit: 25000, memo: 'BDO check' }] },
+      // SaaS subscriptions
+      { ref: 'DEMO-SAAS-1', date: dateNDaysAgo(80), desc: 'Cloudflare hosting',
+        lines: [{ accountCode: '6148', debit: 1500 }, { accountCode: '1020', credit: 1500 }] },
+      { ref: 'DEMO-SAAS-2', date: dateNDaysAgo(50), desc: 'Cloudflare hosting',
+        lines: [{ accountCode: '6148', debit: 1500 }, { accountCode: '1020', credit: 1500 }] },
+      { ref: 'DEMO-SAAS-3', date: dateNDaysAgo(20), desc: 'Cloudflare hosting',
+        lines: [{ accountCode: '6148', debit: 1500 }, { accountCode: '1020', credit: 1500 }] },
+      { ref: 'DEMO-SAAS-4', date: dateNDaysAgo(85), desc: 'Adobe Creative Cloud',
+        lines: [{ accountCode: '6148', debit: 2800 }, { accountCode: '1020', credit: 2800 }] },
+      { ref: 'DEMO-SAAS-5', date: dateNDaysAgo(55), desc: 'Adobe Creative Cloud',
+        lines: [{ accountCode: '6148', debit: 2800 }, { accountCode: '1020', credit: 2800 }] },
+      { ref: 'DEMO-SAAS-6', date: dateNDaysAgo(25), desc: 'Adobe Creative Cloud',
+        lines: [{ accountCode: '6148', debit: 2800 }, { accountCode: '1020', credit: 2800 }] },
+      // Office supplies
+      { ref: 'DEMO-SUP-1', date: dateNDaysAgo(70), desc: 'Office supplies',
+        lines: [{ accountCode: '6070', debit: 3500 }, { accountCode: '1010', credit: 3500 }] },
+      { ref: 'DEMO-SUP-2', date: dateNDaysAgo(30), desc: 'Office supplies',
+        lines: [{ accountCode: '6070', debit: 2200 }, { accountCode: '1010', credit: 2200 }] },
+      // Salaries — 3 months
+      { ref: 'DEMO-SAL-1', date: dateNDaysAgo(75), desc: 'Salary disbursement — month 1',
+        lines: [{ accountCode: '6010', debit: 80000 }, { accountCode: '1020', credit: 80000 }] },
+      { ref: 'DEMO-SAL-2', date: dateNDaysAgo(45), desc: 'Salary disbursement — month 2',
+        lines: [{ accountCode: '6010', debit: 80000 }, { accountCode: '1020', credit: 80000 }] },
+      { ref: 'DEMO-SAL-3', date: dateNDaysAgo(15), desc: 'Salary disbursement — month 3',
+        lines: [{ accountCode: '6010', debit: 80000 }, { accountCode: '1020', credit: 80000 }] },
+      // Service revenue — multiple consulting engagements
+      { ref: 'DEMO-REV-1', date: dateNDaysAgo(72), desc: 'Consulting fee — Project Alpha',
+        lines: [{ accountCode: '1020', debit: 75000, memo: 'Bank deposit from client' }, { accountCode: '4015', credit: 75000 }] },
+      { ref: 'DEMO-REV-2', date: dateNDaysAgo(58), desc: 'Consulting fee — Project Beta',
+        lines: [{ accountCode: '1020', debit: 60000 }, { accountCode: '4015', credit: 60000 }] },
+      { ref: 'DEMO-REV-3', date: dateNDaysAgo(40), desc: 'Consulting fee — Project Gamma',
+        lines: [{ accountCode: '1020', debit: 95000 }, { accountCode: '4015', credit: 95000 }] },
+      { ref: 'DEMO-REV-4', date: dateNDaysAgo(22), desc: 'Consulting fee — Project Delta',
+        lines: [{ accountCode: '1020', debit: 110000 }, { accountCode: '4015', credit: 110000 }] },
+      { ref: 'DEMO-REV-5', date: dateNDaysAgo(8), desc: 'Consulting fee — Project Epsilon',
+        lines: [{ accountCode: '1020', debit: 85000 }, { accountCode: '4015', credit: 85000 }] },
+    ];
+
+    let createdJes = 0;
+    let skippedJes = 0;
+    for (const je of jes) {
+      const existing = await this.prisma.journalEntry.findFirst({
+        where: { tenantId: tenant.id, reference: je.ref },
+      });
+      if (existing) { skippedJes++; continue; }
+      const yyyymmdd = dateStr(je.date).replace(/-/g, '');
+      const seq = String(await this.prisma.journalEntry.count({
+        where: { tenantId: tenant.id, date: { gte: new Date(`${dateStr(je.date)}T00:00:00+08:00`), lte: new Date(`${dateStr(je.date)}T23:59:59+08:00`) } },
+      }) + 1).padStart(4, '0');
+      await this.prisma.journalEntry.create({
+        data: {
+          tenantId:    tenant.id,
+          entryNumber: `JE-${yyyymmdd}-${seq}`,
+          date:        je.date,
+          postingDate: je.date,
+          description: je.desc,
+          reference:   je.ref,
+          status:      'POSTED',
+          source:      'MANUAL',
+          createdBy:   actor.email,
+          postedBy:    actor.email,
+          postedAt:    new Date(),
+          lines: {
+            create: je.lines.map((l) => ({
+              accountId:   acct.get(l.accountCode)!,
+              debit:       new Prisma.Decimal(l.debit ?? 0),
+              credit:      new Prisma.Decimal(l.credit ?? 0),
+              description: l.memo ?? je.desc,
+            })),
+          },
+        },
+      });
+      createdJes++;
+    }
+
+    // ── Customers (AR master) ────────────────────────────────────────────
+    const customerSeeds = [
+      { name: 'Sunrise Logistics Inc.',  tin: '111-222-333-000', email: 'ap@sunrise.ph',  phone: '0917-1112233' },
+      { name: 'Pinnacle Properties Ltd.', tin: '444-555-666-000', email: 'ap@pinnacle.ph', phone: '0922-4445555' },
+    ];
+    for (const c of customerSeeds) {
+      const existing = await this.prisma.customer.findFirst({
+        where: { tenantId: tenant.id, name: c.name },
+      });
+      if (!existing) {
+        await this.prisma.customer.create({
+          data: {
+            tenantId: tenant.id,
+            name: c.name,
+            tin: c.tin,
+            contactEmail: c.email,
+            contactPhone: c.phone,
+            creditTermDays: 30,
+            isActive: true,
+          },
+        });
+      }
+    }
+
+    // ── Vendors (AP master) ──────────────────────────────────────────────
+    const vendorSeeds = [
+      { name: 'BDO Unibank',           tin: '000-123-456-000', atc: 'WI160', wht: 0.02 },
+      { name: 'Globe Telecom',         tin: '222-333-444-000', atc: 'WC158', wht: 0.02 },
+      { name: 'eSecure Filings Inc.',  tin: '999-888-777-666', atc: 'WC158', wht: 0.02 },
+    ];
+    for (const v of vendorSeeds) {
+      const existing = await this.prisma.vendor.findFirst({
+        where: { tenantId: tenant.id, name: v.name },
+      });
+      if (!existing) {
+        await this.prisma.vendor.create({
+          data: {
+            tenantId: tenant.id,
+            name: v.name,
+            tin: v.tin,
+            defaultAtcCode: v.atc,
+            defaultWhtRate: new Prisma.Decimal(v.wht),
+            isActive: true,
+          },
+        });
+      }
+    }
+
+    await this.logAction({
+      actor,
+      tenantId:   tenant.id,
+      tenantSlug: slug,
+      userEmail:  ownerEmail,
+      action:     'TENANT_CREATED' as const,
+      detail:     {
+        bootstrap: 'LEDGER_DEMO',
+        jesCreated: createdJes,
+        jesSkipped: skippedJes,
+      },
+    });
+
+    return {
+      tenantId:           tenant.id,
+      slug,
+      ownerEmail,
+      generatedPassword,
+      jesCreated:         createdJes,
+      jesSkipped:         skippedJes,
+      customersCreated:   customerSeeds.length,
+      vendorsCreated:     vendorSeeds.length,
+      message: generatedPassword
+        ? `Ledger Demo tenant created. Password shown ONCE — save it. Login at slug "ledgerdemo".`
+        : `Ledger Demo tenant exists. ${createdJes} new JEs posted (${skippedJes} already there).`,
+    };
+  }
+
   // ─── Failed events ────────────────────────────────────────────────────────
 
   async listFailedEvents(opts: { limit?: number } = {}) {

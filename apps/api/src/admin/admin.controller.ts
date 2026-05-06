@@ -69,6 +69,17 @@ export class AdminController {
    * Use to provision the platform operator's personal account (different
    * from any test/demo super admin that may exist).
    */
+  /**
+   * Provisions a Ledger demo tenant — SERVICE-business with 90 days of
+   * realistic JEs (rent, salary, SaaS, consulting revenue, supplies),
+   * 2 sample AR customers, 3 sample AP vendors. Idempotent.
+   */
+  @Post('bootstrap-ledger-demo')
+  @HttpCode(HttpStatus.OK)
+  bootstrapLedgerDemo(@Request() req: { user: JwtPayload }) {
+    return this.svc.bootstrapLedgerDemo(actor(req));
+  }
+
   @Post('bootstrap-super-admin')
   @HttpCode(HttpStatus.OK)
   bootstrapSuperAdmin(

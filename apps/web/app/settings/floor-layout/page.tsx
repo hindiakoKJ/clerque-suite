@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { isFnbType } from '@repo/shared-types';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -64,8 +65,7 @@ export default function FloorLayoutSettingsPage() {
   // with a clear explanation. This shouldn't happen via UI clicks (the card is
   // hidden), but a leftover bookmark / typed URL could land them here.
   const businessType = layout.tenant?.businessType;
-  const isFnb = ['COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING'].includes(businessType ?? '');
-  if (!isFnb) {
+  if (!isFnbType(businessType ?? null)) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[70vh] px-6 text-center">
         <Layout className="h-12 w-12 text-muted-foreground/40 mb-4" />

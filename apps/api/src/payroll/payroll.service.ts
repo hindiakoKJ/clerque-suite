@@ -483,11 +483,20 @@ export class PayrollService {
       d.grossPay = round2(d.grossPay + gross);
     }
 
-    // PH statutory deductions (SSS + PhilHealth + Pag-IBIG) — simplified flat percentages
-    // These are rough MTD estimates; real payroll runs need lookup tables
-    const deductionRate    = 0.09;  // ~9% combined employee share
-    const totalDeductionsMtd = round2(totalGrossMtd * deductionRate);
-    const totalNetMtd      = round2(totalGrossMtd - totalDeductionsMtd);
+    // PH statutory deductions — sum from finalized payslips this month for accuracy.
+    // Falls back to a 9% estimate only when no payslips have been generated yet.
+    const payslipDeductionAgg = await this.prisma.payslip.aggregate({
+      where: {
+        tenantId,
+        payRun: { periodStart: { gte: mFrom }, periodEnd: { lt: mTo } },
+      },
+      _sum: { totalDeductions: true },
+    });
+    const realDeductions = Number(payslipDeductionAgg._sum?.totalDeductions ?? 0);
+    const totalDeductionsMtd = realDeductions > 0
+      ? round2(realDeductions)
+      : round2(totalGrossMtd * 0.09);
+    const totalNetMtd = round2(totalGrossMtd - totalDeductionsMtd);
 
     const departmentBreakdown = Array.from(deptMap.entries()).map(([department, d]) => ({
       department,
@@ -511,25 +520,73 @@ export class PayrollService {
     } else if (day < eom) {
       nextRunDate = `${year}-${String(month + 1).padStart(2,'0')}-${String(eom).padStart(2,'0')}`;
     } else {
-      // Already past EOM — next run is the 15th of next month
-      const nextMonth = month + 2 > 12 ? 1 : month + 2;
-      const nextYear  = month + 2 > 12 ? year + 1 : year;
+      // Already past EOM — next run is the 15th of next month.
+      // month is 0-indexed (Jan=0..Dec=11). Next month index = month+1; if that
+      // overflows past Dec (>= 12), roll into January of next year.
+      const rollOver  = month + 1 >= 12;
+      const nextMonth = rollOver ? 1 : month + 2; // 1-indexed for the date string
+      const nextYear  = rollOver ? year + 1 : year;
       nextRunDate = `${nextYear}-${String(nextMonth).padStart(2,'0')}-15`;
     }
 
+    // Real counts pulled from PayRun + LeaveRequest tables (when available).
+    // LeaveRequest is added in Sprint 3; until then onLeaveToday is 0.
+    const todayUtc = new Date(Date.UTC(year, month, day));
+
+    const [completedRuns, pendingRuns, recentRunRows, onLeaveToday] = await Promise.all([
+      this.prisma.payRun.count({ where: { tenantId, status: 'COMPLETED' as any } }),
+      this.prisma.payRun.count({ where: { tenantId, status: 'DRAFT' as any } }),
+      this.prisma.payRun.findMany({
+        where:   { tenantId },
+        orderBy: { periodEnd: 'desc' },
+        take:    5,
+        select: {
+          id: true, label: true, periodEnd: true, status: true, totalNet: true,
+          _count: { select: { payslips: true } },
+        },
+      }),
+      // Best-effort: query LeaveRequest only if the table exists.
+      // Wrap in try/catch via a soft prisma call to avoid breaking pre-Sprint-3 deploys.
+      (async () => {
+        try {
+          const leaveModel = (this.prisma as any).leaveRequest;
+          if (!leaveModel) return 0;
+          return await leaveModel.count({
+            where: {
+              tenantId,
+              status:    'APPROVED',
+              startDate: { lte: todayUtc },
+              endDate:   { gte: todayUtc },
+            },
+          });
+        } catch {
+          return 0;
+        }
+      })(),
+    ]);
+
+    const recentRuns = recentRunRows.map((r) => ({
+      id:            r.id,
+      label:         r.label,
+      status:        r.status as string,
+      periodEnd:     r.periodEnd.toISOString().slice(0, 10),
+      totalNet:      Number(r.totalNet ?? 0),
+      employeeCount: r._count.payslips,
+    }));
+
     return {
       activeEmployees,
-      onLeaveToday:       0,            // Phase 2: leave management not yet implemented
-      totalGrossMtd:      round2(totalGrossMtd),
+      onLeaveToday,
+      totalGrossMtd: round2(totalGrossMtd),
       totalDeductionsMtd,
       totalNetMtd,
-      completedRuns:      0,            // Phase 2: formal pay-run records not yet implemented
-      pendingRuns:        0,
+      completedRuns,
+      pendingRuns,
       nextRunDate,
-      nextRunEmployees:   activeEmployees,
+      nextRunEmployees: activeEmployees,
       averageGross,
       departmentBreakdown,
-      recentRuns:         [],           // Phase 2
+      recentRuns,
     };
   }
 

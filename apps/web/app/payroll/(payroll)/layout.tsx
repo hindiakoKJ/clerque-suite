@@ -15,16 +15,19 @@ const PAYROLL_ACCENT_SOFT = 'hsl(262 70% 58% / 0.08)';
 // Timesheets   → Management + Sales Lead (who manages shift workers)
 // Staff        → HR/Payroll management only
 // Pay Runs & financial payroll → PAYROLL_MASTER + BUSINESS_OWNER only
+// Note: EXTERNAL_AUDITOR is read-only outside staff — no clock-in/out, no own-payslip view.
 const CLOCK_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER',
                               'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
-                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE', 'EXTERNAL_AUDITOR'] as const;
+                              'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
+                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE'] as const;
 const PAY_DASHBOARD_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'FINANCE_LEAD'] as const;
 const TIMESHEETS_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'SALES_LEAD'] as const;
 const PAY_STAFF_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'MDM'] as const;
 const PAY_RUNS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER'] as const;
 const PAYSLIPS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER',
                               'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
-                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE', 'EXTERNAL_AUDITOR'] as const;
+                              'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
+                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE'] as const;
 // My Expenses — personal-reimbursement claims; every authenticated employee can submit.
 const MY_EXPENSES_ROLES   = PAYSLIPS_ROLES;
 

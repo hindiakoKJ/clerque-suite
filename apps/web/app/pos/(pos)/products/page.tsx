@@ -229,6 +229,19 @@ export default function ProductsPage() {
         ? validRecipe.map((r) => ({ rawMaterialId: r.rawMaterialId, quantity: parseFloat(r.quantity) }))
         : [];
 
+      // For RECIPE_BASED products with a recipe attached, derive the cost
+      // client-side too — the backend ignores this and re-derives from BOM
+      // anyway, but sending the right number keeps form validation happy
+      // and lets the user see the same value the backend will store.
+      let resolvedCost = parseFloat(form.costPrice);
+      if (form.inventoryMode === 'RECIPE_BASED' && bomItems.length > 0) {
+        resolvedCost = bomItems.reduce((sum, b) => {
+          const rm = rawMaterials.find((r) => r.id === b.rawMaterialId);
+          return sum + (rm?.costPrice ?? 0) * b.quantity;
+        }, 0);
+      }
+      if (Number.isNaN(resolvedCost)) resolvedCost = 0;
+
       const payload = {
         name: form.name.trim(),
         sku: form.sku.trim() || undefined,
@@ -236,7 +249,7 @@ export default function ProductsPage() {
         description: form.description.trim() || undefined,
         categoryId: form.categoryId || undefined,
         price: parseFloat(form.price),
-        costPrice: parseFloat(form.costPrice),
+        costPrice: resolvedCost,
         isVatable: form.isVatable,
         unitOfMeasureId: form.unitOfMeasureId || undefined,
         inventoryMode: form.inventoryMode,
@@ -841,20 +854,56 @@ export default function ProductsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">
-                    Cost Price (₱) <span className="text-red-400">*</span>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1.5">
+                    Cost Price (₱)
+                    {form.inventoryMode === 'RECIPE_BASED' && recipe.length > 0 ? (
+                      <span className="inline-flex items-center text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
+                        DERIVED
+                      </span>
+                    ) : (
+                      <span className="text-red-400">*</span>
+                    )}
                   </label>
-                  <input
-                    type="number" min="0" step="0.01"
-                    value={form.costPrice}
-                    onChange={(e) => setForm((f) => ({ ...f, costPrice: e.target.value }))}
-                    className={INPUT_CLS}
-                    placeholder="0.00"
-                  />
-                  <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
-                    Required — used to compute COGS &amp; gross profit on every sale.
-                    For recipe items, enter the summed raw-material cost.
-                  </p>
+                  {form.inventoryMode === 'RECIPE_BASED' && recipe.length > 0 ? (
+                    <>
+                      {/* Read-only derived value — computed from current
+                          recipe × ingredient WAC. Server recalculates on every
+                          BOM save and on every ingredient cost change, so
+                          this is always live.  */}
+                      <input
+                        type="text"
+                        value={(() => {
+                          const total = recipe.reduce((sum, line) => {
+                            const rm  = rawMaterials.find((r) => r.id === line.rawMaterialId);
+                            const qty = parseFloat(line.quantity) || 0;
+                            return sum + (rm?.costPrice ?? 0) * qty;
+                          }, 0);
+                          return total > 0 ? `₱${total.toFixed(2)}` : '—';
+                        })()}
+                        readOnly
+                        disabled
+                        className={`${INPUT_CLS} font-semibold text-[var(--accent)] cursor-not-allowed bg-muted/40`}
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
+                        Auto-computed from the recipe below — sum of (ingredient cost × quantity).
+                        Updates automatically when ingredient prices change. To adjust, edit the recipe or update ingredient costs.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        type="number" min="0" step="0.01"
+                        value={form.costPrice}
+                        onChange={(e) => setForm((f) => ({ ...f, costPrice: e.target.value }))}
+                        className={INPUT_CLS}
+                        placeholder="0.00"
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
+                        Required — used to compute COGS &amp; gross profit on every sale.
+                        For recipe items, the cost is computed from ingredients automatically.
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
 

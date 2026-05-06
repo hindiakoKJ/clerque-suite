@@ -448,24 +448,52 @@ export class InventoryService {
     const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Raw material not found');
 
-    const updated = await this.prisma.rawMaterial.update({
-      where: { id },
-      data: {
-        ...(dto.name          != null ? { name:          dto.name }                              : {}),
-        ...(dto.unit          != null ? { unit:          dto.unit }                              : {}),
-        ...(dto.costPrice     != null ? { costPrice:     new Prisma.Decimal(dto.costPrice) }     : {}),
-        ...(dto.isActive      != null ? { isActive:      dto.isActive }                          : {}),
-        // null explicitly clears the alert; undefined means "not provided — leave alone"
-        ...(dto.lowStockAlert !== undefined
-          ? { lowStockAlert: dto.lowStockAlert != null ? new Prisma.Decimal(dto.lowStockAlert) : null }
-          : {}),
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.rawMaterial.update({
+        where: { id },
+        data: {
+          ...(dto.name          != null ? { name:          dto.name }                              : {}),
+          ...(dto.unit          != null ? { unit:          dto.unit }                              : {}),
+          ...(dto.costPrice     != null ? { costPrice:     new Prisma.Decimal(dto.costPrice) }     : {}),
+          ...(dto.isActive      != null ? { isActive:      dto.isActive }                          : {}),
+          // null explicitly clears the alert; undefined means "not provided — leave alone"
+          ...(dto.lowStockAlert !== undefined
+            ? { lowStockAlert: dto.lowStockAlert != null ? new Prisma.Decimal(dto.lowStockAlert) : null }
+            : {}),
+        },
+      });
+
+      // Sprint 8: when an ingredient's cost is manually edited, ripple the
+      // change into every product that uses it. Same logic as the receipt
+      // path so display + ledger stay aligned.
+      if (dto.costPrice != null) {
+        const affectedProducts = await tx.bomItem.findMany({
+          where:    { rawMaterialId: id, product: { tenantId } },
+          select:   { productId: true },
+          distinct: ['productId'],
+        });
+        for (const { productId } of affectedProducts) {
+          const allBom = await tx.bomItem.findMany({
+            where:  { productId },
+            select: { quantity: true, rawMaterial: { select: { costPrice: true } } },
+          });
+          const newProductCost = allBom.reduce(
+            (sum, b) => sum + (b.rawMaterial?.costPrice != null ? Number(b.rawMaterial.costPrice) : 0) * Number(b.quantity),
+            0,
+          );
+          await tx.product.update({
+            where: { id: productId },
+            data:  { costPrice: new Prisma.Decimal(newProductCost.toFixed(4)) },
+          });
+        }
+      }
+
+      return {
+        ...updated,
+        costPrice:     updated.costPrice     != null ? Number(updated.costPrice)     : null,
+        lowStockAlert: updated.lowStockAlert != null ? Number(updated.lowStockAlert) : null,
+      };
     });
-    return {
-      ...updated,
-      costPrice:     updated.costPrice     != null ? Number(updated.costPrice)     : null,
-      lowStockAlert: updated.lowStockAlert != null ? Number(updated.lowStockAlert) : null,
-    };
   }
 
   /**
@@ -552,6 +580,35 @@ export class InventoryService {
           data: { costPrice: new Prisma.Decimal(newWac) },
         });
         unitCost = dto.costPrice; // value this delivery at its own cost
+
+        // Sprint 8: ripple the new WAC into every product that uses this
+        // ingredient. RECIPE_BASED products' Product.costPrice is derived
+        // from BOM × ingredient cost — when an ingredient's cost shifts,
+        // every recipe that uses it must shift too. Without this, the
+        // dashboard's gross-margin numbers and the "missing cost" warnings
+        // drift away from reality between receipts.
+        const affectedProducts = await tx.bomItem.findMany({
+          where:  { rawMaterialId, product: { tenantId } },
+          select: { productId: true },
+          distinct: ['productId'],
+        });
+        for (const { productId } of affectedProducts) {
+          const allBom = await tx.bomItem.findMany({
+            where:  { productId },
+            select: {
+              quantity:    true,
+              rawMaterial: { select: { costPrice: true } },
+            },
+          });
+          const newProductCost = allBom.reduce(
+            (sum, b) => sum + (b.rawMaterial?.costPrice != null ? Number(b.rawMaterial.costPrice) : 0) * Number(b.quantity),
+            0,
+          );
+          await tx.product.update({
+            where: { id: productId },
+            data:  { costPrice: new Prisma.Decimal(newProductCost.toFixed(4)) },
+          });
+        }
       }
 
       // Total value for the journal entry = (this delivery's qty) × (unit cost).

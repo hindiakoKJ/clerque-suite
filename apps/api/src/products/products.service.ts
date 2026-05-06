@@ -43,7 +43,11 @@ export class ProductsService {
 
     // Pre-load raw-material stock map for any RECIPE_BASED products.
     let rmStockMap = new Map<string, number>();
-    if (branchId) {
+    // Sprint 8: pre-load ingredient COST map too, so we can derive each
+    // recipe product's true costPrice live (overriding any stale value
+    // stored on Product.costPrice).
+    let rmCostMap  = new Map<string, number>();
+    {
       const allRmIds = new Set<string>();
       for (const p of products) {
         if (p.inventoryMode === 'RECIPE_BASED') {
@@ -51,11 +55,21 @@ export class ProductsService {
         }
       }
       if (allRmIds.size > 0) {
-        const rows = await this.prisma.rawMaterialInventory.findMany({
-          where: { branchId, rawMaterialId: { in: Array.from(allRmIds) } },
-          select: { rawMaterialId: true, quantity: true },
+        // Costs (always loaded — recipe cost derives from these)
+        const rmRows = await this.prisma.rawMaterial.findMany({
+          where:  { id: { in: Array.from(allRmIds) } },
+          select: { id: true, costPrice: true },
         });
-        rmStockMap = new Map(rows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+        rmCostMap = new Map(rmRows.map((r) => [r.id, r.costPrice != null ? Number(r.costPrice) : 0]));
+
+        // Stocks (only when a branch is in scope — used for max-producible)
+        if (branchId) {
+          const stockRows = await this.prisma.rawMaterialInventory.findMany({
+            where:  { branchId, rawMaterialId: { in: Array.from(allRmIds) } },
+            select: { rawMaterialId: true, quantity: true },
+          });
+          rmStockMap = new Map(stockRows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+        }
       }
     }
 
@@ -89,10 +103,32 @@ export class ProductsService {
         ((lowAlert != null && stockQty <= lowAlert) ||
          (lowAlert == null && p.inventoryMode === 'RECIPE_BASED' && stockQty <= 5));
 
+      // Sprint 8: derive recipe products' costPrice from BOM × ingredient
+      // cost, overriding any stale stored value. The stored Product.costPrice
+      // is kept in sync via saveBom + receiveRawMaterial + updateRawMaterial,
+      // but read-time computation guarantees the dashboard / margin reports
+      // are always live even if a write path was missed.
+      let costPriceFinal: number | null = p.costPrice != null ? Number(p.costPrice) : null;
+      if (p.inventoryMode === 'RECIPE_BASED' && p.bomItems.length > 0) {
+        let derived = 0;
+        for (const b of p.bomItems) {
+          derived += (rmCostMap.get(b.rawMaterialId) ?? 0) * Number(b.quantity);
+        }
+        costPriceFinal = derived;
+      }
+
       // Strip the bomItems from the response (frontend doesn't need them here)
       // and merge in derived fields.
-      const { bomItems: _bom, inventory: _inv, ...rest } = p as { bomItems: unknown; inventory: unknown };
-      return { ...rest, stockQty, isLowStock };
+      const { bomItems: _bom, inventory: _inv, costPrice: _cp, ...rest } = p as { bomItems: unknown; inventory: unknown; costPrice: unknown };
+      return {
+        ...rest,
+        costPrice: costPriceFinal,
+        stockQty,
+        isLowStock,
+        // Hint to the frontend: when true, the cost field is read-only and
+        // tracks ingredients automatically.
+        costPriceIsDerived: p.inventoryMode === 'RECIPE_BASED' && p.bomItems.length > 0,
+      };
     });
   }
 
@@ -116,17 +152,54 @@ export class ProductsService {
       },
     });
     if (!product) throw new NotFoundException('Product not found');
-    return product;
+
+    // Sprint 8: derive costPrice live for RECIPE_BASED products. Same
+    // override pattern as findAll — keeps detail views honest even if a
+    // write path missed the recipe-cost ripple.
+    const isRecipe = product.inventoryMode === 'RECIPE_BASED' && product.bomItems.length > 0;
+    let derivedCost: number | null = product.costPrice != null ? Number(product.costPrice) : null;
+    if (isRecipe) {
+      derivedCost = product.bomItems.reduce(
+        (sum, b) => sum + (b.rawMaterial?.costPrice != null ? Number(b.rawMaterial.costPrice) : 0) * Number(b.quantity),
+        0,
+      );
+    }
+
+    return {
+      ...product,
+      costPrice:          derivedCost as unknown as typeof product.costPrice,
+      costPriceIsDerived: isRecipe,
+    };
   }
 
   async create(tenantId: string, dto: CreateProductDto) {
     const { variants, bomItems, ...rest } = dto;
+
+    // Sprint 8: when a recipe is supplied at create time, derive costPrice
+    // from the BOM × ingredient WAC. This overrides any costPrice the form
+    // sent — recipe products' cost IS their ingredient cost, by definition.
+    let resolvedCostPrice = rest.costPrice;
+    if (bomItems && bomItems.length > 0) {
+      const rmIds  = bomItems.map((b) => b.rawMaterialId);
+      const rmRows = await this.prisma.rawMaterial.findMany({
+        where:  { id: { in: rmIds }, tenantId },
+        select: { id: true, costPrice: true },
+      });
+      const costById = new Map(rmRows.map((r) => [r.id, r.costPrice != null ? Number(r.costPrice) : 0]));
+      resolvedCostPrice = bomItems.reduce(
+        (sum, b) => sum + (costById.get(b.rawMaterialId) ?? 0) * Number(b.quantity),
+        0,
+      );
+    }
+
     return this.prisma.product.create({
       data: {
         tenantId,
         ...rest,
         price: new Prisma.Decimal(rest.price),
-        costPrice: rest.costPrice != null ? new Prisma.Decimal(rest.costPrice) : undefined,
+        costPrice: resolvedCostPrice != null ? new Prisma.Decimal(resolvedCostPrice) : undefined,
+        // Auto-set inventoryMode based on whether a BOM was supplied.
+        inventoryMode: bomItems && bomItems.length > 0 ? 'RECIPE_BASED' : (rest.inventoryMode ?? 'UNIT_BASED'),
         variants: variants
           ? { create: variants.map((v) => ({ ...v, price: v.price != null ? new Prisma.Decimal(v.price) : undefined })) }
           : undefined,
@@ -195,10 +268,37 @@ export class ProductsService {
         });
       }
 
-      // Sync inventoryMode flag
+      // Sync inventoryMode flag + auto-compute Product.costPrice from BOM.
+      // For RECIPE_BASED products, costPrice is DERIVED — it's the sum of
+      // (bom.qty × ingredient.costPrice) across all BOM lines using the
+      // current WAC for each ingredient. The frontend Edit Product form
+      // disables the cost field for recipes and shows this computed value
+      // as read-only. (Owners can still see + override via direct DB
+      // access for emergency cases, but no UI surface for that.)
+      const inventoryMode = items.length > 0 ? 'RECIPE_BASED' : 'UNIT_BASED';
+      let derivedCost: number | null = null;
+      if (items.length > 0) {
+        const rmIds  = items.map((b) => b.rawMaterialId);
+        const rmRows = await tx.rawMaterial.findMany({
+          where:  { id: { in: rmIds }, tenantId },
+          select: { id: true, costPrice: true },
+        });
+        const costById = new Map(rmRows.map((r) => [r.id, r.costPrice != null ? Number(r.costPrice) : 0]));
+        derivedCost = items.reduce(
+          (sum, b) => sum + (costById.get(b.rawMaterialId) ?? 0) * Number(b.quantity),
+          0,
+        );
+      }
+
       await tx.product.update({
         where: { id: productId },
-        data: { inventoryMode: items.length > 0 ? 'RECIPE_BASED' : 'UNIT_BASED' },
+        data: {
+          inventoryMode,
+          // Only overwrite costPrice when we computed a fresh value. Clearing
+          // the BOM (empty items) leaves costPrice alone — the product becomes
+          // UNIT_BASED and the owner can set their own cost.
+          ...(derivedCost != null ? { costPrice: new Prisma.Decimal(derivedCost.toFixed(4)) } : {}),
+        },
       });
 
       // Return updated BOM with raw material names

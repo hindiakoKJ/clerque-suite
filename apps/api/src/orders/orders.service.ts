@@ -225,25 +225,47 @@ export class OrdersService {
       // For every sold item, look up its bill-of-materials and deduct the
       // corresponding raw material inventory at the branch level.
       //
-      // Sprint 4A — when the tenant is on FIFO, also drain ingredient lots in
+      // Sprint 4A — when the tenant is on FIFO, drain ingredient lots in
       // receivedAt order so COGS reflects the actual cost of the ingredients
-      // that were consumed. WAC tenants skip the lot drain (their COGS uses
-      // the running average on RawMaterial.costPrice).
+      // that were consumed. WAC tenants use the running average on
+      // RawMaterial.costPrice.
+      //
+      // Sprint 8 — for RECIPE_BASED products, the COGS posted to the ledger
+      // MUST equal the sum of (bom.qty × ingredient cost) — NOT the manual
+      // Product.costPrice field. Otherwise an owner who hasn't kept their
+      // product cost-price in sync with their suppliers' price changes will
+      // see wildly inaccurate gross margin. We accumulate a per-product
+      // "true unit cost" from the BOM walk and pass it to the COGS event
+      // builder below, overriding the snapshot fallback for recipe products.
       const tenantValuation = await tx.tenant.findUnique({
         where:  { id: tenantId },
         select: { valuationMethod: true },
       });
       const useFifo = tenantValuation?.valuationMethod === 'FIFO';
 
+      // productId -> per-unit recipe cost (₱ per single finished unit).
+      // Populated only for products that have a BOM (i.e., RECIPE_BASED).
+      const recipeUnitCostByProduct = new Map<string, number>();
+
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
         const bomItems = await tx.bomItem.findMany({
           where:  { productId: item.productId },
-          select: { rawMaterialId: true, quantity: true },
+          select: {
+            rawMaterialId: true,
+            quantity:      true,
+            rawMaterial:   { select: { costPrice: true } },
+          },
         });
 
+        if (bomItems.length === 0) continue; // not a recipe product — skip
+
+        // Per-unit cost accumulator for this product (₱ per single unit).
+        let perUnitCost = 0;
+
         for (const bom of bomItems) {
-          const consumeQty = Number(bom.quantity) * soldQty;
+          const perUnitQty = Number(bom.quantity);    // ingredient qty per 1 finished unit
+          const consumeQty = perUnitQty * soldQty;     // total qty drained for this order line
 
           // Always update the aggregate inventory pool (used by max-producible
           // computation and low-stock alerts).
@@ -258,9 +280,14 @@ export class OrdersService {
             data:  { quantity: new Prisma.Decimal(after) },
           });
 
-          // FIFO: drain oldest lots first.
           if (useFifo) {
+            // FIFO: drain oldest lots first AND accumulate the actual lot
+            // unit-costs into the recipe cost. Each lot's unitCost was frozen
+            // at the receipt moment, so this gives the genuine historical
+            // cost of the ingredients in this specific drink.
             let remaining = consumeQty;
+            let drainedCost = 0;        // total ₱ drained from lots for this BOM line
+            let drainedQty  = 0;        // total qty actually drained (may be < consumeQty if under-stocked)
             const lots = await tx.rawMaterialLot.findMany({
               where: {
                 branchId:      payload.branchId,
@@ -277,13 +304,28 @@ export class OrdersService {
                 where: { id: lot.id },
                 data:  { qtyRemaining: new Prisma.Decimal(lotRem - drain) },
               });
-              remaining -= drain;
+              drainedCost += drain * Number(lot.unitCost);
+              drainedQty  += drain;
+              remaining   -= drain;
             }
-            // If we couldn't fully drain (under-stocked), the order still
-            // succeeds — but a future audit query can detect the gap because
-            // the inventory pool went negative-floored to 0 above.
+            // Per-unit cost contribution from this ingredient. If we couldn't
+            // fully drain (under-stocked), fall back to RawMaterial.costPrice
+            // for the remaining portion so COGS is never zero.
+            const bomLineUnitCost = soldQty > 0 ? drainedCost / soldQty : 0;
+            const shortfallQty    = consumeQty - drainedQty;
+            const fallbackUnitCost = shortfallQty > 0 && bom.rawMaterial?.costPrice != null
+              ? (shortfallQty * Number(bom.rawMaterial.costPrice)) / soldQty
+              : 0;
+            perUnitCost += bomLineUnitCost + fallbackUnitCost;
+          } else {
+            // WAC: use RawMaterial.costPrice (running average updated on receipts).
+            // Per-unit cost = bom.qty × ingredient WAC.
+            const wacCost = bom.rawMaterial?.costPrice != null ? Number(bom.rawMaterial.costPrice) : 0;
+            perUnitCost += perUnitQty * wacCost;
           }
         }
+
+        recipeUnitCostByProduct.set(item.productId, perUnitCost);
       }
 
       // Queue AccountingEvents
@@ -341,15 +383,29 @@ export class OrdersService {
             overheadRate,                      // 0 for non-manufacturing tenants
             lines: payload.items
               .map((i) => {
-                // Prefer Moving-Average Cost from inventory (set on costed
-                // receipts). Fall back to the till's snapshot of costPrice.
-                const wac = avgCostByProduct.get(i.productId);
-                const unitCost = wac ?? (i.costPrice != null ? Number(i.costPrice) : null);
+                // Cost resolution precedence (most → least authoritative):
+                //   1. RECIPE  — sum of actual ingredient costs for this order
+                //                (FIFO lot drains or WAC running averages).
+                //                This is the TRUE cost of the drink/food made.
+                //   2. WAC     — Moving-Average Cost from finished-goods
+                //                inventory (UNIT_BASED products on costed receipts).
+                //   3. SNAPSHOT — the till's snapshot of Product.costPrice
+                //                (UNIT_BASED legacy fallback only).
+                const recipe = recipeUnitCostByProduct.get(i.productId);
+                const wac    = avgCostByProduct.get(i.productId);
+                const unitCost =
+                  recipe != null ? recipe :
+                  wac    != null ? wac    :
+                  i.costPrice != null ? Number(i.costPrice) : null;
                 if (unitCost == null) return null;
                 const qty = Number(i.quantity);
                 // Overhead is added per unit produced. For MANUFACTURING, this
                 // shifts a slice of factory utilities into COGS (full absorption).
                 const overhead = overheadRate * qty;
+                const costMethod =
+                  recipe != null ? (useFifo ? 'RECIPE_FIFO' : 'RECIPE_WAC') :
+                  wac    != null ? 'WAC' :
+                                   'SNAPSHOT';
                 return {
                   productId:    i.productId,
                   quantity:     i.quantity,
@@ -357,7 +413,7 @@ export class OrdersService {
                   totalCost:    qty * unitCost + overhead,
                   directCost:   qty * unitCost,
                   overhead,
-                  costMethod:   wac != null ? 'WAC' : 'SNAPSHOT',
+                  costMethod,
                 };
               })
               .filter((line): line is NonNullable<typeof line> => line !== null),

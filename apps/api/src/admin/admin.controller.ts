@@ -61,6 +61,23 @@ export class AdminController {
     return this.svc.bootstrapHnsCorpPh(actor(req));
   }
 
+  /**
+   * Create or upgrade a real super-admin account. Idempotent — existing
+   * users are flag-checked + activated, never password-rotated. New users
+   * get a one-time generated password in the response.
+   *
+   * Use to provision the platform operator's personal account (different
+   * from any test/demo super admin that may exist).
+   */
+  @Post('bootstrap-super-admin')
+  @HttpCode(HttpStatus.OK)
+  bootstrapSuperAdmin(
+    @Request() req: { user: JwtPayload },
+    @Body() body: { email: string; name: string },
+  ) {
+    return this.svc.bootstrapSuperAdmin(body, actor(req));
+  }
+
   // ─── Tenant detail + actions ──────────────────────────────────────────────
 
   @Get('tenants/:id')

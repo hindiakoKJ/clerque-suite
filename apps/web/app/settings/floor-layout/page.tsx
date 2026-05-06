@@ -60,7 +60,33 @@ export default function FloorLayoutSettingsPage() {
     );
   }
 
-  // Tenant hasn't picked a tier yet — show CTA to setup wizard
+  // Floor Layout only applies to F&B tenants — bounce non-F&B back to Settings
+  // with a clear explanation. This shouldn't happen via UI clicks (the card is
+  // hidden), but a leftover bookmark / typed URL could land them here.
+  const businessType = layout.tenant?.businessType;
+  const isFnb = ['COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING'].includes(businessType ?? '');
+  if (!isFnb) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[70vh] px-6 text-center">
+        <Layout className="h-12 w-12 text-muted-foreground/40 mb-4" />
+        <h1 className="text-lg font-semibold mb-2">Not applicable to your business</h1>
+        <p className="text-sm text-muted-foreground max-w-md mb-6">
+          Floor Layout configures stations, printers, and KDS for cafés and
+          restaurants. Your business is registered as <span className="font-mono">{businessType ?? 'unknown'}</span>,
+          which doesn&apos;t use station routing.
+        </p>
+        <Link
+          href="/settings"
+          className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Settings
+        </Link>
+      </div>
+    );
+  }
+
+  // F&B tenant hasn't picked a tier yet — show CTA to setup wizard
   if (!coffeeShopTier) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[70vh] px-6 text-center">
@@ -70,15 +96,24 @@ export default function FloorLayoutSettingsPage() {
           Pick a Coffee Shop tier in the setup wizard to provision your stations,
           printers, and customer display.
         </p>
-        {canManage && (
+        <div className="flex gap-2">
           <Link
-            href="/settings/floor-layout/setup"
-            className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg text-white"
-            style={{ background: 'var(--accent)' }}
+            href="/settings"
+            className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors"
           >
-            Choose a layout
+            <ArrowLeft className="h-4 w-4" />
+            Back
           </Link>
-        )}
+          {canManage && (
+            <Link
+              href="/settings/floor-layout/setup"
+              className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg text-white"
+              style={{ background: 'var(--accent)' }}
+            >
+              Choose a layout
+            </Link>
+          )}
+        </div>
       </div>
     );
   }

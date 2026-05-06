@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { isFnbType } from '@repo/shared-types';
 import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
@@ -308,16 +309,21 @@ export default function SettingsPage() {
       </header>
 
       <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-        {/* Quick links — sub-pages that aren't tabs (each is its own route). */}
+        {/* Quick links — sub-pages that aren't tabs (each is its own route).
+            Floor Layout is gated to F&B tenants only — service / retail /
+            manufacturing don't have stations or KDS, so the card would be
+            misleading. */}
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Configuration</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <SettingsCard
-              href="/settings/floor-layout"
-              icon={LayoutGrid}
-              title="Floor Layout"
-              desc="Stations, printers, category routing, KDS"
-            />
+            {isFnbType(profile?.businessType) && (
+              <SettingsCard
+                href="/settings/floor-layout"
+                icon={LayoutGrid}
+                title="Floor Layout"
+                desc="Stations, printers, category routing, KDS"
+              />
+            )}
             <SettingsCard
               href="/settings/subscription"
               icon={CreditCard}

@@ -219,8 +219,19 @@ export class TenantService {
   async seedTestUsers(tenantId: string, callerId: string) {
     const tenant = await this.prisma.tenant.findUniqueOrThrow({
       where:  { id: tenantId },
-      select: { id: true, slug: true, name: true },
+      select: { id: true, slug: true, name: true, isDemoTenant: true },
     });
+
+    // Defense in depth: real customer tenants must NEVER seed test users.
+    // Predictable passwords on real-customer accounts would be an immediate
+    // security hole. The Subscription page hides the button for non-demo
+    // tenants, but the backend rejects regardless of the UI state.
+    if (!tenant.isDemoTenant) {
+      throw new ForbiddenException(
+        'Test-user seeding is only allowed on demo tenants. Real customer ' +
+        'tenants must create staff manually with secure passwords.',
+      );
+    }
 
     // Pick or create a default branch — many roles need one assigned
     let branch = await this.prisma.branch.findFirst({

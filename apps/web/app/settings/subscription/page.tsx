@@ -315,8 +315,10 @@ export default function SubscriptionPage() {
           </ul>
         </div>
 
-        {/* Test users seeder (BUSINESS_OWNER only) */}
-        <TestUsersSeederCard />
+        {/* Test users seeder (BUSINESS_OWNER only) — DEMO TENANTS ONLY.
+            Real customer tenants should never see this — predictable passwords
+            on real users would be a security hole. Gated by Tenant.isDemoTenant. */}
+        {data.isDemoTenant && <TestUsersSeederCard />}
 
 
         {/* Upgrade CTA */}

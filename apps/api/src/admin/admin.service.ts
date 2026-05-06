@@ -1078,6 +1078,97 @@ export class AdminService {
     };
   }
 
+  // ─── Super Admin bootstrap ───────────────────────────────────────────────
+  /**
+   * Create or upgrade a real super-admin account (no tenant scope, full
+   * platform access). Idempotent — re-running with the same email finds
+   * the existing user and ensures isSuperAdmin + isActive are correct.
+   *
+   * Use this to provision YOUR personal super-admin account (the human
+   * running Clerque platform-side). Different from demo / test super
+   * admins that may exist for development.
+   *
+   * On first creation: returns a generated password — show it ONCE.
+   * On subsequent runs: confirms the account exists with no password rotation.
+   */
+  async bootstrapSuperAdmin(args: { email: string; name: string }, actor: ConsoleActor) {
+    const email = args.email.toLowerCase().trim();
+    const name  = args.name.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new BadRequestException('Invalid email format.');
+    }
+
+    // SUPER_ADMIN role bypasses tenant scoping at the auth layer, but the
+    // User table requires a tenantId FK. Convention (per main.ts:115-127):
+    // assign super admins to ANY existing tenant — the role itself is what
+    // grants platform-wide access. We use the first active tenant we can
+    // find.
+    const homeTenant = await this.prisma.tenant.findFirst({
+      where:   { status: 'ACTIVE' },
+      orderBy: { createdAt: 'asc' },
+      select:  { id: true },
+    });
+    if (!homeTenant) {
+      throw new BadRequestException(
+        'No active tenant exists yet. Create at least one tenant before bootstrapping a super admin.',
+      );
+    }
+
+    const existing = await this.prisma.user.findFirst({ where: { email } });
+    if (existing) {
+      // Idempotent: ensure flags are right, never rotate password silently.
+      const updated = await this.prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          isActive: true,
+          role:     'SUPER_ADMIN',
+        },
+      });
+      await this.logAction({
+        actor,
+        userId:    updated.id,
+        userEmail: email,
+        action:    'TENANT_UPDATED' as const,
+        detail:    { upgrade: 'SUPER_ADMIN_BOOTSTRAP', existing: true },
+      });
+      return {
+        userId:            updated.id,
+        email:             updated.email,
+        generatedPassword: null,  // never rotate existing passwords
+        message:           `Super admin ${email} already exists — promoted to SUPER_ADMIN role + activated.`,
+      };
+    }
+
+    const generatedPassword = this.generatePassword();
+    const passwordHash = await bcrypt.hash(generatedPassword, 12);
+
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        name,
+        passwordHash,
+        role:     'SUPER_ADMIN',
+        isActive: true,
+        tenantId: homeTenant.id,
+      },
+    });
+
+    await this.logAction({
+      actor,
+      userId:    user.id,
+      userEmail: email,
+      action:    'TENANT_CREATED' as const,
+      detail:    { upgrade: 'SUPER_ADMIN_BOOTSTRAP', created: true },
+    });
+
+    return {
+      userId:            user.id,
+      email:             user.email,
+      generatedPassword,
+      message:           `Super admin ${email} created. Save the password — it's shown ONCE.`,
+    };
+  }
+
   // ─── HNS Corp PH bootstrap ───────────────────────────────────────────────
   /**
    * One-shot setup for the HNS Corp PH tenant — the company that runs

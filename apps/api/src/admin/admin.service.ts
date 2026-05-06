@@ -16,6 +16,7 @@ import { DEFAULT_APP_ACCESS } from '@repo/shared-types';
 import { DEMO_SCENARIOS, ScenarioKey, allProducts } from './demo-scenarios';
 import { COFFEE_SHOP_INGREDIENTS } from './coffee-shop-ingredients';
 import { COFFEE_SHOP_CATEGORIES } from './coffee-shop-categories';
+import { AccountsService } from '../accounting/accounts.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,7 +57,10 @@ export interface UpdateTenantProfileDto {
 @Injectable()
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private accounts: AccountsService,
+  ) {}
 
   // ─── Internal helpers ────────────────────────────────────────────────────
 
@@ -1071,6 +1075,181 @@ export class AdminService {
       skipped,
       total:    COFFEE_SHOP_CATEGORIES.length,
       stations: stations.map((s) => ({ id: s.id, kind: s.kind, name: s.name })),
+    };
+  }
+
+  // ─── HNS Corp PH bootstrap ───────────────────────────────────────────────
+  /**
+   * One-shot setup for the HNS Corp PH tenant — the company that runs
+   * Clerque. Idempotent: re-running tops up missing pieces but never
+   * duplicates the tenant, owner, branch, or expense JEs.
+   *
+   * Creates:
+   *   - Tenant: HNS Corp PH (slug: hnscorpph), SERVICE, UNREGISTERED, TIER_6
+   *   - Branch: Main Office
+   *   - Owner: hnscorpph@gmail.com (BUSINESS_OWNER role)
+   *   - Chart of Accounts (full PH-standard 59-account seed)
+   *   - 8 manual journal entries for the operating expenses to date,
+   *     all posted Dr Operating Expense / Cr 3010 Owner's Capital
+   *
+   * Returns the owner's generated password — show it ONCE so the user
+   * can log in. After first login they should change it.
+   */
+  async bootstrapHnsCorpPh(actor: ConsoleActor) {
+    const slug         = 'hnscorpph';
+    const ownerEmail   = 'hnscorpph@gmail.com';
+    const ownerName    = 'HNS Corp PH Owner';
+    const tenantName   = 'HNS Corp PH';
+
+    // ── Step 1: Find or create the tenant ────────────────────────────────
+    let tenant = await this.prisma.tenant.findUnique({ where: { slug } });
+    let generatedPassword: string | null = null;
+
+    if (!tenant) {
+      generatedPassword = this.generatePassword();
+      const passwordHash = await bcrypt.hash(generatedPassword, 12);
+
+      tenant = await this.prisma.$transaction(async (tx) => {
+        const t = await tx.tenant.create({
+          data: {
+            name:         tenantName,
+            slug,
+            businessType: 'SERVICE' as Prisma.TenantCreateInput['businessType'],
+            tier:         'TIER_6' as Prisma.TenantCreateInput['tier'],
+            taxStatus:    'UNREGISTERED' as Prisma.TenantCreateInput['taxStatus'],
+            contactEmail: ownerEmail,
+            status:       'ACTIVE',
+          },
+        });
+
+        const branch = await tx.branch.create({
+          data: { tenantId: t.id, name: 'Main Office', isActive: true },
+        });
+
+        const appAccess = DEFAULT_APP_ACCESS['BUSINESS_OWNER'] ?? [];
+        await tx.user.create({
+          data: {
+            tenantId: t.id,
+            branchId: branch.id,
+            name:     ownerName,
+            email:    ownerEmail.toLowerCase(),
+            passwordHash,
+            role:     'BUSINESS_OWNER',
+            isActive: true,
+            appAccess: {
+              create: appAccess.map((a) => ({
+                appCode: a.app as Prisma.UserAppAccessCreateWithoutUserInput['appCode'],
+                level:   a.level as Prisma.UserAppAccessCreateWithoutUserInput['level'],
+              })),
+            },
+          },
+        });
+
+        return t;
+      });
+    }
+
+    // ── Step 2: Seed Chart of Accounts (idempotent — skips existing) ─────
+    await this.accounts.seedDefaultAccounts(tenant.id);
+
+    // Resolve account IDs we need for the JEs.
+    const codes = ['6148', '6192', '6211', '3010'];
+    const accountRows = await this.prisma.account.findMany({
+      where:  { tenantId: tenant.id, code: { in: codes } },
+      select: { id: true, code: true },
+    });
+    const accountByCode = new Map(accountRows.map((a) => [a.code, a.id]));
+    for (const code of codes) {
+      if (!accountByCode.has(code)) {
+        throw new BadRequestException(`Required account ${code} missing from COA.`);
+      }
+    }
+
+    // ── Step 3: Post the 8 operating expenses ────────────────────────────
+    // Each expense becomes one balanced JE: Dr Expense / Cr 3010 Owner's
+    // Capital (since the owner paid these from personal funds before the
+    // business had its own cash/bank). The JE is identified by `reference`
+    // so re-running the bootstrap doesn't duplicate any entry.
+    const ownerCapitalId = accountByCode.get('3010')!;
+    const expenses = [
+      { date: '2026-04-20', desc: 'Claude Pro subscription',           amount:  1390.97, code: '6148', ref: 'HNS-EXP-001' },
+      { date: '2026-04-24', desc: 'Claude Max upgrade',                amount:  5776.54, code: '6148', ref: 'HNS-EXP-002' },
+      { date: '2026-04-26', desc: 'Cloudflare hosting',                amount:   734.85, code: '6148', ref: 'HNS-EXP-003' },
+      { date: '2026-05-01', desc: 'eSecure SEC filing — KJ',           amount:   400.00, code: '6192', ref: 'HNS-EXP-004' },
+      { date: '2026-05-01', desc: 'eSecure SEC filing — Regine',       amount:   400.00, code: '6192', ref: 'HNS-EXP-005' },
+      { date: '2026-05-01', desc: 'Reimburse M. Manuel — eSecure SEC', amount:   400.00, code: '6192', ref: 'HNS-EXP-006' },
+      { date: '2026-05-04', desc: 'Laptop charger',                    amount:  1522.36, code: '6211', ref: 'HNS-EXP-007' },
+      { date: '2026-05-04', desc: 'Laptop battery',                    amount:  2041.94, code: '6211', ref: 'HNS-EXP-008' },
+    ];
+
+    let createdCount = 0;
+    let skippedCount = 0;
+    for (const exp of expenses) {
+      const existing = await this.prisma.journalEntry.findFirst({
+        where: { tenantId: tenant.id, reference: exp.ref },
+      });
+      if (existing) { skippedCount++; continue; }
+
+      const eventDate = new Date(`${exp.date}T12:00:00+08:00`);
+      const expenseAccountId = accountByCode.get(exp.code)!;
+
+      // Generate a stable entry number that won't collide across runs.
+      const yyyymmdd = exp.date.replace(/-/g, '');
+      const seq = String(await this.prisma.journalEntry.count({
+        where: { tenantId: tenant.id, date: { gte: new Date(`${exp.date}T00:00:00+08:00`), lte: new Date(`${exp.date}T23:59:59+08:00`) } },
+      }) + 1).padStart(4, '0');
+      const entryNumber = `JE-${yyyymmdd}-${seq}`;
+
+      await this.prisma.journalEntry.create({
+        data: {
+          tenantId:    tenant.id,
+          entryNumber,
+          date:        eventDate,
+          postingDate: eventDate,
+          description: exp.desc,
+          reference:   exp.ref,
+          status:      'POSTED',
+          source:      'MANUAL',
+          createdBy:   actor.email,
+          postedBy:    actor.email,
+          postedAt:    new Date(),
+          lines: {
+            create: [
+              { accountId: expenseAccountId, debit:  new Prisma.Decimal(exp.amount), credit: new Prisma.Decimal(0),          description: exp.desc },
+              { accountId: ownerCapitalId,   debit:  new Prisma.Decimal(0),          credit: new Prisma.Decimal(exp.amount), description: `Owner-funded — ${exp.desc}` },
+            ],
+          },
+        },
+      });
+      createdCount++;
+    }
+
+    await this.logAction({
+      actor,
+      tenantId:   tenant.id,
+      tenantSlug: slug,
+      userEmail:  ownerEmail,
+      action:     'TENANT_CREATED',
+      detail:     {
+        bootstrap: 'HNS_CORP_PH',
+        expensesCreated: createdCount,
+        expensesSkipped: skippedCount,
+      },
+    });
+
+    const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
+
+    return {
+      tenantId:           tenant.id,
+      slug,
+      ownerEmail,
+      generatedPassword,  // null on subsequent runs; only filled on first bootstrap
+      expensesCreated:    createdCount,
+      expensesSkipped:    skippedCount,
+      totalExpensesPhp:   totalExpenses,
+      message: generatedPassword
+        ? `HNS Corp PH bootstrapped — owner password shown ONCE, save it now.`
+        : `HNS Corp PH already exists — ${createdCount} new expense JEs posted, ${skippedCount} already present.`,
     };
   }
 

@@ -49,6 +49,18 @@ export class AdminController {
     return this.svc.createTenant(dto, actor(req));
   }
 
+  /**
+   * One-shot bootstrap for HNS Corp PH (the company that runs Clerque).
+   * Idempotent — creates tenant + owner + branch + COA + 8 expense JEs
+   * on first run; tops up missing pieces only on subsequent runs.
+   * Returns the generated owner password ONCE on first run.
+   */
+  @Post('bootstrap-hns-corp-ph')
+  @HttpCode(HttpStatus.OK)
+  bootstrapHnsCorpPh(@Request() req: { user: JwtPayload }) {
+    return this.svc.bootstrapHnsCorpPh(actor(req));
+  }
+
   // ─── Tenant detail + actions ──────────────────────────────────────────────
 
   @Get('tenants/:id')

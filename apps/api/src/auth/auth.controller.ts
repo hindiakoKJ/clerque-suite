@@ -134,6 +134,7 @@ export class AuthController {
    * The endpoint requires JWT auth so we know which tenant to scope the PIN
    * lookup to — prevents cross-tenant PIN reuse.
    */
+  @UseGuards(JwtAuthGuard)
   @Post('verify-supervisor-pin')
   @HttpCode(HttpStatus.OK)
   async verifySupervisorPin(
@@ -154,6 +155,7 @@ export class AuthController {
    * Request:  { currentPassword: "...", newPin: "1234" }
    * Returns:  204
    */
+  @UseGuards(JwtAuthGuard)
   @Post('set-supervisor-pin')
   @HttpCode(HttpStatus.NO_CONTENT)
   async setSupervisorPin(

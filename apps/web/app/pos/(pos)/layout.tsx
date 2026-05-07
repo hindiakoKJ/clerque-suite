@@ -42,7 +42,10 @@ const POS_ACCENT_SOFT = 'hsl(217 91% 55% / 0.08)';
 // Nav items are ALWAYS shown to every POS user but grayed-out (with lock icon)
 // when the current role doesn't have access — so staff can see the full system
 // capability and understand what each role unlocks.
-const TERMINAL_ROLES   = ['SALES_LEAD', 'CASHIER'] as const;
+// Owner is a legitimate till operator on Solo / small-tenant plans where
+// the owner IS the cashier. Backend already permits BUSINESS_OWNER on
+// shifts.controller and orders.controller — frontend now mirrors that.
+const TERMINAL_ROLES   = ['SALES_LEAD', 'CASHIER', 'BUSINESS_OWNER', 'SUPER_ADMIN'] as const;
 const DASHBOARD_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'FINANCE_LEAD'] as const;
 const ORDERS_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER', 'EXTERNAL_AUDITOR'] as const;
 const PRODUCTS_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
@@ -170,7 +173,13 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // session they're in. Useful when admin and cashier are both on the same
   // shop floor on different tablets — the label tells you at a glance.
   // Binary distinction: anyone who operates the till = Cashier, otherwise Admin.
-  const roleLabel: string = inRoles(role, TERMINAL_ROLES) ? 'Cashier' : 'Admin';
+  // Label shown after the app name in the sidebar header. Owners running their
+  // own till see "Owner" instead of "Cashier" for clarity. SUPER_ADMIN always
+  // shows "Admin" regardless of being in TERMINAL_ROLES.
+  const roleLabel: string =
+    role === 'SUPER_ADMIN'    ? 'Admin'   :
+    role === 'BUSINESS_OWNER' ? 'Owner'   :
+    inRoles(role, TERMINAL_ROLES) ? 'Cashier' : 'Admin';
 
   // Build nav — ALL items are shown to every POS user.
   // Items the current role cannot access appear grayed-out with a lock icon.

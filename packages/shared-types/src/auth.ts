@@ -147,6 +147,16 @@ export interface JwtPayload {
   modulePayroll?: boolean;
   /** Authoritative plan code; drives per-plan staff cap + module checks. */
   planCode?:      import('./plans').PlanCode;
+  /**
+   * Plan-driven cross-cutting feature flags (custom roles, audit log, API,
+   * white-label, etc.). Baked at JWT issuance so guards can check without
+   * a DB lookup. Derived from PLAN_FEATURES[planCode].
+   */
+  planFeatures?:  import('./plans').PlanFeatures;
+  /**
+   * Plan limits — branch / AI / API hourly rate. Derived from PLAN_LIMITS[planCode].
+   */
+  planLimits?:    import('./plans').PlanLimits;
   iat?: number;
   exp?: number;
 }

@@ -1215,6 +1215,7 @@ export class AdminService {
             modulePayroll:   true,
             staffSeatQuota:  20,  // matches PLAN_CAPS.SUITE_T3.baseSeats
             staffSeatAddons: 0,
+            branchQuota:     5,   // matches PLAN_LIMITS.SUITE_T3.maxBranches
             taxStatus:    'UNREGISTERED' as Prisma.TenantCreateInput['taxStatus'],
             contactEmail: ownerEmail,
             status:       'ACTIVE',
@@ -1391,6 +1392,7 @@ export class AdminService {
             modulePayroll:   true,
             staffSeatQuota:  8,
             staffSeatAddons: 0,
+            branchQuota:     3,   // matches PLAN_LIMITS.SUITE_T2.maxBranches
             taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
             tinNumber:    '009-876-543-000',
             businessName: 'Acme Consulting Services Inc.',
@@ -1667,7 +1669,7 @@ export class AdminService {
     actor: ConsoleActor,
   ) {
     // Lazy-import to avoid loading shared-types in cold paths.
-    const { PLAN_CAPS } = await import('@repo/shared-types');
+    const { PLAN_CAPS, PLAN_LIMITS, validateSoloModuleCombo } = await import('@repo/shared-types');
 
     const before = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -1727,21 +1729,65 @@ export class AdminService {
       throw new BadRequestException(`Pair plans require exactly 2 modules; current selection has ${onCount}.`);
     }
 
+    // Solo plan additional restriction: POS only — no Ledger, no Payroll.
+    const soloError = validateSoloModuleCombo(
+      targetPlan,
+      flagsAfter.modulePos,
+      flagsAfter.moduleLedger,
+      flagsAfter.modulePayroll,
+    );
+    if (soloError) {
+      throw new BadRequestException(soloError);
+    }
+
+    // Branch quota — auto-sync to PLAN_LIMITS so it always matches the plan.
+    const planLimits = PLAN_LIMITS[targetPlan];
+
+    // Safety check: if downgrading would put the tenant over the new branch cap,
+    // refuse the change so existing data isn't orphaned.
+    const currentBranchCount = await this.prisma.branch.count({
+      where: { tenantId, isActive: true },
+    });
+    if (currentBranchCount > planLimits.maxBranches) {
+      throw new BadRequestException(
+        `Cannot downgrade to ${targetPlan}: tenant has ${currentBranchCount} active branches but the plan allows only ${planLimits.maxBranches}. Deactivate branches first.`,
+      );
+    }
+    const currentHeadcount = await this.prisma.user.count({
+      where: {
+        tenantId, isActive: true,
+        role: { notIn: ['SUPER_ADMIN', 'EXTERNAL_AUDITOR', 'KIOSK_DISPLAY'] },
+      },
+    });
+    if (currentHeadcount > cap.maxTotal) {
+      throw new BadRequestException(
+        `Cannot downgrade to ${targetPlan}: tenant has ${currentHeadcount} active staff but the plan allows only ${cap.maxTotal}. Deactivate staff first.`,
+      );
+    }
+
     const after = await this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
         ...(dto.planCode        !== undefined ? { planCode: dto.planCode } : {}),
         ...(dto.staffSeatAddons !== undefined ? { staffSeatAddons: dto.staffSeatAddons } : {}),
-        // Keep base seats in sync with PLAN_CAPS so the DB column always matches truth.
+        // Keep base seats + branch quota in sync with PLAN constants so the
+        // DB columns always match truth. Single source of truth = shared-types.
         staffSeatQuota: cap.baseSeats,
+        branchQuota:    planLimits.maxBranches,
         ...moduleOverrides,
       },
       select: {
         id: true, name: true, planCode: true,
         modulePos: true, moduleLedger: true, modulePayroll: true,
-        staffSeatQuota: true, staffSeatAddons: true,
+        staffSeatQuota: true, staffSeatAddons: true, branchQuota: true,
       },
     });
+
+    // Force re-login on plan change so the new module flags + caps land in
+    // the JWT immediately rather than waiting up to 15 min for token refresh.
+    if (dto.planCode !== undefined && dto.planCode !== before.planCode) {
+      await this.prisma.userSession.deleteMany({ where: { user: { tenantId } } });
+    }
 
     await this.logAction({
       actor,
@@ -1851,6 +1897,7 @@ export class AdminService {
             modulePayroll:   false,
             staffSeatQuota:  5,
             staffSeatAddons: 0,
+            branchQuota:     2,   // matches PLAN_LIMITS.STD_TEAM.maxBranches
             taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
             isDemoTenant: true,
             contactEmail: ownerEmail,

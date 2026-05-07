@@ -254,6 +254,14 @@ export class AuthService {
       planCode:          (tenant?.planCode ?? 'SUITE_T2') as JwtPayload['planCode'],
     };
 
+    // Bake plan-derived feature flags + limits into the JWT for fast guards.
+    try {
+      const { PLAN_FEATURES, PLAN_LIMITS } = require('@repo/shared-types') as typeof import('@repo/shared-types');
+      const pc = (payload.planCode ?? 'SUITE_T2') as keyof typeof PLAN_FEATURES;
+      payload.planFeatures = PLAN_FEATURES[pc];
+      payload.planLimits   = PLAN_LIMITS[pc];
+    } catch { /* shared-types not loaded — JWT still valid without these */ }
+
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_EXPIRY });
     const refreshToken = this.jwt.sign(
       { sub: userId, type: 'refresh' },

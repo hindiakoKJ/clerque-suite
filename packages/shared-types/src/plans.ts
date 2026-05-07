@@ -99,12 +99,112 @@ export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
   },
 
   // ── Enterprise (sales-led, custom contract) ─────────────────────────────
+  // Hard ceiling: 100 staff. Above that = bespoke contract negotiated separately.
   ENTERPRISE: {
-    moduleCount: 3, baseSeats: 50, maxAddons: 9_950, maxTotal: 10_000,
+    moduleCount: 3, baseSeats: 50, maxAddons: 50, maxTotal: 100,
     pricePhpMonthlyCents: 0, addonSeatPhpMonthlyCents: 0,
     annualMonthEquivalent: 10,
   },
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAN_LIMITS — branch / AI / API ceilings per plan.
+// Every value is a HARD CEILING — no unlimited tiers anywhere.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PlanLimits {
+  maxBranches:    number;
+  maxAiPerMonth:  number;
+  apiRatePerHour: number;  // 0 = no API access
+}
+
+export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
+  STD_SOLO:   { maxBranches:  1, maxAiPerMonth:    0, apiRatePerHour:     0 },
+  STD_DUO:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
+  STD_TEAM:   { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
+  STD_BIZ:    { maxBranches:  3, maxAiPerMonth:  100, apiRatePerHour:   100 },
+  PAIR_T1:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
+  PAIR_T2:    { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
+  PAIR_T3:    { maxBranches:  3, maxAiPerMonth:  100, apiRatePerHour:   100 },
+  SUITE_T1:   { maxBranches:  1, maxAiPerMonth:   50, apiRatePerHour:     0 },
+  SUITE_T2:   { maxBranches:  3, maxAiPerMonth:  200, apiRatePerHour:   500 },
+  SUITE_T3:   { maxBranches:  5, maxAiPerMonth:  500, apiRatePerHour: 1_000 },
+  ENTERPRISE: { maxBranches: 15, maxAiPerMonth: 1_000, apiRatePerHour: 5_000 },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAN_FEATURES — cross-cutting features. NOT vertical-specific (verticals like
+// Laundry, F&B, Construction are POS-module features available at every plan
+// that includes POS).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ApiAccessLevel = 'none' | 'read' | 'readwrite';
+
+export interface PlanFeatures {
+  /** BIR forms (2550Q, 1701Q, 2551Q, EWT, SAWT, 2307, EIS) */
+  birForms:           boolean;
+  /** Owner can edit the 38-permission matrix to create custom role variants */
+  customRoles:        boolean;
+  /** UI to browse the centralized audit trail */
+  auditLog:           boolean;
+  /** Reports that join sales × AR × payroll cost across modules */
+  crossModuleReports: boolean;
+  /** Buy AI prompt add-on packages on top of included quota */
+  aiAddons:           boolean;
+  /** External REST API access level */
+  apiAccess:          ApiAccessLevel;
+  /** Strip Clerque branding from receipts; replace with tenant's */
+  whitelabel:         boolean;
+  /** tenant.com instead of clerque.com/tenant */
+  customDomain:       boolean;
+}
+
+export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
+  STD_SOLO:   { birForms: false, customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false },
+  STD_DUO:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false },
+  STD_TEAM:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false },
+  STD_BIZ:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: false, aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false },
+  PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false },
+  PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false },
+  PAIR_T3:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false },
+  SUITE_T1:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false },
+  SUITE_T2:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false },
+  SUITE_T3:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: false, customDomain: false },
+  ENTERPRISE: { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: true,  customDomain: true  },
+};
+
+/** Plan-level setup fee in PHP centavos. One-time, waived on annual prepay. */
+export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
+  STD_SOLO:        0,
+  STD_DUO:    49_900,
+  STD_TEAM:   99_900,
+  STD_BIZ:   199_900,
+  PAIR_T1:    99_900,
+  PAIR_T2:   199_900,
+  PAIR_T3:   349_900,
+  SUITE_T1:  149_900,
+  SUITE_T2:  299_900,
+  SUITE_T3:  499_900,
+  ENTERPRISE: 999_900,
+};
+
+/**
+ * Solo plan additional rule — only POS module is allowed. Returns the error
+ * message if a Solo tenant is attempting to enable Ledger or Payroll, or
+ * null if the combination is valid.
+ */
+export function validateSoloModuleCombo(
+  planCode: PlanCode,
+  modulePos: boolean,
+  moduleLedger: boolean,
+  modulePayroll: boolean,
+): string | null {
+  if (planCode !== 'STD_SOLO') return null;
+  if (!modulePos)   return 'Solo plan requires POS to be enabled.';
+  if (moduleLedger) return 'Solo plan does not include Ledger. Choose Duo or higher.';
+  if (modulePayroll) return 'Solo plan does not include Payroll. Choose Duo or higher.';
+  return null;
+}
 
 /** Returns the user-facing display name for a plan code. */
 export function planLabel(code: PlanCode): string {

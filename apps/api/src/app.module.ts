@@ -40,6 +40,8 @@ import { CustomerDisplayModule } from './customer-display/customer-display.modul
 import { KdsModule } from './kds/kds.module';
 import { IngredientReportsModule } from './ingredient-reports/ingredient-reports.module';
 import { LaundryModule } from './laundry/laundry.module';
+import { WarehouseModule } from './warehouse/warehouse.module';
+import { ProjectsModule } from './projects/projects.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -86,6 +88,8 @@ import { HealthController } from './health/health.controller';
     KdsModule,
     IngredientReportsModule,
     LaundryModule,
+    WarehouseModule,
+    ProjectsModule,
   ],
 })
 export class AppModule {}

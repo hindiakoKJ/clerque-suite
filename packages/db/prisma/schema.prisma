@@ -452,6 +452,9 @@ model Tenant {
   bankReconciliations BankReconciliation[]
   journalTemplates    JournalTemplate[]
   laundryOrders       LaundryOrder[]
+  stockTransfers      StockTransfer[]
+  cycleCounts         CycleCount[]
+  projects            Project[]
   /// Per-tenant tunable severity thresholds for the Ledger ops dashboard.
   /// JSON shape (keys all numbers, optional):
   ///   { eventLagWarnMs, eventLagBadMs, pendingEventsWarn, failedEventsWarn,
@@ -595,7 +598,7 @@ model Branch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant        Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   users         User[]
   inventory     InventoryItem[]
   orders        Order[]
@@ -605,6 +608,11 @@ model Branch {
   apBills       APBill[]
   apPayments    APPayment[]
   laundryOrders LaundryOrder[]
+  transfersOut  StockTransfer[]    @relation("TransferFromBranch")
+  transfersIn   StockTransfer[]    @relation("TransferToBranch")
+  cycleCounts   CycleCount[]
+  projects      Project[]
+  issuances     MaterialIssuance[] @relation("MaterialIssuanceBranch")
 
   @@map("branches")
 }
@@ -847,6 +855,9 @@ model RawMaterial {
   variantBomItems VariantBomItem[]
   inventory       RawMaterialInventory[]
   lots            RawMaterialLot[]
+  transferLines   StockTransferLine[]
+  cycleCountLines CycleCountLine[]
+  issuanceLines   MaterialIssuanceLine[]
 
   @@index([tenantId, isActive])
   @@map("raw_materials")
@@ -1830,6 +1841,7 @@ model Customer {
   invoices      ARInvoice[]
   payments      ARPayment[]
   laundryOrders LaundryOrder[]
+  projects      Project[]
 
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
@@ -2854,4 +2866,189 @@ model ThirteenthMonth {
 
   @@unique([tenantId, userId, year])
   @@map("thirteenth_month")
+}
+
+// ─── Warehousing: Stock transfers + cycle counts (Sprint 6, 2026-05-08) ──────
+//
+// StockTransfer moves raw materials between branches. The receiving branch's
+// RawMaterialInventory increases when the transfer is RECEIVED; the sending
+// branch's decreases at SENT time. Lots are NOT moved — the receiving branch
+// gets a fresh lot at the originating lot's WAC. Audit trail preserved via
+// inline lines + status timeline.
+
+enum StockTransferStatus {
+  DRAFT // created but not yet sent
+  IN_TRANSIT // sent from origin; awaiting receipt
+  RECEIVED // booked at destination
+  CANCELLED
+}
+
+model StockTransfer {
+  id             String              @id @default(cuid())
+  tenantId       String
+  transferNumber String // ST-{YYYY}-{6-digit-seq}
+  fromBranchId   String
+  toBranchId     String
+  status         StockTransferStatus @default(DRAFT)
+  notes          String?
+  createdById    String
+  sentAt         DateTime?
+  receivedAt     DateTime?
+  receivedById   String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fromBranch Branch              @relation("TransferFromBranch", fields: [fromBranchId], references: [id])
+  toBranch   Branch              @relation("TransferToBranch", fields: [toBranchId], references: [id])
+  lines      StockTransferLine[]
+
+  @@unique([tenantId, transferNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, fromBranchId, createdAt])
+  @@index([tenantId, toBranchId, createdAt])
+  @@map("stock_transfers")
+}
+
+model StockTransferLine {
+  id            String  @id @default(cuid())
+  transferId    String
+  rawMaterialId String
+  quantity      Decimal @db.Decimal(12, 3)
+  unitCost      Decimal @db.Decimal(12, 4) // copied from origin WAC at send time
+  notes         String?
+
+  transfer    StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial   @relation(fields: [rawMaterialId], references: [id])
+
+  @@index([transferId])
+  @@index([rawMaterialId])
+  @@map("stock_transfer_lines")
+}
+
+// CycleCount — physical-count session per branch. Captures expected vs actual
+// quantity per ingredient/product; on POST creates an InventoryLog adjustment
+// for any discrepancies. Provides audit trail for "I counted X, system said Y."
+
+enum CycleCountStatus {
+  OPEN
+  POSTED
+  CANCELLED
+}
+
+model CycleCount {
+  id          String           @id @default(cuid())
+  tenantId    String
+  branchId    String
+  countNumber String // CC-{YYYY}-{6-digit-seq}
+  status      CycleCountStatus @default(OPEN)
+  notes       String?
+  startedById String
+  postedById  String?
+  postedAt    DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  tenant Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch           @relation(fields: [branchId], references: [id])
+  lines  CycleCountLine[]
+
+  @@unique([tenantId, countNumber])
+  @@index([tenantId, branchId, status])
+  @@map("cycle_counts")
+}
+
+model CycleCountLine {
+  id            String  @id @default(cuid())
+  countId       String
+  rawMaterialId String
+  expectedQty   Decimal @db.Decimal(12, 3) // snapshot from RawMaterialInventory at start
+  countedQty    Decimal @db.Decimal(12, 3) // operator entry
+  /// Computed at post: countedQty - expectedQty (positive = found extra; negative = shrinkage).
+  varianceQty   Decimal @default(0) @db.Decimal(12, 3)
+  notes         String?
+
+  count       CycleCount  @relation(fields: [countId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id])
+
+  @@index([countId])
+  @@index([rawMaterialId])
+  @@map("cycle_count_lines")
+}
+
+// ─── Construction: Project + MaterialIssuance (Sprint 6, 2026-05-08) ─────────
+//
+// Lightweight project-costing primitives for construction-material vendors,
+// fabricators, and contractors. A Project has a budget, a status, and
+// MaterialIssuance rows that record raw materials sent from inventory to
+// the job site. Issuance reduces RawMaterialInventory at the source branch
+// and posts a Dr Project-WIP / Cr Inventory accounting event.
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+model Project {
+  id           String        @id @default(cuid())
+  tenantId     String
+  projectCode  String // PRJ-{YYYY}-{6-digit-seq}
+  name         String
+  customerId   String? // optional link to AR customer
+  branchId     String? // optional default source branch
+  status       ProjectStatus @default(PLANNING)
+  budgetAmount Decimal?      @db.Decimal(14, 2)
+  startDate    DateTime?
+  endDate      DateTime?
+  notes        String?
+  createdById  String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer  Customer?          @relation(fields: [customerId], references: [id])
+  branch    Branch?            @relation(fields: [branchId], references: [id])
+  issuances MaterialIssuance[]
+
+  @@unique([tenantId, projectCode])
+  @@index([tenantId, status])
+  @@map("projects")
+}
+
+model MaterialIssuance {
+  id             String   @id @default(cuid())
+  tenantId       String
+  projectId      String
+  branchId       String // source branch
+  issuanceNumber String // ISS-{YYYY}-{6-digit-seq}
+  issuedById     String
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  project Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  branch  Branch                 @relation("MaterialIssuanceBranch", fields: [branchId], references: [id])
+  lines   MaterialIssuanceLine[]
+
+  @@unique([tenantId, issuanceNumber])
+  @@index([projectId, createdAt])
+  @@map("material_issuances")
+}
+
+model MaterialIssuanceLine {
+  id            String  @id @default(cuid())
+  issuanceId    String
+  rawMaterialId String
+  quantity      Decimal @db.Decimal(12, 3)
+  unitCost      Decimal @db.Decimal(12, 4) // copied from RM WAC at issue time
+  notes         String?
+
+  issuance    MaterialIssuance @relation(fields: [issuanceId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial      @relation(fields: [rawMaterialId], references: [id])
+
+  @@index([issuanceId])
+  @@index([rawMaterialId])
+  @@map("material_issuance_lines")
 }

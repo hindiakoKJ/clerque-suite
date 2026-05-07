@@ -5,7 +5,7 @@ import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
-  Shirt, Sparkles,
+  Shirt, Sparkles, Truck, ClipboardCheck, Hammer,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType } from '@repo/shared-types';
@@ -55,6 +55,12 @@ const PENDING_SYNC_ROLES = ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS
 // Laundry workflow — same realistic crew of a small laundromat as the API guard.
 const LAUNDRY_OPS_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
                               'SALES_LEAD', 'CASHIER', 'GENERAL_EMPLOYEE', 'MDM'] as const;
+// Warehousing — multi-branch transfers + cycle counts. Same roles as inventory mgmt.
+const WAREHOUSE_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+                              'WAREHOUSE_STAFF', 'MDM'] as const;
+// Projects (construction / job-cost) — Owner + Branch Manager primary.
+const PROJECT_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+                              'MDM', 'WAREHOUSE_STAFF'] as const;
 // My Expenses moved to /payroll/my-expenses — it's a personal-reimbursement
 // concept (HR territory), not a POS sale-floor concept. POS will instead get
 // a dedicated Cash Paid-Out / Cash Drop feature for till petty-cash.
@@ -193,6 +199,9 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
           makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,        role),
           makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,      role),
           makeNavItem('/pos/inventory',    'Ingredients', ClipboardList,   INVENTORY_ROLES,     role),
+          makeNavItem('/pos/warehouse/transfers',    'Transfers',    Truck,          WAREHOUSE_ROLES, role),
+          makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role),
+          makeNavItem('/pos/projects',     'Projects',    Hammer,          PROJECT_ROLES,       role),
           makeNavItem('/pos/staff',        'Staff',       Users,           STAFF_ROLES,         role),
           makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
           makeNavItem('/pos/promotions',   'Promotions',  Tag,             PROMOTIONS_ROLES,    role),

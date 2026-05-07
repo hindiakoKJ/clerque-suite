@@ -1207,6 +1207,14 @@ export class AdminService {
             slug,
             businessType: 'SERVICE' as Prisma.TenantCreateInput['businessType'],
             tier:         'TIER_6' as Prisma.TenantCreateInput['tier'],
+            // Modular pricing — HNS Corp PH (operator of Clerque) gets the
+            // full SUITE_T3 plan: all 3 modules, 50-staff ceiling.
+            planCode:        'SUITE_T3',
+            modulePos:       true,
+            moduleLedger:    true,
+            modulePayroll:   true,
+            staffSeatQuota:  20,  // matches PLAN_CAPS.SUITE_T3.baseSeats
+            staffSeatAddons: 0,
             taxStatus:    'UNREGISTERED' as Prisma.TenantCreateInput['taxStatus'],
             contactEmail: ownerEmail,
             status:       'ACTIVE',
@@ -1375,6 +1383,14 @@ export class AdminService {
             slug,
             businessType: 'SERVICE' as Prisma.TenantCreateInput['businessType'],
             tier:         'TIER_4' as Prisma.TenantCreateInput['tier'],
+            // Ledger demo lives on the full Suite T2 plan — service business
+            // with full back-office (POS + Ledger + Payroll, 15-staff cap).
+            planCode:        'SUITE_T2',
+            modulePos:       true,
+            moduleLedger:    true,
+            modulePayroll:   true,
+            staffSeatQuota:  8,
+            staffSeatAddons: 0,
             taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
             tinNumber:    '009-876-543-000',
             businessName: 'Acme Consulting Services Inc.',
@@ -1827,6 +1843,14 @@ export class AdminService {
             slug,
             businessType: 'LAUNDRY' as Prisma.TenantCreateInput['businessType'],
             tier:         'TIER_3' as Prisma.TenantCreateInput['tier'],
+            // Laundry demo on STD_TEAM — POS-only, 10-staff cap. Realistic
+            // single-module shape for a mid-size laundromat.
+            planCode:        'STD_TEAM',
+            modulePos:       true,
+            moduleLedger:    false,
+            modulePayroll:   false,
+            staffSeatQuota:  5,
+            staffSeatAddons: 0,
             taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
             isDemoTenant: true,
             contactEmail: ownerEmail,

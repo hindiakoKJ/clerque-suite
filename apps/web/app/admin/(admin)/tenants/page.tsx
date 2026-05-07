@@ -35,7 +35,35 @@ const BUSINESS_TYPES = [
   'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING',
   'RETAIL', 'SERVICE', 'LAUNDRY', 'MANUFACTURING',
 ] as const;
-const TIERS = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'] as const;
+// Modular pricing plan codes (the new source of truth for access).
+// Legacy TIER_1..TIER_6 still in DB but advisory — auto-derived from the
+// chosen plan code. STD_* are POS-only; PAIR_* require pick-2; SUITE_* all-3.
+const PLAN_CODES = [
+  'STD_SOLO',  'STD_DUO',  'STD_TEAM', 'STD_BIZ',
+  'PAIR_T1',   'PAIR_T2',  'PAIR_T3',
+  'SUITE_T1',  'SUITE_T2', 'SUITE_T3',
+  'ENTERPRISE',
+] as const;
+const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
+  STD_SOLO:   'Solo (POS only · 1 staff · ₱199/mo)',
+  STD_DUO:    'Duo (POS only · 3 staff · ₱499/mo)',
+  STD_TEAM:   'Team (POS only · 10 staff · ₱999/mo)',
+  STD_BIZ:    'Business (POS only · 25 staff · ₱1,899/mo)',
+  PAIR_T1:    'Pair T1 (any 2 modules · 3 staff · ₱799/mo)',
+  PAIR_T2:    'Pair T2 (any 2 modules · 10 staff · ₱1,599/mo)',
+  PAIR_T3:    'Pair T3 (any 2 modules · 25 staff · ₱2,899/mo)',
+  SUITE_T1:   'Suite T1 (all 3 modules · 5 staff · ₱1,199/mo)',
+  SUITE_T2:   'Suite T2 (all 3 modules · 15 staff · ₱2,299/mo) ★',
+  SUITE_T3:   'Suite T3 (all 3 modules · 50 staff · ₱4,499/mo)',
+  ENTERPRISE: 'Enterprise (custom · 100 staff)',
+};
+// Legacy tier kept on Tenant table for rollback; auto-mapped from planCode.
+const PLAN_TO_TIER: Record<typeof PLAN_CODES[number], string> = {
+  STD_SOLO: 'TIER_1', STD_DUO: 'TIER_2', STD_TEAM: 'TIER_3', STD_BIZ: 'TIER_4',
+  PAIR_T1: 'TIER_2', PAIR_T2: 'TIER_3', PAIR_T3: 'TIER_4',
+  SUITE_T1: 'TIER_3', SUITE_T2: 'TIER_5', SUITE_T3: 'TIER_6',
+  ENTERPRISE: 'TIER_6',
+};
 const ROLES = [
   'BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER', 'SALES_LEAD',
   'BOOKKEEPER', 'ACCOUNTANT', 'FINANCE_LEAD', 'PAYROLL_MASTER',
@@ -61,7 +89,7 @@ interface CreatedResult { tenantId: string; slug: string; ownerUserId: string; g
 function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated: (r: CreatedResult) => void }) {
   const [form, setForm] = useState({
     name: '', slug: '', businessType: 'RETAIL' as typeof BUSINESS_TYPES[number],
-    tier: 'TIER_1' as typeof TIERS[number],
+    planCode: 'SUITE_T2' as typeof PLAN_CODES[number],
     ownerName: '', ownerEmail: '',
     contactEmail: '', contactPhone: '',
   });
@@ -79,7 +107,48 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
     e.preventDefault();
     setBusy(true);
     try {
-      const { data } = await api.post<CreatedResult>('/admin/tenants', form);
+      // Send legacy tier (auto-mapped from plan code) for backend compat,
+      // then immediately PATCH the plan to set planCode + correct module flags
+      // so the new tenant lands in the right modular-pricing state from day 1.
+      const tier = PLAN_TO_TIER[form.planCode];
+      const createPayload = {
+        name:          form.name,
+        slug:          form.slug,
+        businessType:  form.businessType,
+        tier,
+        ownerName:     form.ownerName,
+        ownerEmail:    form.ownerEmail,
+        contactEmail:  form.contactEmail,
+        contactPhone:  form.contactPhone,
+      };
+      const { data } = await api.post<CreatedResult>('/admin/tenants', createPayload);
+
+      // Immediately apply the modular plan so module gates take effect on first login.
+      // Standalone plans → POS-only forced. Suite → all 3 forced.
+      // Pair → defaults to POS+Ledger, owner can change later via tenant detail.
+      const planCode = form.planCode;
+      const isStd   = planCode.startsWith('STD_');
+      const isSuite = planCode.startsWith('SUITE_') || planCode === 'ENTERPRISE';
+      const planBody: Record<string, unknown> = { planCode, staffSeatAddons: 0 };
+      if (isStd) {
+        planBody.modulePos     = true;
+        planBody.moduleLedger  = false;
+        planBody.modulePayroll = false;
+      } else if (!isSuite) {
+        // Pair default: POS + Ledger (owner can switch via tenant detail)
+        planBody.modulePos     = true;
+        planBody.moduleLedger  = true;
+        planBody.modulePayroll = false;
+      }
+      try {
+        await api.patch(`/admin/tenants/${data.tenantId}/plan`, planBody);
+      } catch (err: unknown) {
+        // Don't block tenant creation if plan-apply fails — surface a warning
+        // and let the operator fix it via the tenant detail page.
+        const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+        toast.warning(`Tenant created but plan apply failed: ${msg ?? 'unknown error'}. Set the plan via the tenant detail page.`);
+      }
+
       onCreated(data);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
@@ -118,12 +187,34 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
                 {BUSINESS_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Subscription Tier *</label>
-              <select required value={form.tier} onChange={(e) => set('tier', e.target.value as typeof form.tier)}
+            <div className="col-span-2">
+              <label className="block text-xs text-muted-foreground mb-1">Plan *</label>
+              <select required value={form.planCode}
+                onChange={(e) => set('planCode', e.target.value as typeof form.planCode)}
                 className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm">
-                {TIERS.map((t) => <option key={t} value={t}>{t.replace('TIER_', 'Tier ')}</option>)}
+                <optgroup label="Single Module — POS only">
+                  <option value="STD_SOLO">{PLAN_LABELS.STD_SOLO}</option>
+                  <option value="STD_DUO">{PLAN_LABELS.STD_DUO}</option>
+                  <option value="STD_TEAM">{PLAN_LABELS.STD_TEAM}</option>
+                  <option value="STD_BIZ">{PLAN_LABELS.STD_BIZ}</option>
+                </optgroup>
+                <optgroup label="Two Modules — pick any 2">
+                  <option value="PAIR_T1">{PLAN_LABELS.PAIR_T1}</option>
+                  <option value="PAIR_T2">{PLAN_LABELS.PAIR_T2}</option>
+                  <option value="PAIR_T3">{PLAN_LABELS.PAIR_T3}</option>
+                </optgroup>
+                <optgroup label="Full Suite — all 3 modules">
+                  <option value="SUITE_T1">{PLAN_LABELS.SUITE_T1}</option>
+                  <option value="SUITE_T2">{PLAN_LABELS.SUITE_T2}</option>
+                  <option value="SUITE_T3">{PLAN_LABELS.SUITE_T3}</option>
+                </optgroup>
+                <optgroup label="Enterprise (sales-led)">
+                  <option value="ENTERPRISE">{PLAN_LABELS.ENTERPRISE}</option>
+                </optgroup>
               </select>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Single Module = POS only. For Ledger or Payroll, pick a Pair plan or Suite. Module flags + staff cap auto-applied from this code.
+              </p>
             </div>
             <div className="col-span-2 border-t border-border pt-3">
               <p className="text-xs font-medium mb-2">Business Owner</p>

@@ -137,12 +137,25 @@ realApi.interceptors.response.use(
       };
       localStorage.setItem('app-auth', JSON.stringify(stored));
 
+      // CRITICAL: also mirror the refreshed access token into the
+      // `app-session` cookie so the Next.js middleware sees the new value.
+      // Without this, the middleware decodes the OLD (revoked) token on the
+      // next navigation, JWT verify fails, and the user gets bounced to /login
+      // — appearing as an inexplicable redirect loop after a successful refresh.
+      if (typeof document !== 'undefined') {
+        document.cookie = `app-session=${newAccess}; path=/; SameSite=Lax`;
+      }
+
       processQueue(null, newAccess);
       original.headers.Authorization = `Bearer ${newAccess}`;
       return realApi(original);
     } catch (err) {
       processQueue(err, null);
       localStorage.removeItem('app-auth');
+      // Clear the stale cookie too so middleware doesn't mistake it as still-valid.
+      if (typeof document !== 'undefined') {
+        document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      }
       window.location.href = '/login';
       return Promise.reject(err);
     } finally {

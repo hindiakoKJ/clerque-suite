@@ -695,10 +695,17 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
             </div>
           </div>
 
-          {/* Tier */}
-          <div className="rounded-lg border border-border bg-background p-4">
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Subscription Tier</h2>
-            <p className="text-xs text-muted-foreground mb-2">Current: <span className="font-mono font-medium text-foreground">{tenant.tier}</span></p>
+          {/* Legacy Tier — now advisory only. Modular Plan below is the source of truth. */}
+          <div className="rounded-lg border border-border/50 bg-background/50 p-4 opacity-70">
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+              Subscription Tier <span className="text-[10px] normal-case font-normal">(legacy — use Modular Plan below)</span>
+            </h2>
+            <p className="text-xs text-muted-foreground mb-2">
+              Current: <span className="font-mono font-medium text-foreground">{tenant.tier}</span>
+              <span className="block mt-1 italic">
+                The modular plan code below is now the source of truth for module access, staff caps, and feature gates. This tier field is kept for backward-compat only.
+              </span>
+            </p>
             <select disabled={busy}
               defaultValue={tenant.tier}
               onChange={(e) => patchTenant('tier', { tier: e.target.value }, `Tier → ${e.target.value}`)}

@@ -126,6 +126,38 @@ export class AdminController {
     return this.svc.setTenantTier(id, body.tier, actor(req));
   }
 
+  /**
+   * Update a tenant's modular-pricing plan: planCode, module flags,
+   * additional seat purchases. Validates against PLAN_CAPS.
+   */
+  @Patch('tenants/:id/plan')
+  @HttpCode(HttpStatus.OK)
+  updatePlan(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+    @Body() body: {
+      planCode?:        string;
+      modulePos?:       boolean;
+      moduleLedger?:    boolean;
+      modulePayroll?:   boolean;
+      staffSeatAddons?: number;
+    },
+  ) {
+    return this.svc.updateTenantPlan(id, body, actor(req));
+  }
+
+  /**
+   * Diagnostic — counts JEs and posted totals for a tenant slug.
+   * Use to debug "trial balance has balances but journal is empty" issues.
+   */
+  @Get('diagnose-tenant')
+  diagnoseTenant(@Query('slug') slug: string) {
+    if (!slug) {
+      throw new Error('slug query param required');
+    }
+    return this.svc.diagnoseTenant(slug);
+  }
+
   @Patch('tenants/:id/ai-override')
   @HttpCode(HttpStatus.OK)
   setAiOverride(

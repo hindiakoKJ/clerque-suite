@@ -1635,6 +1635,167 @@ export class AdminService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Plan management — SUPER_ADMIN flips a tenant's plan / modules / addons.
+  // Sales-led pricing means we set planCode out-of-band; this endpoint is
+  // the safe alternative to direct DB editing. Idempotent + audited.
+  // ─────────────────────────────────────────────────────────────────────────
+  async updateTenantPlan(
+    tenantId: string,
+    dto: {
+      planCode?:        string;        // 'STD_SOLO' | ... | 'SUITE_T3' | 'ENTERPRISE'
+      modulePos?:       boolean;
+      moduleLedger?:    boolean;
+      modulePayroll?:   boolean;
+      staffSeatAddons?: number;        // 0..maxAddons (validated against PLAN_CAPS)
+    },
+    actor: ConsoleActor,
+  ) {
+    // Lazy-import to avoid loading shared-types in cold paths.
+    const { PLAN_CAPS } = await import('@repo/shared-types');
+
+    const before = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        name: true, planCode: true, modulePos: true, moduleLedger: true,
+        modulePayroll: true, staffSeatQuota: true, staffSeatAddons: true,
+      },
+    });
+    if (!before) throw new NotFoundException('Tenant not found.');
+
+    // Validate plan code if changing.
+    if (dto.planCode !== undefined) {
+      if (!Object.prototype.hasOwnProperty.call(PLAN_CAPS, dto.planCode)) {
+        throw new BadRequestException(`Unknown plan code: ${dto.planCode}.`);
+      }
+    }
+
+    const targetPlan = (dto.planCode ?? before.planCode ?? 'SUITE_T2') as keyof typeof PLAN_CAPS;
+    const cap = PLAN_CAPS[targetPlan];
+
+    // Validate seat addon count against plan ceiling.
+    if (dto.staffSeatAddons !== undefined) {
+      if (dto.staffSeatAddons < 0) {
+        throw new BadRequestException('staffSeatAddons cannot be negative.');
+      }
+      if (dto.staffSeatAddons > cap.maxAddons) {
+        throw new BadRequestException(
+          `Plan ${targetPlan} allows at most ${cap.maxAddons} add-on seats; got ${dto.staffSeatAddons}.`,
+        );
+      }
+    }
+
+    // For SUITE plans, force all three modules on (suite is all-3 by definition).
+    // For PAIR / STD plans, respect the explicit booleans the caller sent.
+    const moduleOverrides: { modulePos?: boolean; moduleLedger?: boolean; modulePayroll?: boolean } = {};
+    if (cap.moduleCount === 3) {
+      moduleOverrides.modulePos     = true;
+      moduleOverrides.moduleLedger  = true;
+      moduleOverrides.modulePayroll = true;
+    } else {
+      if (dto.modulePos     !== undefined) moduleOverrides.modulePos     = dto.modulePos;
+      if (dto.moduleLedger  !== undefined) moduleOverrides.moduleLedger  = dto.moduleLedger;
+      if (dto.modulePayroll !== undefined) moduleOverrides.modulePayroll = dto.modulePayroll;
+    }
+
+    // Validate exactly the right number of modules are on.
+    const flagsAfter = {
+      modulePos:     moduleOverrides.modulePos     ?? before.modulePos,
+      moduleLedger:  moduleOverrides.moduleLedger  ?? before.moduleLedger,
+      modulePayroll: moduleOverrides.modulePayroll ?? before.modulePayroll,
+    };
+    const onCount = [flagsAfter.modulePos, flagsAfter.moduleLedger, flagsAfter.modulePayroll].filter(Boolean).length;
+    if (cap.moduleCount === 1 && onCount !== 1) {
+      throw new BadRequestException(`Standalone plans require exactly 1 module; current selection has ${onCount}.`);
+    }
+    if (cap.moduleCount === 2 && onCount !== 2) {
+      throw new BadRequestException(`Pair plans require exactly 2 modules; current selection has ${onCount}.`);
+    }
+
+    const after = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        ...(dto.planCode        !== undefined ? { planCode: dto.planCode } : {}),
+        ...(dto.staffSeatAddons !== undefined ? { staffSeatAddons: dto.staffSeatAddons } : {}),
+        // Keep base seats in sync with PLAN_CAPS so the DB column always matches truth.
+        staffSeatQuota: cap.baseSeats,
+        ...moduleOverrides,
+      },
+      select: {
+        id: true, name: true, planCode: true,
+        modulePos: true, moduleLedger: true, modulePayroll: true,
+        staffSeatQuota: true, staffSeatAddons: true,
+      },
+    });
+
+    await this.logAction({
+      actor,
+      tenantId,
+      tenantSlug: '',
+      userEmail:  '',
+      action:     'TIER_CHANGED',
+      detail: {
+        before: {
+          planCode: before.planCode, modulePos: before.modulePos,
+          moduleLedger: before.moduleLedger, modulePayroll: before.modulePayroll,
+          staffSeatQuota: before.staffSeatQuota, staffSeatAddons: before.staffSeatAddons,
+        },
+        after,
+      },
+    });
+
+    return after;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Diagnostic: count JEs + TB-relevant rows for a tenant slug.
+  // Fastest answer to "trial balance shows balances but journal is empty"
+  // questions. Read-only; super-admin only.
+  // ─────────────────────────────────────────────────────────────────────────
+  async diagnoseTenant(slug: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { slug },
+      select: {
+        id: true, name: true, slug: true, status: true, businessType: true,
+        planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true,
+      },
+    });
+    if (!tenant) throw new NotFoundException(`Tenant slug "${slug}" not found.`);
+
+    const [jeCounts, accountCount, lineSum, recentJEs] = await Promise.all([
+      this.prisma.journalEntry.groupBy({
+        by:    ['status'],
+        where: { tenantId: tenant.id },
+        _count: { _all: true },
+      }),
+      this.prisma.account.count({ where: { tenantId: tenant.id, isActive: true } }),
+      this.prisma.journalLine.aggregate({
+        where: { journalEntry: { tenantId: tenant.id, status: 'POSTED' as any } },
+        _sum:  { debit: true, credit: true },
+      }),
+      this.prisma.journalEntry.findMany({
+        where:   { tenantId: tenant.id },
+        orderBy: { createdAt: 'desc' },
+        take:    5,
+        select:  { id: true, entryNumber: true, status: true, source: true, date: true, description: true, reference: true },
+      }),
+    ]);
+
+    return {
+      tenant,
+      journalEntries: jeCounts.map((g) => ({ status: g.status, count: g._count._all })),
+      activeAccounts: accountCount,
+      postedTotals: {
+        debit:  Number(lineSum._sum?.debit ?? 0),
+        credit: Number(lineSum._sum?.credit ?? 0),
+      },
+      recentEntries: recentJEs,
+      hint: jeCounts.length === 0
+        ? 'No JEs found for this tenant. The bootstrap may have written to a different tenantId. Check that the slug matches what you logged in as.'
+        : 'JEs exist for this tenant. If the journal page shows empty, check that the logged-in user.tenantId matches this tenant.id.',
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Laundry demo bootstrap (Sprint 3 wrap-up, 2026-05-08)
   //
   // Provisions a LAUNDRY-typed tenant ("BrightWash Laundromat") with:

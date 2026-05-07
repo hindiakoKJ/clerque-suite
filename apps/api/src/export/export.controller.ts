@@ -150,6 +150,24 @@ export class ExportController {
   }
 
   /**
+   * GET /export/bir-2316?year=YYYY
+   * BIR Form 2316 Annual Compensation alphalist — one row per active employee
+   * with YTD basic + OT + allowances + statutory contribs + 13th-month + WHT.
+   * Output is upload-ready for the BIR Alphalist Data Entry tool.
+   */
+  @Get('bir-2316')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER', 'ACCOUNTANT')
+  async bir2316(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') yearStr: string | undefined,
+    @Res() res: Response,
+  ) {
+    const year   = yearStr ? parseInt(yearStr, 10) : new Date().getFullYear();
+    const buffer = await this.svc.exportBir2316(user.tenantId!, year);
+    sendXlsx(res, buffer, `bir-2316-alphalist-${year}.xlsx`);
+  }
+
+  /**
    * GET /export/chart-of-accounts
    * Downloads the full Chart of Accounts as Excel (grouped by type).
    * Roles: all accounting roles + BOOKKEEPER + FINANCE_LEAD.

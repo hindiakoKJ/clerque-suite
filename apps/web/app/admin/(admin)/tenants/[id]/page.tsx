@@ -34,6 +34,13 @@ interface TenantDetail {
   aiAddonExpiresAt: string | null;
   /** Sprint 3 — coffee-shop floor-layout tier (only meaningful when businessType=COFFEE_SHOP) */
   coffeeShopTier?: 'CS_1' | 'CS_2' | 'CS_3' | 'CS_4' | 'CS_5' | null;
+  /** Modular pricing — present when bootstrapped after 2026-05-08 */
+  planCode?:        string | null;
+  modulePos?:       boolean;
+  moduleLedger?:    boolean;
+  modulePayroll?:   boolean;
+  staffSeatQuota?:  number;
+  staffSeatAddons?: number;
   _count: { users: number; branches: number; products: number };
 }
 
@@ -699,6 +706,10 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
             </select>
           </div>
 
+          {/* Modular Plan (NEW 2026-05-08) */}
+          <PlanPanel tenant={tenant} busy={busy} setBusy={setBusy} qc={qc} />
+
+
           {/* Coffee Shop Floor Layout — only relevant for COFFEE_SHOP tenants */}
           {tenant.businessType === 'COFFEE_SHOP' && (
             <div className="rounded-lg border border-amber-200/60 bg-amber-50/40 dark:bg-amber-950/20 p-4">
@@ -939,6 +950,121 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
     <div>
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className={`font-medium text-foreground ${mono ? 'font-mono text-xs' : 'text-sm'} break-all`}>{value}</p>
+    </div>
+  );
+}
+
+// ── Modular Plan panel (admin-side) ───────────────────────────────────────
+// Lets SUPER_ADMIN flip a tenant onto any plan code, toggle module flags
+// (for STD / PAIR plans), and adjust seat add-on count. Validates against
+// PLAN_CAPS server-side; this UI only sends the user's intent.
+const PLAN_CODES = [
+  'STD_SOLO', 'STD_DUO', 'STD_TEAM', 'STD_BIZ',
+  'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
+  'SUITE_T1', 'SUITE_T2', 'SUITE_T3', 'ENTERPRISE',
+] as const;
+
+function PlanPanel({
+  tenant, busy, setBusy, qc,
+}: {
+  tenant: TenantDetail;
+  busy:   boolean;
+  setBusy: (b: boolean) => void;
+  qc:     ReturnType<typeof useQueryClient>;
+}) {
+  const [planCode, setPlanCode]   = useState<string>(tenant.planCode ?? 'SUITE_T2');
+  const [pos, setPos]             = useState(tenant.modulePos ?? true);
+  const [ledger, setLedger]       = useState(tenant.moduleLedger ?? true);
+  const [payroll, setPayroll]     = useState(tenant.modulePayroll ?? true);
+  const [addons, setAddons]       = useState<number>(tenant.staffSeatAddons ?? 0);
+
+  // Suite plans force all-3 modules on; reflect that in the UI.
+  const isSuite = planCode.startsWith('SUITE_') || planCode === 'ENTERPRISE';
+  const isPair  = planCode.startsWith('PAIR_');
+  const isStd   = planCode.startsWith('STD_');
+
+  async function save() {
+    if (!confirm(`Apply plan ${planCode} to ${tenant.name}?`)) return;
+    setBusy(true);
+    try {
+      const body: any = { planCode, staffSeatAddons: Number(addons) };
+      if (!isSuite) {
+        body.modulePos     = pos;
+        body.moduleLedger  = ledger;
+        body.modulePayroll = payroll;
+      }
+      await api.patch(`/admin/tenants/${tenant.id}/plan`, body);
+      toast.success(`Plan updated to ${planCode}.`);
+      qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] });
+    } catch (err: unknown) {
+      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-background p-4 space-y-3">
+      <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+        Modular Plan
+      </h2>
+
+      <div>
+        <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Plan code</label>
+        <select
+          value={planCode}
+          onChange={(e) => setPlanCode(e.target.value)}
+          disabled={busy}
+          className="mt-1 w-full h-8 px-2 rounded-md border border-border bg-background text-xs"
+        >
+          {PLAN_CODES.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+      </div>
+
+      {/* Module toggles — disabled for Suite (forced all-on) */}
+      <div>
+        <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Modules</p>
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { v: pos,     set: setPos,     label: 'POS'     },
+            { v: ledger,  set: setLedger,  label: 'Ledger'  },
+            { v: payroll, set: setPayroll, label: 'Payroll' },
+          ].map(({ v, set, label }) => (
+            <label key={label} className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs cursor-pointer ${isSuite ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted'} ${v ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-border'}`}>
+              <input
+                type="checkbox"
+                checked={isSuite ? true : v}
+                disabled={busy || isSuite}
+                onChange={(e) => set(e.target.checked)}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        {isStd  && <p className="text-[10px] text-muted-foreground mt-1">Standalone — exactly one module.</p>}
+        {isPair && <p className="text-[10px] text-muted-foreground mt-1">Pair — exactly two modules.</p>}
+        {isSuite && <p className="text-[10px] text-muted-foreground mt-1">Suite — all three modules included.</p>}
+      </div>
+
+      <div>
+        <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Add-on seats</label>
+        <input
+          type="number"
+          min={0}
+          value={addons}
+          onChange={(e) => setAddons(Number(e.target.value))}
+          disabled={busy}
+          className="mt-1 w-full h-8 px-2 rounded-md border border-border bg-background text-xs"
+        />
+      </div>
+
+      <button
+        onClick={save}
+        disabled={busy}
+        className="w-full h-8 rounded-md bg-[var(--accent,#8B5E3C)] text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50"
+      >
+        Apply plan changes
+      </button>
     </div>
   );
 }

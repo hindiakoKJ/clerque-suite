@@ -701,4 +701,140 @@ export class ExportService {
     autoWidth(ws);
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
+
+  // ─── BIR Form 2316 — Annual Compensation Alphalist ──────────────────────────
+  /**
+   * Generates the BIR 2316 alphalist for a given calendar year.
+   * One row per active employee with YTD compensation broken down into
+   * statutory taxable, non-taxable contributions, and withheld tax.
+   *
+   * Output mirrors the BIR alphalist layout for manual upload to BIR's
+   * eFPS / Alphalist Data Entry tool. We do NOT submit electronically here.
+   */
+  async exportBir2316(tenantId: string, year: number): Promise<Buffer> {
+    const yStart = new Date(Date.UTC(year, 0, 1));
+    const yEnd   = new Date(Date.UTC(year + 1, 0, 1));
+
+    const [name, employees] = await Promise.all([
+      this.tenantName(tenantId),
+      this.prisma.user.findMany({
+        where: {
+          tenantId,
+          role: { notIn: ['SUPER_ADMIN', 'EXTERNAL_AUDITOR', 'KIOSK_DISPLAY'] },
+        },
+        select: {
+          id:    true, name: true, email: true, hiredAt: true,
+          payslips: {
+            where: {
+              tenantId,
+              payRun: { periodStart: { gte: yStart, lt: yEnd } },
+            },
+            select: {
+              basicPay: true, overtimePay: true, allowances: true, grossPay: true,
+              sssContrib: true, philhealthContrib: true, pagibigContrib: true,
+              withholdingTax: true, otherDeductions: true, netPay: true,
+            },
+          },
+          thirteenthMonths: {
+            where:  { tenantId, year },
+            select: { amount: true },
+          },
+        },
+      }),
+    ]);
+
+    const wb = buildWorkbook();
+    const ws = wb.addWorksheet('BIR 2316 Alphalist', { views: [{ state: 'frozen', ySplit: 4 }] });
+    ws.properties.tabColor = { argb: 'FF8B5E3C' };
+
+    writeReportHeader(
+      ws,
+      name,
+      `BIR Form 2316 Alphalist — ${year}`,
+      `Generated: ${new Date().toLocaleString()}   |   ${employees.length} employees`,
+      11,
+    );
+
+    ws.columns = [
+      { key: 'employeeName',     header: 'Employee Name',          width: 28 },
+      { key: 'email',            header: 'Email',                  width: 28 },
+      { key: 'hiredAt',          header: 'Hire Date',              width: 12 },
+      { key: 'basicYTD',         header: 'Basic Salary YTD',       width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'overtimeYTD',      header: 'Overtime Pay YTD',       width: 16, style: { numFmt: PESO_FMT } },
+      { key: 'allowancesYTD',    header: 'Allowances YTD',         width: 16, style: { numFmt: PESO_FMT } },
+      { key: 'grossYTD',         header: 'Gross Compensation YTD', width: 20, style: { numFmt: PESO_FMT } },
+      { key: 'sssYTD',           header: 'SSS Contributions',      width: 16, style: { numFmt: PESO_FMT } },
+      { key: 'philhealthYTD',    header: 'PhilHealth Contribs',    width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'pagibigYTD',       header: 'Pag-IBIG Contribs',      width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'thirteenthMonth',  header: '13th-Month Pay',         width: 16, style: { numFmt: PESO_FMT } },
+      { key: 'whtYTD',           header: 'Withholding Tax YTD',    width: 18, style: { numFmt: PESO_FMT } },
+      { key: 'netYTD',           header: 'Net Compensation YTD',   width: 20, style: { numFmt: PESO_FMT } },
+    ];
+
+    applyHeaderStyle(ws.getRow(4));
+
+    let sumBasic = 0, sumOT = 0, sumAllow = 0, sumGross = 0,
+        sumSss = 0, sumPhic = 0, sumHdmf = 0, sum13th = 0,
+        sumWht = 0, sumNet = 0;
+
+    employees.forEach((e, idx) => {
+      const sum = (key: keyof typeof e.payslips[number]) =>
+        e.payslips.reduce((acc, p) => acc + Number(p[key] ?? 0), 0);
+
+      const basic     = sum('basicPay');
+      const overtime  = sum('overtimePay');
+      const allow     = sum('allowances');
+      const gross     = sum('grossPay');
+      const sss       = sum('sssContrib');
+      const phic      = sum('philhealthContrib');
+      const hdmf      = sum('pagibigContrib');
+      const wht       = sum('withholdingTax');
+      const net       = sum('netPay');
+      const t13       = e.thirteenthMonths.reduce((a, t) => a + Number(t.amount), 0);
+
+      sumBasic += basic; sumOT += overtime; sumAllow += allow; sumGross += gross;
+      sumSss   += sss;   sumPhic += phic;    sumHdmf += hdmf;
+      sumWht   += wht;   sumNet  += net;     sum13th += t13;
+
+      applyAlternatingFill(
+        ws.addRow({
+          employeeName:    e.name,
+          email:           e.email,
+          hiredAt:         e.hiredAt ? e.hiredAt.toISOString().slice(0, 10) : '',
+          basicYTD:        basic,
+          overtimeYTD:     overtime,
+          allowancesYTD:   allow,
+          grossYTD:        gross,
+          sssYTD:          sss,
+          philhealthYTD:   phic,
+          pagibigYTD:      hdmf,
+          thirteenthMonth: t13,
+          whtYTD:          wht,
+          netYTD:          net,
+        }),
+        idx,
+      );
+    });
+
+    const totRow = ws.addRow({
+      employeeName:    'TOTAL',
+      email:           '',
+      hiredAt:         '',
+      basicYTD:        sumBasic,
+      overtimeYTD:     sumOT,
+      allowancesYTD:   sumAllow,
+      grossYTD:        sumGross,
+      sssYTD:          sumSss,
+      philhealthYTD:   sumPhic,
+      pagibigYTD:      sumHdmf,
+      thirteenthMonth: sum13th,
+      whtYTD:          sumWht,
+      netYTD:          sumNet,
+    });
+    totRow.font   = { bold: true };
+    totRow.border = { top: { style: 'thin' }, bottom: { style: 'double' } };
+
+    autoWidth(ws);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
 }

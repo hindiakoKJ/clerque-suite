@@ -19,8 +19,9 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { TIERS, nextTier, type TierId } from '@repo/shared-types';
+import { TIERS, nextTier, type TierId, PLAN_CAPS, planLabel, effectiveSeatCeiling, type PlanCode } from '@repo/shared-types';
 import { toast } from 'sonner';
+import { ShoppingCart, BookOpen, Users as UsersIcon, ArrowRight } from 'lucide-react';
 
 type AiAddonType = 'STARTER_50' | 'STANDARD_200' | 'PRO_500';
 
@@ -123,6 +124,15 @@ export default function SubscriptionPage() {
             Manage your Clerque plan, staff seats, and included apps.
           </p>
         </div>
+
+        {/* ── Modular Plan card (primary, NEW) ──────────────────────────────── */}
+        <ModulePlanCard
+          planCode={(user?.planCode ?? 'SUITE_T2') as PlanCode}
+          modulePos={user?.modulePos !== false}
+          moduleLedger={user?.moduleLedger !== false}
+          modulePayroll={user?.modulePayroll !== false}
+          staffCount={data.staffCount}
+        />
 
         {data.isDemoTenant && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-4 py-3 flex items-start gap-3">
@@ -362,6 +372,121 @@ export default function SubscriptionPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Modular Plan card (primary plan/module/seats summary) ───────────────────
+function ModulePlanCard({
+  planCode, modulePos, moduleLedger, modulePayroll, staffCount,
+}: {
+  planCode:      PlanCode;
+  modulePos:     boolean;
+  moduleLedger:  boolean;
+  modulePayroll: boolean;
+  staffCount:    number;
+}) {
+  const cap         = PLAN_CAPS[planCode];
+  const ceiling     = effectiveSeatCeiling(planCode, 0);
+  const seatsLeft   = Math.max(0, ceiling - staffCount);
+  const usedPct     = Math.min(100, Math.round((staffCount / Math.max(1, ceiling)) * 100));
+  const monthlyPhp  = Math.round(cap.pricePhpMonthlyCents / 100);
+  const addonPhp    = Math.round(cap.addonSeatPhpMonthlyCents / 100);
+  const moduleCount = cap.moduleCount;
+
+  const modules: Array<{ key: 'POS' | 'LEDGER' | 'PAYROLL'; on: boolean; Icon: any; label: string; tagline: string }> = [
+    { key: 'POS',     on: modulePos,     Icon: ShoppingCart, label: 'POS',     tagline: 'Run the till' },
+    { key: 'LEDGER',  on: moduleLedger,  Icon: BookOpen,     label: 'Ledger',  tagline: 'Books that match BIR' },
+    { key: 'PAYROLL', on: modulePayroll, Icon: UsersIcon,    label: 'Payroll', tagline: 'Pay people right' },
+  ];
+
+  return (
+    <div className="rounded-xl border border-[var(--accent)]/20 bg-card p-5 sm:p-6 space-y-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Modular plan</p>
+          <h2 className="text-2xl font-bold text-foreground mt-1">{planLabel(planCode)}</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {moduleCount === 1 ? 'Standalone' : moduleCount === 2 ? 'Two-module pair' : 'Full suite'} · plan code <span className="font-mono">{planCode}</span>
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-2xl font-bold text-foreground">
+            ₱{monthlyPhp.toLocaleString('en-PH')}
+            <span className="text-sm font-normal text-muted-foreground">/mo</span>
+          </p>
+          {addonPhp > 0 && (
+            <p className="text-[11px] text-muted-foreground mt-0.5">+₱{addonPhp.toLocaleString('en-PH')} per add-on seat/mo</p>
+          )}
+        </div>
+      </header>
+
+      {/* Modules */}
+      <div className="grid grid-cols-3 gap-2">
+        {modules.map((m) => (
+          <div
+            key={m.key}
+            className={`rounded-lg border p-3 ${
+              m.on
+                ? 'border-emerald-500/30 bg-emerald-500/5'
+                : 'border-border bg-muted/40 opacity-60'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <m.Icon className={`w-4 h-4 ${m.on ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground'}`} />
+              <span className={`text-sm font-semibold ${m.on ? 'text-foreground' : 'text-muted-foreground'}`}>{m.label}</span>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1">{m.tagline}</p>
+            <p className={`text-[10px] mt-0.5 font-semibold ${m.on ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+              {m.on ? 'Enabled' : 'Not on plan'}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Seats */}
+      <div className="space-y-1.5 pt-3 border-t border-border">
+        <div className="flex items-center justify-between text-sm">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <UsersIcon className="w-3.5 h-3.5" />
+            Staff seats
+          </span>
+          <span className={`font-semibold ${seatsLeft === 0 ? 'text-red-600' : 'text-foreground'}`}>
+            {staffCount} of {ceiling} <span className="text-muted-foreground font-normal">({seatsLeft} remaining)</span>
+          </span>
+        </div>
+        <div className="h-2 rounded-full bg-secondary overflow-hidden">
+          <div
+            className={`h-full transition-all ${
+              seatsLeft === 0 ? 'bg-red-500'
+              : usedPct > 80 ? 'bg-amber-500'
+              : 'bg-emerald-500'
+            }`}
+            style={{ width: `${usedPct}%` }}
+          />
+        </div>
+        {cap.maxAddons > 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            Buy up to {cap.maxAddons} additional seats at ₱{addonPhp.toLocaleString('en-PH')}/mo each (max plan ceiling: {cap.maxTotal} staff).
+          </p>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">
+            Seat add-ons not available on this plan — upgrade to add more staff.
+          </p>
+        )}
+      </div>
+
+      {/* Plan switch CTA — opens email since billing is sales-led */}
+      <a
+        href={`mailto:support@hnscorpph.com?subject=Plan%20change%20request%20-%20${planCode}`}
+        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg border border-border hover:bg-muted text-sm font-medium transition-colors"
+      >
+        Change plan or buy seats
+        <ArrowRight className="w-3.5 h-3.5" />
+      </a>
+      <p className="text-[10px] text-muted-foreground -mt-1">
+        Plan changes are processed manually by our team within 1 business day.
+      </p>
     </div>
   );
 }

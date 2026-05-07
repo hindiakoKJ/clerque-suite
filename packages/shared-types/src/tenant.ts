@@ -18,6 +18,7 @@ export type BusinessType =
   // Non-F&B group
   | 'RETAIL'
   | 'SERVICE'
+  | 'LAUNDRY'       // Laundromat / wash-dry-fold / dry-clean — Sprint 2 vertical
   | 'MANUFACTURING';
 
 /**

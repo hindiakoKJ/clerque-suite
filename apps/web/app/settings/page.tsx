@@ -134,6 +134,7 @@ const BUSINESS_TYPE_LABELS: Record<string, string> = {
   // Non-F&B
   RETAIL:        'Retail',
   SERVICE:       'Service',
+  LAUNDRY:       'Laundry / Wash-Dry-Fold',
   MANUFACTURING: 'Manufacturing / Construction',
 };
 

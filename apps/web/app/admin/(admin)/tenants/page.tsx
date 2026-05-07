@@ -27,7 +27,14 @@ const STATUS_BADGE: Record<string, string> = {
   SUSPENDED: 'bg-red-100 text-red-700',
 };
 
-const BUSINESS_TYPES = ['COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'RETAIL', 'SERVICE', 'MANUFACTURING'] as const;
+// Mirror packages/db/prisma/schema.prisma BusinessType enum exactly. Includes
+// BAR_LOUNGE + CATERING (F&B) and LAUNDRY (Sprint 2 vertical) which the
+// previous list was missing — explains why the New Tenant modal had no
+// Laundry option.
+const BUSINESS_TYPES = [
+  'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING',
+  'RETAIL', 'SERVICE', 'LAUNDRY', 'MANUFACTURING',
+] as const;
 const TIERS = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'] as const;
 const ROLES = [
   'BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER', 'SALES_LEAD',

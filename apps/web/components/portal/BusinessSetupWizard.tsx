@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Coffee, ShoppingBag, Wrench, Factory, ChevronRight, X, ChevronDown } from 'lucide-react';
+import { Coffee, ShoppingBag, Wrench, Factory, Shirt, ChevronRight, X, ChevronDown } from 'lucide-react';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import { isFnbType, type BusinessType } from '@repo/shared-types';
@@ -54,9 +54,16 @@ const OPTIONS: Option[] = [
   {
     type: 'SERVICE',
     label: 'Service',
-    description: 'Salon, clinic, laundry, repair, or any service-based business.',
+    description: 'Salon, clinic, repair, or any generic service-based business.',
     Icon: Wrench,
     color: 'hsl(173 70% 40%)',
+  },
+  {
+    type: 'LAUNDRY',
+    label: 'Laundry',
+    description: 'Wash, dry, fold, dry-clean. Unlocks machine fleet, claim tickets, self-vs-full pricing.',
+    Icon: Shirt,
+    color: 'hsl(199 89% 48%)',
   },
   {
     type: 'MANUFACTURING',

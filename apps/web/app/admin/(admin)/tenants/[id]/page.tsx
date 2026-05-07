@@ -61,7 +61,7 @@ const TIER_OPTIONS    = ['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER
 // BusinessType must exactly match the Prisma enum values in schema.prisma
 const BIZ_TYPES = [
   'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING',
-  'RETAIL', 'SERVICE', 'MANUFACTURING',
+  'RETAIL', 'SERVICE', 'LAUNDRY', 'MANUFACTURING',
 ] as const;
 const BIZ_LABEL: Record<string, string> = {
   COFFEE_SHOP:   'Coffee Shop / Café',
@@ -72,6 +72,7 @@ const BIZ_LABEL: Record<string, string> = {
   CATERING:      'Catering',
   RETAIL:        'Retail',
   SERVICE:       'Service',
+  LAUNDRY:       'Laundry / Wash-Dry-Fold',
   MANUFACTURING: 'Manufacturing',
 };
 const TAX_STATUSES    = ['VAT', 'NON_VAT', 'UNREGISTERED'] as const;

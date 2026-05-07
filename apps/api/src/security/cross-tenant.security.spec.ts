@@ -53,11 +53,12 @@ const USER_B   = 'user-b-manager-uuid';    // a Tenant B manager
 function makePrismaMock() {
   const orderFindFirst = jest.fn();
   return {
-    tenant:      { findUniqueOrThrow: jest.fn(), findUnique: jest.fn() },
+    tenant:      { findUniqueOrThrow: jest.fn(), findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC' }) },
     order:       {
       findFirst:  orderFindFirst,
       findUnique: jest.fn(),
       findMany:   jest.fn().mockResolvedValue([]),
+      count:      jest.fn().mockResolvedValue(0),
       create:     jest.fn(),
     },
     orderItem:   { findMany: jest.fn().mockResolvedValue([]) },
@@ -82,19 +83,37 @@ function makePrismaMock() {
     },
     accountingEvent: { create: jest.fn() },
     loginLog:        { count: jest.fn().mockResolvedValue(0), create: jest.fn() },
-    product:         { findFirst: jest.fn() },
+    product:         { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
 
     // $queryRaw is used by generateOrderNumber — return a stubbed sequence result
     $queryRaw: jest.fn().mockResolvedValue([{ next_seq: BigInt(1) }]),
 
     $transaction: jest.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
       cb({
-        order:           { findFirst: orderFindFirst, update: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order', orderNumber: 'ORD-2026-000001' }), count: jest.fn().mockResolvedValue(0) },
+        // Inner tx mock — must mirror every model the orders.service.create
+        // path touches inside its $transaction. Add new ones here whenever
+        // the service grows new tx.<model> calls.
+        order: {
+          findFirst: orderFindFirst,
+          update:    jest.fn(),
+          create:    jest.fn().mockResolvedValue({ id: 'new-order', orderNumber: 'ORD-2026-000001' }),
+          count:     jest.fn().mockResolvedValue(0),
+        },
         orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
-        inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() },
+        product:         { findMany: jest.fn().mockResolvedValue([]) },
+        tenant:          {
+          findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC', isVatRegistered: false, businessType: 'COFFEE_SHOP', costingProfile: 'STANDARD' }),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null), update: jest.fn(), upsert: jest.fn() },
         inventoryLog:    { create: jest.fn() },
         accountingEvent: { create: jest.fn() },
+        accountingPeriod: { findFirst: jest.fn().mockResolvedValue(null) },
         orderPayment:    { findMany: jest.fn().mockResolvedValue([]) },
+        rawMaterial:     { findMany: jest.fn().mockResolvedValue([]) },
+        rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() },
+        rawMaterialLot:  { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
+        bomItem:         { findMany: jest.fn().mockResolvedValue([]) },
         $queryRaw:       jest.fn().mockResolvedValue([]),
       }),
     ),
@@ -399,10 +418,19 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
         const txMock = {
           order:           { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order' }), count: jest.fn().mockResolvedValue(0) },
           orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
-          inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null) },
+          product:         { findMany: jest.fn().mockResolvedValue([]) },
+          tenant:          {
+            findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC', isVatRegistered: false, businessType: 'COFFEE_SHOP', costingProfile: 'STANDARD' }),
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+          },
+          inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null), upsert: jest.fn(), update: jest.fn() },
           inventoryLog:    { create: jest.fn() },
           accountingEvent: { create: jest.fn() },
+          accountingPeriod: { findFirst: jest.fn().mockResolvedValue(null) },
           orderPayment:    { findMany: jest.fn().mockResolvedValue([]) },
+          rawMaterial:     { findMany: jest.fn().mockResolvedValue([]) },
+          rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue(null) },
+          bomItem:         { findMany: jest.fn().mockResolvedValue([]) },
           // Capture any $queryRaw call
           $queryRaw: jest.fn((...args: unknown[]) => {
             rawSqlCapture = args;
@@ -734,10 +762,19 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
           return Promise.resolve({ id: 'new-order' });
         })},
         orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
-        inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null) },
+        product:         { findMany: jest.fn().mockResolvedValue([]) },
+        tenant:          {
+          findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC', isVatRegistered: false, businessType: 'COFFEE_SHOP', costingProfile: 'STANDARD' }),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn() },
         inventoryLog:    { create: jest.fn() },
         accountingEvent: { create: jest.fn() },
+        accountingPeriod: { findFirst: jest.fn().mockResolvedValue(null) },
         orderPayment:    { findMany: jest.fn().mockResolvedValue([]) },
+        rawMaterial:     { findMany: jest.fn().mockResolvedValue([]) },
+        rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue(null) },
+        bomItem:         { findMany: jest.fn().mockResolvedValue([]) },
         $queryRaw:       jest.fn().mockResolvedValue([]),
       };
       return cb(txMock);

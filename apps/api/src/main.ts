@@ -9,6 +9,12 @@ import { HttpLoggingInterceptor } from './common/interceptors/http-logging.inter
 import { envValidationSchema } from './common/config/env.validation';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { initSentry } from './observability/sentry';
+import { logger as structuredLogger } from './observability/logger';
+
+// Initialize Sentry error tracking before NestFactory.create. Graceful no-op
+// if SENTRY_DSN is unset (dev / local environments).
+initSentry();
 
 // ── Bootstrap seed — runs on every start; upsert-safe, no duplicates ─────────
 async function runSeed(logger: Logger) {

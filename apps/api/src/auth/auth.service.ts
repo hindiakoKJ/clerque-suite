@@ -198,13 +198,29 @@ export class AuthService {
 
     const appAccess = await this.loadAppAccess(userId, role);
 
-    // Fetch tenant registration flags to embed in JWT
-    const tenant = tenantId
-      ? await this.prisma.tenant.findUnique({
+    // Fetch tenant registration flags to embed in JWT.
+    // Defensive: if the DB schema hasn't been pushed since Sprint 9, the
+    // planCode / module flag columns may not exist yet. Fall back to a
+    // legacy-only select so the user can still log in and we can prompt
+    // them to run `prisma db push`.
+    let tenant: any = null;
+    if (tenantId) {
+      try {
+        tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
           select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true },
-        })
-      : null;
+        });
+      } catch (err: any) {
+        // PrismaClientValidationError or P2022 (column doesn't exist) means
+        // schema drift — retry with the legacy field set. Log once for ops.
+        // eslint-disable-next-line no-console
+        console.warn('[auth] Tenant select failed for new fields; falling back to legacy fields. Run `prisma db push` to sync. Original error:', err?.message);
+        tenant = await this.prisma.tenant.findUnique({
+          where:  { id: tenantId },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true },
+        });
+      }
+    }
 
     const taxStatus = (tenant?.taxStatus ?? 'UNREGISTERED') as TaxStatus;
     const flags     = taxStatusFlags(taxStatus);

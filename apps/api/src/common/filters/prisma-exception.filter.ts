@@ -205,6 +205,21 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           messages: ['Cannot reach the database. Please try again shortly.'],
         };
 
+      // Schema drift — a column or table referenced in code doesn't exist in
+      // the live database. Almost always caused by a missing `prisma db push`
+      // (or migrate deploy) after a schema change. Explicit message helps
+      // operators fix it instead of staring at the generic "database error".
+      case 'P2021':
+      case 'P2022':
+        this.logger.error(`Schema drift [${err.code}]: ${err.message}`);
+        return {
+          status:   HttpStatus.INTERNAL_SERVER_ERROR,
+          code:     'SCHEMA_OUT_OF_SYNC',
+          messages: [
+            'The database schema is out of sync. An admin needs to run `prisma db push` (dev) or `prisma migrate deploy` (prod) to apply pending schema changes.',
+          ],
+        };
+
       // Default: unrecognised code — log full details for debugging, return safe generic message
       default:
         this.logger.error(
@@ -214,7 +229,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         return {
           status:   HttpStatus.INTERNAL_SERVER_ERROR,
           code:     `PRISMA_${err.code}`,
-          messages: ['A database error occurred. Please try again.'],
+          messages: [`A database error occurred (Prisma ${err.code}). Check the server log for the underlying cause; if it persists, an admin may need to run \`prisma db push\`.`],
         };
     }
   }

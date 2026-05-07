@@ -1,13 +1,16 @@
 'use client';
 import { useParams, useRouter } from 'next/navigation';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Shirt, Phone, MapPin, Clock, CheckCircle2, ArrowRight,
-  Printer, X,
+  Printer, X, Banknote, CreditCard, Smartphone,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+
+type PaymentMethod = 'CASH' | 'CARD' | 'GCASH';
 
 type LaundryStatus =
   | 'RECEIVED' | 'WASHING' | 'DRYING' | 'FOLDING' | 'READY_FOR_PICKUP'
@@ -74,36 +77,56 @@ export default function LaundryDetailPage() {
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed.'),
   });
 
-  // Claim → create POS Order, then link.
+  // ── Claim & Pay modal ────────────────────────────────────────────────────
+  const [showPay,   setShowPay]   = useState(false);
+  const [payMethod, setPayMethod] = useState<PaymentMethod>('CASH');
+  const [tendered,  setTendered]  = useState<string>('');
+
+  function openPay() {
+    if (!order) return;
+    setPayMethod('CASH');
+    setTendered(String(Number(order.totalAmount).toFixed(2)));
+    setShowPay(true);
+  }
+
+  // Claim → create POS Order with the chosen payment, then link.
   const claim = useMutation({
     mutationFn: async () => {
       if (!order) throw new Error('No order');
-      // Create a POS order matching the laundry total. Single line item describing the service.
+      const total      = Number(order.totalAmount);
+      const tenderNum  = Number(tendered) || total;
+      const change     = payMethod === 'CASH' ? Math.max(0, tenderNum - total) : 0;
+
       const posOrder = await api.post('/orders', {
         order: {
-          branchId:   order.branch!.id,
-          customerId: order.customer?.id ?? null,
-          subtotal:   Number(order.totalAmount),
+          branchId:       order.branch!.id,
+          customerId:     order.customer?.id ?? null,
+          subtotal:       total,
           discountAmount: 0,
-          vatAmount:  0,
-          totalAmount: Number(order.totalAmount),
-          notes:      `Laundry claim ${order.claimNumber}`,
+          vatAmount:      0,
+          totalAmount:    total,
+          notes:          `Laundry claim ${order.claimNumber}`,
           items: [{
             productName: `Laundry · ${order.serviceType.replace(/_/g, ' ')}`,
             quantity:    1,
-            unitPrice:   Number(order.totalAmount),
-            lineTotal:   Number(order.totalAmount),
+            unitPrice:   total,
+            lineTotal:   total,
           }],
-          payments: [{ method: 'CASH', amount: Number(order.totalAmount) }],
+          payments: [{
+            method:   payMethod,
+            amount:   payMethod === 'CASH' ? Math.max(tenderNum, total) : total,
+            ...(change > 0 ? { change } : {}),
+          }],
         },
       }).then((r) => r.data);
 
-      // Link the POS Order back to the laundry order.
       return api.post(`/laundry/orders/${id}/claim`, { orderId: posOrder.id ?? posOrder.data?.id }).then((r) => r.data);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['laundry-order', id] });
+      qc.invalidateQueries({ queryKey: ['laundry-orders'] });
       toast.success('Claimed. Receipt is ready to print.');
+      setShowPay(false);
     },
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Claim failed.'),
   });
@@ -151,12 +174,12 @@ export default function LaundryDetailPage() {
           )}
           {order.status === 'READY_FOR_PICKUP' && (
             <button
-              onClick={() => claim.mutate()}
+              onClick={openPay}
               disabled={claim.isPending}
               className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
             >
               <CheckCircle2 className="h-4 w-4" />
-              {claim.isPending ? 'Claiming…' : 'Claim & Pay'}
+              Claim &amp; Pay
             </button>
           )}
           <button
@@ -269,6 +292,97 @@ export default function LaundryDetailPage() {
           </section>
         )}
       </div>
+
+      {/* ── Claim & Pay modal ─────────────────────────────────────────────── */}
+      {showPay && order && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <header className="px-5 pt-5 pb-3 flex items-start justify-between gap-2 border-b border-border">
+              <div>
+                <h2 className="font-semibold">Claim &amp; Pay</h2>
+                <p className="text-xs text-muted-foreground mt-0.5 font-mono">{order.claimNumber}</p>
+              </div>
+              <button onClick={() => setShowPay(false)} className="text-muted-foreground hover:text-foreground p-1 rounded">
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+
+            <div className="px-5 py-4 space-y-4">
+              {/* Total */}
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Amount due</span>
+                <span className="text-2xl font-semibold text-emerald-700 dark:text-emerald-400">
+                  {fmtPeso(order.totalAmount)}
+                </span>
+              </div>
+
+              {/* Method picker */}
+              <div>
+                <span className="text-xs text-muted-foreground mb-2 block">Payment method</span>
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { v: 'CASH',  label: 'Cash',  Icon: Banknote   },
+                    { v: 'GCASH', label: 'GCash', Icon: Smartphone },
+                    { v: 'CARD',  label: 'Card',  Icon: CreditCard },
+                  ] as const).map(({ v, label, Icon }) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setPayMethod(v)}
+                      className={`flex flex-col items-center gap-1 px-3 py-3 rounded-lg text-xs font-medium border transition-colors ${
+                        payMethod === v
+                          ? 'bg-[var(--accent)] text-white border-transparent'
+                          : 'bg-background border-border hover:bg-muted'
+                      }`}
+                    >
+                      <Icon className="h-5 w-5" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tendered (cash only) */}
+              {payMethod === 'CASH' && (
+                <label className="text-sm block">
+                  <span className="text-xs text-muted-foreground">Cash tendered (₱)</span>
+                  <input
+                    type="number" step="0.01" inputMode="decimal"
+                    value={tendered}
+                    onChange={(e) => setTendered(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-base"
+                    autoFocus
+                  />
+                  {Number(tendered) > Number(order.totalAmount) && (
+                    <span className="text-xs text-muted-foreground mt-1 block">
+                      Change: {fmtPeso(String(Number(tendered) - Number(order.totalAmount)))}
+                    </span>
+                  )}
+                </label>
+              )}
+            </div>
+
+            <footer className="px-5 pb-5 flex justify-end gap-2">
+              <button
+                onClick={() => setShowPay(false)}
+                className="px-4 py-2 rounded-lg text-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => claim.mutate()}
+                disabled={
+                  claim.isPending ||
+                  (payMethod === 'CASH' && Number(tendered) < Number(order.totalAmount))
+                }
+                className="px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {claim.isPending ? 'Claiming…' : 'Confirm &amp; Print Receipt'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

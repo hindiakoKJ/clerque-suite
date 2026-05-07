@@ -1,7 +1,8 @@
 'use client';
-import { useQuery } from '@tanstack/react-query';
-import { Clock, ChevronLeft, ChevronRight, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Clock, ChevronLeft, ChevronRight, CheckCircle2, XCircle, AlertCircle, Check, X } from 'lucide-react';
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { Badge } from '@/components/ui/Badge';
@@ -50,7 +51,10 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
 export default function TimesheetsPage() {
   const { user } = useAuthStore();
+  const qc = useQueryClient();
   const [weekStart, setWeekStart] = useState(currentWeekStart());
+
+  const canApprove = !!user && ['BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN'].includes(user.role);
 
   const { data: rows = [], isLoading } = useQuery<TimesheetRow[]>({
     queryKey: ['timesheets', weekStart],
@@ -58,6 +62,32 @@ export default function TimesheetsPage() {
     enabled: !!user,
     staleTime: 30_000,
   });
+
+  const approveMut = useMutation({
+    mutationFn: (userId: string) =>
+      api.post('/payroll/timesheets/approve-week', { userId, weekStart }).then((r) => r.data),
+    onSuccess: (data: { count: number }) => {
+      qc.invalidateQueries({ queryKey: ['timesheets'] });
+      toast.success(`Approved ${data.count} entr${data.count === 1 ? 'y' : 'ies'}.`);
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  const rejectMut = useMutation({
+    mutationFn: ({ userId, reason }: { userId: string; reason: string }) =>
+      api.post('/payroll/timesheets/reject-week', { userId, weekStart, reason }).then((r) => r.data),
+    onSuccess: (data: { count: number }) => {
+      qc.invalidateQueries({ queryKey: ['timesheets'] });
+      toast.success(`Rejected ${data.count} entr${data.count === 1 ? 'y' : 'ies'}.`);
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  function reject(userId: string) {
+    const reason = window.prompt('Reason for rejecting this employee\'s week?');
+    if (!reason || !reason.trim()) return;
+    rejectMut.mutate({ userId, reason: reason.trim() });
+  }
 
   const pending  = rows.filter((r) => r.status === 'PENDING').length;
   const approved = rows.filter((r) => r.status === 'APPROVED').length;
@@ -137,6 +167,9 @@ export default function TimesheetsPage() {
                   <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs">Total</th>
                   <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs">OT</th>
                   <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs">Status</th>
+                  {canApprove && (
+                    <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs">Actions</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -168,6 +201,32 @@ export default function TimesheetsPage() {
                       <td className="text-center px-4 py-3">
                         <Badge tone={s.tone}>{s.label}</Badge>
                       </td>
+                      {canApprove && (
+                        <td className="text-right px-4 py-3">
+                          {row.status === 'PENDING' ? (
+                            <div className="inline-flex gap-1">
+                              <button
+                                onClick={() => approveMut.mutate(row.employeeId)}
+                                disabled={approveMut.isPending}
+                                className="p-1.5 rounded text-emerald-700 hover:bg-emerald-500/15"
+                                title="Approve all CLOSED entries this week"
+                              >
+                                <Check className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => reject(row.employeeId)}
+                                disabled={rejectMut.isPending}
+                                className="p-1.5 rounded text-red-600 hover:bg-red-500/15"
+                                title="Reject all CLOSED entries this week"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

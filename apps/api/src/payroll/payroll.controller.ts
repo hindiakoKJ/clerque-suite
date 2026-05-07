@@ -230,6 +230,32 @@ export class PayrollController {
     return this.payrollService.setTimesheetStatus(user.tenantId!, id, user.sub, 'REJECTED', body?.reason);
   }
 
+  @ApiOperation({ summary: 'Bulk approve all CLOSED timesheet entries for an employee × week' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Post('timesheets/approve-week')
+  @HttpCode(HttpStatus.OK)
+  bulkApproveWeek(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { userId: string; weekStart: string },
+  ) {
+    return this.payrollService.bulkSetTimesheetStatus(
+      user.tenantId!, body.userId, body.weekStart, user.sub, 'APPROVED',
+    );
+  }
+
+  @ApiOperation({ summary: 'Bulk reject all CLOSED timesheet entries for an employee × week' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Post('timesheets/reject-week')
+  @HttpCode(HttpStatus.OK)
+  bulkRejectWeek(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { userId: string; weekStart: string; reason?: string },
+  ) {
+    return this.payrollService.bulkSetTimesheetStatus(
+      user.tenantId!, body.userId, body.weekStart, user.sub, 'REJECTED', body.reason,
+    );
+  }
+
   // ─── Sprint 3 — Leave management ─────────────────────────────────────────
 
   @ApiOperation({ summary: 'Submit a leave request (any authenticated employee)' })

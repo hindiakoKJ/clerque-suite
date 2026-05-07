@@ -136,6 +136,17 @@ export interface JwtPayload {
    * default matrix. Empty for users created before the RBAC framework.
    */
   customPermissions?: string[];
+  /**
+   * Tenant module entitlement (modular pricing, 2026-05-08). Baked into
+   * the JWT at issuance time so guards can reject requests for disabled
+   * modules without an extra DB lookup. All three default to true for
+   * backward compatibility — pre-existing tenants keep full access.
+   */
+  modulePos?:     boolean;
+  moduleLedger?:  boolean;
+  modulePayroll?: boolean;
+  /** Authoritative plan code; drives per-plan staff cap + module checks. */
+  planCode?:      import('./plans').PlanCode;
   iat?: number;
   exp?: number;
 }

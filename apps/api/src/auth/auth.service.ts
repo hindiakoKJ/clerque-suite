@@ -197,7 +197,7 @@ export class AuthService {
     const tenant = tenantId
       ? await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true },
         })
       : null;
 
@@ -246,6 +246,12 @@ export class AuthService {
         : 0,
       personaKey:        userRbac?.personaKey ?? null,
       customPermissions: userRbac?.customPermissions ?? [],
+      // Modular pricing (2026-05-08) — bake module entitlement into the JWT.
+      // Pre-existing tenants default to all-true so behaviour is unchanged.
+      modulePos:         tenant?.modulePos ?? true,
+      moduleLedger:      tenant?.moduleLedger ?? true,
+      modulePayroll:     tenant?.modulePayroll ?? true,
+      planCode:          (tenant?.planCode ?? 'SUITE_T2') as JwtPayload['planCode'],
     };
 
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_EXPIRY });

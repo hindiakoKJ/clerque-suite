@@ -115,15 +115,29 @@ export default function SelectPage() {
       ]
     : APPS;
 
+  // Tenant module entitlement (modular pricing, 2026-05-08). When a flag is
+  // explicitly false, hide the card even if the user has a non-NONE app access
+  // level. Undefined defaults to true for backward compat.
+  function moduleEnabled(code: 'POS' | 'LEDGER' | 'PAYROLL'): boolean {
+    if (!user) return false;
+    if (code === 'POS')     return user.modulePos     !== false;
+    if (code === 'LEDGER')  return user.moduleLedger  !== false;
+    return user.modulePayroll !== false;
+  }
+
   const accessible: AppCardWithRoute[] = user
     ? baseApps
-        .filter((app) =>
-          // Console card always visible to super admins; others require app access
-          app.name === 'Console'
-            ? isSuper
-            : hasAccess(app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL', app.minLevel)
-        )
+        .filter((app) => {
+          // Console card always visible to super admins
+          if (app.name === 'Console') return isSuper;
+          const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
+          // First gate: tenant plan must include the module.
+          if (!moduleEnabled(code)) return false;
+          // Second gate: user's per-app access level.
+          return hasAccess(code, app.minLevel);
+        })
         .map((app) => {
+          if (app.name === 'Console') return { ...app, resolvedRoute: app.route };
           const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
           const level = user.appAccess.find((a) => a.app === code)?.level;
           return { ...app, resolvedRoute: routeForApp(app, level, user.role) };

@@ -919,14 +919,40 @@ export class PayrollService {
     if (entry.status !== TimeEntryStatus.CLOSED) {
       throw new BadRequestException(`Only CLOSED entries can be ${status.toLowerCase()}. Current status: ${entry.status}.`);
     }
+    void actorUserId; void rejectionReason; // recorded in AuditLog when wired
     return this.prisma.timeEntry.update({
       where: { id: entryId },
-      data: {
-        status: status as TimeEntryStatus,
-        ...(actorUserId ? { approvedById: actorUserId, approvedAt: new Date() } : {}),
-        ...(rejectionReason ? { rejectionReason } : {}),
-      },
+      data:  { status: status as TimeEntryStatus },
     });
+  }
+
+  // ── HR: Bulk approve / reject all CLOSED entries for an employee × week ───
+  async bulkSetTimesheetStatus(
+    tenantId: string,
+    userId: string,
+    weekStart: string, // YYYY-MM-DD (Monday)
+    actorUserId: string,
+    status: 'APPROVED' | 'REJECTED',
+    rejectionReason?: string,
+  ) {
+    const start = new Date(`${weekStart}T00:00:00+08:00`);
+    const end   = new Date(start);
+    end.setDate(end.getDate() + 7);
+
+    // Note: TimeEntry doesn't currently carry approver/rejection-reason fields;
+    // we flip status only. The actor + reason are recorded via AuditLog when
+    // the audit module is wired here (deferred follow-up).
+    void actorUserId; void rejectionReason;
+    const result = await this.prisma.timeEntry.updateMany({
+      where: {
+        tenantId,
+        userId,
+        clockIn: { gte: start, lt: end },
+        status:  TimeEntryStatus.CLOSED,
+      },
+      data: { status: status as TimeEntryStatus },
+    });
+    return { count: result.count };
   }
 
   // ── Leave: Submit, list, approve, reject ──────────────────────────────────

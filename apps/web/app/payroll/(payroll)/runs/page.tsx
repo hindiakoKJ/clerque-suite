@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { DollarSign, Plus, Loader2, ArrowRight } from 'lucide-react';
+import { DollarSign, Plus, Loader2, ArrowRight, Gift } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -224,6 +224,18 @@ export default function PayRunsPage() {
     staleTime: 30_000,
   });
 
+  // 13th-month — idempotent compute for the current calendar year.
+  const generate13th = useMutation({
+    mutationFn: () => api.post(`/payroll/thirteenth-month?year=${new Date().getFullYear()}`).then((r) => r.data),
+    onSuccess: (d: { count: number; totalAmount: number }) => {
+      toast.success(
+        `13th-month computed for ${d.count} employees · ${formatPeso(d.totalAmount)} total.`,
+        { duration: 5000 },
+      );
+    },
+    onError: (err: any) => toast.error(err.response?.data?.message ?? 'Failed.'),
+  });
+
   const filtered = filter === 'ALL' ? runs : runs.filter((r) => r.status === filter);
 
   async function handleProcess(id: string) {
@@ -260,14 +272,25 @@ export default function PayRunsPage() {
             <DollarSign className="h-5 w-5 text-muted-foreground" />
             <h1 className="text-xl font-semibold text-foreground">Pay Runs</h1>
           </div>
-          <button
-            onClick={() => setModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-white transition-opacity hover:opacity-90"
-            style={{ background: 'var(--accent)' }}
-          >
-            <Plus className="h-4 w-4" />
-            New Pay Run
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => generate13th.mutate()}
+              disabled={generate13th.isPending}
+              className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium border border-border hover:bg-muted transition-colors disabled:opacity-50"
+              title={`Compute 13th-month for ${new Date().getFullYear()} (idempotent)`}
+            >
+              <Gift className="h-4 w-4 text-[var(--accent)]" />
+              {generate13th.isPending ? 'Computing…' : '13th-Month'}
+            </button>
+            <button
+              onClick={() => setModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-white transition-opacity hover:opacity-90"
+              style={{ background: 'var(--accent)' }}
+            >
+              <Plus className="h-4 w-4" />
+              New Pay Run
+            </button>
+          </div>
         </div>
 
         {/* Status tabs */}

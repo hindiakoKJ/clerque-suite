@@ -29,6 +29,23 @@ export class AppAccessGuard implements CanActivate {
     // Super admin bypasses all app access checks
     if (user.isSuperAdmin) return true;
 
+    // ── Tenant-module gate (modular pricing, 2026-05-08) ──────────────────
+    // Reject the entire app if the tenant's plan doesn't include this module,
+    // BEFORE checking the user's per-app access level. This is the entitlement
+    // wall that separates STD_SOLO (POS only) from PAIR / SUITE plans.
+    const moduleEnabled =
+      required.app === 'POS'     ? user.modulePos     :
+      required.app === 'LEDGER'  ? user.moduleLedger  :
+      required.app === 'PAYROLL' ? user.modulePayroll :
+      true;
+    // Only block when the flag is explicitly false. Undefined (legacy JWTs
+    // pre-modular-pricing) is treated as enabled for backward compat.
+    if (moduleEnabled === false) {
+      throw new ForbiddenException(
+        `Module not on your plan: ${required.app}. Upgrade your subscription to enable this app.`,
+      );
+    }
+
     const entry = user.appAccess?.find((a) => a.app === required.app);
     const userLevel  = levelValue(entry?.level);
     const minLevel   = levelValue(required.minLevel);

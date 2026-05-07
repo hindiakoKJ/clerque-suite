@@ -94,6 +94,40 @@ export class UsersService {
       throw new BadRequestException('Password must be at least 8 characters.');
     }
 
+    // ── Plan-tier seat-quota check (modular pricing, 2026-05-08) ──────────
+    // Reject when adding this user would push the tenant past its plan
+    // ceiling. Excludes SUPER_ADMIN + EXTERNAL_AUDITOR (audit visitors don't
+    // count) and KIOSK_DISPLAY (machine-account, also out of headcount).
+    if (!['SUPER_ADMIN', 'EXTERNAL_AUDITOR', 'KIOSK_DISPLAY'].includes(dto.role)) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { planCode: true, staffSeatQuota: true, staffSeatAddons: true },
+      });
+      if (tenant) {
+        // Lazy-import to avoid pulling shared-types into the hot path of every test.
+        const { PLAN_CAPS, effectiveSeatCeiling } = await import('@repo/shared-types');
+        const planCode = (tenant.planCode || 'SUITE_T2') as keyof typeof PLAN_CAPS;
+        const ceiling  = effectiveSeatCeiling(planCode, tenant.staffSeatAddons || 0);
+
+        const currentHeadcount = await this.prisma.user.count({
+          where: {
+            tenantId,
+            isActive: true,
+            role: { notIn: ['SUPER_ADMIN', 'EXTERNAL_AUDITOR', 'KIOSK_DISPLAY'] },
+          },
+        });
+        if (currentHeadcount >= ceiling) {
+          throw new ForbiddenException({
+            code:           'PLAN_CEILING_REACHED',
+            message:        `You've reached your plan's staff cap (${ceiling}). Upgrade your plan or buy additional seats to add more staff.`,
+            currentPlan:    planCode,
+            currentSeats:   currentHeadcount,
+            ceiling,
+          });
+        }
+      }
+    }
+
     const passwordHash = await bcrypt.hash(dto.password, 12);
 
     // Seed default app access rows from role defaults

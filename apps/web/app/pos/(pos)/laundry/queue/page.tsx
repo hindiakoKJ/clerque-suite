@@ -2,7 +2,10 @@
 import { useMemo } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Shirt, Phone, ArrowRight, X } from 'lucide-react';
+import {
+  Plus, Shirt, Phone, ArrowRight, X,
+  WashingMachine, Wind, AlertTriangle, CheckCircle2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 
@@ -125,6 +128,9 @@ export default function LaundryQueuePage() {
         </Link>
       </header>
 
+      {/* Machine grid panel */}
+      <MachineGrid />
+
       {isLoading ? (
         <div className="text-sm text-muted-foreground">Loading orders…</div>
       ) : (
@@ -212,5 +218,130 @@ export default function LaundryQueuePage() {
         </div>
       )}
     </div>
+  );
+}
+
+// ── Machine grid (washer/dryer fleet panel) ────────────────────────────────
+interface Machine {
+  id:         string;
+  code:       string;
+  kind:       'WASHER' | 'DRYER' | 'COMBO';
+  capacityKg: string;
+  status:     'IDLE' | 'RUNNING' | 'OUT_OF_ORDER';
+  branch:     { id: string; name: string };
+  lines:      Array<{ id: string; order: { id: string; claimNumber: string } }>;
+}
+
+function MachineGrid() {
+  const qc = useQueryClient();
+
+  const { data: machines = [] } = useQuery<Machine[]>({
+    queryKey: ['laundry-machines'],
+    queryFn:  () => api.get('/laundry/machines').then((r) => r.data),
+    refetchInterval: 30_000,
+  });
+
+  const setStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: Machine['status'] }) =>
+      api.patch(`/laundry/machines/${id}/status`, { status }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-machines'] });
+      qc.invalidateQueries({ queryKey: ['laundry-orders'] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  const markDone = useMutation({
+    mutationFn: (lineId: string) =>
+      api.patch(`/laundry/lines/${lineId}/done`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-machines'] });
+      qc.invalidateQueries({ queryKey: ['laundry-orders'] });
+      toast.success('Marked done.');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  if (machines.length === 0) {
+    return (
+      <section className="rounded-xl border border-dashed border-border bg-muted/20 p-4 text-center text-xs text-muted-foreground">
+        No machines configured. Add washers + dryers under Settings → Laundry → Machines.
+      </section>
+    );
+  }
+
+  const idleCount    = machines.filter((m) => m.status === 'IDLE').length;
+  const runningCount = machines.filter((m) => m.status === 'RUNNING').length;
+  const oooCount     = machines.filter((m) => m.status === 'OUT_OF_ORDER').length;
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="text-sm font-semibold flex items-center gap-2">
+          Machines
+          <span className="text-xs font-normal text-muted-foreground">
+            {idleCount} idle · {runningCount} running · {oooCount} out
+          </span>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-2">
+        {machines.map((m) => {
+          const Icon = m.kind === 'WASHER' ? WashingMachine : Wind;
+          const tint =
+            m.status === 'IDLE'         ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' :
+            m.status === 'RUNNING'      ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'   :
+                                          'border-red-500/40 bg-red-500/10 text-red-600';
+          const runningLine = m.lines[0];
+          return (
+            <div
+              key={m.id}
+              className={`rounded-lg border ${tint} p-2 flex flex-col items-center gap-0.5 text-center transition-colors`}
+            >
+              <Icon className="h-5 w-5" />
+              <div className="text-xs font-bold font-mono">{m.code}</div>
+              <div className="text-[10px] opacity-70">{Number(m.capacityKg).toFixed(0)}kg</div>
+              <div className="text-[10px] uppercase tracking-wide font-semibold">
+                {m.status === 'OUT_OF_ORDER' ? 'OUT' : m.status.toLowerCase()}
+              </div>
+              {runningLine && (
+                <Link
+                  href={`/pos/laundry/${runningLine.order.id}`}
+                  className="text-[10px] font-mono hover:underline"
+                  title={runningLine.order.claimNumber}
+                >
+                  {runningLine.order.claimNumber.slice(-6)}
+                </Link>
+              )}
+              {m.status === 'RUNNING' && runningLine && (
+                <button
+                  onClick={() => markDone.mutate(runningLine.id)}
+                  className="mt-1 inline-flex items-center gap-0.5 rounded text-[9px] bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 font-semibold"
+                  title="Mark done"
+                >
+                  <CheckCircle2 className="h-2.5 w-2.5" /> done
+                </button>
+              )}
+              {m.status === 'IDLE' && (
+                <button
+                  onClick={() => setStatus.mutate({ id: m.id, status: 'OUT_OF_ORDER' })}
+                  className="mt-1 text-[9px] text-muted-foreground hover:text-red-600"
+                  title="Mark out of order"
+                >
+                  <AlertTriangle className="inline h-2.5 w-2.5" />
+                </button>
+              )}
+              {m.status === 'OUT_OF_ORDER' && (
+                <button
+                  onClick={() => setStatus.mutate({ id: m.id, status: 'IDLE' })}
+                  className="mt-1 text-[9px] text-emerald-600 hover:underline"
+                >
+                  fix
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }

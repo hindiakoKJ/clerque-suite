@@ -9,7 +9,10 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '@repo/shared-types';
 import { LaundryService, CreateLaundryOrderDto } from './laundry.service';
-import type { LaundryOrderStatus } from '@prisma/client';
+import type {
+  LaundryOrderStatus, LaundryServiceCode, LaundryServiceMode,
+  LaundryMachineKind, LaundryMachineStatus, LaundryPromoKind,
+} from '@prisma/client';
 
 @ApiTags('Laundry')
 @ApiBearerAuth('access-token')
@@ -76,5 +79,131 @@ export class LaundryController {
     @Body() body: { orderId: string },
   ) {
     return this.svc.claim(user.tenantId!, id, user.sub, body.orderId);
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // v2 — Multi-line tickets, machines, service prices, promos
+  // ═════════════════════════════════════════════════════════════════════════
+
+  // ── Service prices ─────────────────────────────────────────────────────
+  @ApiOperation({ summary: 'List service price matrix' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Get('service-prices')
+  listServicePrices(@CurrentUser() user: JwtPayload) {
+    return this.svc.listServicePrices(user.tenantId!);
+  }
+
+  @ApiOperation({ summary: 'Set/update one row in the service price matrix' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Post('service-prices')
+  @HttpCode(HttpStatus.OK)
+  setServicePrice(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { serviceCode: LaundryServiceCode; mode: LaundryServiceMode; unitPrice: number; isActive?: boolean },
+  ) {
+    return this.svc.setServicePrice(user.tenantId!, body.serviceCode, body.mode, body.unitPrice, body.isActive);
+  }
+
+  // ── Machines ───────────────────────────────────────────────────────────
+  @ApiOperation({ summary: 'List machines with current state and active line' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Get('machines')
+  listMachines(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
+    return this.svc.listMachines(user.tenantId!, branchId);
+  }
+
+  @ApiOperation({ summary: 'Add a machine (W1, D1, etc.)' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Post('machines')
+  @HttpCode(HttpStatus.CREATED)
+  createMachine(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { branchId: string; code: string; kind: LaundryMachineKind; capacityKg: number; notes?: string },
+  ) {
+    return this.svc.createMachine(user.tenantId!, body);
+  }
+
+  @ApiOperation({ summary: 'Set machine status (IDLE / RUNNING / OUT_OF_ORDER)' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Patch('machines/:id/status')
+  @HttpCode(HttpStatus.OK)
+  setMachineStatus(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { status: LaundryMachineStatus },
+  ) {
+    return this.svc.updateMachineStatus(user.tenantId!, id, body.status);
+  }
+
+  // ── Multi-line ticket ──────────────────────────────────────────────────
+  @ApiOperation({ summary: 'Create a v2 ticket — multiple service lines + retail products + auto-promo' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Post('orders/v2')
+  @HttpCode(HttpStatus.CREATED)
+  createOrderV2(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: any,
+  ) {
+    return this.svc.createOrderV2(user.tenantId!, user.sub, dto);
+  }
+
+  // ── Machine assignment per line ────────────────────────────────────────
+  @ApiOperation({ summary: 'Assign a machine to a line (starts the run)' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Patch('lines/:lineId/assign')
+  @HttpCode(HttpStatus.OK)
+  assignMachine(
+    @CurrentUser() user: JwtPayload,
+    @Param('lineId') lineId: string,
+    @Body() body: { machineId: string },
+  ) {
+    return this.svc.assignMachine(user.tenantId!, lineId, body.machineId);
+  }
+
+  @ApiOperation({ summary: 'Mark a running line DONE (frees the machine)' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Patch('lines/:lineId/done')
+  @HttpCode(HttpStatus.OK)
+  markLineDone(@CurrentUser() user: JwtPayload, @Param('lineId') lineId: string) {
+    return this.svc.markLineDone(user.tenantId!, lineId);
+  }
+
+  // ── Promos ─────────────────────────────────────────────────────────────
+  @ApiOperation({ summary: 'List promos' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Get('promos')
+  listPromos(@CurrentUser() user: JwtPayload) {
+    return this.svc.listPromos(user.tenantId!);
+  }
+
+  @ApiOperation({ summary: 'Create a promo' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Post('promos')
+  @HttpCode(HttpStatus.CREATED)
+  createPromo(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { code: string; name: string; kind: LaundryPromoKind; conditions: any; priority?: number; isActive?: boolean; validFrom?: string; validTo?: string },
+  ) {
+    return this.svc.createPromo(user.tenantId!, body);
+  }
+
+  @ApiOperation({ summary: 'Toggle a promo active/inactive' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Patch('promos/:id/toggle')
+  @HttpCode(HttpStatus.OK)
+  togglePromo(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { isActive: boolean },
+  ) {
+    return this.svc.togglePromo(user.tenantId!, id, body.isActive);
+  }
+
+  @ApiOperation({ summary: 'Delete a promo' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Patch('promos/:id/delete')
+  @HttpCode(HttpStatus.OK)
+  deletePromo(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.svc.deletePromo(user.tenantId!, id);
   }
 }

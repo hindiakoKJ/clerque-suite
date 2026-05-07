@@ -6,11 +6,11 @@ import {
   Plus, X, CheckCircle2, XCircle, RotateCcw,
   ChevronDown, Shield, FileText, AlertTriangle, Info,
   KeyRound, Eye, EyeOff, ShieldCheck,
-  LayoutGrid, CreditCard, ShieldAlert, ChevronRight,
+  LayoutGrid, CreditCard, ShieldAlert, ChevronRight, Sparkles,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { isFnbType } from '@repo/shared-types';
+import { isFnbType, isLaundryType } from '@repo/shared-types';
 import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
@@ -322,6 +322,14 @@ export default function SettingsPage() {
                 icon={LayoutGrid}
                 title="Floor Layout"
                 desc="Stations, printers, category routing, KDS"
+              />
+            )}
+            {isLaundryType(profile?.businessType) && (
+              <SettingsCard
+                href="/settings/laundry"
+                icon={Sparkles}
+                title="Laundry Setup"
+                desc="Service prices, promos, machine fleet"
               />
             )}
             <SettingsCard

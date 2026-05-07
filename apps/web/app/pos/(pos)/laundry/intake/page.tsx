@@ -1,38 +1,72 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { ArrowLeft, Plus, Trash2, Sparkles, Receipt } from 'lucide-react';
+import {
+  ArrowLeft, Plus, Trash2, Sparkles, Receipt, ShoppingBag,
+  WashingMachine, Wind, Combine,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 
-interface Branch  { id: string; name: string }
-interface Customer { id: string; name: string; contactPhone: string | null }
+// ── Types ────────────────────────────────────────────────────────────────────
+type ServiceCode = 'WASH' | 'DRY' | 'WASH_DRY_COMBO' | 'DRY_CLEAN' | 'IRON' | 'FOLD' | 'EXTRA_RINSE' | 'FABRIC_SOFTENER';
+type ServiceMode = 'SELF_SERVICE' | 'FULL_SERVICE';
 
-type ServiceType = 'WASH_FOLD' | 'WASH_ONLY' | 'DRY_ONLY' | 'DRY_CLEAN' | 'IRON_ONLY' | 'FULL_SERVICE';
-type PricingMode = 'PER_KG' | 'PER_LOAD' | 'PER_PIECE' | 'PER_GARMENT';
-
-interface IntakeItem {
-  garmentType: string;
-  quantity:    number;
-  condition?:  string;
-  tagNumber?:  string;
+interface ServicePrice {
+  serviceCode: ServiceCode;
+  mode:        ServiceMode;
+  unitPrice:   string;
+  isActive:    boolean;
 }
 
-const SERVICE_OPTIONS: { value: ServiceType; label: string }[] = [
-  { value: 'WASH_FOLD',    label: 'Wash & Fold' },
-  { value: 'WASH_ONLY',    label: 'Wash Only' },
-  { value: 'DRY_ONLY',     label: 'Dry Only' },
-  { value: 'DRY_CLEAN',    label: 'Dry Clean' },
-  { value: 'IRON_ONLY',    label: 'Iron Only' },
-  { value: 'FULL_SERVICE', label: 'Full Service (wash + dry + fold + iron)' },
-];
+interface Branch   { id: string; name: string }
+interface Customer { id: string; name: string; contactPhone: string | null }
+interface Product  { id: string; name: string; sku: string | null; price: string }
 
+interface ServiceLine {
+  serviceCode: ServiceCode;
+  mode:        ServiceMode;
+  sets:        number;
+  weightKg?:   number;
+  notes?:      string;
+}
+interface ProductLine {
+  productId: string;
+  quantity:  number;
+}
+
+const SERVICE_LABEL: Record<ServiceCode, string> = {
+  WASH:            'Wash',
+  DRY:             'Dry',
+  WASH_DRY_COMBO:  'Wash + Dry combo',
+  DRY_CLEAN:       'Dry-clean',
+  IRON:            'Iron',
+  FOLD:            'Fold',
+  EXTRA_RINSE:     'Extra rinse',
+  FABRIC_SOFTENER: 'Fabric softener',
+};
+
+const SERVICE_ICON: Record<ServiceCode, any> = {
+  WASH:            WashingMachine,
+  DRY:             Wind,
+  WASH_DRY_COMBO:  Combine,
+  DRY_CLEAN:       Sparkles,
+  IRON:            Sparkles,
+  FOLD:            Sparkles,
+  EXTRA_RINSE:     Sparkles,
+  FABRIC_SOFTENER: Sparkles,
+};
+
+function fmtPeso(n: number) {
+  return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 export default function LaundryIntakePage() {
   const router = useRouter();
 
-  // Branches + customers come from existing endpoints.
   const { data: branchData } = useQuery<{ data: Branch[] }>({
     queryKey: ['branches'],
     queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
@@ -44,91 +78,110 @@ export default function LaundryIntakePage() {
     queryFn:  () => api.get('/customers').then((r) => Array.isArray(r.data) ? r.data : (r.data?.data ?? [])),
   });
 
-  // ── Form state ────────────────────────────────────────────────────────────
+  const { data: prices = [] } = useQuery<ServicePrice[]>({
+    queryKey: ['laundry-service-prices'],
+    queryFn:  () => api.get('/laundry/service-prices').then((r) => r.data),
+  });
+
+  const { data: products = [] } = useQuery<Product[]>({
+    queryKey: ['laundry-retail-products'],
+    queryFn:  () => api.get('/products').then((r) => Array.isArray(r.data) ? r.data : (r.data?.data ?? [])),
+  });
+
+  // ── Form state ──────────────────────────────────────────────────────────
   const [branchId,    setBranchId]    = useState('');
   const [customerId,  setCustomerId]  = useState('');
-  const [serviceType, setServiceType] = useState<ServiceType>('WASH_FOLD');
-  const [pricingMode, setPricingMode] = useState<PricingMode>('PER_KG');
-  const [weightKg,    setWeightKg]    = useState<string>('');
-  const [loadCount,   setLoadCount]   = useState<string>('');
-  const [pieceCount,  setPieceCount]  = useState<string>('');
-  const [unitPrice,   setUnitPrice]   = useState<string>('60');
-  const [promisedAt,  setPromisedAt]  = useState<string>('');
-  const [notes,       setNotes]       = useState<string>('');
-  const [items,       setItems]       = useState<IntakeItem[]>([]);
+  const [promisedAt,  setPromisedAt]  = useState('');
+  const [notes,       setNotes]       = useState('');
+  const [lines,       setLines]       = useState<ServiceLine[]>([]);
+  const [productLines, setProductLines] = useState<ProductLine[]>([]);
 
-  // Default branch: first active. Run as effect — calling setState directly
-  // during render triggers a "Cannot update during render" warning and can
-  // loop on slow networks where branches arrives after the first paint.
   useEffect(() => {
     if (!branchId && branches.length > 0) setBranchId(branches[0].id);
   }, [branchId, branches]);
 
-  // ── Live total preview ────────────────────────────────────────────────────
-  const qty =
-    pricingMode === 'PER_KG'   ? Number(weightKg) :
-    pricingMode === 'PER_LOAD' ? Number(loadCount) :
-                                  Number(pieceCount);
-  const total = isFinite(qty) && isFinite(Number(unitPrice))
-    ? Math.round(qty * Number(unitPrice) * 100) / 100
-    : 0;
+  // Price lookup
+  const priceFor = (code: ServiceCode, mode: ServiceMode): number => {
+    const row = prices.find((p) => p.serviceCode === code && p.mode === mode && p.isActive);
+    return row ? Number(row.unitPrice) : 0;
+  };
+  const productPriceFor = (id: string): number => Number(products.find((p) => p.id === id)?.price ?? 0);
 
-  // ── Submit ────────────────────────────────────────────────────────────────
+  // Live totals
+  const { servicesSubtotal, productsSubtotal, total } = useMemo(() => {
+    const svc = lines.reduce((s, l) => s + priceFor(l.serviceCode, l.mode) * l.sets, 0);
+    const prd = productLines.reduce((s, l) => s + productPriceFor(l.productId) * l.quantity, 0);
+    return {
+      servicesSubtotal: Math.round(svc * 100) / 100,
+      productsSubtotal: Math.round(prd * 100) / 100,
+      total:            Math.round((svc + prd) * 100) / 100,
+    };
+  }, [lines, productLines, prices, products]);
+
+  // ── Submit ──────────────────────────────────────────────────────────────
   const create = useMutation({
-    mutationFn: () =>
-      api.post('/laundry/orders', {
-        branchId,
-        customerId: customerId || undefined,
-        serviceType,
-        pricingMode,
-        weightKg:   pricingMode === 'PER_KG'   ? Number(weightKg)   : undefined,
-        loadCount:  pricingMode === 'PER_LOAD' ? Number(loadCount)  : undefined,
-        pieceCount: (pricingMode === 'PER_PIECE' || pricingMode === 'PER_GARMENT')
-                    ? Number(pieceCount) : undefined,
-        unitPrice:  Number(unitPrice),
-        promisedAt: promisedAt || undefined,
-        notes:      notes || undefined,
-        items:      items.length > 0 ? items : undefined,
-      }).then((r) => r.data),
+    mutationFn: () => api.post('/laundry/orders/v2', {
+      branchId,
+      customerId: customerId || undefined,
+      promisedAt: promisedAt || undefined,
+      notes:      notes || undefined,
+      lines:      lines.map((l) => ({
+        serviceCode: l.serviceCode,
+        mode:        l.mode,
+        sets:        l.sets,
+        weightKg:    l.weightKg,
+        notes:       l.notes,
+      })),
+      productLines: productLines.length ? productLines : undefined,
+    }).then((r) => r.data),
     onSuccess: (order: { id: string; claimNumber: string }) => {
       toast.success(`Intake recorded — ${order.claimNumber}`);
       router.push(`/pos/laundry/${order.id}`);
     },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message ?? 'Failed to create intake.');
-    },
+    onError:   (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
   });
 
-  function addItem() {
-    setItems([...items, { garmentType: '', quantity: 1 }]);
+  // ── Line helpers ────────────────────────────────────────────────────────
+  function addServiceLine(code: ServiceCode, mode: ServiceMode = 'SELF_SERVICE') {
+    setLines([...lines, { serviceCode: code, mode, sets: 1 }]);
   }
-  function patchItem(idx: number, p: Partial<IntakeItem>) {
-    setItems(items.map((it, i) => i === idx ? { ...it, ...p } : it));
+  function patchLine(idx: number, p: Partial<ServiceLine>) {
+    setLines(lines.map((l, i) => i === idx ? { ...l, ...p } : l));
   }
-  function removeItem(idx: number) {
-    setItems(items.filter((_, i) => i !== idx));
+  function removeLine(idx: number) {
+    setLines(lines.filter((_, i) => i !== idx));
   }
 
-  // ── UI ────────────────────────────────────────────────────────────────────
+  function addProductLine() {
+    setProductLines([...productLines, { productId: products[0]?.id ?? '', quantity: 1 }]);
+  }
+  function patchProductLine(idx: number, p: Partial<ProductLine>) {
+    setProductLines(productLines.map((l, i) => i === idx ? { ...l, ...p } : l));
+  }
+  function removeProductLine(idx: number) {
+    setProductLines(productLines.filter((_, i) => i !== idx));
+  }
+
+  // ── UI ──────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-5">
+    <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
       <Link href="/pos/laundry/queue" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> Back to Queue
       </Link>
       <header>
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight flex items-center gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
           <Sparkles className="h-6 w-6 text-[var(--accent)]" />
           New Intake
         </h1>
-        <p className="text-sm text-muted-foreground">Record a customer drop-off and print the claim ticket.</p>
+        <p className="text-sm text-muted-foreground">Add service lines and retail items, then print the claim ticket.</p>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Branch + Customer */}
-        <div className="space-y-3 p-4 rounded-xl border border-border bg-card">
+      {/* Customer + branch */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="p-4 rounded-xl border border-border bg-card space-y-2">
           <h2 className="text-sm font-semibold">Customer</h2>
           <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-            <option value="">— Select branch —</option>
+            <option value="">— branch —</option>
             {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
           <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
@@ -138,95 +191,168 @@ export default function LaundryIntakePage() {
             ))}
           </select>
         </div>
-
-        {/* Service + pricing */}
-        <div className="space-y-3 p-4 rounded-xl border border-border bg-card">
-          <h2 className="text-sm font-semibold">Service & Price</h2>
-          <select value={serviceType} onChange={(e) => setServiceType(e.target.value as ServiceType)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-            {SERVICE_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
-          <div className="grid grid-cols-3 gap-2">
-            {(['PER_KG', 'PER_LOAD', 'PER_PIECE'] as PricingMode[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setPricingMode(m)}
-                className={`px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
-                  pricingMode === m
-                    ? 'bg-[var(--accent)] text-white border-transparent'
-                    : 'bg-background border-border hover:bg-muted'
-                }`}
-              >
-                {m === 'PER_KG' ? 'Per kg' : m === 'PER_LOAD' ? 'Per load' : 'Per piece'}
-              </button>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {pricingMode === 'PER_KG' && (
-              <input type="number" step="0.01" placeholder="Weight (kg)" value={weightKg} onChange={(e) => setWeightKg(e.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm" />
-            )}
-            {pricingMode === 'PER_LOAD' && (
-              <input type="number" placeholder="Loads" value={loadCount} onChange={(e) => setLoadCount(e.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm" />
-            )}
-            {(pricingMode === 'PER_PIECE' || pricingMode === 'PER_GARMENT') && (
-              <input type="number" placeholder="Pieces" value={pieceCount} onChange={(e) => setPieceCount(e.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm" />
-            )}
-            <input type="number" step="0.01" placeholder="Unit price ₱" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm" />
-          </div>
-          <div className="rounded-lg bg-muted/60 px-3 py-2 text-sm flex items-center justify-between">
-            <span className="text-muted-foreground">Total</span>
-            <span className="font-semibold">{new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(total)}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Optional pickup time + notes */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="p-4 rounded-xl border border-border bg-card space-y-2">
-          <label className="text-sm font-semibold">Promised pickup (optional)</label>
+          <h2 className="text-sm font-semibold">Pickup &amp; notes</h2>
           <input type="datetime-local" value={promisedAt} onChange={(e) => setPromisedAt(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
-        </div>
-        <div className="p-4 rounded-xl border border-border bg-card space-y-2">
-          <label className="text-sm font-semibold">Notes (optional)</label>
-          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. fabric softener, fragile cycle" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes (optional)" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
         </div>
       </div>
 
-      {/* Garment items */}
-      <div className="p-4 rounded-xl border border-border bg-card space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Garments (optional checklist)</h2>
-          <button type="button" onClick={addItem} className="inline-flex items-center gap-1 text-xs text-[var(--accent)] hover:underline">
+      {/* Service lines */}
+      <section className="rounded-xl border border-border bg-card overflow-hidden">
+        <header className="px-4 py-3 border-b border-border flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Service lines</h2>
+          <span className="text-xs text-muted-foreground">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+        </header>
+        <div className="p-4">
+          {/* Quick-add buttons */}
+          <div className="flex flex-wrap gap-2 mb-4">
+            {(['WASH', 'DRY', 'WASH_DRY_COMBO', 'DRY_CLEAN', 'IRON', 'FOLD'] as ServiceCode[]).map((code) => {
+              const Icon = SERVICE_ICON[code];
+              return (
+                <button
+                  key={code}
+                  onClick={() => addServiceLine(code, code === 'DRY_CLEAN' || code === 'IRON' || code === 'FOLD' ? 'FULL_SERVICE' : 'SELF_SERVICE')}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border hover:bg-muted px-3 py-1.5 text-xs font-medium"
+                >
+                  <Icon className="h-3.5 w-3.5 text-[var(--accent)]" />
+                  + {SERVICE_LABEL[code]}
+                </button>
+              );
+            })}
+          </div>
+          {lines.length === 0 && (
+            <p className="text-xs text-muted-foreground italic">No service lines yet — tap a button above.</p>
+          )}
+          <div className="space-y-2">
+            {lines.map((l, idx) => {
+              const unit = priceFor(l.serviceCode, l.mode);
+              const lineTotal = Math.round(unit * l.sets * 100) / 100;
+              return (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-center rounded-lg bg-muted/30 px-3 py-2">
+                  <div className="col-span-3 flex items-center gap-2">
+                    <select
+                      value={l.serviceCode}
+                      onChange={(e) => patchLine(idx, { serviceCode: e.target.value as ServiceCode })}
+                      className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                    >
+                      {(Object.keys(SERVICE_LABEL) as ServiceCode[]).map((c) => (
+                        <option key={c} value={c}>{SERVICE_LABEL[c]}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-3 flex gap-1">
+                    {(['SELF_SERVICE', 'FULL_SERVICE'] as ServiceMode[]).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => patchLine(idx, { mode: m })}
+                        className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium border transition-colors ${
+                          l.mode === m
+                            ? 'bg-[var(--accent)] text-white border-transparent'
+                            : 'bg-background border-border hover:bg-muted'
+                        }`}
+                      >
+                        {m === 'SELF_SERVICE' ? 'Self' : 'Full'}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="number" min={1}
+                    value={l.sets}
+                    onChange={(e) => patchLine(idx, { sets: Math.max(1, Number(e.target.value)) })}
+                    className="col-span-1 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center"
+                    title="Sets"
+                  />
+                  <div className="col-span-2 text-xs text-muted-foreground tabular-nums">
+                    @ {fmtPeso(unit)}/set
+                  </div>
+                  <div className="col-span-2 text-right font-semibold tabular-nums">{fmtPeso(lineTotal)}</div>
+                  <button onClick={() => removeLine(idx)} className="col-span-1 text-red-500 hover:bg-red-500/10 rounded p-1.5 justify-self-end">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* Retail product lines */}
+      <section className="rounded-xl border border-border bg-card overflow-hidden">
+        <header className="px-4 py-3 border-b border-border flex items-center justify-between">
+          <h2 className="text-sm font-semibold flex items-center gap-1.5">
+            <ShoppingBag className="h-4 w-4 text-muted-foreground" />
+            Retail items
+          </h2>
+          <button onClick={addProductLine} className="inline-flex items-center gap-1 text-xs text-[var(--accent)] hover:underline">
             <Plus className="h-3.5 w-3.5" /> Add item
           </button>
+        </header>
+        <div className="p-4 space-y-2">
+          {productLines.length === 0 && (
+            <p className="text-xs text-muted-foreground italic">No retail items.</p>
+          )}
+          {productLines.map((p, idx) => {
+            const unit = productPriceFor(p.productId);
+            return (
+              <div key={idx} className="grid grid-cols-12 gap-2 items-center rounded-lg bg-muted/30 px-3 py-2">
+                <select
+                  value={p.productId}
+                  onChange={(e) => patchProductLine(idx, { productId: e.target.value })}
+                  className="col-span-7 rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                >
+                  {products.map((prod) => (
+                    <option key={prod.id} value={prod.id}>
+                      {prod.name} {prod.sku ? `· ${prod.sku}` : ''} — {fmtPeso(Number(prod.price))}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number" min={1}
+                  value={p.quantity}
+                  onChange={(e) => patchProductLine(idx, { quantity: Math.max(1, Number(e.target.value)) })}
+                  className="col-span-2 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center"
+                  title="Qty"
+                />
+                <div className="col-span-2 text-right font-semibold tabular-nums">{fmtPeso(unit * p.quantity)}</div>
+                <button onClick={() => removeProductLine(idx)} className="col-span-1 text-red-500 hover:bg-red-500/10 rounded p-1.5 justify-self-end">
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            );
+          })}
         </div>
-        {items.length === 0 && (
-          <p className="text-xs text-muted-foreground italic">Skip if you only count by weight or load.</p>
-        )}
-        {items.map((it, idx) => (
-          <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-            <input value={it.garmentType} onChange={(e) => patchItem(idx, { garmentType: e.target.value })} placeholder="Garment (e.g. shirt)" className="col-span-4 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
-            <input type="number" value={it.quantity} onChange={(e) => patchItem(idx, { quantity: Number(e.target.value) })} placeholder="Qty" className="col-span-2 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
-            <input value={it.condition ?? ''} onChange={(e) => patchItem(idx, { condition: e.target.value })} placeholder="Condition" className="col-span-3 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
-            <input value={it.tagNumber ?? ''} onChange={(e) => patchItem(idx, { tagNumber: e.target.value })} placeholder="Tag #" className="col-span-2 rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
-            <button type="button" onClick={() => removeItem(idx)} className="col-span-1 text-red-500 hover:bg-red-500/10 rounded p-1.5">
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        ))}
-      </div>
+      </section>
 
-      {/* Submit */}
-      <div className="flex items-center justify-end gap-2">
-        <Link href="/pos/laundry/queue" className="px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted">Cancel</Link>
-        <button
-          onClick={() => create.mutate()}
-          disabled={create.isPending || !branchId || total <= 0}
-          className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50"
-        >
-          <Receipt className="h-4 w-4" />
-          {create.isPending ? 'Saving…' : 'Record Intake'}
-        </button>
+      {/* Totals + submit */}
+      <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Services subtotal</span>
+          <span className="font-semibold tabular-nums">{fmtPeso(servicesSubtotal)}</span>
+        </div>
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Retail subtotal</span>
+          <span className="font-semibold tabular-nums">{fmtPeso(productsSubtotal)}</span>
+        </div>
+        <div className="flex items-center justify-between text-base pt-2 border-t border-border">
+          <span className="font-semibold">Total (before promos)</span>
+          <span className="text-xl font-bold tabular-nums">{fmtPeso(total)}</span>
+        </div>
+        <p className="text-[11px] text-muted-foreground italic">
+          Promos are evaluated automatically on save based on the line set + current time.
+        </p>
+        <div className="flex justify-end gap-2 pt-2">
+          <Link href="/pos/laundry/queue" className="px-4 py-2 rounded-lg text-sm hover:bg-muted">Cancel</Link>
+          <button
+            onClick={() => create.mutate()}
+            disabled={create.isPending || !branchId || (lines.length === 0 && productLines.length === 0) || total <= 0}
+            className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50"
+          >
+            <Receipt className="h-4 w-4" />
+            {create.isPending ? 'Saving…' : 'Record Intake'}
+          </button>
+        </div>
       </div>
     </div>
   );

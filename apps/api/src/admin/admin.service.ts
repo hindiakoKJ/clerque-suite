@@ -1923,6 +1923,151 @@ export class AdminService {
       throw new BadRequestException('Demo branch / owner missing — re-run bootstrap.');
     }
 
+    // ── Seed v2: machines + service prices + retail products + promos ────
+    // Idempotent — uses upsert / skipDuplicates throughout.
+
+    // 5 washers + 5 dryers (PH-typical small-shop fleet).
+    const machineSpec: Array<{ code: string; kind: 'WASHER' | 'DRYER'; capacityKg: number }> = [
+      { code: 'W1', kind: 'WASHER', capacityKg: 8 },
+      { code: 'W2', kind: 'WASHER', capacityKg: 8 },
+      { code: 'W3', kind: 'WASHER', capacityKg: 8 },
+      { code: 'W4', kind: 'WASHER', capacityKg: 8 },
+      { code: 'W5', kind: 'WASHER', capacityKg: 8 },
+      { code: 'D1', kind: 'DRYER',  capacityKg: 10 },
+      { code: 'D2', kind: 'DRYER',  capacityKg: 10 },
+      { code: 'D3', kind: 'DRYER',  capacityKg: 10 },
+      { code: 'D4', kind: 'DRYER',  capacityKg: 10 },
+      { code: 'D5', kind: 'DRYER',  capacityKg: 10 },
+    ];
+    let machinesCreated = 0;
+    for (const m of machineSpec) {
+      try {
+        await this.prisma.laundryMachine.create({
+          data: {
+            tenantId: tenant.id, branchId: branch.id,
+            code: m.code, kind: m.kind as Prisma.LaundryMachineCreateInput['kind'],
+            capacityKg: new Prisma.Decimal(m.capacityKg),
+            status: 'IDLE',
+          },
+        });
+        machinesCreated++;
+      } catch (e: any) {
+        if (e.code !== 'P2002') throw e; // unique violation = already exists
+      }
+    }
+
+    // Service price matrix (PH-typical neighborhood laundromat pricing).
+    const priceSpec: Array<{ code: 'WASH' | 'DRY' | 'WASH_DRY_COMBO' | 'DRY_CLEAN' | 'IRON' | 'FOLD'; mode: 'SELF_SERVICE' | 'FULL_SERVICE'; price: number }> = [
+      { code: 'WASH',           mode: 'SELF_SERVICE', price: 60  },
+      { code: 'WASH',           mode: 'FULL_SERVICE', price: 100 },
+      { code: 'DRY',            mode: 'SELF_SERVICE', price: 60  },
+      { code: 'DRY',            mode: 'FULL_SERVICE', price: 100 },
+      { code: 'WASH_DRY_COMBO', mode: 'SELF_SERVICE', price: 120 },
+      { code: 'WASH_DRY_COMBO', mode: 'FULL_SERVICE', price: 180 },
+      { code: 'DRY_CLEAN',      mode: 'FULL_SERVICE', price: 200 },
+      { code: 'IRON',           mode: 'FULL_SERVICE', price: 30  },
+      { code: 'FOLD',           mode: 'FULL_SERVICE', price: 20  },
+    ];
+    let pricesCreated = 0;
+    for (const p of priceSpec) {
+      await this.prisma.laundryServicePrice.upsert({
+        where: { tenantId_serviceCode_mode: {
+          tenantId:    tenant.id,
+          serviceCode: p.code as Prisma.LaundryServicePriceCreateInput['serviceCode'],
+          mode:        p.mode as Prisma.LaundryServicePriceCreateInput['mode'],
+        } },
+        create: {
+          tenantId:    tenant.id,
+          serviceCode: p.code as Prisma.LaundryServicePriceCreateInput['serviceCode'],
+          mode:        p.mode as Prisma.LaundryServicePriceCreateInput['mode'],
+          unitPrice:   new Prisma.Decimal(p.price),
+          isActive:    true,
+        },
+        update: {},
+      });
+      pricesCreated++;
+    }
+
+    // Retail products — detergents, fabric softener, plastic bags.
+    const productSpec: Array<{ name: string; sku: string; price: number; cost: number }> = [
+      { name: 'Surf Powder Sachet 70g',    sku: 'SURF-70G',     price: 18, cost: 13 },
+      { name: 'Tide Powder Sachet 70g',    sku: 'TIDE-70G',     price: 20, cost: 15 },
+      { name: 'Downy Fabcon Sachet 25ml',  sku: 'DOWNY-25ML',   price: 9,  cost: 6  },
+      { name: 'Plastic Bag — Small',       sku: 'PB-SMALL',     price: 3,  cost: 1  },
+      { name: 'Plastic Bag — Large',       sku: 'PB-LARGE',     price: 5,  cost: 2  },
+      { name: 'Plastic Hanger (pack of 5)',sku: 'HANGER-5PK',   price: 25, cost: 15 },
+      { name: 'Bleach Sachet 30ml',        sku: 'BLEACH-30ML',  price: 12, cost: 8  },
+      { name: 'Stain Remover Stick',       sku: 'STAIN-STICK',  price: 35, cost: 22 },
+    ];
+    let productsCreated = 0;
+    for (const p of productSpec) {
+      const exists = await this.prisma.product.findFirst({
+        where: { tenantId: tenant.id, sku: p.sku },
+      });
+      if (exists) continue;
+      await this.prisma.product.create({
+        data: {
+          tenantId: tenant.id,
+          name: p.name, sku: p.sku,
+          price:     new Prisma.Decimal(p.price),
+          costPrice: new Prisma.Decimal(p.cost),
+          inventoryMode: 'UNIT_BASED',
+          isVatable: false,
+          isActive:  true,
+        },
+      });
+      productsCreated++;
+    }
+
+    // Demo promos.
+    const promoSpec: Array<{ code: string; name: string; kind: 'PACKAGE_DEAL' | 'PERCENT_OFF' | 'FLAT_OFF' | 'FREE_NTH'; conditions: any; priority: number }> = [
+      {
+        code: 'WASH5FOR250',
+        name: '5 wash sets for ₱250 (self-service)',
+        kind: 'PACKAGE_DEAL',
+        priority: 10,
+        conditions: { service: 'WASH', mode: 'SELF_SERVICE', minSets: 5, fixedTotalPhp: 250 },
+      },
+      {
+        code: 'COMBO150',
+        name: 'Wash+Dry combo flat ₱150 (self-service)',
+        kind: 'FLAT_OFF',
+        priority: 20,
+        conditions: { service: 'WASH_DRY_COMBO', mode: 'SELF_SERVICE', flatPhp: 30, perSet: true },
+      },
+      {
+        code: 'OFFPEAK20',
+        name: '20% off all services (Tue/Wed 8am-12pm)',
+        kind: 'PERCENT_OFF',
+        priority: 50,
+        conditions: { percent: 20, dayOfWeek: [2, 3], hourFrom: 8, hourTo: 12 },
+      },
+      {
+        code: 'LOYALTY10',
+        name: 'Every 10th wash set free',
+        kind: 'FREE_NTH',
+        priority: 80,
+        conditions: { service: 'WASH', everyN: 10 },
+      },
+    ];
+    let promosCreated = 0;
+    for (const p of promoSpec) {
+      try {
+        await this.prisma.laundryPromo.create({
+          data: {
+            tenantId: tenant.id,
+            code: p.code, name: p.name,
+            kind: p.kind as Prisma.LaundryPromoCreateInput['kind'],
+            conditions: p.conditions,
+            priority: p.priority, isActive: true,
+          },
+        });
+        promosCreated++;
+      } catch (e: any) {
+        if (e.code !== 'P2002') throw e;
+      }
+    }
+
     // Seed 4 sample laundry orders covering the workflow stages.
     type SampleOrder = {
       claim:       string;
@@ -1975,18 +2120,23 @@ export class AdminService {
       tenantSlug: slug,
       userEmail:  ownerEmail,
       action:     'TENANT_CREATED',
-      detail:     { bootstrap: 'LAUNDRY_DEMO', ordersCreated: created, ordersSkipped: skipped },
+      detail: {
+        bootstrap: 'LAUNDRY_DEMO',
+        ordersCreated: created, ordersSkipped: skipped,
+        machinesCreated, pricesCreated, productsCreated, promosCreated,
+      },
     });
 
     return {
-      ok:           true,
-      tenantId:     tenant.id,
+      ok:              true,
+      tenantId:        tenant.id,
       slug,
       ownerEmail,
       generatedPassword,
-      ordersCreated: created,
-      ordersSkipped: skipped,
-      loginHint:    `Sign in with email "${ownerEmail}" — password shown once on first run.`,
+      ordersCreated:   created,
+      ordersSkipped:   skipped,
+      machinesCreated, pricesCreated, productsCreated, promosCreated,
+      loginHint:       `Sign in with email "${ownerEmail}" — password shown once on first run.`,
     };
   }
 }

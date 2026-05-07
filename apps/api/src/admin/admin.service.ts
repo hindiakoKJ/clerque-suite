@@ -1729,15 +1729,18 @@ export class AdminService {
       throw new BadRequestException(`Pair plans require exactly 2 modules; current selection has ${onCount}.`);
     }
 
-    // Solo plan additional restriction: POS only — no Ledger, no Payroll.
-    const soloError = validateSoloModuleCombo(
+    // Standalone (Single Module) plans are POS-only across the board —
+    // Solo / Duo / Team / Business all require modulePos=true with Ledger
+    // and Payroll disabled. Anyone needing Ledger or Payroll standalone
+    // should start at a Pair plan.
+    const standaloneError = validateSoloModuleCombo(
       targetPlan,
       flagsAfter.modulePos,
       flagsAfter.moduleLedger,
       flagsAfter.modulePayroll,
     );
-    if (soloError) {
-      throw new BadRequestException(soloError);
+    if (standaloneError) {
+      throw new BadRequestException(standaloneError);
     }
 
     // Branch quota — auto-sync to PLAN_LIMITS so it always matches the plan.

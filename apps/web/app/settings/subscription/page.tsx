@@ -394,10 +394,20 @@ function ModulePlanCard({
   const addonPhp    = Math.round(cap.addonSeatPhpMonthlyCents / 100);
   const moduleCount = cap.moduleCount;
 
-  const modules: Array<{ key: 'POS' | 'LEDGER' | 'PAYROLL'; on: boolean; Icon: any; label: string; tagline: string }> = [
+  const isStandalone = moduleCount === 1;
+
+  // Standalone plans are POS-only; Ledger / Payroll show "Pair upgrade required"
+  // instead of just "Not on plan" to make the upsell path obvious.
+  const modules: Array<{ key: 'POS' | 'LEDGER' | 'PAYROLL'; on: boolean; Icon: any; label: string; tagline: string; lockedNote?: string }> = [
     { key: 'POS',     on: modulePos,     Icon: ShoppingCart, label: 'POS',     tagline: 'Run the till' },
-    { key: 'LEDGER',  on: moduleLedger,  Icon: BookOpen,     label: 'Ledger',  tagline: 'Books that match BIR' },
-    { key: 'PAYROLL', on: modulePayroll, Icon: UsersIcon,    label: 'Payroll', tagline: 'Pay people right' },
+    {
+      key: 'LEDGER',  on: moduleLedger,  Icon: BookOpen,     label: 'Ledger',  tagline: 'Books that match BIR',
+      lockedNote: isStandalone ? 'Upgrade to a Pair plan' : undefined,
+    },
+    {
+      key: 'PAYROLL', on: modulePayroll, Icon: UsersIcon,    label: 'Payroll', tagline: 'Pay people right',
+      lockedNote: isStandalone ? 'Upgrade to a Pair plan' : undefined,
+    },
   ];
 
   return (
@@ -407,7 +417,7 @@ function ModulePlanCard({
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Modular plan</p>
           <h2 className="text-2xl font-bold text-foreground mt-1">{planLabel(planCode)}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {moduleCount === 1 ? 'Standalone' : moduleCount === 2 ? 'Two-module pair' : 'Full suite'} · plan code <span className="font-mono">{planCode}</span>
+            {moduleCount === 1 ? 'Single Module · POS-only' : moduleCount === 2 ? 'Two-module pair' : 'Full suite'} · plan code <span className="font-mono">{planCode}</span>
           </p>
         </div>
         <div className="text-right">
@@ -438,7 +448,7 @@ function ModulePlanCard({
             </div>
             <p className="text-[11px] text-muted-foreground mt-1">{m.tagline}</p>
             <p className={`text-[10px] mt-0.5 font-semibold ${m.on ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground'}`}>
-              {m.on ? 'Enabled' : 'Not on plan'}
+              {m.on ? 'Enabled' : (m.lockedNote ?? 'Not on plan')}
             </p>
           </div>
         ))}

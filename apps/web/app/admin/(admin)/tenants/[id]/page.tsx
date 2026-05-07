@@ -989,7 +989,13 @@ function PlanPanel({
     setBusy(true);
     try {
       const body: any = { planCode, staffSeatAddons: Number(addons) };
-      if (!isSuite) {
+      if (isStd) {
+        // Standalone (Single Module) plans are POS-only by design — force
+        // the flags so admin clicks don't drift into invalid states.
+        body.modulePos     = true;
+        body.moduleLedger  = false;
+        body.modulePayroll = false;
+      } else if (!isSuite) {
         body.modulePos     = pos;
         body.moduleLedger  = ledger;
         body.modulePayroll = payroll;
@@ -1022,27 +1028,33 @@ function PlanPanel({
         </select>
       </div>
 
-      {/* Module toggles — disabled for Suite (forced all-on) */}
+      {/* Module toggles — disabled for Suite (forced all-on) and STD (forced POS-only) */}
       <div>
         <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Modules</p>
         <div className="grid grid-cols-3 gap-2">
           {[
-            { v: pos,     set: setPos,     label: 'POS'     },
-            { v: ledger,  set: setLedger,  label: 'Ledger'  },
-            { v: payroll, set: setPayroll, label: 'Payroll' },
-          ].map(({ v, set, label }) => (
-            <label key={label} className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs cursor-pointer ${isSuite ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted'} ${v ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-border'}`}>
-              <input
-                type="checkbox"
-                checked={isSuite ? true : v}
-                disabled={busy || isSuite}
-                onChange={(e) => set(e.target.checked)}
-              />
-              {label}
-            </label>
-          ))}
+            { v: pos,     set: setPos,     label: 'POS',     code: 'POS' as const     },
+            { v: ledger,  set: setLedger,  label: 'Ledger',  code: 'LEDGER' as const  },
+            { v: payroll, set: setPayroll, label: 'Payroll', code: 'PAYROLL' as const },
+          ].map(({ v, set, label, code }) => {
+            // STD plans: force POS=true, others=false. Suite: all forced true.
+            const stdValue   = isStd && (code === 'POS');
+            const checked    = isSuite ? true : isStd ? stdValue : v;
+            const isLocked   = isSuite || isStd;
+            return (
+              <label key={label} className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs ${isLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-muted'} ${checked ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-border'}`}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={busy || isLocked}
+                  onChange={(e) => set(e.target.checked)}
+                />
+                {label}
+              </label>
+            );
+          })}
         </div>
-        {isStd  && <p className="text-[10px] text-muted-foreground mt-1">Standalone — exactly one module.</p>}
+        {isStd  && <p className="text-[10px] text-muted-foreground mt-1">Single Module is POS-only. Need Ledger or Payroll? Switch to a Pair or Suite plan.</p>}
         {isPair && <p className="text-[10px] text-muted-foreground mt-1">Pair — exactly two modules.</p>}
         {isSuite && <p className="text-[10px] text-muted-foreground mt-1">Suite — all three modules included.</p>}
       </div>

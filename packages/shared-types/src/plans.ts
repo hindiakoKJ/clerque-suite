@@ -189,9 +189,15 @@ export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
 };
 
 /**
- * Solo plan additional rule — only POS module is allowed. Returns the error
- * message if a Solo tenant is attempting to enable Ledger or Payroll, or
- * null if the combination is valid.
+ * All STD_* (Single Module) plans are POS-only by design. Ledger and Payroll
+ * standalone don't make business sense — they need a transactional source
+ * (POS) to be useful. Anyone needing Ledger or Payroll should start at a
+ * Pair plan (any 2 modules) or higher.
+ *
+ * Returns the validation error message if the combination is invalid for
+ * the standalone tier, or null if valid. PAIR / SUITE / ENTERPRISE plans
+ * always return null here — they have their own module-count enforcement
+ * in the moduleCount-vs-onCount check.
  */
 export function validateSoloModuleCombo(
   planCode: PlanCode,
@@ -199,12 +205,28 @@ export function validateSoloModuleCombo(
   moduleLedger: boolean,
   modulePayroll: boolean,
 ): string | null {
-  if (planCode !== 'STD_SOLO') return null;
-  if (!modulePos)   return 'Solo plan requires POS to be enabled.';
-  if (moduleLedger) return 'Solo plan does not include Ledger. Choose Duo or higher.';
-  if (modulePayroll) return 'Solo plan does not include Payroll. Choose Duo or higher.';
+  // Only standalone (single-module) plans are subject to POS-only enforcement.
+  if (!planCode.startsWith('STD_')) return null;
+
+  const planLabel = planCode.replace('STD_', '').toLowerCase().replace(/^./, (c) => c.toUpperCase());
+
+  if (!modulePos) {
+    return `${planLabel} plan requires POS to be enabled — Single Module tier is POS-only.`;
+  }
+  if (moduleLedger) {
+    return `${planLabel} plan does not include Ledger. Choose a Pair plan (POS + Ledger) for accounting access.`;
+  }
+  if (modulePayroll) {
+    return `${planLabel} plan does not include Payroll. Choose a Pair plan (POS + Payroll) for payroll access.`;
+  }
   return null;
 }
+
+/**
+ * Alias kept for clarity in newer callers. Same logic — name better reflects
+ * that this rule applies to all STD_* plans, not just Solo.
+ */
+export const validateStandaloneModuleCombo = validateSoloModuleCombo;
 
 /** Returns the user-facing display name for a plan code. */
 export function planLabel(code: PlanCode): string {

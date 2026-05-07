@@ -200,27 +200,40 @@ describe('Plans constants', () => {
     });
   });
 
-  describe('validateSoloModuleCombo', () => {
-    it('returns null for Solo + POS only (the only valid Solo combo)', () => {
+  describe('validateSoloModuleCombo (now applies to ALL STD_* plans)', () => {
+    it('returns null for any STD plan + POS only (the only valid combo)', () => {
       expect(validateSoloModuleCombo('STD_SOLO', true, false, false)).toBeNull();
+      expect(validateSoloModuleCombo('STD_DUO',  true, false, false)).toBeNull();
+      expect(validateSoloModuleCombo('STD_TEAM', true, false, false)).toBeNull();
+      expect(validateSoloModuleCombo('STD_BIZ',  true, false, false)).toBeNull();
     });
 
-    it('rejects Solo without POS', () => {
+    it('rejects any STD plan without POS', () => {
       expect(validateSoloModuleCombo('STD_SOLO', false, false, false)).toMatch(/POS/i);
+      expect(validateSoloModuleCombo('STD_DUO',  false, false, false)).toMatch(/POS/i);
+      expect(validateSoloModuleCombo('STD_TEAM', false, false, false)).toMatch(/POS/i);
+      expect(validateSoloModuleCombo('STD_BIZ',  false, false, false)).toMatch(/POS/i);
     });
 
-    it('rejects Solo + Ledger combination', () => {
+    it('rejects ANY STD plan + Ledger combination (not just Solo)', () => {
       expect(validateSoloModuleCombo('STD_SOLO', true, true, false)).toMatch(/Ledger/i);
+      expect(validateSoloModuleCombo('STD_DUO',  true, true, false)).toMatch(/Ledger/i);
+      expect(validateSoloModuleCombo('STD_TEAM', true, true, false)).toMatch(/Ledger/i);
+      expect(validateSoloModuleCombo('STD_BIZ',  true, true, false)).toMatch(/Ledger/i);
     });
 
-    it('rejects Solo + Payroll combination', () => {
+    it('rejects ANY STD plan + Payroll combination', () => {
       expect(validateSoloModuleCombo('STD_SOLO', true, false, true)).toMatch(/Payroll/i);
+      expect(validateSoloModuleCombo('STD_DUO',  true, false, true)).toMatch(/Payroll/i);
+      expect(validateSoloModuleCombo('STD_TEAM', true, false, true)).toMatch(/Payroll/i);
+      expect(validateSoloModuleCombo('STD_BIZ',  true, false, true)).toMatch(/Payroll/i);
     });
 
-    it('returns null for non-Solo plans (no Solo-specific restriction)', () => {
-      expect(validateSoloModuleCombo('STD_DUO', true, true, false)).toBeNull();
-      expect(validateSoloModuleCombo('PAIR_T1', false, true, true)).toBeNull();
-      expect(validateSoloModuleCombo('SUITE_T2', true, true, true)).toBeNull();
+    it('returns null for PAIR / SUITE / ENTERPRISE plans (no STD-specific restriction)', () => {
+      expect(validateSoloModuleCombo('PAIR_T1',    true, true, false)).toBeNull();
+      expect(validateSoloModuleCombo('PAIR_T2',    false, true, true)).toBeNull();
+      expect(validateSoloModuleCombo('SUITE_T2',   true, true, true)).toBeNull();
+      expect(validateSoloModuleCombo('ENTERPRISE', true, true, true)).toBeNull();
     });
   });
 

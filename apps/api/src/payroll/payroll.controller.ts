@@ -2,15 +2,18 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Query,
   Param,
   UseGuards,
   HttpCode,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, Min, Max, IsEnum, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, Max, IsEnum, IsDateString, IsNumber } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard }   from '../auth/guards/roles.guard';
@@ -18,6 +21,7 @@ import { Roles }        from '../auth/decorators/roles.decorator';
 import { CurrentUser }  from '../auth/decorators/current-user.decorator';
 import { JwtPayload }   from '@repo/shared-types';
 import { PayrollService } from './payroll.service';
+import type { LeaveType, LeaveStatus, SalaryType } from '@prisma/client';
 
 // ─── DTOs ─────────────────────────────────────────────────────────────────────
 
@@ -190,6 +194,163 @@ export class PayrollController {
   @Get('payslips/mine')
   getMyPayslips(@CurrentUser() user: JwtPayload) {
     return this.payrollService.getMyPayslips(user.tenantId!, user.sub);
+  }
+
+  // ─── Sprint 3 — HR salary edits + timesheet approval ─────────────────────
+
+  @ApiOperation({ summary: 'Edit an employee\'s salary rate / type / hire date' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Patch('employees/:id/salary')
+  @HttpCode(HttpStatus.OK)
+  editSalary(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { salaryRate?: number; salaryType?: SalaryType; hiredAt?: string },
+  ) {
+    return this.payrollService.editEmployeeSalary(user.tenantId!, id, user.sub, body);
+  }
+
+  @ApiOperation({ summary: 'Approve a CLOSED timesheet entry' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Patch('timesheets/:id/approve')
+  @HttpCode(HttpStatus.OK)
+  approveTimesheet(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.payrollService.setTimesheetStatus(user.tenantId!, id, user.sub, 'APPROVED');
+  }
+
+  @ApiOperation({ summary: 'Reject a CLOSED timesheet entry with a reason' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Patch('timesheets/:id/reject')
+  @HttpCode(HttpStatus.OK)
+  rejectTimesheet(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.payrollService.setTimesheetStatus(user.tenantId!, id, user.sub, 'REJECTED', body?.reason);
+  }
+
+  // ─── Sprint 3 — Leave management ─────────────────────────────────────────
+
+  @ApiOperation({ summary: 'Submit a leave request (any authenticated employee)' })
+  @Post('leaves')
+  @HttpCode(HttpStatus.CREATED)
+  submitLeave(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { type: LeaveType; startDate: string; endDate: string; daysCount: number; reason: string },
+  ) {
+    return this.payrollService.submitLeave(user.tenantId!, user.sub, body);
+  }
+
+  @ApiOperation({ summary: 'List all leave requests (HR view)' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Get('leaves')
+  listLeaves(
+    @CurrentUser() user: JwtPayload,
+    @Query('status') status?: LeaveStatus,
+  ) {
+    return this.payrollService.listLeavesForTenant(user.tenantId!, status);
+  }
+
+  @ApiOperation({ summary: 'Approve a pending leave request' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Patch('leaves/:id/approve')
+  @HttpCode(HttpStatus.OK)
+  approveLeave(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.payrollService.setLeaveStatus(user.tenantId!, id, user.sub, 'APPROVED');
+  }
+
+  @ApiOperation({ summary: 'Reject a pending leave request' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Patch('leaves/:id/reject')
+  @HttpCode(HttpStatus.OK)
+  rejectLeave(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.payrollService.setLeaveStatus(user.tenantId!, id, user.sub, 'REJECTED', body?.reason);
+  }
+
+  // ─── Sprint 3 — 13th-month ───────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'Compute / refresh 13th-month for the given year' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Post('thirteenth-month')
+  @HttpCode(HttpStatus.OK)
+  generate13th(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year?: string,
+  ) {
+    return this.payrollService.generateThirteenthMonth(
+      user.tenantId!,
+      year ? Number(year) : new Date().getFullYear(),
+    );
+  }
+
+  @ApiOperation({ summary: 'List 13th-month rows (optional year filter)' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
+  @Get('thirteenth-month')
+  list13th(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year?: string,
+  ) {
+    return this.payrollService.listThirteenthMonth(user.tenantId!, year ? Number(year) : undefined);
+  }
+
+  // ─── Sprint 3 — Payslip PDFs ─────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'Download a payslip as PDF (HR — any payslip in tenant)' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Get('payslips/:id/pdf')
+  async payslipPdf(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const buf = await this.payrollService.getPayslipPdf(user.tenantId!, id);
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="payslip-${id}.pdf"`,
+      'Content-Length':      buf.length.toString(),
+    });
+    res.send(buf);
+  }
+
+  @ApiOperation({ summary: 'Download MY payslip PDF (employee self-service)' })
+  @Get('me/payslips/:id/pdf')
+  async myPayslipPdf(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const buf = await this.payrollService.getPayslipPdf(user.tenantId!, id, user.sub);
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="payslip-${id}.pdf"`,
+      'Content-Length':      buf.length.toString(),
+    });
+    res.send(buf);
+  }
+
+  // ─── Sprint 3 — Employee self-service ────────────────────────────────────
+
+  @ApiOperation({ summary: 'My salary info + last payslip (self-service)' })
+  @Get('me/salary')
+  getMySalary(@CurrentUser() user: JwtPayload) {
+    return this.payrollService.getMySalary(user.tenantId!, user.sub);
+  }
+
+  @ApiOperation({ summary: 'My leave requests (self-service)' })
+  @Get('me/leaves')
+  getMyLeaves(@CurrentUser() user: JwtPayload) {
+    return this.payrollService.listMyLeaves(user.tenantId!, user.sub);
+  }
+
+  @ApiOperation({ summary: 'My recent payslips list (self-service)' })
+  @Get('me/payslips')
+  getMyPayslipsList(@CurrentUser() user: JwtPayload) {
+    return this.payrollService.listMyPayslips(user.tenantId!, user.sub);
   }
 
   // ─── Contributions ────────────────────────────────────────────────────────

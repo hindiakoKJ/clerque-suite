@@ -5,7 +5,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma, TimeEntryStatus } from '@prisma/client';
+import { Prisma, TimeEntryStatus, LeaveType, LeaveStatus, SalaryType } from '@prisma/client';
+import { generatePayslipPdf } from './payslip-pdf';
 
 // ─── Response shapes (match what the frontend expects) ───────────────────────
 
@@ -845,6 +846,289 @@ export class PayrollService {
       overtimeHours:     Number(s.overtimeHours),
       createdAt:         s.createdAt.toISOString(),
     };
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Sprint 3 — Leave management, salary edits, timesheet approvals,
+  //            13th-month, BIR 2316, payslip PDF, employee self-service.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  // ── HR: Edit employee salary ──────────────────────────────────────────────
+  async editEmployeeSalary(
+    tenantId: string,
+    targetUserId: string,
+    actorUserId: string,
+    dto: { salaryRate?: number; salaryType?: SalaryType; hiredAt?: string },
+  ) {
+    const target = await this.prisma.user.findFirst({
+      where:  { id: targetUserId, tenantId },
+      select: { id: true, salaryRate: true, salaryType: true, hiredAt: true, name: true, role: true },
+    });
+    if (!target) throw new NotFoundException('Employee not found in this tenant.');
+
+    const updated = await this.prisma.user.update({
+      where: { id: targetUserId },
+      data: {
+        ...(dto.salaryRate !== undefined ? { salaryRate: new Prisma.Decimal(dto.salaryRate) } : {}),
+        ...(dto.salaryType ? { salaryType: dto.salaryType } : {}),
+        ...(dto.hiredAt    ? { hiredAt: new Date(dto.hiredAt) } : {}),
+      },
+      select: { id: true, name: true, salaryRate: true, salaryType: true, hiredAt: true },
+    });
+
+    // Best-effort audit log; soft-fail if the table isn't available.
+    try {
+      await (this.prisma as any).auditLog?.create({
+        data: {
+          tenantId,
+          actorId:    actorUserId,
+          action:     'SETTING_CHANGED',
+          targetType: 'User',
+          targetId:   targetUserId,
+          before:     {
+            salaryRate: target.salaryRate ? Number(target.salaryRate) : null,
+            salaryType: target.salaryType,
+            hiredAt:    target.hiredAt,
+          },
+          after: {
+            salaryRate: updated.salaryRate ? Number(updated.salaryRate) : null,
+            salaryType: updated.salaryType,
+            hiredAt:    updated.hiredAt,
+          },
+          metadata: { reason: 'Payroll salary edit' },
+        },
+      });
+    } catch { /* audit table optional */ }
+
+    return updated;
+  }
+
+  // ── HR: Approve / reject a timesheet entry ────────────────────────────────
+  async setTimesheetStatus(
+    tenantId: string,
+    entryId: string,
+    actorUserId: string,
+    status: 'APPROVED' | 'REJECTED',
+    rejectionReason?: string,
+  ) {
+    const entry = await this.prisma.timeEntry.findFirst({
+      where:  { id: entryId, tenantId },
+      select: { id: true, status: true, userId: true },
+    });
+    if (!entry) throw new NotFoundException('Time entry not found.');
+    if (entry.status !== TimeEntryStatus.CLOSED) {
+      throw new BadRequestException(`Only CLOSED entries can be ${status.toLowerCase()}. Current status: ${entry.status}.`);
+    }
+    return this.prisma.timeEntry.update({
+      where: { id: entryId },
+      data: {
+        status: status as TimeEntryStatus,
+        ...(actorUserId ? { approvedById: actorUserId, approvedAt: new Date() } : {}),
+        ...(rejectionReason ? { rejectionReason } : {}),
+      },
+    });
+  }
+
+  // ── Leave: Submit, list, approve, reject ──────────────────────────────────
+  async submitLeave(
+    tenantId: string,
+    userId: string,
+    dto: { type: LeaveType; startDate: string; endDate: string; daysCount: number; reason: string },
+  ) {
+    if (new Date(dto.startDate) > new Date(dto.endDate)) {
+      throw new BadRequestException('startDate must be before endDate.');
+    }
+    if (dto.daysCount <= 0) {
+      throw new BadRequestException('daysCount must be > 0.');
+    }
+    return this.prisma.leaveRequest.create({
+      data: {
+        tenantId,
+        userId,
+        type:       dto.type,
+        status:     'PENDING',
+        startDate:  new Date(dto.startDate),
+        endDate:    new Date(dto.endDate),
+        daysCount:  new Prisma.Decimal(dto.daysCount),
+        reason:     dto.reason,
+      },
+    });
+  }
+
+  async listLeavesForTenant(tenantId: string, status?: LeaveStatus) {
+    return this.prisma.leaveRequest.findMany({
+      where: { tenantId, ...(status ? { status } : {}) },
+      orderBy: [{ status: 'asc' }, { startDate: 'desc' }],
+      include: {
+        user:     { select: { id: true, name: true, email: true } },
+        approver: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  async listMyLeaves(tenantId: string, userId: string) {
+    return this.prisma.leaveRequest.findMany({
+      where:   { tenantId, userId },
+      orderBy: { startDate: 'desc' },
+      include: { approver: { select: { id: true, name: true } } },
+    });
+  }
+
+  async setLeaveStatus(
+    tenantId: string,
+    leaveId: string,
+    actorUserId: string,
+    status: 'APPROVED' | 'REJECTED',
+    rejectionReason?: string,
+  ) {
+    const leave = await this.prisma.leaveRequest.findFirst({
+      where: { id: leaveId, tenantId },
+    });
+    if (!leave) throw new NotFoundException('Leave request not found.');
+    if (leave.status !== 'PENDING') {
+      throw new BadRequestException(`Leave is already ${leave.status}.`);
+    }
+    return this.prisma.leaveRequest.update({
+      where: { id: leaveId },
+      data: {
+        status,
+        approvedBy:      actorUserId,
+        approvedAt:      new Date(),
+        rejectionReason: status === 'REJECTED' ? (rejectionReason ?? null) : null,
+      },
+    });
+  }
+
+  // ── 13th-month compute ────────────────────────────────────────────────────
+  /**
+   * Computes 13th-month pay = basicSalaryYTD / 12 for every active employee.
+   * Idempotent on (tenantId, userId, year). Re-running updates the snapshot.
+   */
+  async generateThirteenthMonth(tenantId: string, year: number) {
+    const yStart = new Date(Date.UTC(year, 0, 1));
+    const yEnd   = new Date(Date.UTC(year + 1, 0, 1));
+
+    // Pull total basicPay YTD per employee from Payslips.
+    const slips = await this.prisma.payslip.groupBy({
+      by:    ['userId'],
+      where: { tenantId, payRun: { periodStart: { gte: yStart, lt: yEnd } } },
+      _sum:  { basicPay: true },
+    });
+
+    const employees = await this.prisma.user.findMany({
+      where:  { tenantId, isActive: true, role: { notIn: ['SUPER_ADMIN', 'EXTERNAL_AUDITOR'] } },
+      select: { id: true, name: true },
+    });
+    const ytdByUser = new Map(slips.map((s) => [s.userId, Number(s._sum.basicPay ?? 0)]));
+
+    const results: { userId: string; name: string; basicSalaryYTD: number; amount: number }[] = [];
+    for (const e of employees) {
+      const ytd    = ytdByUser.get(e.id) ?? 0;
+      const amount = round2(ytd / 12);
+      await this.prisma.thirteenthMonth.upsert({
+        where:  { tenantId_userId_year: { tenantId, userId: e.id, year } },
+        create: { tenantId, userId: e.id, year, basicSalaryYTD: new Prisma.Decimal(ytd), amount: new Prisma.Decimal(amount) },
+        update: { basicSalaryYTD: new Prisma.Decimal(ytd), amount: new Prisma.Decimal(amount) },
+      });
+      results.push({ userId: e.id, name: e.name, basicSalaryYTD: ytd, amount });
+    }
+    return { year, count: results.length, totalAmount: round2(results.reduce((s, r) => s + r.amount, 0)), rows: results };
+  }
+
+  async listThirteenthMonth(tenantId: string, year?: number) {
+    return this.prisma.thirteenthMonth.findMany({
+      where: { tenantId, ...(year ? { year } : {}) },
+      orderBy: [{ year: 'desc' }],
+      include: { user: { select: { id: true, name: true } } },
+    });
+  }
+
+  // ── Payslip PDF (HR + employee self-service share the renderer) ───────────
+  async getPayslipPdf(tenantId: string, payslipId: string, restrictToUserId?: string): Promise<Buffer> {
+    const where: any = { id: payslipId, tenantId };
+    if (restrictToUserId) where.userId = restrictToUserId;
+
+    const slip = await this.prisma.payslip.findFirst({
+      where,
+      include: { payRun: { select: { label: true, periodStart: true, periodEnd: true } } },
+    });
+    if (!slip) throw new NotFoundException('Payslip not found.');
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { name: true, tinNumber: true, address: true, businessName: true },
+    });
+
+    return generatePayslipPdf({
+      tenant: {
+        name:         tenant?.name ?? 'Clerque',
+        tinNumber:    tenant?.tinNumber ?? null,
+        address:      tenant?.address ?? null,
+        businessName: tenant?.businessName ?? null,
+      },
+      payslip: {
+        employeeName:      slip.employeeName,
+        position:          slip.position,
+        department:        slip.department,
+        periodStart:       slip.payRun.periodStart.toISOString().slice(0, 10),
+        periodEnd:         slip.payRun.periodEnd.toISOString().slice(0, 10),
+        runLabel:          slip.payRun.label,
+        basicPay:          Number(slip.basicPay),
+        overtimePay:       Number(slip.overtimePay),
+        allowances:        Number(slip.allowances),
+        grossPay:          Number(slip.grossPay),
+        sssContrib:        Number(slip.sssContrib),
+        philhealthContrib: Number(slip.philhealthContrib),
+        pagibigContrib:    Number(slip.pagibigContrib),
+        withholdingTax:    Number(slip.withholdingTax),
+        otherDeductions:   Number(slip.otherDeductions),
+        totalDeductions:   Number(slip.totalDeductions),
+        netPay:            Number(slip.netPay),
+        regularHours:      Number(slip.regularHours),
+        overtimeHours:     Number(slip.overtimeHours),
+      },
+    });
+  }
+
+  // ── Employee self-service: my salary + projected next pay ─────────────────
+  async getMySalary(tenantId: string, userId: string) {
+    const me = await this.prisma.user.findFirst({
+      where:  { id: userId, tenantId },
+      select: { name: true, salaryRate: true, salaryType: true, hiredAt: true, branch: { select: { name: true } } },
+    });
+    if (!me) throw new NotFoundException('User not found.');
+
+    const lastPayslip = await this.prisma.payslip.findFirst({
+      where:   { tenantId, userId },
+      orderBy: { createdAt: 'desc' },
+      select:  { netPay: true, grossPay: true, createdAt: true,
+                 payRun: { select: { label: true, periodEnd: true } } },
+    });
+
+    return {
+      name:        me.name,
+      salaryRate:  me.salaryRate ? Number(me.salaryRate) : null,
+      salaryType:  me.salaryType,
+      hiredAt:     me.hiredAt,
+      department:  me.branch?.name ?? null,
+      lastPayslip: lastPayslip
+        ? {
+            netPay:     Number(lastPayslip.netPay),
+            grossPay:   Number(lastPayslip.grossPay),
+            runLabel:   lastPayslip.payRun.label,
+            periodEnd:  lastPayslip.payRun.periodEnd.toISOString().slice(0, 10),
+          }
+        : null,
+    };
+  }
+
+  async listMyPayslips(tenantId: string, userId: string) {
+    return this.prisma.payslip.findMany({
+      where:   { tenantId, userId },
+      orderBy: { createdAt: 'desc' },
+      take:    24,
+      include: { payRun: { select: { label: true, periodStart: true, periodEnd: true } } },
+    });
   }
 }
 

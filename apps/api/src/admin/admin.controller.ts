@@ -80,6 +80,16 @@ export class AdminController {
     return this.svc.bootstrapLedgerDemo(actor(req));
   }
 
+  /**
+   * Provisions a Laundry demo tenant — LAUNDRY-typed with 4 sample orders
+   * covering the workflow stages (RECEIVED → READY). Idempotent.
+   */
+  @Post('bootstrap-laundry-demo')
+  @HttpCode(HttpStatus.OK)
+  bootstrapLaundryDemo(@Request() req: { user: JwtPayload }) {
+    return this.svc.bootstrapLaundryDemo(actor(req));
+  }
+
   @Post('bootstrap-super-admin')
   @HttpCode(HttpStatus.OK)
   bootstrapSuperAdmin(

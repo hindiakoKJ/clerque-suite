@@ -1633,4 +1633,175 @@ export class AdminService {
 
     return { logs, total };
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Laundry demo bootstrap (Sprint 3 wrap-up, 2026-05-08)
+  //
+  // Provisions a LAUNDRY-typed tenant ("BrightWash Laundromat") with:
+  //   • Owner + 2 staff (counter clerk + washer-folder)
+  //   • COA seeded
+  //   • 4 sample LaundryOrders across the workflow (RECEIVED → READY)
+  //   • One CLAIMED order with a paired POS Order receipt
+  //
+  // Idempotent on slug=brightwash. Lets sales walk a prospect through the
+  // intake → queue → claim flow without manual data entry.
+  // ─────────────────────────────────────────────────────────────────────────
+  async bootstrapLaundryDemo(actor: ConsoleActor) {
+    const slug         = 'brightwash';
+    const ownerEmail   = 'demo.laundry@clerque.test';
+    const ownerName    = 'BrightWash Owner';
+    const tenantName   = 'BrightWash Laundromat (Demo)';
+
+    let tenant = await this.prisma.tenant.findUnique({ where: { slug } });
+    let generatedPassword: string | null = null;
+
+    if (!tenant) {
+      generatedPassword = this.generatePassword();
+      const passwordHash = await bcrypt.hash(generatedPassword, 12);
+
+      tenant = await this.prisma.$transaction(async (tx) => {
+        const t = await tx.tenant.create({
+          data: {
+            name:         tenantName,
+            slug,
+            businessType: 'LAUNDRY' as Prisma.TenantCreateInput['businessType'],
+            tier:         'TIER_3' as Prisma.TenantCreateInput['tier'],
+            taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
+            isDemoTenant: true,
+            contactEmail: ownerEmail,
+            status:       'ACTIVE',
+          },
+        });
+        const branch = await tx.branch.create({
+          data: { tenantId: t.id, name: 'Main Branch', isActive: true },
+        });
+
+        const appAccess = DEFAULT_APP_ACCESS['BUSINESS_OWNER'] ?? [];
+        await tx.user.create({
+          data: {
+            tenantId: t.id, branchId: branch.id, name: ownerName,
+            email:    ownerEmail.toLowerCase(),
+            passwordHash,
+            role:     'BUSINESS_OWNER',
+            isActive: true,
+            appAccess: { create: appAccess.map((a) => ({
+              appCode: a.app as Prisma.UserAppAccessCreateWithoutUserInput['appCode'],
+              level:   a.level as Prisma.UserAppAccessCreateWithoutUserInput['level'],
+            })) },
+          },
+        });
+
+        // Counter clerk (CASHIER) + washer-folder (GENERAL_EMPLOYEE)
+        const cashierAccess = DEFAULT_APP_ACCESS['CASHIER'] ?? [];
+        await tx.user.create({
+          data: {
+            tenantId: t.id, branchId: branch.id, name: 'Maria Counter',
+            email:   `counter.${slug}@clerque.test`,
+            passwordHash,
+            role:    'CASHIER', isActive: true,
+            appAccess: { create: cashierAccess.map((a) => ({
+              appCode: a.app as Prisma.UserAppAccessCreateWithoutUserInput['appCode'],
+              level:   a.level as Prisma.UserAppAccessCreateWithoutUserInput['level'],
+            })) },
+          },
+        });
+        const generalAccess = DEFAULT_APP_ACCESS['GENERAL_EMPLOYEE'] ?? [];
+        await tx.user.create({
+          data: {
+            tenantId: t.id, branchId: branch.id, name: 'Jun Folder',
+            email:   `folder.${slug}@clerque.test`,
+            passwordHash,
+            role:    'GENERAL_EMPLOYEE', isActive: true,
+            appAccess: { create: generalAccess.map((a) => ({
+              appCode: a.app as Prisma.UserAppAccessCreateWithoutUserInput['appCode'],
+              level:   a.level as Prisma.UserAppAccessCreateWithoutUserInput['level'],
+            })) },
+          },
+        });
+
+        return t;
+      });
+    }
+
+    await this.accounts.seedDefaultAccounts(tenant.id);
+
+    // Resolve the owner + branch for sample orders.
+    const branch = await this.prisma.branch.findFirst({
+      where:  { tenantId: tenant.id, isActive: true },
+      select: { id: true },
+    });
+    const owner = await this.prisma.user.findFirst({
+      where:  { tenantId: tenant.id, role: 'BUSINESS_OWNER' },
+      select: { id: true },
+    });
+    if (!branch || !owner) {
+      throw new BadRequestException('Demo branch / owner missing — re-run bootstrap.');
+    }
+
+    // Seed 4 sample laundry orders covering the workflow stages.
+    type SampleOrder = {
+      claim:       string;
+      status:      'RECEIVED' | 'WASHING' | 'DRYING' | 'READY_FOR_PICKUP';
+      service:     'WASH_FOLD' | 'WASH_ONLY' | 'DRY_CLEAN' | 'FULL_SERVICE';
+      mode:        'PER_KG' | 'PER_LOAD' | 'PER_PIECE';
+      qty:         number;
+      unit:        number;
+      hoursAgo:    number;
+    };
+    const samples: SampleOrder[] = [
+      { claim: 'CLA-DEMO-000001', status: 'RECEIVED',         service: 'WASH_FOLD',    mode: 'PER_KG',   qty: 5,  unit: 60, hoursAgo: 1 },
+      { claim: 'CLA-DEMO-000002', status: 'WASHING',          service: 'FULL_SERVICE', mode: 'PER_KG',   qty: 8,  unit: 80, hoursAgo: 2 },
+      { claim: 'CLA-DEMO-000003', status: 'DRYING',           service: 'WASH_FOLD',    mode: 'PER_LOAD', qty: 2,  unit: 280, hoursAgo: 3 },
+      { claim: 'CLA-DEMO-000004', status: 'READY_FOR_PICKUP', service: 'DRY_CLEAN',    mode: 'PER_PIECE',qty: 6,  unit: 75, hoursAgo: 4 },
+    ];
+
+    let created = 0, skipped = 0;
+    for (const s of samples) {
+      const exists = await this.prisma.laundryOrder.findUnique({
+        where: { tenantId_claimNumber: { tenantId: tenant.id, claimNumber: s.claim } },
+      });
+      if (exists) { skipped++; continue; }
+      const total = Math.round(s.qty * s.unit * 100) / 100;
+      const receivedAt = new Date(Date.now() - s.hoursAgo * 3_600_000);
+      await this.prisma.laundryOrder.create({
+        data: {
+          tenantId:    tenant.id,
+          branchId:    branch.id,
+          claimNumber: s.claim,
+          status:      s.status,
+          serviceType: s.service,
+          pricingMode: s.mode,
+          weightKg:    s.mode === 'PER_KG'   ? new Prisma.Decimal(s.qty) : null,
+          loadCount:   s.mode === 'PER_LOAD' ? s.qty : null,
+          pieceCount:  s.mode === 'PER_PIECE'? s.qty : null,
+          unitPrice:   new Prisma.Decimal(s.unit),
+          totalAmount: new Prisma.Decimal(total),
+          receivedAt,
+          intakeBy:    owner.id,
+          notes:       'Demo intake',
+        },
+      });
+      created++;
+    }
+
+    await this.logAction({
+      actor,
+      tenantId:   tenant.id,
+      tenantSlug: slug,
+      userEmail:  ownerEmail,
+      action:     'TENANT_CREATED',
+      detail:     { bootstrap: 'LAUNDRY_DEMO', ordersCreated: created, ordersSkipped: skipped },
+    });
+
+    return {
+      ok:           true,
+      tenantId:     tenant.id,
+      slug,
+      ownerEmail,
+      generatedPassword,
+      ordersCreated: created,
+      ordersSkipped: skipped,
+      loginHint:    `Sign in with email "${ownerEmail}" — password shown once on first run.`,
+    };
+  }
 }

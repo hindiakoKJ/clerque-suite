@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt } from 'lucide-react';
+import { useRouter, usePathname } from 'next/navigation';
+import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt, User as UserIcon, Plane } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
@@ -28,6 +28,8 @@ const PAYSLIPS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 
                               'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
                               'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
                               'PAYROLL_MASTER', 'GENERAL_EMPLOYEE'] as const;
+// HR view roles — these get the dashboard-first experience and Leaves admin tab.
+const HR_VIEW_ROLES       = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'FINANCE_LEAD'] as const;
 // My Expenses — personal-reimbursement claims; every authenticated employee can submit.
 const MY_EXPENSES_ROLES   = PAYSLIPS_ROLES;
 
@@ -49,7 +51,9 @@ function makePayNavItem(
 
 export default function PayrollLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const { user, clear } = useAuthStore();
+  const isHrRole = !!user && (HR_VIEW_ROLES as readonly string[]).includes(user.role);
 
   // ── App-level guard ────────────────────────────────────────────────────────
   // KIOSK_DISPLAY accounts are kiosk-hardware credentials and have NO business
@@ -67,8 +71,14 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
       payrollAccess && payrollAccess.level !== 'NONE';
     if (!hasPayroll) {
       router.replace('/select');
+      return;
     }
-  }, [user, router]);
+    // Auto-route non-HR roles landing on /payroll or /payroll/dashboard to
+    // their employee self-service home.
+    if (!isHrRole && (pathname === '/payroll' || pathname === '/payroll/dashboard')) {
+      router.replace('/payroll/me');
+    }
+  }, [user, router, isHrRole, pathname]);
 
   // Set accent on <html> so Radix Dialog portals (rendered at document.body)
   // also inherit the correct --accent value.
@@ -92,20 +102,31 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
 
   const role = user?.role;
 
-  // Build payroll nav — all items shown; grayed-out when role lacks access.
-  // Clock In/Out is accessible to EVERY role (universal attendance tracking).
-  const navItems: NavItem[] = [
-    makePayNavItem('/payroll/clock',       'Clock In / Out', Timer,           CLOCK_ROLES,         role),
-    makePayNavItem('/payroll/attendance',  'My Attendance',  CalendarDays,    CLOCK_ROLES,         role),
-    makePayNavItem('/payroll/dashboard',   'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role),
-    makePayNavItem('/payroll/timesheets',  'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role),
-    makePayNavItem('/payroll/staff',       'Staff',          UserCheck,       PAY_STAFF_ROLES,     role),
-    makePayNavItem('/payroll/runs',        'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
-    makePayNavItem('/payroll/payslips',    'Payslips',       FileText,        PAYSLIPS_ROLES,      role),
-    makePayNavItem('/payroll/my-expenses', 'My Expenses',    Receipt,         MY_EXPENSES_ROLES,   role),
-    makePayNavItem('/payroll/contributions','Contributions', HeartHandshake,  PAY_RUNS_ROLES,      role),
-    makePayNavItem('/payroll/reports',     'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
-  ].filter((item) => !item.disabled);
+  // Build payroll nav — items differ based on whether this is an HR-view role
+  // (dashboard-first, with Staff + Pay Runs + Leaves admin) or an employee
+  // self-service role (lands on /payroll/me with leave-request UI).
+  const navItems: NavItem[] = (
+    isHrRole
+      ? [
+          makePayNavItem('/payroll/dashboard',     'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role),
+          makePayNavItem('/payroll/clock',         'Clock In / Out', Timer,           CLOCK_ROLES,         role),
+          makePayNavItem('/payroll/timesheets',    'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role),
+          makePayNavItem('/payroll/staff',         'Staff',          UserCheck,       PAY_STAFF_ROLES,     role),
+          makePayNavItem('/payroll/leaves',        'Leaves',         Plane,           HR_VIEW_ROLES,       role),
+          makePayNavItem('/payroll/runs',          'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
+          makePayNavItem('/payroll/payslips',      'Payslips',       FileText,        PAYSLIPS_ROLES,      role),
+          makePayNavItem('/payroll/contributions', 'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
+          makePayNavItem('/payroll/reports',       'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
+        ]
+      : [
+          makePayNavItem('/payroll/me',          'Home',           UserIcon,     CLOCK_ROLES,         role),
+          makePayNavItem('/payroll/clock',       'Clock In / Out', Timer,        CLOCK_ROLES,         role),
+          makePayNavItem('/payroll/attendance',  'My Attendance',  CalendarDays, CLOCK_ROLES,         role),
+          makePayNavItem('/payroll/me/leaves',   'My Leaves',      Plane,        CLOCK_ROLES,         role),
+          makePayNavItem('/payroll/payslips',    'My Payslips',    FileText,     PAYSLIPS_ROLES,      role),
+          makePayNavItem('/payroll/my-expenses', 'My Expenses',    Receipt,      MY_EXPENSES_ROLES,   role),
+        ]
+  ).filter((item) => !item.disabled);
 
   return (
     <div

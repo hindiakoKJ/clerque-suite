@@ -36,5 +36,22 @@ else
   npx prisma migrate deploy --schema="$SCHEMA"
 fi
 
+# ── Catch-up sync (Sprint 6-10 additive schema not yet in versioned migrations) ──
+# Prisma `db push` is forward-only and idempotent for additive changes. Every
+# deploy ensures the prod DB matches the current schema.prisma even if the
+# delta wasn't captured as a versioned migration. This prevents schema drift
+# from silently breaking auth.service / admin queries between sprints.
+#
+# Safety: this is `db push` WITHOUT `--accept-data-loss`. If a future schema
+# change requires dropping a column, this command fails loudly and the deploy
+# stops — forcing the operator to capture a real migration with the destructive
+# step explicit. For all the additive changes through Sprint 10 this is safe.
+echo "[Clerque] ── Catch-up schema sync (idempotent additive db push) ─────"
+npx prisma db push --schema="$SCHEMA" --skip-generate || {
+  echo "[Clerque] WARN: db push failed (likely a destructive change pending)."
+  echo "[Clerque]       Capture a versioned migration before redeploying."
+  exit 1
+}
+
 echo "[Clerque] ── Starting API server ────────────────────────────────────"
 exec node apps/api/dist/main

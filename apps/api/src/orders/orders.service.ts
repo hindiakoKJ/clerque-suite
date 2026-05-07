@@ -636,6 +636,7 @@ export class OrdersService {
     return this.prisma.order.findMany({
       where: {
         tenantId,
+        deletedAt: null,    // soft-delete: hide voided/cancelled orders from active lists
         ...(branchId ? { branchId } : {}),
         ...(shiftId ? { shiftId } : {}),
       },
@@ -650,6 +651,9 @@ export class OrdersService {
   }
 
   async findOne(tenantId: string, id: string) {
+    // Note: findOne intentionally INCLUDES soft-deleted records — the receipt
+    // detail page needs to render voided orders for audit. Lists use findAll
+    // which filters them out.
     const order = await this.prisma.order.findFirst({
       where: { id, tenantId },
       include: {
@@ -703,7 +707,10 @@ export class OrdersService {
         include: { order: true, product: { select: { id: true, costPrice: true, name: true } } },
       });
       if (!item) throw new NotFoundException('Order item not found.');
-      if (item.order.status !== 'COMPLETED') {
+      // Sprint 7: PAID orders (still in production) can also be refunded —
+      // customer changes mind before the drink is ready. Only OPEN, VOIDED,
+      // or RETURNED block refunds.
+      if (item.order.status !== 'PAID' && item.order.status !== 'COMPLETED') {
         throw new BadRequestException(`Cannot refund — order is ${item.order.status}.`);
       }
 

@@ -142,6 +142,15 @@ export class ProjectsService {
       const costByRm = new Map(rms.map((r) => [r.id, Number(r.costPrice ?? 0)]));
 
       // Verify stock + decrement.
+      // NOTE: full Dr Project-WIP / Cr Inventory journal posting is deferred
+      // to a follow-up sprint that adds a MATERIAL_ISSUANCE AccountingEventType
+      // and a Project-WIP COA account. For now, the inventory decrement is
+      // reflected in RawMaterialInventory.quantity and the issuance row +
+      // line history serves as the audit trail. The cash-out cost is
+      // captured in MaterialIssuanceLine.unitCost × quantity (used for
+      // project P&L) but is NOT yet reconciled into the GL. Reports will
+      // show project P&L correctly; trial balance will not reflect WIP
+      // movement until the GL wiring lands.
       for (const l of dto.lines) {
         const inv = await tx.rawMaterialInventory.findUnique({
           where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId: l.rawMaterialId } },

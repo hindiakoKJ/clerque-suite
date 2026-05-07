@@ -126,17 +126,33 @@ export class WarehouseService {
     return t;
   }
 
-  /** Send: deducts from source RawMaterialInventory; status → IN_TRANSIT. */
+  /** Send: deducts from source RawMaterialInventory; status → IN_TRANSIT.
+   *
+   *  Race-safe: uses an atomic status-conditional updateMany to claim the
+   *  DRAFT row before any inventory math runs. Two concurrent send calls
+   *  cannot both pass — the second sees status already changed and aborts.
+   */
   async sendTransfer(tenantId: string, id: string) {
     return this.prisma.$transaction(async (tx) => {
-      const t = await tx.stockTransfer.findFirst({
+      // Atomic claim: flip DRAFT → IN_TRANSIT only if currently DRAFT. If
+      // someone else already sent it, this returns count=0 and we abort.
+      const claimed = await tx.stockTransfer.updateMany({
+        where: { id, tenantId, status: 'DRAFT' },
+        data:  { status: 'IN_TRANSIT', sentAt: new Date() },
+      });
+      if (claimed.count === 0) {
+        const existing = await tx.stockTransfer.findFirst({
+          where: { id, tenantId },
+          select: { status: true },
+        });
+        if (!existing) throw new NotFoundException('Transfer not found.');
+        throw new BadRequestException(`Only DRAFT transfers can be sent (current: ${existing.status}).`);
+      }
+
+      const t = await tx.stockTransfer.findFirstOrThrow({
         where:   { id, tenantId },
         include: { lines: true },
       });
-      if (!t) throw new NotFoundException('Transfer not found.');
-      if (t.status !== 'DRAFT') {
-        throw new BadRequestException(`Only DRAFT transfers can be sent (current: ${t.status}).`);
-      }
 
       for (const line of t.lines) {
         const inv = await tx.rawMaterialInventory.findUnique({
@@ -144,6 +160,8 @@ export class WarehouseService {
         });
         const onHand = Number(inv?.quantity ?? 0);
         if (onHand < Number(line.quantity)) {
+          // Roll the status flip back so the caller can retry after restocking.
+          await tx.stockTransfer.update({ where: { id }, data: { status: 'DRAFT', sentAt: null } });
           throw new BadRequestException(
             `Insufficient stock at source for raw-material ${line.rawMaterialId}: have ${onHand}, need ${line.quantity}.`,
           );
@@ -154,24 +172,29 @@ export class WarehouseService {
         });
       }
 
-      return tx.stockTransfer.update({
-        where: { id },
-        data:  { status: 'IN_TRANSIT', sentAt: new Date() },
-      });
+      return t;
     });
   }
 
-  /** Receive: increments destination inventory; status → RECEIVED. */
+  /** Receive: increments destination inventory; status → RECEIVED.
+   *  Atomic IN_TRANSIT → RECEIVED claim prevents double-receive races.
+   */
   async receiveTransfer(tenantId: string, id: string, userId: string) {
     return this.prisma.$transaction(async (tx) => {
-      const t = await tx.stockTransfer.findFirst({
+      const claimed = await tx.stockTransfer.updateMany({
+        where: { id, tenantId, status: 'IN_TRANSIT' },
+        data:  { status: 'RECEIVED', receivedAt: new Date(), receivedById: userId },
+      });
+      if (claimed.count === 0) {
+        const existing = await tx.stockTransfer.findFirst({ where: { id, tenantId }, select: { status: true } });
+        if (!existing) throw new NotFoundException('Transfer not found.');
+        throw new BadRequestException(`Only IN_TRANSIT transfers can be received (current: ${existing.status}).`);
+      }
+
+      const t = await tx.stockTransfer.findFirstOrThrow({
         where:   { id, tenantId },
         include: { lines: true },
       });
-      if (!t) throw new NotFoundException('Transfer not found.');
-      if (t.status !== 'IN_TRANSIT') {
-        throw new BadRequestException(`Only IN_TRANSIT transfers can be received (current: ${t.status}).`);
-      }
 
       for (const line of t.lines) {
         await tx.rawMaterialInventory.upsert({
@@ -184,25 +207,34 @@ export class WarehouseService {
         });
       }
 
-      return tx.stockTransfer.update({
-        where: { id },
-        data:  { status: 'RECEIVED', receivedAt: new Date(), receivedById: userId },
-      });
+      return t;
     });
   }
 
   async cancelTransfer(tenantId: string, id: string) {
     return this.prisma.$transaction(async (tx) => {
-      const t = await tx.stockTransfer.findFirst({
+      // Atomic claim: only DRAFT or IN_TRANSIT can transition to CANCELLED.
+      // A double-cancel race sees count=0 on the second call and aborts
+      // before any double-refund of inventory.
+      const claimed = await tx.stockTransfer.updateMany({
+        where: { id, tenantId, status: { in: ['DRAFT', 'IN_TRANSIT'] } },
+        data:  { status: 'CANCELLED' },
+      });
+      if (claimed.count === 0) {
+        const existing = await tx.stockTransfer.findFirst({ where: { id, tenantId }, select: { status: true } });
+        if (!existing) throw new NotFoundException('Transfer not found.');
+        throw new BadRequestException(`Cannot cancel a ${existing.status} transfer.`);
+      }
+
+      const t = await tx.stockTransfer.findFirstOrThrow({
         where:   { id, tenantId },
+        // Use a fresh load — we need the PRE-cancel sentAt to know whether
+        // inventory was already deducted at source.
         include: { lines: true },
       });
-      if (!t) throw new NotFoundException('Transfer not found.');
-      if (t.status === 'RECEIVED' || t.status === 'CANCELLED') {
-        throw new BadRequestException(`Cannot cancel a ${t.status} transfer.`);
-      }
-      // If already in transit, refund the source branch.
-      if (t.status === 'IN_TRANSIT') {
+
+      // If the transfer was already IN_TRANSIT, refund source inventory.
+      if (t.sentAt) {
         for (const line of t.lines) {
           await tx.rawMaterialInventory.update({
             where: { branchId_rawMaterialId: { branchId: t.fromBranchId, rawMaterialId: line.rawMaterialId } },
@@ -210,10 +242,8 @@ export class WarehouseService {
           });
         }
       }
-      return tx.stockTransfer.update({
-        where: { id },
-        data:  { status: 'CANCELLED' },
-      });
+
+      return t;
     });
   }
 

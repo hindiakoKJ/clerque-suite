@@ -1,6 +1,8 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { JwtPayload, PlanFeatures, ApiAccessLevel } from '@repo/shared-types';
+import type { JwtPayload, PlanFeatures, ApiAccessLevel, PlanCode } from '@repo/shared-types';
+import { PLAN_FEATURES } from '@repo/shared-types';
+import { PrismaService } from '../../prisma/prisma.service';
 
 export const PLAN_FEATURE_KEY = 'planFeature';
 
@@ -20,9 +22,12 @@ const API_LEVELS: Record<ApiAccessLevel, number> = { none: 0, read: 1, readwrite
 
 @Injectable()
 export class PlanFeatureGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly prisma:    PrismaService,
+  ) {}
 
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const required = this.reflector.getAllAndOverride<PlanFeatureRequirement | undefined>(
       PLAN_FEATURE_KEY,
       [ctx.getHandler(), ctx.getClass()],
@@ -33,11 +38,26 @@ export class PlanFeatureGuard implements CanActivate {
     if (!user) return false;
     if (user.isSuperAdmin) return true; // platform admin bypass
 
-    const features = user.planFeatures;
+    // Resolve features. Prefer JWT-baked (fast path); fall back to DB lookup
+    // for legacy JWTs issued before Sprint 9 so the gate doesn't become
+    // silently permissive after deploy. DB lookup happens once per request
+    // for legacy tokens — acceptable until they expire (≤ 8h).
+    let features = user.planFeatures;
+    if (!features && user.tenantId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: user.tenantId },
+        select: { planCode: true },
+      });
+      const pc = (tenant?.planCode ?? 'SUITE_T2') as PlanCode;
+      features = PLAN_FEATURES[pc];
+    }
     if (!features) {
-      // Legacy JWT (pre-Sprint 9) — be permissive. Once tokens cycle, the
-      // post-Sprint-9 JWT carries planFeatures and the guard becomes strict.
-      return true;
+      // No tenant context (e.g. registration flow) — deny by default.
+      throw new ForbiddenException({
+        code:    'PLAN_FEATURE_LOCKED',
+        feature: required.feature,
+        message: 'Cannot determine plan features for this session.',
+      });
     }
 
     if (required.feature === 'apiAccess') {

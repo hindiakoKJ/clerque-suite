@@ -214,6 +214,9 @@ export class LaundryService {
     if (order.status === 'CLAIMED') {
       throw new BadRequestException('Already CLAIMED — cannot revert.');
     }
+    if (order.status === 'CANCELLED') {
+      throw new BadRequestException('Already CANCELLED — cannot revert or advance.');
+    }
     if (status === 'CLAIMED') {
       throw new BadRequestException('Use the claim endpoint to mark CLAIMED (creates POS Order).');
     }
@@ -448,6 +451,11 @@ export class LaundryService {
       });
       const productSubtotal = enrichedProductLines.reduce((s, l) => s + l.lineTotal, 0);
 
+      // Note: retail product inventory deduction is performed AFTER the
+      // claim number is generated (see below) — we need the claim number in
+      // the InventoryLog reason for traceability. The placeholder list of
+      // products + quantities is held here, applied after.
+
       // Promo evaluation (best-fit) — basic implementation; can be expanded.
       const promoDiscount = await this.evaluatePromos(tx, tenantId, serviceLines);
 
@@ -533,6 +541,44 @@ export class LaundryService {
           items:             true,
         },
       });
+
+      // Decrement retail product inventory + write InventoryLog audit row.
+      // Skip products that are recipe-mode (BOM-based) since their stock is
+      // implicit through raw materials. Allow negative-stock to not block
+      // a sale (POS behaviour); low-stock alerts cover the gap separately.
+      if (enrichedProductLines.length > 0) {
+        const productInvMeta = await tx.product.findMany({
+          where:  { id: { in: enrichedProductLines.map((p) => p.productId) }, tenantId },
+          select: { id: true, inventoryMode: true },
+        });
+        const inventoryModeById = new Map(productInvMeta.map((p) => [p.id, p.inventoryMode]));
+        for (const line of enrichedProductLines) {
+          if (inventoryModeById.get(line.productId) !== 'UNIT_BASED') continue;
+          const before = await tx.inventoryItem.findUnique({
+            where: { branchId_productId: { branchId: dto.branchId, productId: line.productId } },
+            select: { quantity: true },
+          });
+          const beforeQty = Number(before?.quantity ?? 0);
+          const afterQty  = beforeQty - line.quantity;
+          await tx.inventoryItem.upsert({
+            where:  { branchId_productId: { branchId: dto.branchId, productId: line.productId } },
+            update: { quantity: { decrement: line.quantity } },
+            create: { tenantId, branchId: dto.branchId, productId: line.productId, quantity: -line.quantity },
+          });
+          await tx.inventoryLog.create({
+            data: {
+              tenantId, branchId: dto.branchId, productId: line.productId,
+              type:           'SALE_DEDUCTION',
+              quantity:       new Prisma.Decimal(-line.quantity),
+              quantityBefore: new Prisma.Decimal(beforeQty),
+              quantityAfter:  new Prisma.Decimal(afterQty),
+              reason:         `Laundry retail · ${claimNumber}`,
+              referenceId:    order.id,
+              createdById:    userId,
+            },
+          }).catch(() => { /* best-effort audit; never block sale */ });
+        }
+      }
 
       return order;
     });

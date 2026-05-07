@@ -10,8 +10,8 @@ import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant } from '@repo/shared-types';
-import type { TaxStatus, TierId, AiAddonType } from '@repo/shared-types';
+import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant, PLAN_FEATURES, PLAN_LIMITS } from '@repo/shared-types';
+import type { TaxStatus, TierId, AiAddonType, PlanCode } from '@repo/shared-types';
 
 // 8h access token = one login covers a full work shift; no mid-shift logouts.
 // Refresh-token rotation still happens silently in the background via the
@@ -255,12 +255,11 @@ export class AuthService {
     };
 
     // Bake plan-derived feature flags + limits into the JWT for fast guards.
-    try {
-      const { PLAN_FEATURES, PLAN_LIMITS } = require('@repo/shared-types') as typeof import('@repo/shared-types');
-      const pc = (payload.planCode ?? 'SUITE_T2') as keyof typeof PLAN_FEATURES;
-      payload.planFeatures = PLAN_FEATURES[pc];
-      payload.planLimits   = PLAN_LIMITS[pc];
-    } catch { /* shared-types not loaded — JWT still valid without these */ }
+    // Imports are top-of-file so this runs synchronously without dynamic require()
+    // (which fails silently in production NestJS bundles).
+    const pc = (payload.planCode ?? 'SUITE_T2') as PlanCode;
+    payload.planFeatures = PLAN_FEATURES[pc];
+    payload.planLimits   = PLAN_LIMITS[pc];
 
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_EXPIRY });
     const refreshToken = this.jwt.sign(
@@ -485,6 +484,15 @@ export class AuthService {
       isPtuHolder:       false,
       ptuNumber:         null,
       minNumber:         null,
+      // Super-admin has full module access + Enterprise-tier features.
+      // PlanFeatureGuard already short-circuits on isSuperAdmin, but other
+      // guards reading these fields directly would otherwise see undefined.
+      modulePos:         true,
+      moduleLedger:      true,
+      modulePayroll:     true,
+      planCode:          'ENTERPRISE',
+      planFeatures:      PLAN_FEATURES.ENTERPRISE,
+      planLimits:        PLAN_LIMITS.ENTERPRISE,
     };
     const accessToken = this.jwt.sign(payload, { expiresIn: '2h' });
     const refreshToken = this.jwt.sign(

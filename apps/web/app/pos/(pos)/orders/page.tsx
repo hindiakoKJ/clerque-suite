@@ -94,7 +94,12 @@ export default function OrdersPage() {
   const { data: orders = [], isLoading } = useQuery<Order[]>({
     queryKey: ['orders', user?.branchId],
     queryFn: () =>
-      api.get(`/orders?branchId=${user!.branchId}`).then((r) => r.data),
+      api.get(`/orders?branchId=${user!.branchId}&take=200`).then((r) => {
+        // Endpoint shape: { data, total, take, skip }. Accept the legacy
+        // bare-array shape too for backward-compat with older deploys.
+        const d = r.data;
+        return Array.isArray(d) ? d : (d?.data ?? []);
+      }),
     enabled: !!user?.branchId,
     staleTime: 15_000,
     // Poll every 15s while the page is open so PAID->COMPLETED transitions

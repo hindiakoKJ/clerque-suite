@@ -64,12 +64,18 @@ export class OrdersController {
     @CurrentUser() user: JwtPayload,
     @Query('branchId') branchId?: string,
     @Query('shiftId') shiftId?: string,
+    @Query('take')     take?:     string,
+    @Query('skip')     skip?:     string,
   ) {
     try {
       // Branch-scoped roles (CASHIER, SALES_LEAD, BRANCH_MANAGER, etc.) are
       // forced to their own branchId — owners/accountants see whatever they ask for.
       const scoped = effectiveBranchId(user, branchId);
-      return await this.ordersService.findAll(user.tenantId!, scoped, shiftId);
+      return await this.ordersService.findAll(
+        user.tenantId!, scoped, shiftId,
+        take ? Number(take) : undefined,
+        skip ? Number(skip) : undefined,
+      );
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
       if (err instanceof ForbiddenException) throw err;

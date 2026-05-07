@@ -632,22 +632,45 @@ export class OrdersService {
 
   // ─── List orders ─────────────────────────────────────────────────────────
 
-  findAll(tenantId: string, branchId?: string, shiftId?: string) {
-    return this.prisma.order.findMany({
-      where: {
-        tenantId,
-        deletedAt: null,    // soft-delete: hide voided/cancelled orders from active lists
-        ...(branchId ? { branchId } : {}),
-        ...(shiftId ? { shiftId } : {}),
-      },
-      include: {
-        items: { include: { modifiers: true } },
-        payments: true,
-        discounts: true,
-        createdBy: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+  /**
+   * List orders for a tenant. ALWAYS paginated to prevent OOM at scale —
+   * a busy branch can do 500+ orders/day; without a cap a year-old tenant
+   * would try to deserialize tens of thousands of rows.
+   *
+   * Default take = 100, max = 500. Returns { data, total, take, skip }.
+   * Soft-deleted orders are excluded.
+   */
+  async findAll(
+    tenantId: string,
+    branchId?: string,
+    shiftId?: string,
+    take = 100,
+    skip = 0,
+  ) {
+    const safeTake = Math.min(Math.max(take, 1), 500);
+    const safeSkip = Math.max(skip, 0);
+    const where = {
+      tenantId,
+      deletedAt: null,
+      ...(branchId ? { branchId } : {}),
+      ...(shiftId ? { shiftId } : {}),
+    };
+    const [total, data] = await Promise.all([
+      this.prisma.order.count({ where }),
+      this.prisma.order.findMany({
+        where,
+        include: {
+          items: { include: { modifiers: true } },
+          payments: true,
+          discounts: true,
+          createdBy: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take:    safeTake,
+        skip:    safeSkip,
+      }),
+    ]);
+    return { data, total, take: safeTake, skip: safeSkip };
   }
 
   async findOne(tenantId: string, id: string) {

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma, ProjectStatus } from '@prisma/client';
 
 export interface CreateProjectDto {
@@ -20,7 +21,10 @@ export interface CreateIssuanceDto {
 
 @Injectable()
 export class ProjectsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma:  PrismaService,
+    private periods: AccountingPeriodsService,
+  ) {}
 
   // ── Numbering ──────────────────────────────────────────────────────────
   private async nextProjectCode(tx: Prisma.TransactionClient, tenantId: string): Promise<string> {
@@ -185,6 +189,13 @@ export class ProjectsService {
       // issuance — operator can backfill manually via Journal Import.
       const totalCost = Math.round(totalIssuedCost * 100) / 100;
       if (totalCost > 0) {
+        const postingDate = new Date();
+
+        // Period-close guard: if the period containing today is closed, the
+        // JE cannot be posted. Refuse the whole issuance so inventory and GL
+        // stay consistent.
+        await this.periods.assertDateIsOpen(tenantId, postingDate);
+
         const accounts = await tx.account.findMany({
           where:  { tenantId, code: { in: ['1052', '1051'] }, isActive: true },
           select: { id: true, code: true },
@@ -192,24 +203,18 @@ export class ProjectsService {
         const wipAcct = accounts.find((a) => a.code === '1052');
         const rmAcct  = accounts.find((a) => a.code === '1051');
         if (wipAcct && rmAcct) {
-          // Generate stable entry number (per-day sequence per tenant).
-          const yyyymmdd = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-          const dayCount = await tx.journalEntry.count({
-            where: {
-              tenantId,
-              date: {
-                gte: new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`),
-                lt:  new Date(`${new Date().toISOString().slice(0, 10)}T23:59:59Z`),
-              },
-            },
-          });
-          const entryNumber = `ISS-${yyyymmdd}-${String(dayCount + 1).padStart(4, '0')}`;
+          // Race-safe entry number derived from the unique issuanceNumber.
+          // The previous "day-count + 1" approach had a race window where two
+          // concurrent issuances within the same day could collide on the
+          // same suffix. issuanceNumber is uniquely sequenced per tenant per
+          // year, so JE-{issuanceNumber} is unique by construction.
+          const entryNumber = `JE-${issuanceNumber}`;
           await tx.journalEntry.create({
             data: {
               tenantId,
               entryNumber,
-              date:        new Date(),
-              postingDate: new Date(),
+              date:        postingDate,
+              postingDate,
               description: `Material issuance ${issuanceNumber}`,
               reference:   issuanceNumber,
               status:      'POSTED',

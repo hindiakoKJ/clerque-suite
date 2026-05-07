@@ -14,24 +14,36 @@ production deploy, capture them as versioned migrations** so they can be replaye
 deterministically via `prisma migrate deploy`.
 
 Run these from a **cmd** prompt with the API's `.env` already configured
-(`DATABASE_URL` + `DIRECT_URL` pointing at your local dev Postgres, NOT prod):
+(`DATABASE_URL` + `DIRECT_URL` pointing at your local dev Postgres, NOT prod).
+
+**Important:** because all the schema deltas were already applied to your local
+DB via `db push`, Prisma will detect "drift" and prompt to baseline. We bypass
+the prompt by capturing one consolidated migration (works around the
+non-interactive cmd hang issue):
 
 ```cmd
 cd /d "E:\AI Projects\app-suite\apps\api"
-npx prisma migrate dev --name sprint_6_warehouse_construction --schema=..\..\packages\db\prisma\schema.prisma
-npx prisma migrate dev --name sprint_7_laundry_v2_machines_promos --schema=..\..\packages\db\prisma\schema.prisma
-npx prisma migrate dev --name sprint_8_laundry_addons --schema=..\..\packages\db\prisma\schema.prisma
-npx prisma migrate dev --name sprint_9_plan_features_limits --schema=..\..\packages\db\prisma\schema.prisma
-npx prisma migrate dev --name sprint_10_material_issuance_event --schema=..\..\packages\db\prisma\schema.prisma
+npx prisma migrate diff --from-empty --to-schema-datamodel "..\..\packages\db\prisma\schema.prisma" --script > "..\..\packages\db\prisma\migrations\20260508_sprints_6_to_10_consolidated\migration.sql"
 ```
 
-Each command:
-1. Captures any pending schema delta into a versioned `.sql` migration file under
-   `packages/db/prisma/migrations/`
-2. Applies it to your local dev DB
-3. Regenerates the Prisma client
+(Create the directory first if it doesn't exist:
+`mkdir "..\..\packages\db\prisma\migrations\20260508_sprints_6_to_10_consolidated"`)
 
-If Prisma reports "no schema delta," that migration is a no-op — safe to skip the name.
+Then mark the migration as applied without re-running it (since the schema is
+already live in your dev DB):
+
+```cmd
+npx prisma migrate resolve --applied 20260508_sprints_6_to_10_consolidated
+```
+
+For a fresh database (no existing schema), use the simpler approach:
+
+```cmd
+npx prisma migrate deploy
+```
+
+This applies all migrations idempotently — the standard CI/CD command for
+production deploys. NEVER run `prisma db push` against production.
 
 After all migrations are captured, commit the new files:
 

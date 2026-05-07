@@ -29,14 +29,21 @@ export class LaundryController {
     'SALES_LEAD', 'CASHIER', 'GENERAL_EMPLOYEE', 'MDM',
   ] as const;
 
-  @ApiOperation({ summary: 'List active laundry orders (everything except CLAIMED)' })
+  @ApiOperation({ summary: 'List active laundry orders (everything except CLAIMED). Paginated.' })
   @Roles(...LaundryController.LAUNDRY_OPS)
   @Get('orders')
   list(
     @CurrentUser() user: JwtPayload,
     @Query('branchId') branchId?: string,
+    @Query('take')     take?:     string,
+    @Query('skip')     skip?:     string,
   ) {
-    return this.svc.listActive(user.tenantId!, branchId);
+    return this.svc.listActive(
+      user.tenantId!,
+      branchId,
+      take ? Number(take) : undefined,
+      skip ? Number(skip) : undefined,
+    );
   }
 
   @ApiOperation({ summary: 'Get a single laundry order' })

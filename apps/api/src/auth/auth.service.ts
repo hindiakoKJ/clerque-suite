@@ -184,12 +184,17 @@ export class AuthService {
     name = '',
     deviceInfo?: string,
     ipAddress?: string,
+    /** When true, skip the "revoke all active sessions" step. Used by
+     *  refresh() so multi-device sessions don't get cross-killed on each
+     *  rotation. Login from a fresh credential always revokes (default). */
+    skipRevokeAll = false,
   ): Promise<AuthTokens> {
-    // Revoke all existing sessions (single active session policy)
-    await this.prisma.userSession.updateMany({
-      where: { userId, status: 'ACTIVE' },
-      data: { status: 'REVOKED' },
-    });
+    if (!skipRevokeAll) {
+      await this.prisma.userSession.updateMany({
+        where: { userId, status: 'ACTIVE' },
+        data: { status: 'REVOKED' },
+      });
+    }
 
     const appAccess = await this.loadAppAccess(userId, role);
 
@@ -328,13 +333,17 @@ export class AuthService {
     });
     if (!user) throw new UnauthorizedException();
 
-    // Rotate: revoke old session, issue new tokens
+    // Rotate: revoke ONLY the matched session, then issue new tokens. Other
+    // active sessions (e.g. user logged in on a second device) stay alive.
     await this.prisma.userSession.update({
       where: { id: matchedSession.id },
       data: { status: 'REVOKED' },
     });
 
-    return this.login(user.id, user.tenantId, user.branchId, user.role, user.name);
+    return this.login(
+      user.id, user.tenantId, user.branchId, user.role, user.name,
+      undefined, undefined, /* skipRevokeAll */ true,
+    );
   }
 
   async logout(userId: string, refreshToken: string): Promise<void> {

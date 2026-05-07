@@ -90,11 +90,17 @@ function fmtTime(iso: string) {
 export default function LaundryQueuePage() {
   const qc = useQueryClient();
 
-  const { data: orders = [], isLoading } = useQuery<LaundryOrder[]>({
+  const { data: page, isLoading } = useQuery<{ data: LaundryOrder[]; total: number; take: number; skip: number }>({
     queryKey: ['laundry-orders'],
-    queryFn:  () => api.get('/laundry/orders').then((r) => r.data),
+    queryFn:  () => api.get('/laundry/orders?take=100').then((r) => {
+      // Backward-compat: older API returned a bare array
+      const d = r.data;
+      if (Array.isArray(d)) return { data: d, total: d.length, take: d.length, skip: 0 };
+      return d;
+    }),
     refetchInterval: 30_000,
   });
+  const orders: LaundryOrder[] = page?.data ?? [];
 
   const advance = useMutation({
     mutationFn: ({ id, status }: { id: string; status: LaundryStatus }) =>

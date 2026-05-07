@@ -87,15 +87,15 @@ export class LaundryService {
         quantity = Number(dto.weightKg);
         break;
       case 'PER_LOAD':
-        if (!dto.loadCount || dto.loadCount <= 0) {
-          throw new BadRequestException('loadCount is required for PER_LOAD pricing.');
+        if (!dto.loadCount || dto.loadCount <= 0 || !Number.isInteger(dto.loadCount)) {
+          throw new BadRequestException('loadCount must be a positive integer for PER_LOAD pricing.');
         }
         quantity = dto.loadCount;
         break;
       case 'PER_PIECE':
       case 'PER_GARMENT':
-        if (!dto.pieceCount || dto.pieceCount <= 0) {
-          throw new BadRequestException('pieceCount is required for PER_PIECE / PER_GARMENT pricing.');
+        if (!dto.pieceCount || dto.pieceCount <= 0 || !Number.isInteger(dto.pieceCount)) {
+          throw new BadRequestException('pieceCount must be a positive integer for PER_PIECE / PER_GARMENT pricing.');
         }
         quantity = dto.pieceCount;
         break;
@@ -152,29 +152,40 @@ export class LaundryService {
     });
   }
 
-  async listActive(tenantId: string, branchId?: string) {
+  /**
+   * List active orders for the kanban. Always paginated to keep payloads
+   * predictable on busy days. Caller can override take up to 200; default 100.
+   */
+  async listActive(tenantId: string, branchId?: string, take = 100, skip = 0) {
     await this.assertLaundryTenant(tenantId);
-    return this.prisma.laundryOrder.findMany({
-      where: {
-        tenantId,
-        branchId: branchId || undefined,
-        status:   { not: 'CLAIMED' },
-      },
-      orderBy: { receivedAt: 'desc' },
-      include: {
-        items:    true,
-        customer: { select: { id: true, name: true, contactPhone: true } },
-        branch:   { select: { id: true, name: true } },
-        // v2 multi-line: expose the machine codes currently in use so the
-        // kanban card can show "Using W1, W2, D1" chips below the customer.
-        lines: {
-          select: {
-            id: true, machineStatus: true,
-            machine: { select: { id: true, code: true, kind: true } },
+    const safeTake = Math.min(Math.max(take, 1), 200);
+    const safeSkip = Math.max(skip, 0);
+    const where = {
+      tenantId,
+      branchId: branchId || undefined,
+      status:   { not: 'CLAIMED' as const },
+    };
+    const [total, data] = await Promise.all([
+      this.prisma.laundryOrder.count({ where }),
+      this.prisma.laundryOrder.findMany({
+        where,
+        orderBy: { receivedAt: 'desc' },
+        take:    safeTake,
+        skip:    safeSkip,
+        include: {
+          items:    true,
+          customer: { select: { id: true, name: true, contactPhone: true } },
+          branch:   { select: { id: true, name: true } },
+          lines: {
+            select: {
+              id: true, machineStatus: true,
+              machine: { select: { id: true, code: true, kind: true } },
+            },
           },
         },
-      },
-    });
+      }),
+    ]);
+    return { data, total, take: safeTake, skip: safeSkip };
   }
 
   async getOne(tenantId: string, id: string) {
@@ -681,15 +692,28 @@ export class LaundryService {
     tenantId: string,
     lines: Array<{ serviceCode: LaundryServiceCode; mode: LaundryServiceMode; sets: number; unitPrice: number; lineTotal: number }>,
   ): Promise<{ totalDiscount: number; applications: Array<{ code: string; name: string; discount: number }> }> {
-    const now = new Date();
-    const dow = now.getUTCDay();
-    const hour = now.getUTCHours() + 8; // crude UTC+8 for PH
+    // Compute day-of-week + hour in Asia/Manila (UTC+8) using Intl.
+    // The previous implementation did `getUTCHours() + 8` which can yield 24+
+    // and crosses the day boundary near midnight, mis-evaluating off-peak windows.
+    const phFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Manila',
+      weekday:  'short',
+      hour:     '2-digit',
+      hour12:   false,
+    });
+    const parts = phFormatter.formatToParts(new Date());
+    const weekdayMap: Record<string, number> = {
+      Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+    };
+    const dow  = weekdayMap[parts.find((p) => p.type === 'weekday')?.value ?? 'Mon'] ?? 1;
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
 
+    const nowUtc = new Date();
     const promos = await tx.laundryPromo.findMany({
       where: {
         tenantId, isActive: true,
-        OR: [{ validFrom: null }, { validFrom: { lte: now } }],
-        AND: [{ OR: [{ validTo: null }, { validTo: { gte: now } }] }],
+        OR: [{ validFrom: null }, { validFrom: { lte: nowUtc } }],
+        AND: [{ OR: [{ validTo: null }, { validTo: { gte: nowUtc } }] }],
       },
       orderBy: { priority: 'asc' },
     });
@@ -789,8 +813,11 @@ export class LaundryService {
   async deleteAddOn(tenantId: string, id: string) {
     const a = await this.prisma.laundryServiceAddOn.findFirst({ where: { id, tenantId } });
     if (!a) throw new NotFoundException('Add-on not found.');
-    // Soft-deactivate if any historical line references it; else hard delete.
-    const usage = await this.prisma.laundryOrderLineAddOn.count({ where: { addOnId: id } });
+    // Soft-deactivate if any historical line in THIS tenant references it; else hard delete.
+    // Tenant-scoped count to avoid cross-tenant existence leaks.
+    const usage = await this.prisma.laundryOrderLineAddOn.count({
+      where: { addOnId: id, line: { order: { tenantId } } },
+    });
     if (usage > 0) {
       await this.prisma.laundryServiceAddOn.update({ where: { id }, data: { isActive: false } });
       return { ok: true, softDeleted: true };

@@ -203,6 +203,8 @@ enum AccountingEventType {
   EOD_SUMMARY
   INVENTORY_ADJUSTMENT
   SETTLEMENT
+  // Sprint 10: project material issuance — Dr Project-WIP / Cr Inventory
+  MATERIAL_ISSUANCE
 }
 
 enum InventoryLogType {

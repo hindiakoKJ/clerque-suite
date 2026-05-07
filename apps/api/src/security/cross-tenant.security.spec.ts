@@ -89,7 +89,7 @@ function makePrismaMock() {
 
     $transaction: jest.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
       cb({
-        order:           { findFirst: orderFindFirst, update: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order', orderNumber: 'ORD-2026-000001' }) },
+        order:           { findFirst: orderFindFirst, update: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order', orderNumber: 'ORD-2026-000001' }), count: jest.fn().mockResolvedValue(0) },
         orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
         inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null), update: jest.fn() },
         inventoryLog:    { create: jest.fn() },
@@ -397,7 +397,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
       let rawSqlCapture: unknown[] = [];
       prisma.$transaction.mockImplementationOnce(async (cb: Function) => {
         const txMock = {
-          order:           { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order' }) },
+          order:           { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order' }), count: jest.fn().mockResolvedValue(0) },
           orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
           inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null) },
           inventoryLog:    { create: jest.fn() },
@@ -729,7 +729,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
     let capturedCreatedById: string | undefined;
     prisma.$transaction.mockImplementationOnce(async (cb: Function) => {
       const txMock = {
-        order:           { findFirst: jest.fn(), create: jest.fn((args: any) => {
+        order:           { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0), create: jest.fn((args: any) => {
           capturedCreatedById = args.data.createdById;
           return Promise.resolve({ id: 'new-order' });
         })},

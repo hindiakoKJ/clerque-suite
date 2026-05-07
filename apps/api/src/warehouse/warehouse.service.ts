@@ -312,15 +312,21 @@ export class WarehouseService {
 
   /** Operator enters/updates the counted qty for a line. */
   async setLineCount(tenantId: string, lineId: string, countedQty: number) {
+    if (!Number.isFinite(countedQty) || countedQty < 0) {
+      throw new BadRequestException('countedQty must be a non-negative number.');
+    }
     const line = await this.prisma.cycleCountLine.findFirst({
       where: { id: lineId, count: { tenantId, status: 'OPEN' } },
     });
     if (!line) throw new NotFoundException('Line not found or count is not OPEN.');
+    // Use Prisma.Decimal arithmetic to preserve precision for high-volume kg.
+    const counted  = new Prisma.Decimal(countedQty);
+    const expected = new Prisma.Decimal(line.expectedQty);
     return this.prisma.cycleCountLine.update({
       where: { id: lineId },
       data:  {
-        countedQty:  new Prisma.Decimal(countedQty),
-        varianceQty: new Prisma.Decimal(countedQty - Number(line.expectedQty)),
+        countedQty:  counted,
+        varianceQty: counted.minus(expected),
       },
     });
   }
@@ -342,16 +348,27 @@ export class WarehouseService {
 
       let postedLines = 0;
       for (const line of c.lines) {
-        const variance = Number(line.countedQty) - Number(line.expectedQty);
-        if (Math.abs(variance) < 0.001) continue; // skip zero-variance
+        const counted  = new Prisma.Decimal(line.countedQty);
+        const expected = new Prisma.Decimal(line.expectedQty);
+        const variance = counted.minus(expected);
+
+        // Skip zero-variance (within 1g / 1ml precision).
+        if (variance.abs().lessThan(new Prisma.Decimal('0.001'))) continue;
+
+        // Refuse to post a count that would drive inventory negative.
+        if (counted.lessThan(0)) {
+          throw new BadRequestException(
+            `Line ${line.id}: counted quantity ${counted} cannot be negative.`,
+          );
+        }
 
         await tx.rawMaterialInventory.update({
           where: { branchId_rawMaterialId: { branchId: c.branchId, rawMaterialId: line.rawMaterialId } },
-          data:  { quantity: new Prisma.Decimal(line.countedQty) },
+          data:  { quantity: counted },
         });
         await tx.cycleCountLine.update({
           where: { id: line.id },
-          data:  { varianceQty: new Prisma.Decimal(variance) },
+          data:  { varianceQty: variance },
         });
         postedLines++;
       }

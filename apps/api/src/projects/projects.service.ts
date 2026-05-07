@@ -142,15 +142,7 @@ export class ProjectsService {
       const costByRm = new Map(rms.map((r) => [r.id, Number(r.costPrice ?? 0)]));
 
       // Verify stock + decrement.
-      // NOTE: full Dr Project-WIP / Cr Inventory journal posting is deferred
-      // to a follow-up sprint that adds a MATERIAL_ISSUANCE AccountingEventType
-      // and a Project-WIP COA account. For now, the inventory decrement is
-      // reflected in RawMaterialInventory.quantity and the issuance row +
-      // line history serves as the audit trail. The cash-out cost is
-      // captured in MaterialIssuanceLine.unitCost × quantity (used for
-      // project P&L) but is NOT yet reconciled into the GL. Reports will
-      // show project P&L correctly; trial balance will not reflect WIP
-      // movement until the GL wiring lands.
+      let totalIssuedCost = 0;
       for (const l of dto.lines) {
         const inv = await tx.rawMaterialInventory.findUnique({
           where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId: l.rawMaterialId } },
@@ -165,10 +157,11 @@ export class ProjectsService {
           where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId: l.rawMaterialId } },
           data:  { quantity: { decrement: l.quantity } },
         });
+        totalIssuedCost += l.quantity * (costByRm.get(l.rawMaterialId) ?? 0);
       }
 
       const issuanceNumber = await this.nextIssuanceNumber(tx, tenantId);
-      return tx.materialIssuance.create({
+      const issuance = await tx.materialIssuance.create({
         data: {
           tenantId, projectId, issuanceNumber,
           branchId:   dto.branchId,
@@ -185,6 +178,57 @@ export class ProjectsService {
         },
         include: { lines: { include: { rawMaterial: { select: { name: true, unit: true } } } } },
       });
+
+      // Post the JE: Dr 1052 Work in Process / Cr 1051 Raw Materials Inventory.
+      // Both accounts are in the default seeded COA. If they're missing
+      // (legacy tenants pre-seed) we skip the JE rather than failing the
+      // issuance — operator can backfill manually via Journal Import.
+      const totalCost = Math.round(totalIssuedCost * 100) / 100;
+      if (totalCost > 0) {
+        const accounts = await tx.account.findMany({
+          where:  { tenantId, code: { in: ['1052', '1051'] }, isActive: true },
+          select: { id: true, code: true },
+        });
+        const wipAcct = accounts.find((a) => a.code === '1052');
+        const rmAcct  = accounts.find((a) => a.code === '1051');
+        if (wipAcct && rmAcct) {
+          // Generate stable entry number (per-day sequence per tenant).
+          const yyyymmdd = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          const dayCount = await tx.journalEntry.count({
+            where: {
+              tenantId,
+              date: {
+                gte: new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`),
+                lt:  new Date(`${new Date().toISOString().slice(0, 10)}T23:59:59Z`),
+              },
+            },
+          });
+          const entryNumber = `ISS-${yyyymmdd}-${String(dayCount + 1).padStart(4, '0')}`;
+          await tx.journalEntry.create({
+            data: {
+              tenantId,
+              entryNumber,
+              date:        new Date(),
+              postingDate: new Date(),
+              description: `Material issuance ${issuanceNumber}`,
+              reference:   issuanceNumber,
+              status:      'POSTED',
+              source:      'SYSTEM',
+              createdBy:   userId,
+              postedBy:    userId,
+              postedAt:    new Date(),
+              lines: {
+                create: [
+                  { accountId: wipAcct.id, debit:  new Prisma.Decimal(totalCost), credit: new Prisma.Decimal(0),         description: `WIP — project ${project.projectCode}` },
+                  { accountId: rmAcct.id,  debit:  new Prisma.Decimal(0),         credit: new Prisma.Decimal(totalCost), description: `Raw materials issued ${issuanceNumber}` },
+                ],
+              },
+            },
+          });
+        }
+      }
+
+      return issuance;
     });
   }
 

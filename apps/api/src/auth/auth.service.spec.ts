@@ -60,11 +60,18 @@ describe('AuthService — validateUser()', () => {
   beforeEach(async () => {
     prisma = makePrismaMock();
 
+    const { MailService } = await import('../mail/mail.service');
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: PrismaService, useValue: prisma },
         { provide: JwtService,    useValue: makeJwtMock() },
+        // MailService was added to AuthService constructor for password
+        // reset / lockout notifications. Mock it so the spec compiles.
+        { provide: MailService, useValue: {
+          sendPasswordReset: jest.fn(), sendLockoutNotice: jest.fn(),
+          sendPasswordResetEmail: jest.fn(),
+        } },
       ],
     }).compile();
 

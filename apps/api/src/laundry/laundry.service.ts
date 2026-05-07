@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   LaundryServiceType, LaundryPricingMode, LaundryOrderStatus, BusinessType, Prisma,
   LaundryServiceCode, LaundryServiceMode, LaundryMachineKind, LaundryMachineStatus,
-  LaundryMachineLineStatus, LaundryPromoKind,
+  LaundryMachineLineStatus, LaundryPromoKind, LaundryAddOnKind,
 } from '@prisma/client';
 
 // ─── DTOs ──────────────────────────────────────────────────────────────────────
@@ -165,6 +165,14 @@ export class LaundryService {
         items:    true,
         customer: { select: { id: true, name: true, contactPhone: true } },
         branch:   { select: { id: true, name: true } },
+        // v2 multi-line: expose the machine codes currently in use so the
+        // kanban card can show "Using W1, W2, D1" chips below the customer.
+        lines: {
+          select: {
+            id: true, machineStatus: true,
+            machine: { select: { id: true, code: true, kind: true } },
+          },
+        },
       },
     });
   }
@@ -178,6 +186,14 @@ export class LaundryService {
         customer: { select: { id: true, name: true, contactPhone: true, address: true } },
         branch:   { select: { id: true, name: true } },
         order:    { select: { id: true, orderNumber: true, totalAmount: true } },
+        lines: {
+          include: {
+            machine: { select: { id: true, code: true, kind: true } },
+            addOns:  true,
+          },
+        },
+        productLines:      { include: { product: { select: { id: true, name: true, sku: true } } } },
+        promoApplications: true,
       },
     });
     if (!order) throw new NotFoundException('Laundry order not found.');
@@ -281,7 +297,12 @@ export class LaundryService {
         lines: {
           where: { machineStatus: 'RUNNING' },
           include: {
-            order: { select: { id: true, claimNumber: true } },
+            order: {
+              select: {
+                id: true, claimNumber: true,
+                customer: { select: { id: true, name: true } },
+              },
+            },
           },
         },
       },
@@ -336,6 +357,8 @@ export class LaundryService {
         sets:        number;
         weightKg?:   number;
         notes?:      string;
+        /** Optional list of add-on IDs to attach to this line. */
+        addOnIds?:   string[];
       }>;
       productLines?: Array<{ productId: string; quantity: number; notes?: string }>;
       garments?: Array<{ garmentType: string; quantity?: number; condition?: string; tagNumber?: string }>;
@@ -360,14 +383,49 @@ export class LaundryService {
         priceRows.map((p) => [priceKey(p.serviceCode, p.mode), Number(p.unitPrice)]),
       );
 
-      // Compute service line subtotals.
+      // Resolve all add-on definitions referenced by any line.
+      const allAddOnIds = Array.from(
+        new Set(dto.lines.flatMap((l) => l.addOnIds ?? [])),
+      );
+      const addOns = allAddOnIds.length
+        ? await tx.laundryServiceAddOn.findMany({
+            where:  { id: { in: allAddOnIds }, tenantId, isActive: true },
+            select: { id: true, code: true, name: true, kind: true, amount: true },
+          })
+        : [];
+      if (addOns.length !== allAddOnIds.length) {
+        throw new BadRequestException('One or more add-ons not found or inactive.');
+      }
+      const addOnById = new Map(addOns.map((a) => [a.id, a]));
+
+      // Compute service line subtotals (base + add-on contributions).
       const serviceLines = dto.lines.map((l) => {
         const unit = priceMap.get(priceKey(l.serviceCode, l.mode));
         if (unit == null) {
           throw new BadRequestException(`No price set for ${l.serviceCode} (${l.mode}). Configure under Settings → Laundry.`);
         }
-        const lineTotal = Math.round(unit * l.sets * 100) / 100;
-        return { ...l, unitPrice: unit, lineTotal };
+        const baseTotal = Math.round(unit * l.sets * 100) / 100;
+
+        // Resolve add-ons for this line and compute contributions.
+        const lineAddOns = (l.addOnIds ?? []).map((id) => {
+          const a = addOnById.get(id)!;
+          const perUnit  = Number(a.amount);
+          const totalAmt = a.kind === 'FLAT_FEE'
+            ? Math.round(perUnit * 100) / 100              // once per line
+            : Math.round(perUnit * l.sets * 100) / 100;    // SURCHARGE per set
+          return {
+            addOnId:       a.id,
+            kind:          a.kind,
+            code:          a.code,
+            name:          a.name,
+            amountPerUnit: perUnit,
+            totalAmount:   totalAmt,
+          };
+        });
+        const addOnTotal = lineAddOns.reduce((s, a) => s + a.totalAmount, 0);
+        const lineTotal  = Math.round((baseTotal + addOnTotal) * 100) / 100;
+
+        return { ...l, unitPrice: unit, lineTotal, addOns: lineAddOns };
       });
       const serviceSubtotal = serviceLines.reduce((s, l) => s + l.lineTotal, 0);
 
@@ -426,6 +484,16 @@ export class LaundryService {
               lineTotal:   new Prisma.Decimal(l.lineTotal),
               weightKg:    l.weightKg != null ? new Prisma.Decimal(l.weightKg) : null,
               notes:       l.notes ?? null,
+              addOns: l.addOns.length ? {
+                create: l.addOns.map((a) => ({
+                  addOnId:       a.addOnId,
+                  kind:          a.kind,
+                  code:          a.code,
+                  name:          a.name,
+                  amountPerUnit: new Prisma.Decimal(a.amountPerUnit),
+                  totalAmount:   new Prisma.Decimal(a.totalAmount),
+                })),
+              } : undefined,
             })),
           },
           productLines: enrichedProductLines.length ? {
@@ -454,7 +522,12 @@ export class LaundryService {
           } : undefined,
         },
         include: {
-          lines:             { include: { machine: { select: { id: true, code: true, kind: true } } } },
+          lines: {
+            include: {
+              machine: { select: { id: true, code: true, kind: true } },
+              addOns:  true,
+            },
+          },
           productLines:      { include: { product: { select: { id: true, name: true } } } },
           promoApplications: true,
           items:             true,
@@ -616,5 +689,67 @@ export class LaundryService {
       }
     }
     return { totalDiscount: Math.round(totalDiscount * 100) / 100, applications };
+  }
+
+  // ── Service Add-Ons (Sprint 8) ────────────────────────────────────────────
+
+  async listAddOns(tenantId: string, includeInactive = false) {
+    return this.prisma.laundryServiceAddOn.findMany({
+      where:   { tenantId, ...(includeInactive ? {} : { isActive: true }) },
+      orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  async createAddOn(
+    tenantId: string,
+    dto: {
+      code: string; name: string; kind?: LaundryAddOnKind;
+      amount: number; priority?: number; defaultOn?: boolean; isActive?: boolean;
+    },
+  ) {
+    return this.prisma.laundryServiceAddOn.create({
+      data: {
+        tenantId,
+        code:     dto.code.toUpperCase().replace(/\s+/g, '_'),
+        name:     dto.name,
+        kind:     (dto.kind ?? 'SURCHARGE') as LaundryAddOnKind,
+        amount:   new Prisma.Decimal(dto.amount),
+        priority: dto.priority ?? 100,
+        defaultOn: dto.defaultOn ?? false,
+        isActive:  dto.isActive ?? true,
+      },
+    });
+  }
+
+  async updateAddOn(
+    tenantId: string,
+    id: string,
+    dto: Partial<{ name: string; amount: number; priority: number; defaultOn: boolean; isActive: boolean }>,
+  ) {
+    const a = await this.prisma.laundryServiceAddOn.findFirst({ where: { id, tenantId } });
+    if (!a) throw new NotFoundException('Add-on not found.');
+    return this.prisma.laundryServiceAddOn.update({
+      where: { id },
+      data: {
+        ...(dto.name      !== undefined ? { name: dto.name } : {}),
+        ...(dto.amount    !== undefined ? { amount: new Prisma.Decimal(dto.amount) } : {}),
+        ...(dto.priority  !== undefined ? { priority: dto.priority } : {}),
+        ...(dto.defaultOn !== undefined ? { defaultOn: dto.defaultOn } : {}),
+        ...(dto.isActive  !== undefined ? { isActive: dto.isActive } : {}),
+      },
+    });
+  }
+
+  async deleteAddOn(tenantId: string, id: string) {
+    const a = await this.prisma.laundryServiceAddOn.findFirst({ where: { id, tenantId } });
+    if (!a) throw new NotFoundException('Add-on not found.');
+    // Soft-deactivate if any historical line references it; else hard delete.
+    const usage = await this.prisma.laundryOrderLineAddOn.count({ where: { addOnId: id } });
+    if (usage > 0) {
+      await this.prisma.laundryServiceAddOn.update({ where: { id }, data: { isActive: false } });
+      return { ok: true, softDeleted: true };
+    }
+    await this.prisma.laundryServiceAddOn.delete({ where: { id } });
+    return { ok: true, softDeleted: false };
   }
 }

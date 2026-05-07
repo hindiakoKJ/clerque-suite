@@ -21,6 +21,13 @@ interface ServicePrice {
   isActive:    boolean;
 }
 
+interface AddOn {
+  id: string; code: string; name: string;
+  kind: 'SURCHARGE' | 'FLAT_FEE';
+  amount: string; priority: number;
+  defaultOn: boolean; isActive: boolean;
+}
+
 interface Branch   { id: string; name: string }
 interface Customer { id: string; name: string; contactPhone: string | null }
 interface Product  { id: string; name: string; sku: string | null; price: string }
@@ -31,6 +38,7 @@ interface ServiceLine {
   sets:        number;
   weightKg?:   number;
   notes?:      string;
+  addOnIds:    string[];
 }
 interface ProductLine {
   productId: string;
@@ -83,6 +91,12 @@ export default function LaundryIntakePage() {
     queryFn:  () => api.get('/laundry/service-prices').then((r) => r.data),
   });
 
+  const { data: addons = [] } = useQuery<AddOn[]>({
+    queryKey: ['laundry-addons'],
+    queryFn:  () => api.get('/laundry/addons').then((r) => r.data),
+  });
+  const addOnById = useMemo(() => new Map(addons.map((a) => [a.id, a])), [addons]);
+
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ['laundry-retail-products'],
     queryFn:  () => api.get('/products').then((r) => Array.isArray(r.data) ? r.data : (r.data?.data ?? [])),
@@ -107,16 +121,29 @@ export default function LaundryIntakePage() {
   };
   const productPriceFor = (id: string): number => Number(products.find((p) => p.id === id)?.price ?? 0);
 
+  // Compute one line's total including add-ons (matches backend logic).
+  function computeLineTotal(l: ServiceLine): number {
+    const base = priceFor(l.serviceCode, l.mode) * l.sets;
+    const addOnContrib = l.addOnIds.reduce((s, id) => {
+      const a = addOnById.get(id);
+      if (!a) return s;
+      const per = Number(a.amount);
+      return s + (a.kind === 'FLAT_FEE' ? per : per * l.sets);
+    }, 0);
+    return Math.round((base + addOnContrib) * 100) / 100;
+  }
+
   // Live totals
   const { servicesSubtotal, productsSubtotal, total } = useMemo(() => {
-    const svc = lines.reduce((s, l) => s + priceFor(l.serviceCode, l.mode) * l.sets, 0);
+    const svc = lines.reduce((s, l) => s + computeLineTotal(l), 0);
     const prd = productLines.reduce((s, l) => s + productPriceFor(l.productId) * l.quantity, 0);
     return {
       servicesSubtotal: Math.round(svc * 100) / 100,
       productsSubtotal: Math.round(prd * 100) / 100,
       total:            Math.round((svc + prd) * 100) / 100,
     };
-  }, [lines, productLines, prices, products]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, productLines, prices, products, addons]);
 
   // ── Submit ──────────────────────────────────────────────────────────────
   const create = useMutation({
@@ -131,6 +158,7 @@ export default function LaundryIntakePage() {
         sets:        l.sets,
         weightKg:    l.weightKg,
         notes:       l.notes,
+        addOnIds:    l.addOnIds,
       })),
       productLines: productLines.length ? productLines : undefined,
     }).then((r) => r.data),
@@ -143,7 +171,16 @@ export default function LaundryIntakePage() {
 
   // ── Line helpers ────────────────────────────────────────────────────────
   function addServiceLine(code: ServiceCode, mode: ServiceMode = 'SELF_SERVICE') {
-    setLines([...lines, { serviceCode: code, mode, sets: 1 }]);
+    // Pre-select any add-ons flagged defaultOn=true.
+    const defaultAddOnIds = addons.filter((a) => a.defaultOn && a.isActive).map((a) => a.id);
+    setLines([...lines, { serviceCode: code, mode, sets: 1, addOnIds: defaultAddOnIds }]);
+  }
+  function toggleLineAddOn(idx: number, addOnId: string) {
+    setLines(lines.map((l, i) => {
+      if (i !== idx) return l;
+      const has = l.addOnIds.includes(addOnId);
+      return { ...l, addOnIds: has ? l.addOnIds.filter((x) => x !== addOnId) : [...l.addOnIds, addOnId] };
+    }));
   }
   function patchLine(idx: number, p: Partial<ServiceLine>) {
     setLines(lines.map((l, i) => i === idx ? { ...l, ...p } : l));
@@ -227,50 +264,80 @@ export default function LaundryIntakePage() {
           <div className="space-y-2">
             {lines.map((l, idx) => {
               const unit = priceFor(l.serviceCode, l.mode);
-              const lineTotal = Math.round(unit * l.sets * 100) / 100;
+              const lineTotal = computeLineTotal(l);
               return (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-center rounded-lg bg-muted/30 px-3 py-2">
-                  <div className="col-span-3 flex items-center gap-2">
-                    <select
-                      value={l.serviceCode}
-                      onChange={(e) => patchLine(idx, { serviceCode: e.target.value as ServiceCode })}
-                      className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
-                    >
-                      {(Object.keys(SERVICE_LABEL) as ServiceCode[]).map((c) => (
-                        <option key={c} value={c}>{SERVICE_LABEL[c]}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="col-span-3 flex gap-1">
-                    {(['SELF_SERVICE', 'FULL_SERVICE'] as ServiceMode[]).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        onClick={() => patchLine(idx, { mode: m })}
-                        className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium border transition-colors ${
-                          l.mode === m
-                            ? 'bg-[var(--accent)] text-white border-transparent'
-                            : 'bg-background border-border hover:bg-muted'
-                        }`}
+                <div key={idx} className="rounded-lg bg-muted/30 px-3 py-2 space-y-1.5">
+                  <div className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-3 flex items-center gap-2">
+                      <select
+                        value={l.serviceCode}
+                        onChange={(e) => patchLine(idx, { serviceCode: e.target.value as ServiceCode })}
+                        className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
                       >
-                        {m === 'SELF_SERVICE' ? 'Self' : 'Full'}
-                      </button>
-                    ))}
+                        {(Object.keys(SERVICE_LABEL) as ServiceCode[]).map((c) => (
+                          <option key={c} value={c}>{SERVICE_LABEL[c]}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="col-span-3 flex gap-1">
+                      {(['SELF_SERVICE', 'FULL_SERVICE'] as ServiceMode[]).map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => patchLine(idx, { mode: m })}
+                          className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium border transition-colors ${
+                            l.mode === m
+                              ? 'bg-[var(--accent)] text-white border-transparent'
+                              : 'bg-background border-border hover:bg-muted'
+                          }`}
+                        >
+                          {m === 'SELF_SERVICE' ? 'Self' : 'Full'}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="number" min={1}
+                      value={l.sets}
+                      onChange={(e) => patchLine(idx, { sets: Math.max(1, Number(e.target.value)) })}
+                      className="col-span-1 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center"
+                      title="Sets"
+                    />
+                    <div className="col-span-2 text-xs text-muted-foreground tabular-nums">
+                      @ {fmtPeso(unit)}/set
+                    </div>
+                    <div className="col-span-2 text-right font-semibold tabular-nums">{fmtPeso(lineTotal)}</div>
+                    <button onClick={() => removeLine(idx)} className="col-span-1 text-red-500 hover:bg-red-500/10 rounded p-1.5 justify-self-end">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
-                  <input
-                    type="number" min={1}
-                    value={l.sets}
-                    onChange={(e) => patchLine(idx, { sets: Math.max(1, Number(e.target.value)) })}
-                    className="col-span-1 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center"
-                    title="Sets"
-                  />
-                  <div className="col-span-2 text-xs text-muted-foreground tabular-nums">
-                    @ {fmtPeso(unit)}/set
-                  </div>
-                  <div className="col-span-2 text-right font-semibold tabular-nums">{fmtPeso(lineTotal)}</div>
-                  <button onClick={() => removeLine(idx)} className="col-span-1 text-red-500 hover:bg-red-500/10 rounded p-1.5 justify-self-end">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+
+                  {/* Add-on chips */}
+                  {addons.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {addons.filter((a) => a.isActive).map((a) => {
+                        const selected = l.addOnIds.includes(a.id);
+                        const amt      = Number(a.amount);
+                        const sign     = amt < 0 ? '−' : '+';
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => toggleLineAddOn(idx, a.id)}
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border transition-colors ${
+                              selected
+                                ? amt < 0
+                                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-400'
+                                  : 'bg-[var(--accent)]/15 border-[var(--accent)]/40 text-[var(--accent)]'
+                                : 'bg-background border-border text-muted-foreground hover:bg-muted'
+                            }`}
+                          >
+                            <span>{a.name}</span>
+                            <span className="font-mono">{sign}{fmtPeso(Math.abs(amt))}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}

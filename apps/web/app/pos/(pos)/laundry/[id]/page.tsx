@@ -20,12 +20,12 @@ interface LaundryDetail {
   id:           string;
   claimNumber:  string;
   status:       LaundryStatus;
-  serviceType:  string;
-  pricingMode:  string;
+  serviceType:  string | null;
+  pricingMode:  string | null;
   weightKg:     string | null;
   loadCount:    number | null;
   pieceCount:   number | null;
-  unitPrice:    string;
+  unitPrice:    string | null;
   totalAmount:  string;
   receivedAt:   string;
   promisedAt:   string | null;
@@ -36,6 +36,17 @@ interface LaundryDetail {
   branch:       { id: string; name: string } | null;
   order:        { id: string; orderNumber: string; totalAmount: string } | null;
   items:        Array<{ id: string; garmentType: string; quantity: number; condition: string | null; tagNumber: string | null }>;
+  lines?:       Array<{
+    id: string;
+    serviceCode: string;
+    mode: string;
+    sets: number;
+    unitPrice: string;
+    lineTotal: string;
+    machineStatus: 'NOT_STARTED' | 'RUNNING' | 'DONE';
+    machine: { id: string; code: string; kind: 'WASHER' | 'DRYER' | 'COMBO' } | null;
+    addOns?: Array<{ id: string; code: string; name: string; totalAmount: string }>;
+  }>;
 }
 
 const FLOW: LaundryStatus[] = ['RECEIVED', 'WASHING', 'DRYING', 'FOLDING', 'READY_FOR_PICKUP'];
@@ -107,7 +118,7 @@ export default function LaundryDetailPage() {
           totalAmount:    total,
           notes:          `Laundry claim ${order.claimNumber}`,
           items: [{
-            productName: `Laundry · ${order.serviceType.replace(/_/g, ' ')}`,
+            productName: `Laundry · ${order.claimNumber}`,
             quantity:    1,
             unitPrice:   total,
             lineTotal:   total,
@@ -159,7 +170,7 @@ export default function LaundryDetailPage() {
             </span>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            {order.serviceType.replace(/_/g, ' ').toLowerCase()} · {order.branch?.name ?? '—'}
+            {order.serviceType ? order.serviceType.replace(/_/g, ' ').toLowerCase() + ' · ' : ''}{order.branch?.name ?? '—'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -199,6 +210,96 @@ export default function LaundryDetailPage() {
         </div>
       </header>
 
+      {/* Currently using — prominent machine assignment banner */}
+      {order.lines && order.lines.some((l) => l.machine) && (
+        <section className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Currently using
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {order.lines.filter((l) => l.machine).map((l) => {
+                  const tint =
+                    l.machineStatus === 'RUNNING' ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40' :
+                    l.machineStatus === 'DONE'    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/40' :
+                                                     'bg-muted text-foreground border-border';
+                  return (
+                    <span
+                      key={l.id}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-sm font-bold font-mono ${tint}`}
+                    >
+                      {l.machine!.code}
+                      <span className="text-[10px] uppercase tracking-wide opacity-70 font-sans">
+                        {l.machineStatus.toLowerCase().replace('_', ' ')}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Service lines (v2 multi-line tickets) */}
+      {order.lines && order.lines.length > 0 && (
+        <section className="rounded-xl border border-border bg-card overflow-hidden">
+          <header className="px-4 py-3 border-b border-border">
+            <h2 className="text-sm font-semibold">Service lines</h2>
+          </header>
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium">Service</th>
+                <th className="text-left px-4 py-2 font-medium">Mode</th>
+                <th className="text-right px-4 py-2 font-medium">Sets</th>
+                <th className="text-right px-4 py-2 font-medium">Unit</th>
+                <th className="text-left px-4 py-2 font-medium">Add-ons</th>
+                <th className="text-center px-4 py-2 font-medium">Machine</th>
+                <th className="text-right px-4 py-2 font-medium">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {order.lines.map((l) => (
+                <tr key={l.id} className="border-t border-border/40">
+                  <td className="px-4 py-2.5 capitalize">{l.serviceCode.replace(/_/g, ' ').toLowerCase()}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{l.mode === 'SELF_SERVICE' ? 'self' : 'full'}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{l.sets}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{fmtPeso(l.unitPrice)}</td>
+                  <td className="px-4 py-2.5">
+                    {(l.addOns ?? []).length === 0 ? (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {(l.addOns ?? []).map((a) => (
+                          <span key={a.id} className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
+                            {a.name}
+                            <span className="font-mono">
+                              {Number(a.totalAmount) < 0 ? '−' : '+'}{fmtPeso(String(Math.abs(Number(a.totalAmount))))}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    {l.machine ? (
+                      <span className="inline-flex items-center gap-0.5 rounded-full border border-border bg-background px-2 py-0.5 text-xs font-mono font-bold">
+                        {l.machine.code}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-semibold tabular-nums">{fmtPeso(l.lineTotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Customer */}
         <section className="p-4 rounded-xl border border-border bg-card space-y-2">
@@ -226,13 +327,21 @@ export default function LaundryDetailPage() {
         <section className="p-4 rounded-xl border border-border bg-card space-y-2">
           <h2 className="text-sm font-semibold">Pricing</h2>
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <div className="text-muted-foreground">Mode</div>
-            <div>{order.pricingMode.replace(/_/g, ' ').toLowerCase()}</div>
+            {order.pricingMode && (
+              <>
+                <div className="text-muted-foreground">Mode</div>
+                <div>{order.pricingMode.replace(/_/g, ' ').toLowerCase()}</div>
+              </>
+            )}
             {order.weightKg && (<><div className="text-muted-foreground">Weight</div><div>{Number(order.weightKg).toFixed(2)} kg</div></>)}
             {order.loadCount != null && (<><div className="text-muted-foreground">Loads</div><div>{order.loadCount}</div></>)}
             {order.pieceCount != null && (<><div className="text-muted-foreground">Pieces</div><div>{order.pieceCount}</div></>)}
-            <div className="text-muted-foreground">Unit price</div>
-            <div>{fmtPeso(order.unitPrice)}</div>
+            {order.unitPrice && (
+              <>
+                <div className="text-muted-foreground">Unit price</div>
+                <div>{fmtPeso(order.unitPrice)}</div>
+              </>
+            )}
             <div className="text-muted-foreground font-semibold">Total</div>
             <div className="font-semibold">{fmtPeso(order.totalAmount)}</div>
             {order.order && (

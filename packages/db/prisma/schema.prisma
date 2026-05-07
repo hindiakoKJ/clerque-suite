@@ -454,6 +454,7 @@ model Tenant {
   laundryOrders        LaundryOrder[]
   laundryMachines      LaundryMachine[]
   laundryServicePrices LaundryServicePrice[]
+  laundryAddOns        LaundryServiceAddOn[]
   laundryPromos        LaundryPromo[]
   stockTransfers       StockTransfer[]
   cycleCounts          CycleCount[]
@@ -2922,8 +2923,9 @@ model LaundryOrderLine {
   startedAt     DateTime?
   finishedAt    DateTime?
 
-  order   LaundryOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  machine LaundryMachine? @relation(fields: [machineId], references: [id])
+  order   LaundryOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  machine LaundryMachine?         @relation(fields: [machineId], references: [id])
+  addOns  LaundryOrderLineAddOn[]
 
   @@index([orderId])
   @@index([machineId])
@@ -2983,6 +2985,57 @@ model LaundryPromoApplication {
 
   @@index([orderId])
   @@map("laundry_promo_applications")
+}
+
+/// Tenant-defined service add-on / modifier (Sprint 8, 2026-05-08).
+/// Lets the owner price arbitrary variants on top of the standard service codes:
+///   - "BYO detergent" (SURCHARGE, amount=-15)
+///   - "Without folding" (SURCHARGE, amount=-20)
+///   - "Extra rinse" (SURCHARGE, amount=+10)
+///   - "Express 1-hr" (SURCHARGE, amount=+50)
+enum LaundryAddOnKind {
+  SURCHARGE
+  FLAT_FEE
+}
+
+model LaundryServiceAddOn {
+  id        String           @id @default(cuid())
+  tenantId  String
+  code      String
+  name      String
+  kind      LaundryAddOnKind @default(SURCHARGE)
+  amount    Decimal          @db.Decimal(10, 2)
+  priority  Int              @default(100)
+  defaultOn Boolean          @default(false)
+  isActive  Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines  LaundryOrderLineAddOn[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, isActive])
+  @@map("laundry_service_addons")
+}
+
+model LaundryOrderLineAddOn {
+  id            String           @id @default(cuid())
+  lineId        String
+  addOnId       String
+  kind          LaundryAddOnKind
+  code          String
+  name          String
+  amountPerUnit Decimal          @db.Decimal(10, 2)
+  totalAmount   Decimal          @db.Decimal(12, 2)
+  appliedAt     DateTime         @default(now())
+
+  line  LaundryOrderLine    @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  addOn LaundryServiceAddOn @relation(fields: [addOnId], references: [id])
+
+  @@index([lineId])
+  @@index([addOnId])
+  @@map("laundry_order_line_addons")
 }
 
 // ─── Payroll: Leave management + 13th-month (Sprint 3, 2026-05-08) ────────────

@@ -22,8 +22,8 @@ interface LaundryOrder {
   id:           string;
   claimNumber:  string;
   status:       LaundryStatus;
-  serviceType:  LaundryServiceType;
-  pricingMode:  'PER_KG' | 'PER_LOAD' | 'PER_PIECE' | 'PER_GARMENT';
+  serviceType:  LaundryServiceType | null;
+  pricingMode:  'PER_KG' | 'PER_LOAD' | 'PER_PIECE' | 'PER_GARMENT' | null;
   weightKg:     string | null;
   loadCount:    number | null;
   pieceCount:   number | null;
@@ -33,6 +33,11 @@ interface LaundryOrder {
   customer:     { id: string; name: string; contactPhone: string | null } | null;
   branch:       { id: string; name: string } | null;
   items:        Array<{ id: string; garmentType: string; quantity: number }>;
+  lines?:       Array<{
+    id: string;
+    machineStatus: 'NOT_STARTED' | 'RUNNING' | 'DONE';
+    machine: { id: string; code: string; kind: 'WASHER' | 'DRYER' | 'COMBO' } | null;
+  }>;
 }
 
 const FLOW: LaundryStatus[] = ['RECEIVED', 'WASHING', 'DRYING', 'FOLDING', 'READY_FOR_PICKUP'];
@@ -64,6 +69,10 @@ function fmtPrice(s: string | null) {
 }
 
 function fmtQty(o: LaundryOrder) {
+  // v2 multi-line: count total sets across service lines.
+  if (o.lines && o.lines.length > 0) {
+    return `${o.lines.length} line${o.lines.length === 1 ? '' : 's'}`;
+  }
   if (o.pricingMode === 'PER_KG' && o.weightKg)    return `${Number(o.weightKg).toFixed(2)} kg`;
   if (o.pricingMode === 'PER_LOAD' && o.loadCount) return `${o.loadCount} load${o.loadCount > 1 ? 's' : ''}`;
   if (o.pieceCount)                                 return `${o.pieceCount} pcs`;
@@ -174,11 +183,38 @@ export default function LaundryQueuePage() {
                         </div>
                       )}
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {fmtQty(o)} · {o.serviceType.replace(/_/g, ' ').toLowerCase()}
+                        {fmtQty(o)}{o.serviceType ? ` · ${o.serviceType.replace(/_/g, ' ').toLowerCase()}` : ''}
                       </div>
                       <div className="mt-1 text-[11px] text-muted-foreground">
                         Received {fmtTime(o.receivedAt)}
                       </div>
+
+                      {/* Machine chips — show codes currently assigned to this customer's lines */}
+                      {(() => {
+                        const machines = (o.lines ?? [])
+                          .filter((l) => l.machine)
+                          .map((l) => ({ code: l.machine!.code, kind: l.machine!.kind, status: l.machineStatus }));
+                        if (machines.length === 0) return null;
+                        return (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {machines.map((m, i) => {
+                              const tint =
+                                m.status === 'RUNNING' ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40' :
+                                m.status === 'DONE'    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30' :
+                                                          'bg-muted text-muted-foreground border-border';
+                              return (
+                                <span
+                                  key={i}
+                                  className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-mono font-bold ${tint}`}
+                                  title={`${m.code} · ${m.kind.toLowerCase()} · ${m.status.toLowerCase()}`}
+                                >
+                                  {m.code}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
 
                       <div className="mt-2 flex gap-1.5">
                         {next && (
@@ -229,7 +265,14 @@ interface Machine {
   capacityKg: string;
   status:     'IDLE' | 'RUNNING' | 'OUT_OF_ORDER';
   branch:     { id: string; name: string };
-  lines:      Array<{ id: string; order: { id: string; claimNumber: string } }>;
+  lines:      Array<{
+    id: string;
+    order: {
+      id: string;
+      claimNumber: string;
+      customer: { id: string; name: string } | null;
+    };
+  }>;
 }
 
 function MachineGrid() {
@@ -284,7 +327,7 @@ function MachineGrid() {
           </span>
         </div>
       </div>
-      <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 gap-2">
         {machines.map((m) => {
           const Icon = m.kind === 'WASHER' ? WashingMachine : Wind;
           const tint =
@@ -292,52 +335,69 @@ function MachineGrid() {
             m.status === 'RUNNING'      ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'   :
                                           'border-red-500/40 bg-red-500/10 text-red-600';
           const runningLine = m.lines[0];
+          const customerName = runningLine?.order.customer?.name;
           return (
             <div
               key={m.id}
-              className={`rounded-lg border ${tint} p-2 flex flex-col items-center gap-0.5 text-center transition-colors`}
+              className={`rounded-lg border ${tint} p-2.5 flex flex-col gap-1 transition-colors min-h-[110px]`}
             >
-              <Icon className="h-5 w-5" />
-              <div className="text-xs font-bold font-mono">{m.code}</div>
-              <div className="text-[10px] opacity-70">{Number(m.capacityKg).toFixed(0)}kg</div>
-              <div className="text-[10px] uppercase tracking-wide font-semibold">
-                {m.status === 'OUT_OF_ORDER' ? 'OUT' : m.status.toLowerCase()}
+              {/* Top row: machine code + icon + status */}
+              <div className="flex items-center justify-between gap-1">
+                <div className="flex items-center gap-1.5">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="text-base font-bold font-mono leading-none">{m.code}</span>
+                </div>
+                <span className="text-[9px] uppercase tracking-wide font-semibold opacity-80">
+                  {m.status === 'OUT_OF_ORDER' ? 'OUT' : m.status.toLowerCase()}
+                </span>
               </div>
-              {runningLine && (
+              <div className="text-[10px] opacity-70">{Number(m.capacityKg).toFixed(0)}kg · {m.kind.toLowerCase()}</div>
+
+              {/* Customer + claim # — only for RUNNING */}
+              {runningLine ? (
                 <Link
                   href={`/pos/laundry/${runningLine.order.id}`}
-                  className="text-[10px] font-mono hover:underline"
+                  className="block mt-auto rounded bg-background/60 hover:bg-background px-1.5 py-1 text-left transition-colors"
                   title={runningLine.order.claimNumber}
                 >
-                  {runningLine.order.claimNumber.slice(-6)}
+                  <div className="text-xs font-semibold truncate text-foreground">
+                    {customerName ?? <span className="italic text-muted-foreground">Walk-in</span>}
+                  </div>
+                  <div className="text-[10px] font-mono opacity-70 truncate">{runningLine.order.claimNumber}</div>
                 </Link>
+              ) : (
+                <div className="mt-auto h-[2.4rem]" />
               )}
-              {m.status === 'RUNNING' && runningLine && (
-                <button
-                  onClick={() => markDone.mutate(runningLine.id)}
-                  className="mt-1 inline-flex items-center gap-0.5 rounded text-[9px] bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 font-semibold"
-                  title="Mark done"
-                >
-                  <CheckCircle2 className="h-2.5 w-2.5" /> done
-                </button>
-              )}
-              {m.status === 'IDLE' && (
-                <button
-                  onClick={() => setStatus.mutate({ id: m.id, status: 'OUT_OF_ORDER' })}
-                  className="mt-1 text-[9px] text-muted-foreground hover:text-red-600"
-                  title="Mark out of order"
-                >
-                  <AlertTriangle className="inline h-2.5 w-2.5" />
-                </button>
-              )}
-              {m.status === 'OUT_OF_ORDER' && (
-                <button
-                  onClick={() => setStatus.mutate({ id: m.id, status: 'IDLE' })}
-                  className="mt-1 text-[9px] text-emerald-600 hover:underline"
-                >
-                  fix
-                </button>
-              )}
+
+              {/* Action row */}
+              <div className="flex items-center justify-end gap-1 -mt-0.5">
+                {m.status === 'RUNNING' && runningLine && (
+                  <button
+                    onClick={() => markDone.mutate(runningLine.id)}
+                    className="inline-flex items-center gap-0.5 rounded text-[10px] bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 font-semibold"
+                    title="Mark done"
+                  >
+                    <CheckCircle2 className="h-3 w-3" /> done
+                  </button>
+                )}
+                {m.status === 'IDLE' && (
+                  <button
+                    onClick={() => setStatus.mutate({ id: m.id, status: 'OUT_OF_ORDER' })}
+                    className="text-[10px] text-muted-foreground hover:text-red-600"
+                    title="Mark out of order"
+                  >
+                    <AlertTriangle className="inline h-3 w-3" />
+                  </button>
+                )}
+                {m.status === 'OUT_OF_ORDER' && (
+                  <button
+                    onClick={() => setStatus.mutate({ id: m.id, status: 'IDLE' })}
+                    className="text-[10px] text-emerald-600 hover:underline"
+                  >
+                    fix
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}

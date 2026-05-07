@@ -2019,6 +2019,37 @@ export class AdminService {
       productsCreated++;
     }
 
+    // Default service add-ons (PH-typical neighborhood pricing modifiers).
+    // Owner can edit/delete from Settings → Laundry → Add-ons.
+    const addOnSpec: Array<{ code: string; name: string; amount: number; priority: number; defaultOn?: boolean }> = [
+      { code: 'BYO_DETERGENT',   name: 'Bring own detergent',   amount: -15, priority: 10 },
+      { code: 'NO_FOLD',         name: 'Without folding',       amount: -20, priority: 20 },
+      { code: 'EXTRA_RINSE',     name: 'Extra rinse cycle',     amount:  10, priority: 30 },
+      { code: 'FABRIC_SOFTENER', name: 'Add fabric softener',   amount:   8, priority: 40 },
+      { code: 'HOT_WASH',        name: 'Hot-water wash',        amount:  20, priority: 50 },
+      { code: 'HANGERED',        name: 'Hung instead of folded',amount:  15, priority: 60 },
+      { code: 'EXPRESS_1HR',     name: 'Express (1-hour rush)', amount:  50, priority: 70 },
+    ];
+    let addOnsCreated = 0;
+    for (const a of addOnSpec) {
+      try {
+        await this.prisma.laundryServiceAddOn.create({
+          data: {
+            tenantId: tenant.id,
+            code: a.code, name: a.name,
+            kind: 'SURCHARGE',
+            amount: new Prisma.Decimal(a.amount),
+            priority: a.priority,
+            defaultOn: a.defaultOn ?? false,
+            isActive:  true,
+          },
+        });
+        addOnsCreated++;
+      } catch (e: any) {
+        if (e.code !== 'P2002') throw e;
+      }
+    }
+
     // Demo promos.
     const promoSpec: Array<{ code: string; name: string; kind: 'PACKAGE_DEAL' | 'PERCENT_OFF' | 'FLAT_OFF' | 'FREE_NTH'; conditions: any; priority: number }> = [
       {
@@ -2123,7 +2154,7 @@ export class AdminService {
       detail: {
         bootstrap: 'LAUNDRY_DEMO',
         ordersCreated: created, ordersSkipped: skipped,
-        machinesCreated, pricesCreated, productsCreated, promosCreated,
+        machinesCreated, pricesCreated, productsCreated, promosCreated, addOnsCreated,
       },
     });
 
@@ -2135,7 +2166,7 @@ export class AdminService {
       generatedPassword,
       ordersCreated:   created,
       ordersSkipped:   skipped,
-      machinesCreated, pricesCreated, productsCreated, promosCreated,
+      machinesCreated, pricesCreated, productsCreated, promosCreated, addOnsCreated,
       loginHint:       `Sign in with email "${ownerEmail}" — password shown once on first run.`,
     };
   }

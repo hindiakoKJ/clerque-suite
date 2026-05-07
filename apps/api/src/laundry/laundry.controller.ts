@@ -11,7 +11,7 @@ import type { JwtPayload } from '@repo/shared-types';
 import { LaundryService, CreateLaundryOrderDto } from './laundry.service';
 import type {
   LaundryOrderStatus, LaundryServiceCode, LaundryServiceMode,
-  LaundryMachineKind, LaundryMachineStatus, LaundryPromoKind,
+  LaundryMachineKind, LaundryMachineStatus, LaundryPromoKind, LaundryAddOnKind,
 } from '@prisma/client';
 
 @ApiTags('Laundry')
@@ -205,5 +205,51 @@ export class LaundryController {
   @HttpCode(HttpStatus.OK)
   deletePromo(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.svc.deletePromo(user.tenantId!, id);
+  }
+
+  // ── Service Add-Ons (Sprint 8) ────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'List service add-ons / modifiers' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Get('addons')
+  listAddOns(
+    @CurrentUser() user: JwtPayload,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
+    return this.svc.listAddOns(user.tenantId!, includeInactive === 'true');
+  }
+
+  @ApiOperation({ summary: 'Create a service add-on (BYO detergent, no-fold, express, etc.)' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Post('addons')
+  @HttpCode(HttpStatus.CREATED)
+  createAddOn(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: {
+      code: string; name: string; kind?: LaundryAddOnKind;
+      amount: number; priority?: number; defaultOn?: boolean; isActive?: boolean;
+    },
+  ) {
+    return this.svc.createAddOn(user.tenantId!, body);
+  }
+
+  @ApiOperation({ summary: 'Update an add-on' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Patch('addons/:id')
+  @HttpCode(HttpStatus.OK)
+  updateAddOn(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Partial<{ name: string; amount: number; priority: number; defaultOn: boolean; isActive: boolean }>,
+  ) {
+    return this.svc.updateAddOn(user.tenantId!, id, body);
+  }
+
+  @ApiOperation({ summary: 'Delete (or soft-deactivate if used) an add-on' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Patch('addons/:id/delete')
+  @HttpCode(HttpStatus.OK)
+  deleteAddOn(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.svc.deleteAddOn(user.tenantId!, id);
   }
 }

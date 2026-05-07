@@ -44,7 +44,7 @@ export default function LaundrySettingsPage() {
     // shows nothing useful. We'll just display a friendly note.
   }
 
-  const [tab, setTab] = useState<'prices' | 'promos' | 'machines'>('prices');
+  const [tab, setTab] = useState<'prices' | 'addons' | 'promos' | 'machines'>('prices');
 
   return (
     <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
@@ -58,7 +58,7 @@ export default function LaundrySettingsPage() {
       </header>
 
       <div className="flex gap-1 border-b border-border">
-        {(['prices', 'promos', 'machines'] as const).map((t) => (
+        {(['prices', 'addons', 'promos', 'machines'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -68,15 +68,172 @@ export default function LaundrySettingsPage() {
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
-            {t === 'prices' ? 'Service Prices' : t === 'promos' ? 'Promos' : 'Machines'}
+            {t === 'prices'   ? 'Service Prices'
+            : t === 'addons'   ? 'Add-ons'
+            : t === 'promos'   ? 'Promos'
+            : 'Machines'}
           </button>
         ))}
       </div>
 
-      {tab === 'prices' && <PricesTab />}
-      {tab === 'promos' && <PromosTab />}
+      {tab === 'prices'   && <PricesTab />}
+      {tab === 'addons'   && <AddOnsTab />}
+      {tab === 'promos'   && <PromosTab />}
       {tab === 'machines' && <MachinesTab />}
     </div>
+  );
+}
+
+// ── Add-ons tab ─────────────────────────────────────────────────────────────
+interface AddOn {
+  id: string; code: string; name: string;
+  kind: 'SURCHARGE' | 'FLAT_FEE';
+  amount: string; priority: number;
+  defaultOn: boolean; isActive: boolean;
+}
+
+function AddOnsTab() {
+  const qc = useQueryClient();
+  const { data: addons = [] } = useQuery<AddOn[]>({
+    queryKey: ['laundry-addons-all'],
+    queryFn:  () => api.get('/laundry/addons?includeInactive=true').then((r) => r.data),
+  });
+
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Partial<{ name: string; amount: number; priority: number; defaultOn: boolean; isActive: boolean }> }) =>
+      api.patch(`/laundry/addons/${id}`, body).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['laundry-addons-all'] }),
+    onError:   (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.patch(`/laundry/addons/${id}/delete`).then((r) => r.data),
+    onSuccess: (data: any) => {
+      qc.invalidateQueries({ queryKey: ['laundry-addons-all'] });
+      toast.success(data?.softDeleted ? 'Soft-deactivated (used in past orders).' : 'Deleted.');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  const [showNew, setShowNew] = useState(false);
+  const [code, setCode]       = useState('');
+  const [name, setName]       = useState('');
+  const [amount, setAmount]   = useState('');
+  const [kind, setKind]       = useState<'SURCHARGE' | 'FLAT_FEE'>('SURCHARGE');
+
+  const create = useMutation({
+    mutationFn: () => api.post('/laundry/addons', {
+      code, name, kind, amount: Number(amount),
+    }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-addons-all'] });
+      toast.success('Add-on created.');
+      setShowNew(false); setCode(''); setName(''); setAmount(''); setKind('SURCHARGE');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  return (
+    <section className="rounded-xl border border-border bg-card overflow-hidden">
+      <header className="px-4 py-3 border-b border-border flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Service Add-ons</h2>
+          <p className="text-xs text-muted-foreground">Modifiers per service line — surcharges or discounts. Negative amount = discount.</p>
+        </div>
+        <button
+          onClick={() => setShowNew(true)}
+          className="inline-flex items-center gap-1 text-xs text-[var(--accent)] hover:underline"
+        >
+          <Plus className="h-3.5 w-3.5" /> Add modifier
+        </button>
+      </header>
+      {addons.length === 0 ? (
+        <div className="p-10 text-center text-sm text-muted-foreground">No add-ons. Add common modifiers like "BYO detergent" or "No fold".</div>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="text-left px-4 py-2 font-medium">Code</th>
+              <th className="text-left px-4 py-2 font-medium">Name</th>
+              <th className="text-left px-4 py-2 font-medium">Kind</th>
+              <th className="text-right px-4 py-2 font-medium">Amount ₱</th>
+              <th className="text-center px-4 py-2 font-medium">Active</th>
+              <th className="px-2 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {addons.map((a) => {
+              const amt = Number(a.amount);
+              return (
+                <tr key={a.id} className="border-t border-border/40">
+                  <td className="px-4 py-2.5 font-mono text-xs">{a.code}</td>
+                  <td className="px-4 py-2.5">{a.name}</td>
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                    {a.kind === 'SURCHARGE' ? 'per set' : 'flat fee'}
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <input
+                      type="number" step="0.01"
+                      defaultValue={amt}
+                      onBlur={(e) => {
+                        const val = Number(e.target.value);
+                        if (val !== amt) update.mutate({ id: a.id, body: { amount: val } });
+                      }}
+                      className={`w-24 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums ${
+                        amt < 0 ? 'text-emerald-600' : amt > 0 ? 'text-amber-700 dark:text-amber-400' : ''
+                      }`}
+                    />
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <button
+                      onClick={() => update.mutate({ id: a.id, body: { isActive: !a.isActive } })}
+                      className={`p-1.5 rounded ${a.isActive ? 'text-emerald-600 hover:bg-emerald-500/10' : 'text-muted-foreground hover:bg-muted'}`}
+                    >
+                      {a.isActive ? <ToggleRight className="h-4 w-4" /> : <ToggleLeft className="h-4 w-4" />}
+                    </button>
+                  </td>
+                  <td className="px-2 py-2.5 text-right">
+                    <button
+                      onClick={() => { if (confirm(`Delete ${a.code}?`)) remove.mutate(a.id); }}
+                      className="p-1.5 rounded text-red-500 hover:bg-red-500/10"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      <div className="px-4 py-2 text-[11px] text-muted-foreground border-t border-border bg-muted/20">
+        Negative ₱ = discount on the line. Per-set is multiplied by the number of sets; flat fee charges once.
+      </div>
+
+      {showNew && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-3">
+            <h2 className="font-semibold">New Add-on</h2>
+            <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="CODE (e.g. NO_FOLD)" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono" />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Without folding)" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
+            <select value={kind} onChange={(e) => setKind(e.target.value as any)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              <option value="SURCHARGE">Per set (charged once per set)</option>
+              <option value="FLAT_FEE">Flat fee (charged once per line)</option>
+            </select>
+            <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount ₱ (negative = discount)" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowNew(false)} className="px-4 py-2 rounded-lg text-sm hover:bg-muted">Cancel</button>
+              <button
+                onClick={() => create.mutate()}
+                disabled={!code || !name || !amount || create.isPending}
+                className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {create.isPending ? 'Creating…' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

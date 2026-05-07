@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery, useMutation } from '@tanstack/react-query';
@@ -57,8 +57,12 @@ export default function LaundryIntakePage() {
   const [notes,       setNotes]       = useState<string>('');
   const [items,       setItems]       = useState<IntakeItem[]>([]);
 
-  // Default branch: first active.
-  if (!branchId && branches.length > 0) setBranchId(branches[0].id);
+  // Default branch: first active. Run as effect — calling setState directly
+  // during render triggers a "Cannot update during render" warning and can
+  // loop on slow networks where branches arrives after the first paint.
+  useEffect(() => {
+    if (!branchId && branches.length > 0) setBranchId(branches[0].id);
+  }, [branchId, branches]);
 
   // ── Live total preview ────────────────────────────────────────────────────
   const qty =

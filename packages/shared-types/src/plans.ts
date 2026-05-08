@@ -173,6 +173,24 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
   ENTERPRISE: { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: true,  customDomain: true  },
 };
 
+/** Plan-level monthly recurring fee in PHP centavos.
+ *  Source of truth for SubscriptionInvoice generation. Updated per pricing
+ *  decisions; ENTERPRISE is "contact sales" — billed manually outside this
+ *  table (use 0 here; the auto-issue cron skips ENTERPRISE tenants). */
+export const PLAN_MONTHLY_PRICE_PHP_CENTS: Record<PlanCode, number> = {
+  STD_SOLO:    49_900,    // ₱499/mo
+  STD_DUO:     89_900,    // ₱899/mo
+  STD_TEAM:   149_900,    // ₱1,499/mo
+  STD_BIZ:    249_900,    // ₱2,499/mo
+  PAIR_T1:    149_900,    // ₱1,499/mo
+  PAIR_T2:    279_900,    // ₱2,799/mo
+  PAIR_T3:    449_900,    // ₱4,499/mo
+  SUITE_T1:   249_900,    // ₱2,499/mo
+  SUITE_T2:   449_900,    // ₱4,499/mo
+  SUITE_T3:   799_900,    // ₱7,999/mo
+  ENTERPRISE: 0,           // billed manually
+};
+
 /** Plan-level setup fee in PHP centavos. One-time, waived on annual prepay. */
 export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
   STD_SOLO:        0,

@@ -92,16 +92,70 @@ export class ConstructionService {
    * Mark DRAFT billing as ISSUED. Atomic — only flips if status is currently
    * DRAFT (TOCTOU-safe). Frontend should issue an Order against this billing
    * via the existing AR flow; orderId is then linked back via linkOrder().
+   *
+   * Emits PROGRESS_BILLING accounting event with the gross/retention/net
+   * breakdown so the kernel JE handler (Step B) can post:
+   *   DR 1030 AR (gross)
+   *   CR 4010 Revenue (gross net of VAT)
+   *   CR 2020 Output VAT
+   *   CR 2078 Retention Withheld (the held-back portion)
+   * Until the handler ships, the event is no-op'd by the cron.
    */
   async issueProgressBilling(tenantId: string, id: string) {
-    const result = await this.prisma.progressBilling.updateMany({
-      where: { id, tenantId, status: 'DRAFT' },
-      data:  { status: 'ISSUED', issuedAt: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.progressBilling.updateMany({
+        where: { id, tenantId, status: 'DRAFT' },
+        data:  { status: 'ISSUED', issuedAt: new Date() },
+      });
+      if (result.count === 0) {
+        throw new ConflictException('Billing is not in DRAFT or does not exist.');
+      }
+      const billing = await tx.progressBilling.findFirstOrThrow({
+        where:  { id, tenantId },
+        select: {
+          id: true, billingNumber: true, projectId: true,
+          grossAmount: true, retentionAmount: true, netAmount: true,
+          stageDescription: true, percentComplete: true,
+        },
+      });
+      await tx.accountingEvent.create({
+        data: {
+          tenantId,
+          type:    'PROGRESS_BILLING',
+          status:  'PENDING',
+          payload: {
+            billingId:        billing.id,
+            billingNumber:    billing.billingNumber,
+            projectId:        billing.projectId,
+            grossAmount:      Number(billing.grossAmount),
+            retentionAmount:  Number(billing.retentionAmount),
+            netAmount:        Number(billing.netAmount),
+            stageDescription: billing.stageDescription,
+            percentComplete:  Number(billing.percentComplete),
+            issuedAt:         new Date().toISOString(),
+          },
+        },
+      });
+      return this.getProgressBillingViaTx(tx, tenantId, id);
     });
-    if (result.count === 0) {
-      throw new ConflictException('Billing is not in DRAFT or does not exist.');
-    }
-    return this.getProgressBilling(tenantId, id);
+  }
+
+  /** Tx-scoped helper used by issueProgressBilling to avoid a second connection. */
+  private async getProgressBillingViaTx(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    id: string,
+  ) {
+    const billing = await tx.progressBilling.findFirst({
+      where: { id, tenantId },
+      include: {
+        project:          { select: { id: true, name: true, projectCode: true, status: true } },
+        retentionRelease: true,
+        order:            { select: { id: true, orderNumber: true, status: true } },
+      },
+    });
+    if (!billing) throw new NotFoundException('Progress billing not found.');
+    return billing;
   }
 
   async linkOrderToBilling(tenantId: string, billingId: string, orderId: string) {
@@ -186,13 +240,40 @@ export class ConstructionService {
       throw new BadRequestException('releasedAmount exceeds the retention held on this billing.');
     }
 
-    return this.prisma.retentionRelease.create({
-      data: {
-        tenantId,
-        progressBillingId: billing.id,
-        releasedAmount:    releasedAmount as any,
-        notes:             dto.notes ?? null,
-      },
+    // Atomic: create the release row + queue the RETENTION_RELEASE accounting
+    // event for the JE handler (Step B): DR 2078 / CR 1030 AR (or CR 1010
+    // Cash if released as a direct customer payment — handler will branch on
+    // payload.releaseMethod when implemented).
+    return this.prisma.$transaction(async (tx) => {
+      const release = await tx.retentionRelease.create({
+        data: {
+          tenantId,
+          progressBillingId: billing.id,
+          releasedAmount:    releasedAmount as any,
+          notes:             dto.notes ?? null,
+        },
+      });
+      await tx.accountingEvent.create({
+        data: {
+          tenantId,
+          type:    'RETENTION_RELEASE',
+          status:  'PENDING',
+          payload: {
+            releaseId:         release.id,
+            progressBillingId: billing.id,
+            billingNumber:     billing.billingNumber,
+            projectId:         billing.projectId,
+            releasedAmount:    releasedAmount,
+            // Default release method: AR_CREDIT (offset against an open AR
+            // invoice). Frontend can pass releaseMethod='CASH' in dto.notes
+            // payload later when we add the field; for now Step B handler
+            // assumes AR_CREDIT.
+            releaseMethod:     'AR_CREDIT',
+            releasedAt:        new Date().toISOString(),
+          },
+        },
+      });
+      return release;
     });
   }
 

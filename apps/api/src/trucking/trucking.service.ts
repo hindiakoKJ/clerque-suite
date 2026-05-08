@@ -192,24 +192,52 @@ export class TruckingService {
     const lastSeq = last ? Number(last.tripNumber.slice(prefix.length)) || 0 : 0;
     const tripNumber = `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
 
-    return this.prisma.tripTicket.create({
-      data: {
-        tenantId,
-        branchId:         dto.branchId,
-        tripNumber,
-        status:           'DRAFT',
-        customerId:       dto.customerId ?? null,
-        fleetAssetId:     dto.fleetAssetId,
-        driverId:         dto.driverId,
-        helperId:         dto.helperId ?? null,
-        originLabel:      dto.originLabel,
-        destinationLabel: dto.destinationLabel,
-        cargoDescription: dto.cargoDescription ?? null,
-        cargoWeightKg:    (dto.cargoWeightKg ?? null) as any,
-        freightAmount:    dto.freightAmount as any,
-        cashAdvance:      (dto.cashAdvance ?? 0) as any,
-        notes:            dto.notes ?? null,
-      },
+    const cashAdvance = Number(dto.cashAdvance ?? 0);
+
+    // Atomic: create the trip + queue the cash-advance accounting event so
+    // the kernel JE engine posts DR 1034 / CR 1010 once a handler ships.
+    // Until the handler exists, the event is marked SYNCED no-op by the
+    // cron's default branch (same pattern as MATERIAL_ISSUANCE today).
+    return this.prisma.$transaction(async (tx) => {
+      const trip = await tx.tripTicket.create({
+        data: {
+          tenantId,
+          branchId:         dto.branchId,
+          tripNumber,
+          status:           'DRAFT',
+          customerId:       dto.customerId ?? null,
+          fleetAssetId:     dto.fleetAssetId,
+          driverId:         dto.driverId,
+          helperId:         dto.helperId ?? null,
+          originLabel:      dto.originLabel,
+          destinationLabel: dto.destinationLabel,
+          cargoDescription: dto.cargoDescription ?? null,
+          cargoWeightKg:    (dto.cargoWeightKg ?? null) as any,
+          freightAmount:    dto.freightAmount as any,
+          cashAdvance:      cashAdvance as any,
+          notes:            dto.notes ?? null,
+        },
+      });
+
+      if (cashAdvance > 0) {
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type:    'TRIP_CASH_ADVANCE',
+            status:  'PENDING',
+            payload: {
+              tripId:     trip.id,
+              tripNumber: trip.tripNumber,
+              driverId:   dto.driverId,
+              branchId:   dto.branchId,
+              amount:     cashAdvance,
+              issuedAt:   new Date().toISOString(),
+            },
+          },
+        });
+      }
+
+      return trip;
     });
   }
 
@@ -249,13 +277,58 @@ export class TruckingService {
     const data: Prisma.TripTicketUpdateInput = { status: targetStatus };
     if (targetStatus === 'DISPATCHED' && !trip.dispatchedAt)  data.dispatchedAt = now;
     if (targetStatus === 'DELIVERED'  && !trip.deliveredAt)   data.deliveredAt  = now;
+
+    // For LIQUIDATED: stamp the timestamps + compute variance + emit
+    // TRIP_LIQUIDATION accounting event (atomically, in a single transaction
+    // so a partial failure can't leave the trip liquidated without a JE-able
+    // event row, or vice-versa). Variance > 0  → driver returns leftover cash.
+    // Variance < 0  → driver overspent; carried on 1034 Advances to Employees
+    // as a non-zero balance to force investigation.
     if (targetStatus === 'LIQUIDATED' && !trip.liquidatedAt) {
-      data.liquidatedAt   = now;
-      data.liquidatedBy   = { connect: { id: actingUserId } };
-      // Compute and freeze the variance once liquidated.
-      const cashAdv      = Number(trip.cashAdvance);
+      const cashAdv       = Number(trip.cashAdvance);
       const receiptsTotal = Number(trip.receiptsTotal);
-      data.liquidationVariance = (cashAdv - receiptsTotal) as any;
+      const variance      = cashAdv - receiptsTotal;
+
+      data.liquidatedAt        = now;
+      data.liquidatedBy        = { connect: { id: actingUserId } };
+      data.liquidationVariance = variance as any;
+
+      // Per-category breakdown for the JE handler to expense each category
+      // line (FUEL→6080, TOLL→6100, etc.). Aggregate at emit time so the
+      // payload is self-contained.
+      const liquidationLines = await this.prisma.liquidationItem.findMany({
+        where:   { tripTicketId: tripId, tenantId },
+        select:  { category: true, amount: true },
+      });
+      const categoryBreakdown = liquidationLines.reduce<Record<string, number>>((acc, line) => {
+        const cat = (line.category || 'OTHER').toUpperCase();
+        acc[cat] = (acc[cat] ?? 0) + Number(line.amount);
+        return acc;
+      }, {});
+
+      return this.prisma.$transaction(async (tx) => {
+        await tx.tripTicket.update({ where: { id: tripId }, data });
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type:    'TRIP_LIQUIDATION',
+            status:  'PENDING',
+            payload: {
+              tripId:           trip.id,
+              tripNumber:       trip.tripNumber,
+              driverId:         trip.driverId,
+              branchId:         trip.branchId,
+              cashAdvance:      cashAdv,
+              receiptsTotal,
+              variance,
+              categoryBreakdown,
+              liquidatedAt:     now.toISOString(),
+              liquidatedById:   actingUserId,
+            },
+          },
+        });
+        return this.getTrip(tenantId, tripId);
+      });
     }
 
     await this.prisma.tripTicket.update({ where: { id: tripId }, data });

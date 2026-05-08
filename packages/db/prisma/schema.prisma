@@ -216,6 +216,21 @@ enum AccountingEventType {
   /// Cash variance recorded at shift close (declared cash != expected cash).
   /// Over: DR Cash / CR Cash Variance Income. Short: DR Cash Variance Expense / CR Cash.
   CASH_VARIANCE
+  // ── Sprint 13 — Vertical-engine events ───────────────────────────────────
+  /// Trucking: cash advance issued to driver at trip dispatch.
+  /// DR 1034 Advances to Employees / CR 1010 Cash on Hand.
+  TRIP_CASH_ADVANCE
+  /// Trucking: trip liquidated — driver returns receipts; expense the
+  /// receipts by category, settle the advance, carry overspend on 1034
+  /// (left non-zero so the bookkeeper investigates).
+  TRIP_LIQUIDATION
+  /// Construction: progress billing issued (Option 2 retention treatment) —
+  /// DR AR (gross) / CR Revenue (net of VAT) / CR Output VAT / CR 2076
+  /// Retention Withheld for the held-back portion.
+  PROGRESS_BILLING
+  /// Construction: retention released back to the customer's AR (or directly
+  /// to cash if released as net payment). DR 2076 / CR AR (or Cash).
+  RETENTION_RELEASE
 }
 
 enum InventoryLogType {

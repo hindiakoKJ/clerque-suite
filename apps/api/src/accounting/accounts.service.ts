@@ -161,6 +161,12 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '2075', name: 'Unearned Revenue',                          type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '2076', name: 'Dividends Payable',                         type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '2077', name: 'Other Current Liabilities',                 type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
+  // Sprint 13 — Construction (Project-Engine). Held-back portion of
+  // progress billings: revenue is recognized at billing time but the
+  // customer keeps a % until project handover. Released via the
+  // RETENTION_RELEASE event. SYSTEM_ONLY because the kernel handler is
+  // the only correct writer; manual JEs would desync the schedule.
+  { code: '2078', name: 'Retention Withheld – Customer',              type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'SYSTEM_ONLY', isSystem: true  },
 
   // ── Non-Current Liabilities ──────────────────────────────────────────────────
   { code: '2090', name: 'Long-term Bank Loans',                      type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },

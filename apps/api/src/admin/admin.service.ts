@@ -28,7 +28,9 @@ export interface CreateTenantDto {
   slug:          string;
   businessType:
     | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
-    | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING';
+    | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING'
+    // Sprint 12 — six-engine vertical structure
+    | 'PHARMACY' | 'TRUCKING' | 'CONSTRUCTION';
   tier:          'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5' | 'TIER_6';
   ownerName:     string;
   ownerEmail:    string;

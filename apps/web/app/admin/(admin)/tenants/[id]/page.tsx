@@ -62,10 +62,23 @@ interface TenantUser {
 }
 
 const STATUS_OPTIONS  = ['ACTIVE', 'GRACE', 'SUSPENDED'] as const;
-// BusinessType must exactly match the Prisma enum values in schema.prisma
+// BusinessType must exactly match the Prisma enum values in schema.prisma.
+// Sprint 12 — six-engine vertical structure (PHARMACY, TRUCKING, CONSTRUCTION
+// are first-class registered packs; their full vertical schema ships when
+// each engine's first paying tenant onboards).
 const BIZ_TYPES = [
+  // Food-Engine
   'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING',
-  'RETAIL', 'SERVICE', 'LAUNDRY', 'MANUFACTURING',
+  // Retail-Engine
+  'RETAIL',
+  // Service-Engine
+  'SERVICE', 'LAUNDRY',
+  // Project-Engine
+  'MANUFACTURING', 'CONSTRUCTION',
+  // Compliance-Engine
+  'PHARMACY',
+  // Logistics-Engine
+  'TRUCKING',
 ] as const;
 const BIZ_LABEL: Record<string, string> = {
   COFFEE_SHOP:   'Coffee Shop / Café',
@@ -78,6 +91,9 @@ const BIZ_LABEL: Record<string, string> = {
   SERVICE:       'Service',
   LAUNDRY:       'Laundry / Wash-Dry-Fold',
   MANUFACTURING: 'Manufacturing',
+  CONSTRUCTION:  'Construction / Civil Works',
+  PHARMACY:      'Pharmacy / Drugstore',
+  TRUCKING:      'Trucking / Hauling',
 };
 const TAX_STATUSES    = ['VAT', 'NON_VAT', 'UNREGISTERED'] as const;
 const ROLES = [

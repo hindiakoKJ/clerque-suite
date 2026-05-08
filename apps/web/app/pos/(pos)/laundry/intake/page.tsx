@@ -81,11 +81,18 @@ function fmtPeso(n: number) {
 export default function LaundryIntakePage() {
   const router = useRouter();
 
-  const { data: branchData } = useQuery<{ data: Branch[] }>({
-    queryKey: ['branches'],
-    queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
+  // /tenant/branches returns Branch[] directly. Earlier this was wrapped as
+  // `{ data: Branch[] }` and `branchData?.data` was always undefined, leaving
+  // branches=[] and Record Intake disabled because branchId never resolved.
+  // Reads either shape defensively (mirrors the fix already applied in the
+  // Add Machine modal under settings/laundry).
+  const { data: branchesRaw = [] } = useQuery<Branch[]>({
+    queryKey: ['tenant-branches'],
+    queryFn:  () => api.get('/tenant/branches').then((r) =>
+      Array.isArray(r.data) ? r.data : (r.data?.data ?? []),
+    ),
   });
-  const branches = branchData?.data ?? [];
+  const branches = branchesRaw.filter((b) => (b as { isActive?: boolean }).isActive !== false);
 
   const { data: customers = [] } = useQuery<Customer[]>({
     queryKey: ['customers'],

@@ -31,9 +31,22 @@ const STATUS_BADGE: Record<string, string> = {
 // BAR_LOUNGE + CATERING (F&B) and LAUNDRY (Sprint 2 vertical) which the
 // previous list was missing — explains why the New Tenant modal had no
 // Laundry option.
+// Sprint 12 — six-engine vertical structure. Order matches the engine
+// grouping shown in the demo-data picker for visual consistency:
+//   Food → Retail → Service → Project → Compliance → Logistics
 const BUSINESS_TYPES = [
+  // Food-Engine
   'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING',
-  'RETAIL', 'SERVICE', 'LAUNDRY', 'MANUFACTURING',
+  // Retail-Engine
+  'RETAIL',
+  // Service-Engine
+  'SERVICE', 'LAUNDRY',
+  // Project-Engine
+  'MANUFACTURING', 'CONSTRUCTION',
+  // Compliance-Engine
+  'PHARMACY',
+  // Logistics-Engine
+  'TRUCKING',
 ] as const;
 // Modular pricing plan codes (the new source of truth for access).
 // Legacy TIER_1..TIER_6 still in DB but advisory — auto-derived from the

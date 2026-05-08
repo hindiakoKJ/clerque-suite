@@ -7,6 +7,7 @@ import {
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
   Shirt, Sparkles, Truck, ClipboardCheck, Hammer,
+  Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType, isFnbType } from '@repo/shared-types';
@@ -244,11 +245,15 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // Ledger/Payroll module entitlement) is handled BACKEND-side. The nav items
   // here are purely visual — backend guards remain the authoritative wall.
   const businessType = layout?.tenant?.businessType;
-  const isLaundry    = isLaundryType(businessType);
-  const isFnb        = isFnbType(businessType);
-  const isService    = businessType === 'SERVICE';
-  const isMfg        = businessType === 'MANUFACTURING';
-  const isRetail     = businessType === 'RETAIL';
+  const isLaundry      = isLaundryType(businessType);
+  const isFnb          = isFnbType(businessType);
+  const isService      = businessType === 'SERVICE';
+  const isMfg          = businessType === 'MANUFACTURING';
+  const isRetail       = businessType === 'RETAIL';
+  // Sprint 13 verticals
+  const isPharmacy     = businessType === 'PHARMACY';
+  const isTrucking     = businessType === 'TRUCKING';
+  const isConstruction = businessType === 'CONSTRUCTION';
   // Multi-branch features only surface once the tenant has actually provisioned
   // a second branch — not merely because the plan permits it. Reasoning:
   //   - Transfers: nothing to transfer to/from with one branch.
@@ -307,6 +312,71 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/products',      'Services',   Package,         PRODUCTS_ROLES,     role),
       ]),
     ];
+  } else if (isPharmacy) {
+    // ── PHARMACY (Sprint 13 Compliance-Engine) ───────────────────────────────
+    // Adds Rx + Lots + DDB Register on top of standard retail nav. Inventory
+    // management is critical here (lot/expiry tracking is FDA-mandated).
+    verticalNav = [
+      ...withSection('Overview', [
+        makeNavItem('/pos/dashboard',         'Dashboard',       LayoutDashboard, DASHBOARD_ROLES, role),
+      ]),
+      ...withSection('Sell', [
+        makeNavItem('/pos/terminal',          'Terminal',        ShoppingCart,    TERMINAL_ROLES,  role),
+        makeNavItem('/pos/orders',            'Orders',          ShoppingBag,     ORDERS_ROLES,    role),
+      ]),
+      ...withSection('Pharmacy', [
+        makeNavItem('/pos/pharmacy/rx',       'Prescriptions',   FileBadge,       PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/pharmacy/lots',     'Product Lots',    Pill,            INVENTORY_ROLES, role),
+        makeNavItem('/pos/pharmacy/register', 'DDB Register',    ShieldAlert,     PRODUCTS_ROLES,  role),
+      ]),
+      ...withSection('Catalog', [
+        makeNavItem('/pos/products',          'Products',        Package,         PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/inventory',         'Inventory',       ClipboardList,   INVENTORY_ROLES, role),
+        makeNavItem('/pos/settings/uom',      'Units (UoM)',     Ruler,           UOM_ROLES,       role),
+      ]),
+      ...warehouseSection,
+    ];
+  } else if (isTrucking) {
+    // ── TRUCKING (Sprint 13 Logistics-Engine) ────────────────────────────────
+    // Trip dispatch + fleet maintenance + liquidation. Catalog is minimal —
+    // freight is sold at the till as a service line.
+    verticalNav = [
+      ...withSection('Overview', [
+        makeNavItem('/pos/dashboard',         'Dashboard',       LayoutDashboard, DASHBOARD_ROLES, role),
+      ]),
+      ...withSection('Operations', [
+        makeNavItem('/pos/trucking/trips',    'Trip Tickets',    Truck,           ORDERS_ROLES,    role),
+        makeNavItem('/pos/trucking/fleet',    'Fleet',           Wrench,          PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/trucking/pm',       'PM Schedules',    ClipboardList,   PRODUCTS_ROLES,  role),
+      ]),
+      ...withSection('Sell', [
+        makeNavItem('/pos/terminal',          'Terminal',        ShoppingCart,    TERMINAL_ROLES,  role),
+        makeNavItem('/pos/orders',            'Orders',          ShoppingBag,     ORDERS_ROLES,    role),
+      ]),
+      ...warehouseSection,
+    ];
+  } else if (isConstruction) {
+    // ── CONSTRUCTION (Sprint 13 Project-Engine) ──────────────────────────────
+    // Projects + progress billings on top of Service-style nav. Material
+    // issuance flows through Projects → Issuances (existing).
+    verticalNav = [
+      ...withSection('Overview', [
+        makeNavItem('/pos/dashboard',         'Dashboard',       LayoutDashboard, DASHBOARD_ROLES, role),
+      ]),
+      ...withSection('Projects', [
+        makeNavItem('/pos/projects',          'Projects',        Hammer,          PROJECT_ROLES,   role),
+        makeNavItem('/pos/construction/billings', 'Progress Billings', ReceiptIcon, PROJECT_ROLES, role),
+      ]),
+      ...withSection('Sell', [
+        makeNavItem('/pos/terminal',          'Terminal',        ShoppingCart,    TERMINAL_ROLES,  role),
+        makeNavItem('/pos/orders',            'Orders',          ShoppingBag,     ORDERS_ROLES,    role),
+      ]),
+      ...withSection('Catalog', [
+        makeNavItem('/pos/products',          'Products',        Package,         PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/inventory',         'Materials',       ClipboardList,   INVENTORY_ROLES, role),
+      ]),
+      ...warehouseSection,
+    ];
   } else if (isFnb) {
     // ── F&B (Coffee Shop, Restaurant, Bakery, Food Stall, Bar, Catering) ─────
     // Recipes/BOM live inside the Products page (mode toggle on each product).
@@ -327,9 +397,10 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ...warehouseSection,
     ];
   } else if (isService || isMfg) {
-    // ── SERVICE / MANUFACTURING / CONSTRUCTION ───────────────────────────────
-    // These verticals get Projects + Material Issuance (the project-cost flow)
-    // ON TOP OF the standard POS surface.
+    // ── SERVICE / MANUFACTURING ──────────────────────────────────────────────
+    // SERVICE adds Job Orders (auto repair, appliance, IT, etc.) for the
+    // diagnose → estimate → fix → claim workflow.
+    // MANUFACTURING uses Projects for batch costing.
     verticalNav = [
       ...withSection('Overview', [
         makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
@@ -338,6 +409,9 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
         makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
       ]),
+      ...(isService ? withSection('Service', [
+        makeNavItem('/pos/job-orders',   'Job Orders',  Briefcase,       PRODUCTS_ROLES,  role),
+      ]) : []),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
         makeNavItem('/pos/inventory',    isMfg ? 'Raw Materials' : 'Inventory', ClipboardList, INVENTORY_ROLES, role),

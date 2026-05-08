@@ -12,7 +12,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   Sparkles, WashingMachine, Wind, Combine, Shirt, PackageCheck,
-  Clock, ShoppingBag, TrendingUp,
+  Clock, ShoppingBag, TrendingUp, CheckCircle2, Circle, ArrowRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatPeso } from '@/lib/utils';
@@ -56,6 +56,10 @@ function todayBoundsPH(): { startISO: string; endISO: string } {
   return { startISO: start, endISO: end };
 }
 
+interface ServicePrice { unitPrice: string; isActive: boolean }
+interface MachineLite  { id: string }
+interface BranchLite   { id: string; isActive: boolean }
+
 export function LaundryDashboard() {
   // Active orders — anything not CLAIMED / CANCELLED.
   const { data: activeOrders = [] } = useQuery<LaundryOrder[]>({
@@ -63,6 +67,31 @@ export function LaundryDashboard() {
     queryFn:  () => api.get('/laundry/orders?status=active').then((r) => r.data),
     refetchInterval: 30_000, // 30s — board feels live without hammering the API
   });
+
+  // Setup-checklist signals — read-only queries used to determine which steps
+  // a fresh tenant still has to complete. Each query is small and cached;
+  // unused on already-set-up tenants because the checklist is hidden.
+  const { data: prices = [] }   = useQuery<ServicePrice[]>({
+    queryKey: ['laundry-service-prices'],
+    queryFn:  () => api.get('/laundry/service-prices').then((r) => r.data),
+    staleTime: 60_000,
+  });
+  const { data: machines = [] } = useQuery<MachineLite[]>({
+    queryKey: ['laundry-machines-dash'],
+    queryFn:  () => api.get('/laundry/machines').then((r) => r.data),
+    staleTime: 60_000,
+  });
+  const { data: branches = [] } = useQuery<BranchLite[]>({
+    queryKey: ['tenant-branches'],
+    queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
+    staleTime: 60_000,
+  });
+
+  const hasPrices    = prices.some((p) => p.isActive && Number(p.unitPrice) > 0);
+  const hasMachines  = machines.length > 0;
+  const hasBranch    = branches.some((b) => b.isActive);
+  const hasOrders    = activeOrders.length > 0;
+  const showChecklist = !hasPrices || !hasMachines || !hasOrders;
 
   // Today's intake — count of orders where receivedAt is today (PH time).
   const { data: todayOrders = [] } = useQuery<LaundryOrder[]>({
@@ -117,6 +146,50 @@ export function LaundryDashboard() {
           </Link>
         </div>
       </header>
+
+      {/* ── First-run setup checklist ─────────────────────────────────── */}
+      {showChecklist && (
+        <section className="rounded-xl border border-border bg-card p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-[var(--accent)]" />
+              Get started
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              {[hasBranch, hasPrices, hasMachines, hasOrders].filter(Boolean).length} of 4 done
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Three things and you're ready to take your first claim. We'll hide this once you're set up.
+          </p>
+          <div className="space-y-1 pt-1">
+            <ChecklistRow
+              done={hasBranch}
+              label="Add at least one branch"
+              hint="If this is a single-location laundromat, the default Main branch is fine."
+              href="/settings/branches"
+            />
+            <ChecklistRow
+              done={hasPrices}
+              label="Set service prices"
+              hint="One-tap apply Manila default rates from Settings → Laundry."
+              href="/settings/laundry"
+            />
+            <ChecklistRow
+              done={hasMachines}
+              label="Add washers + dryers (optional)"
+              hint="Skip if you're starting small. You can assign loads to specific machines later."
+              href="/settings/laundry?tab=machines"
+            />
+            <ChecklistRow
+              done={hasOrders}
+              label="Take your first intake"
+              hint="Once prices are set, head to Intake and create a claim ticket."
+              href="/pos/laundry/intake"
+            />
+          </div>
+        </section>
+      )}
 
       {/* ── Workflow board (live counts per stage) ─────────────────────── */}
       <section>
@@ -217,5 +290,29 @@ export function LaundryDashboard() {
         </section>
       )}
     </div>
+  );
+}
+
+function ChecklistRow({
+  done, label, hint, href,
+}: { done: boolean; label: string; hint: string; href: string }) {
+  return (
+    <Link
+      href={href}
+      className={`flex items-start gap-2 px-2 py-1.5 rounded-md transition-colors ${
+        done ? 'opacity-60' : 'hover:bg-muted/40'
+      }`}
+    >
+      {done
+        ? <CheckCircle2 className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />
+        : <Circle       className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />}
+      <div className="min-w-0 flex-1">
+        <p className={`text-sm ${done ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
+          {label}
+        </p>
+        {!done && <p className="text-[11px] text-muted-foreground">{hint}</p>}
+      </div>
+      {!done && <ArrowRight className="w-3.5 h-3.5 text-muted-foreground mt-1 shrink-0" />}
+    </Link>
   );
 }

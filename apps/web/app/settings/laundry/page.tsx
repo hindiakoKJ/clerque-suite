@@ -254,7 +254,60 @@ function PricesTab() {
 
   const services: ServiceCode[] = ['WASH', 'DRY', 'WASH_DRY_COMBO', 'DRY_CLEAN', 'IRON', 'FOLD'];
 
+  // First-run state — no service has a non-zero price yet.
+  const isFirstRun = prices.every((p) => Number(p.unitPrice) === 0);
+
+  // Sensible PH market defaults (Manila averages, 2026). One-click apply
+  // for owners who don't want to enter prices line by line.
+  const PH_DEFAULTS: Array<{ serviceCode: ServiceCode; mode: ServiceMode; unitPrice: number }> = [
+    { serviceCode: 'WASH',           mode: 'SELF_SERVICE', unitPrice:  60 },
+    { serviceCode: 'WASH',           mode: 'FULL_SERVICE', unitPrice: 120 },
+    { serviceCode: 'DRY',            mode: 'SELF_SERVICE', unitPrice:  60 },
+    { serviceCode: 'DRY',            mode: 'FULL_SERVICE', unitPrice: 100 },
+    { serviceCode: 'WASH_DRY_COMBO', mode: 'SELF_SERVICE', unitPrice: 110 },
+    { serviceCode: 'WASH_DRY_COMBO', mode: 'FULL_SERVICE', unitPrice: 220 },
+    { serviceCode: 'DRY_CLEAN',      mode: 'FULL_SERVICE', unitPrice: 250 },
+    { serviceCode: 'IRON',           mode: 'FULL_SERVICE', unitPrice:  35 },
+    { serviceCode: 'FOLD',           mode: 'FULL_SERVICE', unitPrice:  20 },
+  ];
+  const applyDefaults = useMutation({
+    mutationFn: async () => {
+      // Sequential POSTs — laundry/service-prices is small and ordering keeps
+      // toasts predictable. ~9 round trips finishes well under a second.
+      for (const p of PH_DEFAULTS) {
+        await api.post('/laundry/service-prices', { ...p, isActive: true });
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-service-prices'] });
+      qc.invalidateQueries({ queryKey: ['laundry-active-orders'] });
+      toast.success('Applied PH market default prices. Tweak any row as needed.');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed to apply defaults.'),
+  });
+
   return (
+    <>
+      {isFirstRun && (
+        <section className="rounded-xl border border-amber-300 bg-amber-50/60 dark:bg-amber-950/20 dark:border-amber-700 p-4 mb-3 flex items-start gap-3">
+          <Tag className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+          <div className="text-sm flex-1">
+            <p className="font-semibold text-amber-900 dark:text-amber-200">No prices set yet.</p>
+            <p className="text-amber-800 dark:text-amber-300/90 mt-0.5">
+              Until you set rates, every line on a new ticket will price at ₱0.00. Apply
+              typical Manila rates as a starting point, then tweak each row as you like.
+            </p>
+            <button
+              type="button"
+              onClick={() => applyDefaults.mutate()}
+              disabled={applyDefaults.isPending}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium px-3 py-1.5 disabled:opacity-50"
+            >
+              {applyDefaults.isPending ? 'Applying…' : 'Apply PH market default prices'}
+            </button>
+          </div>
+        </section>
+      )}
     <section className="rounded-xl border border-border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
@@ -306,6 +359,7 @@ function PricesTab() {
         Set price to 0 to deactivate that service+mode combination.
       </div>
     </section>
+    </>
   );
 }
 

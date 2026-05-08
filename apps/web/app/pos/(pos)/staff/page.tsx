@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 import { StaffPermissionEditor } from '@/components/staff/StaffPermissionEditor';
-import type { TierId, UserRole } from '@repo/shared-types';
+import type { PlanCode, UserRole } from '@repo/shared-types';
 
 type StaffRole =
   | 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'SALES_LEAD'
@@ -548,11 +548,14 @@ export default function StaffPage() {
               </div>
 
               {/* RBAC Phase 5: persona + custom permissions + SOD warnings */}
-              {user?.tier && (
+              {(user as any)?.planCode && (
                 <div className="border-t border-border pt-3">
                   <StaffPermissionEditor
                     role={editForm.role as UserRole}
-                    tier={user.tier as TierId}
+                    planCode={(user as any).planCode as PlanCode}
+                    modulePos={Boolean((user as any).modulePos)}
+                    moduleLedger={Boolean((user as any).moduleLedger)}
+                    modulePayroll={Boolean((user as any).modulePayroll)}
                     personaKey={editForm.personaKey}
                     customPermissions={editForm.customPermissions}
                     onPersonaChange={(key) => setEditForm((f) => ({ ...f, personaKey: key }))}

@@ -270,3 +270,96 @@ export function isModuleEnabled(
   if (app === 'LEDGER')  return modules.moduleLedger;
   return modules.modulePayroll;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plan-based permission / persona availability
+//
+// Replaces the legacy tier-feature-flag indirection with a direct mapping to
+// plan modules + PLAN_FEATURES. Used by the Staff Edit UI and assertPermission
+// defense-in-depth checks. The legacy isPermissionAvailableAtTier still exists
+// in tiers.ts for backward compatibility but is no longer consulted at runtime.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PlanContext {
+  planCode:     PlanCode;
+  modulePos:    boolean;
+  moduleLedger: boolean;
+  modulePayroll:boolean;
+}
+
+/**
+ * Permission → plan-availability check. Returns true when the tenant's plan
+ * (modules + features) makes the permission exercisable. Permissions not
+ * listed below are universal — gated only by role.
+ *
+ * Mirrors the semantic intent of tiers.PERMISSION_REQUIRES_FEATURE:
+ *   ledger:* read       → Ledger module on
+ *   ledger:* full       → Ledger module on (no extra feature flag — Ledger is binary)
+ *   payroll:*           → Payroll module on
+ *   audit:view          → PLAN_FEATURES.auditLog
+ *   bir:view            → PLAN_FEATURES.birForms
+ *   staff:assign_payroll_master → Payroll module on
+ */
+export function isPermissionAvailableUnderPlan(
+  permission: string,
+  ctx: PlanContext,
+): boolean {
+  const f = PLAN_FEATURES[ctx.planCode];
+
+  switch (permission) {
+    // Ledger surface
+    case 'ledger:view':
+    case 'ledger:trial_balance':
+    case 'ledger:export':
+    case 'finance:cash_flow':
+    case 'ledger:journal_entry':
+    case 'ledger:period_close':
+    case 'ledger:period_reopen':
+    case 'finance:bank_recon':
+      return ctx.moduleLedger || PLAN_CAPS[ctx.planCode].moduleCount === 3;
+
+    // Payroll surface
+    case 'payroll:view_salary':
+    case 'payroll:edit':
+    case 'payroll:run':
+    case 'staff:assign_payroll_master':
+      return ctx.modulePayroll || PLAN_CAPS[ctx.planCode].moduleCount === 3;
+
+    // Compliance
+    case 'audit:view': return f.auditLog;
+    case 'bir:view':   return f.birForms;
+
+    default:
+      return true; // universal
+  }
+}
+
+/**
+ * Returns the human-readable upgrade hint for a plan-locked permission, or
+ * null if the permission is universally available. Used by the Staff Edit UI
+ * to render "Upgrade to Pair / Suite / Enterprise" tooltips.
+ */
+export function getRequiredPlanForPermission(permission: string): string | null {
+  switch (permission) {
+    case 'ledger:view':
+    case 'ledger:trial_balance':
+    case 'ledger:export':
+    case 'finance:cash_flow':
+    case 'ledger:journal_entry':
+    case 'ledger:period_close':
+    case 'ledger:period_reopen':
+    case 'finance:bank_recon':
+      return 'Add the Ledger module (Pair or Suite plan).';
+    case 'payroll:view_salary':
+    case 'payroll:edit':
+    case 'payroll:run':
+    case 'staff:assign_payroll_master':
+      return 'Add the Payroll module (Pair or Suite plan).';
+    case 'audit:view':
+      return 'Upgrade to Business / Pair T3 / Suite T2 or higher (audit log).';
+    case 'bir:view':
+      return 'Upgrade to Duo or higher (BIR forms).';
+    default:
+      return null;
+  }
+}

@@ -21,13 +21,13 @@ import { useMemo } from 'react';
 import {
   PERSONAS,
   PERMISSION_MATRIX,
-  TIERS,
   detectViolations,
-  isPersonaAvailableAtTier,
-  isPermissionAvailableAtTier,
+  isPermissionAvailableUnderPlan,
+  getRequiredPlanForPermission,
+  planLabel,
+  type PlanCode,
   type PersonaKey,
   type PermissionKey,
-  type TierId,
   type UserRole,
 } from '@repo/shared-types';
 import { ShieldAlert, Lock, AlertTriangle, ChevronDown } from 'lucide-react';
@@ -35,7 +35,10 @@ import { useState } from 'react';
 
 interface Props {
   role: UserRole;
-  tier: TierId;
+  planCode: PlanCode;
+  modulePos: boolean;
+  moduleLedger: boolean;
+  modulePayroll: boolean;
   personaKey: string | null;
   customPermissions: string[];
   onPersonaChange: (key: string | null) => void;
@@ -50,7 +53,10 @@ function permissionDomain(perm: PermissionKey): string {
 
 export function StaffPermissionEditor({
   role,
-  tier,
+  planCode,
+  modulePos,
+  moduleLedger,
+  modulePayroll,
   personaKey,
   customPermissions,
   onPersonaChange,
@@ -58,10 +64,21 @@ export function StaffPermissionEditor({
 }: Props) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  // Personas filtered by tier
+  const planCtx = useMemo(
+    () => ({ planCode, modulePos, moduleLedger, modulePayroll }),
+    [planCode, modulePos, moduleLedger, modulePayroll],
+  );
+
+  // Personas filtered by plan: a persona is offered when ALL of its
+  // extraPermissions are exercisable under the current plan + module set.
   const availablePersonas = useMemo(
-    () => Object.values(PERSONAS).filter((p) => isPersonaAvailableAtTier(p.key, tier)),
-    [tier],
+    () =>
+      Object.values(PERSONAS).filter((p) =>
+        p.extraPermissions.every((perm) =>
+          isPermissionAvailableUnderPlan(perm, planCtx),
+        ),
+      ),
+    [planCtx],
   );
 
   // Effective permission set = role default + custom additions.
@@ -90,7 +107,7 @@ export function StaffPermissionEditor({
 
   function togglePermission(perm: PermissionKey) {
     if (rolePermissions.includes(perm)) return; // already granted by role; not a custom toggle
-    if (!isPermissionAvailableAtTier(perm, tier)) return; // tier-locked
+    if (!isPermissionAvailableUnderPlan(perm, planCtx)) return; // plan-locked
     const next = customSet.has(perm)
       ? customPermissions.filter((p) => p !== perm)
       : [...customPermissions, perm];
@@ -184,7 +201,7 @@ export function StaffPermissionEditor({
                 {perms.map((perm) => {
                   const inRole       = rolePermissions.includes(perm);
                   const inCustom     = customSet.has(perm);
-                  const tierLocked   = !isPermissionAvailableAtTier(perm, tier);
+                  const tierLocked   = !isPermissionAvailableUnderPlan(perm, planCtx);
                   const isGranted    = inRole || inCustom;
                   return (
                     <label
@@ -208,9 +225,12 @@ export function StaffPermissionEditor({
                       {inRole       && <span className="ml-auto text-[9px] uppercase tracking-wide text-emerald-600 dark:text-emerald-400 font-bold">role</span>}
                       {!inRole && inCustom && <span className="ml-auto text-[9px] uppercase tracking-wide text-blue-600 dark:text-blue-400 font-bold">custom</span>}
                       {tierLocked && (
-                        <span className="ml-auto inline-flex items-center gap-1 text-[9px] uppercase tracking-wide text-amber-600 dark:text-amber-400 font-bold">
+                        <span
+                          className="ml-auto inline-flex items-center gap-1 text-[9px] uppercase tracking-wide text-amber-600 dark:text-amber-400 font-bold"
+                          title={getRequiredPlanForPermission(perm) ?? ''}
+                        >
                           <Lock className="w-2.5 h-2.5" />
-                          tier
+                          plan
                         </span>
                       )}
                     </label>
@@ -219,8 +239,9 @@ export function StaffPermissionEditor({
               </div>
             ))}
             <p className="text-[10px] text-muted-foreground pt-2 border-t border-border">
-              Tier-locked permissions need {TIERS.TIER_4.displayName} or higher to enable.
-              Role defaults can't be removed — they come with the role.
+              Plan-locked permissions ({planLabel(planCode)}) need a higher plan or
+              an extra module to enable. Role defaults can't be removed — they
+              come with the role.
             </p>
           </div>
         )}

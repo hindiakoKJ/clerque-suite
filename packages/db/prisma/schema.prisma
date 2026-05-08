@@ -472,6 +472,18 @@ model Tenant {
   stockTransfers       StockTransfer[]
   cycleCounts          CycleCount[]
   projects             Project[]
+  // Sprint 13 — six-engine vertical schemas (back-references)
+  prescriptions            Prescription[]
+  productLots              ProductLot[]
+  controlledSubstanceLogs  ControlledSubstanceLog[]
+  fleetAssets              FleetAsset[]
+  pmSchedules              PMSchedule[]
+  tireSerials              TireSerial[]
+  tripTickets              TripTicket[]
+  liquidationItems         LiquidationItem[]
+  progressBillings         ProgressBilling[]
+  retentionReleases        RetentionRelease[]
+  jobOrders                JobOrder[]
   /// Per-tenant tunable severity thresholds for the Ledger ops dashboard.
   /// JSON shape (keys all numbers, optional):
   ///   { eventLagWarnMs, eventLagBadMs, pendingEventsWarn, failedEventsWarn,
@@ -631,6 +643,11 @@ model Branch {
   cycleCounts     CycleCount[]
   projects        Project[]
   issuances       MaterialIssuance[] @relation("MaterialIssuanceBranch")
+  // Sprint 13
+  productLots     ProductLot[]
+  fleetAssets     FleetAsset[]
+  tripTickets     TripTicket[]
+  jobOrders       JobOrder[]
 
   @@map("branches")
 }
@@ -665,6 +682,11 @@ model User {
   separatedAt              DateTime?
   enable2fa                Boolean        @default(false)
   twoFactorSecret          String?
+  /// Sprint 13 — Compliance-Engine. PRC license number for licensed
+  /// pharmacists. Required for `pharmacist:dispense` permission and printed
+  /// on Rx-required POS receipts. Null for non-pharmacists.
+  prcLicense               String?
+  prcLicenseExpiresAt      DateTime?
   /// Time-limited token for self-service password reset (expires in 1 hour)
   passwordResetToken       String?        @unique
   passwordResetTokenExpiry DateTime?
@@ -705,6 +727,14 @@ model User {
   leaveRequests       LeaveRequest[]       @relation("UserLeaves")
   leaveApprovals      LeaveRequest[]       @relation("LeaveApprover")
   thirteenthMonths    ThirteenthMonth[]
+
+  // Sprint 13 — vertical engine back-references
+  fleetAssetsAsPrimaryDriver FleetAsset[]   @relation("FleetPrimaryDriver")
+  tripsAsDriver              TripTicket[]   @relation("TripDriver")
+  tripsAsHelper              TripTicket[]   @relation("TripHelper")
+  tripsAsLiquidator          TripTicket[]   @relation("TripLiquidator")
+  jobOrdersAsTechnician      JobOrder[]     @relation("JobOrderTechnician")
+  jobOrderLinesAsTechnician  JobOrderLine[] @relation("JobOrderLineTechnician")
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -814,6 +844,22 @@ model Product {
   /// Whether this item carries 12% VAT. Drives taxType on OrderItem at checkout.
   isVatable       Boolean       @default(true)
   isActive        Boolean       @default(true)
+  // ── Sprint 13 — Compliance-Engine (Pharmacy) ──────────────────────────
+  /// Generic name (per RA 6675 — Generics Act of 1988). Required on every
+  /// dispensed-drug receipt. Null for non-pharmacy products.
+  genericName     String?
+  /// Brand name shown alongside generic on Rx-required products.
+  brandName       String?
+  /// Dosage form (tablet, capsule, syrup, suspension, cream, etc.).
+  dosageForm      String?
+  /// Strength (e.g. "500mg", "5mg/ml"). Free-text — formularies vary.
+  strength        String?
+  /// True = requires a valid prescription before dispensing. Pharmacy POS
+  /// blocks the sale at the till until a prescriptionId is attached.
+  isRxRequired    Boolean       @default(false)
+  /// True = DDB-regulated (RA 9165 dangerous drugs). Sale auto-creates a
+  /// ControlledSubstanceLog row with patient + doctor + dispensing pharmacist.
+  isControlledDrug Boolean      @default(false)
   /// Unit of Measure for this product (PC, KG, BOX, LITER, etc.)
   unitOfMeasureId String?
   createdAt       DateTime      @default(now())
@@ -830,6 +876,10 @@ model Product {
   promotionItems      PromotionProduct[]
   modifierGroups      ProductModifierGroup[]
   laundryProductLines LaundryProductLine[]
+  // Sprint 13 — Compliance-Engine
+  productLots         ProductLot[]
+  // Sprint 13 — Service-Engine
+  jobOrderLines       JobOrderLine[]         @relation("JobOrderLineProduct")
 
   @@index([tenantId, sku])
   @@index([tenantId, barcode])
@@ -1124,6 +1174,11 @@ model Order {
   discounts        OrderDiscount[]
   accountingEvents AccountingEvent[]
   laundryOrder     LaundryOrder?
+  // Sprint 13 — vertical engine back-references
+  tripTicket         TripTicket?         @relation("TripOrder")
+  progressBillings   ProgressBilling[]   @relation("ProgressBillingOrder")
+  retentionReleases  RetentionRelease[]  @relation("RetentionReleaseOrder")
+  jobOrder           JobOrder?           @relation("JobOrderInvoice")
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId, createdAt])
@@ -1165,13 +1220,29 @@ model OrderItem {
   /// When the runner/cashier marked it as delivered.
   servedAt   DateTime?
 
-  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product   Product             @relation(fields: [productId], references: [id])
-  variant   ProductVariant?     @relation(fields: [variantId], references: [id])
-  modifiers OrderItemModifier[]
-  refunds   OrderItemRefund[]
+  // ── Sprint 13 — Compliance-Engine (Pharmacy) ──────────────────────────
+  /// Link to a Prescription when the dispensed item required one. Pharmacy
+  /// POS attaches this at till; backend rejects sale of `isRxRequired`
+  /// products without a valid prescriptionId.
+  prescriptionId String?
+  /// Specific lot dispensed (for FDA recall trail + expiry enforcement).
+  /// Null for non-pharmacy items.
+  lotId          String?
+  /// PRC license number of the pharmacist who approved the dispense.
+  /// Required for `isRxRequired` items; printed on the OR.
+  dispensedByPrc String?
+
+  order        Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product             @relation(fields: [productId], references: [id])
+  variant      ProductVariant?     @relation(fields: [variantId], references: [id])
+  modifiers    OrderItemModifier[]
+  refunds      OrderItemRefund[]
+  prescription Prescription?       @relation(fields: [prescriptionId], references: [id])
+  lot          ProductLot?         @relation(fields: [lotId], references: [id])
 
   @@index([orderId])
+  @@index([prescriptionId])
+  @@index([lotId])
   @@map("order_items")
 }
 
@@ -1869,6 +1940,10 @@ model Customer {
   payments      ARPayment[]
   laundryOrders LaundryOrder[]
   projects      Project[]
+  // Sprint 13
+  prescriptions Prescription[]
+  trips         TripTicket[]   @relation("TripCustomer")
+  jobOrders     JobOrder[]     @relation("JobOrderCustomer")
 
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
@@ -3289,6 +3364,8 @@ model Project {
   customer  Customer?          @relation(fields: [customerId], references: [id])
   branch    Branch?            @relation(fields: [branchId], references: [id])
   issuances MaterialIssuance[]
+  // Sprint 13 — Construction
+  progressBillings ProgressBilling[]
 
   @@unique([tenantId, projectCode])
   @@index([tenantId, status])
@@ -3328,4 +3405,412 @@ model MaterialIssuanceLine {
   @@index([issuanceId])
   @@index([rawMaterialId])
   @@map("material_issuance_lines")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sprint 13 — Six-engine vertical schemas (Pharmacy / Trucking / Construction /
+// Service-Engine job orders / Manufacturing reports rely on existing Project).
+//
+// Architectural rule (per architecture decisions): these tables extend POS
+// surfaces only. The universal kernel (accounting JE engine, BIR, payroll
+// computation) does NOT branch per vertical. Vertical-specific events post
+// to the JE engine via existing AccountingEvent rows with new event types
+// (RX_DISPENSE, TRIP_LIQUIDATION, PROGRESS_BILLING, JOB_ORDER_INVOICE).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ═══ Compliance-Engine (Pharmacy) ════════════════════════════════════════════
+
+/// Prescription record (RA 6675, RA 9165, FDA). One row per Rx; multiple
+/// dispenses against the same Rx tracked via `refillsRemaining` countdown.
+/// Pharmacy POS rejects sale of `Product.isRxRequired` items without a
+/// valid (refillsRemaining > 0) Prescription attached.
+model Prescription {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  customerId          String?
+  /// Pharmacy-issued Rx number, scanned or typed at intake.
+  rxNumber            String
+  /// Patient's name as written on the Rx — required even when customerId is null.
+  patientName         String
+  patientIdType       String?
+  patientIdNumber     String?
+  /// Prescribing physician's name + PRC license + S2 license (for controlled drugs).
+  prescribingDoctor   String
+  doctorPrcLicense    String
+  doctorS2License     String?
+  doctorClinic        String?
+  issuedAt            DateTime
+  refillsRemaining    Int        @default(0)
+  notes               String?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  tenant              Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer            Customer?  @relation(fields: [customerId], references: [id])
+  orderItems          OrderItem[]
+  controlledSubstanceLogs ControlledSubstanceLog[]
+
+  @@unique([tenantId, rxNumber])
+  @@index([tenantId, customerId])
+  @@map("prescriptions")
+}
+
+/// FDA-required lot + expiry tracking for pharmacy products.
+model ProductLot {
+  id           String    @id @default(cuid())
+  tenantId     String
+  productId    String
+  branchId     String
+  lotNumber    String
+  expiresAt    DateTime
+  quantity     Decimal   @db.Decimal(12, 3)
+  costPrice    Decimal   @db.Decimal(12, 2)
+  receivedAt   DateTime  @default(now())
+  supplierRef  String?
+  isActive     Boolean   @default(true)
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product    Product     @relation(fields: [productId], references: [id])
+  branch     Branch      @relation(fields: [branchId], references: [id])
+  orderItems OrderItem[]
+
+  @@unique([tenantId, productId, lotNumber])
+  @@index([tenantId, productId, branchId, expiresAt])
+  @@map("product_lots")
+}
+
+/// DDB controlled-substance dispensing register (RA 9165).
+model ControlledSubstanceLog {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  orderItemId         String   @unique
+  prescriptionId      String?
+  patientName         String
+  patientIdType       String
+  patientIdNumber     String
+  doctorName          String
+  doctorPrcLicense    String
+  doctorS2License     String
+  pharmacistPrc       String
+  drugName            String
+  drugStrength        String?
+  quantityDispensed   Decimal  @db.Decimal(10, 3)
+  dispensedAt         DateTime @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  prescription Prescription? @relation(fields: [prescriptionId], references: [id])
+
+  @@index([tenantId, dispensedAt])
+  @@map("controlled_substance_logs")
+}
+
+// ═══ Logistics-Engine (Trucking) ═════════════════════════════════════════════
+
+enum TripStatus {
+  DRAFT
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+  LIQUIDATED
+  CANCELLED
+}
+
+enum FleetAssetKind {
+  TRUCK_4_WHEELER
+  TRUCK_6_WHEELER
+  TRUCK_10_WHEELER
+  TRACTOR_HEAD
+  TRAILER
+  VAN
+  MOTORCYCLE
+}
+
+enum PMScheduleType {
+  ENGINE_OIL
+  TIRE_ROTATION
+  TIRE_REPLACEMENT
+  CHASSIS_LUBE
+  BRAKE_INSPECTION
+  TRANSMISSION_FLUID
+  AIR_FILTER
+  REGISTRATION_LTO
+  INSURANCE_RENEWAL
+  CUSTOM
+}
+
+model FleetAsset {
+  id              String         @id @default(cuid())
+  tenantId        String
+  branchId        String?
+  kind            FleetAssetKind
+  plateNumber     String
+  bodyNumber      String?
+  engineNumber    String?
+  chassisNumber   String?
+  yearModel       Int?
+  mileageKm       Int            @default(0)
+  primaryDriverId String?
+  isActive        Boolean        @default(true)
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch        Branch?           @relation(fields: [branchId], references: [id])
+  primaryDriver User?             @relation("FleetPrimaryDriver", fields: [primaryDriverId], references: [id])
+  trips         TripTicket[]
+  pmSchedules   PMSchedule[]
+  tireSerials   TireSerial[]
+
+  @@unique([tenantId, plateNumber])
+  @@index([tenantId, isActive])
+  @@map("fleet_assets")
+}
+
+model PMSchedule {
+  id                  String          @id @default(cuid())
+  tenantId            String
+  fleetAssetId        String
+  type                PMScheduleType
+  customLabel         String?
+  intervalKm          Int?
+  intervalDays        Int?
+  lastDoneAt          DateTime?
+  lastDoneMileageKm   Int?
+  nextDueAt           DateTime?
+  nextDueMileageKm    Int?
+  lastCost            Decimal?        @db.Decimal(12, 2)
+  isActive            Boolean         @default(true)
+  notes               String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleetAsset FleetAsset @relation(fields: [fleetAssetId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, fleetAssetId])
+  @@index([tenantId, nextDueAt])
+  @@map("pm_schedules")
+}
+
+model TireSerial {
+  id              String   @id @default(cuid())
+  tenantId        String
+  fleetAssetId    String?
+  serialNumber    String
+  brand           String?
+  size            String?
+  status          String   @default("NEW")
+  installedAt     DateTime?
+  removedAt       DateTime?
+  position        String?
+  installMileage  Int?
+  removeMileage   Int?
+  retreadCount    Int      @default(0)
+  costPrice       Decimal? @db.Decimal(12, 2)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fleetAsset FleetAsset? @relation(fields: [fleetAssetId], references: [id])
+
+  @@unique([tenantId, serialNumber])
+  @@index([tenantId, fleetAssetId])
+  @@map("tire_serials")
+}
+
+model TripTicket {
+  id                  String     @id @default(cuid())
+  tenantId            String
+  branchId            String
+  tripNumber          String
+  status              TripStatus @default(DRAFT)
+  orderId             String?    @unique
+  customerId          String?
+  fleetAssetId        String
+  driverId            String
+  helperId            String?
+  originLabel         String
+  destinationLabel    String
+  cargoDescription    String?
+  cargoWeightKg       Decimal?   @db.Decimal(10, 2)
+  freightAmount       Decimal    @db.Decimal(12, 2)
+  cashAdvance         Decimal    @default(0) @db.Decimal(12, 2)
+  receiptsTotal       Decimal    @default(0) @db.Decimal(12, 2)
+  liquidationVariance Decimal?   @db.Decimal(12, 2)
+  dispatchedAt        DateTime?
+  deliveredAt         DateTime?
+  liquidatedAt        DateTime?
+  liquidatedById      String?
+  notes               String?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch            @relation(fields: [branchId], references: [id])
+  customer     Customer?         @relation("TripCustomer", fields: [customerId], references: [id])
+  fleetAsset   FleetAsset        @relation(fields: [fleetAssetId], references: [id])
+  driver       User              @relation("TripDriver", fields: [driverId], references: [id])
+  helper       User?             @relation("TripHelper", fields: [helperId], references: [id])
+  liquidatedBy User?             @relation("TripLiquidator", fields: [liquidatedById], references: [id])
+  order        Order?            @relation("TripOrder", fields: [orderId], references: [id])
+  liquidation  LiquidationItem[]
+
+  @@unique([tenantId, tripNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, fleetAssetId, dispatchedAt])
+  @@index([tenantId, driverId, dispatchedAt])
+  @@map("trip_tickets")
+}
+
+model LiquidationItem {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tripTicketId    String
+  category        String
+  amount          Decimal  @db.Decimal(12, 2)
+  receiptImageUrl String?
+  description     String?
+  createdAt       DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tripTicket TripTicket @relation(fields: [tripTicketId], references: [id], onDelete: Cascade)
+
+  @@index([tripTicketId])
+  @@map("liquidation_items")
+}
+
+// ═══ Project-Engine — Construction (extends existing Project) ═══════════════
+
+enum ProgressBillingStatus {
+  DRAFT
+  ISSUED
+  PAID
+  CANCELLED
+}
+
+model ProgressBilling {
+  id              String                @id @default(cuid())
+  tenantId        String
+  projectId       String
+  billingNumber   String
+  stageDescription String
+  percentComplete Decimal               @db.Decimal(5, 2)
+  grossAmount     Decimal               @db.Decimal(14, 2)
+  retentionPercent Decimal              @default(10.00) @db.Decimal(5, 2)
+  retentionAmount Decimal               @db.Decimal(14, 2)
+  netAmount       Decimal               @db.Decimal(14, 2)
+  status          ProgressBillingStatus @default(DRAFT)
+  orderId         String?               @unique
+  issuedAt        DateTime?
+  paidAt          DateTime?
+  notes           String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  order    Order?   @relation("ProgressBillingOrder", fields: [orderId], references: [id])
+  retentionRelease RetentionRelease?
+
+  @@unique([tenantId, billingNumber])
+  @@index([tenantId, projectId, createdAt])
+  @@index([tenantId, status])
+  @@map("progress_billings")
+}
+
+model RetentionRelease {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  progressBillingId   String   @unique
+  releasedAmount      Decimal  @db.Decimal(14, 2)
+  releasedAt          DateTime @default(now())
+  orderId             String?  @unique
+  notes               String?
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  progressBilling ProgressBilling @relation(fields: [progressBillingId], references: [id], onDelete: Cascade)
+  order           Order?          @relation("RetentionReleaseOrder", fields: [orderId], references: [id])
+
+  @@index([tenantId, releasedAt])
+  @@map("retention_releases")
+}
+
+// ═══ Service-Engine — Job Order (generic service / auto repair) ═════════════
+
+enum JobOrderStatus {
+  DRAFT
+  DIAGNOSING
+  AWAITING_APPROVAL
+  AWAITING_PARTS
+  IN_PROGRESS
+  QC
+  READY_FOR_PICKUP
+  CLAIMED
+  CANCELLED
+}
+
+enum JobOrderLineKind {
+  LABOR
+  PART
+  CONSUMABLE
+  SUBLET
+}
+
+model JobOrder {
+  id              String         @id @default(cuid())
+  tenantId        String
+  branchId        String
+  jobNumber       String
+  status          JobOrderStatus @default(DRAFT)
+  customerId      String?
+  itemDescription String
+  customerComplaint String?
+  diagnosis       String?
+  assignedToId    String?
+  estimateAmount  Decimal?       @db.Decimal(12, 2)
+  estimateApprovedAt DateTime?
+  totalAmount     Decimal        @default(0) @db.Decimal(12, 2)
+  orderId         String?        @unique
+  promisedAt      DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  claimedAt       DateTime?
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch     Branch         @relation(fields: [branchId], references: [id])
+  customer   Customer?      @relation("JobOrderCustomer", fields: [customerId], references: [id])
+  assignedTo User?          @relation("JobOrderTechnician", fields: [assignedToId], references: [id])
+  order      Order?         @relation("JobOrderInvoice", fields: [orderId], references: [id])
+  lines      JobOrderLine[]
+
+  @@unique([tenantId, jobNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, branchId, createdAt])
+  @@map("job_orders")
+}
+
+model JobOrderLine {
+  id          String           @id @default(cuid())
+  jobOrderId  String
+  kind        JobOrderLineKind
+  productId   String?
+  description String
+  quantity    Decimal          @db.Decimal(12, 3)
+  unitPrice   Decimal          @db.Decimal(12, 2)
+  lineTotal   Decimal          @db.Decimal(14, 2)
+  technicianId String?
+  notes       String?
+
+  jobOrder    JobOrder         @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  product     Product?         @relation("JobOrderLineProduct", fields: [productId], references: [id])
+  technician  User?            @relation("JobOrderLineTechnician", fields: [technicianId], references: [id])
+
+  @@index([jobOrderId])
+  @@map("job_order_lines")
 }

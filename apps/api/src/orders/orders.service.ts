@@ -23,10 +23,14 @@ export class OrdersService {
   // ─── Create order (online or from offline sync) ─────────────────────────
 
   async create(tenantId: string, cashierId: string, payload: OfflineOrder) {
-    // Idempotency: if clientUuid already exists, return existing order
+    // Idempotency: if clientUuid already exists FOR THIS TENANT, return it.
+    // Tenant scope is critical — clientUuid is globally unique on the Order
+    // model, so a malicious payload could otherwise echo back another
+    // tenant's order body. findFirst with both filters short-circuits only
+    // on a real match within the caller's tenant.
     if (payload.clientUuid) {
-      const existing = await this.prisma.order.findUnique({
-        where: { clientUuid: payload.clientUuid },
+      const existing = await this.prisma.order.findFirst({
+        where: { clientUuid: payload.clientUuid, tenantId },
       });
       if (existing) return existing;
     }
@@ -82,12 +86,21 @@ export class OrdersService {
       // routes to any station, there's nothing to wait on — the order skips
       // the PAID stage entirely and goes straight to COMPLETED at sale time.
       const productIds = payload.items.map((i) => i.productId);
+      // CRITICAL: scope by tenantId so a crafted productId from another tenant
+      // cannot be smuggled into this tenant's order. If any productId is not
+      // owned by this tenant, reject the entire order — it's malformed input,
+      // not a routing edge case.
       const productsForRouting = productIds.length
         ? await tx.product.findMany({
-            where:  { id: { in: productIds } },
+            where:  { id: { in: productIds }, tenantId },
             select: { id: true, category: { select: { stationId: true } } },
           })
         : [];
+      if (productsForRouting.length !== new Set(productIds).size) {
+        throw new BadRequestException(
+          'One or more products in this order do not belong to your tenant.',
+        );
+      }
       const hasAnyRoutedItem = productsForRouting.some(
         (p) => p.category?.stationId != null,
       );
@@ -249,8 +262,12 @@ export class OrdersService {
 
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
+        // BOM walk: defense-in-depth tenant scope on the JOIN side too.
+        // The productId guard above already rejects cross-tenant productIds,
+        // but scoping the bomItem query by product.tenantId makes this
+        // resilient to any future code path that bypasses the upstream guard.
         const bomItems = await tx.bomItem.findMany({
-          where:  { productId: item.productId },
+          where:  { productId: item.productId, product: { tenantId } },
           select: {
             rawMaterialId: true,
             quantity:      true,

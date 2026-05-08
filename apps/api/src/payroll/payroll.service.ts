@@ -704,9 +704,13 @@ export class PayrollService {
       totalNet        += netPay;
     }
 
-    // Atomically: delete old payslips (re-processing), insert new, update run status
+    // Atomically: delete old payslips (re-processing), insert new, update run status.
+    // Defense-in-depth: scope deleteMany by tenantId too. The payRun is already
+    // tenant-validated upstream, but if some future caller forwards a stale
+    // payRunId without re-validating, this guarantees no cross-tenant payslips
+    // can be wiped by accident.
     const updatedRun = await this.prisma.$transaction(async (tx) => {
-      await tx.payslip.deleteMany({ where: { payRunId } });
+      await tx.payslip.deleteMany({ where: { payRunId, tenantId } });
       await tx.payslip.createMany({ data: payslipData });
       return tx.payRun.update({
         where: { id: payRunId },

@@ -5,21 +5,24 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { wouldExceedStaffCap, nextTier, type TierId } from '@repo/shared-types';
+import { PLAN_CAPS, effectiveSeatCeiling, type PlanCode } from '@repo/shared-types';
 import type { JwtPayload } from '@repo/shared-types';
 
 /**
- * TierQuotaGuard — enforces the staff cap for the current tenant's tier.
+ * TierQuotaGuard — enforces the staff cap for the current tenant's plan.
+ *
+ * Renamed semantically from the old "tier" model: the source of truth is now
+ * `Tenant.planCode` + `staffSeatAddons` resolved through PLAN_CAPS. The
+ * legacy `Tenant.tier` enum is no longer consulted.
  *
  * Apply to POST /users to reject creation when the tenant has already hit
- * tier.maxStaff non-owner staff. The frontend disables the "Add Staff" button
- * via the same logic, but this guard is the authoritative check.
+ * the plan's staff cap. The frontend disables the "Add Staff" button via the
+ * same logic, but this guard is the authoritative check.
  *
  * Owners (BUSINESS_OWNER) and SUPER_ADMIN are NOT counted toward the cap.
  *
- * Throws ForbiddenException with structured payload that the frontend can
- * use to render the upgrade CTA with the correct target tier:
- *   { code: 'TIER_QUOTA_EXCEEDED', currentTier, requiredTier, currentCount, cap }
+ * Throws ForbiddenException with structured payload:
+ *   { code: 'PLAN_CEILING_REACHED', planCode, currentCount, ceiling, message }
  */
 @Injectable()
 export class TierQuotaGuard implements CanActivate {
@@ -31,46 +34,45 @@ export class TierQuotaGuard implements CanActivate {
     if (!user || user.isSuperAdmin) return true; // platform admins bypass
     if (!user.tenantId) return true;             // no tenant scope to check
 
-    // Service / display accounts (KIOSK_DISPLAY) don't take a staff seat —
-    // they're hardware credentials, not real headcount. Skip the quota check
-    // entirely when the role being created is one of these.
+    // Service / display accounts (KIOSK_DISPLAY, EXTERNAL_AUDITOR) don't take
+    // a seat. Skip the quota check entirely when creating one of those.
     const newRole = (req.body?.role ?? '').toUpperCase();
-    if (newRole === 'KIOSK_DISPLAY') return true;
+    if (['KIOSK_DISPLAY', 'EXTERNAL_AUDITOR'].includes(newRole)) return true;
 
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: user.tenantId },
-      select: { tier: true },
+      select: { planCode: true, staffSeatAddons: true },
     });
     if (!tenant) {
       throw new ForbiddenException('Tenant not found.');
     }
 
-    // Count active non-owner staff. BUSINESS_OWNER is the tenant admin and
-    // not subject to the cap (multiple co-owners allowed without taking seats).
-    // KIOSK_DISPLAY accounts are also excluded — they're not real employees,
-    // they're credentials for kiosk hardware (KDS tablets, customer displays).
+    const planCode = (tenant.planCode ?? 'SUITE_T2') as PlanCode;
+    const ceiling  = effectiveSeatCeiling(planCode, tenant.staffSeatAddons ?? 0);
+
+    // Count active non-owner / non-machine staff.
     const currentCount = await this.prisma.user.count({
       where: {
         tenantId: user.tenantId,
         isActive: true,
-        role: { notIn: ['BUSINESS_OWNER', 'SUPER_ADMIN', 'KIOSK_DISPLAY'] },
+        role: { notIn: ['BUSINESS_OWNER', 'SUPER_ADMIN', 'KIOSK_DISPLAY', 'EXTERNAL_AUDITOR'] },
       },
     });
 
-    const tierId = tenant.tier as TierId;
-    if (!wouldExceedStaffCap(tierId, currentCount)) return true;
+    if (currentCount < ceiling) return true;
 
-    const upgradeTo = nextTier(tierId);
+    const cap = PLAN_CAPS[planCode];
     throw new ForbiddenException({
-      code:         'TIER_QUOTA_EXCEEDED',
-      currentTier:  tierId,
-      requiredTier: upgradeTo?.id ?? null,
+      code:          'PLAN_CEILING_REACHED',
+      planCode,
       currentCount,
-      cap:          currentCount, // cap == count when blocked
+      ceiling,
+      maxAllowed:    cap.maxTotal,
       message:
-        upgradeTo
-          ? `Your ${tierId} subscription allows ${currentCount} staff. Upgrade to ${upgradeTo.id} to add more.`
-          : `Your ${tierId} subscription has reached its staff limit.`,
+        `Your ${planCode} plan allows up to ${ceiling} staff. ` +
+        (cap.maxAddons > 0
+          ? `Buy additional seats from Settings → Subscription, or upgrade to a higher plan.`
+          : `Upgrade to a higher plan to add more staff.`),
     });
   }
 }

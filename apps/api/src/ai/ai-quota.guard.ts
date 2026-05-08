@@ -41,7 +41,7 @@ export class AiQuotaGuard implements CanActivate {
         code:          'AI_NOT_ENABLED',
         monthlyQuota:  0,
         usedThisMonth: 0,
-        message:       'AI features are not active. Buy an add-on package or upgrade to TIER_5+ to enable.',
+        message:       'AI features are not active on your plan. Upgrade to a Team / Pair T2 / Suite plan or higher, or buy an AI add-on package.',
       });
     }
 

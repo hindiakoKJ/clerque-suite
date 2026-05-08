@@ -51,35 +51,50 @@ export class TenantService {
    * Used by Settings → Subscription page to render the upgrade CTA.
    */
   async getSubscription(tenantId: string) {
+    const { PLAN_CAPS, PLAN_LIMITS, PLAN_FEATURES, PLAN_SETUP_FEE_PHP_CENTS, effectiveSeatCeiling, planLabel } =
+      await import('@repo/shared-types');
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: {
-        tier: true,
-        expiresAt: true,
-        branchQuota: true,
-        cashierSeatQuota: true,
-        hasTimeMonitoring: true,
-        hasBirForms: true,
-        isDemoTenant: true,
-        signupSource: true,
-        setupFeePaidAt: true,
-        aiAddonType: true,
+        // Modular plan (source of truth for access)
+        planCode:         true,
+        modulePos:        true,
+        moduleLedger:     true,
+        modulePayroll:    true,
+        staffSeatQuota:   true,
+        staffSeatAddons:  true,
+        // Legacy / cross-cutting
+        tier:             true,  // legacy display only
+        expiresAt:        true,
+        branchQuota:      true,
+        hasBirForms:      true,
+        isDemoTenant:     true,
+        signupSource:     true,
+        setupFeePaidAt:   true,
+        // AI add-on flags
+        aiAddonType:      true,
         aiAddonExpiresAt: true,
-        aiQuotaOverride: true,
+        aiQuotaOverride:  true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found');
 
-    // Resolve AI quota — tier-included + active addon + override.
-    const tierId = tenant.tier as TierId;
-    const aiResolution = getAiQuotaForTenant(
-      tierId,
-      tenant.aiAddonType as AiAddonType | null,
-      tenant.aiAddonExpiresAt,
-      tenant.aiQuotaOverride,
-    );
+    // Plan-based authority. The legacy `tier` field is included in the
+    // response only for legacy display; all gating decisions read from planCode.
+    const planCode = (tenant.planCode ?? 'SUITE_T2') as keyof typeof PLAN_CAPS;
+    const cap      = PLAN_CAPS[planCode];
+    const limits   = PLAN_LIMITS[planCode];
+    const features = PLAN_FEATURES[planCode];
 
-    // Count this month's actual usage.
+    // AI quota — base quota comes from PLAN_LIMITS; addon stacks on top;
+    // override (set by SUPER_ADMIN) takes precedence over both.
+    const baseQuota = tenant.aiQuotaOverride ?? limits.maxAiPerMonth;
+    const addonNow  = tenant.aiAddonType && tenant.aiAddonExpiresAt && tenant.aiAddonExpiresAt > new Date()
+      ? AI_ADDONS[tenant.aiAddonType as AiAddonType]?.promptsIncluded ?? 0
+      : 0;
+    const aiQuota = baseQuota + addonNow;
+
     const startOfMonth = new Date();
     startOfMonth.setUTCDate(1);
     startOfMonth.setUTCHours(0, 0, 0, 0);
@@ -91,18 +106,16 @@ export class TenantService {
       },
     });
 
-    // Tier pricing — looked up from the canonical pricing table.
-    const tierPricing = TIER_PRICING[tierId];
     const aiAddonPackage = tenant.aiAddonType
       ? AI_ADDONS[tenant.aiAddonType as AiAddonType]
       : null;
 
-    // Active non-owner staff count — what the tier cap limits.
+    // Active non-owner staff count — what the plan cap limits.
     const staffCount = await this.prisma.user.count({
       where: {
         tenantId,
         isActive: true,
-        role: { notIn: ['BUSINESS_OWNER', 'SUPER_ADMIN'] },
+        role: { notIn: ['BUSINESS_OWNER', 'SUPER_ADMIN', 'KIOSK_DISPLAY', 'EXTERNAL_AUDITOR'] },
       },
     });
 
@@ -111,33 +124,63 @@ export class TenantService {
       where: { tenantId, isActive: true },
     });
 
+    const seatCeiling = effectiveSeatCeiling(planCode, tenant.staffSeatAddons ?? 0);
+
     return {
+      // ─── Modular Plan (source of truth) ────────────────────────────────
+      planCode,
+      planLabel:       planLabel(planCode),
+      modules: {
+        pos:     tenant.modulePos,
+        ledger:  tenant.moduleLedger,
+        payroll: tenant.modulePayroll,
+      },
+      caps: {
+        baseSeats:       cap.baseSeats,
+        maxAddons:       cap.maxAddons,
+        maxTotal:        cap.maxTotal,
+        currentCeiling:  seatCeiling,    // baseSeats + addons (clamped to maxTotal)
+        addonsPurchased: tenant.staffSeatAddons ?? 0,
+      },
+      limits: {
+        maxBranches:    limits.maxBranches,
+        maxAiPerMonth:  limits.maxAiPerMonth,
+        apiRatePerHour: limits.apiRatePerHour,
+      },
+      features,
+
+      // ─── Legacy fields (kept for backward compat with existing UI) ────
       tier:              tenant.tier,
       expiresAt:         tenant.expiresAt,
       staffCount,
       branchCount,
       branchQuota:       tenant.branchQuota,
-      cashierSeatQuota:  tenant.cashierSeatQuota,
-      hasTimeMonitoring: tenant.hasTimeMonitoring,
-      hasBirForms:       tenant.hasBirForms,
+      cashierSeatQuota:  seatCeiling,    // alias for old name
+      hasTimeMonitoring: features.birForms,  // approximation; payroll module is the real gate
+      hasBirForms:       features.birForms,
       isDemoTenant:      tenant.isDemoTenant,
       signupSource:      tenant.signupSource,
 
-      // Pricing — what they pay
+      // Pricing — derived from plan
       pricing: {
-        setupFeePhp:    tierPricing.setupFeePhp,
-        monthlyPhp:     tierPricing.monthlyPhp,
-        annualPhp:      tierPricing.annualPhp,
+        setupFeePhp:    Math.round(PLAN_SETUP_FEE_PHP_CENTS[planCode] / 100),
+        monthlyPhp:     Math.round(cap.pricePhpMonthlyCents / 100),
+        annualPhp:      Math.round((cap.pricePhpMonthlyCents * cap.annualMonthEquivalent) / 100),
+        addonSeatPhpMonthly: Math.round(cap.addonSeatPhpMonthlyCents / 100),
         setupFeePaidAt: tenant.setupFeePaidAt,
       },
 
       // AI quota — usage vs budget
       ai: {
-        monthlyQuota:    aiResolution.monthlyQuota,
+        monthlyQuota:    aiQuota,
         usedThisMonth:   aiUsedThisMonth,
-        remaining:       Math.max(0, aiResolution.monthlyQuota - aiUsedThisMonth),
-        source:          aiResolution.source,
-        enabled:         aiResolution.enabled,
+        remaining:       Math.max(0, aiQuota - aiUsedThisMonth),
+        source:          tenant.aiQuotaOverride != null
+          ? 'override'
+          : addonNow > 0
+            ? (baseQuota > 0 ? 'plan+addon' : 'addon_only')
+            : (baseQuota > 0 ? 'plan_included' : 'plan_locked'),
+        enabled:         aiQuota > 0,
         addonType:       tenant.aiAddonType,
         addonExpiresAt:  tenant.aiAddonExpiresAt,
         addonPackage:    aiAddonPackage,

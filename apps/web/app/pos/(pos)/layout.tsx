@@ -8,7 +8,7 @@ import {
   Shirt, Sparkles, Truck, ClipboardCheck, Hammer,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
-import { isLaundryType } from '@repo/shared-types';
+import { isLaundryType, isFnbType } from '@repo/shared-types';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { ClockWidget } from '@/components/pos/ClockWidget';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
@@ -181,42 +181,115 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     role === 'BUSINESS_OWNER' ? 'Owner'   :
     inRoles(role, TERMINAL_ROLES) ? 'Cashier' : 'Admin';
 
-  // Build nav — ALL items are shown to every POS user.
-  // Items the current role cannot access appear grayed-out with a lock icon.
-  // Backend guards remain the authoritative enforcement layer.
+  // ── POS sidebar nav resolver — vertical + multi-branch aware ────────────────
   //
-  // For LAUNDRY tenants the workflow centers on Intake/Queue rather than the
-  // F&B Terminal/Ingredients flow, so we swap the catalog-heavy items out.
+  // The nav set you see depends on TWO independent dimensions:
+  //
+  //   1. businessType (vertical) — different verticals use POS differently:
+  //        - LAUNDRY                       → Intake / Queue / Machines (no Terminal)
+  //        - F&B (Coffee, Restaurant, …)   → Terminal + Ingredients/Recipes
+  //        - SERVICE / MANUFACTURING       → adds Projects + Material Issuance
+  //        - RETAIL                        → flat catalog, no recipes
+  //
+  //   2. multi-branch — Transfers + Cycle Counts only make sense when the
+  //      tenant has more than one branch. We use the floor-layout hook's
+  //      branch list (fast, cached) as the single source of truth.
+  //
+  // Plan-tier gating (POS-only on Solo/Duo/Team/Business; AppAccessGuard for
+  // Ledger/Payroll module entitlement) is handled BACKEND-side. The nav items
+  // here are purely visual — backend guards remain the authoritative wall.
   const businessType = layout?.tenant?.businessType;
   const isLaundry    = isLaundryType(businessType);
+  const isFnb        = isFnbType(businessType);
+  const isService    = businessType === 'SERVICE';
+  const isMfg        = businessType === 'MANUFACTURING';
+  const isRetail     = businessType === 'RETAIL';
+  // Multi-branch features (Transfers) only relevant if the tenant's plan
+  // permits multiple branches. PLAN_LIMITS.maxBranches is baked into the JWT
+  // as user.planLimits — single-branch plans (Solo/Duo/Pair T1/Suite T1)
+  // hide Transfers entirely. Plans with maxBranches > 1 show Transfers
+  // even if the tenant currently only has 1 branch — operator gets the
+  // affordance to set up a second branch and immediately use Transfers.
+  const maxBranches  = (user as any)?.planLimits?.maxBranches ?? 1;
+  const showTransfers = maxBranches > 1;
+  // Cycle counts work for any inventory-tracking biz; show by default for
+  // F&B / Service / Mfg / Retail. Hide for Laundry (no raw-material counts).
+  const showCycleCounts = !isLaundry;
 
-  const navItems: NavItem[] = (
-    isLaundry
-      ? [
-          makeNavItem('/pos/dashboard',     'Dashboard',     LayoutDashboard, DASHBOARD_ROLES,    role),
-          makeNavItem('/pos/laundry/intake','Intake',        Sparkles,        LAUNDRY_OPS_ROLES,  role),
-          makeNavItem('/pos/laundry/queue', 'Queue',         Shirt,           LAUNDRY_OPS_ROLES,  role),
-          makeNavItem('/pos/orders',        'Orders',        ShoppingBag,     ORDERS_ROLES,       role),
-          makeNavItem('/pos/products',      'Services',      Package,         PRODUCTS_ROLES,     role),
-          makeNavItem('/pos/staff',         'Staff',         Users,           STAFF_ROLES,        role),
-          makeNavItem('/pos/promotions',    'Promotions',    Tag,             PROMOTIONS_ROLES,   role),
-          makeNavItem('/pos/pending',       'Pending Sync',  Clock,           PENDING_SYNC_ROLES, role, pendingCount || undefined),
-        ]
-      : [
-          makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES,     role),
-          makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,      role),
-          makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,        role),
-          makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,      role),
-          makeNavItem('/pos/inventory',    'Ingredients', ClipboardList,   INVENTORY_ROLES,     role),
-          makeNavItem('/pos/warehouse/transfers',    'Transfers',    Truck,          WAREHOUSE_ROLES, role),
-          makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role),
-          makeNavItem('/pos/projects',     'Projects',    Hammer,          PROJECT_ROLES,       role),
-          makeNavItem('/pos/staff',        'Staff',       Users,           STAFF_ROLES,         role),
-          makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,           role),
-          makeNavItem('/pos/promotions',   'Promotions',  Tag,             PROMOTIONS_ROLES,    role),
-          makeNavItem('/pos/pending',      'Pending Sync',Clock,           PENDING_SYNC_ROLES,  role, pendingCount || undefined),
-        ]
-  ).filter((item) => !item.disabled);
+  const COMMON_TAIL: NavItem[] = [
+    makeNavItem('/pos/staff',        'Staff',        Users,           STAFF_ROLES,        role),
+    makeNavItem('/pos/promotions',   'Promotions',   Tag,             PROMOTIONS_ROLES,   role),
+    makeNavItem('/pos/pending',      'Pending Sync', Clock,           PENDING_SYNC_ROLES, role, pendingCount || undefined),
+  ];
+
+  let verticalNav: NavItem[];
+
+  if (isLaundry) {
+    // ── LAUNDRY ──────────────────────────────────────────────────────────────
+    verticalNav = [
+      makeNavItem('/pos/dashboard',     'Dashboard',  LayoutDashboard, DASHBOARD_ROLES,    role),
+      makeNavItem('/pos/laundry/intake','Intake',     Sparkles,        LAUNDRY_OPS_ROLES,  role),
+      makeNavItem('/pos/laundry/queue', 'Queue',      Shirt,           LAUNDRY_OPS_ROLES,  role),
+      makeNavItem('/pos/orders',        'Orders',     ShoppingBag,     ORDERS_ROLES,       role),
+      makeNavItem('/pos/products',      'Services',   Package,         PRODUCTS_ROLES,     role),
+    ];
+  } else if (isFnb) {
+    // ── F&B (Coffee Shop, Restaurant, Bakery, Food Stall, Bar, Catering) ─────
+    // Recipes/BOM live inside the Products page (mode toggle on each product).
+    // Floor Layout lives under Settings — not a top-level nav item.
+    verticalNav = [
+      makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
+      makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
+      makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
+      makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
+      makeNavItem('/pos/inventory',    'Ingredients', ClipboardList,   INVENTORY_ROLES, role),
+      ...(showTransfers   ? [makeNavItem('/pos/warehouse/transfers',    'Transfers',    Truck,          WAREHOUSE_ROLES, role)] : []),
+      ...(showCycleCounts ? [makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role)] : []),
+      makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
+    ];
+  } else if (isService || isMfg) {
+    // ── SERVICE / MANUFACTURING / CONSTRUCTION ───────────────────────────────
+    // These verticals get Projects + Material Issuance (the project-cost flow)
+    // ON TOP OF the standard POS surface.
+    verticalNav = [
+      makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
+      makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
+      makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
+      makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
+      makeNavItem('/pos/inventory',    isMfg ? 'Raw Materials' : 'Inventory', ClipboardList, INVENTORY_ROLES, role),
+      makeNavItem('/pos/projects',     'Projects',    Hammer,          PROJECT_ROLES,   role),
+      ...(showTransfers   ? [makeNavItem('/pos/warehouse/transfers',    'Transfers',    Truck,          WAREHOUSE_ROLES, role)] : []),
+      ...(showCycleCounts ? [makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role)] : []),
+      makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
+    ];
+  } else if (isRetail) {
+    // ── RETAIL ───────────────────────────────────────────────────────────────
+    // Flat catalog, no recipes/BOM, no projects.
+    verticalNav = [
+      makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
+      makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
+      makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
+      makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
+      makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES, role),
+      ...(showTransfers   ? [makeNavItem('/pos/warehouse/transfers',    'Transfers',    Truck,          WAREHOUSE_ROLES, role)] : []),
+      ...(showCycleCounts ? [makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role)] : []),
+      makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
+    ];
+  } else {
+    // Fallback — businessType not set yet (new tenant) or unknown.
+    // Show the F&B set as a sensible default; user can switch business type
+    // from Settings to get the right nav.
+    verticalNav = [
+      makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
+      makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
+      makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
+      makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
+      makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES, role),
+      makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
+    ];
+  }
+
+  const navItems: NavItem[] = [...verticalNav, ...COMMON_TAIL].filter((item) => !item.disabled);
 
   async function doLogout() {
     const refresh = localStorage.getItem('app-auth');

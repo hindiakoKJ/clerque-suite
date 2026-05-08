@@ -631,8 +631,14 @@ export class JournalService {
         // overspend into expense; carry on 1034 so a human reconciles.
         const tripNumber        = String(payload['tripNumber'] ?? event.id);
         const receiptsTotal     = Number(payload['receiptsTotal'] ?? 0);
-        const categoryBreakdown = (payload['categoryBreakdown'] as Record<string, number>) ?? {};
         const variance          = Number(payload['variance'] ?? 0);
+        // Defensive: payload might be malformed (string, array, or null).
+        // Treat anything other than a plain object as empty.
+        const rawBreakdown      = payload['categoryBreakdown'];
+        const categoryBreakdown: Record<string, number> =
+          rawBreakdown && typeof rawBreakdown === 'object' && !Array.isArray(rawBreakdown)
+            ? (rawBreakdown as Record<string, number>)
+            : {};
 
         if (receiptsTotal <= 0 && variance === 0) {
           await this.prisma.accountingEvent.update({
@@ -658,12 +664,19 @@ export class JournalService {
           return '6140';
         };
 
-        description = `Trip liquidation — ${tripNumber}`;
+        // Flag variance != 0 in the JE description so a bookkeeper reading
+        // the GL knows to investigate. Per locked policy: residual stays
+        // on 1034 (Advances to Employees) until reconciled.
+        const varianceMarker =
+          variance > 0 ? ` (variance ₱${variance.toFixed(2)} cash to return)` :
+          variance < 0 ? ` (variance ₱${Math.abs(variance).toFixed(2)} OVERSPEND — investigate)` :
+                         '';
+        description = `Trip liquidation — ${tripNumber}${varianceMarker}`;
 
         let totalExpensed = 0;
         for (const [cat, amt] of Object.entries(categoryBreakdown)) {
           const a = Number(amt);
-          if (a <= 0) continue;
+          if (!Number.isFinite(a) || a <= 0) continue;
           totalExpensed += a;
           lines.push({
             accountId:   await getAccount(categoryAccount(cat)),
@@ -770,6 +783,14 @@ export class JournalService {
             data: { status: 'SYNCED', syncedAt: new Date() },
           });
           return { skipped: true };
+        }
+
+        // Strict allowlist — typos like "Cash" must NOT silently route to AR.
+        // Mark the event FAILED so a human investigates rather than mis-posting.
+        if (releaseMethod !== 'AR_CREDIT' && releaseMethod !== 'CASH') {
+          throw new BadRequestException(
+            `RETENTION_RELEASE.releaseMethod must be AR_CREDIT or CASH, got "${releaseMethod}"`,
+          );
         }
 
         description = `Retention released — ${billingNumber}`;

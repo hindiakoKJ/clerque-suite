@@ -307,7 +307,25 @@ export class TruckingService {
       }, {});
 
       return this.prisma.$transaction(async (tx) => {
-        await tx.tripTicket.update({ where: { id: tripId }, data });
+        // TOCTOU-safe + tenant-scoped: only flip if the trip is still in
+        // the prior status (no other liquidation slipped in) AND belongs
+        // to this tenant. Build the data without the relation-helper for
+        // the inner write (use raw FK + scalar fields).
+        const flatData: Prisma.TripTicketUncheckedUpdateInput = {
+          status:              targetStatus,
+          dispatchedAt:        data.dispatchedAt as Date | undefined,
+          deliveredAt:         data.deliveredAt  as Date | undefined,
+          liquidatedAt:        now,
+          liquidatedById:      actingUserId,
+          liquidationVariance: variance as any,
+        };
+        const result = await tx.tripTicket.updateMany({
+          where: { id: tripId, tenantId, status: trip.status },
+          data:  flatData,
+        });
+        if (result.count !== 1) {
+          throw new ConflictException('Trip status changed concurrently — please retry.');
+        }
         await tx.accountingEvent.create({
           data: {
             tenantId,
@@ -331,7 +349,19 @@ export class TruckingService {
       });
     }
 
-    await this.prisma.tripTicket.update({ where: { id: tripId }, data });
+    // Non-LIQUIDATED transition: TOCTOU + tenant-scoped flip.
+    const flatData: Prisma.TripTicketUncheckedUpdateInput = {
+      status:       targetStatus,
+      dispatchedAt: data.dispatchedAt as Date | undefined,
+      deliveredAt:  data.deliveredAt  as Date | undefined,
+    };
+    const result = await this.prisma.tripTicket.updateMany({
+      where: { id: tripId, tenantId, status: trip.status },
+      data:  flatData,
+    });
+    if (result.count !== 1) {
+      throw new ConflictException('Trip status changed concurrently — please retry.');
+    }
     return this.getTrip(tenantId, tripId);
   }
 
@@ -362,10 +392,13 @@ export class TruckingService {
           description:     dto.description ?? null,
         },
       });
-      await tx.tripTicket.update({
-        where: { id: tripId },
+      const upd = await tx.tripTicket.updateMany({
+        where: { id: tripId, tenantId },
         data:  { receiptsTotal: { increment: dto.amount as any } },
       });
+      if (upd.count !== 1) {
+        throw new ConflictException('Trip not found or tenant mismatch.');
+      }
       return item;
     });
   }

@@ -160,18 +160,22 @@ export class ConstructionService {
   async linkOrderToBilling(tenantId: string, billingId: string, orderId: string) {
     // Validate both belong to the tenant.
     const [billing, order] = await Promise.all([
-      this.prisma.progressBilling.findFirst({ where: { id: billingId, tenantId }, select: { id: true, status: true, orderId: true } }),
+      this.prisma.progressBilling.findFirst({ where: { id: billingId, tenantId }, select: { id: true } }),
       this.prisma.order.findFirst({           where: { id: orderId,   tenantId }, select: { id: true } }),
     ]);
     if (!billing) throw new NotFoundException('Progress billing not found.');
     if (!order)   throw new NotFoundException('Order not found.');
-    if (billing.orderId) {
-      throw new ConflictException('This billing is already linked to an order.');
-    }
-    await this.prisma.progressBilling.update({
-      where: { id: billingId },
+    // TOCTOU-safe + tenant-scoped: only link if currently unlinked AND
+    // belongs to this tenant. Two concurrent link attempts both pass
+    // the prior orderId check; updateMany with `orderId: null` filter
+    // ensures only one wins.
+    const result = await this.prisma.progressBilling.updateMany({
+      where: { id: billingId, tenantId, orderId: null },
       data:  { orderId },
     });
+    if (result.count !== 1) {
+      throw new ConflictException('Billing is already linked to an order.');
+    }
     return this.getProgressBilling(tenantId, billingId);
   }
 

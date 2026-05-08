@@ -254,12 +254,17 @@ export default function PayRunsPage() {
 
   async function handleCancel(id: string) {
     if (!confirm('Cancel this pay run?')) return;
+    // Use the same `processing` lock as handleProcess so a double-click on
+    // the cancel button cannot fire two concurrent /cancel calls.
+    setProcessing(id);
     try {
       await api.post(`/payroll/runs/${id}/cancel`);
       toast.success('Pay run cancelled');
       qc.invalidateQueries({ queryKey: ['payroll-runs'] });
     } catch (err: any) {
       toast.error(err.response?.data?.message ?? 'Something went wrong');
+    } finally {
+      setProcessing(null);
     }
   }
 

@@ -1,5 +1,5 @@
 import {
-  Injectable, BadRequestException, NotFoundException,
+  Injectable, BadRequestException, NotFoundException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Prisma, JobOrderStatus, JobOrderLineKind } from '@prisma/client';
@@ -160,20 +160,34 @@ export class JobOrdersService {
     if (target === 'READY_FOR_PICKUP' && !jo.completedAt) data.completedAt = now;
     if (target === 'CLAIMED'          && !jo.claimedAt)   data.claimedAt   = now;
 
-    await this.prisma.jobOrder.update({ where: { id }, data });
+    // TOCTOU + tenant-scoped: only flip if status hasn't moved since the
+    // findFirst above. updateMany returns count; throw on mismatch.
+    const result = await this.prisma.jobOrder.updateMany({
+      where: { id, tenantId, status: jo.status },
+      data:  data as Prisma.JobOrderUncheckedUpdateInput,
+    });
+    if (result.count !== 1) {
+      throw new ConflictException('Job order status changed concurrently — please retry.');
+    }
     return this.getJobOrder(tenantId, id);
   }
 
   async linkOrder(tenantId: string, jobOrderId: string, orderId: string) {
     const [jo, order] = await Promise.all([
-      this.prisma.jobOrder.findFirst({ where: { id: jobOrderId, tenantId }, select: { id: true, orderId: true } }),
+      this.prisma.jobOrder.findFirst({ where: { id: jobOrderId, tenantId }, select: { id: true } }),
       this.prisma.order.findFirst({    where: { id: orderId,    tenantId }, select: { id: true } }),
     ]);
     if (!jo)    throw new NotFoundException('Job order not found.');
     if (!order) throw new NotFoundException('Order not found.');
-    if (jo.orderId) throw new BadRequestException('Job order is already linked to an Order.');
 
-    await this.prisma.jobOrder.update({ where: { id: jobOrderId }, data: { orderId } });
+    // TOCTOU + tenant-scoped: only link if currently unlinked.
+    const result = await this.prisma.jobOrder.updateMany({
+      where: { id: jobOrderId, tenantId, orderId: null },
+      data:  { orderId },
+    });
+    if (result.count !== 1) {
+      throw new ConflictException('Job order is already linked to an Order.');
+    }
     return this.getJobOrder(tenantId, jobOrderId);
   }
 
@@ -227,10 +241,13 @@ export class JobOrdersService {
           notes:       dto.notes ?? null,
         },
       });
-      await tx.jobOrder.update({
-        where: { id: jobOrderId },
+      const upd = await tx.jobOrder.updateMany({
+        where: { id: jobOrderId, tenantId },
         data:  { totalAmount: { increment: lineTotal as any } },
       });
+      if (upd.count !== 1) {
+        throw new ConflictException('Job order not found or tenant mismatch.');
+      }
       return line;
     });
   }
@@ -246,11 +263,20 @@ export class JobOrdersService {
       if (line.jobOrder.status === 'CLAIMED' || line.jobOrder.status === 'CANCELLED') {
         throw new BadRequestException(`Cannot remove lines from a ${line.jobOrder.status} job order.`);
       }
-      await tx.jobOrderLine.delete({ where: { id: lineId } });
-      await tx.jobOrder.update({
-        where: { id: jobOrderId },
+      // Atomic delete + parent decrement, both tenant-scoped.
+      const del = await tx.jobOrderLine.deleteMany({
+        where: { id: lineId, jobOrder: { id: jobOrderId, tenantId } },
+      });
+      if (del.count !== 1) {
+        throw new ConflictException('Line was modified concurrently.');
+      }
+      const upd = await tx.jobOrder.updateMany({
+        where: { id: jobOrderId, tenantId },
         data:  { totalAmount: { decrement: Number(line.lineTotal) as any } },
       });
+      if (upd.count !== 1) {
+        throw new ConflictException('Job order not found or tenant mismatch.');
+      }
       return { ok: true };
     });
   }

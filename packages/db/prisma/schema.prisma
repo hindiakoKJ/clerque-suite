@@ -786,6 +786,10 @@ model UserSession {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  // Sprint 13 audit hardening: hot-path on every refresh — find ACTIVE
+  // sessions for this user. Without this index every refresh scans all
+  // sessions ever created for the user.
+  @@index([userId, status])
   @@map("user_sessions")
 }
 
@@ -816,6 +820,9 @@ model LoginLog {
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
+  // Sprint 13 audit hardening: lockout check counts recent failures per
+  // user. Without this index every login does a non-indexed scan.
+  @@index([userId, createdAt])
   @@map("login_logs")
 }
 

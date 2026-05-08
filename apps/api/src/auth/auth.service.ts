@@ -45,7 +45,11 @@ export class AuthService {
       tenantId = tenant.id;
     }
 
-    const user = await this.prisma.user.findFirst({
+    // Find ALL active users matching this email (could be the same email
+    // registered in multiple tenants). When companyCode is supplied, the
+    // tenantId filter narrows to one. Without companyCode, we need a
+    // deterministic + safe tie-breaker.
+    const candidates = await this.prisma.user.findMany({
       where: { email, isActive: true, ...(tenantId ? { tenantId } : {}) },
       select: {
         id: true,
@@ -55,10 +59,31 @@ export class AuthService {
         name: true,
         passwordHash: true,
         isActive: true,
+        tenant: { select: { status: true } },
         appAccess: { select: { appCode: true, level: true } },
       },
     });
+    let user = candidates[0];
     if (!user) return null;
+    if (candidates.length > 1) {
+      // Same email exists in 2+ tenants and the caller didn't disambiguate
+      // with companyCode. Prefer SUPER_ADMIN (HNS staff convenience login),
+      // then fall back to rejecting — it's safer to force the caller to
+      // specify a tenant than to log them into the "wrong" one silently.
+      const superAdmin = candidates.find((c) => c.role === 'SUPER_ADMIN');
+      if (superAdmin) {
+        user = superAdmin;
+      } else {
+        throw new BadRequestException(
+          'This email is registered in multiple companies. Please specify your Company Code.',
+        );
+      }
+    }
+    // Re-validate tenant.status when we resolved without companyCode (the
+    // companyCode path already checked it above).
+    if (!tenantId && user.tenant?.status === 'SUSPENDED') {
+      throw new ForbiddenException('This account has been suspended. Please contact support.');
+    }
 
     // ── Account lockout check ──────────────────────────────────────────────
     const windowStart = new Date(Date.now() - LOCKOUT_MINUTES * 60 * 1000);

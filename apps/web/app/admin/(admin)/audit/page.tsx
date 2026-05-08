@@ -137,8 +137,31 @@ export default function AuditLogPage() {
                     <td className="p-2.5 text-xs text-muted-foreground">
                       {log.userEmail ?? '—'}
                     </td>
-                    <td className="p-2.5 text-xs text-muted-foreground font-mono max-w-[200px] truncate" title={JSON.stringify(log.detail ?? {})}>
-                      {log.detail ? JSON.stringify(log.detail) : '—'}
+                    {/*
+                      Console privacy invariant: render only the FIELD NAMES
+                      that changed, never their values. A SUPER_ADMIN must
+                      not see what a tenant's overhead rate / TIN / contact
+                      info was changed FROM or TO — only that those fields
+                      were touched. The backend's logAction() already records
+                      Object.keys(dto), but we filter defense-in-depth in
+                      case any handler ever logs the full payload.
+                    */}
+                    <td className="p-2.5 text-xs text-muted-foreground font-mono max-w-[200px] truncate"
+                        title={(() => {
+                          if (!log.detail || typeof log.detail !== 'object') return '—';
+                          const d = log.detail as Record<string, unknown>;
+                          // If detail looks like { fields: [...] }, show those keys directly.
+                          if (Array.isArray((d as any).fields)) return ((d as any).fields as string[]).join(', ');
+                          return Object.keys(d).join(', ') || '—';
+                        })()}>
+                      {(() => {
+                        if (!log.detail || typeof log.detail !== 'object') return '—';
+                        const d = log.detail as Record<string, unknown>;
+                        const keys = Array.isArray((d as any).fields)
+                          ? ((d as any).fields as string[])
+                          : Object.keys(d);
+                        return keys.length ? keys.join(', ') : '—';
+                      })()}
                     </td>
                   </tr>
                 ))}

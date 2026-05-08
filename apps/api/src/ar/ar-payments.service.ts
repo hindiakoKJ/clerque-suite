@@ -21,6 +21,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from '../accounting/journal.service';
@@ -310,14 +311,13 @@ export class ARPaymentsService {
     if (!payment.journalEntryId) throw new BadRequestException('Payment has no JE to reverse.');
 
     return this.prisma.$transaction(async (tx) => {
-      await this.journal.reverse(tenantId, payment.journalEntryId!, userId);
-
-      // Capture invoice IDs to recompute, then delete applications
-      const invoiceIds = payment.applications.map((a) => a.invoiceId);
-      await tx.aRPaymentApplication.deleteMany({ where: { paymentId: payment.id } });
-
-      const updated = await tx.aRPayment.update({
-        where: { id: payment.id },
+      // TOCTOU + tenant-scoped: claim the void atomically BEFORE reversing
+      // the JE. Two concurrent voids both pass the prior `voidedAt == null`
+      // check; updateMany guarded on `voidedAt: null` ensures only one
+      // succeeds. The other gets count=0 and we abort before posting a
+      // duplicate reversal.
+      const claim = await tx.aRPayment.updateMany({
+        where: { id: payment.id, tenantId, voidedAt: null },
         data: {
           appliedAmount:   new Prisma.Decimal(0),
           unappliedAmount: payment.totalAmount,
@@ -326,11 +326,23 @@ export class ARPaymentsService {
           voidReason:      reason.trim(),
         },
       });
+      if (claim.count !== 1) {
+        throw new ConflictException('Payment was already voided concurrently.');
+      }
+
+      await this.journal.reverse(tenantId, payment.journalEntryId!, userId);
+
+      // Capture invoice IDs to recompute, then delete applications.
+      const invoiceIds = payment.applications.map((a) => a.invoiceId);
+      await tx.aRPaymentApplication.deleteMany({ where: { paymentId: payment.id } });
 
       for (const invoiceId of invoiceIds) {
         await this.recomputeInvoiceStatus(tx, invoiceId);
       }
 
+      const updated = await tx.aRPayment.findFirstOrThrow({
+        where: { id: payment.id, tenantId },
+      });
       return updated;
     }, { timeout: 30_000 });
   }

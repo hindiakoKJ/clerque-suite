@@ -44,6 +44,8 @@ interface TenantProfile {
   valuationMethod?:     'WAC' | 'FIFO' | null;
   firstTransactionAt?:  string | null;
   overheadRatePerUnit?: number | string | null;
+  // Sprint 12 — accounting basis (CASH vs ACCRUAL). Console-controlled.
+  accountingMethod?:    'CASH' | 'ACCRUAL' | null;
 }
 
 interface StaffUser {
@@ -1275,6 +1277,34 @@ function CostingCard({
           The inventory valuation method is set by HNS support during onboarding. Changing it
           mid-life would produce inconsistent COGS, so it requires a planned fiscal-year cutover —
           contact support to discuss.
+        </p>
+      </div>
+
+      {/* Sprint 12 — Accounting basis (CASH vs ACCRUAL) — read-only.
+          Same console-only policy lock as valuation method: switching mid-
+          life rebases revenue recognition + AR/AP, which corrupts comparable
+          financial statements. */}
+      <div className="pt-4 border-t border-border space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium text-muted-foreground">Accounting basis</label>
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+            <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+          </span>
+        </div>
+        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border bg-muted/20">
+          <span className="text-base font-semibold text-foreground">
+            {profile.accountingMethod ?? 'ACCRUAL'}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            ({(profile.accountingMethod ?? 'ACCRUAL') === 'CASH'
+              ? 'Cash basis — revenue when received, expense when paid'
+              : 'Accrual basis — revenue when earned, expense when incurred (PFRS default)'})
+          </span>
+        </div>
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          Your accounting basis determines when revenue and expenses are recognized in the books.
+          Changing it mid-year corrupts year-over-year comparability — contact HNS support to plan a
+          fiscal-year cutover.
         </p>
       </div>
 

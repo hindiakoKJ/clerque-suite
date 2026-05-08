@@ -11,7 +11,7 @@
  */
 
 import {
-  Injectable, NotFoundException, BadRequestException,
+  Injectable, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from '../accounting/journal.service';
@@ -251,12 +251,11 @@ export class APPaymentsService {
     if (!payment.journalEntryId) throw new BadRequestException('Payment has no JE to reverse.');
 
     return this.prisma.$transaction(async (tx) => {
-      await this.journal.reverse(tenantId, payment.journalEntryId!, userId);
-      const billIds = payment.applications.map((a) => a.billId);
-      await tx.aPPaymentApplication.deleteMany({ where: { paymentId: payment.id } });
-
-      const updated = await tx.aPPayment.update({
-        where: { id: payment.id },
+      // TOCTOU + tenant-scoped: claim the void atomically BEFORE reversing
+      // the JE. updateMany guarded on voidedAt: null so two concurrent
+      // voids cannot both reverse the JE.
+      const claim = await tx.aPPayment.updateMany({
+        where: { id: payment.id, tenantId, voidedAt: null },
         data: {
           appliedAmount:   new Prisma.Decimal(0),
           unappliedAmount: payment.totalAmount,
@@ -265,11 +264,18 @@ export class APPaymentsService {
           voidReason:      reason.trim(),
         },
       });
+      if (claim.count !== 1) {
+        throw new ConflictException('Payment was already voided concurrently.');
+      }
+
+      await this.journal.reverse(tenantId, payment.journalEntryId!, userId);
+      const billIds = payment.applications.map((a) => a.billId);
+      await tx.aPPaymentApplication.deleteMany({ where: { paymentId: payment.id } });
 
       for (const billId of billIds) {
         await this.recomputeBillStatus(tx, billId);
       }
-      return updated;
+      return tx.aPPayment.findFirstOrThrow({ where: { id: payment.id, tenantId } });
     }, { timeout: 30_000 });
   }
 

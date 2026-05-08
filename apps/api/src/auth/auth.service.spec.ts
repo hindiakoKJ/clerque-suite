@@ -18,6 +18,7 @@ function makePrismaMock() {
     },
     user: {
       findFirst: jest.fn(),
+      findMany:  jest.fn(),
       update:    jest.fn(),
     },
     loginLog: {
@@ -50,6 +51,7 @@ const MOCK_USER = {
   name:         'Maria Santos',
   passwordHash: '',          // set per-test via bcrypt.hash
   isActive:     true,
+  tenant:       { status: 'ACTIVE' },
   appAccess:    [],
 };
 
@@ -83,7 +85,7 @@ describe('AuthService — validateUser()', () => {
   describe('account lockout', () => {
     it(`throws ForbiddenException after ${MAX_FAILED_ATTEMPTS} failed attempts within ${LOCKOUT_MINUTES} min`, async () => {
       const hash = await bcrypt.hash('correct-password', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(MAX_FAILED_ATTEMPTS);
 
       await expect(
@@ -93,7 +95,7 @@ describe('AuthService — validateUser()', () => {
 
     it('lockout message mentions attempt count and lockout duration', async () => {
       const hash = await bcrypt.hash('correct-password', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(MAX_FAILED_ATTEMPTS);
 
       try {
@@ -107,7 +109,7 @@ describe('AuthService — validateUser()', () => {
 
     it('does NOT lock out with 4 failed attempts (one below threshold)', async () => {
       const hash = await bcrypt.hash('correct-password', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(MAX_FAILED_ATTEMPTS - 1);
 
       // Should NOT throw lockout — returns user if password matches
@@ -117,7 +119,7 @@ describe('AuthService — validateUser()', () => {
 
     it('is scoped to the recent time window — loginLog.count queries with gte: windowStart', async () => {
       const hash = await bcrypt.hash('pw', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(0);
 
       await svc.validateUser('maria@example.com', 'pw');
@@ -138,7 +140,7 @@ describe('AuthService — validateUser()', () => {
   describe('valid credentials', () => {
     it('returns the user when email + password are correct', async () => {
       const hash = await bcrypt.hash('correct-password', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(0);
 
       const result = await svc.validateUser('maria@example.com', 'correct-password');
@@ -148,7 +150,7 @@ describe('AuthService — validateUser()', () => {
 
     it('does NOT create a loginLog entry on success', async () => {
       const hash = await bcrypt.hash('correct-password', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(0);
 
       await svc.validateUser('maria@example.com', 'correct-password');
@@ -161,7 +163,7 @@ describe('AuthService — validateUser()', () => {
   describe('invalid password', () => {
     it('returns null for incorrect password', async () => {
       const hash = await bcrypt.hash('correct-password', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(0);
 
       const result = await svc.validateUser('maria@example.com', 'wrong-password');
@@ -170,7 +172,7 @@ describe('AuthService — validateUser()', () => {
 
     it('logs a failed loginLog entry when password is wrong', async () => {
       const hash = await bcrypt.hash('correct-password', 4);
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(0);
 
       await svc.validateUser('maria@example.com', 'wrong-password');
@@ -191,14 +193,14 @@ describe('AuthService — validateUser()', () => {
 
   describe('user not found', () => {
     it('returns null when no user matches the email', async () => {
-      prisma.user.findFirst.mockResolvedValue(null);
+      prisma.user.findMany.mockResolvedValue([]);
 
       const result = await svc.validateUser('ghost@example.com', 'any-password');
       expect(result).toBeNull();
     });
 
     it('does not log a failed attempt for unknown email (no userId to attach)', async () => {
-      prisma.user.findFirst.mockResolvedValue(null);
+      prisma.user.findMany.mockResolvedValue([]);
 
       await svc.validateUser('ghost@example.com', 'any-password');
       expect(prisma.loginLog.create).not.toHaveBeenCalled();
@@ -240,7 +242,7 @@ describe('AuthService — validateUser()', () => {
     it('proceeds normally for an ACTIVE tenant', async () => {
       const hash = await bcrypt.hash('correct-password', 4);
       prisma.tenant.findUnique.mockResolvedValue({ id: 'tenant-1', status: 'ACTIVE' });
-      prisma.user.findFirst.mockResolvedValue({ ...MOCK_USER, passwordHash: hash });
+      prisma.user.findMany.mockResolvedValue([{ ...MOCK_USER, passwordHash: hash }]);
       prisma.loginLog.count.mockResolvedValue(0);
 
       const result = await svc.validateUser('maria@example.com', 'correct-password', 'my-shop');

@@ -209,6 +209,26 @@ export class PharmacyService {
       throw new BadRequestException('quantityDispensed must be > 0.');
     }
 
+    // Tenant-scope guard: the OrderItem must belong to an Order owned by this
+    // tenant. Without this check a malicious caller could pass an OrderItem
+    // ID from another tenant and have a DDB log written against it (audit
+    // pollution + potential RA-9165 register tampering).
+    const orderItem = await this.prisma.orderItem.findFirst({
+      where:  { id: dto.orderItemId, order: { tenantId } },
+      select: { id: true },
+    });
+    if (!orderItem) {
+      throw new NotFoundException('Order item not found for this tenant.');
+    }
+    // Optional: tenant-scope guard on prescription, when provided.
+    if (dto.prescriptionId) {
+      const rx = await this.prisma.prescription.findFirst({
+        where:  { id: dto.prescriptionId, tenantId },
+        select: { id: true },
+      });
+      if (!rx) throw new NotFoundException('Prescription not found.');
+    }
+
     return this.prisma.controlledSubstanceLog.create({
       data: {
         tenantId,

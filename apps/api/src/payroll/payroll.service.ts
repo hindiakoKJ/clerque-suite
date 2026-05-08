@@ -709,34 +709,47 @@ export class PayrollService {
     // tenant-validated upstream, but if some future caller forwards a stale
     // payRunId without re-validating, this guarantees no cross-tenant payslips
     // can be wiped by accident.
-    const updatedRun = await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       await tx.payslip.deleteMany({ where: { payRunId, tenantId } });
       await tx.payslip.createMany({ data: payslipData });
-      return tx.payRun.update({
-        where: { id: payRunId },
+      // TOCTOU + tenant-scoped status flip. updateMany guarded on status:
+      // 'DRAFT' so two concurrent process calls cannot both produce
+      // payslips and double-flip the run to COMPLETED.
+      const result = await tx.payRun.updateMany({
+        where: { id: payRunId, tenantId, status: 'DRAFT' as any },
         data: {
-          status:        'COMPLETED' as any,
-          totalGross:    round2(totalGross),
+          status:          'COMPLETED' as any,
+          totalGross:      round2(totalGross),
           totalDeductions: round2(totalDeductions),
-          totalNet:      round2(totalNet),
-          employeeCount: payslipData.length,
-          processedAt:   new Date(),
+          totalNet:        round2(totalNet),
+          employeeCount:   payslipData.length,
+          processedAt:     new Date(),
           processedById,
         },
       });
+      if (result.count !== 1) {
+        throw new ConflictException('Pay run is not in DRAFT or was modified concurrently.');
+      }
     });
 
-    return this.serializePayRun(updatedRun);
+    // Re-fetch outside the tx for return.
+    const finalRun = await this.prisma.payRun.findFirstOrThrow({ where: { id: payRunId, tenantId } });
+    return this.serializePayRun(finalRun);
   }
 
   async cancelPayRun(payRunId: string, tenantId: string): Promise<PayRunDto> {
     const run = await this.prisma.payRun.findFirst({ where: { id: payRunId, tenantId } });
     if (!run) throw new NotFoundException('Pay run not found');
     if ((run.status as string) === 'COMPLETED') throw new BadRequestException('Completed pay runs cannot be cancelled');
-    const updated = await this.prisma.payRun.update({
-      where: { id: payRunId },
-      data: { status: 'CANCELLED' as any },
+    // TOCTOU + tenant-scoped: only flip if not already COMPLETED.
+    const result = await this.prisma.payRun.updateMany({
+      where: { id: payRunId, tenantId, status: { not: 'COMPLETED' as any } },
+      data:  { status: 'CANCELLED' as any },
     });
+    if (result.count !== 1) {
+      throw new ConflictException('Pay run was modified concurrently or is COMPLETED.');
+    }
+    const updated = await this.prisma.payRun.findFirstOrThrow({ where: { id: payRunId, tenantId } });
     return this.serializePayRun(updated);
   }
 

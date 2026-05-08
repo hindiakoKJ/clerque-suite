@@ -162,6 +162,23 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         { href: '/pos/settings/uom', roles: UOM_ROLES        },
       ].find((item) => inRoles(r, item.roles));
       if (firstAccessible) router.replace(firstAccessible.href);
+      return;
+    }
+
+    // BUSINESS_OWNER landing — Solo owners run their own till, so Terminal is
+    // their home. On every other plan there are hired cashiers, so the owner
+    // is a manager: send them to the Dashboard instead on first entry. They
+    // can still click Terminal in the sidebar to fill in for a sick cashier.
+    // We only intercept the literal entry point (/pos), not /pos/terminal —
+    // that way explicit sidebar navigation to Terminal is respected.
+    const planCode = (user as any)?.planCode as string | undefined;
+    const isSoloPlan = planCode === 'STD_SOLO';
+    if (
+      r === 'BUSINESS_OWNER' &&
+      !isSoloPlan &&
+      pathname === '/pos'
+    ) {
+      router.replace('/pos/dashboard');
     }
   }, [hydrated, user, pathname, router, layout?.tenant?.businessType]); // eslint-disable-line react-hooks/exhaustive-deps
 

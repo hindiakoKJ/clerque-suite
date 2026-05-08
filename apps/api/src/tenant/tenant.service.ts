@@ -456,7 +456,11 @@ export class TenantService {
         contactEmail: true,
         contactPhone: true,
         status: true,
-        tier: true,
+        tier: true,           // legacy — kept for back-compat callers
+        planCode: true,       // modular pricing — authoritative plan identifier
+        modulePos: true,
+        moduleLedger: true,
+        modulePayroll: true,
         taxStatus: true,
         isVatRegistered: true,
         isBirRegistered: true,

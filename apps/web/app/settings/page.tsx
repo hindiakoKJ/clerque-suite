@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { isFnbType, isLaundryType } from '@repo/shared-types';
+import { isFnbType, isLaundryType, planLabel, type PlanCode } from '@repo/shared-types';
 import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
@@ -31,7 +31,14 @@ interface TenantProfile {
   contactEmail: string | null;
   contactPhone: string | null;
   status: string;
-  tier: string;
+  /** Legacy SubscriptionTier (TIER_1..TIER_6). Retained for backward compat;
+   *  not authoritative — read planCode instead. */
+  tier?: string;
+  /** Modular pricing — authoritative plan identifier. */
+  planCode?: PlanCode | null;
+  modulePos?: boolean;
+  moduleLedger?: boolean;
+  modulePayroll?: boolean;
   // Sprint 4A + 6 — costing settings
   valuationMethod?:     'WAC' | 'FIFO' | null;
   firstTransactionAt?:  string | null;
@@ -473,13 +480,28 @@ export default function SettingsPage() {
               <CostingCard profile={profile} qc={qc} />
             )}
 
-            {/* Read-only system info */}
+            {/* Read-only system info — driven by modular pricing (planCode + module flags). */}
             <div className="rounded-xl border border-border bg-card p-4 space-y-3">
               <h3 className="text-sm font-semibold text-foreground">System Info</h3>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <InfoRow label="Company Code" value={profile?.slug ?? '—'} />
                 <InfoRow label="Status" value={profile?.status ?? '—'} />
-                <InfoRow label="Subscription Tier" value={profile?.tier?.replace('TIER_', 'Tier ') ?? '—'} />
+                <InfoRow
+                  label="Plan"
+                  value={profile?.planCode ? planLabel(profile.planCode) : '—'}
+                />
+                <InfoRow
+                  label="Modules"
+                  value={
+                    profile
+                      ? [
+                          profile.modulePos      ? 'POS'     : null,
+                          profile.moduleLedger   ? 'Ledger'  : null,
+                          profile.modulePayroll  ? 'Payroll' : null,
+                        ].filter(Boolean).join(' · ') || '—'
+                      : '—'
+                  }
+                />
               </div>
             </div>
 

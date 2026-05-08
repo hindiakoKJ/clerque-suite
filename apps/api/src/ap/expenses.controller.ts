@@ -13,6 +13,8 @@ import {
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AppAccessGuard } from '../auth/guards/app-access.guard';
+import { RequireApp } from '../auth/decorators/require-app.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -35,7 +37,8 @@ const AP_POST_VOID_ROLES = [
 
 @ApiTags('AP — Expenses')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard)
+@RequireApp('LEDGER', 'READ_ONLY')
 @Controller('ap/expenses')
 export class ExpensesController {
   constructor(private readonly expensesService: ExpensesService) {}

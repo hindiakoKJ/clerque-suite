@@ -13,6 +13,8 @@ import {
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AppAccessGuard } from '../auth/guards/app-access.guard';
+import { RequireApp } from '../auth/decorators/require-app.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -23,7 +25,8 @@ import { ReopenPeriodDto } from './dto/reopen-period.dto';
 
 @ApiTags('Accounting Periods')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard)
+@RequireApp('LEDGER', 'READ_ONLY')
 @Controller('accounting-periods')
 export class AccountingPeriodsController {
   constructor(private periodsService: AccountingPeriodsService) {}

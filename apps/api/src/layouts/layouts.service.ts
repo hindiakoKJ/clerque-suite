@@ -256,14 +256,13 @@ export class LayoutsService {
     if (trimmed.length === 0 || trimmed.length > 60) {
       throw new BadRequestException('Station name must be 1-60 characters.');
     }
-    const existing = await this.prisma.station.findFirst({
+    // Atomic tenant-scoped update — closes the TOCTOU window.
+    const result = await this.prisma.station.updateMany({
       where: { id: stationId, tenantId },
+      data:  { name: trimmed },
     });
-    if (!existing) throw new NotFoundException('Station not found.');
-    return this.prisma.station.update({
-      where: { id: stationId },
-      data: { name: trimmed },
-    });
+    if (result.count === 0) throw new NotFoundException('Station not found.');
+    return this.prisma.station.findUnique({ where: { id: stationId } });
   }
 
   /**
@@ -291,31 +290,33 @@ export class LayoutsService {
       patch.name = trimmed;
     }
 
-    return this.prisma.printer.update({
-      where: { id: printerId },
+    // Atomic tenant-scoped update — closes the TOCTOU window.
+    const result = await this.prisma.printer.updateMany({
+      where: { id: printerId, tenantId },
       data:  {
         ...(patch.name     !== undefined ? { name:     patch.name }     : {}),
         ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
       },
     });
+    if (result.count === 0) throw new NotFoundException('Printer not found.');
+    return this.prisma.printer.findUnique({ where: { id: printerId } });
   }
 
   /** Assign a category to a station (or null to unroute). */
   async setCategoryStation(tenantId: string, categoryId: string, stationId: string | null) {
-    const cat = await this.prisma.category.findFirst({
-      where: { id: categoryId, tenantId },
-    });
-    if (!cat) throw new NotFoundException('Category not found.');
     if (stationId) {
       const station = await this.prisma.station.findFirst({
         where: { id: stationId, tenantId },
       });
       if (!station) throw new NotFoundException('Station not found.');
     }
-    return this.prisma.category.update({
-      where: { id: categoryId },
-      data: { stationId },
+    // Atomic tenant-scoped update — covers both validation and write in one query.
+    const result = await this.prisma.category.updateMany({
+      where: { id: categoryId, tenantId },
+      data:  { stationId },
     });
+    if (result.count === 0) throw new NotFoundException('Category not found.');
+    return this.prisma.category.findUnique({ where: { id: categoryId } });
   }
 
   /**

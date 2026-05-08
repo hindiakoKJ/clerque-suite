@@ -83,16 +83,22 @@ export class NotificationsService {
   }
 
   async markRead(tenantId: string, userId: string, notificationId: string) {
-    // Tenant-scoped + recipient-scoped check inside the update
-    const n = await this.prisma.notification.findFirst({
-      where: { id: notificationId, tenantId, OR: [{ userId }, { userId: null }] },
-      select: { id: true, readAt: true },
-    });
-    if (!n) return null;
-    if (n.readAt) return n; // already read — idempotent
-    return this.prisma.notification.update({
-      where: { id: notificationId },
+    // Atomic tenant + recipient scope — single query closes the TOCTOU window
+    // between findFirst and update. We match `readAt: null` so a re-read no-ops
+    // without a second update; idempotent.
+    const result = await this.prisma.notification.updateMany({
+      where: {
+        id:        notificationId,
+        tenantId,
+        OR:        [{ userId }, { userId: null }],
+        readAt:    null,
+      },
       data:  { readAt: new Date() },
+    });
+    // result.count === 0 either means already read OR not found / cross-tenant.
+    // Re-fetch to distinguish (and return the row for the caller).
+    return this.prisma.notification.findFirst({
+      where: { id: notificationId, tenantId, OR: [{ userId }, { userId: null }] },
     });
   }
 

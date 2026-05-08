@@ -303,7 +303,7 @@ export class AdminController {
 
   @Get('failed-events')
   failedEvents(@Query('limit') limit?: string) {
-    return this.svc.listFailedEvents({ limit: limit ? Number(limit) : undefined });
+    return this.svc.listFailedEvents({ limit: clampPageSize(limit) });
   }
 
   // ─── Console audit log ────────────────────────────────────────────────────
@@ -316,8 +316,26 @@ export class AdminController {
   ) {
     return this.svc.listConsoleLogs({
       tenantId,
-      limit:  limit  ? Number(limit)  : undefined,
-      offset: offset ? Number(offset) : undefined,
+      limit:  clampPageSize(limit),
+      offset: clampOffset(offset),
     });
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Pagination bounds — used to defend against ?limit=99999999 DoS via massive
+// result-set construction. Default 50 / max 500 matches the convention used
+// elsewhere (see orders.controller.ts list endpoints).
+// ───────────────────────────────────────────────────────────────────────────
+function clampPageSize(raw: string | undefined, fallback = 50, max = 500): number {
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+function clampOffset(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(Math.floor(n), 1_000_000); // arbitrary sanity bound
 }

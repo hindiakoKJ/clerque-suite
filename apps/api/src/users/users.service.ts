@@ -268,17 +268,32 @@ export class UsersService {
       );
     }
 
-    // ── BUG-6 fix: Session invalidation on privilege changes ─────────────────
-    // Role changes and deactivations must take effect immediately — existing JWTs
-    // carry the old role and remain valid until their 15-min expiry otherwise.
-    // Deleting sessions forces re-login, which issues a fresh token with the new role.
-    // Applies to: role change (escalation OR de-escalation) and account deactivation.
-    if (dto.role !== undefined || dto.isActive === false) {
+    // ── Session invalidation on privilege changes ───────────────────────────
+    // Privilege-affecting fields must take effect immediately — existing JWTs
+    // carry the OLD role / persona / customPermissions and remain valid until
+    // their access-token expiry otherwise. Deleting sessions forces re-login
+    // and a fresh token reflecting the new privileges.
+    //
+    // Triggers:
+    //   - role change (escalation OR de-escalation)
+    //   - account deactivation
+    //   - persona change (RBAC bundle swap)
+    //   - customPermissions change (granular permission grant or revoke)
+    //
+    // Without invalidation on persona/customPermissions, an owner could grant
+    // ledger:journal_entry to a CASHIER and the cashier's cached JWT would not
+    // reflect the change for 15 min — also the reverse: a revoke would not take
+    // effect until the next refresh.
+    const privilegeChanged =
+      dto.role               !== undefined ||
+      dto.isActive           === false      ||
+      dto.personaKey         !== undefined ||
+      dto.customPermissions  !== undefined;
+    if (privilegeChanged) {
       // Tenant-scoped session invalidation — only kill sessions belonging to
       // a user inside the caller's tenant. The outer findOne(tenantId, id)
       // already proves `id` belongs to tenantId, but keep the join in the
-      // delete query as defense-in-depth so a future refactor can't strip
-      // the upstream check and silently invalidate cross-tenant sessions.
+      // delete query as defense-in-depth.
       await this.prisma.userSession.deleteMany({
         where: { userId: id, user: { tenantId } },
       });
@@ -302,10 +317,12 @@ export class UsersService {
       data: { passwordHash },
     });
 
-    // Revoke all sessions for security
+    // Revoke all sessions — tenant-scoped via the user join so a future
+    // refactor can't accidentally revoke sessions for a same-cuid user in
+    // another tenant.
     await this.prisma.userSession.updateMany({
-      where: { userId: id },
-      data: { status: 'REVOKED' },
+      where: { userId: id, user: { tenantId } },
+      data:  { status: 'REVOKED' },
     });
     return { message: 'Password reset. All active sessions revoked.' };
   }

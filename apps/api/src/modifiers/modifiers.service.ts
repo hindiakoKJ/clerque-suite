@@ -76,26 +76,37 @@ export class ModifiersService {
 
   async updateGroup(tenantId: string, groupId: string, dto: UpdateModifierGroupDto) {
     await this.findGroup(tenantId, groupId);
-    return this.prisma.modifierGroup.update({
+    // Atomic tenant-scoped update — closes TOCTOU between findGroup and update.
+    const result = await this.prisma.modifierGroup.updateMany({
+      where: { id: groupId, tenantId },
+      data:  dto,
+    });
+    if (result.count === 0) throw new NotFoundException('Modifier group not found');
+    return this.prisma.modifierGroup.findUnique({
       where: { id: groupId },
-      data: dto,
       include: { options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' } } },
     });
   }
 
   async deleteGroup(tenantId: string, groupId: string) {
-    const group = await this.findGroup(tenantId, groupId);
+    await this.findGroup(tenantId, groupId);
     const inUse = await this.prisma.productModifierGroup.count({
-      where: { modifierGroupId: groupId },
+      // Scope through Product.tenantId so a cross-tenant attacker can't
+      // probe groupId existence by inspecting the inUse count.
+      where: { modifierGroupId: groupId, product: { tenantId } },
     });
     if (inUse > 0) {
-      // Soft-delete instead of hard delete when products reference the group
-      return this.prisma.modifierGroup.update({
-        where: { id: groupId },
-        data: { isActive: false },
+      // Soft-delete (atomic) when products still reference the group.
+      const soft = await this.prisma.modifierGroup.updateMany({
+        where: { id: groupId, tenantId },
+        data:  { isActive: false },
       });
+      if (soft.count === 0) throw new NotFoundException('Modifier group not found');
+      return this.prisma.modifierGroup.findUnique({ where: { id: groupId } });
     }
-    return this.prisma.modifierGroup.delete({ where: { id: groupId } });
+    const hard = await this.prisma.modifierGroup.deleteMany({ where: { id: groupId, tenantId } });
+    if (hard.count === 0) throw new NotFoundException('Modifier group not found');
+    return { id: groupId };
   }
 
   // ─── Options ─────────────────────────────────────────────────────────────────
@@ -120,15 +131,22 @@ export class ModifiersService {
     dto: UpdateModifierOptionDto,
   ) {
     await this.findOption(tenantId, groupId, optionId);
-    return this.prisma.modifierOption.update({
-      where: { id: optionId },
-      data: dto,
+    // ModifierOption has no own tenantId — scope through parent group.
+    const result = await this.prisma.modifierOption.updateMany({
+      where: { id: optionId, modifierGroupId: groupId, group: { tenantId } },
+      data:  dto,
     });
+    if (result.count === 0) throw new NotFoundException('Modifier option not found');
+    return this.prisma.modifierOption.findUnique({ where: { id: optionId } });
   }
 
   async deleteOption(tenantId: string, groupId: string, optionId: string) {
     await this.findOption(tenantId, groupId, optionId);
-    return this.prisma.modifierOption.delete({ where: { id: optionId } });
+    const result = await this.prisma.modifierOption.deleteMany({
+      where: { id: optionId, modifierGroupId: groupId, group: { tenantId } },
+    });
+    if (result.count === 0) throw new NotFoundException('Modifier option not found');
+    return { id: optionId };
   }
 
   // ─── Product ↔ Group wiring ───────────────────────────────────────────────

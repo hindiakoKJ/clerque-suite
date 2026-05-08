@@ -79,28 +79,32 @@ export class CustomersService {
 
   async update(id: string, tenantId: string, dto: UpdateCustomerDto) {
     await this.findOne(id, tenantId);
-    return this.prisma.customer.update({
-      where: { id },
-      data: {
-        ...(dto.name            !== undefined ? { name: dto.name }                                              : {}),
-        ...(dto.tin             !== undefined ? { tin: dto.tin }                                                : {}),
-        ...(dto.address         !== undefined ? { address: dto.address }                                        : {}),
-        ...(dto.contactEmail    !== undefined ? { contactEmail: dto.contactEmail }                              : {}),
-        ...(dto.contactPhone    !== undefined ? { contactPhone: dto.contactPhone }                              : {}),
-        ...(dto.creditTermDays  !== undefined ? { creditTermDays: dto.creditTermDays }                          : {}),
-        ...(dto.creditLimit     !== undefined ? { creditLimit: new Prisma.Decimal(dto.creditLimit!) }           : {}),
-        ...(dto.notes           !== undefined ? { notes: dto.notes }                                            : {}),
-        ...(dto.isActive        !== undefined ? { isActive: dto.isActive }                                      : {}),
-      },
-    });
+    // Atomic tenant-scoped update — closes the TOCTOU window between findOne()
+    // and update() that an unscoped `where: { id }` would leave open.
+    const data = {
+      ...(dto.name            !== undefined ? { name: dto.name }                                              : {}),
+      ...(dto.tin             !== undefined ? { tin: dto.tin }                                                : {}),
+      ...(dto.address         !== undefined ? { address: dto.address }                                        : {}),
+      ...(dto.contactEmail    !== undefined ? { contactEmail: dto.contactEmail }                              : {}),
+      ...(dto.contactPhone    !== undefined ? { contactPhone: dto.contactPhone }                              : {}),
+      ...(dto.creditTermDays  !== undefined ? { creditTermDays: dto.creditTermDays }                          : {}),
+      ...(dto.creditLimit     !== undefined ? { creditLimit: new Prisma.Decimal(dto.creditLimit!) }           : {}),
+      ...(dto.notes           !== undefined ? { notes: dto.notes }                                            : {}),
+      ...(dto.isActive        !== undefined ? { isActive: dto.isActive }                                      : {}),
+    };
+    const result = await this.prisma.customer.updateMany({ where: { id, tenantId }, data });
+    if (result.count === 0) throw new NotFoundException('Customer not found');
+    return this.prisma.customer.findUnique({ where: { id } });
   }
 
   async deactivate(id: string, tenantId: string) {
-    await this.findOne(id, tenantId);
-    return this.prisma.customer.update({
-      where: { id },
-      data: { isActive: false },
+    // Atomic tenant-scoped soft-delete.
+    const result = await this.prisma.customer.updateMany({
+      where: { id, tenantId },
+      data:  { isActive: false },
     });
+    if (result.count === 0) throw new NotFoundException('Customer not found');
+    return this.prisma.customer.findUnique({ where: { id } });
   }
 
   /**

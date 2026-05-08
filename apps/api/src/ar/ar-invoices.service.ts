@@ -330,8 +330,9 @@ export class ARInvoicesService {
       // Reverse the JE — journal.service handles flipping debits/credits
       await this.journal.reverse(tenantId, invoice.journalEntryId!, userId);
 
-      return tx.aRInvoice.update({
-        where: { id: invoice.id },
+      // Atomic tenant-scoped void — defends against TOCTOU even inside the txn.
+      const voided = await tx.aRInvoice.updateMany({
+        where: { id: invoice.id, tenantId },
         data: {
           status:     'VOIDED',
           voidedById: userId,
@@ -339,6 +340,8 @@ export class ARInvoicesService {
           voidReason: reason.trim(),
         },
       });
+      if (voided.count === 0) throw new NotFoundException('Invoice not found.');
+      return tx.aRInvoice.findUnique({ where: { id: invoice.id } });
     }, { timeout: 30_000 });
   }
 
@@ -351,10 +354,16 @@ export class ARInvoicesService {
     if (invoice.status !== 'DRAFT') {
       throw new ForbiddenException('Only DRAFT invoices can be cancelled. Use Void for posted invoices.');
     }
-    return this.prisma.aRInvoice.update({
-      where: { id: invoiceId },
+    // Atomic tenant + status-conditional cancel — also defends against a race
+    // that would flip the invoice out of DRAFT between the read and write.
+    const result = await this.prisma.aRInvoice.updateMany({
+      where: { id: invoiceId, tenantId, status: 'DRAFT' },
       data:  { status: 'CANCELLED', voidedById: userId, voidedAt: new Date(), voidReason: reason },
     });
+    if (result.count === 0) {
+      throw new BadRequestException('Invoice no longer in DRAFT status — cannot cancel.');
+    }
+    return this.prisma.aRInvoice.findUnique({ where: { id: invoiceId } });
   }
 
   // ── Read ───────────────────────────────────────────────────────────────────

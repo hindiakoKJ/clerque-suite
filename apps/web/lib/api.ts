@@ -142,8 +142,22 @@ realApi.interceptors.response.use(
       // Without this, the middleware decodes the OLD (revoked) token on the
       // next navigation, JWT verify fails, and the user gets bounced to /login
       // — appearing as an inexplicable redirect loop after a successful refresh.
+      //
+      // Hardening notes:
+      //   - `Secure` is added when the page is served over https (production
+      //     on Vercel + custom domains). Localhost over http omits it so the
+      //     dev cookie still works.
+      //   - `HttpOnly` cannot be set here — `document.cookie` is JS-side, and
+      //     HttpOnly cookies are unreadable AND unwritable from JS. Moving to
+      //     a fully HttpOnly model requires the server to set the cookie via
+      //     Set-Cookie on the /auth/refresh response (separate refactor).
+      //   - `SameSite=Lax` blocks cross-site CSRF for top-level navigations.
+      //     We don't use Strict because the OAuth-style demo flow needs the
+      //     cookie to survive a redirect from /demo.
       if (typeof document !== 'undefined') {
-        document.cookie = `app-session=${newAccess}; path=/; SameSite=Lax`;
+        const isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
+        const flags = `path=/; SameSite=Lax${isHttps ? '; Secure' : ''}`;
+        document.cookie = `app-session=${newAccess}; ${flags}`;
       }
 
       processQueue(null, newAccess);

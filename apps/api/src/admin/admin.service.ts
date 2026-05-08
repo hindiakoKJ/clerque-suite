@@ -524,13 +524,29 @@ export class AdminService {
     return t;
   }
 
+  /**
+   * @deprecated The legacy `tier` (SubscriptionTier) field is advisory only.
+   * Module entitlement, seat caps, AI quotas, and feature flags are all
+   * driven by `planCode` + `modulePos/Ledger/Payroll`. Use `updateTenantPlan`
+   * (PATCH /admin/tenants/:id/plan) instead. This endpoint is retained for
+   * legacy console scripts that may still toggle the old field; it does NOT
+   * change any runtime-authoritative entitlement.
+   */
   async setTenantTier(tenantId: string, tier: string, actor: ConsoleActor) {
     const t = await this.prisma.tenant.update({
       where:  { id: tenantId },
       data:   { tier: tier as Prisma.TenantUpdateInput['tier'] },
       select: { id: true, slug: true, tier: true },
     });
-    await this.logAction({ actor, tenantId, tenantSlug: t.slug, action: 'TIER_CHANGED', detail: { tier } });
+    await this.logAction({
+      actor, tenantId, tenantSlug: t.slug,
+      action: 'TIER_CHANGED',
+      detail: {
+        tier,
+        legacyOnly: true,
+        note: 'Modular plan (planCode + modules) is the authoritative entitlement source.',
+      },
+    });
     return t;
   }
 

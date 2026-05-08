@@ -5,12 +5,24 @@
  */
 
 export type ScenarioKey =
+  // Food-Engine
   | 'COFFEE_SHOP'
   | 'BAKERY'
-  | 'SARI_SARI'
   | 'RESTAURANT'
+  // Retail-Engine
+  | 'SARI_SARI'
   | 'BOUTIQUE'
-  | 'LAUNDRY';
+  | 'HARDWARE'
+  // Service-Engine
+  | 'LAUNDRY'
+  | 'AUTO_REPAIR'
+  // Project-Engine
+  | 'MANUFACTURING'
+  | 'CONSTRUCTION'
+  // Compliance-Engine
+  | 'PHARMACY'
+  // Logistics-Engine
+  | 'TRUCKING';
 
 export interface DemoProduct {
   name:        string;
@@ -44,7 +56,8 @@ export interface DemoScenario {
   /** Must match the BusinessType enum in schema.prisma exactly. */
   businessType:
     | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
-    | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING';
+    | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING'
+    | 'PHARMACY' | 'TRUCKING' | 'CONSTRUCTION';
   taxStatus:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
   categories:   DemoCategory[];
   rawMaterials?: DemoRawMaterial[];
@@ -440,6 +453,271 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
     ],
     // Laundry doesn't use the BOM system — services consume detergent in bulk
     // tracked via inventoryAdjust, not per-claim recipe deduction.
+    rawMaterials: [],
+    bomItems: [],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // HARDWARE — Retail-Engine. Common PH neighborhood hardware store.
+  // Hand tools, fasteners, paint, electricals, plumbing. Key UX: per-item
+  // UoM (piece / box / pack) with conversion at checkout.
+  // ────────────────────────────────────────────────────────────────────────
+  HARDWARE: {
+    label: 'Hardware Store (Manila Hardware)',
+    businessType: 'RETAIL',
+    taxStatus: 'VAT',
+    categories: [
+      {
+        name: 'Hand Tools', sortOrder: 1,
+        products: [
+          { name: 'Hammer (claw, 16oz)',     description: 'Steel-handle claw hammer',        price:  350, costPrice: 180, isVatable: true },
+          { name: 'Pliers (combination 8")', description: 'Insulated combination pliers',     price:  295, costPrice: 145, isVatable: true },
+          { name: 'Phillips Screwdriver (#2)', description: 'Magnetic-tip Phillips driver',   price:  165, costPrice:  75, isVatable: true },
+          { name: 'Tape Measure (5m)',       description: '5-meter retractable steel tape',   price:  185, costPrice:  85, isVatable: true },
+          { name: 'Adjustable Wrench (10")', description: '10-inch adjustable wrench',        price:  395, costPrice: 195, isVatable: true },
+        ],
+      },
+      {
+        name: 'Fasteners', sortOrder: 2,
+        products: [
+          { name: 'Wood Screw 2" (per pc)',  description: 'Phillips-head wood screw',         price:    3, costPrice:  1.2, isVatable: true },
+          { name: 'Wood Screw 2" (box of 100)', description: 'Box of 100 wood screws',         price:  245, costPrice: 120,  isVatable: true },
+          { name: 'Concrete Nail 3" (per pc)', description: 'Hardened concrete nail',         price:    5, costPrice:  2,   isVatable: true },
+          { name: 'Self-tapping Screw (pack of 50)', description: 'Steel self-tap, ½"',       price:  165, costPrice:  80,  isVatable: true },
+        ],
+      },
+      {
+        name: 'Paint', sortOrder: 3,
+        products: [
+          { name: 'Latex Paint White (1 gal)',   description: 'Boysen latex, gallon',         price:  595, costPrice: 410, isVatable: true },
+          { name: 'Enamel Paint Black (1 qt)',   description: 'Davies enamel, quart',         price:  295, costPrice: 195, isVatable: true },
+          { name: 'Custom Tint (made-to-order)', description: 'Base + tint — assembled at counter', price: 850, costPrice: 510, isVatable: true },
+          { name: 'Paint Roller (9")',           description: 'Foam paint roller',            price:  185, costPrice:  85, isVatable: true },
+          { name: 'Paint Brush 2"',              description: 'Natural-bristle paint brush',  price:   95, costPrice:  40, isVatable: true },
+        ],
+      },
+      {
+        name: 'Electricals', sortOrder: 4,
+        products: [
+          { name: 'PVC Flex Cord (per meter)',   description: 'Twin-core household cord',     price:   85, costPrice:  45, isVatable: true },
+          { name: 'Outlet (2-gang)',             description: 'Universal 2-gang outlet',      price:  175, costPrice:  85, isVatable: true },
+          { name: 'LED Bulb 9W',                 description: 'Daylight LED, E27 base',       price:  165, costPrice:  85, isVatable: true },
+          { name: 'Extension Cord (2m)',         description: '4-outlet extension cord',      price:  395, costPrice: 220, isVatable: true },
+        ],
+      },
+    ],
+    rawMaterials: [],
+    bomItems: [],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // AUTO_REPAIR — Service-Engine. Small auto-repair shop (vulcanizing,
+  // brake service, oil change). Sells parts retail + labor as services.
+  // ────────────────────────────────────────────────────────────────────────
+  AUTO_REPAIR: {
+    label: 'Auto Repair Shop (Quick Auto)',
+    businessType: 'SERVICE',
+    taxStatus: 'NON_VAT',
+    categories: [
+      {
+        name: 'Labor (services)', sortOrder: 1,
+        products: [
+          { name: 'Oil Change Service',          description: 'Drain, replace filter, refill', price:  500, costPrice: 0, isVatable: false },
+          { name: 'Brake Pad Replacement',       description: 'Front pads, both wheels',        price: 1200, costPrice: 0, isVatable: false },
+          { name: 'Tire Vulcanizing',            description: 'Per tire, patch + balance',      price:  150, costPrice: 0, isVatable: false },
+          { name: 'Wheel Alignment',             description: 'Computerized 4-wheel alignment', price: 1500, costPrice: 0, isVatable: false },
+          { name: 'Diagnostic Scan',             description: 'OBD-II error code read',         price:  500, costPrice: 0, isVatable: false },
+        ],
+      },
+      {
+        name: 'Parts (retail)', sortOrder: 2,
+        products: [
+          { name: 'Engine Oil 4L (10W-40)',      description: 'Mineral 10W-40, 4-liter',       price:  995, costPrice: 595, isVatable: false },
+          { name: 'Oil Filter (Toyota/Mazda)',   description: 'Universal oil filter',          price:  395, costPrice: 195, isVatable: false },
+          { name: 'Brake Pads (Front, generic)', description: 'Universal front brake pads',    price:  995, costPrice: 595, isVatable: false },
+          { name: 'Air Filter',                  description: 'Universal air filter',          price:  495, costPrice: 295, isVatable: false },
+          { name: 'Battery (45Ah, lead-acid)',   description: 'Standard car battery',          price: 3995, costPrice: 2895, isVatable: false },
+        ],
+      },
+    ],
+    rawMaterials: [],
+    bomItems: [],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // MANUFACTURING — Project-Engine. Small fabricator: custom metal works,
+  // gates, grills, tables. Recipes (BOM) drive material consumption.
+  // ────────────────────────────────────────────────────────────────────────
+  MANUFACTURING: {
+    label: 'Metal Fabricator (Iron Works MNL)',
+    businessType: 'MANUFACTURING',
+    taxStatus: 'VAT',
+    categories: [
+      {
+        name: 'Finished Goods', sortOrder: 1,
+        products: [
+          { name: 'Metal Gate (Standard 2m)',    description: 'Single-leaf swing gate, powder-coated', price: 18500, costPrice: 9500, isVatable: true },
+          { name: 'Window Grill (Standard sqm)', description: 'Decorative window grill, per sqm',      price:  3500, costPrice: 1700, isVatable: true },
+          { name: 'Steel Stair (Custom)',        description: 'Made-to-order steel stair, per riser',  price:  4500, costPrice: 2200, isVatable: true },
+          { name: 'Coffee Table Frame',          description: 'Powder-coated steel table frame',       price:  6500, costPrice: 3100, isVatable: true },
+        ],
+      },
+      {
+        name: 'Raw Materials (sold separately)', sortOrder: 2,
+        products: [
+          { name: 'Square Tubing 1x1" (per ft)', description: 'Mild-steel square tube',         price:   95, costPrice:  55, isVatable: true },
+          { name: 'Welding Rod (per kg)',        description: 'E6013 welding rod',              price:  295, costPrice: 165, isVatable: true },
+        ],
+      },
+    ],
+    rawMaterials: [
+      { name: 'Square Tube 1x1" 6m',  unit: 'pc',  costPrice:  330, stockQty: 200 },
+      { name: 'Flat Bar 1/4" x 1"',    unit: 'pc',  costPrice:  185, stockQty: 200 },
+      { name: 'Welding Rod E6013',     unit: 'kg',  costPrice:  165, stockQty: 100 },
+      { name: 'Powder Coat Paint',     unit: 'kg',  costPrice:  450, stockQty:  50 },
+    ],
+    bomItems: [],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // CONSTRUCTION — Project-Engine. General contractor. Long-running projects
+  // with materials issuance, progress billing, and retention release.
+  // Demo focuses on the catalog of materials + service line items.
+  // ────────────────────────────────────────────────────────────────────────
+  CONSTRUCTION: {
+    label: 'General Contractor (BuildRight)',
+    businessType: 'CONSTRUCTION',
+    taxStatus: 'VAT',
+    categories: [
+      {
+        name: 'Civil Works (services)', sortOrder: 1,
+        products: [
+          { name: 'Concrete Pouring (per cu.m)', description: 'Labor + tools for slab pour',   price: 4500, costPrice: 1900, isVatable: true },
+          { name: 'Tile Installation (per sqm)', description: 'Tile + cement + labor',          price: 1200, costPrice:  600, isVatable: true },
+          { name: 'Plumbing Rough-in',           description: 'Standard residential rough-in',  price: 35000, costPrice: 18000, isVatable: true },
+          { name: 'Electrical Wiring (per outlet)', description: 'Wire + outlet + labor',       price:  995, costPrice:  395, isVatable: true },
+        ],
+      },
+      {
+        name: 'Materials', sortOrder: 2,
+        products: [
+          { name: 'Cement (40kg bag)',           description: 'Holcim Type I',                  price:  295, costPrice: 215, isVatable: true },
+          { name: 'Rebar 10mm (6m length)',      description: 'Deformed reinforcing bar',       price:  225, costPrice: 165, isVatable: true },
+          { name: 'Plywood 4x8 (1/4")',          description: 'Marine plywood',                 price:  895, costPrice: 595, isVatable: true },
+          { name: 'Concrete Block (4")',         description: 'Hollow block, 4-inch',           price:   18, costPrice:  12, isVatable: true },
+          { name: 'Sand (cu.m)',                 description: 'Washed river sand',              price: 1800, costPrice: 1200, isVatable: true },
+          { name: 'Gravel (cu.m)',               description: '3/4" crushed gravel',            price: 1900, costPrice: 1300, isVatable: true },
+        ],
+      },
+      {
+        name: 'Tools (rental items)', sortOrder: 3,
+        products: [
+          { name: 'Concrete Mixer Rental (day)', description: 'Per-day rental, includes fuel', price: 1500, costPrice:  500, isVatable: true },
+          { name: 'Scaffold Set (week)',         description: 'Per-week scaffold rental',       price: 4500, costPrice: 1800, isVatable: true },
+        ],
+      },
+    ],
+    rawMaterials: [],
+    bomItems: [],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // PHARMACY — Compliance-Engine. Common PH community drugstore. The full
+  // schema (Prescription, ProductLot, ControlledSubstanceLog) ships when
+  // first paying pharmacy onboards. The catalog below is a representative
+  // mix of OTC + prescription drugs (the Rx-required flag will surface in
+  // the future Compliance-Engine UI).
+  // ────────────────────────────────────────────────────────────────────────
+  PHARMACY: {
+    label: 'Drugstore (Botika ng Bayan)',
+    businessType: 'PHARMACY',
+    taxStatus: 'VAT',
+    categories: [
+      {
+        name: 'OTC — Pain & Fever', sortOrder: 1,
+        products: [
+          { name: 'Paracetamol 500mg (Biogesic, per tab)', description: 'Generic name: Paracetamol',  price:   3, costPrice: 1.4, isVatable: true },
+          { name: 'Mefenamic Acid 500mg (Dolfenal, per tab)', description: 'Generic: Mefenamic Acid', price:  12, costPrice:  6, isVatable: true },
+          { name: 'Ibuprofen 200mg (Advil, per tab)',     description: 'Generic: Ibuprofen',           price:  10, costPrice:  5, isVatable: true },
+          { name: 'Aspirin 80mg (Aspilet, per tab)',      description: 'Generic: Acetylsalicylic Acid',price:   2, costPrice:  1, isVatable: true },
+        ],
+      },
+      {
+        name: 'OTC — Cough & Cold', sortOrder: 2,
+        products: [
+          { name: 'Salbutamol Syrup 60ml (Ventolin)',     description: 'Generic: Salbutamol — Rx-recommended', price: 195, costPrice: 110, isVatable: true },
+          { name: 'Loratadine 10mg (Claritin, per tab)',  description: 'Generic: Loratadine — antihistamine',  price:  18, costPrice:   9, isVatable: true },
+          { name: 'Carbocisteine 500mg (Solmux, per cap)', description: 'Generic: Carbocisteine — mucolytic',  price:  12, costPrice:   6, isVatable: true },
+        ],
+      },
+      {
+        name: 'Rx — Antibiotics', sortOrder: 3,
+        products: [
+          { name: 'Amoxicillin 500mg (Amoxil, per cap)',  description: 'Generic: Amoxicillin — Rx required',   price:  18, costPrice: 10, isVatable: true },
+          { name: 'Cefalexin 500mg (Keflex, per cap)',    description: 'Generic: Cefalexin — Rx required',     price:  35, costPrice: 18, isVatable: true },
+          { name: 'Co-Amoxiclav 625mg (Augmentin, per tab)', description: 'Generic: Amoxicillin+Clavulanate', price:  85, costPrice: 50, isVatable: true },
+        ],
+      },
+      {
+        name: 'Vitamins & Supplements', sortOrder: 4,
+        products: [
+          { name: 'Vitamin C 500mg (Cecon, per tab)',      description: 'Ascorbic Acid',                  price:   5, costPrice:  2.5, isVatable: true },
+          { name: 'Multivitamins (Centrum, per tab)',      description: 'Adult multivitamin + minerals',  price:  18, costPrice:  9,   isVatable: true },
+          { name: 'Iron + Folic Acid (Iberet Folic, per tab)', description: 'Iron + folic supplement',    price:  25, costPrice: 14,   isVatable: true },
+        ],
+      },
+      {
+        name: 'Personal Care & Pharmacy Compounds', sortOrder: 5,
+        products: [
+          { name: 'Alcohol 70% (500ml)',                   description: 'Isopropyl alcohol',              price:  95, costPrice: 50, isVatable: true },
+          { name: 'Hydrocortisone Cream 1% (15g)',         description: 'Topical anti-itch — OTC',        price: 195, costPrice: 110, isVatable: true },
+          { name: 'Compounded Cream (Custom)',             description: 'Made-to-order pharmacy compound', price: 850, costPrice: 350, isVatable: true },
+        ],
+      },
+    ],
+    rawMaterials: [],
+    bomItems: [],
+  },
+
+  // ────────────────────────────────────────────────────────────────────────
+  // TRUCKING — Logistics-Engine. Small hauling/delivery operation. The full
+  // workflow (TripTicket, Liquidation, Fleet, PM Schedule, TireSerial)
+  // ships when first paying trucking tenant onboards. The catalog below is
+  // service-line items the dispatcher can attach to a trip + retail parts.
+  // ────────────────────────────────────────────────────────────────────────
+  TRUCKING: {
+    label: 'Trucking & Hauling (Reliable Cargo)',
+    businessType: 'TRUCKING',
+    taxStatus: 'VAT',
+    categories: [
+      {
+        name: 'Trip Routes (services)', sortOrder: 1,
+        products: [
+          { name: 'Manila → Cebu (10-wheeler)',  description: 'Roll-on roll-off, full truckload',      price: 45000, costPrice: 28000, isVatable: true },
+          { name: 'Manila → Davao (10-wheeler)', description: 'RoRo + land, full truckload',           price: 65000, costPrice: 42000, isVatable: true },
+          { name: 'Manila → Baguio (6-wheeler)', description: 'Land freight, full truckload',          price: 18000, costPrice:  9500, isVatable: true },
+          { name: 'Local Delivery (Metro Manila)', description: 'Same-day delivery, per drop',          price:  1500, costPrice:   650, isVatable: true },
+          { name: 'Express Surcharge',           description: 'Weekend / next-day add-on',              price:  3000, costPrice:     0, isVatable: true },
+        ],
+      },
+      {
+        name: 'Trip Costs (passed-through)', sortOrder: 2,
+        products: [
+          { name: 'Fuel Allowance (per trip)',   description: 'Diesel allocation per route',            price:  6500, costPrice: 6500, isVatable: false },
+          { name: 'Toll Fee (per trip)',         description: 'NLEX/SLEX/STAR toll',                    price:  1500, costPrice: 1500, isVatable: false },
+          { name: 'Driver Allowance (per trip)', description: 'Per-trip driver per-diem',               price:  1200, costPrice: 1200, isVatable: false },
+        ],
+      },
+      {
+        name: 'Parts (retail counter)', sortOrder: 3,
+        products: [
+          { name: 'Engine Oil 16L (15W-40)',     description: 'Heavy-duty diesel oil',                 price: 4500, costPrice: 2800, isVatable: true },
+          { name: 'Hydraulic Oil 18L',           description: 'AW46 hydraulic',                        price: 3995, costPrice: 2400, isVatable: true },
+          { name: 'Tire 11R22.5 (truck)',        description: 'New radial truck tire',                 price: 18500, costPrice: 11500, isVatable: true },
+          { name: 'Tire Retread 11R22.5',        description: 'Retreaded truck tire',                  price: 8500, costPrice: 5200,  isVatable: true },
+        ],
+      },
+    ],
     rawMaterials: [],
     bomItems: [],
   },

@@ -87,13 +87,27 @@ const ROLES = [
   'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
 ] as const;
 
+// Sprint 12 — six-engine demo scenarios. Grouped by engine in the admin
+// picker so it's clear which BusinessType + tax-status the seed will set.
 const DEMO_SCENARIOS = [
-  { key: 'COFFEE_SHOP', label: 'Coffee Shop (Brew & Co.)',            biz: 'F&B',     tax: 'VAT'         },
-  { key: 'BAKERY',      label: 'Bakery (La Panaderia)',               biz: 'F&B',     tax: 'NON_VAT'     },
-  { key: 'SARI_SARI',   label: 'Sari-Sari Store (Corner Mart)',       biz: 'Retail',  tax: 'UNREGISTERED' },
-  { key: 'RESTAURANT',  label: 'Filipino Restaurant (Casa de Manila)', biz: 'F&B',    tax: 'VAT'         },
-  { key: 'BOUTIQUE',    label: 'Fashion Boutique (Luxe MNL)',          biz: 'Retail', tax: 'VAT'         },
-  { key: 'LAUNDRY',     label: 'Laundromat (SudsUp)',                  biz: 'Laundry', tax: 'NON_VAT'    },
+  // Food-Engine
+  { key: 'COFFEE_SHOP',  label: 'Coffee Shop (Brew & Co.)',             biz: 'F&B',          engine: 'Food',       tax: 'VAT'         },
+  { key: 'BAKERY',       label: 'Bakery (La Panaderia)',                biz: 'F&B',          engine: 'Food',       tax: 'NON_VAT'     },
+  { key: 'RESTAURANT',   label: 'Filipino Restaurant (Casa de Manila)', biz: 'F&B',          engine: 'Food',       tax: 'VAT'         },
+  // Retail-Engine
+  { key: 'SARI_SARI',    label: 'Sari-Sari Store (Corner Mart)',        biz: 'Retail',       engine: 'Retail',     tax: 'UNREGISTERED' },
+  { key: 'BOUTIQUE',     label: 'Fashion Boutique (Luxe MNL)',          biz: 'Retail',       engine: 'Retail',     tax: 'VAT'         },
+  { key: 'HARDWARE',     label: 'Hardware Store (Manila Hardware)',     biz: 'Retail',       engine: 'Retail',     tax: 'VAT'         },
+  // Service-Engine
+  { key: 'LAUNDRY',      label: 'Laundromat (SudsUp)',                  biz: 'Laundry',      engine: 'Service',    tax: 'NON_VAT'     },
+  { key: 'AUTO_REPAIR',  label: 'Auto Repair Shop (Quick Auto)',        biz: 'Service',      engine: 'Service',    tax: 'NON_VAT'     },
+  // Project-Engine
+  { key: 'MANUFACTURING', label: 'Metal Fabricator (Iron Works MNL)',   biz: 'Manufacturing', engine: 'Project',   tax: 'VAT'         },
+  { key: 'CONSTRUCTION', label: 'General Contractor (BuildRight)',      biz: 'Construction', engine: 'Project',    tax: 'VAT'         },
+  // Compliance-Engine
+  { key: 'PHARMACY',     label: 'Drugstore (Botika ng Bayan)',          biz: 'Pharmacy',     engine: 'Compliance', tax: 'VAT'         },
+  // Logistics-Engine
+  { key: 'TRUCKING',     label: 'Trucking & Hauling (Reliable Cargo)',  biz: 'Trucking',     engine: 'Logistics',  tax: 'VAT'         },
 ] as const;
 
 const STATUS_BADGE: Record<string, string> = {
@@ -314,27 +328,40 @@ function DemoResetModal({ tenantId, tenantSlug, onClose, onDone }: {
             <p>All existing orders, products, categories, and inventory will be wiped and replaced with fresh demo data for the selected business type.</p>
           </div>
 
-          {/* Scenario picker */}
+          {/* Scenario picker — grouped by engine for clarity. Sprint 12. */}
           <div>
             <label className="block text-xs text-muted-foreground mb-1.5">Choose a business scenario</label>
-            <div className="space-y-2">
-              {DEMO_SCENARIOS.map((s) => (
-                <label key={s.key}
-                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors
-                    ${scenario === s.key
-                      ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-                      : 'border-border hover:bg-muted/40'}`}>
-                  <input type="radio" name="scenario" value={s.key}
-                    checked={scenario === s.key} onChange={() => setScenario(s.key)}
-                    className="mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{s.label}</p>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      {s.biz} · {s.tax.replace('_', '-')}
+            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+              {(['Food', 'Retail', 'Service', 'Project', 'Compliance', 'Logistics'] as const).map((engine) => {
+                const inEngine = DEMO_SCENARIOS.filter((s) => s.engine === engine);
+                if (inEngine.length === 0) return null;
+                return (
+                  <div key={engine}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                      {engine}-Engine
                     </p>
+                    <div className="space-y-1.5">
+                      {inEngine.map((s) => (
+                        <label key={s.key}
+                          className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors
+                            ${scenario === s.key
+                              ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                              : 'border-border hover:bg-muted/40'}`}>
+                          <input type="radio" name="scenario" value={s.key}
+                            checked={scenario === s.key} onChange={() => setScenario(s.key)}
+                            className="mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">{s.label}</p>
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              {s.biz} · {s.tax.replace('_', '-')}
+                            </p>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
                   </div>
-                </label>
-              ))}
+                );
+              })}
             </div>
           </div>
 

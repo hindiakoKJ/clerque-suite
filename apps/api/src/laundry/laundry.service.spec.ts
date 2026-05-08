@@ -16,11 +16,16 @@ import { LaundryService } from './laundry.service';
 const TENANT_A = 'tenant-a';
 
 function makePrismaMock() {
-  return {
+  const mock: any = {
     tenant: { findUnique: jest.fn() },
     laundryOrder: {
       findFirst:  jest.fn(),
+      findUnique: jest.fn(),
       update:     jest.fn(),
+      updateMany: jest.fn(),
+    },
+    customer: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     laundryMachine: {
       findFirst:  jest.fn(),
@@ -37,6 +42,12 @@ function makePrismaMock() {
       findUnique: jest.fn(),
     },
   };
+  // Inline $transaction — just runs the callback against the same mock (the
+  // claim() implementation passes `tx` but tests don't distinguish).
+  mock.$transaction = jest.fn((cb: any) =>
+    typeof cb === 'function' ? cb(mock) : Promise.resolve(cb),
+  );
+  return mock;
 }
 
 describe('LaundryService', () => {
@@ -134,17 +145,72 @@ describe('LaundryService', () => {
         .rejects.toThrow(BadRequestException);
     });
 
-    it('updates status to CLAIMED and links posOrderId', async () => {
-      prisma.laundryOrder.findFirst.mockResolvedValue({ id: 'o1', status: 'READY_FOR_PICKUP' });
-      prisma.laundryOrder.update.mockResolvedValue({ id: 'o1' });
+    it('updates status to CLAIMED and links posOrderId via atomic updateMany', async () => {
+      prisma.laundryOrder.findFirst.mockResolvedValue({
+        id: 'o1', status: 'READY_FOR_PICKUP', customerId: 'c1', isDelivery: false,
+      });
+      prisma.laundryOrder.updateMany.mockResolvedValue({ count: 1 });
+      prisma.laundryOrder.findUnique.mockResolvedValue({ id: 'o1' });
 
       await service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-123');
 
-      const args = prisma.laundryOrder.update.mock.calls[0][0] as any;
+      // Atomic, status-conditional updateMany — no fallthrough to legacy update().
+      const args = prisma.laundryOrder.updateMany.mock.calls[0][0] as any;
+      expect(args.where).toMatchObject({ id: 'o1', tenantId: TENANT_A });
+      expect(args.where.status).toEqual({ notIn: ['CLAIMED', 'CANCELLED'] });
       expect(args.data.status).toBe('CLAIMED');
       expect(args.data.releasedBy).toBe('u-cashier');
       expect(args.data.orderId).toBe('pos-123');
       expect(args.data.claimedAt).toBeInstanceOf(Date);
+      expect(prisma.laundryOrder.update).not.toHaveBeenCalled();
+    });
+
+    it('increments customer loyalty visits on claim (when customerId attached)', async () => {
+      prisma.laundryOrder.findFirst.mockResolvedValue({
+        id: 'o1', status: 'READY_FOR_PICKUP', customerId: 'c1', isDelivery: false,
+      });
+      prisma.laundryOrder.updateMany.mockResolvedValue({ count: 1 });
+      prisma.laundryOrder.findUnique.mockResolvedValue({ id: 'o1' });
+
+      await service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-123');
+
+      expect(prisma.customer.updateMany).toHaveBeenCalledWith({
+        where: { id: 'c1', tenantId: TENANT_A },
+        data:  { loyaltyVisits: { increment: 1 } },
+      });
+    });
+
+    it('walk-in (no customerId) does not bump loyalty', async () => {
+      prisma.laundryOrder.findFirst.mockResolvedValue({
+        id: 'o1', status: 'READY_FOR_PICKUP', customerId: null, isDelivery: false,
+      });
+      prisma.laundryOrder.updateMany.mockResolvedValue({ count: 1 });
+      prisma.laundryOrder.findUnique.mockResolvedValue({ id: 'o1' });
+
+      await service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-123');
+      expect(prisma.customer.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('delivery ticket: claim sets deliveryStatus = DELIVERED', async () => {
+      prisma.laundryOrder.findFirst.mockResolvedValue({
+        id: 'o1', status: 'READY_FOR_PICKUP', customerId: 'c1', isDelivery: true,
+      });
+      prisma.laundryOrder.updateMany.mockResolvedValue({ count: 1 });
+      prisma.laundryOrder.findUnique.mockResolvedValue({ id: 'o1' });
+
+      await service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-123');
+      const args = prisma.laundryOrder.updateMany.mock.calls[0][0] as any;
+      expect(args.data.deliveryStatus).toBe('DELIVERED');
+    });
+
+    it('count=0 (concurrent already-claimed) throws BadRequestException', async () => {
+      prisma.laundryOrder.findFirst.mockResolvedValue({
+        id: 'o1', status: 'READY_FOR_PICKUP', customerId: 'c1', isDelivery: false,
+      });
+      prisma.laundryOrder.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-123'))
+        .rejects.toThrow(BadRequestException);
     });
   });
 

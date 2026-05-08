@@ -171,7 +171,15 @@ export default function ProductsPage() {
   };
 
   function openCreate() {
-    setForm({ ...EMPTY_FORM });
+    // Default VAT-able to OFF for non-VAT-registered tenants. The Tenant
+    // model has `taxStatus` (NON_VAT / VAT / EXEMPT / etc.) and a legacy
+    // `isVatRegistered` boolean kept in sync. Either signal disables the
+    // default. The toggle stays visible — owner may still mark a specific
+    // item VAT-able if needed.
+    const isVatTenant =
+      (tenantProfile as any)?.taxStatus === 'VAT' ||
+      (tenantProfile as any)?.isVatRegistered === true;
+    setForm({ ...EMPTY_FORM, isVatable: isVatTenant });
     setRecipe([]);
     setEditing(null);
     setModal('create');
@@ -973,22 +981,28 @@ export default function ProductsPage() {
                 />
               </div>
 
-              {/* VAT toggle */}
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-foreground">VAT-able (12%)</p>
-                  <p className="text-xs text-muted-foreground">Enable if this product is subject to VAT</p>
+              {/* VAT toggle — only shown for VAT-registered tenants. Non-VAT
+                  tenants (NON_VAT / EXEMPT) don't charge VAT, so surfacing
+                  the toggle is misleading. The form already defaults
+                  isVatable to false for those tenants on openCreate(). */}
+              {((tenantProfile as any)?.taxStatus === 'VAT' ||
+                (tenantProfile as any)?.isVatRegistered === true) && (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">VAT-able (12%)</p>
+                    <p className="text-xs text-muted-foreground">Enable if this product is subject to VAT</p>
+                  </div>
+                  <button
+                    onClick={() => setForm((f) => ({ ...f, isVatable: !f.isVatable }))}
+                    className="w-10 h-6 rounded-full transition-colors"
+                    style={{ background: form.isVatable ? 'var(--accent)' : undefined }}
+                  >
+                    <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+                      form.isVatable ? 'translate-x-4' : 'translate-x-0'
+                    }`} />
+                  </button>
                 </div>
-                <button
-                  onClick={() => setForm((f) => ({ ...f, isVatable: !f.isVatable }))}
-                  className="w-10 h-6 rounded-full transition-colors"
-                  style={{ background: form.isVatable ? 'var(--accent)' : undefined }}
-                >
-                  <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
-                    form.isVatable ? 'translate-x-4' : 'translate-x-0'
-                  }`} />
-                </button>
-              </div>
+              )}
 
               {/* Inventory Mode — F&B only */}
               {isFnb && (

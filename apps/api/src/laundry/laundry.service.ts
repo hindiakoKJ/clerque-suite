@@ -260,16 +260,75 @@ export class LaundryService {
     if (order.status === 'CLAIMED') throw new BadRequestException('Already claimed.');
     if (order.status === 'CANCELLED') throw new BadRequestException('Cannot claim a cancelled order.');
 
-    return this.prisma.laundryOrder.update({
-      where: { id },
-      data: {
-        status:     'CLAIMED',
-        claimedAt:  new Date(),
-        releasedBy: userId,
-        orderId:    posOrderId,
-      },
-      include: { items: true, order: { select: { id: true, orderNumber: true, totalAmount: true } } },
+    // Atomic claim + loyalty bump in one transaction. We use a status-conditional
+    // updateMany so a concurrent claim for the same order can't double-credit
+    // the customer's loyalty count.
+    return this.prisma.$transaction(async (tx) => {
+      const result = await tx.laundryOrder.updateMany({
+        where: {
+          id, tenantId,
+          status: { notIn: ['CLAIMED', 'CANCELLED'] },
+        },
+        data: {
+          status:     'CLAIMED',
+          claimedAt:  new Date(),
+          releasedBy: userId,
+          orderId:    posOrderId,
+          // If the order was a delivery ticket, mark it DELIVERED — the
+          // customer is taking custody right now (or has already received it).
+          deliveryStatus: order.isDelivery ? 'DELIVERED' : null,
+        },
+      });
+      if (result.count === 0) {
+        throw new BadRequestException('Order is no longer claimable (already CLAIMED or CANCELLED).');
+      }
+
+      // Loyalty: increment Customer.loyaltyVisits if a customer was attached.
+      // Walk-in tickets (customerId null) don't accrue loyalty by definition.
+      if (order.customerId) {
+        await tx.customer.updateMany({
+          where: { id: order.customerId, tenantId },
+          data:  { loyaltyVisits: { increment: 1 } },
+        });
+      }
+
+      return tx.laundryOrder.findUnique({
+        where:   { id },
+        include: { items: true, order: { select: { id: true, orderNumber: true, totalAmount: true } } },
+      });
     });
+  }
+
+  /**
+   * Public claim-stub lookup — UNAUTHENTICATED endpoint. Customer scans the
+   * QR on their paper ticket (or opens the SMS link) and sees their order
+   * status without logging in. Token is unguessable (claimNumber + 4 random
+   * alphanums) so iterating sequential claim numbers won't surface other
+   * customers' orders.
+   *
+   * Returns minimal fields: claim number, status, promised time, total,
+   * loyalty progress. Never returns service-line detail or customer PII.
+   */
+  async getPublicStub(token: string) {
+    const order = await this.prisma.laundryOrder.findUnique({
+      where:  { publicStubToken: token },
+      select: {
+        claimNumber:    true,
+        status:         true,
+        receivedAt:     true,
+        promisedAt:     true,
+        readyAt:        true,
+        claimedAt:      true,
+        totalAmount:    true,
+        isDelivery:     true,
+        deliveryStatus: true,
+        tenant:         { select: { name: true } },
+        branch:         { select: { name: true } },
+        customer:       { select: { name: true, loyaltyVisits: true } },
+      },
+    });
+    if (!order) throw new NotFoundException('Stub not found or expired.');
+    return order;
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -371,6 +430,10 @@ export class LaundryService {
       customerId?: string;
       promisedAt?: string;
       notes?:      string;
+      /** Sprint 11 — pickup/delivery support. */
+      isDelivery?:      boolean;
+      deliveryAddress?: string;
+      deliveryFee?:     number;
       lines: Array<{
         serviceCode: LaundryServiceCode;
         mode:        LaundryServiceMode;
@@ -476,11 +539,28 @@ export class LaundryService {
       // Promo evaluation (best-fit) — basic implementation; can be expanded.
       const promoDiscount = await this.evaluatePromos(tx, tenantId, serviceLines);
 
-      const grossTotal = serviceSubtotal + productSubtotal;
+      // Delivery fee — added to gross before promo discount. Walk-in tickets
+      // ignore this field; delivery tickets default to 0 if the operator
+      // didn't enter a fee (we still flag isDelivery so the rider workflow
+      // surfaces the order on the queue board).
+      const deliveryFee = dto.isDelivery && Number.isFinite(dto.deliveryFee)
+        ? Math.max(0, Math.round((dto.deliveryFee as number) * 100) / 100)
+        : 0;
+
+      const grossTotal = serviceSubtotal + productSubtotal + deliveryFee;
       const netTotal   = Math.max(0, Math.round((grossTotal - promoDiscount.totalDiscount) * 100) / 100);
 
       // Generate claim number (reuse existing helper).
       const claimNumber = await this.nextClaimNumber(tx, tenantId);
+
+      // Public stub token — short random suffix appended to the claim number
+      // so the customer-facing /stub/<token> page is unguessable. Format:
+      // {claimNumber}-{4 random alphanum}. Stored on the order; never reuses.
+      const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/1/O/0 — easier to read
+      const suffix = Array.from({ length: 4 }, () =>
+        ALPHA[Math.floor(Math.random() * ALPHA.length)],
+      ).join('');
+      const publicStubToken = `${claimNumber}-${suffix}`;
 
       const order = await tx.laundryOrder.create({
         data: {
@@ -500,6 +580,12 @@ export class LaundryService {
           promisedAt:  dto.promisedAt ? new Date(dto.promisedAt) : null,
           notes:       dto.notes ?? null,
           intakeBy:    userId,
+          // Delivery — only set when isDelivery=true. Walk-in tickets keep these null.
+          isDelivery:      Boolean(dto.isDelivery),
+          deliveryAddress: dto.isDelivery ? (dto.deliveryAddress?.trim() || null) : null,
+          deliveryFee:     dto.isDelivery ? new Prisma.Decimal(deliveryFee) : null,
+          deliveryStatus:  dto.isDelivery ? 'PENDING_PICKUP' : null,
+          publicStubToken,
           lines: {
             create: serviceLines.map((l) => ({
               serviceCode: l.serviceCode,

@@ -83,11 +83,12 @@ const ROLES = [
 ] as const;
 
 const DEMO_SCENARIOS = [
-  { key: 'COFFEE_SHOP', label: 'Coffee Shop (Brew & Co.)',            biz: 'F&B',    tax: 'VAT'         },
-  { key: 'BAKERY',      label: 'Bakery (La Panaderia)',               biz: 'F&B',    tax: 'NON_VAT'     },
-  { key: 'SARI_SARI',   label: 'Sari-Sari Store (Corner Mart)',       biz: 'Retail', tax: 'UNREGISTERED' },
-  { key: 'RESTAURANT',  label: 'Filipino Restaurant (Casa de Manila)', biz: 'F&B',   tax: 'VAT'         },
+  { key: 'COFFEE_SHOP', label: 'Coffee Shop (Brew & Co.)',            biz: 'F&B',     tax: 'VAT'         },
+  { key: 'BAKERY',      label: 'Bakery (La Panaderia)',               biz: 'F&B',     tax: 'NON_VAT'     },
+  { key: 'SARI_SARI',   label: 'Sari-Sari Store (Corner Mart)',       biz: 'Retail',  tax: 'UNREGISTERED' },
+  { key: 'RESTAURANT',  label: 'Filipino Restaurant (Casa de Manila)', biz: 'F&B',    tax: 'VAT'         },
   { key: 'BOUTIQUE',    label: 'Fashion Boutique (Luxe MNL)',          biz: 'Retail', tax: 'VAT'         },
+  { key: 'LAUNDRY',     label: 'Laundromat (SudsUp)',                  biz: 'Laundry', tax: 'NON_VAT'    },
 ] as const;
 
 const STATUS_BADGE: Record<string, string> = {

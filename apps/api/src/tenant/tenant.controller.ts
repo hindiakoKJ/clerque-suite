@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Body, Req, UseGuards, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, Param, Req, UseGuards, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -116,6 +116,47 @@ export class TenantController {
   @HttpCode(HttpStatus.OK)
   updateProfile(@CurrentUser() user: JwtPayload, @Body() body: UpdateTenantProfileDto) {
     return this.tenantService.updateProfile(user.tenantId!, body);
+  }
+
+  /**
+   * POST /tenant/branches — create a new branch.
+   *
+   * Plan-aware: rejects when the tenant has already provisioned `maxBranches`
+   * for their plan code (PLAN_LIMITS). Owners can buy a higher plan from
+   * Settings → Subscription to lift the cap.
+   *
+   * BUSINESS_OWNER + SUPER_ADMIN only — adding a branch is a structural,
+   * billing-relevant change that staff shouldn't make.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Post('branches')
+  @HttpCode(HttpStatus.CREATED)
+  createBranch(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { name?: string; address?: string },
+  ) {
+    if (!body.name || body.name.trim().length < 2) {
+      throw new BadRequestException('Branch name must be at least 2 characters.');
+    }
+    return this.tenantService.createBranch(user.tenantId!, {
+      name:    body.name.trim(),
+      address: body.address?.trim() || null,
+    });
+  }
+
+  /**
+   * PATCH /tenant/branches/:id — rename / change address / toggle active.
+   * BUSINESS_OWNER + SUPER_ADMIN.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Patch('branches/:id')
+  @HttpCode(HttpStatus.OK)
+  updateBranch(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { name?: string; address?: string | null; isActive?: boolean },
+  ) {
+    return this.tenantService.updateBranch(user.tenantId!, id, body);
   }
 
   /**

@@ -341,10 +341,16 @@ export default function SettingsPage() {
               />
             )}
             <SettingsCard
+              href="/settings/branches"
+              icon={Building2}
+              title="Branches"
+              desc="Add / rename / deactivate locations"
+            />
+            <SettingsCard
               href="/settings/subscription"
               icon={CreditCard}
               title="Subscription"
-              desc="Tier, staff cap, billing, upgrade"
+              desc="Plan, staff cap, billing, upgrade"
             />
             <SettingsCard
               href="/settings/sod-violations"

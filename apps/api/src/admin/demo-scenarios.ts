@@ -4,7 +4,13 @@
  * Prices are VAT-inclusive, set at market rates as of 2026.
  */
 
-export type ScenarioKey = 'COFFEE_SHOP' | 'BAKERY' | 'SARI_SARI' | 'RESTAURANT' | 'BOUTIQUE';
+export type ScenarioKey =
+  | 'COFFEE_SHOP'
+  | 'BAKERY'
+  | 'SARI_SARI'
+  | 'RESTAURANT'
+  | 'BOUTIQUE'
+  | 'LAUNDRY';
 
 export interface DemoProduct {
   name:        string;
@@ -36,7 +42,9 @@ export interface DemoBomItem {
 export interface DemoScenario {
   label:        string;
   /** Must match the BusinessType enum in schema.prisma exactly. */
-  businessType: 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
+  businessType:
+    | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
+    | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING';
   taxStatus:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
   categories:   DemoCategory[];
   rawMaterials?: DemoRawMaterial[];
@@ -380,6 +388,60 @@ export const DEMO_SCENARIOS: Record<ScenarioKey, DemoScenario> = {
         ],
       },
     ],
+  },
+  // ────────────────────────────────────────────────────────────────────────
+  // LAUNDRY — wash & fold + retail (detergent, hangers, fabric softener)
+  // ────────────────────────────────────────────────────────────────────────
+  // Note: laundry SERVICES (wash / dry / dry-clean rates) are seeded as
+  // LaundryServicePrice rows in admin.service.ts → seedLaundryDefaults()
+  // (called when scenarioKey === 'LAUNDRY'). The catalog below is the
+  // RETAIL side only — items the customer can buy at the counter alongside
+  // a claim ticket.
+  LAUNDRY: {
+    label: 'Laundromat (SudsUp)',
+    businessType: 'LAUNDRY',
+    taxStatus: 'NON_VAT',
+    categories: [
+      {
+        name: 'Detergents', sortOrder: 1,
+        products: [
+          { name: 'Tide Powder Sachet (60g)',  description: 'Single-load detergent sachet',         price: 18,  costPrice: 9,   isVatable: false },
+          { name: 'Surf Powder 700g',          description: 'Family-size laundry detergent',        price: 95,  costPrice: 60,  isVatable: false },
+          { name: 'Ariel Liquid 800ml',        description: 'Concentrated liquid detergent',        price: 175, costPrice: 110, isVatable: false },
+          { name: 'Joy Dishwashing Liquid',    description: '250ml — for whites/delicates pre-wash', price: 65,  costPrice: 40,  isVatable: false },
+        ],
+      },
+      {
+        name: 'Fabric Care', sortOrder: 2,
+        products: [
+          { name: 'Downy Antibac (1.5L)',      description: 'Antibacterial fabric conditioner',     price: 245, costPrice: 160, isVatable: false },
+          { name: 'Bear Brand Fabric Softener',description: '900ml refill pack',                    price: 95,  costPrice: 60,  isVatable: false },
+          { name: 'Lemon Bleach (500ml)',      description: 'Color-safe oxygen bleach',             price: 65,  costPrice: 40,  isVatable: false },
+          { name: 'Stain Remover Spray',       description: 'Pre-wash stain treatment',             price: 145, costPrice: 90,  isVatable: false },
+        ],
+      },
+      {
+        name: 'Accessories', sortOrder: 3,
+        products: [
+          { name: 'Plastic Hanger (per pc)',   description: 'Heavy-duty plastic clothes hanger',    price: 8,   costPrice: 3,   isVatable: false },
+          { name: 'Garment Bag (medium)',      description: 'Mesh wash bag for delicates',          price: 65,  costPrice: 30,  isVatable: false },
+          { name: 'Garment Bag (large)',       description: 'Large mesh wash bag',                  price: 95,  costPrice: 50,  isVatable: false },
+          { name: 'Lint Roller',               description: 'Adhesive lint roller, 60 sheets',      price: 85,  costPrice: 45,  isVatable: false },
+        ],
+      },
+      {
+        name: 'Add-on Services (retail SKU)', sortOrder: 4,
+        products: [
+          { name: 'Express Same-day Surcharge', description: 'Add-on fee for same-day completion',  price: 100, costPrice: 0, isVatable: false },
+          { name: 'Pickup Fee (within 3km)',    description: 'Door pickup within 3 km radius',       price: 50,  costPrice: 0, isVatable: false },
+          { name: 'Delivery Fee (within 3km)',  description: 'Door delivery within 3 km radius',     price: 50,  costPrice: 0, isVatable: false },
+        ],
+      },
+    ],
+    // Laundry doesn't use the BOM system — services consume detergent in bulk
+    // tracked via inventoryAdjust, not per-claim recipe deduction.
+    rawMaterials: [],
+    bomItems: [],
   },
 };
 

@@ -2,10 +2,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Plus, Trash2, Sparkles, Receipt, ShoppingBag,
-  WashingMachine, Wind, Combine,
+  WashingMachine, Wind, Combine, UserPlus, Truck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -29,7 +29,13 @@ interface AddOn {
 }
 
 interface Branch   { id: string; name: string }
-interface Customer { id: string; name: string; contactPhone: string | null }
+interface Customer {
+  id:             string;
+  name:           string;
+  contactPhone:   string | null;
+  defaultAddress?:string | null;
+  loyaltyVisits?: number;
+}
 interface Product  { id: string; name: string; sku: string | null; price: string }
 
 interface ServiceLine {
@@ -110,6 +116,38 @@ export default function LaundryIntakePage() {
   const [lines,       setLines]       = useState<ServiceLine[]>([]);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
 
+  // Sprint 11 — delivery + customer creation
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCustomer,     setNewCustomer]     = useState({ name: '', phone: '', defaultAddress: '' });
+  const [isDelivery,      setIsDelivery]      = useState(false);
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryFee,     setDeliveryFee]     = useState<string>('');
+  const qc = useQueryClient();
+
+  // When the picker selects a customer with a saved default address, prefill
+  // the delivery field. Operator can still override per ticket.
+  const selectedCustomer = customers.find((c) => c.id === customerId) ?? null;
+  useEffect(() => {
+    if (isDelivery && selectedCustomer?.defaultAddress && !deliveryAddress) {
+      setDeliveryAddress(selectedCustomer.defaultAddress);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDelivery, selectedCustomer?.id]);
+
+  const createCustomer = useMutation({
+    mutationFn: (body: { name: string; contactPhone?: string; defaultAddress?: string }) =>
+      api.post('/customers', body).then((r) => r.data),
+    onSuccess: (c: Customer) => {
+      toast.success('Customer added');
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      setShowNewCustomer(false);
+      setNewCustomer({ name: '', phone: '', defaultAddress: '' });
+      setCustomerId(c.id);
+      if (isDelivery && c.defaultAddress) setDeliveryAddress(c.defaultAddress);
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed to add customer'),
+  });
+
   useEffect(() => {
     if (!branchId && branches.length > 0) setBranchId(branches[0].id);
   }, [branchId, branches]);
@@ -152,6 +190,12 @@ export default function LaundryIntakePage() {
       customerId: customerId || undefined,
       promisedAt: promisedAt || undefined,
       notes:      notes || undefined,
+      // Sprint 11 — delivery support. Walk-in tickets keep these flat off.
+      isDelivery,
+      deliveryAddress: isDelivery ? (deliveryAddress.trim() || undefined) : undefined,
+      deliveryFee:     isDelivery && deliveryFee
+                          ? Number(deliveryFee)
+                          : undefined,
       lines:      lines.map((l) => ({
         serviceCode: l.serviceCode,
         mode:        l.mode,
@@ -221,12 +265,28 @@ export default function LaundryIntakePage() {
             <option value="">— branch —</option>
             {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
-          <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-            <option value="">Walk-in (anonymous)</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}{c.contactPhone ? ` · ${c.contactPhone}` : ''}</option>
-            ))}
-          </select>
+          <div className="flex gap-2">
+            <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              <option value="">Walk-in (anonymous)</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}{c.contactPhone ? ` · ${c.contactPhone}` : ''}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setShowNewCustomer(true)}
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-2 text-xs hover:bg-muted shrink-0"
+              title="Add a new customer"
+            >
+              <UserPlus className="w-3.5 h-3.5" /> New
+            </button>
+          </div>
+          {selectedCustomer && (selectedCustomer.loyaltyVisits ?? 0) > 0 && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
+              ⭐ {selectedCustomer.loyaltyVisits} previous visit{selectedCustomer.loyaltyVisits === 1 ? '' : 's'}
+              {(selectedCustomer.loyaltyVisits ?? 0) % 10 === 9 && ' — next visit unlocks free wash!'}
+            </p>
+          )}
         </div>
         <div className="p-4 rounded-xl border border-border bg-card space-y-2">
           <h2 className="text-sm font-semibold">Pickup &amp; notes</h2>
@@ -234,6 +294,51 @@ export default function LaundryIntakePage() {
           <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes (optional)" className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" />
         </div>
       </div>
+
+      {/* Delivery toggle + address */}
+      <section className="rounded-xl border border-border bg-card p-4 space-y-2">
+        <label className="flex items-center justify-between cursor-pointer">
+          <span className="flex items-center gap-2 text-sm font-semibold">
+            <Truck className="w-4 h-4 text-[var(--accent)]" />
+            Pickup &amp; delivery
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsDelivery((v) => !v)}
+            className="w-10 h-6 rounded-full transition-colors"
+            style={{ background: isDelivery ? 'var(--accent)' : undefined }}
+          >
+            <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+              isDelivery ? 'translate-x-4' : 'translate-x-0'
+            }`} />
+          </button>
+        </label>
+        {isDelivery && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-2">
+            <textarea
+              value={deliveryAddress}
+              onChange={(e) => setDeliveryAddress(e.target.value)}
+              placeholder={selectedCustomer?.defaultAddress ?? 'Delivery address'}
+              rows={2}
+              className="md:col-span-2 rounded-lg border border-border bg-background px-3 py-2 text-sm resize-none"
+            />
+            <input
+              value={deliveryFee}
+              onChange={(e) => setDeliveryFee(e.target.value)}
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Delivery fee (₱)"
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+        )}
+        {!isDelivery && (
+          <p className="text-[11px] text-muted-foreground">
+            Walk-in / over-the-counter. Toggle on for pickup &amp; delivery to add an address and fee.
+          </p>
+        )}
+      </section>
 
       {/* No-prices banner — first thing the operator sees if Settings → Laundry
           hasn't been configured yet. Without unit prices every line is ₱0.00. */}
@@ -443,6 +548,87 @@ export default function LaundryIntakePage() {
           </button>
         </div>
       </div>
+
+      {/* ── New customer modal ───────────────────────────────────────── */}
+      {showNewCustomer && (
+        <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="px-6 py-4 border-b border-border">
+              <h2 className="font-semibold flex items-center gap-2">
+                <UserPlus className="w-4 h-4 text-[var(--accent)]" /> New customer
+              </h2>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Saves to your customer list — autocompletes on next visit and
+                accrues loyalty visits.
+              </p>
+            </div>
+            <div className="p-6 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">
+                  Name <span className="text-red-400">*</span>
+                </label>
+                <input
+                  value={newCustomer.name}
+                  onChange={(e) => setNewCustomer((c) => ({ ...c, name: e.target.value }))}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  placeholder="e.g. Maria Santos"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Phone</label>
+                <input
+                  value={newCustomer.phone}
+                  onChange={(e) => setNewCustomer((c) => ({ ...c, phone: e.target.value }))}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  placeholder="09XX XXX XXXX"
+                  inputMode="tel"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">
+                  Default delivery address (optional)
+                </label>
+                <textarea
+                  value={newCustomer.defaultAddress}
+                  onChange={(e) => setNewCustomer((c) => ({ ...c, defaultAddress: e.target.value }))}
+                  rows={2}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm resize-none"
+                  placeholder="Street, Barangay, City"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Auto-fills the delivery address when this customer requests pickup &amp; delivery.
+                </p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-border flex items-center justify-end gap-2">
+              <button
+                onClick={() => setShowNewCustomer(false)}
+                className="text-sm px-3 py-1.5 rounded-lg border border-border hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (newCustomer.name.trim().length < 2) {
+                    toast.error('Name must be at least 2 characters');
+                    return;
+                  }
+                  createCustomer.mutate({
+                    name:           newCustomer.name.trim(),
+                    contactPhone:   newCustomer.phone.trim()          || undefined,
+                    defaultAddress: newCustomer.defaultAddress.trim() || undefined,
+                  });
+                }}
+                disabled={createCustomer.isPending}
+                className="text-sm px-3 py-1.5 rounded-lg bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-40"
+              >
+                {createCustomer.isPending ? 'Saving…' : 'Add customer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

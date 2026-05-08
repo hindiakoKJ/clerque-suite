@@ -1833,12 +1833,20 @@ model Customer {
   tin            String?
   /// BIR-registered address — required for invoices above ₱1,000
   address        String?
+  /// Default pickup/delivery address used by laundry intake. Falls back to
+  /// `address` when null — separated so a B2B customer's BIR-registered HQ
+  /// address can differ from where they want their dry-cleaning delivered.
+  defaultAddress String?
   contactEmail   String?
   contactPhone   String?
   /// Payment term in calendar days. 0 = cash; 30 = Net 30; 60 = Net 60.
   creditTermDays Int      @default(0)
   /// Maximum outstanding AR balance allowed. NULL = no limit.
   creditLimit    Decimal? @db.Decimal(14, 2)
+  /// Lifetime claim count — auto-incremented on every CLAIMED LaundryOrder.
+  /// Drives the loyalty punch-card UI ("you're 7 of 10 visits in"). Reset to 0
+  /// after a free-Nth promo redemption.
+  loyaltyVisits  Int      @default(0)
   notes          String?
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
@@ -2763,6 +2771,16 @@ enum LaundryOrderStatus {
   CANCELLED
 }
 
+/// Sprint 11 — delivery workflow for laundry tickets. Only set when
+/// LaundryOrder.isDelivery = true; null for walk-in / pickup orders.
+enum LaundryDeliveryStatus {
+  PENDING_PICKUP    /// rider not yet dispatched
+  OUT_FOR_PICKUP    /// rider en route to customer
+  AT_LAUNDROMAT     /// laundry received from customer (back-end of pickup leg)
+  OUT_FOR_DELIVERY  /// rider returning the cleaned load to customer
+  DELIVERED         /// customer received the cleaned load — usually claimed in same beat
+}
+
 model LaundryOrder {
   id          String              @id @default(cuid())
   tenantId    String
@@ -2789,6 +2807,20 @@ model LaundryOrder {
   intakeBy    String // userId (creator)
   releasedBy  String?
   orderId     String?             @unique // POS Order created on claim
+  /// Sprint 11 — pickup/delivery support. When isDelivery=true, the order
+  /// is delivered to deliveryAddress (auto-filled from Customer.defaultAddress
+  /// if present); deliveryFee is added to totalAmount; deliveryStatus tracks
+  /// the rider workflow. Non-delivery walk-in tickets keep these null/false.
+  isDelivery       Boolean                @default(false)
+  deliveryAddress  String?
+  deliveryFee      Decimal?               @db.Decimal(10, 2)
+  deliveryStatus   LaundryDeliveryStatus?
+  /// Sprint 11 — short shareable token (e.g. CLA-2026-000001-A1B2) used as
+  /// the URL slug for the public claim-stub page. Customer can show their
+  /// phone instead of the paper ticket. Token is intentionally unguessable
+  /// — random 4-char suffix means an attacker can't iterate sequential
+  /// claim numbers to peek at other customers' orders.
+  publicStubToken  String?                @unique
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 

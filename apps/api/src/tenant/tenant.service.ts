@@ -39,10 +39,113 @@ export class TenantService {
 
   /** Returns all active branches for branch-picker dropdowns across the app. */
   async getBranches(tenantId: string) {
+    // Return ALL branches (including inactive) so the management UI can
+    // show + reactivate them. Filter on consuming side if you need only
+    // active. Active flag exposed in the payload.
     return this.prisma.branch.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, address: true, isActive: true },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+    });
+  }
+
+  /**
+   * Create a new branch — plan-aware. Rejects when the tenant has already
+   * provisioned PLAN_LIMITS[planCode].maxBranches active branches.
+   */
+  async createBranch(tenantId: string, dto: { name: string; address: string | null }) {
+    const { PLAN_LIMITS } = await import('@repo/shared-types');
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { planCode: true },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+
+    const planCode = (tenant.planCode ?? 'SUITE_T2') as keyof typeof PLAN_LIMITS;
+    const cap      = PLAN_LIMITS[planCode]?.maxBranches ?? 1;
+
+    const activeCount = await this.prisma.branch.count({
       where: { tenantId, isActive: true },
-      select: { id: true, name: true, address: true },
-      orderBy: { name: 'asc' },
+    });
+    if (activeCount >= cap) {
+      throw new ForbiddenException({
+        code:           'BRANCH_CAP_REACHED',
+        planCode,
+        currentCount:   activeCount,
+        ceiling:        cap,
+        message:
+          `Your ${planCode} plan allows up to ${cap} active branch${cap === 1 ? '' : 'es'}. ` +
+          `Upgrade your plan to add more.`,
+      });
+    }
+
+    const branch = await this.prisma.branch.create({
+      data: {
+        tenantId,
+        name:    dto.name,
+        address: dto.address,
+        isActive: true,
+      },
+      select: { id: true, name: true, address: true, isActive: true },
+    });
+    return branch;
+  }
+
+  /**
+   * Update a branch — rename, change address, or flip active flag. Atomic
+   * tenant-scoped update; deactivating a branch does NOT cascade-delete
+   * historical orders (audit trail preserved).
+   *
+   * Re-activating a branch when the plan ceiling is already at cap throws.
+   */
+  async updateBranch(
+    tenantId: string,
+    id: string,
+    dto: { name?: string; address?: string | null; isActive?: boolean },
+  ) {
+    if (dto.name !== undefined && dto.name.trim().length < 2) {
+      throw new BadRequestException('Branch name must be at least 2 characters.');
+    }
+
+    // If reactivating, check the plan cap.
+    if (dto.isActive === true) {
+      const { PLAN_LIMITS } = await import('@repo/shared-types');
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { planCode: true },
+      });
+      const planCode = (tenant?.planCode ?? 'SUITE_T2') as keyof typeof PLAN_LIMITS;
+      const cap      = PLAN_LIMITS[planCode]?.maxBranches ?? 1;
+
+      // Count active branches EXCLUDING the one we're about to flip back on.
+      const activeOthers = await this.prisma.branch.count({
+        where: { tenantId, isActive: true, id: { not: id } },
+      });
+      if (activeOthers >= cap) {
+        throw new ForbiddenException({
+          code:         'BRANCH_CAP_REACHED',
+          planCode,
+          currentCount: activeOthers,
+          ceiling:      cap,
+          message:      `Your ${planCode} plan allows up to ${cap} active branches. Upgrade your plan to reactivate this one.`,
+        });
+      }
+    }
+
+    const data: Record<string, unknown> = {};
+    if (dto.name     !== undefined) data.name     = dto.name.trim();
+    if (dto.address  !== undefined) data.address  = dto.address;
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const result = await this.prisma.branch.updateMany({
+      where: { id, tenantId },
+      data,
+    });
+    if (result.count === 0) throw new NotFoundException('Branch not found.');
+    return this.prisma.branch.findUnique({
+      where:  { id },
+      select: { id: true, name: true, address: true, isActive: true },
     });
   }
 

@@ -25,7 +25,9 @@ type ConsoleActor = { email: string };
 export interface CreateTenantDto {
   name:          string;
   slug:          string;
-  businessType:  'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
+  businessType:
+    | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
+    | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING';
   tier:          'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5' | 'TIER_6';
   ownerName:     string;
   ownerEmail:    string;
@@ -855,6 +857,20 @@ export class AdminService {
       }
     }
 
+    // Sprint 11 — LAUNDRY scenario: seed service prices, machines, and a
+    // handful of sample customers + claim tickets across stages so the demo
+    // dashboard / queue feel populated. Idempotent: pre-existing rows are
+    // wiped earlier in this method (no laundry-specific delete needed because
+    // LaundryOrder cascades from tenant; but service prices / machines /
+    // promos persist across resets — clear them here).
+    if (scenario.businessType === 'LAUNDRY') {
+      try {
+        await this.seedLaundryDefaults(tenantId, branchId);
+      } catch (err) {
+        this.logger.warn(`Laundry demo seed failed for tenant ${tenantId}: ${err}`);
+      }
+    }
+
     return {
       scenario:        scenario.label,
       businessType:    scenario.businessType,
@@ -868,6 +884,131 @@ export class AdminService {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`resetDemoData failed for tenant ${tenantId} / scenario ${scenarioKey}: ${msg}`, err instanceof Error ? err.stack : undefined);
       throw new BadRequestException(`Demo reset failed: ${msg.slice(0, 300)}`);
+    }
+  }
+
+  /**
+   * LAUNDRY scenario seeder — populates service prices, machines, customers,
+   * and a few in-flight claim tickets so the demo dashboard / queue feel real.
+   * Called from resetDemoData() after the standard catalog seed.
+   *
+   * Idempotent: wipes laundry-specific tables first.
+   */
+  private async seedLaundryDefaults(tenantId: string, branchId: string) {
+    // Wipe laundry-specific rows. LaundryOrder cascades from tenant via the
+    // outer wipe earlier in resetDemoData, but service prices / machines /
+    // promos / customers persist across non-laundry runs.
+    await this.prisma.laundryServicePrice.deleteMany({ where: { tenantId } });
+    await this.prisma.laundryServiceAddOn.deleteMany({ where: { tenantId } });
+    await this.prisma.laundryPromo.deleteMany({ where: { tenantId } });
+    await this.prisma.laundryMachine.deleteMany({ where: { tenantId } });
+    await this.prisma.customer.deleteMany({ where: { tenantId, isActive: true } });
+
+    // Service prices — typical Manila rates.
+    const PRICES: Array<{
+      serviceCode: 'WASH' | 'DRY' | 'WASH_DRY_COMBO' | 'DRY_CLEAN' | 'IRON' | 'FOLD' | 'EXTRA_RINSE' | 'FABRIC_SOFTENER';
+      mode:        'SELF_SERVICE' | 'FULL_SERVICE';
+      unitPrice:   number;
+    }> = [
+      { serviceCode: 'WASH',            mode: 'SELF_SERVICE', unitPrice:  60 },
+      { serviceCode: 'WASH',            mode: 'FULL_SERVICE', unitPrice: 120 },
+      { serviceCode: 'DRY',             mode: 'SELF_SERVICE', unitPrice:  60 },
+      { serviceCode: 'DRY',             mode: 'FULL_SERVICE', unitPrice: 100 },
+      { serviceCode: 'WASH_DRY_COMBO',  mode: 'SELF_SERVICE', unitPrice: 110 },
+      { serviceCode: 'WASH_DRY_COMBO',  mode: 'FULL_SERVICE', unitPrice: 220 },
+      { serviceCode: 'DRY_CLEAN',       mode: 'FULL_SERVICE', unitPrice: 250 },
+      { serviceCode: 'IRON',            mode: 'FULL_SERVICE', unitPrice:  35 },
+      { serviceCode: 'FOLD',            mode: 'FULL_SERVICE', unitPrice:  20 },
+      { serviceCode: 'EXTRA_RINSE',     mode: 'FULL_SERVICE', unitPrice:  25 },
+      { serviceCode: 'FABRIC_SOFTENER', mode: 'FULL_SERVICE', unitPrice:  30 },
+    ];
+    await this.prisma.laundryServicePrice.createMany({
+      data: PRICES.map((p) => ({
+        tenantId,
+        serviceCode: p.serviceCode as any,
+        mode:        p.mode as any,
+        unitPrice:   p.unitPrice,
+        isActive:    true,
+      })),
+    });
+
+    // Machine fleet — 3 washers, 3 dryers, 1 combo unit.
+    const MACHINES: Array<{ code: string; kind: 'WASHER' | 'DRYER' | 'COMBO'; capacityKg: number }> = [
+      { code: 'W-01', kind: 'WASHER', capacityKg:  8 },
+      { code: 'W-02', kind: 'WASHER', capacityKg:  8 },
+      { code: 'W-03', kind: 'WASHER', capacityKg: 15 },
+      { code: 'D-01', kind: 'DRYER',  capacityKg: 10 },
+      { code: 'D-02', kind: 'DRYER',  capacityKg: 10 },
+      { code: 'D-03', kind: 'DRYER',  capacityKg: 15 },
+      { code: 'C-01', kind: 'COMBO',  capacityKg:  8 },
+    ];
+    await this.prisma.laundryMachine.createMany({
+      data: MACHINES.map((m) => ({
+        tenantId,
+        branchId,
+        code:       m.code,
+        kind:       m.kind as any,
+        capacityKg: m.capacityKg,
+        status:     'IDLE' as any,
+      })),
+    });
+
+    // Sample customers — realistic PH names with phone + saved addresses so
+    // the loyalty + delivery flows have something to attach to.
+    const CUSTOMERS = [
+      { name: 'Maria Santos',     phone: '09171234567', address: 'Brgy. Poblacion, Makati City' },
+      { name: 'Jose Dela Cruz',   phone: '09181234568', address: 'Sgt. Esguerra Ave, QC'        },
+      { name: 'Ana Reyes',        phone: '09191234569', address: 'Maginhawa St, QC'             },
+      { name: 'Pedro Garcia',     phone: '09201234570', address: 'Banawe St, QC'                },
+      { name: 'Rosa Mendoza',     phone: '09211234571', address: 'Tomas Morato Ave, QC'         },
+    ];
+    const customers = await Promise.all(
+      CUSTOMERS.map((c) =>
+        this.prisma.customer.create({
+          data: {
+            tenantId,
+            name:           c.name,
+            contactPhone:   c.phone,
+            defaultAddress: c.address,
+            loyaltyVisits:  Math.floor(Math.random() * 9), // 0..8 prior visits
+            isActive:       true,
+          },
+        }),
+      ),
+    );
+
+    // A few claim tickets across all stages so the queue board renders.
+    // Year-prefix matches the actual claim-numbering scheme.
+    const year = new Date().getFullYear();
+    const STAGES: Array<'RECEIVED' | 'WASHING' | 'DRYING' | 'FOLDING' | 'READY_FOR_PICKUP'> = [
+      'RECEIVED', 'WASHING', 'DRYING', 'FOLDING', 'READY_FOR_PICKUP',
+    ];
+    const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let seq = 1;
+    for (let i = 0; i < STAGES.length; i++) {
+      const customer = customers[i % customers.length];
+      const isDelivery = i % 3 === 0; // every third order is delivery
+      const claimNumber = `CLA-${year}-${String(seq).padStart(6, '0')}`;
+      const suffix = Array.from({ length: 4 }, () => ALPHA[Math.floor(Math.random() * ALPHA.length)]).join('');
+      seq += 1;
+      await this.prisma.laundryOrder.create({
+        data: {
+          tenantId,
+          branchId,
+          customerId:      customer.id,
+          claimNumber,
+          publicStubToken: `${claimNumber}-${suffix}`,
+          status:          STAGES[i] as any,
+          totalAmount:     220 + i * 50,
+          intakeBy:        'demo-seed',
+          receivedAt:      new Date(Date.now() - (STAGES.length - i) * 60 * 60 * 1000),
+          promisedAt:      new Date(Date.now() + (24 - i * 4) * 60 * 60 * 1000),
+          isDelivery,
+          deliveryAddress: isDelivery ? customer.defaultAddress : null,
+          deliveryFee:     isDelivery ? 50 : null,
+          deliveryStatus:  isDelivery ? 'PENDING_PICKUP' as any : null,
+        },
+      });
     }
   }
 

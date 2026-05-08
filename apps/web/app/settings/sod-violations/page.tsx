@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ShieldAlert, User, Calendar } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -79,12 +80,13 @@ export default function SodViolationsPage() {
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        <button
-          onClick={() => router.back()}
+        {/* Sprint 12 — fixed-target back to avoid Settings ⇄ subpage loops. */}
+        <Link
+          href="/settings"
           className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
+          <ArrowLeft className="w-4 h-4" /> Back to Settings
+        </Link>
 
         <div className="flex items-start gap-3">
           <div className="rounded-xl bg-amber-500/10 p-2.5">

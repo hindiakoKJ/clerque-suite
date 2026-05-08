@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, ArrowUpRight, CheckCircle2, Users, Building2,
@@ -111,12 +112,14 @@ export default function SubscriptionPage() {
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        <button
-          onClick={() => router.back()}
+        {/* Sprint 12 — fixed-target back instead of router.back() to avoid
+            Settings ⇄ Subscription loops when user came from main /settings. */}
+        <Link
+          href="/settings"
           className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
+          <ArrowLeft className="w-4 h-4" /> Back to Settings
+        </Link>
 
         <div>
           <h1 className="text-2xl font-bold text-foreground">Subscription</h1>

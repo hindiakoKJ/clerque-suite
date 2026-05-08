@@ -303,11 +303,23 @@ export default function SettingsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-background">
-      {/* Top bar */}
+      {/* Top bar — back goes to the app picker, not browser history.
+          Sprint 12 fix: router.back() created a Settings ⇄ Settings/<sub> loop
+          when the user navigated subpage → main → tries to go back. Settings
+          is a destination, not a step in a flow; "back" should mean "out of
+          settings entirely" — to the app picker where the user can pick POS /
+          Ledger / Sync. */}
       <header className="h-14 border-b border-border bg-card/60 backdrop-blur-sm flex items-center px-4 gap-3 sticky top-0 z-10">
         <button
-          onClick={() => router.back()}
+          onClick={() => {
+            // Super-admin → console; everyone else → app picker.
+            const dest = (user as { isSuperAdmin?: boolean } | null)?.isSuperAdmin
+              ? '/admin'
+              : '/select';
+            router.push(dest);
+          }}
           className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
+          title="Exit settings"
         >
           <ArrowLeft className="w-4 h-4" />
         </button>

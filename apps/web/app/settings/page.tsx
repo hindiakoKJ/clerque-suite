@@ -340,12 +340,17 @@ export default function SettingsPage() {
                 desc="Service prices, promos, machine fleet"
               />
             )}
-            <SettingsCard
-              href="/settings/branches"
-              icon={Building2}
-              title="Branches"
-              desc="Add / rename / deactivate locations"
-            />
+            {/* Branches — only relevant on multi-branch plans. Solo plan
+                tenants (maxBranches=1) can't have a second location anyway,
+                so the card would just lead to a single read-only row. */}
+            {((user as any)?.planLimits?.maxBranches ?? 1) > 1 && (
+              <SettingsCard
+                href="/settings/branches"
+                icon={Building2}
+                title="Branches"
+                desc="Add / rename / deactivate locations"
+              />
+            )}
             <SettingsCard
               href="/settings/subscription"
               icon={CreditCard}

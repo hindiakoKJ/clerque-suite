@@ -435,11 +435,16 @@ function MachinesTab() {
     queryKey: ['laundry-machines'],
     queryFn:  () => api.get('/laundry/machines').then((r) => r.data),
   });
-  const { data: branchData } = useQuery<{ data: Branch[] }>({
-    queryKey: ['branches'],
-    queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
+  // /tenant/branches returns Branch[] directly (not { data: [...] }).
+  // Filter to active branches so a freshly-deactivated location can't be
+  // assigned a new machine.
+  const { data: allBranches = [] } = useQuery<Array<Branch & { isActive?: boolean }>>({
+    queryKey: ['tenant-branches'],
+    queryFn:  () => api.get('/tenant/branches').then((r) =>
+      Array.isArray(r.data) ? r.data : (r.data?.data ?? []),
+    ),
   });
-  const branches = branchData?.data ?? [];
+  const branches = allBranches.filter((b) => b.isActive !== false);
 
   const [showNew, setShowNew] = useState(false);
   const [code, setCode] = useState('');

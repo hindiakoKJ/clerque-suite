@@ -73,18 +73,30 @@ interface MissingCostProduct {
 }
 interface MissingCostResponse { count: number; products: MissingCostProduct[]; }
 
+/**
+ * Vertical-aware dashboard router.
+ *
+ * Decides which dashboard component to render based on the tenant's
+ * businessType. Critical: this thin wrapper is the ONLY place we can branch
+ * because each child component owns its own hooks and they cannot be reused
+ * across renders. An earlier version had `if (isLaundry) return <LaundryDashboard/>`
+ * INSIDE SalesDashboard — that caused a Rules-of-Hooks violation: when layout
+ * loaded and isLaundry flipped to true, the conditional return ran BEFORE
+ * subsequent useQuery calls had a chance to register, so React saw fewer
+ * hooks than the previous render and crashed with "Something went wrong".
+ *
+ * Lesson: never branch on async data BEFORE other hooks in the same component.
+ */
 export default function DashboardPage() {
+  const { layout } = useFloorLayout();
+  const isLaundry = isLaundryType(layout?.tenant?.businessType);
+  return isLaundry ? <LaundryDashboard /> : <SalesDashboard />;
+}
+
+function SalesDashboard() {
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? '';
   const [date, setDate] = useState(todayPH());
-
-  // Vertical-aware dashboard. The SalesDashboard below is built around F&B /
-  // Retail concepts (revenue, COGS, gross margin, top products by quantity
-  // sold). A laundromat operator needs to see workflow stages and pickup-due
-  // counts — entirely different metrics. Swap the whole page when LAUNDRY.
-  const { layout } = useFloorLayout();
-  const isLaundry = isLaundryType(layout?.tenant?.businessType);
-  if (isLaundry) return <LaundryDashboard />;
 
   const { data, isLoading, refetch, isFetching } = useQuery<DailyReport>({
     queryKey: ['daily-report', branchId, date],

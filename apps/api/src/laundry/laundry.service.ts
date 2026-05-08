@@ -344,6 +344,16 @@ export class LaundryService {
     });
   }
 
+  /**
+   * Services that physically cannot be self-service. Dry-clean uses
+   * solvents and dedicated equipment customers don't operate; ironing
+   * and folding are inherently human-labor tasks. Setting a SELF_SERVICE
+   * price for any of these is rejected so the catalog stays sensible.
+   */
+  private static readonly SELF_SERVICE_INELIGIBLE: LaundryServiceCode[] = [
+    'DRY_CLEAN', 'IRON', 'FOLD',
+  ];
+
   /** Upsert a single price row for (service, mode). */
   async setServicePrice(
     tenantId: string,
@@ -352,6 +362,15 @@ export class LaundryService {
     unitPrice: number,
     isActive = true,
   ) {
+    if (
+      mode === 'SELF_SERVICE'
+      && LaundryService.SELF_SERVICE_INELIGIBLE.includes(serviceCode)
+      && unitPrice > 0
+    ) {
+      throw new BadRequestException(
+        `${serviceCode} cannot be sold as SELF_SERVICE — it requires staff. Use FULL_SERVICE pricing only.`,
+      );
+    }
     return this.prisma.laundryServicePrice.upsert({
       where: { tenantId_serviceCode_mode: { tenantId, serviceCode, mode } },
       create: { tenantId, serviceCode, mode, unitPrice: new Prisma.Decimal(unitPrice), isActive },

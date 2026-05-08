@@ -263,6 +263,12 @@ function PricesTab() {
 
   const services: ServiceCode[] = ['WASH', 'DRY', 'WASH_DRY_COMBO', 'DRY_CLEAN', 'IRON', 'FOLD'];
 
+  // Services that physically CAN'T be self-service. Dry-clean uses solvents
+  // and a dedicated machine that customers don't operate; ironing and folding
+  // are inherently human-labor tasks. Hide the SELF_SERVICE input for these
+  // and let the backend reject any attempt to price them as self-service.
+  const SELF_SERVICE_INELIGIBLE: ServiceCode[] = ['DRY_CLEAN', 'IRON', 'FOLD'];
+
   // First-run state — no service has a non-zero price yet.
   const isFirstRun = prices.every((p) => Number(p.unitPrice) === 0);
 
@@ -330,21 +336,31 @@ function PricesTab() {
           {services.map((code) => {
             const self = prices.find((p) => p.serviceCode === code && p.mode === 'SELF_SERVICE');
             const full = prices.find((p) => p.serviceCode === code && p.mode === 'FULL_SERVICE');
+            const selfIneligible = SELF_SERVICE_INELIGIBLE.includes(code);
             return (
               <tr key={code} className="border-t border-border/40">
                 <td className="px-4 py-2.5 font-medium">{SERVICE_LABEL[code]}</td>
                 <td className="px-4 py-2.5 text-right">
-                  <input
-                    type="number" step="0.01"
-                    defaultValue={self ? Number(self.unitPrice) : 0}
-                    onBlur={(e) => {
-                      const val = Number(e.target.value);
-                      if (val !== Number(self?.unitPrice ?? -1)) {
-                        setPrice.mutate({ serviceCode: code, mode: 'SELF_SERVICE', unitPrice: val, isActive: val > 0 });
-                      }
-                    }}
-                    className="w-28 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
-                  />
+                  {selfIneligible ? (
+                    <span
+                      className="inline-block w-28 rounded-lg border border-dashed border-border/60 bg-muted/20 px-2 py-1 text-[11px] text-muted-foreground italic"
+                      title="This service requires staff — not available as self-service."
+                    >
+                      Staff only
+                    </span>
+                  ) : (
+                    <input
+                      type="number" step="0.01"
+                      defaultValue={self ? Number(self.unitPrice) : 0}
+                      onBlur={(e) => {
+                        const val = Number(e.target.value);
+                        if (val !== Number(self?.unitPrice ?? -1)) {
+                          setPrice.mutate({ serviceCode: code, mode: 'SELF_SERVICE', unitPrice: val, isActive: val > 0 });
+                        }
+                      }}
+                      className="w-28 rounded-lg border border-border bg-background px-2 py-1 text-right tabular-nums"
+                    />
+                  )}
                 </td>
                 <td className="px-4 py-2.5 text-right">
                   <input

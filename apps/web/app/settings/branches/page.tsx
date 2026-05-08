@@ -14,6 +14,7 @@
  */
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Plus, Building2, Pencil, ToggleRight, ToggleLeft, Lock } from 'lucide-react';
 import { toast } from 'sonner';
@@ -32,6 +33,7 @@ const INPUT_CLS =
   'w-full border border-border bg-background rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent transition-shadow';
 
 export default function BranchesPage() {
+  const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
   const qc      = useQueryClient();
@@ -110,9 +112,16 @@ export default function BranchesPage() {
 
   return (
     <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-5">
-      <Link href="/settings" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+      <button
+        type="button"
+        onClick={() => {
+          if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+          else router.push('/settings');
+        }}
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
         <ArrowLeft className="h-4 w-4" /> Back to Settings
-      </Link>
+      </button>
 
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>

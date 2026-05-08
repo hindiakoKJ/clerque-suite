@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Plus, Trash2, WashingMachine, Wind, Tag, ToggleRight, ToggleLeft } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -37,6 +38,7 @@ const SERVICE_LABEL: Record<ServiceCode, string> = {
 };
 
 export default function LaundrySettingsPage() {
+  const router = useRouter();
   const user = useAuthStore((s) => s.user);
 
   if (user && !isLaundryType((user as any).businessType ?? null)) {
@@ -48,9 +50,16 @@ export default function LaundrySettingsPage() {
 
   return (
     <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
-      <Link href="/settings" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+      <button
+        type="button"
+        onClick={() => {
+          if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+          else router.push('/settings');
+        }}
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
         <ArrowLeft className="h-4 w-4" /> Back to Settings
-      </Link>
+      </button>
 
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Laundry</h1>

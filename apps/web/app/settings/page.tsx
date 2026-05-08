@@ -305,23 +305,32 @@ export default function SettingsPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-background">
-      {/* Top bar — back goes to the app picker, not browser history.
-          Sprint 12 fix: router.back() created a Settings ⇄ Settings/<sub> loop
-          when the user navigated subpage → main → tries to go back. Settings
-          is a destination, not a step in a flow; "back" should mean "out of
-          settings entirely" — to the app picker where the user can pick POS /
-          Ledger / Sync. */}
+      {/* Top bar — back returns to wherever the user came from (the app
+          they entered Settings from), via router.back().
+          The Sprint 12 fix tried to break a Settings ⇄ Settings/<sub> loop
+          by jumping straight to /select. That was correct in spirit but
+          wrong for the common case: the user expects Back to mean "exit
+          back to POS/Ledger/Sync." The real loop was caused by sub-pages
+          using <Link href="/settings"> (history push) instead of
+          router.back() (history pop) — so we compact history cleanly in
+          the sub-pages and use router.back() here, falling back to the
+          app picker only when there is no history (direct landing). */}
       <header className="h-14 border-b border-border bg-card/60 backdrop-blur-sm flex items-center px-4 gap-3 sticky top-0 z-10">
         <button
           onClick={() => {
-            // Super-admin → console; everyone else → app picker.
-            const dest = (user as { isSuperAdmin?: boolean } | null)?.isSuperAdmin
+            const fallback = (user as { isSuperAdmin?: boolean } | null)?.isSuperAdmin
               ? '/admin'
               : '/select';
-            router.push(dest);
+            // history.length is at least 2 in any normal SPA navigation
+            // (initial entry + this page). Treat <= 1 as direct landing.
+            if (typeof window !== 'undefined' && window.history.length > 1) {
+              router.back();
+            } else {
+              router.push(fallback);
+            }
           }}
           className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent/10 transition-colors"
-          title="Exit settings"
+          title="Back"
         >
           <ArrowLeft className="w-4 h-4" />
         </button>

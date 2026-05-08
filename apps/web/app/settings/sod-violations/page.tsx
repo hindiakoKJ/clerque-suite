@@ -80,13 +80,20 @@ export default function SodViolationsPage() {
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        {/* Sprint 12 — fixed-target back to avoid Settings ⇄ subpage loops. */}
-        <Link
-          href="/settings"
+        {/* Back compacts history (router.back) so /settings → /settings/<sub>
+            → back returns to /settings, then back again exits Settings to
+            wherever the user came from. Falls back to /settings push when
+            we landed here directly (no history). */}
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+            else router.push('/settings');
+          }}
           className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="w-4 h-4" /> Back to Settings
-        </Link>
+        </button>
 
         <div className="flex items-start gap-3">
           <div className="rounded-xl bg-amber-500/10 p-2.5">

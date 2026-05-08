@@ -112,14 +112,19 @@ export default function SubscriptionPage() {
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-        {/* Sprint 12 — fixed-target back instead of router.back() to avoid
-            Settings ⇄ Subscription loops when user came from main /settings. */}
-        <Link
-          href="/settings"
+        {/* Back compacts history (router.back) so /settings → /settings/<sub>
+            → back returns to /settings, then back again exits Settings to
+            wherever the user came from. */}
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+            else router.push('/settings');
+          }}
           className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="w-4 h-4" /> Back to Settings
-        </Link>
+        </button>
 
         <div>
           <h1 className="text-2xl font-bold text-foreground">Subscription</h1>

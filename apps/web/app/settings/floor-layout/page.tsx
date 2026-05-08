@@ -75,13 +75,17 @@ export default function FloorLayoutSettingsPage() {
           restaurants. Your business is registered as <span className="font-mono">{businessType ?? 'unknown'}</span>,
           which doesn&apos;t use station routing.
         </p>
-        <Link
-          href="/settings"
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+            else router.push('/settings');
+          }}
           className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Settings
-        </Link>
+        </button>
       </div>
     );
   }
@@ -97,13 +101,17 @@ export default function FloorLayoutSettingsPage() {
           printers, and customer display.
         </p>
         <div className="flex gap-2">
-          <Link
-            href="/settings"
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+              else router.push('/settings');
+            }}
             className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors"
           >
             <ArrowLeft className="h-4 w-4" />
             Back
-          </Link>
+          </button>
           {canManage && (
             <Link
               href="/settings/floor-layout/setup"

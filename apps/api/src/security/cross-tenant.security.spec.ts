@@ -52,6 +52,11 @@ const USER_B   = 'user-b-manager-uuid';    // a Tenant B manager
 
 function makePrismaMock() {
   const orderFindFirst = jest.fn();
+  // Shift updateMany is asserted by both outer-prisma callers (legacy code
+  // path) and inner-tx callers (post-Sprint-11 atomic close). Share the same
+  // mock function so either invocation site lets the assertion pass.
+  const shiftUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+  const shiftFindFirst  = jest.fn();
   return {
     tenant:      { findUniqueOrThrow: jest.fn(), findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC' }) },
     order:       {
@@ -65,11 +70,11 @@ function makePrismaMock() {
     user:        { findFirst: jest.fn(), count: jest.fn() },
     branch:      { findFirst: jest.fn() },
     shift:       {
-      findFirst:  jest.fn(),
+      findFirst:  shiftFindFirst,
       findMany:   jest.fn().mockResolvedValue([]),
       create:     jest.fn(),
       update:     jest.fn(),
-      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      updateMany: shiftUpdateMany,
     },
     inventoryItem: {
       findUnique: jest.fn(),
@@ -101,6 +106,17 @@ function makePrismaMock() {
         // Inner tx mock — must mirror every model the orders.service.create
         // path touches inside its $transaction. Add new ones here whenever
         // the service grows new tx.<model> calls.
+        // Sprint 11 — shifts.close() and shifts.recordCashOut() also wrap their
+        // mutations + AccountingEvent inserts in a transaction now (see POS→GL
+        // completeness sweep), so the tx mock has to expose those models too.
+        shift: {
+          // Share the same mock fns as the outer prisma so test assertions
+          // on prisma.shift.updateMany / .findFirst still see the calls
+          // even when shifts.service.close routes through tx.shift.* now.
+          findFirst:  shiftFindFirst,
+          updateMany: shiftUpdateMany,
+        },
+        shiftCashOut: { create: jest.fn() },
         order: {
           findFirst: orderFindFirst,
           update:    jest.fn(),

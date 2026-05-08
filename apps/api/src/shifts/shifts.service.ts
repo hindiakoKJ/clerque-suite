@@ -154,22 +154,51 @@ export class ShiftsService {
     const closingCashExpected = summary.expectedCash;
     const variance = closingCashDeclared - closingCashExpected;
 
-    // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId, closedAt: null }
-    // is atomic — the tenantId guard and the "not-yet-closed" check happen in one
-    // SQL statement, eliminating the window between findFirst and the write.
-    await this.prisma.shift.updateMany({
-      where: { id: shiftId, tenantId, closedAt: null },
-      data: {
-        closedAt:            new Date(),
-        closingCashDeclared: new Prisma.Decimal(closingCashDeclared),
-        closingCashExpected: new Prisma.Decimal(closingCashExpected),
-        variance:            new Prisma.Decimal(variance),
-        notes:               notes ?? shift.notes,
-      },
-    });
+    // Atomic close + variance JE event in one transaction. Without this,
+    // a shift could close successfully but the cash-variance JE could fail
+    // and leave the GL out of sync with the actual drawer count. Wrapping in
+    // a transaction guarantees all-or-nothing.
+    return this.prisma.$transaction(async (tx) => {
+      // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId, closedAt: null }
+      // is atomic — the tenantId guard and the "not-yet-closed" check happen in one
+      // SQL statement, eliminating the window between findFirst and the write.
+      const result = await tx.shift.updateMany({
+        where: { id: shiftId, tenantId, closedAt: null },
+        data: {
+          closedAt:            new Date(),
+          closingCashDeclared: new Prisma.Decimal(closingCashDeclared),
+          closingCashExpected: new Prisma.Decimal(closingCashExpected),
+          variance:            new Prisma.Decimal(variance),
+          notes:               notes ?? shift.notes,
+        },
+      });
+      if (result.count === 0) {
+        throw new ConflictException('Shift is already closed.');
+      }
 
-    // Re-fetch the closed shift for the response (updateMany does not return rows)
-    return this.prisma.shift.findFirst({ where: { id: shiftId, tenantId } });
+      // Queue cash-variance JE — non-zero variance only. Zero variance means
+      // the drawer reconciled perfectly and there's nothing to post.
+      if (variance !== 0) {
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type:    'CASH_VARIANCE',
+            status:  'PENDING',
+            payload: {
+              shiftId,
+              cashierId,
+              branchId:       shift.branchId,
+              variance,
+              declaredAmount: closingCashDeclared,
+              expectedAmount: closingCashExpected,
+              completedAt:    new Date().toISOString(),
+            } as unknown as Prisma.JsonObject,
+          },
+        });
+      }
+
+      return tx.shift.findFirst({ where: { id: shiftId, tenantId } });
+    });
   }
 
   // ─── Cash Out / Cash Drop ───────────────────────────────────────────────
@@ -260,20 +289,53 @@ export class ShiftsService {
       }
     }
 
-    return this.prisma.shiftCashOut.create({
-      data: {
-        tenantId,
-        branchId:        shift.branchId,
-        shiftId,
-        type:            dto.type,
-        amount:          new Prisma.Decimal(dto.amount),
-        reason:          dto.reason,
-        category:        dto.category,
-        receiptPhotoUrl: dto.receiptPhotoUrl,
-        createdById:     cashierId,
-        approvedById:    dto.approvedById,
-        aiAssisted:      dto.aiAssisted ?? false,
-      },
+    // Atomic cash-out + JE event in one transaction. PAID_OUT events post a
+    // real expense to the GL (DR Expense / CR Cash); CASH_DROP is a balance-sheet
+    // movement only (cash out of till, into safe — both still tenant assets,
+    // no GL impact unless the tenant tracks a separate "Cash on Safe" account
+    // and chooses to journal it manually).
+    return this.prisma.$transaction(async (tx) => {
+      const cashOut = await tx.shiftCashOut.create({
+        data: {
+          tenantId,
+          branchId:        shift.branchId,
+          shiftId,
+          type:            dto.type,
+          amount:          new Prisma.Decimal(dto.amount),
+          reason:          dto.reason,
+          category:        dto.category,
+          receiptPhotoUrl: dto.receiptPhotoUrl,
+          createdById:     cashierId,
+          approvedById:    dto.approvedById,
+          aiAssisted:      dto.aiAssisted ?? false,
+        },
+      });
+
+      if (dto.type === 'PAID_OUT') {
+        // Queue the GL posting. Processor: DR <category-mapped expense> / CR Cash.
+        // Without this every paid-out leaks from the GL — cash leaves the
+        // drawer and shows up in the variance at close, but no expense
+        // category gets debited.
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type:    'PAID_OUT',
+            status:  'PENDING',
+            payload: {
+              cashOutId:   cashOut.id,
+              shiftId,
+              branchId:    shift.branchId,
+              cashierId,
+              amount:      dto.amount,
+              category:    (dto.category ?? 'OTHER').toUpperCase(),
+              reason:      dto.reason,
+              completedAt: new Date().toISOString(),
+            } as unknown as Prisma.JsonObject,
+          },
+        });
+      }
+
+      return cashOut;
     });
   }
 

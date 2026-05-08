@@ -516,6 +516,85 @@ export class JournalService {
           lines.push({ accountId: await getAccount('1050'), credit: absValue, description: `Stock removed: ${productName}` });
         }
 
+      } else if (event.type === 'PAID_OUT') {
+        // Mid-shift cash drop / paid-out — cashier pulled cash from the till
+        // for a small expense (taxi fare for a delivery, ice run for the bar,
+        // restocking change). Always cash-out: DR Expense / CR Cash on Hand.
+        //
+        // Account routing by category — keeps the GL meaningful instead of
+        // dumping everything into a single "miscellaneous" bucket.
+        const amount   = Number(payload['amount'] ?? 0);
+        const category = String(payload['category'] ?? 'OTHER').toUpperCase();
+        const reason   = payload['reason'] ? String(payload['reason']) : null;
+        const shiftId  = payload['shiftId'] ? String(payload['shiftId']) : null;
+
+        if (amount <= 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+
+        // PH chart-of-accounts mapping (defaults; tenants can re-route in
+        // Settings → Chart of Accounts if they want finer breakdown).
+        //   SUPPLIES        → 6070 Office Supplies Expense
+        //   TRANSPORT       → 6100 Transportation and Travel
+        //   UTILITIES       → 6060 Utilities Expense
+        //   REPAIRS         → 6090 Repairs and Maintenance
+        //   MEALS / OTHER   → 6140 Miscellaneous Expense
+        const expenseAccount =
+          category === 'SUPPLIES'  ? '6070' :
+          category === 'TRANSPORT' ? '6100' :
+          category === 'UTILITIES' ? '6060' :
+          category === 'REPAIRS'   ? '6090' :
+                                     '6140';
+
+        const shiftSuffix = shiftId ? ` (shift ${shiftId.slice(-6)})` : '';
+        description = `Paid out: ${category}${reason ? ` — ${reason}` : ''}${shiftSuffix}`;
+
+        lines.push({ accountId: await getAccount(expenseAccount), debit:  amount, description: reason ?? `${category} paid out` });
+        lines.push({ accountId: await getAccount('1010'),         credit: amount, description: 'Cash from till'  });
+
+      } else if (event.type === 'CASH_VARIANCE') {
+        // Shift close variance — declared cash != expected cash.
+        //   variance > 0 (over)  → DR Cash on Hand / CR Cash Variance Income
+        //   variance < 0 (short) → DR Cash Variance Expense / CR Cash on Hand
+        //
+        // Always posted regardless of size; even a ₱1 short matters for audit
+        // trail. Bookkeepers can write manual JEs at month-end to clear
+        // accumulated variances if they're noise.
+        const variance  = Number(payload['variance'] ?? 0);
+        const declared  = Number(payload['declaredAmount'] ?? 0);
+        const expected  = Number(payload['expectedAmount'] ?? 0);
+        const shiftId   = payload['shiftId'] ? String(payload['shiftId']) : null;
+        const cashierId = payload['cashierId'] ? String(payload['cashierId']) : null;
+
+        if (variance === 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+
+        const shiftSuffix = shiftId ? ` (shift ${shiftId.slice(-6)})` : '';
+        const cashierSuffix = cashierId ? ` cashier ${cashierId.slice(-6)}` : '';
+        description = `Cash ${variance > 0 ? 'overage' : 'shortage'}${shiftSuffix}${cashierSuffix}: declared ₱${declared.toFixed(2)} vs expected ₱${expected.toFixed(2)}`;
+
+        const absVariance = Math.abs(variance);
+        if (variance > 0) {
+          // Over — extra cash in the drawer is misc income (4092).
+          lines.push({ accountId: await getAccount('1010'), debit:  absVariance, description: 'Cash drawer overage' });
+          lines.push({ accountId: await getAccount('4092'), credit: absVariance, description: 'Cash overage income' });
+        } else {
+          // Short — missing cash booked to misc expense (6140). Bookkeepers
+          // can re-route to a dedicated 6141 "Cash Shortage" account if they
+          // want better visibility (Settings → Chart of Accounts → split).
+          lines.push({ accountId: await getAccount('6140'), debit:  absVariance, description: 'Cash drawer shortage' });
+          lines.push({ accountId: await getAccount('1010'), credit: absVariance, description: 'Missing cash from till' });
+        }
+
       } else {
         await this.prisma.accountingEvent.update({
           where: { id: eventId },

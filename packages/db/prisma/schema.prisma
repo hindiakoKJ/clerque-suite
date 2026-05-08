@@ -205,6 +205,13 @@ enum AccountingEventType {
   SETTLEMENT
   // Sprint 10: project material issuance — Dr Project-WIP / Cr Inventory
   MATERIAL_ISSUANCE
+  // Sprint 11: shift cash flow events
+  /// Mid-shift cash drop / paid-out (cashier pays for supplies, petty expense
+  /// from the till). DR Expense / CR Cash on Hand.
+  PAID_OUT
+  /// Cash variance recorded at shift close (declared cash != expected cash).
+  /// Over: DR Cash / CR Cash Variance Income. Short: DR Cash Variance Expense / CR Cash.
+  CASH_VARIANCE
 }
 
 enum InventoryLogType {

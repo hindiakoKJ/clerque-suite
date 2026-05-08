@@ -84,6 +84,14 @@ function makePrismaMock() {
     accountingEvent: { create: jest.fn() },
     loginLog:        { count: jest.fn().mockResolvedValue(0), create: jest.fn() },
     product:         { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+    terminal:        { findFirst: jest.fn().mockResolvedValue(null) },
+    shiftCashOut:    {
+      aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }),
+      findMany:  jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn(),
+      create:    jest.fn(),
+      delete:    jest.fn(),
+    },
 
     // $queryRaw is used by generateOrderNumber — return a stubbed sequence result
     $queryRaw: jest.fn().mockResolvedValue([{ next_seq: BigInt(1) }]),
@@ -418,7 +426,11 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
         const txMock = {
           order:           { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order' }), count: jest.fn().mockResolvedValue(0) },
           orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
-          product:         { findMany: jest.fn().mockResolvedValue([]) },
+          // After the cross-tenant productId fix, orders.service validates
+          // every productId belongs to the caller's tenant. Mock the lookup
+          // to return the requested product so the test exercises the
+          // raw-SQL inventory path it actually targets.
+          product:         { findMany: jest.fn().mockResolvedValue([{ id: 'prod-a', tenantId: TENANT_A, category: { stationId: null } }]) },
           tenant:          {
             findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC', isVatRegistered: false, businessType: 'COFFEE_SHOP', costingProfile: 'STANDARD' }),
             updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -477,6 +489,7 @@ describe('SECURITY — InventoryService: Cross-Tenant Attack Vectors', () => {
       providers: [
         InventoryService,
         { provide: PrismaService, useValue: prisma },
+        { provide: AccountingPeriodsService, useValue: makePeriodsMock() },
       ],
     }).compile();
 

@@ -14,6 +14,8 @@ import {
   isModuleEnabled,
   validateSoloModuleCombo,
   planLabel,
+  isPermissionAvailableUnderPlan,
+  getRequiredPlanForPermission,
   type PlanCode,
 } from '@repo/shared-types';
 
@@ -244,6 +246,97 @@ describe('Plans constants', () => {
         expect(label).toBeTruthy();
         expect(label.length).toBeGreaterThan(0);
       }
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Plan-based permission gate (replaces legacy tier-feature indirection)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  describe('isPermissionAvailableUnderPlan', () => {
+    const POS_ONLY = { modulePos: true,  moduleLedger: false, modulePayroll: false };
+    const POS_LED  = { modulePos: true,  moduleLedger: true,  modulePayroll: false };
+    const POS_PAY  = { modulePos: true,  moduleLedger: false, modulePayroll: true  };
+    const SUITE    = { modulePos: true,  moduleLedger: true,  modulePayroll: true  };
+
+    it('universal permissions are always available', () => {
+      const ctx = { planCode: 'STD_SOLO' as PlanCode, ...POS_ONLY };
+      expect(isPermissionAvailableUnderPlan('product:create', ctx)).toBe(true);
+      expect(isPermissionAvailableUnderPlan('order:create',   ctx)).toBe(true);
+      expect(isPermissionAvailableUnderPlan('staff:view',     ctx)).toBe(true);
+    });
+
+    it('ledger:* requires moduleLedger', () => {
+      const noLed = { planCode: 'STD_SOLO' as PlanCode, ...POS_ONLY };
+      const led   = { planCode: 'PAIR_T1' as PlanCode, ...POS_LED };
+      expect(isPermissionAvailableUnderPlan('ledger:view',          noLed)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', noLed)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('ledger:view',          led)).toBe(true);
+      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', led)).toBe(true);
+    });
+
+    it('payroll:* requires modulePayroll', () => {
+      const noPay = { planCode: 'STD_SOLO' as PlanCode, ...POS_ONLY };
+      const pay   = { planCode: 'PAIR_T2' as PlanCode, ...POS_PAY };
+      expect(isPermissionAvailableUnderPlan('payroll:view_salary',         noPay)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('payroll:run',                  noPay)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('staff:assign_payroll_master', noPay)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('payroll:view_salary',         pay)).toBe(true);
+      expect(isPermissionAvailableUnderPlan('payroll:run',                  pay)).toBe(true);
+    });
+
+    it('SUITE plans always include all module-gated permissions even if a module flag is somehow false', () => {
+      // moduleCount === 3 short-circuits to true regardless of per-module flags.
+      const buggy = { planCode: 'SUITE_T2' as PlanCode, modulePos: true, moduleLedger: false, modulePayroll: false };
+      expect(isPermissionAvailableUnderPlan('ledger:view',  buggy)).toBe(true);
+      expect(isPermissionAvailableUnderPlan('payroll:run',  buggy)).toBe(true);
+    });
+
+    it('audit:view follows PLAN_FEATURES.auditLog', () => {
+      // STD_SOLO does NOT include auditLog
+      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'STD_SOLO',  ...POS_ONLY })).toBe(false);
+      // STD_BIZ DOES include auditLog
+      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'STD_BIZ',   ...POS_ONLY })).toBe(true);
+      // SUITE plans always include it
+      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'SUITE_T2',  ...SUITE })).toBe(true);
+    });
+
+    it('bir:view follows PLAN_FEATURES.birForms', () => {
+      // STD_SOLO has NO BIR forms
+      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'STD_SOLO', ...POS_ONLY })).toBe(false);
+      // STD_DUO+ HAS BIR forms
+      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'STD_DUO',  ...POS_ONLY })).toBe(true);
+      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'PAIR_T1', ...POS_LED  })).toBe(true);
+    });
+
+    it('unknown permission keys default to true (universal)', () => {
+      const ctx = { planCode: 'STD_SOLO' as PlanCode, ...POS_ONLY };
+      expect(isPermissionAvailableUnderPlan('completely:made_up', ctx)).toBe(true);
+    });
+  });
+
+  describe('getRequiredPlanForPermission', () => {
+    it('returns null for universal permissions', () => {
+      expect(getRequiredPlanForPermission('product:create')).toBeNull();
+      expect(getRequiredPlanForPermission('staff:view')).toBeNull();
+      expect(getRequiredPlanForPermission('unknown:thing')).toBeNull();
+    });
+
+    it('returns Ledger hint for ledger permissions', () => {
+      expect(getRequiredPlanForPermission('ledger:view')).toMatch(/ledger/i);
+      expect(getRequiredPlanForPermission('ledger:journal_entry')).toMatch(/ledger/i);
+      expect(getRequiredPlanForPermission('finance:bank_recon')).toMatch(/ledger/i);
+    });
+
+    it('returns Payroll hint for payroll permissions', () => {
+      expect(getRequiredPlanForPermission('payroll:view_salary')).toMatch(/payroll/i);
+      expect(getRequiredPlanForPermission('payroll:run')).toMatch(/payroll/i);
+      expect(getRequiredPlanForPermission('staff:assign_payroll_master')).toMatch(/payroll/i);
+    });
+
+    it('returns audit / bir hints for compliance permissions', () => {
+      expect(getRequiredPlanForPermission('audit:view')).toMatch(/audit/i);
+      expect(getRequiredPlanForPermission('bir:view')).toMatch(/bir/i);
     });
   });
 });

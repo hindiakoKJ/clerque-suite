@@ -7,7 +7,7 @@
  */
 
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException, Logger,
+  Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -17,6 +17,7 @@ import { DEMO_SCENARIOS, ScenarioKey, allProducts } from './demo-scenarios';
 import { COFFEE_SHOP_INGREDIENTS } from './coffee-shop-ingredients';
 import { COFFEE_SHOP_CATEGORIES } from './coffee-shop-categories';
 import { AccountsService } from '../accounting/accounts.service';
+import { MailService } from '../mail/mail.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,10 @@ export interface UpdateTenantProfileDto {
   name?:           string;
   businessName?:   string | null;
   /** Must match the BusinessType enum in schema.prisma exactly. */
-  businessType?:   'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING';
+  businessType?:
+    | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
+    | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING'
+    | 'PHARMACY' | 'TRUCKING' | 'CONSTRUCTION';
   taxStatus?:      'VAT' | 'NON_VAT' | 'UNREGISTERED';
   tinNumber?:      string | null;
   isBirRegistered?: boolean;
@@ -54,6 +58,19 @@ export interface UpdateTenantProfileDto {
   contactPhone?:   string | null;
   address?:        string | null;
   isDemoTenant?:   boolean;
+  // ── Sprint 12 — Policy fields, console-only authority ───────────────────
+  // These three used to be tenant-editable. Per the user directive, they're
+  // now console-only because each one corrupts accounting integrity if
+  // changed mid-life (revenue recognition, COGS continuity, VAT base, COGS
+  // overhead allocation). The tenant-side endpoints that used to set them
+  // now return 403 with code: 'CONSOLE_ONLY_POLICY'. Owners see the values
+  // read-only in Settings with a "contact support to change" affordance.
+  /** Inventory valuation method. WAC = weighted average; FIFO = first-in-first-out. */
+  valuationMethod?:    'WAC' | 'FIFO';
+  /** Revenue recognition basis. CASH on receipt; ACCRUAL on invoice. */
+  accountingMethod?:   'CASH' | 'ACCRUAL';
+  /** Manufacturing-only overhead rate (₱ per unit produced). Null = clear. */
+  overheadRatePerUnit?: number | null;
 }
 
 @Injectable()
@@ -62,9 +79,38 @@ export class AdminService {
   constructor(
     private prisma: PrismaService,
     private accounts: AccountsService,
+    private mail: MailService,
   ) {}
 
   // ─── Internal helpers ────────────────────────────────────────────────────
+
+  /**
+   * Sprint 12 — typed-slug confirmation for destructive console ops.
+   *
+   * The caller (controller) must pass `confirmationToken` from the body.
+   * Server-side check that it matches the tenant's slug exactly. Frontend
+   * shows a typed-slug modal so a misclicked button can't quietly suspend
+   * a tenant or wipe their data. Both sides must agree before mutation.
+   */
+  private async assertTypedSlug(tenantId: string, confirmationToken: string | undefined) {
+    if (!confirmationToken || typeof confirmationToken !== 'string') {
+      throw new BadRequestException({
+        code:    'CONFIRMATION_REQUIRED',
+        message: 'This is a destructive operation. Type the tenant slug to confirm.',
+      });
+    }
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { slug: true },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+    if (confirmationToken.trim().toLowerCase() !== tenant.slug.toLowerCase()) {
+      throw new ForbiddenException({
+        code:    'CONFIRMATION_MISMATCH',
+        message: `Confirmation slug does not match. Expected '${tenant.slug}'.`,
+      });
+    }
+  }
 
   /** Generates a secure 12-char random password. Shown once in Console UI. */
   private generatePassword(): string {
@@ -234,6 +280,21 @@ export class AdminService {
         // Sprint 3 — surface coffee-shop floor-layout tier in the Console
         coffeeShopTier: true,
         hasCustomerDisplay: true,
+        // Sprint 12 — costing & accounting policy fields (console-only authority).
+        // These are policy values, not financial data — value-set choices, not
+        // amounts. Surfacing them here doesn't violate the zero-financial-
+        // visibility invariant; the audit log still records `Object.keys()` only.
+        valuationMethod:     true,
+        accountingMethod:    true,
+        firstTransactionAt:  true,
+        overheadRatePerUnit: true,
+        // Modular pricing — needed by the PlanPanel
+        planCode:        true,
+        modulePos:       true,
+        moduleLedger:    true,
+        modulePayroll:   true,
+        staffSeatQuota:  true,
+        staffSeatAddons: true,
         _count: { select: { users: true, branches: true, products: true } },
       },
     });
@@ -418,7 +479,10 @@ export class AdminService {
   async resetUserPassword(userId: string, actor: ConsoleActor) {
     const user = await this.prisma.user.findUnique({
       where:  { id: userId },
-      select: { id: true, email: true, tenant: { select: { id: true, slug: true } } },
+      select: {
+        id: true, email: true, name: true,
+        tenant: { select: { id: true, slug: true } },
+      },
     });
     if (!user) throw new NotFoundException('User not found.');
 
@@ -440,6 +504,23 @@ export class AdminService {
       userEmail:  user.email,
       action:     'PASSWORD_RESET',
     });
+
+    // Sprint 12 — fire-and-forget email to the affected user. Closes the
+    // silent-reset attack: if a SUPER_ADMIN credential is compromised, the
+    // affected user gets independent notice and can call HNS to flag it.
+    // The reset itself still succeeds even if email delivery fails — we'd
+    // rather complete the reset than block on a transient SMTP issue.
+    if (user.email && user.tenant?.slug) {
+      this.mail.sendAdminPasswordResetNotice({
+        to:         user.email,
+        name:       user.name ?? user.email,
+        actorEmail: actor.email,
+        when:       new Date(),
+        tenantSlug: user.tenant.slug,
+      }).catch((err) => {
+        this.logger.warn(`Password-reset notice email failed for ${user.email}: ${err}`);
+      });
+    }
 
     return { userId, generatedPassword };
   }
@@ -516,7 +597,18 @@ export class AdminService {
 
   // ─── Tenant admin actions (existing) ─────────────────────────────────────
 
-  async setTenantStatus(tenantId: string, status: 'ACTIVE' | 'GRACE' | 'SUSPENDED', actor: ConsoleActor) {
+  async setTenantStatus(
+    tenantId: string,
+    status: 'ACTIVE' | 'GRACE' | 'SUSPENDED',
+    actor: ConsoleActor,
+    confirmationToken?: string,
+  ) {
+    // Sprint 12 — typed-slug confirmation required when SUSPENDING (kicks the
+    // tenant out, blocks logins). ACTIVE / GRACE transitions don't lock the
+    // tenant out so they don't need the extra step.
+    if (status === 'SUSPENDED') {
+      await this.assertTypedSlug(tenantId, confirmationToken);
+    }
     const t = await this.prisma.tenant.update({
       where:  { id: tenantId },
       data:   { status },
@@ -570,9 +662,29 @@ export class AdminService {
   async updateTenantProfile(tenantId: string, dto: UpdateTenantProfileDto, actor: ConsoleActor) {
     const t = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
-      select: { id: true, slug: true },
+      select: {
+        id: true, slug: true, businessType: true,
+        // For policy-write validation:
+        firstTransactionAt: true,
+      },
     });
     if (!t) throw new NotFoundException('Tenant not found.');
+
+    // Sprint 12 — guard against incoherent policy writes. Console can still
+    // override, but it gets a clear error when the change would corrupt data.
+    if (dto.overheadRatePerUnit != null) {
+      const targetType = dto.businessType ?? t.businessType;
+      if (targetType !== 'MANUFACTURING') {
+        throw new BadRequestException(
+          'Overhead allocation only applies to MANUFACTURING tenants. ' +
+          'For F&B and retail, utilities and rent should be recorded as ' +
+          'Operating Expenses, not COGS (per PFRS for SMEs).',
+        );
+      }
+      if (Number.isNaN(dto.overheadRatePerUnit) || dto.overheadRatePerUnit < 0) {
+        throw new BadRequestException('Overhead rate must be a non-negative number.');
+      }
+    }
 
     const data: Prisma.TenantUpdateInput = {};
     if (dto.name          !== undefined) data.name          = dto.name?.trim() || undefined;
@@ -587,10 +699,26 @@ export class AdminService {
     if (dto.address       !== undefined) data.address       = dto.address?.trim() ?? null;
     if (dto.isDemoTenant  !== undefined) data.isDemoTenant  = dto.isDemoTenant;
 
+    // Policy fields — console-only authority (Sprint 12)
+    if (dto.valuationMethod    !== undefined) {
+      data.valuationMethod  = dto.valuationMethod  as Prisma.TenantUpdateInput['valuationMethod'];
+    }
+    if (dto.accountingMethod   !== undefined) {
+      data.accountingMethod = dto.accountingMethod as Prisma.TenantUpdateInput['accountingMethod'];
+    }
+    if (dto.overheadRatePerUnit !== undefined) {
+      data.overheadRatePerUnit = dto.overheadRatePerUnit != null
+        ? new Prisma.Decimal(dto.overheadRatePerUnit)
+        : null;
+    }
+
     const updated = await this.prisma.tenant.update({
       where:  { id: tenantId },
       data,
-      select: { id: true, slug: true, name: true, businessType: true, taxStatus: true },
+      select: {
+        id: true, slug: true, name: true, businessType: true, taxStatus: true,
+        valuationMethod: true, accountingMethod: true, overheadRatePerUnit: true,
+      },
     });
 
     await this.logAction({
@@ -598,7 +726,17 @@ export class AdminService {
       tenantId,
       tenantSlug: t.slug,
       action:  'PROFILE_UPDATED',
-      detail:  { fields: Object.keys(dto) },
+      // Field NAMES only — never the values. Preserves the privacy invariant
+      // (console audit log never records financial data; policy values stay
+      // visible only via the read endpoints, not via the audit feed).
+      detail:  {
+        fields: Object.keys(dto),
+        // Surface a flag if the update overrode the auto-lock — bookkeepers
+        // need to know a CPA-grade decision was made under support oversight.
+        ...(dto.valuationMethod && t.firstTransactionAt
+          ? { valuationLockOverridden: true }
+          : {}),
+      },
     });
 
     return updated;
@@ -606,7 +744,17 @@ export class AdminService {
 
   // ─── Demo data reset ──────────────────────────────────────────────────────
 
-  async resetDemoData(tenantId: string, scenarioKey: ScenarioKey, actor: ConsoleActor) {
+  async resetDemoData(
+    tenantId: string,
+    scenarioKey: ScenarioKey,
+    actor: ConsoleActor,
+    confirmationToken?: string,
+  ) {
+    // Sprint 12 — typed-slug confirmation. Wiping demo data deletes orders,
+    // JEs, products, etc. Even on a demo tenant a misclick is an annoying
+    // multi-minute reseed. Make it deliberate.
+    await this.assertTypedSlug(tenantId, confirmationToken);
+
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
       select: {
@@ -1028,7 +1176,13 @@ export class AdminService {
    * Useful when a tenant onboards and wants to clear sample data before
    * entering real products.
    */
-  async clearAllTenantData(tenantId: string, actor: ConsoleActor) {
+  async clearAllTenantData(tenantId: string, actor: ConsoleActor, confirmationToken?: string) {
+    // Sprint 12 — typed-slug confirmation REQUIRED for this op. clearAllTenantData
+    // wipes products, orders, JEs, AR/AP, raw materials, inventory. There's no
+    // undo. Not negotiable — the typed-slug guard is the safety net between a
+    // misclick and an unrecoverable state.
+    await this.assertTypedSlug(tenantId, confirmationToken);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { id: true, slug: true },

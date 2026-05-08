@@ -148,6 +148,63 @@ export class MailService {
     });
   }
 
+  // ── Admin-initiated Password Reset Notice (Sprint 12) ────────────────────
+  //
+  // Sent to the affected user whenever a SUPER_ADMIN resets their password
+  // via the Console. Closes a real attack: pre-Sprint-12, a compromised
+  // SUPER_ADMIN credential could reset a tenant owner's password silently
+  // and then log in as them. This email gives the affected user independent
+  // notice — if it lands unexpectedly, they call HNS support immediately.
+  //
+  // The reset itself still works (we still surface the new password to the
+  // SUPER_ADMIN, who needs to communicate it to the user); we just no longer
+  // do it silently.
+  async sendAdminPasswordResetNotice(opts: {
+    to:           string;
+    name:         string;
+    actorEmail:   string;
+    when:         Date;
+    tenantSlug:   string;
+  }): Promise<void> {
+    const supportUrl = `${this.appUrl}/help`;
+    const whenStr = opts.when.toLocaleString('en-PH', {
+      dateStyle: 'long', timeStyle: 'short',
+    });
+
+    await this.send({
+      to:      opts.to,
+      subject: 'Your Clerque password was reset by HNS support',
+      html:    this.layout(`
+        <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
+          Password Reset Notice
+        </h2>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Hi <strong>${this.escape(opts.name)}</strong>,
+        </p>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          A member of the HNS support team (<strong>${this.escape(opts.actorEmail)}</strong>)
+          reset your Clerque password on <strong>${whenStr}</strong>.
+        </p>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          The new password will be communicated to you directly through the same channel
+          you've been using with HNS support. Once you log in with it, change it to
+          something only you know.
+        </p>
+        <div style="margin:0 0 24px;padding:14px;border-radius:8px;background:#fef3c7;border-left:4px solid #f59e0b;">
+          <p style="margin:0;color:#78350f;line-height:1.6;font-size:14px;">
+            <strong>Didn't expect this?</strong> Contact HNS support immediately at
+            <a href="${supportUrl}" style="color:#92400e;text-decoration:underline;">${supportUrl}</a>
+            and don't log in until we confirm. This is the kind of email that flags
+            a compromised support account — your alert helps us catch it.
+          </p>
+        </div>
+        <p style="margin:0;color:#aaa;font-size:12px;">
+          Tenant: ${this.escape(opts.tenantSlug)}
+        </p>
+      `),
+    });
+  }
+
   // ── Internal helpers ───────────────────────────────────────────────────────
 
   private async send(opts: { to: string; subject: string; html: string }) {

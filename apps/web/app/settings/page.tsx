@@ -546,58 +546,43 @@ export default function SettingsPage() {
               <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
                 <p className="font-semibold text-sm">BIR Tax Classification</p>
                 <p>
-                  This setting controls how the POS computes VAT, generates receipts, and presents
-                  BIR forms. Set it exactly as your Certificate of Registration (COR) states.
-                  After saving, log out and back in so your session reflects the new classification.
+                  Your registration status (VAT / Non-VAT / Unregistered) is set during onboarding
+                  and is now <strong>controlled by HNS support</strong> — switching mid-life flips
+                  VAT computation and receipt format, which BIR has to approve. You can still
+                  update operational fields like TIN, business name, PTU, and registered address
+                  yourself. To change your registration status, contact us.
                 </p>
               </div>
             </div>
 
-            {/* Tax status selector */}
+            {/* Tax status — read-only display */}
             <div className="rounded-xl border border-border bg-card p-4 space-y-4">
-              <h3 className="text-sm font-semibold text-foreground">Registration Status</h3>
-
-              <div className="space-y-2">
-                {([
-                  {
-                    value: 'VAT',
-                    label: 'VAT-Registered',
-                    sub: 'Collects 12% VAT; issues VAT Official Receipts; files BIR 2550Q quarterly.',
-                    badge: 'bg-green-500/10 text-green-700 border-green-400/30',
-                  },
-                  {
-                    value: 'NON_VAT',
-                    label: 'Non-VAT Registered',
-                    sub: 'Registered with BIR but below VAT threshold. Issues Official Receipts. No input tax claim.',
-                    badge: 'bg-blue-500/10 text-blue-700 border-blue-400/30',
-                  },
-                  {
-                    value: 'UNREGISTERED',
-                    label: 'Unregistered / Barangay Business',
-                    sub: 'No BIR registration. Issues Acknowledgement Receipts only. No VAT, no BIR forms.',
-                    badge: 'bg-muted text-muted-foreground border-border',
-                  },
-                ] as const).map(({ value, label, sub, badge }) => (
-                  <button
-                    key={value}
-                    onClick={() => { setTaxForm((f) => ({ ...f, taxStatus: value })); setTaxDirty(true); }}
-                    disabled={!isOwner}
-                    className={`w-full text-left rounded-lg border px-4 py-3 transition-all ${
-                      taxForm.taxStatus === value
-                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] ring-1 ring-[var(--accent)]/30'
-                        : 'border-border hover:border-[var(--accent)]/40 hover:bg-accent/5'
-                    } disabled:opacity-60 disabled:cursor-not-allowed`}
-                  >
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${badge}`}>
-                        {value.replace('_', ' ')}
-                      </span>
-                      <span className="text-sm font-medium text-foreground">{label}</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground pl-0.5">{sub}</p>
-                  </button>
-                ))}
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-foreground">Registration Status</h3>
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                  <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+                </span>
               </div>
+
+              {(() => {
+                const STATUS_META = {
+                  VAT:          { label: 'VAT-Registered',                    sub: 'Collects 12% VAT; issues VAT Official Receipts; files BIR 2550Q quarterly.',     badge: 'bg-green-500/10 text-green-700 border-green-400/30' },
+                  NON_VAT:      { label: 'Non-VAT Registered',                sub: 'Registered with BIR but below VAT threshold. Issues Official Receipts. No input tax claim.', badge: 'bg-blue-500/10 text-blue-700 border-blue-400/30' },
+                  UNREGISTERED: { label: 'Unregistered / Barangay Business',  sub: 'No BIR registration. Issues Acknowledgement Receipts only. No VAT, no BIR forms.',  badge: 'bg-muted text-muted-foreground border-border' },
+                } as const;
+                const current = STATUS_META[taxForm.taxStatus] ?? STATUS_META.UNREGISTERED;
+                return (
+                  <div className="rounded-lg border border-border bg-muted/20 px-4 py-3">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${current.badge}`}>
+                        {taxForm.taxStatus.replace('_', ' ')}
+                      </span>
+                      <span className="text-sm font-medium text-foreground">{current.label}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground pl-0.5">{current.sub}</p>
+                  </div>
+                );
+              })()}
 
               {taxForm.taxStatus !== 'UNREGISTERED' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-border">
@@ -1241,49 +1226,17 @@ function CostingCard({
   profile: TenantProfile;
   qc: ReturnType<typeof useQueryClient>;
 }) {
+  // Sprint 12 — CostingCard is fully read-only on the tenant side. Both
+  // valuationMethod and overheadRatePerUnit are now CONSOLE-only policy
+  // knobs (changing them mid-life corrupts COGS continuity). Owners see
+  // the active values with a lock badge + a "Contact support to change"
+  // affordance. The previous mutation buttons + auto-lock-on-first-txn UI
+  // are gone — the lock is permanent from the tenant's perspective.
   const isManufacturing = profile.businessType === 'MANUFACTURING';
-  const isLocked = !!profile.firstTransactionAt;
-
-  const [valMethod, setValMethod] = useState<'WAC' | 'FIFO'>(
-    (profile.valuationMethod as 'WAC' | 'FIFO') ?? 'WAC',
-  );
-  const [overhead, setOverhead] = useState<string>(
-    profile.overheadRatePerUnit != null ? String(profile.overheadRatePerUnit) : '',
-  );
-  const [savingMethod, setSavingMethod] = useState(false);
-  const [savingOH, setSavingOH] = useState(false);
-
-  async function saveMethod() {
-    if (isLocked) return;
-    setSavingMethod(true);
-    try {
-      await api.patch('/tenant/valuation-method', { method: valMethod });
-      toast.success(`Valuation method set to ${valMethod}.`);
-      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message ?? 'Failed to update valuation method.');
-    } finally {
-      setSavingMethod(false);
-    }
-  }
-
-  async function saveOverhead() {
-    setSavingOH(true);
-    try {
-      const ratePerUnit = overhead.trim() === '' ? null : parseFloat(overhead);
-      if (ratePerUnit != null && (Number.isNaN(ratePerUnit) || ratePerUnit < 0)) {
-        toast.error('Overhead rate must be a non-negative number.');
-        return;
-      }
-      await api.patch('/tenant/overhead-rate', { ratePerUnit });
-      toast.success(ratePerUnit == null ? 'Overhead allocation cleared.' : 'Overhead rate saved.');
-      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message ?? 'Failed to update overhead rate.');
-    } finally {
-      setSavingOH(false);
-    }
-  }
+  const valMethod   = (profile.valuationMethod as 'WAC' | 'FIFO') ?? 'WAC';
+  const overheadStr = profile.overheadRatePerUnit != null
+    ? `₱${Number(profile.overheadRatePerUnit).toFixed(4)} / unit`
+    : '— (utilities recorded as OpEx)';
 
   return (
     <div className="rounded-xl border border-border bg-card p-4 space-y-5">
@@ -1292,99 +1245,44 @@ function CostingCard({
         <h3 className="text-sm font-semibold text-foreground">Inventory Costing</h3>
       </div>
 
-      {/* Valuation method */}
+      {/* Valuation method — read-only */}
       <div className="space-y-2">
-        <label className="text-xs font-medium text-muted-foreground">
-          Valuation method
-          {isLocked && (
-            <span className="ml-2 inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600">
-              LOCKED
-            </span>
-          )}
-        </label>
-        <div className="flex gap-2">
-          {(['WAC', 'FIFO'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => !isLocked && setValMethod(m)}
-              disabled={isLocked}
-              className={`flex-1 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
-                valMethod === m
-                  ? 'border-transparent text-white'
-                  : 'border-border text-muted-foreground hover:bg-secondary'
-              } ${isLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
-              style={valMethod === m ? { background: 'var(--accent)' } : undefined}
-            >
-              {m}
-            </button>
-          ))}
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium text-muted-foreground">Valuation method</label>
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+            <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+          </span>
+        </div>
+        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border bg-muted/20">
+          <span className="text-base font-semibold text-foreground">{valMethod}</span>
+          <span className="text-xs text-muted-foreground">
+            ({valMethod === 'WAC' ? 'Weighted Average Cost' : 'First-In-First-Out'})
+          </span>
         </div>
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          <strong className="text-foreground">WAC</strong> (default): running weighted-average cost.
-          Simpler, smoother COGS — recommended for most cafés / restaurants.<br />
-          <strong className="text-foreground">FIFO</strong>: oldest inventory consumed first. More
-          accurate for perishables, required by some auditors. Both are PFRS-compliant.
+          The inventory valuation method is set by HNS support during onboarding. Changing it
+          mid-life would produce inconsistent COGS, so it requires a planned fiscal-year cutover —
+          contact support to discuss.
         </p>
-        {!isLocked && (
-          <div className="flex gap-2 items-start rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-              <strong>Choose carefully — this is set once.</strong> The valuation method locks
-              automatically the moment you post your first sale, per PFRS for SMEs §13. After that,
-              switching requires support intervention and a fiscal year-end cutover.
-            </p>
-          </div>
-        )}
-        {isLocked ? (
-          <p className="text-[11px] text-amber-600 leading-relaxed">
-            Locked — first transaction posted on{' '}
-            {new Date(profile.firstTransactionAt!).toLocaleDateString('en-PH')}. Switching mid-stream
-            would produce inconsistent COGS. Contact support to plan a clean cutover at fiscal year-end.
-          </p>
-        ) : (
-          valMethod !== (profile.valuationMethod ?? 'WAC') && (
-            <button
-              onClick={saveMethod}
-              disabled={savingMethod}
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white disabled:opacity-50"
-              style={{ background: 'var(--accent)' }}
-            >
-              {savingMethod ? 'Saving…' : `Save ${valMethod}`}
-            </button>
-          )
-        )}
       </div>
 
-      {/* Manufacturing overhead — visible only for MANUFACTURING tenants */}
+      {/* Manufacturing overhead — read-only, only shown for MANUFACTURING */}
       {isManufacturing && (
         <div className="pt-4 border-t border-border space-y-2">
-          <label className="text-xs font-medium text-muted-foreground">
-            Manufacturing overhead (₱ per unit produced)
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="number"
-              min={0}
-              step="0.0001"
-              value={overhead}
-              onChange={(e) => setOverhead(e.target.value)}
-              placeholder="e.g. 2.50"
-              className="flex-1 h-9 px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-            />
-            <button
-              onClick={saveOverhead}
-              disabled={savingOH}
-              className="text-xs font-semibold px-4 rounded-lg text-white disabled:opacity-50"
-              style={{ background: 'var(--accent)' }}
-            >
-              {savingOH ? 'Saving…' : 'Save'}
-            </button>
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-muted-foreground">
+              Manufacturing overhead (₱ per unit produced)
+            </label>
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+              <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+            </span>
+          </div>
+          <div className="px-3 py-2.5 rounded-lg border border-border bg-muted/20 text-sm font-semibold">
+            {overheadStr}
           </div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Adds factory overhead (utilities, depreciation, indirect labor) to COGS using full
-            absorption costing. Set this only when your accountant confirms the rate. Leave blank to
-            clear (utilities revert to OpEx).
+            Overhead allocation is set by HNS support based on your CPA's recommendation. Contact
+            support to adjust.
           </p>
         </div>
       )}

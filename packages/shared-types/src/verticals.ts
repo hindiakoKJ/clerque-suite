@@ -140,7 +140,7 @@ export interface VerticalPack {
       titleEdit:       string;
       namePlaceholder: string;
       /** Whether to show the recipe / BOM toggle. Only true for RECIPE_BOM. */
-      showInventoryMode: boolean;
+      allowRecipeProducts: boolean;
       /** Notes shown under the modal title (e.g. pricing setup pointer). */
       helperHtml?: string;
     };
@@ -230,7 +230,7 @@ export const fnbPack: VerticalPack = {
       titleNew:        'New Product',
       titleEdit:       'Edit Product',
       namePlaceholder: 'e.g. Brewed Coffee',
-      showInventoryMode: true,    // recipe vs unit toggle
+      allowRecipeProducts: true,    // recipe vs unit toggle
     },
   },
 
@@ -288,7 +288,10 @@ export const retailPack: VerticalPack = {
       titleNew:        'New Product',
       titleEdit:       'Edit Product',
       namePlaceholder: 'e.g. Item name',
-      showInventoryMode: false,
+      // Sprint 12 — even retail tenants have side-business recipe items
+      // (a hardware store mixes paint to order; agrivet repackages bulk feeds;
+      // a sari-sari store assembles snack packs). Per-product opt-in.
+      allowRecipeProducts: true,
     },
   },
 
@@ -348,7 +351,9 @@ export const serviceMfgPack: VerticalPack = {
       titleNew:        'New Product',
       titleEdit:       'Edit Product',
       namePlaceholder: 'e.g. Item / raw material',
-      showInventoryMode: false,
+      // Service / Mfg tenants run kit-of-parts assemblies + custom builds;
+      // recipe BOM is core to their COGS, not a side-business affordance.
+      allowRecipeProducts: true,
     },
   },
 
@@ -402,7 +407,10 @@ export const laundryPack: VerticalPack = {
       titleNew:        'New Service / Item',
       titleEdit:       'Edit Service / Item',
       namePlaceholder: 'e.g. Wash & Fold (per kg)',
-      showInventoryMode: false,
+      // Sprint 12 — laundromats with side-business retail can opt into
+      // ingredient-based COGS (e.g. branded laundry bag → cloth + thread).
+      // Most retail items stay UNIT_BASED; the per-product toggle handles it.
+      allowRecipeProducts: true,
       helperHtml: 'Use this for retail items (detergent, fabric softener, hangers). Per-kg / per-load <strong>service prices</strong> live under Settings → Laundry.',
     },
   },
@@ -428,6 +436,244 @@ export const laundryPack: VerticalPack = {
   },
 
   help: { sectionsModule: '@/app/pos/(pos)/help/laundry-sections' },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// SIX-ENGINE STRUCTURE (Sprint 12)
+//
+// The platform organizes around six vertical engines:
+//   1. Food-Engine        — fnbPack (above): F&B (6 BusinessTypes)
+//   2. Retail-Engine      — retailPack (above): RETAIL
+//   3. Service-Engine     — serviceMfgPack + laundryPack: SERVICE, LAUNDRY,
+//                           MANUFACTURING (until split out into Project-Engine)
+//   4. Compliance-Engine  — pharmacyPack (below): PHARMACY
+//   5. Logistics-Engine   — truckingPack (below): TRUCKING
+//   6. Project-Engine     — constructionPack (below): CONSTRUCTION
+//                           (MANUFACTURING currently maps to serviceMfgPack;
+//                           will move here once Project-Engine schema lands)
+//
+// Each pack is a registration slot. The vertical-specific schema (Rx, lots,
+// trip tickets, project models) ships incrementally as each engine's first
+// paying tenant onboards. Today's packs declare the POS sidebar / dashboard /
+// product-modal copy so a tenant signing up as PHARMACY, TRUCKING, or
+// CONSTRUCTION immediately sees a vertical-flavoured UI.
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Pharmacy pack — Compliance-Engine.
+ *
+ * Drugstores / botikas. PH-regulated: Generics Act (RA 6675), DDB controlled
+ * substances register (RA 9165), FDA lot+expiry tracking, mandatory PWD/Senior
+ * discount. Schema additions (Prescription, ProductLot, ControlledSubstanceLog,
+ * User.prcLicense) ship when first pharmacy tenant onboards. UI today is the
+ * POS shell with appropriate labels; the Rx-required dispense gate, lot picker,
+ * and DDB monthly export are stubs in pos.sidebarGroups pointing at routes
+ * that will be implemented in the Compliance-Engine sprint.
+ */
+export const pharmacyPack: VerticalPack = {
+  businessTypes: ['PHARMACY'],
+  category:      'PHARMACY',
+  id:            'pharmacy',
+  displayName:   'Pharmacy',
+  tagline:       'Drugstores / botikas with prescription tracking, lot+expiry, and DDB compliance.',
+
+  pos: {
+    cashierScreen: 'DISPENSE',
+    sidebarGroups: [
+      { label: 'Overview', items: [{ label: 'Dashboard', href: '/pos/dashboard', iconName: 'LayoutDashboard' }] },
+      { label: 'Dispense', items: [
+        { label: 'Terminal',       href: '/pos/terminal',       iconName: 'ShoppingCart' },
+        { label: 'Prescriptions',  href: '/pos/pharmacy/rx',    iconName: 'FileText' },
+        { label: 'Orders',         href: '/pos/orders',         iconName: 'ShoppingBag' },
+      ]},
+      { label: 'Catalog', items: [
+        { label: 'Products / Drugs', href: '/pos/products',     iconName: 'Pill' },
+        { label: 'Lots & Expiry',    href: '/pos/pharmacy/lots',iconName: 'Calendar' },
+        { label: 'Inventory',        href: '/pos/inventory',    iconName: 'ClipboardList' },
+      ]},
+      { label: 'Compliance', items: [
+        { label: 'DDB Register',     href: '/pos/pharmacy/ddb', iconName: 'Shield' },
+      ]},
+      { label: 'Warehouse', items: [
+        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
+        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
+      ]},
+    ],
+    receiptFormat: 'PHARMACY_RX',
+    productModal: {
+      titleNew:        'New Drug / Product',
+      titleEdit:       'Edit Drug / Product',
+      namePlaceholder: 'e.g. Paracetamol 500mg (Biogesic)',
+      // Pharmacies compound creams + premixes — recipe BOM matters here.
+      allowRecipeProducts: true,
+      helperHtml: 'For Rx-required items, set generic name + brand + strength + dosage form. Lot/expiry tracking is automatic for FDA-regulated SKUs.',
+    },
+  },
+
+  inventory: 'UNIT_FIFO',
+
+  ledger: {
+    reportIds:            [],   // intentionally empty — Ledger reports stay universal (per user directive)
+    journalTemplateIds:   [],
+    optionalAccountCodes: [],
+  },
+
+  payroll: {
+    compensationTypes: ['HOURLY', 'SALARY'],
+    timesheetShape:    'SHIFT',
+    extraIds:          [],
+  },
+
+  settings: {
+    extraCards: [
+      { label: 'Pharmacy Setup', desc: 'Pharmacist roster, Rx categories, DDB config', href: '/settings/pharmacy', iconName: 'Pill' },
+    ],
+  },
+
+  help: { sectionsModule: '@/app/pos/(pos)/help/page' },
+  // Solo plan illegal for pharmacy — at minimum needs an active pharmacist on
+  // duty (which a single owner cashier may not be) plus back-office reconciliation.
+  excludedPlans: ['STD_SOLO'],
+  requiredFeatures: ['birForms'],
+};
+
+/**
+ * Trucking pack — Logistics-Engine.
+ *
+ * Hauling, delivery fleets, courier. PH MSME segment massively underserved.
+ * Schema additions (TripTicket, LiquidationItem, FleetAsset, PMSchedule,
+ * TireSerial) ship when first trucking tenant onboards. Trip ledger drives
+ * profitability per route; liquidation reconciles cash advances against
+ * receipts; PM schedule tracks engine oil / tire / chassis maintenance.
+ */
+export const truckingPack: VerticalPack = {
+  businessTypes: ['TRUCKING'],
+  category:      'LAUNDRY',  // closest existing category — refine when category enum extends
+  id:            'trucking',
+  displayName:   'Trucking & Hauling',
+  tagline:       'Trip-ticket profitability, cash-advance liquidation, fleet maintenance schedules.',
+
+  pos: {
+    cashierScreen: 'WORK_ORDER',
+    sidebarGroups: [
+      { label: 'Overview', items: [{ label: 'Dashboard', href: '/pos/dashboard', iconName: 'LayoutDashboard' }] },
+      { label: 'Operations', items: [
+        { label: 'Trip Tickets',   href: '/pos/trucking/trips',         iconName: 'Truck' },
+        { label: 'Liquidation',    href: '/pos/trucking/liquidation',   iconName: 'Receipt' },
+        { label: 'Drivers',        href: '/pos/staff',                  iconName: 'Users' },
+      ]},
+      { label: 'Fleet', items: [
+        { label: 'Assets',         href: '/pos/trucking/fleet',         iconName: 'Truck' },
+        { label: 'PM Schedule',    href: '/pos/trucking/pm-schedule',   iconName: 'Wrench' },
+        { label: 'Tires',          href: '/pos/trucking/tires',         iconName: 'Disc' },
+      ]},
+      { label: 'Records', items: [
+        { label: 'Orders',         href: '/pos/orders',                 iconName: 'ShoppingBag' },
+      ]},
+    ],
+    receiptFormat: 'PROJECT_INVOICE',
+    productModal: {
+      titleNew:        'New Service / Item',
+      titleEdit:       'Edit Service / Item',
+      namePlaceholder: 'e.g. 10-wheeler Manila→Cebu',
+      // Trucking sells services + parts retail. Recipe BOM rarely needed
+      // (trip cost is composed at the trip-ticket level, not via product BOM).
+      allowRecipeProducts: false,
+    },
+  },
+
+  // Trips ARE the WIP — fuel + driver allowance + cash advances accumulate
+  // until liquidated. Maps cleanly to PROJECT_WIP.
+  inventory: 'PROJECT_WIP',
+
+  ledger: {
+    reportIds:            [],
+    journalTemplateIds:   [],
+    optionalAccountCodes: [],
+  },
+
+  payroll: {
+    compensationTypes: ['HOURLY', 'SALARY', 'PIECE_RATE', 'PROJECT_HOURS'],
+    timesheetShape:    'PROJECT',
+    extraIds:          [],
+  },
+
+  settings: {
+    extraCards: [
+      { label: 'Fleet Setup', desc: 'Vehicles, PM schedules, driver assignment', href: '/settings/fleet', iconName: 'Truck' },
+    ],
+  },
+
+  help: { sectionsModule: '@/app/pos/(pos)/help/page' },
+  excludedPlans: ['STD_SOLO'], // single-truck operators exist but typically need at least DUO for accounting
+};
+
+/**
+ * Construction pack — Project-Engine.
+ *
+ * General contractors, civil works, interior fit-out, custom fabrication.
+ * Project-heavy: each job is months long, with progress billing, retention,
+ * and materials variance vs quoted. Schema additions (Project, ProjectMaterial,
+ * ProgressBilling, RetentionRelease) ship when first construction tenant
+ * onboards. MANUFACTURING currently sits under serviceMfgPack but will move
+ * here once Project-Engine ships properly.
+ */
+export const constructionPack: VerticalPack = {
+  businessTypes: ['CONSTRUCTION'],
+  category:      'MANUFACTURING',  // closest existing category
+  id:            'construction',
+  displayName:   'Construction',
+  tagline:       'General contractors, civil works, interior fit-out — project P&L + progress billing.',
+
+  pos: {
+    cashierScreen: 'WORK_ORDER',
+    sidebarGroups: [
+      { label: 'Overview', items: [{ label: 'Dashboard', href: '/pos/dashboard', iconName: 'LayoutDashboard' }] },
+      { label: 'Projects', items: [
+        { label: 'Projects',        href: '/pos/projects',              iconName: 'Hammer' },
+        { label: 'Materials',       href: '/pos/projects/materials',    iconName: 'Package' },
+        { label: 'Progress Billing', href: '/pos/projects/billing',     iconName: 'Receipt' },
+      ]},
+      { label: 'Catalog', items: [
+        { label: 'Products / Materials', href: '/pos/products',         iconName: 'Package' },
+        { label: 'Inventory',            href: '/pos/inventory',        iconName: 'ClipboardList' },
+        { label: 'Units (UoM)',          href: '/pos/settings/uom',     iconName: 'Ruler' },
+      ]},
+      { label: 'Sell', items: [
+        { label: 'Terminal',  href: '/pos/terminal',  iconName: 'ShoppingCart' },
+        { label: 'Orders',    href: '/pos/orders',    iconName: 'ShoppingBag' },
+      ]},
+      { label: 'Warehouse', items: [
+        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
+        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
+      ]},
+    ],
+    receiptFormat: 'PROJECT_INVOICE',
+    productModal: {
+      titleNew:        'New Material / Service',
+      titleEdit:       'Edit Material / Service',
+      namePlaceholder: 'e.g. Cement bag 40kg / Tile installation per sqm',
+      allowRecipeProducts: true,  // assemblies (e.g. door + hardware kit) are recipes
+    },
+  },
+
+  inventory: 'PROJECT_WIP',
+
+  ledger: {
+    reportIds:            [],
+    journalTemplateIds:   [],
+    optionalAccountCodes: [],
+  },
+
+  payroll: {
+    compensationTypes: ['HOURLY', 'SALARY', 'PROJECT_HOURS', 'PIECE_RATE'],
+    timesheetShape:    'PROJECT',
+    extraIds:          [],
+  },
+
+  settings: { extraCards: [] },
+  help: { sectionsModule: '@/app/pos/(pos)/help/page' },
+  excludedPlans: ['STD_SOLO'], // construction tenants need multi-staff seat counts
 };
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -478,7 +724,7 @@ export const barbershopPack: VerticalPack = {
       titleNew:        'New Service / Product',
       titleEdit:       'Edit Service / Product',
       namePlaceholder: 'e.g. Men\'s haircut',
-      showInventoryMode: false,
+      allowRecipeProducts: false,
     },
   },
 
@@ -509,16 +755,23 @@ export const barbershopPack: VerticalPack = {
 // ──────────────────────────────────────────────────────────────────────────
 
 export const VERTICAL_PACKS: Record<BusinessType, VerticalPack> = {
+  // Food-Engine
   COFFEE_SHOP:   fnbPack,
   RESTAURANT:    fnbPack,
   BAKERY:        fnbPack,
   FOOD_STALL:    fnbPack,
   BAR_LOUNGE:    fnbPack,
   CATERING:      fnbPack,
+  // Retail-Engine
   RETAIL:        retailPack,
+  // Service-Engine
   SERVICE:       serviceMfgPack,
   MANUFACTURING: serviceMfgPack,
   LAUNDRY:       laundryPack,
+  // Sprint 12 — six-engine completion
+  PHARMACY:      pharmacyPack,
+  TRUCKING:      truckingPack,
+  CONSTRUCTION:  constructionPack,
 };
 
 /** Default pack used when a businessType isn't yet registered (defensive). */

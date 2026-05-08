@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Post, Body, Param, Req, UseGuards, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, Param, Req, UseGuards, HttpCode, HttpStatus, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -162,11 +162,11 @@ export class TenantController {
   /**
    * PATCH /tenant/tax-settings
    *
-   * Updates BIR tax classification, TIN, business name, and accounting method.
-   * Restricted to BUSINESS_OWNER and SUPER_ADMIN — these are compliance-critical fields.
-   *
-   * ⚠️  After calling this endpoint, the user must re-login to receive an updated JWT.
-   *     The old JWT still carries the previous tax flags until it expires or is refreshed.
+   * Updates operational fields (TIN, business name, registered address, PTU/MIN).
+   * Sprint 12 — three policy fields (taxStatus, accountingMethod, isBirRegistered)
+   * are now CONSOLE-only. If an owner posts any of those, returns 403
+   * CONSOLE_ONLY_POLICY. SUPER_ADMIN can still write all fields when
+   * authenticating into the tenant (ops/support workflow).
    */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   @Patch('tax-settings')
@@ -176,6 +176,23 @@ export class TenantController {
     @Body() body: UpdateTaxSettingsDto,
     @Req() req: Request,
   ) {
+    // Owner attempting to change a policy field — 403 with the same code the
+    // valuation/overhead endpoints use. Surfaces a friendly message to the UI
+    // and is consistent across all four locked policy knobs.
+    if (!user.isSuperAdmin) {
+      const policyField =
+        body.taxStatus        != null ? 'taxStatus'        :
+        body.accountingMethod != null ? 'accountingMethod' :
+        null;
+      if (policyField) {
+        throw new ForbiddenException({
+          code:    'CONSOLE_ONLY_POLICY',
+          field:   policyField,
+          message: `${policyField} is now controlled by HNS support. Contact us to change.`,
+        });
+      }
+    }
+
     const ipAddress = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
                     ?? req.socket?.remoteAddress;
     return this.tenantService.updateTaxSettings(
@@ -183,26 +200,45 @@ export class TenantController {
       body,
       user.sub,
       ipAddress,
+      Boolean(user.isSuperAdmin),
     );
   }
 
   /**
-   * Update the inventory valuation method (WAC | FIFO).
-   * Locked after the first transaction has been posted.
+   * Sprint 12 — valuation method is now console-only.
+   *
+   * Why: switching valuation mid-year produces inconsistent COGS. Even with
+   * the existing first-transaction auto-lock, owners were able to switch
+   * before issuing their first OR (the most common scenario where a coffee
+   * shop signs up Friday, plays with WAC/FIFO over the weekend, then opens
+   * Monday with whatever they last clicked). HNS support owns this knob now;
+   * the tenant sees the value read-only in Settings.
+   *
+   * SUPER_ADMIN can still hit this endpoint — for support workflows that
+   * authenticate AS the tenant — but the friendlier console path is
+   * PATCH /admin/tenants/:id/profile { valuationMethod: 'FIFO' }.
    */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   @Patch('valuation-method')
   @HttpCode(HttpStatus.OK)
   setValuationMethod(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { method: 'WAC' | 'FIFO' },
+    @Body() _body: { method: 'WAC' | 'FIFO' },
   ) {
-    return this.tenantService.setValuationMethod(user.tenantId!, body.method, user.sub);
+    if (!user.isSuperAdmin) {
+      throw new ForbiddenException({
+        code:    'CONSOLE_ONLY_POLICY',
+        field:   'valuationMethod',
+        message: 'Inventory valuation method is now controlled by HNS support. Contact us to change.',
+      });
+    }
+    return this.tenantService.setValuationMethod(user.tenantId!, _body.method, user.sub);
   }
 
   /**
-   * Sprint 6 — Set manufacturing overhead rate (₱ per unit produced).
-   * MANUFACTURING tenants only. Set null to clear.
+   * Sprint 12 — overhead rate is now console-only (same reason as valuation
+   * method: changing the COGS base mid-year corrupts gross margin reporting).
+   * Tenants see the value read-only in Settings → Costing.
    */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   @Patch('overhead-rate')
@@ -211,6 +247,13 @@ export class TenantController {
     @CurrentUser() user: JwtPayload,
     @Body() body: { ratePerUnit: number | null },
   ) {
+    if (!user.isSuperAdmin) {
+      throw new ForbiddenException({
+        code:    'CONSOLE_ONLY_POLICY',
+        field:   'overheadRatePerUnit',
+        message: 'Manufacturing overhead rate is now controlled by HNS support. Contact us to change.',
+      });
+    }
     return this.tenantService.setOverheadRate(user.tenantId!, body.ratePerUnit);
   }
 

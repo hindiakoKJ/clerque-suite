@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { ModifierGroupModal } from '@/components/pos/ModifierGroupModal';
 import { StockAdjustModal } from '@/components/pos/StockAdjustModal';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
-import { isFnbType, isLaundryType } from '@repo/shared-types';
+import { isFnbType, isLaundryType, getVerticalPack } from '@repo/shared-types';
 import { ImportModal } from '@/components/ui/ImportModal';
 
 interface Category { id: string; name: string; }
@@ -79,14 +79,16 @@ export default function ProductsPage() {
   const isFnb     = isFnbType(tenantProfile?.businessType);
   const isLaundry = isLaundryType(tenantProfile?.businessType);
 
-  // Vertical-aware copy. Laundry tenants sell SERVICES (wash, dry, dry-clean)
-  // plus a small retail catalog (detergent, fabric softener) — labelling
-  // every screen "Products" with a coffee placeholder is jarring for them.
-  const NEW_ITEM_LABEL  = isLaundry ? 'New Service / Item' : 'New Product';
-  const NEW_NAME_PLACEHOLDER =
-    isLaundry ? 'e.g. Wash & Fold (per kg)' :
-    isFnb     ? 'e.g. Brewed Coffee'        :
-                'e.g. Item name';
+  // Vertical-aware copy + recipe gating come from the VerticalPack registry —
+  // the single source of truth keyed by businessType. Sprint 12 made
+  // `allowRecipeProducts` true for FNB / Retail / Service / Laundry, opening
+  // the recipe (BOM) toggle on a per-product basis. Side-business items
+  // (laundromat bottled water, hardware-store paint mix, etc.) can now track
+  // ingredient-level COGS without forcing the whole tenant into RECIPE_BASED.
+  const verticalPack = getVerticalPack(tenantProfile?.businessType ?? null);
+  const NEW_ITEM_LABEL        = verticalPack.pos.productModal.titleNew;
+  const NEW_NAME_PLACEHOLDER  = verticalPack.pos.productModal.namePlaceholder;
+  const allowRecipeProducts   = verticalPack.pos.productModal.allowRecipeProducts;
 
   const [modifierTarget, setModifierTarget] = useState<Product | null>(null);
   const [showImport,    setShowImport]    = useState(false);
@@ -200,7 +202,10 @@ export default function ProductsPage() {
     setRecipe([]);
 
     // For F&B: fetch full product detail to get BOM items
-    if (isFnb && p.inventoryMode === 'RECIPE_BASED') {
+    // Sprint 12 — load BOM for any vertical whose pack allows recipe products,
+    // not just F&B. A retail-store paint-mix product still needs to render its
+    // recipe rows on edit.
+    if (allowRecipeProducts && p.inventoryMode === 'RECIPE_BASED') {
       try {
         const { data: detail } = await api.get<Product>(`/products/${p.id}`);
         setForm((prev) => ({ ...prev, inventoryMode: detail.inventoryMode ?? 'UNIT_BASED' }));
@@ -485,7 +490,7 @@ export default function ProductsPage() {
             <table className="w-full text-sm min-w-[640px]">
               <thead className="sticky top-0 bg-background border-b border-border">
                 <tr>
-                  {['Name', 'SKU', 'Category', 'Price', 'Cost', 'Stock', 'UOM', 'VAT', 'Status', ...(isFnb ? ['Recipe'] : []), ...(isFnb && canManage ? ['Modifiers'] : []), 'Actions'].map((h, i, arr) => (
+                  {['Name', 'SKU', 'Category', 'Price', 'Cost', 'Stock', 'UOM', 'VAT', 'Status', ...(allowRecipeProducts ? ['Recipe'] : []), ...(isFnb && canManage ? ['Modifiers'] : []), 'Actions'].map((h, i, arr) => (
                     <th
                       key={h}
                       className={`py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide ${
@@ -571,8 +576,8 @@ export default function ProductsPage() {
                         {p.isActive ? 'ACTIVE' : 'INACTIVE'}
                       </span>
                     </td>
-                    {/* Recipe badge (F&B only) */}
-                    {isFnb && (
+                    {/* Recipe badge — any vertical that allows recipe products */}
+                    {allowRecipeProducts && (
                       <td className="px-4 py-3 text-center">
                         {p.inventoryMode === 'RECIPE_BASED' ? (
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
@@ -1004,8 +1009,14 @@ export default function ProductsPage() {
                 </div>
               )}
 
-              {/* Inventory Mode — F&B only */}
-              {isFnb && (
+              {/* Inventory Mode — gated by VerticalPack `allowRecipeProducts`.
+                  Sprint 12 opened this to non-F&B verticals so a laundromat
+                  selling bottled water (or a hardware store mixing paint)
+                  can flag specific products as recipe-based and track
+                  ingredient-level COGS, while their main catalog stays
+                  UNIT_BASED. The kernel doesn't care which vertical calls
+                  it — the JE engine consumes BOM items the same way. */}
+              {allowRecipeProducts && (
                 <>
                   <div className="flex items-center justify-between pt-1">
                     <div>
@@ -1014,14 +1025,38 @@ export default function ProductsPage() {
                         Recipe-based inventory
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Track ingredients instead of finished units
+                        {isFnb
+                          ? 'Track ingredients instead of finished units'
+                          : 'For made-to-order side products. Most retail/service items should stay UNIT_BASED.'}
                       </p>
                     </div>
                     <button
-                      onClick={() => setForm((f) => ({
-                        ...f,
-                        inventoryMode: f.inventoryMode === 'RECIPE_BASED' ? 'UNIT_BASED' : 'RECIPE_BASED',
-                      }))}
+                      onClick={() => {
+                        const flipping = form.inventoryMode !== 'RECIPE_BASED';
+                        // First-time guard for non-F&B tenants — show a confirm
+                        // so an owner doesn't accidentally flag their whole catalog
+                        // as recipe-based and break inventory reconciliation.
+                        if (flipping && !isFnb) {
+                          const ack = typeof localStorage !== 'undefined'
+                            && localStorage.getItem('clerque-recipe-mode-ack') === '1';
+                          if (!ack) {
+                            const ok = window.confirm(
+                              'Recipe mode is for items you assemble in-house from raw materials.\n\n' +
+                              'Most retail / service products should stay UNIT_BASED. Use this only for things like:\n' +
+                              '  • a hardware store mixing paint (base + tint)\n' +
+                              '  • a laundromat bundling a custom cleaning kit\n' +
+                              '  • a pharmacy compounding cream from base + active ingredient\n\n' +
+                              'Continue?',
+                            );
+                            if (!ok) return;
+                            try { localStorage.setItem('clerque-recipe-mode-ack', '1'); } catch {}
+                          }
+                        }
+                        setForm((f) => ({
+                          ...f,
+                          inventoryMode: f.inventoryMode === 'RECIPE_BASED' ? 'UNIT_BASED' : 'RECIPE_BASED',
+                        }));
+                      }}
                       className="w-10 h-6 rounded-full transition-colors shrink-0"
                       style={{ background: form.inventoryMode === 'RECIPE_BASED' ? 'var(--accent)' : undefined }}
                     >

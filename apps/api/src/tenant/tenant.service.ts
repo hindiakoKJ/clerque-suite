@@ -705,6 +705,15 @@ export class TenantService {
     dto:         UpdateTaxSettingsDto,
     performedBy: string,
     ipAddress?:  string,
+    /**
+     * Sprint 12 — when called by an owner (`isConsole: false`), the policy
+     * fields `taxStatus`, `accountingMethod`, `isBirRegistered` are silently
+     * ignored. SUPER_ADMIN console calls (`isConsole: true`) can still write
+     * them. The owner gets a friendly error if they explicitly pass any of
+     * the three locked fields, surfaced as 403 by the controller — see
+     * tenant.controller.ts updateTaxSettings.
+     */
+    isConsole:   boolean = false,
   ) {
     const current = await this.prisma.tenant.findUniqueOrThrow({
       where:  { id: tenantId },
@@ -718,18 +727,25 @@ export class TenantService {
       this.taxCalc.validateTin(dto.tinNumber); // throws BadRequestException on invalid format
     }
 
+    // Policy fields — taxStatus, accountingMethod, isBirRegistered (the latter
+    // is derived from taxStatus). For non-console callers, drop them silently
+    // so an owner who somehow bypasses the controller-side guard still can't
+    // write them. Belt-and-suspenders.
+    const allowTaxStatus     = isConsole && dto.taxStatus        != null;
+    const allowAcctMethod    = isConsole && dto.accountingMethod != null;
+
     // Derive boolean flags from the incoming taxStatus (or keep current if unchanged)
-    const nextStatus = dto.taxStatus ?? (current.taxStatus as TaxStatus);
+    const nextStatus = (allowTaxStatus ? dto.taxStatus : null) ?? (current.taxStatus as TaxStatus);
     const { isVatRegistered, isBirRegistered } = taxStatusFlags(nextStatus);
 
     const updated = await this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
-        ...(dto.taxStatus          != null ? { taxStatus: dto.taxStatus, isVatRegistered, isBirRegistered } : {}),
+        ...(allowTaxStatus           ? { taxStatus: dto.taxStatus!, isVatRegistered, isBirRegistered } : {}),
         ...(dto.tinNumber          != null ? { tinNumber: dto.tinNumber }               : {}),
         ...(dto.businessName       != null ? { businessName: dto.businessName }         : {}),
         ...(dto.registeredAddress  != null ? { registeredAddress: dto.registeredAddress } : {}),
-        ...(dto.accountingMethod   != null ? { accountingMethod: dto.accountingMethod } : {}),
+        ...(allowAcctMethod          ? { accountingMethod: dto.accountingMethod! } : {}),
         ...(dto.isPtuHolder        != null ? { isPtuHolder: dto.isPtuHolder }           : {}),
         ...(dto.ptuNumber          != null ? { ptuNumber: dto.ptuNumber }               : {}),
         ...(dto.minNumber          != null ? { minNumber: dto.minNumber }               : {}),
@@ -745,7 +761,7 @@ export class TenantService {
     // tax flags (isVatRegistered, isBirRegistered, taxStatus) take effect immediately.
     // Without this, existing JWTs carry the old flags for up to 15 minutes, allowing
     // a downgraded NON_VAT tenant to continue submitting VAT orders during that window.
-    if (dto.taxStatus != null && dto.taxStatus !== current.taxStatus) {
+    if (allowTaxStatus && dto.taxStatus !== current.taxStatus) {
       await this.prisma.userSession.updateMany({
         where: { user: { tenantId } },
         data:  { status: 'REVOKED' },

@@ -78,6 +78,10 @@ enum BusinessType {
   SERVICE // Salon, clinic, repair, any generic service-based
   LAUNDRY // Laundromat / wash-dry-fold / dry-clean — first-class vertical
   MANUFACTURING // Fabrication, construction, BOM / bill-of-materials workflows
+  // ── Sprint 12 — six-engine vertical structure ─────────────────────────────
+  PHARMACY // Drugstores / botikas — Compliance-Engine (Rx, lots, DDB register, expiry)
+  TRUCKING // Trucking / hauling / courier — Logistics-Engine (trip tickets, liquidation)
+  CONSTRUCTION // Construction / civil works / fit-out — Project-Engine (WIP, progress billing)
 }
 
 enum TenantStatus {

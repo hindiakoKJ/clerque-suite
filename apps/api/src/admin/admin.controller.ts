@@ -111,9 +111,9 @@ export class AdminController {
   setStatus(
     @Request() req: { user: JwtPayload },
     @Param('id') id: string,
-    @Body() body: { status: 'ACTIVE' | 'GRACE' | 'SUSPENDED' },
+    @Body() body: { status: 'ACTIVE' | 'GRACE' | 'SUSPENDED'; confirmationToken?: string },
   ) {
-    return this.svc.setTenantStatus(id, body.status, actor(req));
+    return this.svc.setTenantStatus(id, body.status, actor(req), body.confirmationToken);
   }
 
   @Patch('tenants/:id/tier')
@@ -207,8 +207,9 @@ export class AdminController {
   clearTenantData(
     @Request() req: { user: JwtPayload },
     @Param('id') id: string,
+    @Body() body: { confirmationToken?: string },
   ) {
-    return this.svc.clearAllTenantData(id, actor(req));
+    return this.svc.clearAllTenantData(id, actor(req), body.confirmationToken);
   }
 
   /**
@@ -251,9 +252,9 @@ export class AdminController {
   resetDemo(
     @Request() req: { user: JwtPayload },
     @Param('id') id: string,
-    @Body() body: { scenario: ScenarioKey },
+    @Body() body: { scenario: ScenarioKey; confirmationToken?: string },
   ) {
-    return this.svc.resetDemoData(id, body.scenario, actor(req));
+    return this.svc.resetDemoData(id, body.scenario, actor(req), body.confirmationToken);
   }
 
   // ─── Tenant users ─────────────────────────────────────────────────────────

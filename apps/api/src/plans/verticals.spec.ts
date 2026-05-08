@@ -19,20 +19,30 @@ import {
   retailPack,
   laundryPack,
   serviceMfgPack,
+  pharmacyPack,
+  truckingPack,
+  constructionPack,
   type BusinessType,
 } from '@repo/shared-types';
 
 const ALL_BUSINESS_TYPES: BusinessType[] = [
+  // Food-Engine
   'COFFEE_SHOP',
   'RESTAURANT',
   'BAKERY',
   'FOOD_STALL',
   'BAR_LOUNGE',
   'CATERING',
+  // Retail-Engine
   'RETAIL',
+  // Service-Engine
   'SERVICE',
   'LAUNDRY',
   'MANUFACTURING',
+  // Sprint 12 — six-engine completion
+  'PHARMACY',       // Compliance-Engine
+  'TRUCKING',       // Logistics-Engine
+  'CONSTRUCTION',   // Project-Engine
 ];
 
 describe('VerticalPack registry', () => {
@@ -166,6 +176,52 @@ describe('VerticalPack registry', () => {
     });
     it('Service/Mfg uses PROJECT_WIP', () => {
       expect(serviceMfgPack.inventory).toBe('PROJECT_WIP');
+    });
+    it('Pharmacy uses UNIT_FIFO (lot/expiry tracking)', () => {
+      expect(pharmacyPack.inventory).toBe('UNIT_FIFO');
+    });
+    it('Trucking + Construction use PROJECT_WIP', () => {
+      expect(truckingPack.inventory).toBe('PROJECT_WIP');
+      expect(constructionPack.inventory).toBe('PROJECT_WIP');
+    });
+  });
+
+  describe('Sprint 12 — six-engine completion', () => {
+    it('PHARMACY pack — Compliance-Engine', () => {
+      expect(getVerticalPack('PHARMACY')).toBe(pharmacyPack);
+      expect(pharmacyPack.pos.cashierScreen).toBe('DISPENSE');
+      expect(pharmacyPack.pos.receiptFormat).toBe('PHARMACY_RX');
+      expect(pharmacyPack.excludedPlans).toContain('STD_SOLO');
+      expect(pharmacyPack.requiredFeatures).toContain('birForms');
+      // Pharmacy needs lot+expiry, so allows recipe products (compounds).
+      expect(pharmacyPack.pos.productModal.allowRecipeProducts).toBe(true);
+    });
+
+    it('TRUCKING pack — Logistics-Engine', () => {
+      expect(getVerticalPack('TRUCKING')).toBe(truckingPack);
+      expect(truckingPack.pos.cashierScreen).toBe('WORK_ORDER');
+      // Trip-ticket workflow + payroll needs PROJECT_HOURS for billable time.
+      expect(truckingPack.payroll.compensationTypes).toContain('PROJECT_HOURS');
+      expect(truckingPack.payroll.timesheetShape).toBe('PROJECT');
+      expect(truckingPack.excludedPlans).toContain('STD_SOLO');
+    });
+
+    it('CONSTRUCTION pack — Project-Engine', () => {
+      expect(getVerticalPack('CONSTRUCTION')).toBe(constructionPack);
+      expect(constructionPack.pos.cashierScreen).toBe('WORK_ORDER');
+      // Project P&L + progress billing — recipes for kits + assemblies.
+      expect(constructionPack.pos.productModal.allowRecipeProducts).toBe(true);
+      expect(constructionPack.payroll.timesheetShape).toBe('PROJECT');
+      expect(constructionPack.excludedPlans).toContain('STD_SOLO');
+    });
+
+    it('all three new packs have a Compliance-style settings card or sidebar slot', () => {
+      // Pharmacy ships with a dedicated Pharmacy Setup card.
+      expect(pharmacyPack.settings.extraCards.length).toBeGreaterThan(0);
+      // Trucking ships with a Fleet Setup card.
+      expect(truckingPack.settings.extraCards.length).toBeGreaterThan(0);
+      // Construction's settings live under Projects — extra cards optional.
+      expect(Array.isArray(constructionPack.settings.extraCards)).toBe(true);
     });
   });
 

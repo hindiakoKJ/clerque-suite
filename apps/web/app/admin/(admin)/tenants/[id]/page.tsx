@@ -41,6 +41,11 @@ interface TenantDetail {
   modulePayroll?:   boolean;
   staffSeatQuota?:  number;
   staffSeatAddons?: number;
+  /** Sprint 12 — costing & accounting policy fields (console-only). */
+  valuationMethod?:    'WAC' | 'FIFO' | null;
+  accountingMethod?:   'CASH' | 'ACCRUAL' | null;
+  firstTransactionAt?: string | null;
+  overheadRatePerUnit?: number | string | null;
   _count: { users: number; branches: number; products: number };
 }
 
@@ -261,19 +266,29 @@ function EditProfileModal({ tenant, onClose, onSaved }: {
 
 // ─── Demo Reset Modal ────────────────────────────────────────────────────────
 
-function DemoResetModal({ tenantId, onClose, onDone }: {
-  tenantId: string;
+function DemoResetModal({ tenantId, tenantSlug, onClose, onDone }: {
+  tenantId:   string;
+  tenantSlug: string;
   onClose:  () => void;
   onDone:   (result: { scenario: string; productsSeeded: number; ordersGenerated: number }) => void;
 }) {
   const [scenario, setScenario] = useState<string>(DEMO_SCENARIOS[0].key);
+  const [confirmText, setConfirmText] = useState('');
   const [busy, setBusy] = useState(false);
   const picked = DEMO_SCENARIOS.find((s) => s.key === scenario)!;
+  const slugMatches = confirmText.trim().toLowerCase() === tenantSlug.toLowerCase();
 
   async function confirm() {
+    if (!slugMatches) {
+      toast.error(`Type the tenant slug exactly: '${tenantSlug}'`);
+      return;
+    }
     setBusy(true);
     try {
-      const { data } = await api.post(`/admin/tenants/${tenantId}/reset-demo`, { scenario });
+      const { data } = await api.post(`/admin/tenants/${tenantId}/reset-demo`, {
+        scenario,
+        confirmationToken: tenantSlug,
+      });
       onDone(data);
       onClose();
     } catch (err: unknown) {
@@ -330,10 +345,25 @@ function DemoResetModal({ tenantId, onClose, onDone }: {
             <p>✓ Tenant flagged as Demo Tenant</p>
           </div>
 
+          {/* Sprint 12 — typed-slug confirmation. Wiping demo data is destructive
+              even on a demo tenant; the multi-minute reseed is annoying enough that
+              an accidental click should be friction-gated. */}
+          <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-3 py-2 space-y-1.5">
+            <p className="text-[11px] font-semibold text-amber-900 dark:text-amber-200">
+              Type tenant slug to confirm
+            </p>
+            <input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={tenantSlug}
+              className="w-full h-8 px-2 rounded-md border border-amber-400 bg-background text-xs font-mono focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
+
           <div className="flex justify-end gap-2 border-t border-border pt-3">
             <button onClick={onClose}
               className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted">Cancel</button>
-            <button onClick={confirm} disabled={busy}
+            <button onClick={confirm} disabled={busy || !slugMatches}
               className="h-9 px-4 rounded-md text-sm font-medium text-white disabled:opacity-50 flex items-center gap-1.5"
               style={{ background: 'hsl(300 65% 45%)' }}>
               {busy ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Resetting…</> : '🔄 Reset Demo Data'}
@@ -577,6 +607,26 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
     } finally { setBusy(false); }
   }
 
+  /**
+   * Sprint 12 — typed-slug confirmation helper for destructive ops.
+   * Prompts the SUPER_ADMIN to type the tenant's slug. The backend also
+   * verifies it (defence-in-depth), so a curl call without the token also
+   * fails. Returns the slug if confirmed, undefined if cancelled.
+   */
+  function promptForSlugConfirmation(actionLabel: string): string | undefined {
+    if (!tenant) return undefined;
+    const typed = window.prompt(
+      `${actionLabel} on '${tenant.slug}'. This action is destructive and audit-logged.\n\n` +
+      `Type the tenant slug ('${tenant.slug}') to confirm:`,
+    );
+    if (typed == null) return undefined;
+    if (typed.trim().toLowerCase() !== tenant.slug.toLowerCase()) {
+      toast.error(`Confirmation does not match. Expected '${tenant.slug}'.`);
+      return undefined;
+    }
+    return tenant.slug;
+  }
+
   const lockedCount   = users?.filter((u) => u.isLocked).length ?? 0;
   const inactiveCount = users?.filter((u) => !u.isActive).length ?? 0;
 
@@ -604,6 +654,7 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
       {showDemoReset && (
         <DemoResetModal
           tenantId={id}
+          tenantSlug={tenant.slug}
           onClose={() => setShowDemoReset(false)}
           onDone={(result) => {
             toast.success(`Demo reset done — ${result.productsSeeded} products + ${result.ordersGenerated} orders seeded for ${result.scenario}.`);
@@ -685,19 +736,37 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
           <div className="rounded-lg border border-border bg-background p-4">
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Account Status</h2>
             <div className="flex flex-wrap gap-2">
-              {STATUS_OPTIONS.filter((s) => s !== tenant.status).map((s) => (
-                <button key={s} disabled={busy}
-                  onClick={() => patchTenant('status', { status: s }, `Status → ${s}`)}
-                  className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted disabled:opacity-50">
-                  Set {s}
-                </button>
-              ))}
+              {STATUS_OPTIONS.filter((s) => s !== tenant.status).map((s) => {
+                const isDestructive = s === 'SUSPENDED';
+                return (
+                  <button key={s} disabled={busy}
+                    onClick={() => {
+                      if (isDestructive) {
+                        const token = promptForSlugConfirmation('Suspend tenant');
+                        if (!token) return;
+                        patchTenant('status', { status: s, confirmationToken: token }, `Status → ${s}`);
+                      } else {
+                        patchTenant('status', { status: s }, `Status → ${s}`);
+                      }
+                    }}
+                    className={`text-xs px-3 py-1.5 rounded-md border disabled:opacity-50 ${
+                      isDestructive
+                        ? 'border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30'
+                        : 'border-border hover:bg-muted'
+                    }`}>
+                    Set {s}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           {/* Modular Plan — single source of truth (legacy tier UI removed 2026-05-08). */}
           <PlanPanel tenant={tenant} busy={busy} setBusy={setBusy} qc={qc} />
 
+          {/* Sprint 12 — Costing & Accounting Policy.
+              Console-only authority. Tenants see these read-only on Settings. */}
+          <CostingPolicyPanel tenant={tenant} busy={busy} patchTenant={patchTenant} />
 
           {/* Coffee Shop Floor Layout — only relevant for COFFEE_SHOP tenants */}
           {tenant.businessType === 'COFFEE_SHOP' && (
@@ -831,10 +900,13 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
             </p>
             <button
               onClick={async () => {
-                if (!confirm('Wipe ALL products, ingredients, orders, and journal entries for this tenant? Users + branches + layout will be preserved. Cannot be undone.')) return;
+                // Sprint 12 — typed-slug confirmation. clearAllTenantData has
+                // no undo; the typed-slug guard is the only safety net.
+                const token = promptForSlugConfirmation('Clear all tenant data');
+                if (!token) return;
                 try {
                   setBusy(true);
-                  await api.post(`/admin/tenants/${tenant.id}/clear-data`);
+                  await api.post(`/admin/tenants/${tenant.id}/clear-data`, { confirmationToken: token });
                   toast.success('All data cleared. Tenant now has an empty slate.');
                   qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] });
                 } catch (err: unknown) {
@@ -1066,6 +1138,143 @@ function PlanPanel({
       >
         Apply plan changes
       </button>
+    </div>
+  );
+}
+
+// ── Costing & Accounting Policy panel (Sprint 12) ─────────────────────────
+//
+// Console-only authority over four policy knobs that affect accounting
+// integrity (revenue recognition, COGS continuity, VAT base, overhead
+// allocation). The tenant sees these read-only in their own Settings.
+//
+// Privacy invariant: this panel renders policy VALUES (WAC, ACCRUAL,
+// ₱2.50/unit) — these are choices, not financial data. The audit log still
+// records `Object.keys()` only, so the privacy wall (no console access to
+// actual financial numbers) is preserved.
+function CostingPolicyPanel({
+  tenant, busy, patchTenant,
+}: {
+  tenant: TenantDetail;
+  busy: boolean;
+  patchTenant: (path: string, body: object, label: string) => Promise<void>;
+}) {
+  const isManufacturing = tenant.businessType === 'MANUFACTURING';
+  const isLocked = !!tenant.firstTransactionAt;
+  const valuationMethod  = (tenant.valuationMethod  as 'WAC' | 'FIFO')   ?? 'WAC';
+  const accountingMethod = (tenant.accountingMethod as 'CASH' | 'ACCRUAL') ?? 'ACCRUAL';
+  const overheadStr = tenant.overheadRatePerUnit != null
+    ? String(tenant.overheadRatePerUnit)
+    : '';
+
+  const update = (body: object, label: string) =>
+    patchTenant('profile', body, label);
+
+  return (
+    <div className="rounded-lg border border-border bg-background/50 p-4 space-y-4">
+      <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+        Costing & Accounting Policy
+      </h2>
+
+      {/* Valuation method */}
+      <div>
+        <label className="text-[11px] font-semibold text-foreground uppercase tracking-wider">
+          Inventory Valuation
+          {isLocked && (
+            <span className="ml-2 inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 normal-case tracking-normal">
+              POST-LOCK
+            </span>
+          )}
+        </label>
+        <div className="flex gap-2 mt-1.5">
+          {(['WAC', 'FIFO'] as const).map((m) => (
+            <button
+              key={m}
+              disabled={busy}
+              onClick={() => update({ valuationMethod: m }, `Valuation → ${m}`)}
+              className={`flex-1 text-xs font-medium px-3 py-1.5 rounded-md border transition-colors disabled:opacity-50 ${
+                valuationMethod === m
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                  : 'border-border text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        {isLocked && (
+          <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-1.5 leading-snug">
+            ⚠ This tenant has posted transactions (first txn:{' '}
+            {new Date(tenant.firstTransactionAt!).toLocaleDateString('en-PH')}).
+            Switching valuation will produce inconsistent COGS — confirm with the operator + CPA
+            before applying. Use only at fiscal year-end cutover.
+          </p>
+        )}
+      </div>
+
+      {/* Accounting method */}
+      <div>
+        <label className="text-[11px] font-semibold text-foreground uppercase tracking-wider">
+          Accounting Basis
+        </label>
+        <div className="flex gap-2 mt-1.5">
+          {(['CASH', 'ACCRUAL'] as const).map((m) => (
+            <button
+              key={m}
+              disabled={busy}
+              onClick={() => update({ accountingMethod: m }, `Accounting → ${m}`)}
+              className={`flex-1 text-xs font-medium px-3 py-1.5 rounded-md border transition-colors disabled:opacity-50 ${
+                accountingMethod === m
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                  : 'border-border text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+          CASH = revenue on receipt, ACCRUAL = revenue on invoice. Default ACCRUAL for VAT-registered.
+        </p>
+      </div>
+
+      {/* Manufacturing overhead — only for MANUFACTURING */}
+      {isManufacturing && (
+        <div>
+          <label className="text-[11px] font-semibold text-foreground uppercase tracking-wider">
+            Manufacturing Overhead (₱/unit)
+          </label>
+          <div className="flex gap-2 mt-1.5">
+            <input
+              defaultValue={overheadStr}
+              disabled={busy}
+              type="number"
+              min={0}
+              step="0.0001"
+              placeholder="e.g. 2.5000"
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                const ratePerUnit = v === '' ? null : parseFloat(v);
+                if (ratePerUnit != null && (Number.isNaN(ratePerUnit) || ratePerUnit < 0)) {
+                  return;
+                }
+                if (String(ratePerUnit) === overheadStr) return; // unchanged
+                update({ overheadRatePerUnit: ratePerUnit }, `Overhead → ₱${v || '0'}`);
+              }}
+              className="flex-1 h-8 px-2 rounded-md border border-border bg-background text-xs"
+            />
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+            Adds factory overhead to COGS via full absorption costing. Leave blank to clear.
+          </p>
+        </div>
+      )}
+
+      {!isManufacturing && (
+        <p className="text-[10px] text-muted-foreground italic leading-snug">
+          Manufacturing overhead allocation is only available for MANUFACTURING tenants.
+        </p>
+      )}
     </div>
   );
 }

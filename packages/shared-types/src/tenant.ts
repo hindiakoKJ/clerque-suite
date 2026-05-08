@@ -18,8 +18,12 @@ export type BusinessType =
   // Non-F&B group
   | 'RETAIL'
   | 'SERVICE'
-  | 'LAUNDRY'       // Laundromat / wash-dry-fold / dry-clean — Sprint 2 vertical
-  | 'MANUFACTURING';
+  | 'LAUNDRY'       // Laundromat / wash-dry-fold / dry-clean — Service-Engine
+  | 'MANUFACTURING'
+  // Sprint 12 — six-engine vertical structure
+  | 'PHARMACY'      // Drugstores / botikas — Compliance-Engine
+  | 'TRUCKING'      // Trucking / hauling / courier — Logistics-Engine
+  | 'CONSTRUCTION'; // Construction / civil works / fit-out — Project-Engine
 
 /**
  * The complete set of F&B business types.

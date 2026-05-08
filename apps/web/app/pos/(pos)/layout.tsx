@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
@@ -97,6 +98,19 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // KDS buttons in the header (they open in a new window for second-screen use).
   const { hasCustomerDisplay, layout } = useFloorLayout();
   const kdsStations = (layout?.stations ?? []).filter((s) => s.hasKds);
+
+  // Real branch count — the source of truth for whether to surface multi-branch
+  // features in the sidebar (Stock Transfers, Cycle Counts). A tenant whose plan
+  // permits multiple branches but who has only set up one shouldn't see these
+  // affordances yet — they'd land on empty pages anyway. Only when a second
+  // branch is actually provisioned do these become useful.
+  const branchesQuery = useQuery<Array<{ id: string; isActive: boolean }>>({
+    queryKey: ['tenant-branches'],
+    queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
+    enabled:  !!accessToken,
+    staleTime: 60_000,
+  });
+  const activeBranchCount = (branchesQuery.data ?? []).filter((b) => b.isActive).length;
 
   const [showCloseShift,      setShowCloseShift]      = useState(false);
   const [showCashOut,         setShowCashOut]         = useState(false);
@@ -204,17 +218,20 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   const isService    = businessType === 'SERVICE';
   const isMfg        = businessType === 'MANUFACTURING';
   const isRetail     = businessType === 'RETAIL';
-  // Multi-branch features (Transfers) only relevant if the tenant's plan
-  // permits multiple branches. PLAN_LIMITS.maxBranches is baked into the JWT
-  // as user.planLimits — single-branch plans (Solo/Duo/Pair T1/Suite T1)
-  // hide Transfers entirely. Plans with maxBranches > 1 show Transfers
-  // even if the tenant currently only has 1 branch — operator gets the
-  // affordance to set up a second branch and immediately use Transfers.
-  const maxBranches  = (user as any)?.planLimits?.maxBranches ?? 1;
-  const showTransfers = maxBranches > 1;
-  // Cycle counts work for any inventory-tracking biz; show by default for
-  // F&B / Service / Mfg / Retail. Hide for Laundry (no raw-material counts).
-  const showCycleCounts = !isLaundry;
+  // Multi-branch features only surface once the tenant has actually provisioned
+  // a second branch — not merely because the plan permits it. Reasoning:
+  //   - Transfers: nothing to transfer to/from with one branch.
+  //   - Cycle Counts: a single-branch coffee shop / retail cashier can adjust
+  //     inventory directly via the Ingredients/Products page; the formal
+  //     count → variance → posting SOP is overhead they don't need. It's a
+  //     multi-branch / warehouse-supervised control.
+  // Plan capacity (planLimits.maxBranches) still gates whether the tenant CAN
+  // add another branch, but that's enforced at the Settings → Branches page.
+  // Until activeBranchCount > 1, both nav items stay hidden.
+  // Laundry hides Cycle Counts at every count (no raw-material variance flow).
+  const isMultiBranch  = activeBranchCount > 1;
+  const showTransfers   = isMultiBranch;
+  const showCycleCounts = isMultiBranch && !isLaundry;
 
   const COMMON_TAIL: NavItem[] = [
     makeNavItem('/pos/staff',        'Staff',        Users,           STAFF_ROLES,        role),

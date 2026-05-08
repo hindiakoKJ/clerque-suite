@@ -233,7 +233,60 @@ Existing arch decision; flagged by audit for completeness. Mitigation: HttpOnly 
 | Input validation | 1 (admin pagination clamp) | 5 |
 | Frontend security | 1 (cookie Secure) | 3 |
 
-**Total: 25 fixed, 27 deferred.** Deferred items are tracked here and should be picked up next sprint, prioritised by exploitability:
+# Laundry vertical-fit follow-ups (2026-05-08)
+
+These aren't security findings — they're product gaps the user surfaced while
+testing the LAUNDRY business type. Tracked here so they're not lost.
+
+### Fixed in this sprint
+
+- POS sidebar grouped into sections (Overview / Sell / Catalog / Warehouse / Manage; LAUNDRY: Overview / Operations / Records).
+- Owner-on-non-Solo first-entry redirect now also covers `/pos/terminal` (was: only `/pos`). Uses `sessionStorage` flag so subsequent sidebar clicks to Terminal are still respected.
+- Settings → System Info shows `Plan: Suite T2` + module list instead of the legacy "Tier 4".
+- Admin tenant page: legacy "Subscription Tier" select removed entirely. Modular Plan is the sole UI.
+- `New Product` modal vertical-aware:
+  - Title: "New Service / Item" for LAUNDRY, "New Product" elsewhere.
+  - Placeholder: "e.g. Wash & Fold (per kg)" / "e.g. Brewed Coffee" / generic by vertical.
+  - Helper text inside the modal points laundry users to `Settings → Laundry` for per-kg / per-load service prices.
+- Laundry Intake page now renders an amber banner when no service prices are configured, plus a `Set prices →` link in the Service-lines header. Closes the "why is everything ₱0.00?" loop.
+- Help & Guide is vertical-aware: LAUNDRY tenants now see laundromat-flavoured FAQs (intake, claim tickets, queue, pricing) instead of coffee-shop content. Lives in `apps/web/app/pos/(pos)/help/laundry-sections.tsx`.
+- `/pos/dashboard` swaps to a laundry-specific board for LAUNDRY tenants — workflow stage tiles (RECEIVED → WASHING → DRYING → FOLDING → READY), today's intake count, pickup-due-today list, today's claimed revenue. Falls back to the F&B Sales Dashboard for every other vertical.
+
+### Deferred — LAUNDRY-1: Customer creation UI in intake
+
+Today the intake form's customer dropdown only shows existing customers + Walk-in. No "+ New Customer" affordance. Need a small inline modal that POSTs to `/customers` with name + phone + (optional) address, refreshes the dropdown, auto-selects the new entry. Backend endpoint already exists.
+
+### Deferred — LAUNDRY-2: Delivery option + delivery address
+
+Add to `LaundryOrder`: `isDelivery` boolean, `deliveryAddress` text, `deliveryFee` decimal, `deliveryStatus` enum (PENDING / OUT_FOR_DELIVERY / DELIVERED). Customer record needs `defaultAddress` field. Intake UI: delivery toggle that reveals address field (defaulting to customer's saved address). Queue board: add a "Out for delivery" column when isDelivery=true. Settings → Laundry: per-zone delivery fee table.
+
+### Deferred — LAUNDRY-3: Digital claim stubs / loyalty for repeat customers
+
+User asked: "is it possible to create an online/digital stubs for repeating customers? that could be in the promo." Two pieces:
+1. **Digital claim stub**: SMS/email a one-time link with QR + claim number; customer can show the QR instead of the paper ticket.
+2. **Loyalty card**: Mirror the existing FREE_NTH promo (Buy 9 get 10th free) but visible to the customer — "You're 7 of 10 visits in." Punch-card UI.
+Both share the customer record. Build after LAUNDRY-1 + LAUNDRY-2 land — they need the customer model fleshed out first.
+
+### Deferred — LAUNDRY-4: "Add Branch" affordance
+
+`Settings → Branches` page doesn't exist. Add a list page that GETs `/tenant/branches`, shows existing branches + an "Add Branch" button gated by `planLimits.maxBranches`. POST should reject when `branch.count({ tenantId }) >= maxBranches`.
+
+### Deferred — LAUNDRY-5: Demo Data seeding per business type
+
+The "Reset Demo Data..." button under admin → tenant page seeds generic data. Should branch on `tenant.businessType`:
+- **LAUNDRY** → 5 customers, 8 orders across all stages, 3 machines, default service prices.
+- **COFFEE_SHOP** → menu items, ingredients, sample orders.
+- **RETAIL** → flat catalog + opening stock.
+- **SERVICE** / **MANUFACTURING** → projects, raw materials, sample issuances.
+Today the seeder is coffee-shop-flavoured by default.
+
+### Deferred — LAUNDRY-6: VAT toggle defaulting
+
+Product creation modal defaults VAT-able to ON. For non-VAT-registered tenants (`taxStatus !== 'VAT'`) this is wrong — toggle should default OFF and probably hide entirely. Read `tenantProfile.taxStatus` to decide.
+
+---
+
+**Total: 25 fixed, 27 deferred (security) + 6 fixed, 6 deferred (laundry vertical-fit).** Deferred items are tracked here and should be picked up next sprint, prioritised by exploitability:
 1. `DEFERRED-25` (XSS in receipts) — highest user-facing risk.
 2. `DEFERRED-1` (HttpOnly cookie) — closes the XSS-to-auth amplifier.
 3. `DEFERRED-10`–`DEFERRED-19` (race conditions) — financial data integrity.

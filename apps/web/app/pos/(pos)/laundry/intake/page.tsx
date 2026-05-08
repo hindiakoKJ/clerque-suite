@@ -235,11 +235,33 @@ export default function LaundryIntakePage() {
         </div>
       </div>
 
+      {/* No-prices banner — first thing the operator sees if Settings → Laundry
+          hasn't been configured yet. Without unit prices every line is ₱0.00. */}
+      {prices.filter((p) => p.isActive && Number(p.unitPrice) > 0).length === 0 && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-4 py-3 flex items-start gap-3">
+          <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-xs space-y-1">
+            <p className="font-semibold text-amber-900 dark:text-amber-200">No service prices set yet.</p>
+            <p className="text-amber-800 dark:text-amber-300/90">
+              Service lines will price at ₱0.00 until you set per-kg / per-load rates in&nbsp;
+              <Link href="/settings/laundry" className="underline font-medium">Settings → Laundry</Link>.
+              Retail items (detergent, fabric softener) are managed in&nbsp;
+              <Link href="/pos/products" className="underline font-medium">Products</Link>.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Service lines */}
       <section className="rounded-xl border border-border bg-card overflow-hidden">
         <header className="px-4 py-3 border-b border-border flex items-center justify-between">
           <h2 className="text-sm font-semibold">Service lines</h2>
-          <span className="text-xs text-muted-foreground">{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <Link href="/settings/laundry" className="hover:text-foreground hover:underline">
+              Set prices →
+            </Link>
+            <span>{lines.length} line{lines.length === 1 ? '' : 's'}</span>
+          </div>
         </header>
         <div className="p-4">
           {/* Quick-add buttons */}

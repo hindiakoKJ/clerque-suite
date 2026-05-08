@@ -1,5 +1,8 @@
 'use client';
 import { HelpPage, type HelpSection } from '@/components/help/HelpPage';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { isLaundryType } from '@repo/shared-types';
+import { LAUNDRY_SECTIONS } from './laundry-sections';
 
 const SECTIONS: HelpSection[] = [
   // ─────────────────────────────────────────────────────────────────────────
@@ -621,11 +624,23 @@ const SECTIONS: HelpSection[] = [
 ];
 
 export default function CounterHelpPage() {
+  // Help content swaps based on the tenant's vertical. The default SECTIONS
+  // above are F&B / Retail flavoured ("the till", "products", "shifts").
+  // Laundry tenants get a workflow-flavoured set (intake, claim ticket, queue,
+  // service prices) loaded from laundry-sections.tsx — none of the F&B
+  // copy maps onto a wash-and-fold operation.
+  const { layout } = useFloorLayout();
+  const isLaundry  = isLaundryType(layout?.tenant?.businessType);
+
   return (
     <HelpPage
       appName="Counter"
-      appTagline="Point-of-sale guide for cashiers, sales leads, and managers. Search any topic or browse by section."
-      sections={SECTIONS}
+      appTagline={
+        isLaundry
+          ? 'Laundromat guide — intake, claim tickets, the wash → dry → fold queue, pricing.'
+          : 'Point-of-sale guide for cashiers, sales leads, and managers. Search any topic or browse by section.'
+      }
+      sections={isLaundry ? LAUNDRY_SECTIONS : SECTIONS}
     />
   );
 }

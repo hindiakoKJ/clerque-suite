@@ -11,6 +11,9 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { isLaundryType } from '@repo/shared-types';
+import { LaundryDashboard } from './LaundryDashboard';
 
 const METHOD_LABELS: Record<string, string> = {
   CASH: 'Cash',
@@ -74,6 +77,14 @@ export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? '';
   const [date, setDate] = useState(todayPH());
+
+  // Vertical-aware dashboard. The SalesDashboard below is built around F&B /
+  // Retail concepts (revenue, COGS, gross margin, top products by quantity
+  // sold). A laundromat operator needs to see workflow stages and pickup-due
+  // counts — entirely different metrics. Swap the whole page when LAUNDRY.
+  const { layout } = useFloorLayout();
+  const isLaundry = isLaundryType(layout?.tenant?.businessType);
+  if (isLaundry) return <LaundryDashboard />;
 
   const { data, isLoading, refetch, isFetching } = useQuery<DailyReport>({
     queryKey: ['daily-report', branchId, date],

@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { ModifierGroupModal } from '@/components/pos/ModifierGroupModal';
 import { StockAdjustModal } from '@/components/pos/StockAdjustModal';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
-import { isFnbType } from '@repo/shared-types';
+import { isFnbType, isLaundryType } from '@repo/shared-types';
 import { ImportModal } from '@/components/ui/ImportModal';
 
 interface Category { id: string; name: string; }
@@ -76,7 +76,17 @@ export default function ProductsPage() {
   const isReadOnly = !canManage;
 
   const { data: tenantProfile } = useBusinessSetup(true);
-  const isFnb = isFnbType(tenantProfile?.businessType);
+  const isFnb     = isFnbType(tenantProfile?.businessType);
+  const isLaundry = isLaundryType(tenantProfile?.businessType);
+
+  // Vertical-aware copy. Laundry tenants sell SERVICES (wash, dry, dry-clean)
+  // plus a small retail catalog (detergent, fabric softener) — labelling
+  // every screen "Products" with a coffee placeholder is jarring for them.
+  const NEW_ITEM_LABEL  = isLaundry ? 'New Service / Item' : 'New Product';
+  const NEW_NAME_PLACEHOLDER =
+    isLaundry ? 'e.g. Wash & Fold (per kg)' :
+    isFnb     ? 'e.g. Brewed Coffee'        :
+                'e.g. Item name';
 
   const [modifierTarget, setModifierTarget] = useState<Product | null>(null);
   const [showImport,    setShowImport]    = useState(false);
@@ -439,7 +449,7 @@ export default function ProductsPage() {
                 style={{ background: 'var(--accent)' }}
               >
                 <Plus className="h-3.5 w-3.5" />
-                New Product
+                {NEW_ITEM_LABEL}
               </button>
             </>
           )}
@@ -750,8 +760,17 @@ export default function ProductsPage() {
           <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-border shrink-0">
               <h2 className="font-semibold text-foreground">
-                {modal === 'create' ? 'New Product' : 'Edit Product'}
+                {modal === 'create'
+                  ? NEW_ITEM_LABEL
+                  : isLaundry ? 'Edit Service / Item' : 'Edit Product'}
               </h2>
+              {isLaundry && modal === 'create' && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Use this for retail items (detergent, fabric softener, hangers).
+                  Per-kg / per-load <strong>service prices</strong> live under
+                  <a href="/settings/laundry" className="text-[var(--accent)] hover:underline ml-1">Settings → Laundry</a>.
+                </p>
+              )}
             </div>
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               <div>
@@ -762,7 +781,7 @@ export default function ProductsPage() {
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   className={INPUT_CLS}
-                  placeholder="e.g. Brewed Coffee"
+                  placeholder={NEW_NAME_PLACEHOLDER}
                 />
               </div>
 

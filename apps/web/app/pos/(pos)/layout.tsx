@@ -167,18 +167,32 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
 
     // BUSINESS_OWNER landing — Solo owners run their own till, so Terminal is
     // their home. On every other plan there are hired cashiers, so the owner
-    // is a manager: send them to the Dashboard instead on first entry. They
-    // can still click Terminal in the sidebar to fill in for a sick cashier.
-    // We only intercept the literal entry point (/pos), not /pos/terminal —
-    // that way explicit sidebar navigation to Terminal is respected.
+    // is a manager: send them to the Dashboard on first entry. They can still
+    // click Terminal in the sidebar afterwards.
+    //
+    // Two entry points need the redirect because login + middleware send users
+    // straight to /pos/terminal (not /pos):
+    //   1. /pos          — direct root visit
+    //   2. /pos/terminal — login-flow + bookmarked URL
+    //
+    // To allow sidebar navigation to Terminal AFTER the first redirect, we
+    // remember "owner already landed once" in sessionStorage. So:
+    //   first load  → /pos/terminal → bounced to /pos/dashboard
+    //   sidebar tap → /pos/terminal → respected (flag set)
     const planCode = (user as any)?.planCode as string | undefined;
     const isSoloPlan = planCode === 'STD_SOLO';
     if (
       r === 'BUSINESS_OWNER' &&
       !isSoloPlan &&
-      pathname === '/pos'
+      (pathname === '/pos' || pathname === '/pos/terminal')
     ) {
-      router.replace('/pos/dashboard');
+      const alreadyLanded =
+        typeof sessionStorage !== 'undefined' &&
+        sessionStorage.getItem('owner-landed') === '1';
+      if (!alreadyLanded) {
+        try { sessionStorage.setItem('owner-landed', '1'); } catch {}
+        router.replace('/pos/dashboard');
+      }
     }
   }, [hydrated, user, pathname, router, layout?.tenant?.businessType]); // eslint-disable-line react-hooks/exhaustive-deps
 

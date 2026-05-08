@@ -237,8 +237,16 @@ export class ProductsService {
   }
 
   async deactivate(tenantId: string, id: string) {
-    await this.findOne(tenantId, id);
-    return this.prisma.product.update({ where: { id }, data: { isActive: false } });
+    // Atomic, tenant-scoped update — closes the TOCTOU window between
+    // findOne() and update() that an unscoped `where: { id }` would leave open.
+    const result = await this.prisma.product.updateMany({
+      where: { id, tenantId },
+      data:  { isActive: false },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Product not found in your tenant.');
+    }
+    return this.prisma.product.findUnique({ where: { id } });
   }
 
   /**

@@ -183,8 +183,14 @@ export class JournalTemplatesService {
   }
 
   async delete(tenantId: string, id: string) {
-    await this.findOne(tenantId, id);
-    return this.prisma.journalTemplate.delete({ where: { id } });
+    // Atomic tenant-scoped delete — no TOCTOU window between findOne + delete.
+    const result = await this.prisma.journalTemplate.deleteMany({
+      where: { id, tenantId },
+    });
+    if (result.count === 0) {
+      throw new NotFoundException('Journal template not found in your tenant.');
+    }
+    return { id };
   }
 
   /** Used by the scheduler — find every template whose nextRunAt is due. */

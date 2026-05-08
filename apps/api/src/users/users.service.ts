@@ -274,7 +274,14 @@ export class UsersService {
     // Deleting sessions forces re-login, which issues a fresh token with the new role.
     // Applies to: role change (escalation OR de-escalation) and account deactivation.
     if (dto.role !== undefined || dto.isActive === false) {
-      await this.prisma.userSession.deleteMany({ where: { userId: id } });
+      // Tenant-scoped session invalidation — only kill sessions belonging to
+      // a user inside the caller's tenant. The outer findOne(tenantId, id)
+      // already proves `id` belongs to tenantId, but keep the join in the
+      // delete query as defense-in-depth so a future refactor can't strip
+      // the upstream check and silently invalidate cross-tenant sessions.
+      await this.prisma.userSession.deleteMany({
+        where: { userId: id, user: { tenantId } },
+      });
     }
 
     return updated;

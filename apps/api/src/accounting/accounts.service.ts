@@ -412,7 +412,13 @@ export class AccountsService {
     if (account.isSystem && dto.postingControl !== undefined) {
       throw new ForbiddenException('Posting control on system accounts cannot be changed');
     }
-    return this.prisma.account.update({ where: { id }, data: dto });
+    // Atomic tenant-scoped write — defends against TOCTOU between findFirst and update.
+    const result = await this.prisma.account.updateMany({
+      where: { id, tenantId },
+      data:  dto,
+    });
+    if (result.count === 0) throw new NotFoundException('Account not found');
+    return this.prisma.account.findUnique({ where: { id } });
   }
 
   async delete(tenantId: string, id: string) {
@@ -420,11 +426,17 @@ export class AccountsService {
     if (!account) throw new NotFoundException('Account not found');
     if (account.isSystem) throw new ForbiddenException('System accounts cannot be deleted');
 
-    const usedInLines = await this.prisma.journalLine.count({ where: { accountId: id } });
+    // JournalLine has no tenantId column — scope through the parent JournalEntry.
+    const usedInLines = await this.prisma.journalLine.count({
+      where: { accountId: id, journalEntry: { tenantId } },
+    });
     if (usedInLines > 0) {
       throw new ConflictException('Account has journal entries and cannot be deleted. Deactivate it instead.');
     }
-    return this.prisma.account.delete({ where: { id } });
+    // Atomic tenant-scoped delete.
+    const result = await this.prisma.account.deleteMany({ where: { id, tenantId } });
+    if (result.count === 0) throw new NotFoundException('Account not found');
+    return { id };
   }
 
   // ── Trial Balance ────────────────────────────────────────────────────────────

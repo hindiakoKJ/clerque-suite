@@ -347,7 +347,13 @@ export class LaundryService {
     if (status === 'IDLE' && m.status === 'RUNNING') {
       throw new BadRequestException('Machine is currently RUNNING — finish or cancel the load first.');
     }
-    return this.prisma.laundryMachine.update({ where: { id }, data: { status } });
+    // Atomic tenant-scoped write — closes the TOCTOU window between findFirst and update.
+    const result = await this.prisma.laundryMachine.updateMany({
+      where: { id, tenantId },
+      data:  { status },
+    });
+    if (result.count === 0) throw new NotFoundException('Machine not found.');
+    return this.prisma.laundryMachine.findUnique({ where: { id } });
   }
 
   // ── Multi-line ticket creation ────────────────────────────────────────────
@@ -673,15 +679,19 @@ export class LaundryService {
   }
 
   async togglePromo(tenantId: string, id: string, isActive: boolean) {
-    const p = await this.prisma.laundryPromo.findFirst({ where: { id, tenantId } });
-    if (!p) throw new NotFoundException('Promo not found.');
-    return this.prisma.laundryPromo.update({ where: { id }, data: { isActive } });
+    // Atomic tenant-scoped toggle — no findFirst pre-check needed.
+    const result = await this.prisma.laundryPromo.updateMany({
+      where: { id, tenantId },
+      data:  { isActive },
+    });
+    if (result.count === 0) throw new NotFoundException('Promo not found.');
+    return this.prisma.laundryPromo.findUnique({ where: { id } });
   }
 
   async deletePromo(tenantId: string, id: string) {
-    const p = await this.prisma.laundryPromo.findFirst({ where: { id, tenantId } });
-    if (!p) throw new NotFoundException('Promo not found.');
-    await this.prisma.laundryPromo.delete({ where: { id } });
+    // Atomic tenant-scoped delete.
+    const result = await this.prisma.laundryPromo.deleteMany({ where: { id, tenantId } });
+    if (result.count === 0) throw new NotFoundException('Promo not found.');
     return { ok: true };
   }
 

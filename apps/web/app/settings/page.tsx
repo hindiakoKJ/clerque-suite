@@ -10,7 +10,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { isFnbType, isLaundryType, planLabel, type PlanCode } from '@repo/shared-types';
+import { isFnbType, isLaundryType, planLabel, getVerticalPack, type PlanCode } from '@repo/shared-types';
+import * as Icons from 'lucide-react';
 import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
@@ -324,22 +325,22 @@ export default function SettingsPage() {
         <section>
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Configuration</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            {isFnbType(profile?.businessType) && (
-              <SettingsCard
-                href="/settings/floor-layout"
-                icon={LayoutGrid}
-                title="Floor Layout"
-                desc="Stations, printers, category routing, KDS"
-              />
-            )}
-            {isLaundryType(profile?.businessType) && (
-              <SettingsCard
-                href="/settings/laundry"
-                icon={Sparkles}
-                title="Laundry Setup"
-                desc="Service prices, promos, machine fleet"
-              />
-            )}
+            {/* Vertical-specific cards come from the VerticalPack registry —
+                no hardcoded `if (isFnbType(...))` branches here. Adding a new
+                vertical with its own settings card is a one-line addition to
+                the pack's `settings.extraCards`. */}
+            {getVerticalPack((profile?.businessType ?? null) as any).settings.extraCards.map((card) => {
+              const Icon = (Icons as any)[card.iconName] ?? Icons.Settings;
+              return (
+                <SettingsCard
+                  key={card.href}
+                  href={card.href}
+                  icon={Icon}
+                  title={card.label}
+                  desc={card.desc}
+                />
+              );
+            })}
             {/* Branches — only relevant on multi-branch plans. Solo plan
                 tenants (maxBranches=1) can't have a second location anyway,
                 so the card would just lead to a single read-only row. */}

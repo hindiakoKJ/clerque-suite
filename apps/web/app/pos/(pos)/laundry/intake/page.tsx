@@ -234,7 +234,17 @@ export default function LaundryIntakePage() {
   }
 
   function addProductLine() {
-    setProductLines([...productLines, { productId: products[0]?.id ?? '', quantity: 1 }]);
+    // Sprint 12 fix — only add a line when we have a product to default to.
+    // Previously, clicking "+ Add item" before /products finished loading
+    // created a line with productId=''. The native select then displayed
+    // its first option (e.g. "Water") because no matching option existed,
+    // but React state stayed ''. productPriceFor('') returns 0, so the
+    // line total + retail subtotal both showed ₱0.00.
+    if (products.length === 0) {
+      toast.error('No retail products yet — create one under Products first.');
+      return;
+    }
+    setProductLines([...productLines, { productId: products[0].id, quantity: 1 }]);
   }
   function patchProductLine(idx: number, p: Partial<ProductLine>) {
     setProductLines(productLines.map((l, i) => i === idx ? { ...l, ...p } : l));
@@ -242,6 +252,21 @@ export default function LaundryIntakePage() {
   function removeProductLine(idx: number) {
     setProductLines(productLines.filter((_, i) => i !== idx));
   }
+
+  // Sprint 12 fix — when /products finishes loading after the user has
+  // already added retail lines (rare but possible: slow network, lines
+  // restored from a draft), backfill any line with an empty productId to
+  // match what the dropdown is visually showing. Without this, the line
+  // total stays ₱0.00 even though the dropdown looks correct.
+  useEffect(() => {
+    if (products.length === 0) return;
+    const needsBackfill = productLines.some((l) => !l.productId);
+    if (!needsBackfill) return;
+    setProductLines((lines) =>
+      lines.map((l) => (l.productId ? l : { ...l, productId: products[0].id })),
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products.length]);
 
   // ── UI ──────────────────────────────────────────────────────────────────
   return (

@@ -94,12 +94,11 @@ export class ConstructionService {
    * via the existing AR flow; orderId is then linked back via linkOrder().
    *
    * Emits PROGRESS_BILLING accounting event with the gross/retention/net
-   * breakdown so the kernel JE handler (Step B) can post:
-   *   DR 1030 AR (gross)
-   *   CR 4010 Revenue (gross net of VAT)
-   *   CR 2020 Output VAT
-   *   CR 2078 Retention Withheld (the held-back portion)
-   * Until the handler ships, the event is no-op'd by the cron.
+   * breakdown. The kernel JE handler posts:
+   *   DR 1030 AR – Trade            netAmount        (collectable now)
+   *   DR 1037 Retention Receivable  retentionAmount  (collectable later)
+   *   CR 4010 Sales Revenue         grossAmount − vat
+   *   CR 2020 Output VAT            vat (12% if tenant.taxStatus = VAT)
    */
   async issueProgressBilling(tenantId: string, id: string) {
     return this.prisma.$transaction(async (tx) => {
@@ -241,9 +240,9 @@ export class ConstructionService {
     }
 
     // Atomic: create the release row + queue the RETENTION_RELEASE accounting
-    // event for the JE handler (Step B): DR 2078 / CR 1030 AR (or CR 1010
-    // Cash if released as a direct customer payment — handler will branch on
-    // payload.releaseMethod when implemented).
+    // event. The kernel JE handler posts (per releaseMethod):
+    //   AR_CREDIT (default): DR 1030 AR / CR 1037 Retention Receivable
+    //   CASH:                DR 1010 Cash / CR 1037 Retention Receivable
     return this.prisma.$transaction(async (tx) => {
       const release = await tx.retentionRelease.create({
         data: {

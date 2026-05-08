@@ -48,6 +48,15 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '1034', name: 'Advances to Employees',                     type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '1035', name: 'Due from Related Parties',                  type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '1036', name: 'Other Receivables',                         type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  // Sprint 13 — Construction (Project-Engine). The retention portion of
+  // progress billings: revenue is fully recognized at billing time, but the
+  // customer holds back a % until project handover. The held-back amount
+  // remains receivable from the customer — booked here separately so it
+  // doesn't pollute current-AR aging buckets. Released via the
+  // RETENTION_RELEASE event (DR 1030 or 1010 / CR 1037).
+  // SYSTEM_ONLY: only the kernel JE handler may post; manual JEs would
+  // desync the retention schedule.
+  { code: '1037', name: 'Retention Receivable – Customer',           type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY', isSystem: true  },
 
   // ── Tax Assets ──────────────────────────────────────────────────────────────
   // Input VAT: creditable against Output VAT; BIR Form 2550Q Schedule 4
@@ -161,12 +170,6 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '2075', name: 'Unearned Revenue',                          type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '2076', name: 'Dividends Payable',                         type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '2077', name: 'Other Current Liabilities',                 type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
-  // Sprint 13 — Construction (Project-Engine). Held-back portion of
-  // progress billings: revenue is recognized at billing time but the
-  // customer keeps a % until project handover. Released via the
-  // RETENTION_RELEASE event. SYSTEM_ONLY because the kernel handler is
-  // the only correct writer; manual JEs would desync the schedule.
-  { code: '2078', name: 'Retention Withheld – Customer',              type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'SYSTEM_ONLY', isSystem: true  },
 
   // ── Non-Current Liabilities ──────────────────────────────────────────────────
   { code: '2090', name: 'Long-term Bank Loans',                      type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },

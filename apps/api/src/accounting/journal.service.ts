@@ -595,6 +595,191 @@ export class JournalService {
           lines.push({ accountId: await getAccount('1010'), credit: absVariance, description: 'Missing cash from till' });
         }
 
+      } else if (event.type === 'TRIP_CASH_ADVANCE') {
+        // Sprint 13 — Trucking. Cash advance issued to driver at dispatch.
+        //   DR 1034 Advances to Employees   (asset receivable from driver)
+        //   CR 1010 Cash on Hand
+        const amount     = Number(payload['amount'] ?? 0);
+        const tripNumber = String(payload['tripNumber'] ?? event.id);
+        if (amount <= 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+        description = `Cash advance — Trip ${tripNumber}`;
+        lines.push({ accountId: await getAccount('1034'), debit:  amount, description: `Advance to driver (${tripNumber})` });
+        lines.push({ accountId: await getAccount('1010'), credit: amount, description: 'Cash from till' });
+
+      } else if (event.type === 'TRIP_LIQUIDATION') {
+        // Sprint 13 — Trucking. Driver returns receipts; expense each
+        // category, settle the advance with what was actually documented.
+        //
+        //   For each (category, amount) in categoryBreakdown:
+        //     DR <expense-account-by-category>   amount
+        //   CR 1034 Advances to Employees        sum(amount)   (= receiptsTotal)
+        //
+        // The variance (cashAdvance − receiptsTotal) is left on 1034 by
+        // construction: nothing posts against the residual. So:
+        //   variance > 0 (driver owes return cash)  → 1034 stays positive
+        //                                              until cash refund posts a
+        //                                              separate JE (DR 1010 / CR 1034).
+        //   variance < 0 (driver overspent)         → 1034 goes negative,
+        //                                              forcing investigation.
+        // This matches the user's locked-in policy: never auto-absorb
+        // overspend into expense; carry on 1034 so a human reconciles.
+        const tripNumber        = String(payload['tripNumber'] ?? event.id);
+        const receiptsTotal     = Number(payload['receiptsTotal'] ?? 0);
+        const categoryBreakdown = (payload['categoryBreakdown'] as Record<string, number>) ?? {};
+        const variance          = Number(payload['variance'] ?? 0);
+
+        if (receiptsTotal <= 0 && variance === 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+
+        // Category → PH chart-of-accounts mapping. Tenants can re-route in
+        // Settings → Chart of Accounts if they want finer granularity.
+        //   FUEL   → 6101 Gasoline & Oil Expense
+        //   REPAIR → 6102 Vehicle Maintenance
+        //   TOLL   → 6100 Transportation and Travel
+        //   MEALS  → 6100 Transportation and Travel  (driver per-diem)
+        //   OTHER  → 6140 Miscellaneous Expense
+        const categoryAccount = (cat: string): string => {
+          const c = cat.toUpperCase();
+          if (c === 'FUEL')   return '6101';
+          if (c === 'REPAIR') return '6102';
+          if (c === 'TOLL')   return '6100';
+          if (c === 'MEALS')  return '6100';
+          return '6140';
+        };
+
+        description = `Trip liquidation — ${tripNumber}`;
+
+        let totalExpensed = 0;
+        for (const [cat, amt] of Object.entries(categoryBreakdown)) {
+          const a = Number(amt);
+          if (a <= 0) continue;
+          totalExpensed += a;
+          lines.push({
+            accountId:   await getAccount(categoryAccount(cat)),
+            debit:       a,
+            description: `${cat}: ${tripNumber}`,
+          });
+        }
+        if (totalExpensed > 0) {
+          lines.push({
+            accountId:   await getAccount('1034'),
+            credit:      totalExpensed,
+            description: `Settle advance (${tripNumber})`,
+          });
+        }
+        // Variance is intentionally NOT posted here. If variance > 0 (cash
+        // returned), the trucking module emits a follow-up event (TODO:
+        // CASH_RETURN — out of scope this sprint). If variance < 0
+        // (overspent), the residual sits on 1034 awaiting investigation.
+
+      } else if (event.type === 'PROGRESS_BILLING') {
+        // Sprint 13 — Construction. Revenue is fully recognized at billing
+        // time. The customer pays the NET portion now and holds the
+        // RETENTION until project handover.
+        //
+        // Accounts:
+        //   1030 AR – Trade               (net portion — collectable now)
+        //   1037 Retention Receivable     (retention — collectable later)
+        //   4010 Sales Revenue            (revenue net of VAT, on the gross)
+        //   2020 Output VAT Payable       (12% of pre-VAT, VAT-registered only)
+        //
+        // For grossAmount = 100,000  retention = 10,000  net = 90,000  vat = 12%:
+        //   vatAmount  = 100,000 − 100,000/1.12 = 10,714.29
+        //   revenueNet = 100,000 − 10,714.29    = 89,285.71
+        //   DR AR              90,000 - vat-on-net  → see below
+        //
+        // VAT split — gross = (vat-portion-of-net + vat-portion-of-retention).
+        // Both customer payment streams will eventually settle the VAT, so we
+        // don't split the VAT credit between AR and Retention Receivable —
+        // we simply book the full VAT now and keep AR/1037 as their full
+        // (vat-inclusive) collectable amounts. This balances:
+        //   DR AR 1030          90,000      (full collectable now)
+        //   DR Retention 1037   10,000      (full collectable later)
+        //   CR Revenue 4010     89,285.71
+        //   CR VAT 2020         10,714.29
+        // Total DR 100,000  =  Total CR 100,000  ✓
+        const billingNumber   = String(payload['billingNumber']   ?? event.id);
+        const grossAmount     = Number(payload['grossAmount']     ?? 0);
+        const retentionAmount = Number(payload['retentionAmount'] ?? 0);
+        const netAmount       = +(grossAmount - retentionAmount).toFixed(2);
+
+        if (grossAmount <= 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+
+        const tenant = await this.prisma.tenant.findUnique({
+          where:  { id: tenantId },
+          select: { taxStatus: true },
+        });
+        // VAT-12 only when the tenant is VAT-registered. NON_VAT / EXEMPT
+        // / PERCENTAGE_TAX → 0% output VAT for this billing.
+        const isVatable  = tenant?.taxStatus === 'VAT';
+        const vatAmount  = isVatable ? +(grossAmount - grossAmount / 1.12).toFixed(2) : 0;
+        const revenueNet = +(grossAmount - vatAmount).toFixed(2);
+
+        description = `Progress billing ${billingNumber}`;
+        if (netAmount > 0) {
+          lines.push({ accountId: await getAccount('1030'), debit: netAmount,         description: `AR (net) — ${billingNumber}` });
+        }
+        if (retentionAmount > 0) {
+          lines.push({ accountId: await getAccount('1037'), debit: retentionAmount,   description: `Retention — ${billingNumber}` });
+        }
+        lines.push({ accountId: await getAccount('4010'),   credit: revenueNet,       description: `Revenue — ${billingNumber}` });
+        if (vatAmount > 0) {
+          lines.push({ accountId: await getAccount('2020'), credit: vatAmount,        description: `Output VAT 12% — ${billingNumber}` });
+        }
+
+      } else if (event.type === 'RETENTION_RELEASE') {
+        // Sprint 13 — Construction. The retention schedule has matured.
+        // Two release flavors:
+        //
+        //   AR_CREDIT (default) — move retention from "long-term collectable"
+        //   into normal AR aging so the customer pays it via the standard
+        //   collection flow.
+        //     DR 1030 AR – Trade            releasedAmount
+        //     CR 1037 Retention Receivable  releasedAmount
+        //
+        //   CASH — customer pays the retention directly (final settlement).
+        //   Bypasses AR entirely.
+        //     DR 1010 Cash on Hand          releasedAmount
+        //     CR 1037 Retention Receivable  releasedAmount
+        //
+        // Both leave the GL balanced and clear 1037 by the released amount.
+        const billingNumber  = String(payload['billingNumber']  ?? event.id);
+        const releasedAmount = Number(payload['releasedAmount'] ?? 0);
+        const releaseMethod  = String(payload['releaseMethod']  ?? 'AR_CREDIT');
+
+        if (releasedAmount <= 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+
+        description = `Retention released — ${billingNumber}`;
+        if (releaseMethod === 'CASH') {
+          lines.push({ accountId: await getAccount('1010'), debit:  releasedAmount, description: `Retention received — ${billingNumber}` });
+        } else {
+          lines.push({ accountId: await getAccount('1030'), debit:  releasedAmount, description: `AR — released retention ${billingNumber}` });
+        }
+        lines.push({ accountId: await getAccount('1037'), credit: releasedAmount,   description: `Release retention — ${billingNumber}` });
+
       } else {
         await this.prisma.accountingEvent.update({
           where: { id: eventId },

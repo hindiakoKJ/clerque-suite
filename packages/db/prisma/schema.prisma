@@ -224,12 +224,13 @@ enum AccountingEventType {
   /// receipts by category, settle the advance, carry overspend on 1034
   /// (left non-zero so the bookkeeper investigates).
   TRIP_LIQUIDATION
-  /// Construction: progress billing issued (Option 2 retention treatment) —
-  /// DR AR (gross) / CR Revenue (net of VAT) / CR Output VAT / CR 2076
-  /// Retention Withheld for the held-back portion.
+  /// Construction: progress billing issued — revenue fully recognized,
+  /// retention split out as a long-term receivable (1037) so it doesn't
+  /// pollute current-AR aging. DR 1030 AR (net) + DR 1037 Retention
+  /// Receivable / CR 4010 Revenue / CR 2020 Output VAT.
   PROGRESS_BILLING
-  /// Construction: retention released back to the customer's AR (or directly
-  /// to cash if released as net payment). DR 2076 / CR AR (or Cash).
+  /// Construction: retention released — moved into current AR for normal
+  /// collection (default) or paid directly as cash. DR 1030 or 1010 / CR 1037.
   RETENTION_RELEASE
 }
 

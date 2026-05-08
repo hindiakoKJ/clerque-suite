@@ -38,13 +38,20 @@ import { AccountingPeriodsService } from '../accounting-periods/accounting-perio
 
 const ACCOUNT_IDS: Record<string, string> = {
   '1010': 'acct-1010-cash',
+  '1030': 'acct-1030-ar',
   '1031': 'acct-1031-digital',
+  '1034': 'acct-1034-driver-advance',
+  '1037': 'acct-1037-retention',
   '1050': 'acct-1050-inventory',
   '2010': 'acct-2010-ap',
   '2020': 'acct-2020-vat',
   '3010': 'acct-3010-equity',
   '4010': 'acct-4010-sales',
   '5010': 'acct-5010-cogs',
+  '6100': 'acct-6100-transport',
+  '6101': 'acct-6101-fuel',
+  '6102': 'acct-6102-vehicle-mtc',
+  '6140': 'acct-6140-misc',
 };
 
 const ID_TO_CODE: Record<string, string> = Object.fromEntries(
@@ -83,8 +90,12 @@ function round(n: number) { return Math.round(n * 100) / 100; }
 
 async function runProcessEvent(
   payload: Record<string, unknown>,
-  type: 'SALE' | 'COGS' | 'VOID' | 'INVENTORY_ADJUSTMENT',
+  type:
+    | 'SALE' | 'COGS' | 'VOID' | 'INVENTORY_ADJUSTMENT'
+    | 'TRIP_CASH_ADVANCE' | 'TRIP_LIQUIDATION'
+    | 'PROGRESS_BILLING' | 'RETENTION_RELEASE',
   origSale?: { payload: Record<string, unknown>; lines: Array<{ accountId: string; debit: unknown; credit: unknown; description: string }> },
+  tenantTaxStatus: 'VAT' | 'NON_VAT' | 'EXEMPT' | 'PERCENTAGE_TAX' = 'VAT',
 ): Promise<CapturedLine[] | { skipped: true }> {
   let captured: CapturedLine[] | { skipped: true } = { skipped: true };
 
@@ -133,6 +144,9 @@ async function runProcessEvent(
     journalEntry: {
       count:  jest.fn().mockResolvedValue(0),
       create: journalEntryCreate,
+    },
+    tenant: {
+      findUnique: jest.fn().mockResolvedValue({ taxStatus: tenantTaxStatus }),
     },
     $transaction: jest.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
       // Pass-through with the same mocks.
@@ -512,6 +526,232 @@ describe('JournalService — accounting correctness across business types', () =
         totalValue:     0,
         paymentMethod:  'OWNER_FUNDED',
       }, 'INVENTORY_ADJUSTMENT');
+
+      expect(result).toEqual({ skipped: true });
+    });
+  });
+
+  // ── 6. Sprint 13 — Trucking events ─────────────────────────────────────────
+
+  describe('TRIP_CASH_ADVANCE event', () => {
+    it('₱5,000 advance to driver — DR 1034 / CR 1010', async () => {
+      const lines = await runProcessEvent({
+        tripId:     'trip-1',
+        tripNumber: 'TRIP-2026-000001',
+        driverId:   'user-driver',
+        branchId:   'branch-1',
+        amount:     5000,
+        issuedAt:   new Date().toISOString(),
+      }, 'TRIP_CASH_ADVANCE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1034')).toBeCloseTo(5000, 2);
+      expect(s.credits.get('1010')).toBeCloseTo(5000, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+      expect(s.debitTotal).toBeCloseTo(5000, 2);
+    });
+
+    it('zero advance — skipped, no JE posted', async () => {
+      const result = await runProcessEvent({
+        tripId:     'trip-1',
+        tripNumber: 'TRIP-2026-000002',
+        driverId:   'user-driver',
+        branchId:   'branch-1',
+        amount:     0,
+      }, 'TRIP_CASH_ADVANCE');
+
+      expect(result).toEqual({ skipped: true });
+    });
+  });
+
+  describe('TRIP_LIQUIDATION event', () => {
+    it('exact-spend liquidation — DR fuel/toll/meals / CR 1034 (no residual)', async () => {
+      // Driver got ₱5,000, spent ₱2,500 fuel + ₱500 toll + ₱200 meals = ₱3,200,
+      // returned ₱1,800. We post the expensed portion only; the ₱1,800
+      // variance stays on 1034 awaiting the cash-return JE (out of scope).
+      const lines = await runProcessEvent({
+        tripId:        'trip-1',
+        tripNumber:    'TRIP-2026-000003',
+        driverId:      'user-driver',
+        branchId:      'branch-1',
+        cashAdvance:   5000,
+        receiptsTotal: 3200,
+        variance:      1800,
+        categoryBreakdown: { FUEL: 2500, TOLL: 500, MEALS: 200 },
+        liquidatedAt:  new Date().toISOString(),
+      }, 'TRIP_LIQUIDATION') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('6101')).toBeCloseTo(2500, 2);  // FUEL
+      expect(s.debits.get('6100')).toBeCloseTo(700,  2);  // TOLL + MEALS combined
+      expect(s.credits.get('1034')).toBeCloseTo(3200, 2); // Settle the receipted portion
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('overspend liquidation — receipts > advance, residual on 1034 negative', async () => {
+      // Driver got ₱5,000, spent ₱5,800 (over by ₱800 — REPAIR cost).
+      // The full ₱5,800 expensed; ₱5,800 credited to 1034.
+      // 1034 ends at -₱800 forcing investigation (per locked policy).
+      const lines = await runProcessEvent({
+        tripId:        'trip-1',
+        tripNumber:    'TRIP-2026-000004',
+        driverId:      'user-driver',
+        branchId:      'branch-1',
+        cashAdvance:   5000,
+        receiptsTotal: 5800,
+        variance:      -800,
+        categoryBreakdown: { FUEL: 3000, REPAIR: 2800 },
+      }, 'TRIP_LIQUIDATION') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('6101')).toBeCloseTo(3000, 2);
+      expect(s.debits.get('6102')).toBeCloseTo(2800, 2);
+      expect(s.credits.get('1034')).toBeCloseTo(5800, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('OTHER category falls through to 6140 misc', async () => {
+      const lines = await runProcessEvent({
+        tripId:        'trip-1',
+        tripNumber:    'TRIP-2026-000005',
+        driverId:      'user-driver',
+        branchId:      'branch-1',
+        cashAdvance:   1000,
+        receiptsTotal: 1000,
+        variance:      0,
+        categoryBreakdown: { OTHER: 1000 },
+      }, 'TRIP_LIQUIDATION') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('6140')).toBeCloseTo(1000, 2);
+      expect(s.credits.get('1034')).toBeCloseTo(1000, 2);
+    });
+
+    it('empty liquidation (no receipts, no variance) — skipped', async () => {
+      const result = await runProcessEvent({
+        tripId:        'trip-1',
+        tripNumber:    'TRIP-2026-000006',
+        cashAdvance:   0,
+        receiptsTotal: 0,
+        variance:      0,
+        categoryBreakdown: {},
+      }, 'TRIP_LIQUIDATION');
+
+      expect(result).toEqual({ skipped: true });
+    });
+  });
+
+  // ── 7. Sprint 13 — Construction events ─────────────────────────────────────
+
+  describe('PROGRESS_BILLING event', () => {
+    it('VAT-registered: ₱100k gross / 10% retention → AR 90k + Retention 10k / Revenue + VAT', async () => {
+      const lines = await runProcessEvent({
+        billingId:        'pb-1',
+        billingNumber:    'PB-2026-000001',
+        projectId:        'proj-1',
+        grossAmount:      100_000,
+        retentionAmount:  10_000,
+        netAmount:        90_000,
+        stageDescription: 'Foundation works',
+        percentComplete:  25,
+      }, 'PROGRESS_BILLING', undefined, 'VAT') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1030')).toBeCloseTo(90_000, 2);    // AR (net to collect now)
+      expect(s.debits.get('1037')).toBeCloseTo(10_000, 2);    // Retention Receivable
+      // VAT split: vat = 100k − 100k/1.12 = 10,714.29; revenue = 89,285.71
+      expect(s.credits.get('4010')).toBeCloseTo(89_285.71, 2);
+      expect(s.credits.get('2020')).toBeCloseTo(10_714.29, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+      expect(s.debitTotal).toBeCloseTo(100_000, 2);
+    });
+
+    it('non-VAT tenant: zero VAT, full gross goes to revenue', async () => {
+      const lines = await runProcessEvent({
+        billingId:        'pb-2',
+        billingNumber:    'PB-2026-000002',
+        projectId:        'proj-1',
+        grossAmount:      50_000,
+        retentionAmount:  5_000,
+        netAmount:        45_000,
+      }, 'PROGRESS_BILLING', undefined, 'NON_VAT') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1030')).toBeCloseTo(45_000, 2);
+      expect(s.debits.get('1037')).toBeCloseTo(5_000, 2);
+      expect(s.credits.get('4010')).toBeCloseTo(50_000, 2);
+      expect(s.credits.get('2020') ?? 0).toBeCloseTo(0, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('zero retention (final billing) — only AR + Revenue + VAT, no 1037 entry', async () => {
+      const lines = await runProcessEvent({
+        billingId:        'pb-3',
+        billingNumber:    'PB-2026-000003',
+        projectId:        'proj-1',
+        grossAmount:      28_000,
+        retentionAmount:  0,
+        netAmount:        28_000,
+      }, 'PROGRESS_BILLING', undefined, 'VAT') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1030')).toBeCloseTo(28_000, 2);
+      expect(s.debits.get('1037')).toBeUndefined();
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('zero gross — skipped', async () => {
+      const result = await runProcessEvent({
+        billingId:        'pb-4',
+        billingNumber:    'PB-2026-000004',
+        grossAmount:      0,
+        retentionAmount:  0,
+        netAmount:        0,
+      }, 'PROGRESS_BILLING');
+
+      expect(result).toEqual({ skipped: true });
+    });
+  });
+
+  describe('RETENTION_RELEASE event', () => {
+    it('AR_CREDIT (default) — DR 1030 / CR 1037 (move into current AR for collection)', async () => {
+      const lines = await runProcessEvent({
+        releaseId:         'rr-1',
+        progressBillingId: 'pb-1',
+        billingNumber:     'PB-2026-000001',
+        projectId:         'proj-1',
+        releasedAmount:    10_000,
+        releaseMethod:     'AR_CREDIT',
+      }, 'RETENTION_RELEASE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1030')).toBeCloseTo(10_000, 2);
+      expect(s.credits.get('1037')).toBeCloseTo(10_000, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('CASH method — DR 1010 / CR 1037 (customer paid retention directly)', async () => {
+      const lines = await runProcessEvent({
+        releaseId:         'rr-2',
+        progressBillingId: 'pb-1',
+        billingNumber:     'PB-2026-000001',
+        releasedAmount:    8_500,
+        releaseMethod:     'CASH',
+      }, 'RETENTION_RELEASE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1010')).toBeCloseTo(8_500, 2);
+      expect(s.credits.get('1037')).toBeCloseTo(8_500, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('zero amount — skipped', async () => {
+      const result = await runProcessEvent({
+        releaseId:         'rr-3',
+        progressBillingId: 'pb-1',
+        releasedAmount:    0,
+        releaseMethod:     'AR_CREDIT',
+      }, 'RETENTION_RELEASE');
 
       expect(result).toEqual({ skipped: true });
     });

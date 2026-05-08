@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { Calendar, FileText, DollarSign, Clock, ArrowRight, Plane } from 'lucide-react';
+import { Calendar, FileText, DollarSign, Clock, ArrowRight, Plane, ClipboardList, MapPin } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 
@@ -17,6 +17,23 @@ interface MySalary {
     runLabel:  string;
     periodEnd: string;
   } | null;
+}
+
+interface MyShift {
+  shiftStart:          string | null;
+  shiftEnd:            string | null;
+  expectedHoursPerDay: number | null;
+  position:            string | null;
+  branch:              string | null;
+}
+
+function fmtTime12(t?: string | null) {
+  if (!t) return '—';
+  const [h, m] = t.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return t;
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
 }
 
 interface MyLeave {
@@ -68,6 +85,12 @@ export default function MyPayrollPage() {
     enabled:  !!user,
   });
 
+  const { data: shift } = useQuery<MyShift>({
+    queryKey: ['payroll-me-shift'],
+    queryFn:  () => api.get('/payroll/me/shift').then((r) => r.data),
+    enabled:  !!user,
+  });
+
   const pendingLeaves   = leaves.filter((l) => l.status === 'PENDING').length;
   const approvedYtdDays = leaves
     .filter((l) => l.status === 'APPROVED' && new Date(l.startDate).getFullYear() === new Date().getFullYear())
@@ -81,6 +104,36 @@ export default function MyPayrollPage() {
           Hi {salary?.name?.split(' ')[0] ?? user?.name?.split(' ')[0]}. Your salary, attendance, and payslips at a glance.
         </p>
       </header>
+
+      {/* ── Shift banner — read-only schedule set by your manager ─────────────── */}
+      {shift && (shift.shiftStart || shift.shiftEnd) && (
+        <section className="rounded-xl border border-border bg-card p-4 flex items-center gap-4">
+          <div className="h-10 w-10 rounded-full bg-[var(--accent-soft)] flex items-center justify-center shrink-0">
+            <Clock className="h-5 w-5 text-[var(--accent)]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Your shift</span>
+              <span className="text-base font-semibold font-mono">
+                {fmtTime12(shift.shiftStart)} <span className="text-muted-foreground">→</span> {fmtTime12(shift.shiftEnd)}
+              </span>
+              {shift.expectedHoursPerDay != null && (
+                <span className="text-xs text-muted-foreground">({shift.expectedHoursPerDay}h)</span>
+              )}
+            </div>
+            {(shift.position || shift.branch) && (
+              <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+                {shift.position && <span>{shift.position}</span>}
+                {shift.branch && (
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="h-3 w-3" /> {shift.branch}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── Stat cards ────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -119,10 +172,10 @@ export default function MyPayrollPage() {
           </div>
           <ArrowRight className="h-4 w-4 text-muted-foreground" />
         </Link>
-        <Link href="/payroll/me/leaves" className="rounded-xl border border-border bg-card p-4 hover:bg-muted/40 transition-colors flex items-center justify-between">
+        <Link href="/payroll/me/requests" className="rounded-xl border border-border bg-card p-4 hover:bg-muted/40 transition-colors flex items-center justify-between">
           <div>
-            <div className="text-sm font-semibold">Request Leave</div>
-            <div className="text-xs text-muted-foreground">Submit a new request</div>
+            <div className="text-sm font-semibold">Requests</div>
+            <div className="text-xs text-muted-foreground">Leaves, OT, schedule, etc.</div>
           </div>
           <ArrowRight className="h-4 w-4 text-muted-foreground" />
         </Link>

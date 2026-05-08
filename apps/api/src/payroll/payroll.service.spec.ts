@@ -20,10 +20,12 @@ const ACTOR   = 'user-actor';
 function makePrismaMock() {
   return {
     user: {
-      findFirst:  jest.fn(),
-      update:     jest.fn(),
-      findMany:   jest.fn().mockResolvedValue([]),
-      count:      jest.fn().mockResolvedValue(0),
+      findFirst:        jest.fn(),
+      findFirstOrThrow: jest.fn(),
+      update:           jest.fn(),
+      updateMany:       jest.fn().mockResolvedValue({ count: 0 }),
+      findMany:         jest.fn().mockResolvedValue([]),
+      count:            jest.fn().mockResolvedValue(0),
     },
     timeEntry: {
       findFirst:  jest.fn(),
@@ -77,10 +79,13 @@ describe('PayrollService — Sprint 3 endpoints', () => {
       prisma.user.findFirst.mockResolvedValue({
         id: TARGET, name: 'Maria', role: 'CASHIER',
         salaryRate: 15000, salaryType: 'MONTHLY', hiredAt: null,
+        shiftStart: null, shiftEnd: null,
       });
-      prisma.user.update.mockResolvedValue({
+      prisma.user.updateMany.mockResolvedValue({ count: 1 });
+      prisma.user.findFirstOrThrow.mockResolvedValue({
         id: TARGET, name: 'Maria',
         salaryRate: 18000, salaryType: 'MONTHLY', hiredAt: null,
+        shiftStart: null, shiftEnd: null,
       });
 
       const result = await svc.editEmployeeSalary(TENANT, TARGET, ACTOR, {
@@ -88,9 +93,9 @@ describe('PayrollService — Sprint 3 endpoints', () => {
         salaryType: 'MONTHLY' as any,
       });
 
-      expect(prisma.user.update).toHaveBeenCalledWith(expect.objectContaining({
-        where: { id: TARGET },
-        data: expect.objectContaining({ salaryType: 'MONTHLY' }),
+      expect(prisma.user.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where:  { id: TARGET, tenantId: TENANT },
+        data:   expect.objectContaining({ salaryType: 'MONTHLY' }),
       }));
       expect(result.salaryRate).toBeDefined();
     });
@@ -105,10 +110,13 @@ describe('PayrollService — Sprint 3 endpoints', () => {
       prisma.user.findFirst.mockResolvedValue({
         id: TARGET, name: 'Maria', role: 'CASHIER',
         salaryRate: 15000, salaryType: 'MONTHLY', hiredAt: null,
+        shiftStart: null, shiftEnd: null,
       });
-      prisma.user.update.mockResolvedValue({
+      prisma.user.updateMany.mockResolvedValue({ count: 1 });
+      prisma.user.findFirstOrThrow.mockResolvedValue({
         id: TARGET, name: 'Maria',
         salaryRate: 18000, salaryType: 'MONTHLY', hiredAt: null,
+        shiftStart: null, shiftEnd: null,
       });
 
       await svc.editEmployeeSalary(TENANT, TARGET, ACTOR, { salaryRate: 18000 });

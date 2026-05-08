@@ -20,6 +20,8 @@ export interface EmployeeDto {
   status:      'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
   startDate:   string | null; // ISO date string
   basicRate:   number | null;
+  shiftStart:  string | null; // "HH:mm" 24h, set on hire
+  shiftEnd:    string | null;
 }
 
 export interface TimesheetRow {
@@ -319,6 +321,8 @@ export class PayrollService {
         isActive:       true,
         hiredAt:        true,
         salaryRate:     true,
+        shiftStart:     true,
+        shiftEnd:       true,
         branch:         { select: { name: true } },
       },
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
@@ -334,6 +338,8 @@ export class PayrollService {
       status:     u.isActive ? 'ACTIVE' : 'INACTIVE',
       startDate:  u.hiredAt ? u.hiredAt.toISOString().slice(0, 10) : null,
       basicRate:  u.salaryRate !== null ? Number(u.salaryRate) : null,
+      shiftStart: u.shiftStart ?? null,
+      shiftEnd:   u.shiftEnd   ?? null,
     }));
   }
 
@@ -875,22 +881,58 @@ export class PayrollService {
     tenantId: string,
     targetUserId: string,
     actorUserId: string,
-    dto: { salaryRate?: number; salaryType?: SalaryType; hiredAt?: string },
+    dto: {
+      salaryRate?: number;
+      salaryType?: SalaryType;
+      hiredAt?:    string;
+      shiftStart?: string | null;
+      shiftEnd?:   string | null;
+    },
   ) {
     const target = await this.prisma.user.findFirst({
       where:  { id: targetUserId, tenantId },
-      select: { id: true, salaryRate: true, salaryType: true, hiredAt: true, name: true, role: true },
+      select: {
+        id: true, salaryRate: true, salaryType: true, hiredAt: true,
+        shiftStart: true, shiftEnd: true,
+        name: true, role: true,
+      },
     });
     if (!target) throw new NotFoundException('Employee not found in this tenant.');
 
-    const updated = await this.prisma.user.update({
-      where: { id: targetUserId },
+    // Validate shift time strings — must be "HH:mm" 24-hour or null/empty.
+    // Empty string from the form means "clear the field" → coerce to null.
+    const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const normalizeShift = (v: string | null | undefined): string | null | undefined => {
+      if (v === undefined) return undefined;          // not provided → no-op
+      if (v === null || v === '') return null;        // explicit clear
+      if (!HHMM.test(v)) {
+        throw new BadRequestException(`Shift time must be HH:mm (24h), got "${v}".`);
+      }
+      return v;
+    };
+    const newShiftStart = normalizeShift(dto.shiftStart);
+    const newShiftEnd   = normalizeShift(dto.shiftEnd);
+
+    // Tenant-scoped + atomic update (audit-batch hardening pattern).
+    const result = await this.prisma.user.updateMany({
+      where: { id: targetUserId, tenantId },
       data: {
         ...(dto.salaryRate !== undefined ? { salaryRate: new Prisma.Decimal(dto.salaryRate) } : {}),
         ...(dto.salaryType ? { salaryType: dto.salaryType } : {}),
         ...(dto.hiredAt    ? { hiredAt: new Date(dto.hiredAt) } : {}),
+        ...(newShiftStart !== undefined ? { shiftStart: newShiftStart } : {}),
+        ...(newShiftEnd   !== undefined ? { shiftEnd:   newShiftEnd   } : {}),
       },
-      select: { id: true, name: true, salaryRate: true, salaryType: true, hiredAt: true },
+    });
+    if (result.count !== 1) {
+      throw new NotFoundException('Employee not found or tenant mismatch.');
+    }
+    const updated = await this.prisma.user.findFirstOrThrow({
+      where:  { id: targetUserId, tenantId },
+      select: {
+        id: true, name: true, salaryRate: true, salaryType: true, hiredAt: true,
+        shiftStart: true, shiftEnd: true,
+      },
     });
 
     // Best-effort audit log; soft-fail if the table isn't available.
@@ -906,11 +948,15 @@ export class PayrollService {
             salaryRate: target.salaryRate ? Number(target.salaryRate) : null,
             salaryType: target.salaryType,
             hiredAt:    target.hiredAt,
+            shiftStart: target.shiftStart,
+            shiftEnd:   target.shiftEnd,
           },
           after: {
             salaryRate: updated.salaryRate ? Number(updated.salaryRate) : null,
             salaryType: updated.salaryType,
             hiredAt:    updated.hiredAt,
+            shiftStart: updated.shiftStart,
+            shiftEnd:   updated.shiftEnd,
           },
           metadata: { reason: 'Payroll salary edit' },
         },
@@ -1163,6 +1209,61 @@ export class PayrollService {
           }
         : null,
     };
+  }
+
+  /**
+   * Sprint 14 — return the employee's assigned shift schedule + recent
+   * actual punches for the last 7 days, so the user can see "what time am
+   * I supposed to clock in" alongside "what time did I actually clock in
+   * this week." shiftStart/shiftEnd are stored as 24h "HH:mm" strings on
+   * the User row.
+   */
+  async getMyShift(tenantId: string, userId: string) {
+    const me = await this.prisma.user.findFirst({
+      where:  { id: userId, tenantId },
+      select: {
+        name: true, position: true, shiftStart: true, shiftEnd: true,
+        branch: { select: { name: true } },
+      },
+    });
+    if (!me) throw new NotFoundException('User not found.');
+
+    // Last 7 days of TimeEntry rows for this user.
+    const since = new Date(Date.now() - 7 * 86_400_000);
+    const recent = await this.prisma.timeEntry.findMany({
+      where: { tenantId, userId, clockIn: { gte: since } },
+      orderBy: { clockIn: 'desc' },
+      select: { clockIn: true, clockOut: true, grossHours: true, otHours: true, status: true },
+      take: 14,
+    });
+
+    return {
+      name:       me.name,
+      position:   me.position ?? null,
+      branch:     me.branch?.name ?? null,
+      shiftStart: me.shiftStart ?? null,
+      shiftEnd:   me.shiftEnd ?? null,
+      // Compute coarse expected daily hours from the shift window.
+      // Cosmetic only — real payroll uses TimeEntry.grossHours.
+      expectedHoursPerDay: this.computeShiftHours(me.shiftStart, me.shiftEnd),
+      recentPunches: recent.map((p) => ({
+        clockIn:    p.clockIn,
+        clockOut:   p.clockOut,
+        grossHours: p.grossHours ? Number(p.grossHours) : null,
+        otHours:    p.otHours ? Number(p.otHours) : null,
+        status:     p.status,
+      })),
+    };
+  }
+
+  private computeShiftHours(start?: string | null, end?: string | null): number | null {
+    if (!start || !end) return null;
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+    if ([sh, sm, eh, em].some((v) => Number.isNaN(v))) return null;
+    let mins = (eh * 60 + em) - (sh * 60 + sm);
+    if (mins < 0) mins += 24 * 60; // overnight shift
+    return +(mins / 60).toFixed(2);
   }
 
   async listMyPayslips(tenantId: string, userId: string) {

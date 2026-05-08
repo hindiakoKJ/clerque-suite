@@ -208,7 +208,13 @@ export class PayrollController {
   editSalary(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { salaryRate?: number; salaryType?: SalaryType; hiredAt?: string },
+    @Body() body: {
+      salaryRate?: number;
+      salaryType?: SalaryType;
+      hiredAt?:    string;
+      shiftStart?: string | null;
+      shiftEnd?:   string | null;
+    },
   ) {
     return this.payrollService.editEmployeeSalary(user.tenantId!, id, user.sub, body);
   }
@@ -380,6 +386,12 @@ export class PayrollController {
   @Get('me/payslips')
   getMyPayslipsList(@CurrentUser() user: JwtPayload) {
     return this.payrollService.listMyPayslips(user.tenantId!, user.sub);
+  }
+
+  @ApiOperation({ summary: 'My assigned shift (self-service)' })
+  @Get('me/shift')
+  getMyShift(@CurrentUser() user: JwtPayload) {
+    return this.payrollService.getMyShift(user.tenantId!, user.sub);
   }
 
   // ─── Contributions ────────────────────────────────────────────────────────

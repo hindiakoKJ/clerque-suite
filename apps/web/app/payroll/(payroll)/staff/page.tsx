@@ -20,6 +20,8 @@ interface Employee {
   status: 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
   startDate: string;
   basicRate: number;
+  shiftStart?: string | null;
+  shiftEnd?:   string | null;
 }
 
 const STATUS_STYLES: Record<Employee['status'], { tone: 'success' | 'warn' | 'default'; label: string }> = {
@@ -38,6 +40,9 @@ export default function PayrollStaffPage() {
   const [editRate,      setEditRate]      = useState('');
   const [editType,      setEditType]      = useState<SalaryType>('MONTHLY');
   const [editHired,     setEditHired]     = useState('');
+  // Shift schedule (HH:mm 24h). Manager assigns on hire / first day.
+  const [editShiftStart, setEditShiftStart] = useState('');
+  const [editShiftEnd,   setEditShiftEnd]   = useState('');
 
   const canEditSalary = !!user && ['BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN'].includes(user.role);
 
@@ -64,6 +69,8 @@ export default function PayrollStaffPage() {
     setEditRate(emp.basicRate ? String(emp.basicRate) : '');
     setEditType('MONTHLY');
     setEditHired(emp.startDate ? emp.startDate.slice(0, 10) : '');
+    setEditShiftStart(emp.shiftStart ?? '');
+    setEditShiftEnd(emp.shiftEnd ?? '');
   }
 
   const filtered = employees.filter((e) =>
@@ -230,6 +237,35 @@ export default function PayrollStaffPage() {
                   className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                 />
               </label>
+
+              {/* Shift schedule — set on first day of employment so the
+                  employee sees their shift on the Sync home + Requests page
+                  can compute over-/under-time correctly. */}
+              <div className="pt-3 border-t border-border space-y-2">
+                <div className="text-xs font-medium text-foreground">Shift schedule</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-sm block">
+                    <span className="text-xs text-muted-foreground">Shift start</span>
+                    <input
+                      type="time"
+                      value={editShiftStart}
+                      onChange={(e) => setEditShiftStart(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono"
+                    />
+                  </label>
+                  <label className="text-sm block">
+                    <span className="text-xs text-muted-foreground">Shift end</span>
+                    <input
+                      type="time"
+                      value={editShiftEnd}
+                      onChange={(e) => setEditShiftEnd(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-mono"
+                    />
+                  </label>
+                </div>
+                <p className="text-[11px] text-muted-foreground">Leave blank for variable shifts. Overnight shifts (e.g. 22:00 → 06:00) are supported.</p>
+              </div>
+
               <p className="text-xs text-muted-foreground italic">
                 Changes are written to the audit log with before / after values.
               </p>
@@ -249,6 +285,11 @@ export default function PayrollStaffPage() {
                     salaryRate: editRate ? Number(editRate) : undefined,
                     salaryType: editType,
                     hiredAt:    editHired || undefined,
+                    // Shift: empty string clears the field on the server
+                    // (null), populated string sets it. Both branches are
+                    // explicit so the manager can also CLEAR an old shift.
+                    shiftStart: editShiftStart || null,
+                    shiftEnd:   editShiftEnd   || null,
                   },
                 })}
                 disabled={editMut.isPending}

@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt, User as UserIcon, Plane } from 'lucide-react';
+import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt, User as UserIcon, Plane, ClipboardList } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
@@ -40,12 +40,14 @@ function inPayrollRoles(role: string | undefined | null, set: readonly string[])
 function makePayNavItem(
   href: string, label: string, icon: React.ElementType,
   allowedRoles: readonly string[], role: string | undefined | null,
+  sectionStart?: string,
 ): NavItem {
   const hasAccess = inPayrollRoles(role, allowedRoles);
   return {
     href, label, icon,
     disabled: !hasAccess,
     disabledReason: hasAccess ? undefined : 'Your role doesn\'t have access to this section',
+    sectionStart,
   };
 }
 
@@ -104,27 +106,38 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
 
   // Build payroll nav — items differ based on whether this is an HR-view role
   // (dashboard-first, with Staff + Pay Runs + Leaves admin) or an employee
-  // self-service role (lands on /payroll/me with leave-request UI).
+  // self-service role (lands on /payroll/me with the Requests landing).
+  //
+  // sectionStart on the FIRST item of each group renders a small header above
+  // it (AppShell handles the rendering). Sections are kept light — three
+  // logical groupings: Overview, Time & Attendance, then payroll/finance.
   const navItems: NavItem[] = (
     isHrRole
       ? [
-          makePayNavItem('/payroll/dashboard',     'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role),
-          makePayNavItem('/payroll/clock',         'Clock In / Out', Timer,           CLOCK_ROLES,         role),
+          // Overview
+          makePayNavItem('/payroll/dashboard',     'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role, 'Overview'),
+          // Time & Attendance
+          makePayNavItem('/payroll/clock',         'Clock In / Out', Timer,           CLOCK_ROLES,         role, 'Time & Attendance'),
           makePayNavItem('/payroll/timesheets',    'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role),
-          makePayNavItem('/payroll/staff',         'Staff',          UserCheck,       PAY_STAFF_ROLES,     role),
           makePayNavItem('/payroll/leaves',        'Leaves',         Plane,           HR_VIEW_ROLES,       role),
-          makePayNavItem('/payroll/runs',          'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role),
+          // People
+          makePayNavItem('/payroll/staff',         'Staff',          UserCheck,       PAY_STAFF_ROLES,     role, 'People'),
+          // Payroll & Finance
+          makePayNavItem('/payroll/runs',          'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role, 'Payroll & Finance'),
           makePayNavItem('/payroll/payslips',      'Payslips',       FileText,        PAYSLIPS_ROLES,      role),
           makePayNavItem('/payroll/contributions', 'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
           makePayNavItem('/payroll/reports',       'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
         ]
       : [
-          makePayNavItem('/payroll/me',          'Home',           UserIcon,     CLOCK_ROLES,         role),
-          makePayNavItem('/payroll/clock',       'Clock In / Out', Timer,        CLOCK_ROLES,         role),
-          makePayNavItem('/payroll/attendance',  'My Attendance',  CalendarDays, CLOCK_ROLES,         role),
-          makePayNavItem('/payroll/me/leaves',   'My Leaves',      Plane,        CLOCK_ROLES,         role),
-          makePayNavItem('/payroll/payslips',    'My Payslips',    FileText,     PAYSLIPS_ROLES,      role),
-          makePayNavItem('/payroll/my-expenses', 'My Expenses',    Receipt,      MY_EXPENSES_ROLES,   role),
+          // Overview
+          makePayNavItem('/payroll/me',          'Home',           UserIcon,        CLOCK_ROLES,         role, 'Overview'),
+          // Time & Attendance
+          makePayNavItem('/payroll/clock',       'Clock In / Out', Timer,           CLOCK_ROLES,         role, 'Time & Attendance'),
+          makePayNavItem('/payroll/attendance',  'My Attendance',  CalendarDays,    CLOCK_ROLES,         role),
+          makePayNavItem('/payroll/me/requests', 'Requests',       ClipboardList,   CLOCK_ROLES,         role),
+          // Payroll & Finance
+          makePayNavItem('/payroll/payslips',    'My Payslips',    FileText,        PAYSLIPS_ROLES,      role, 'Payroll & Finance'),
+          makePayNavItem('/payroll/my-expenses', 'My Expenses',    Receipt,         MY_EXPENSES_ROLES,   role),
         ]
   ).filter((item) => !item.disabled);
 

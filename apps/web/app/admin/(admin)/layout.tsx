@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { ShieldCheck, LayoutDashboard, Building2, AlertCircle, User, Receipt, Settings as SettingsIcon } from 'lucide-react';
+import { ShieldCheck, LayoutDashboard, Building2, AlertCircle, User, Receipt } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -40,13 +40,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   if (!user || !(user.isSuperAdmin || user.role === 'SUPER_ADMIN')) return null;
 
+  // Match the tenant apps' layout convention: Settings lives in the
+  // sidebar FOOTER (next to Sign Out), not in the main nav. Keeps the
+  // visual rhythm consistent across POS / Ledger / Sync / Console.
   const navItems: NavItem[] = [
     { href: '/admin/dashboard', label: 'Dashboard',     icon: LayoutDashboard },
     { href: '/admin/tenants',   label: 'Tenants',       icon: Building2 },
     { href: '/admin/billing',   label: 'Billing',       icon: Receipt },
     { href: '/admin/events',    label: 'Failed Events', icon: AlertCircle },
     { href: '/admin/audit',     label: 'Audit Log',     icon: User },
-    { href: '/admin/settings',  label: 'Settings',      icon: SettingsIcon },
   ];
 
   return (
@@ -56,7 +58,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         logoIcon={ShieldCheck}
         appName="Console"
         helpHref={undefined}
-        settingsHref={null}   // Console has /admin/settings in navItems above; suppress duplicate footer link
+        settingsHref="/admin/settings"   // Footer Settings link points at the Console-specific settings page
         onSignOut={handleLogout}
         headerRight={
           <div className="hidden sm:flex items-center gap-1.5 text-xs text-foreground bg-pink-500/10 border border-pink-400/30 rounded-md px-2.5 py-1.5">

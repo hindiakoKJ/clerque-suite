@@ -59,7 +59,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       const status   = exception.getStatus();
       const response = exception.getResponse();
       const messages = this.extractMessages(response);
-      return { status, code: 'HTTP_EXCEPTION', messages };
+      // Preserve a caller-supplied `code` if the throw passed a structured
+      // response body, e.g. `throw new BadRequestException({ code:
+      // 'CONFIRMATION_REQUIRED', message: '...' })`. Without this, the
+      // frontend can't distinguish "wrong slug" from "missing token" from
+      // "permission denied" since they're all generic 400s. Falls back to
+      // 'HTTP_EXCEPTION' for plain string-message throws.
+      const customCode =
+        typeof response === 'object' && response !== null
+          ? ((response as Record<string, unknown>)['code'] as string | undefined)
+          : undefined;
+      return { status, code: customCode ?? 'HTTP_EXCEPTION', messages };
     }
 
     // 2. Prisma known request errors

@@ -125,7 +125,10 @@ realApi.interceptors.response.use(
     // destructive op (Reset Demo, Clear All Data, Reset PW for high-priv
     // roles, plan downgrade, suspend, etc.) gets consistent UX.
     const errCode = (error.response?.data as { code?: string } | undefined)?.code;
-    const errMsg  = (error.response?.data as { message?: string } | undefined)?.message;
+    // GlobalExceptionFilter wraps the message as an array of strings; tolerate
+    // both shapes so a future filter change doesn't silently regress this path.
+    const rawMsg  = (error.response?.data as { message?: string | string[] } | undefined)?.message;
+    const errMsg  = Array.isArray(rawMsg) ? rawMsg.join(' ') : rawMsg;
     if (
       errCode === 'CONFIRMATION_REQUIRED' &&
       !original._confirmRetried &&

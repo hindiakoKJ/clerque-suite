@@ -89,12 +89,11 @@ export class LaundryController {
   }
 
   /**
-   * Sprint 19 — Single-call claim + payment. Replaces the two-step flow
-   * (frontend creates POS order then calls /claim) which was broken: the
-   * laundry till has no real product to point at and OrderItem.productId
-   * is required. This endpoint handles everything server-side.
+   * Sprint 19 — Single-call claim + payment. Idempotent on payment:
+   * if the order is already PAID, just records the pickup. Otherwise
+   * creates the POS Order + AccountingEvent + payment, then marks CLAIMED.
    */
-  @ApiOperation({ summary: 'Claim + record payment in one call (replaces frontend POS-order create + claim)' })
+  @ApiOperation({ summary: 'Claim + record payment in one call' })
   @Roles(...LaundryController.LAUNDRY_OPS)
   @Post('orders/:id/claim-and-pay')
   @HttpCode(HttpStatus.OK)
@@ -108,6 +107,44 @@ export class LaundryController {
     },
   ) {
     return this.svc.claimAndPay(user.tenantId!, id, user.sub, body);
+  }
+
+  /**
+   * Sprint 19 — Record payment WITHOUT marking the order CLAIMED. Used
+   * when the customer pays at intake (self-service walk-in) or anywhere
+   * before pickup. Activity status (RECEIVED → … → READY) progresses
+   * independently. Refuses if order is already PAID.
+   */
+  @ApiOperation({ summary: 'Record payment on a laundry order (does not mark CLAIMED)' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Post('orders/:id/pay')
+  @HttpCode(HttpStatus.OK)
+  payForOrder(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: {
+      method:    'CASH' | 'GCASH_PERSONAL' | 'GCASH_BUSINESS' | 'MAYA_PERSONAL' | 'MAYA_BUSINESS' | 'QR_PH';
+      tendered?: number;
+      reference?: string;
+    },
+  ) {
+    return this.svc.payForOrder(user.tenantId!, id, user.sub, body);
+  }
+
+  /**
+   * Sprint 19 — Pickup-only claim for already-PAID orders. Records the
+   * customer taking custody without re-billing. Refuses if not paid —
+   * the frontend should route to claim-and-pay in that case.
+   */
+  @ApiOperation({ summary: 'Mark a pre-paid order CLAIMED (pickup only, no payment)' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Post('orders/:id/claim-pickup')
+  @HttpCode(HttpStatus.OK)
+  claimPickup(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.svc.claimPickup(user.tenantId!, id, user.sub);
   }
 
   // ═════════════════════════════════════════════════════════════════════════

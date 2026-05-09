@@ -156,6 +156,17 @@ export default function LaundryIntakePage() {
   const [isDelivery,      setIsDelivery]      = useState(false);
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [deliveryFee,     setDeliveryFee]     = useState<string>('');
+
+  // Sprint 19 — Payment-at-intake. The "Pay Now" button records intake +
+  // payment in one flow; "Record Intake" alone leaves payment to be
+  // collected later via /pos/laundry/[id]. Pay-now state holds the
+  // already-created laundry order so we can call /pay against it after
+  // the cashier confirms method + tendered.
+  const [showPay,        setShowPay]        = useState(false);
+  const [payMethod,      setPayMethod]      = useState<'CASH' | 'GCASH' | 'CARD'>('CASH');
+  const [tendered,       setTendered]       = useState<string>('');
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
+
   const qc = useQueryClient();
 
   // When the picker selects a customer with a saved default address, prefill
@@ -260,6 +271,58 @@ export default function LaundryIntakePage() {
       router.push(`/pos/laundry/${order.id}`);
     },
     onError:   (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  // Sprint 19 — "Record + Pay Now" path. Same body as `create`, but on
+  // success we open the payment modal rather than navigating away.
+  const createForPay = useMutation({
+    mutationFn: () => api.post('/laundry/orders/v2', {
+      branchId,
+      customerId: customerId || undefined,
+      promisedAt: promisedAt || undefined,
+      notes:      notes || undefined,
+      isDelivery,
+      deliveryAddress: isDelivery ? (deliveryAddress.trim() || undefined) : undefined,
+      deliveryFee:     isDelivery && deliveryFee ? Number(deliveryFee) : undefined,
+      lines:      lines.map((l) => ({
+        serviceCode: l.serviceCode, mode: l.mode, sets: l.sets,
+        weightKg: l.weightKg, notes: l.notes, addOnIds: l.addOnIds,
+        machineId: l.machineId || undefined,
+      })),
+      productLines: productLines.length ? productLines : undefined,
+    }).then((r) => r.data),
+    onSuccess: (order: { id: string; claimNumber: string }) => {
+      setPendingOrderId(order.id);
+      setTendered(String(total.toFixed(2)));
+      setPayMethod('CASH');
+      setShowPay(true);
+      // Toast deferred until payment lands.
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  const payNow = useMutation({
+    mutationFn: () => {
+      if (!pendingOrderId) throw new Error('No pending order.');
+      // UI labels (CASH/GCASH/CARD) → backend PaymentMethod enum.
+      const apiMethod: 'CASH' | 'GCASH_PERSONAL' | 'QR_PH' =
+        payMethod === 'GCASH' ? 'GCASH_PERSONAL' :
+        payMethod === 'CARD'  ? 'QR_PH' :
+        'CASH';
+      return api.post(`/laundry/orders/${pendingOrderId}/pay`, {
+        method:    apiMethod,
+        tendered:  payMethod === 'CASH' ? Math.max(Number(tendered) || 0, total) : undefined,
+      }).then((r) => r.data);
+    },
+    onSuccess: () => {
+      toast.success('Paid. Receipt is ready.');
+      const id = pendingOrderId!;
+      setShowPay(false);
+      setPendingOrderId(null);
+      qc.invalidateQueries({ queryKey: ['laundry-orders'] });
+      router.push(`/pos/laundry/${id}`);
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Payment failed.'),
   });
 
   // ── Line helpers ────────────────────────────────────────────────────────
@@ -662,18 +725,99 @@ export default function LaundryIntakePage() {
         <p className="text-[11px] text-muted-foreground italic">
           Promos are evaluated automatically on save based on the line set + current time.
         </p>
-        <div className="flex justify-end gap-2 pt-2">
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
           <Link href="/pos/laundry/queue" className="px-4 py-2 rounded-lg text-sm hover:bg-muted">Cancel</Link>
           <button
             onClick={() => create.mutate()}
-            disabled={create.isPending || !branchId || (lines.length === 0 && productLines.length === 0) || total <= 0}
-            className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50"
+            disabled={create.isPending || createForPay.isPending || !branchId || (lines.length === 0 && productLines.length === 0) || total <= 0}
+            className="inline-flex items-center gap-2 px-5 py-2 rounded-lg border border-border text-sm font-semibold hover:bg-muted disabled:opacity-50"
+            title="Record the intake; payment collected later at claim"
           >
             <Receipt className="h-4 w-4" />
             {create.isPending ? 'Saving…' : 'Record Intake'}
           </button>
+          <button
+            onClick={() => createForPay.mutate()}
+            disabled={create.isPending || createForPay.isPending || !branchId || (lines.length === 0 && productLines.length === 0) || total <= 0}
+            className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+            title="Record the intake AND collect payment now"
+          >
+            <Receipt className="h-4 w-4" />
+            {createForPay.isPending ? 'Recording…' : 'Record + Pay Now'}
+          </button>
         </div>
       </div>
+
+      {/* ── Pay-now modal (Sprint 19) ──────────────────────────────────── */}
+      {showPay && pendingOrderId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-3">
+            <div className="flex items-start justify-between">
+              <h3 className="font-semibold">Pay Now</h3>
+              <button
+                onClick={() => { setShowPay(false); router.push(`/pos/laundry/${pendingOrderId}`); }}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                title="Skip payment — order is recorded but unpaid"
+              >
+                Skip → open ticket
+              </button>
+            </div>
+            <div className="rounded-md bg-muted/40 px-3 py-2 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Amount due</span>
+              <span className="text-xl font-bold tabular-nums">{fmtPeso(total)}</span>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Payment method</div>
+              <div className="grid grid-cols-3 gap-2">
+                {(['CASH', 'GCASH', 'CARD'] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setPayMethod(m)}
+                    className={`py-2 rounded-md text-xs font-semibold border ${
+                      payMethod === m
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                        : 'border-border hover:bg-muted'
+                    }`}
+                  >
+                    {m === 'CASH' ? 'Cash' : m === 'GCASH' ? 'GCash' : 'Card / QR'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {payMethod === 'CASH' && (
+              <label className="block">
+                <span className="text-xs text-muted-foreground">Cash tendered (₱)</span>
+                <input
+                  type="number" step="0.01" min="0"
+                  value={tendered}
+                  onChange={(e) => setTendered(e.target.value)}
+                  className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm font-mono"
+                />
+                {Number(tendered) > total && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Change: <span className="font-mono">{fmtPeso(Number(tendered) - total)}</span>
+                  </p>
+                )}
+              </label>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => { setShowPay(false); router.push(`/pos/laundry/${pendingOrderId}`); }}
+                className="px-4 py-2 rounded-md border border-border text-sm hover:bg-muted"
+              >
+                Skip
+              </button>
+              <button
+                onClick={() => payNow.mutate()}
+                disabled={payNow.isPending || (payMethod === 'CASH' && Number(tendered) < total)}
+                className="px-5 py-2 rounded-md bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {payNow.isPending ? 'Recording payment…' : 'Confirm Payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── New customer modal ───────────────────────────────────────── */}
       {showNewCustomer && (

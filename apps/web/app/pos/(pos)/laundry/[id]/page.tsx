@@ -17,9 +17,11 @@ type LaundryStatus =
   | 'CLAIMED' | 'CANCELLED';
 
 interface LaundryDetail {
-  id:           string;
-  claimNumber:  string;
-  status:       LaundryStatus;
+  id:             string;
+  claimNumber:    string;
+  status:         LaundryStatus;
+  paymentStatus?: 'UNPAID' | 'PAID';
+  paidAt?:        string | null;
   serviceType:  string | null;
   pricingMode:  string | null;
   weightKg:     string | null;
@@ -99,8 +101,9 @@ export default function LaundryDetailPage() {
   const [payMethod, setPayMethod] = useState<PaymentMethod>('CASH');
   const [tendered,  setTendered]  = useState<string>('');
 
-  function openPay() {
+  function openPay(intent: 'CLAIM_AND_PAY' | 'PAY_ONLY' = 'CLAIM_AND_PAY') {
     if (!order) return;
+    setPayIntent(intent);
     setPayMethod('CASH');
     setTendered(String(Number(order.totalAmount).toFixed(2)));
     setShowPay(true);
@@ -133,6 +136,46 @@ export default function LaundryDetailPage() {
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Claim failed.'),
   });
 
+  // Sprint 19 — Pay-only (does not mark CLAIMED). Used when the customer
+  // pays anywhere between intake and pickup. The same modal serves both
+  // claim+pay and pay-only depending on payIntent below.
+  const [payIntent, setPayIntent] = useState<'CLAIM_AND_PAY' | 'PAY_ONLY'>('CLAIM_AND_PAY');
+
+  const payOnly = useMutation({
+    mutationFn: async () => {
+      if (!order) throw new Error('No order');
+      const total     = Number(order.totalAmount);
+      const tenderNum = Number(tendered) || total;
+      const apiMethod: 'CASH' | 'GCASH_PERSONAL' | 'QR_PH' =
+        payMethod === 'GCASH' ? 'GCASH_PERSONAL' :
+        payMethod === 'CARD'  ? 'QR_PH' :
+        'CASH';
+      return api.post(`/laundry/orders/${id}/pay`, {
+        method:    apiMethod,
+        tendered:  payMethod === 'CASH' ? Math.max(tenderNum, total) : undefined,
+      }).then((r) => r.data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-order', id] });
+      qc.invalidateQueries({ queryKey: ['laundry-orders'] });
+      toast.success('Paid. Receipt is ready.');
+      setShowPay(false);
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Payment failed.'),
+  });
+
+  // Pickup-only claim for pre-paid orders.
+  const claimPickup = useMutation({
+    mutationFn: () =>
+      api.post(`/laundry/orders/${id}/claim-pickup`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-order', id] });
+      qc.invalidateQueries({ queryKey: ['laundry-orders'] });
+      toast.success('Claimed.');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed.'),
+  });
+
   if (isLoading || !order) {
     return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
   }
@@ -159,6 +202,16 @@ export default function LaundryDetailPage() {
             }`}>
               {LABEL[order.status]}
             </span>
+            {/* Sprint 19 — paid/unpaid pill (separate axis from activity status) */}
+            {order.paymentStatus === 'PAID' ? (
+              <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-600 text-white">
+                PAID
+              </span>
+            ) : order.status !== 'CANCELLED' && (
+              <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-300">
+                Unpaid
+              </span>
+            )}
           </div>
           <p className="text-sm text-muted-foreground mt-1">
             {order.serviceType ? order.serviceType.replace(/_/g, ' ').toLowerCase() + ' · ' : ''}{order.branch?.name ?? '—'}
@@ -174,14 +227,38 @@ export default function LaundryDetailPage() {
               {LABEL[next]} <ArrowRight className="h-4 w-4" />
             </button>
           )}
-          {order.status === 'READY_FOR_PICKUP' && (
+          {/* Sprint 19 — Pay button visible at any non-CLAIMED stage if
+              the order is still UNPAID. Lets the customer pay before
+              the wash even starts (self-service / pay-at-intake). */}
+          {order.paymentStatus !== 'PAID' && order.status !== 'CLAIMED' && order.status !== 'CANCELLED' && (
             <button
-              onClick={openPay}
+              onClick={() => openPay('PAY_ONLY')}
+              disabled={payOnly.isPending}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {payOnly.isPending ? 'Recording…' : 'Pay'}
+            </button>
+          )}
+          {order.status === 'READY_FOR_PICKUP' && order.paymentStatus === 'PAID' && (
+            <button
+              onClick={() => claimPickup.mutate()}
+              disabled={claimPickup.isPending}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
+              title="Order is already paid — just record pickup"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {claimPickup.isPending ? 'Claiming…' : 'Claim (Paid)'}
+            </button>
+          )}
+          {order.status === 'READY_FOR_PICKUP' && order.paymentStatus !== 'PAID' && (
+            <button
+              onClick={() => openPay('CLAIM_AND_PAY')}
               disabled={claim.isPending}
               className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-sm font-semibold disabled:opacity-50"
             >
               <CheckCircle2 className="h-4 w-4" />
-              Claim &amp; Pay
+              Claim & Pay
             </button>
           )}
           <button
@@ -544,14 +621,16 @@ export default function LaundryDetailPage() {
                 Cancel
               </button>
               <button
-                onClick={() => claim.mutate()}
+                onClick={() => (payIntent === 'PAY_ONLY' ? payOnly.mutate() : claim.mutate())}
                 disabled={
-                  claim.isPending ||
+                  claim.isPending || payOnly.isPending ||
                   (payMethod === 'CASH' && Number(tendered) < Number(order.totalAmount))
                 }
                 className="px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
               >
-                {claim.isPending ? 'Claiming…' : 'Confirm & Print Receipt'}
+                {(claim.isPending || payOnly.isPending)
+                  ? (payIntent === 'PAY_ONLY' ? 'Recording payment…' : 'Claiming…')
+                  : (payIntent === 'PAY_ONLY' ? 'Confirm Payment' : 'Confirm & Print Receipt')}
               </button>
             </footer>
           </div>

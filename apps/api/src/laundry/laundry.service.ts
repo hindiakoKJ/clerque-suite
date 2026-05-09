@@ -263,6 +263,64 @@ export class LaundryService {
    * sale, and link the laundry order — all in one $transaction. The
    * frontend now just sends the payment info.
    */
+  /**
+   * Sprint 19 — Record payment on a laundry order WITHOUT marking it
+   * CLAIMED. Activity status (RECEIVED → … → READY) progresses
+   * independently. Use cases:
+   *   - Self-service walk-in pays at intake, then loads the machine themselves
+   *   - Full-service customer pays upfront before staff starts the wash
+   *   - Anywhere in between
+   *
+   * Idempotent on the LaundryOrder.id — calling pay twice throws because
+   * paymentStatus is already PAID. Creates one POS Order + AccountingEvent;
+   * stamps paidAt + paymentStatus=PAID + orderId on the laundry order.
+   */
+  async payForOrder(
+    tenantId: string,
+    laundryOrderId: string,
+    userId: string,
+    payment: {
+      method:    'CASH' | 'GCASH_PERSONAL' | 'GCASH_BUSINESS' | 'MAYA_PERSONAL' | 'MAYA_BUSINESS' | 'QR_PH';
+      tendered?: number;
+      reference?: string;
+    },
+  ) {
+    await this.assertLaundryTenant(tenantId);
+    const order = await this.prisma.laundryOrder.findFirst({
+      where: { id: laundryOrderId, tenantId },
+    });
+    if (!order)                                throw new NotFoundException('Laundry order not found.');
+    if (order.status === 'CANCELLED')          throw new BadRequestException('Cannot bill a cancelled order.');
+    if (order.paymentStatus === 'PAID')        throw new BadRequestException('Order is already paid.');
+    if (!order.branchId)                       throw new BadRequestException('Laundry order has no branch — cannot bill.');
+
+    return this.prisma.$transaction(async (tx) => {
+      const posOrderId = await this._recordSale(tx, tenantId, order, userId, payment);
+      // Stamp payment fields on the laundry order; do NOT touch status.
+      const flipped = await tx.laundryOrder.updateMany({
+        where: { id: laundryOrderId, tenantId, paymentStatus: 'UNPAID' },
+        data: {
+          paymentStatus: 'PAID',
+          paidAt:        new Date(),
+          orderId:       posOrderId,
+        },
+      });
+      if (flipped.count === 0) {
+        throw new ConflictException('Order was paid concurrently — refresh and verify.');
+      }
+      return tx.laundryOrder.findUnique({
+        where: { id: laundryOrderId },
+        include: { items: true, order: { select: { id: true, orderNumber: true, totalAmount: true } } },
+      });
+    }, { timeout: 20_000, maxWait: 5_000 });
+  }
+
+  /**
+   * Sprint 19 — Combined "claim + pay" for the legacy backend pay-at-claim
+   * flow. If the order is already PAID (customer paid earlier), the payment
+   * step is a no-op and only the CLAIMED stamp lands. If UNPAID, both fire.
+   * The frontend's Claim & Pay modal hits this endpoint regardless.
+   */
   async claimAndPay(
     tenantId: string,
     laundryOrderId: string,
@@ -277,136 +335,29 @@ export class LaundryService {
     const order = await this.prisma.laundryOrder.findFirst({
       where: { id: laundryOrderId, tenantId },
     });
-    if (!order) throw new NotFoundException('Laundry order not found.');
-    if (order.status === 'CLAIMED')   throw new BadRequestException('Already claimed.');
-    if (order.status === 'CANCELLED') throw new BadRequestException('Cannot claim a cancelled order.');
-    if (!order.branchId)              throw new BadRequestException('Laundry order has no branch — cannot bill.');
-
-    const total = Number(order.totalAmount);
-    const tenderNum = payment.method === 'CASH'
-      ? Math.max(Number(payment.tendered ?? total), total)
-      : total;
-    const change = payment.method === 'CASH' ? Math.max(0, tenderNum - total) : 0;
+    if (!order)                          throw new NotFoundException('Laundry order not found.');
+    if (order.status === 'CLAIMED')      throw new BadRequestException('Already claimed.');
+    if (order.status === 'CANCELLED')    throw new BadRequestException('Cannot claim a cancelled order.');
+    if (!order.branchId)                 throw new BadRequestException('Laundry order has no branch — cannot bill.');
 
     return this.prisma.$transaction(async (tx) => {
-      // ── 1. Resolve sentinel "Laundry Service" product ────────────────
-      // Looked up by SKU so we can find it across deploys; lazy-created
-      // on first claim. Hidden from the regular POS catalog by tagging
-      // it isActive=false (still queryable by id, but not browsable).
-      const SENTINEL_SKU = '__LAUNDRY_SERVICE__';
-      let serviceProduct = await tx.product.findFirst({
-        where:  { tenantId, sku: SENTINEL_SKU },
-        select: { id: true },
-      });
-      if (!serviceProduct) {
-        serviceProduct = await tx.product.create({
-          data: {
-            tenantId,
-            sku:        SENTINEL_SKU,
-            name:       'Laundry Service',
-            description: 'System-generated sentinel product for laundry claim cash-outs. Not user-editable.',
-            price:      0,    // priced per laundry order at claim time
-            costPrice:  0,
-            isVatable:  false,
-            isActive:   false, // hidden from the regular POS product picker
-          },
-          select: { id: true },
-        });
+      let posOrderId = order.orderId;
+      // Only record a new sale if the order isn't already paid.
+      if (order.paymentStatus !== 'PAID') {
+        posOrderId = await this._recordSale(tx, tenantId, order, userId, payment);
       }
 
-      // ── 2. POS Order number ─────────────────────────────────────────
-      const orderNumber = await this.numbering.next(tenantId, 'POS_ORDER', null, tx);
-
-      // ── 3. Create POS Order with single service line + payment ──────
-      const posOrder = await tx.order.create({
-        data: {
-          tenantId,
-          branchId:       order.branchId,
-          customerId:     order.customerId,
-          orderNumber,
-          status:         'COMPLETED',
-          createdById:    userId,
-          paidAt:         new Date(),
-          completedAt:    new Date(),
-          subtotal:       new Prisma.Decimal(total),
-          discountAmount: new Prisma.Decimal(0),
-          vatAmount:      new Prisma.Decimal(0),
-          totalAmount:    new Prisma.Decimal(total),
-          invoiceType:    'CASH_SALE',
-          taxType:        'VAT_EXEMPT',
-          notes:          `Laundry claim · ${order.claimNumber}`,
-          items: {
-            create: [{
-              productId:   serviceProduct.id,
-              productName: `Laundry · ${order.claimNumber}`,
-              unitPrice:   new Prisma.Decimal(total),
-              quantity:    new Prisma.Decimal(1),
-              discountAmount: new Prisma.Decimal(0),
-              vatAmount:   new Prisma.Decimal(0),
-              lineTotal:   new Prisma.Decimal(total),
-              isVatable:   false,
-              taxType:     'VAT_EXEMPT',
-            }],
-          },
-          payments: {
-            create: [{
-              method: payment.method,
-              amount: new Prisma.Decimal(payment.method === 'CASH' ? tenderNum : total),
-              reference: payment.reference ?? null,
-              ...(change > 0 ? { change: new Prisma.Decimal(change) } : {}),
-            }],
-          },
-        },
-        select: { id: true, orderNumber: true, totalAmount: true },
-      });
-
-      // ── 4. Emit AccountingEvent for the SALE so journal posts ───────
-      await tx.accountingEvent.create({
-        data: {
-          tenantId,
-          orderId: posOrder.id,
-          type:    'SALE',
-          status:  'PENDING',
-          payload: {
-            orderId:         posOrder.id,
-            orderNumber:     posOrder.orderNumber,
-            branchId:        order.branchId,
-            completedAt:     new Date().toISOString(),
-            lines: [{
-              productId:    serviceProduct.id,
-              productName:  `Laundry · ${order.claimNumber}`,
-              quantity:     1,
-              unitPrice:    total,
-              lineTotal:    total,
-              discountAmount: 0,
-              vatAmount:    0,
-              isVatable:    false,
-              taxType:      'VAT_EXEMPT',
-            }],
-            payments: [{
-              method:    payment.method,
-              amount:    payment.method === 'CASH' ? tenderNum : total,
-              reference: payment.reference ?? null,
-              ...(change > 0 ? { change } : {}),
-            }],
-            vatAmount:       0,
-            totalAmount:     total,
-            discountAmount:  0,
-            isPwdScDiscount: false,
-            invoiceType:     'CASH_SALE',
-            taxType:         'VAT_EXEMPT',
-          } as unknown as Prisma.JsonObject,
-        },
-      });
-
-      // ── 5. Link laundry order + flip to CLAIMED (status-conditional) ─
+      // Always: status → CLAIMED + claimedAt + releasedBy + orderId link.
+      // paymentStatus=PAID + paidAt land here too (no-op if already PAID).
       const flipped = await tx.laundryOrder.updateMany({
         where: { id: laundryOrderId, tenantId, status: { notIn: ['CLAIMED', 'CANCELLED'] } },
         data: {
           status:         'CLAIMED',
           claimedAt:      new Date(),
           releasedBy:     userId,
-          orderId:        posOrder.id,
+          orderId:        posOrderId,
+          paymentStatus:  'PAID',
+          paidAt:         order.paidAt ?? new Date(),
           deliveryStatus: order.isDelivery ? 'DELIVERED' : null,
         },
       });
@@ -414,7 +365,6 @@ export class LaundryService {
         throw new ConflictException('Order is no longer claimable (already CLAIMED or CANCELLED).');
       }
 
-      // ── 6. Loyalty bump ──────────────────────────────────────────────
       if (order.customerId) {
         await tx.customer.updateMany({
           where: { id: order.customerId, tenantId },
@@ -427,6 +377,183 @@ export class LaundryService {
         include: { items: true, order: { select: { id: true, orderNumber: true, totalAmount: true } } },
       });
     }, { timeout: 20_000, maxWait: 5_000 });
+  }
+
+  /**
+   * Internal helper — given an open transaction client and a laundry order,
+   * lazy-creates the sentinel "Laundry Service" product if needed, allocates
+   * a POS order number, creates the POS Order + payment row, and emits the
+   * SALE AccountingEvent so the journal posts. Returns the POS Order id.
+   *
+   * Used by both payForOrder() (pay-only) and claimAndPay() (pay + mark
+   * claimed) so the cash-flow path is identical.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async _recordSale(
+    tx: any,
+    tenantId: string,
+    order: { id: string; branchId: string; customerId: string | null; claimNumber: string; totalAmount: any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+    userId: string,
+    payment: {
+      method:    'CASH' | 'GCASH_PERSONAL' | 'GCASH_BUSINESS' | 'MAYA_PERSONAL' | 'MAYA_BUSINESS' | 'QR_PH';
+      tendered?: number;
+      reference?: string;
+    },
+  ): Promise<string> {
+    const total = Number(order.totalAmount);
+    const tenderNum = payment.method === 'CASH'
+      ? Math.max(Number(payment.tendered ?? total), total)
+      : total;
+    const change = payment.method === 'CASH' ? Math.max(0, tenderNum - total) : 0;
+
+    // Sentinel "Laundry Service" product — lazy-created per tenant.
+    const SENTINEL_SKU = '__LAUNDRY_SERVICE__';
+    let serviceProduct = await tx.product.findFirst({
+      where:  { tenantId, sku: SENTINEL_SKU },
+      select: { id: true },
+    });
+    if (!serviceProduct) {
+      serviceProduct = await tx.product.create({
+        data: {
+          tenantId,
+          sku:        SENTINEL_SKU,
+          name:       'Laundry Service',
+          description: 'System-generated sentinel product for laundry claim cash-outs. Not user-editable.',
+          price:      0,
+          costPrice:  0,
+          isVatable:  false,
+          isActive:   false,
+        },
+        select: { id: true },
+      });
+    }
+
+    const orderNumber = await this.numbering.next(tenantId, 'POS_ORDER', null, tx);
+    const posOrder = await tx.order.create({
+      data: {
+        tenantId,
+        branchId:       order.branchId,
+        customerId:     order.customerId,
+        orderNumber,
+        status:         'COMPLETED',
+        createdById:    userId,
+        paidAt:         new Date(),
+        completedAt:    new Date(),
+        subtotal:       new Prisma.Decimal(total),
+        discountAmount: new Prisma.Decimal(0),
+        vatAmount:      new Prisma.Decimal(0),
+        totalAmount:    new Prisma.Decimal(total),
+        invoiceType:    'CASH_SALE',
+        taxType:        'VAT_EXEMPT',
+        notes:          `Laundry · ${order.claimNumber}`,
+        items: {
+          create: [{
+            productId:      serviceProduct.id,
+            productName:    `Laundry · ${order.claimNumber}`,
+            unitPrice:      new Prisma.Decimal(total),
+            quantity:       new Prisma.Decimal(1),
+            discountAmount: new Prisma.Decimal(0),
+            vatAmount:      new Prisma.Decimal(0),
+            lineTotal:      new Prisma.Decimal(total),
+            isVatable:      false,
+            taxType:        'VAT_EXEMPT',
+          }],
+        },
+        payments: {
+          create: [{
+            method:    payment.method,
+            amount:    new Prisma.Decimal(payment.method === 'CASH' ? tenderNum : total),
+            reference: payment.reference ?? null,
+            ...(change > 0 ? { change: new Prisma.Decimal(change) } : {}),
+          }],
+        },
+      },
+      select: { id: true, orderNumber: true },
+    });
+
+    await tx.accountingEvent.create({
+      data: {
+        tenantId,
+        orderId: posOrder.id,
+        type:    'SALE',
+        status:  'PENDING',
+        payload: {
+          orderId:         posOrder.id,
+          orderNumber:     posOrder.orderNumber,
+          branchId:        order.branchId,
+          completedAt:     new Date().toISOString(),
+          lines: [{
+            productId:      serviceProduct.id,
+            productName:    `Laundry · ${order.claimNumber}`,
+            quantity:       1,
+            unitPrice:      total,
+            lineTotal:      total,
+            discountAmount: 0,
+            vatAmount:      0,
+            isVatable:      false,
+            taxType:        'VAT_EXEMPT',
+          }],
+          payments: [{
+            method:    payment.method,
+            amount:    payment.method === 'CASH' ? tenderNum : total,
+            reference: payment.reference ?? null,
+            ...(change > 0 ? { change } : {}),
+          }],
+          vatAmount:       0,
+          totalAmount:     total,
+          discountAmount:  0,
+          isPwdScDiscount: false,
+          invoiceType:     'CASH_SALE',
+          taxType:         'VAT_EXEMPT',
+        } as unknown as Prisma.JsonObject,
+      },
+    });
+
+    return posOrder.id;
+  }
+
+  /**
+   * Sprint 19 — Pickup-only claim. For orders that are already PAID
+   * (self-service or pay-at-intake), records the customer taking custody
+   * without re-billing. Throws if not paid — caller should route to
+   * claimAndPay instead.
+   */
+  async claimPickup(tenantId: string, laundryOrderId: string, userId: string) {
+    await this.assertLaundryTenant(tenantId);
+    const order = await this.prisma.laundryOrder.findFirst({
+      where: { id: laundryOrderId, tenantId },
+    });
+    if (!order)                            throw new NotFoundException('Laundry order not found.');
+    if (order.status === 'CLAIMED')        throw new BadRequestException('Already claimed.');
+    if (order.status === 'CANCELLED')      throw new BadRequestException('Cannot claim a cancelled order.');
+    if (order.paymentStatus !== 'PAID') {
+      throw new BadRequestException('Order is not paid yet — use claim-and-pay or record payment first.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const flipped = await tx.laundryOrder.updateMany({
+        where: { id: laundryOrderId, tenantId, status: { notIn: ['CLAIMED', 'CANCELLED'] } },
+        data: {
+          status:         'CLAIMED',
+          claimedAt:      new Date(),
+          releasedBy:     userId,
+          deliveryStatus: order.isDelivery ? 'DELIVERED' : null,
+        },
+      });
+      if (flipped.count === 0) {
+        throw new ConflictException('Order is no longer claimable.');
+      }
+      if (order.customerId) {
+        await tx.customer.updateMany({
+          where: { id: order.customerId, tenantId },
+          data:  { loyaltyVisits: { increment: 1 } },
+        });
+      }
+      return tx.laundryOrder.findUnique({
+        where: { id: laundryOrderId },
+        include: { items: true, order: { select: { id: true, orderNumber: true, totalAmount: true } } },
+      });
+    });
   }
 
   async claim(tenantId: string, id: string, userId: string, posOrderId: string) {

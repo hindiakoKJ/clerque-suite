@@ -2934,6 +2934,11 @@ enum LaundryDeliveryStatus {
   DELIVERED         /// customer received the cleaned load — usually claimed in same beat
 }
 
+enum LaundryPaymentStatus {
+  UNPAID
+  PAID
+}
+
 model LaundryOrder {
   id          String              @id @default(cuid())
   tenantId    String
@@ -2941,6 +2946,13 @@ model LaundryOrder {
   customerId  String? // optional walk-in
   claimNumber String // CLA-2026-000001 (unique per tenant per year)
   status      LaundryOrderStatus  @default(RECEIVED)
+  /// Sprint 19 — Payment is independent of activity status. Customers
+  /// can pay at intake (self-service / walk-in pay-upfront), at claim
+  /// time (legacy full-service), or anywhere in between. paidAt + the
+  /// existing orderId field get stamped the moment payment lands.
+  /// Claim then only records pickup if already PAID — no double-billing.
+  paymentStatus LaundryPaymentStatus @default(UNPAID)
+  paidAt        DateTime?
   /// Legacy single-shape header fields. Sprint 7 (2026-05-08) introduced
   /// LaundryOrderLine for multi-line tickets. New tickets create lines and
   /// leave these null; old tickets still read from these. Both flows compute

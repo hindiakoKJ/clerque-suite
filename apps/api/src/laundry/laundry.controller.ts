@@ -88,6 +88,28 @@ export class LaundryController {
     return this.svc.claim(user.tenantId!, id, user.sub, body.orderId);
   }
 
+  /**
+   * Sprint 19 — Single-call claim + payment. Replaces the two-step flow
+   * (frontend creates POS order then calls /claim) which was broken: the
+   * laundry till has no real product to point at and OrderItem.productId
+   * is required. This endpoint handles everything server-side.
+   */
+  @ApiOperation({ summary: 'Claim + record payment in one call (replaces frontend POS-order create + claim)' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Post('orders/:id/claim-and-pay')
+  @HttpCode(HttpStatus.OK)
+  claimAndPay(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: {
+      method:    'CASH' | 'GCASH_PERSONAL' | 'GCASH_BUSINESS' | 'MAYA_PERSONAL' | 'MAYA_BUSINESS' | 'QR_PH';
+      tendered?: number;
+      reference?: string;
+    },
+  ) {
+    return this.svc.claimAndPay(user.tenantId!, id, user.sub, body);
+  }
+
   // ═════════════════════════════════════════════════════════════════════════
   // v2 — Multi-line tickets, machines, service prices, promos
   // ═════════════════════════════════════════════════════════════════════════

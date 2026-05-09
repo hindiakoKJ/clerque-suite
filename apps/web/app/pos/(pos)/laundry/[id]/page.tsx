@@ -106,38 +106,23 @@ export default function LaundryDetailPage() {
     setShowPay(true);
   }
 
-  // Claim → create POS Order with the chosen payment, then link.
+  // Claim + Pay in one call (Sprint 19 fix — replaces the broken
+  // frontend-creates-POS-order then /claim flow which failed because
+  // OrderItem.productId is required and laundry has no real product).
   const claim = useMutation({
     mutationFn: async () => {
       if (!order) throw new Error('No order');
-      const total      = Number(order.totalAmount);
-      const tenderNum  = Number(tendered) || total;
-      const change     = payMethod === 'CASH' ? Math.max(0, tenderNum - total) : 0;
-
-      const posOrder = await api.post('/orders', {
-        order: {
-          branchId:       order.branch!.id,
-          customerId:     order.customer?.id ?? null,
-          subtotal:       total,
-          discountAmount: 0,
-          vatAmount:      0,
-          totalAmount:    total,
-          notes:          `Laundry claim ${order.claimNumber}`,
-          items: [{
-            productName: `Laundry · ${order.claimNumber}`,
-            quantity:    1,
-            unitPrice:   total,
-            lineTotal:   total,
-          }],
-          payments: [{
-            method:   payMethod,
-            amount:   payMethod === 'CASH' ? Math.max(tenderNum, total) : total,
-            ...(change > 0 ? { change } : {}),
-          }],
-        },
+      const total     = Number(order.totalAmount);
+      const tenderNum = Number(tendered) || total;
+      // Map UI labels (CASH/GCASH/CARD) to the backend's PaymentMethod enum.
+      const apiMethod: 'CASH' | 'GCASH_PERSONAL' | 'QR_PH' =
+        payMethod === 'GCASH' ? 'GCASH_PERSONAL' :
+        payMethod === 'CARD'  ? 'QR_PH' :
+        'CASH';
+      return api.post(`/laundry/orders/${id}/claim-and-pay`, {
+        method:    apiMethod,
+        tendered:  payMethod === 'CASH' ? Math.max(tenderNum, total) : undefined,
       }).then((r) => r.data);
-
-      return api.post(`/laundry/orders/${id}/claim`, { orderId: posOrder.id ?? posOrder.data?.id }).then((r) => r.data);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['laundry-order', id] });
@@ -566,7 +551,7 @@ export default function LaundryDetailPage() {
                 }
                 className="px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
               >
-                {claim.isPending ? 'Claiming…' : 'Confirm &amp; Print Receipt'}
+                {claim.isPending ? 'Claiming…' : 'Confirm & Print Receipt'}
               </button>
             </footer>
           </div>

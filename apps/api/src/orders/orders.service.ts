@@ -948,6 +948,76 @@ export class OrdersService {
     // which suffered double-issuance under concurrent checkouts on busy
     // shifts and was only safety-netted by the DB unique constraint
     // (P2002 → 409 retry storm).
+    //
+    // Sprint 19 — additional self-heal for the "counter behind data" failure
+    // mode: if a demo seed, manual SQL, or a tenant data-reset that preserves
+    // the sequence row leaves orphaned `ORD-{YYYY}-NNNNNN` rows above the
+    // current counter, the next `next()` call returns a colliding number and
+    // the parent $transaction rolls back the increment too — so the retry
+    // hits the same collision indefinitely. We pre-sync the counter to
+    // MAX(existing suffix) + 1 here, INSIDE the same tx, to break the loop.
+    await this.syncCounterToMax(tx, tenantId);
     return this.numbering.next(tenantId, 'POS_ORDER', null, tx);
+  }
+
+  /**
+   * If `documentNumberSequence` for POS_ORDER on this tenant is behind the
+   * highest existing `Order.orderNumber` suffix for the current year, fast-
+   * forward the counter so the next `next()` call cannot collide.
+   *
+   * Cheap (one indexed lookup + one update at most) — and a no-op when the
+   * counter is already ahead, which is the steady-state case.
+   */
+  private async syncCounterToMax(
+    tx: Parameters<Parameters<typeof this.prisma.$transaction>[0]>[0],
+    tenantId: string,
+  ): Promise<void> {
+    const year = new Date().getFullYear();
+    const prefix = `ORD-${year}-`;
+
+    // Highest existing order number for this tenant in the current year.
+    // Lexical sort works because the suffix is zero-padded (6 digits).
+    const last = await tx.order.findFirst({
+      where:   { tenantId, orderNumber: { startsWith: prefix } },
+      orderBy: { orderNumber: 'desc' },
+      select:  { orderNumber: true },
+    });
+    if (!last) return;
+
+    const m = last.orderNumber.match(/^ORD-\d{4}-(\d+)$/);
+    if (!m) return;
+    const maxSuffix = parseInt(m[1], 10);
+    if (!Number.isFinite(maxSuffix)) return;
+
+    const seq = await tx.documentNumberSequence.findFirst({
+      where: { tenantId, type: 'POS_ORDER', branchId: null },
+      select: { id: true, counter: true },
+    });
+
+    if (!seq) {
+      // No sequence row yet but orphan ORD-{YYYY}-NNNNNN rows exist (e.g. from
+      // a hand-seeded demo or migration). Pre-create the row with the right
+      // counter so numbering.next() picks up at maxSuffix+1.
+      await tx.documentNumberSequence.create({
+        data: {
+          tenantId,
+          type:        'POS_ORDER',
+          branchId:    null,
+          prefix:      'ORD',
+          format:      'ORD-{YYYY}-{######}',
+          padding:     6,
+          counter:     maxSuffix,
+          resetPolicy: 'YEARLY',
+          lastResetAt: new Date(),
+        },
+      });
+      return;
+    }
+
+    if (seq.counter >= maxSuffix) return; // already ahead — nothing to do
+    await tx.documentNumberSequence.update({
+      where: { id: seq.id },
+      data:  { counter: maxSuffix },     // .next() will increment to maxSuffix+1
+    });
   }
 }

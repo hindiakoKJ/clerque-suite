@@ -484,7 +484,8 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
     clear();
     clearShift();
-    // Server clears the HttpOnly cookie via /auth/logout; no client-side cookie work needed.
+    // Also clear the web-origin mirror cookie (server clears its own HttpOnly copy).
+    document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     router.push('/login');
   }
 

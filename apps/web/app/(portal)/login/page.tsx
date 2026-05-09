@@ -57,8 +57,16 @@ function LoginInner() {
       const user = jwtDecode<JwtPayload>(data.accessToken);
       setUser(user);
 
-      // Sprint 17 — `app-session` cookie is set server-side via Set-Cookie
-      // on the /auth/login response (HttpOnly). No client write needed.
+      // Sprint 17/18 — client-side cookie write is REQUIRED in cross-origin
+      // setups (web on :3000, API on :3001). The API also sets an HttpOnly
+      // app-session cookie via Set-Cookie, but that's scoped to the API
+      // origin and the Next.js middleware on the web origin can't read it.
+      // Until we add a same-origin /api proxy, we keep this write so middleware
+      // sees the token. Defence-in-depth: the API still HttpOnly's its own copy.
+      const isProd = window.location.protocol === 'https:';
+      document.cookie =
+        `app-session=${data.accessToken}; path=/; SameSite=Lax` +
+        (isProd ? '; Secure' : '');
 
       // If app was pre-selected, go directly; otherwise show app selector.
       // On the console subdomain, super-admins land on /admin/dashboard and

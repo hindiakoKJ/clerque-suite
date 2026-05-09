@@ -147,11 +147,15 @@ realApi.interceptors.response.use(
       //   - `Secure` is added when the page is served over https (production
       //     on Vercel + custom domains). Localhost over http omits it so the
       //     dev cookie still works.
-      // Sprint 17 — `app-session` cookie is now server-managed (HttpOnly).
-      // `/auth/refresh` sets it via Set-Cookie. The browser stores it
-      // automatically; JS cannot read or write it (good — closes the XSS
-      // session-token-theft vector). We still keep the access token in
-      // localStorage for the in-page Authorization header (Bearer flow).
+      // Sprint 17/18 — server also sets an HttpOnly `app-session` cookie on
+      // its own origin. That's scoped to the API host (e.g. localhost:3001),
+      // so the web's Next.js middleware (running on the web host) can't read
+      // it. Until we ship a same-origin /api proxy, we ALSO write a
+      // non-HttpOnly mirror on the web origin so middleware can authenticate.
+      const isProd = window.location.protocol === 'https:';
+      document.cookie =
+        `app-session=${newAccess}; path=/; SameSite=Lax` +
+        (isProd ? '; Secure' : '');
 
       processQueue(null, newAccess);
       original.headers.Authorization = `Bearer ${newAccess}`;
@@ -159,11 +163,10 @@ realApi.interceptors.response.use(
     } catch (err) {
       processQueue(err, null);
       localStorage.removeItem('app-auth');
-      // Server-managed cookie — POST /auth/logout would clear it via
-      // clearCookie. We can't directly expire an HttpOnly cookie from JS,
-      // but the next /auth/refresh will fail with 401 and the user will be
-      // redirected to /login (where backend clears it on success login or
-      // it expires naturally).
+      // Expire the web-origin mirror cookie so middleware doesn't see a
+      // stale token. The API's own HttpOnly copy gets cleared by the next
+      // failed /auth/refresh (401) or an explicit POST /auth/logout.
+      document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
       window.location.href = '/login';
       return Promise.reject(err);
     } finally {

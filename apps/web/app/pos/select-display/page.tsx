@@ -125,6 +125,7 @@ export default function SelectDisplayPage() {
               const refresh = localStorage.getItem('app-auth');
               if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
               clear();
+              document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
               router.push('/login');
             }}
             className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300"

@@ -794,6 +794,15 @@ export class LaundryService {
       }
 
       return order;
+    }, {
+      // Sprint 19 — bump transaction window above the 5s Prisma default.
+      // Intake does branch/prices/add-on/machine lookups, promo eval,
+      // claim numbering, a big nested create with multiple child relations,
+      // machine flip, and per-product inventory updates. Under cold-start
+      // latency on Railway that easily breaks 5s and surfaces as P2028.
+      // 20s is comfortable headroom; ops alerts still fire on prod regressions.
+      timeout: 20_000,
+      maxWait: 5_000,
     });
   }
 

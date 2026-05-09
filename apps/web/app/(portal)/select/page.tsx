@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ShoppingCart, BookOpen, Users, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
+import { api } from '@/lib/api';
 import type { AccessLevel } from '@repo/shared-types';
 import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 
@@ -218,9 +219,10 @@ export default function SelectPage() {
         {/* Sign out */}
         <div className="text-center">
           <button
-            onClick={() => {
+            onClick={async () => {
+              const refresh = localStorage.getItem('app-auth');
+              if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
               useAuthStore.getState().clear();
-              document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
               router.push('/login');
             }}
             className="text-sm text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:underline"

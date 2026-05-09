@@ -141,6 +141,7 @@ export class AdminController {
       moduleLedger?:    boolean;
       modulePayroll?:   boolean;
       staffSeatAddons?: number;
+      confirmationToken?: string;     // typed-slug on downgrade
     },
   ) {
     return this.svc.updateTenantPlan(id, body, actor(req));
@@ -278,8 +279,12 @@ export class AdminController {
 
   @Post('users/:id/reset-password')
   @HttpCode(HttpStatus.OK)
-  resetPassword(@Request() req: { user: JwtPayload }, @Param('id') id: string) {
-    return this.svc.resetUserPassword(id, actor(req));
+  resetPassword(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+    @Body() body: { confirmationToken?: string },
+  ) {
+    return this.svc.resetUserPassword(id, actor(req), body?.confirmationToken);
   }
 
   @Post('users/:id/clear-lockout')

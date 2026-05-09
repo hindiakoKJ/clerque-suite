@@ -145,14 +145,24 @@ export class NumberingService {
       return `${seq.prefix}${pad(counter, seq.padding)}`;
     }
 
+    // Sprint 17 — Manila wall-clock for {YYYY}/{YY}/{MM} substitutions to
+    // align document numbering with the local business day boundary.
+    const ph = toManila(now);
     return seq.format
-      .replace(/\{YYYY\}/g, String(now.getUTCFullYear()))
-      .replace(/\{YY\}/g,   String(now.getUTCFullYear()).slice(-2))
-      .replace(/\{MM\}/g,   pad(now.getUTCMonth() + 1, 2))
+      .replace(/\{YYYY\}/g, String(ph.year))
+      .replace(/\{YY\}/g,   String(ph.year).slice(-2))
+      .replace(/\{MM\}/g,   pad(ph.month, 2))
       .replace(/\{#+\}/g,   (m) => pad(counter, m.length - 2)); // {####} → 4 digits
   }
 
-  /** Has the calendar boundary crossed since the last reset? */
+  /**
+   * Has the calendar boundary crossed since the last reset?
+   *
+   * Sprint 17 — uses Asia/Manila wall-clock for the boundary check, not UTC.
+   * Otherwise, JE/SI numbers issued between 00:00–08:00 UTC (08:00–16:00
+   * PHT) on the 1st of a new month would reset to 1 mid-business-day on
+   * the wrong day. Manila is UTC+8 with no DST, so a fixed offset is fine.
+   */
   private shouldResetCounter(
     policy: SequenceResetPolicy,
     last:   Date | null,
@@ -161,14 +171,14 @@ export class NumberingService {
     if (policy === 'NEVER') return false;
     if (!last) return true; // never reset → first call after policy change
 
+    const lastPH = toManila(last);
+    const nowPH  = toManila(now);
+
     if (policy === 'YEARLY') {
-      return last.getUTCFullYear() !== now.getUTCFullYear();
+      return lastPH.year !== nowPH.year;
     }
     if (policy === 'MONTHLY') {
-      return (
-        last.getUTCFullYear() !== now.getUTCFullYear() ||
-        last.getUTCMonth()    !== now.getUTCMonth()
-      );
+      return lastPH.year !== nowPH.year || lastPH.month !== nowPH.month;
     }
     return false;
   }
@@ -219,4 +229,18 @@ export class NumberingService {
       data:  patch,
     });
   }
+}
+
+/**
+ * Convert a UTC Date to Asia/Manila wall-clock components. Manila is fixed
+ * UTC+8 (no DST), so we just shift the epoch and read UTC fields.
+ */
+function toManila(d: Date): { year: number; month: number; day: number } {
+  const phMs = d.getTime() + 8 * 60 * 60 * 1000;
+  const ph   = new Date(phMs);
+  return {
+    year:  ph.getUTCFullYear(),
+    month: ph.getUTCMonth() + 1,
+    day:   ph.getUTCDate(),
+  };
 }

@@ -141,7 +141,11 @@ export default function JobOrdersPage() {
             jos.map((jo) => (
               <div key={jo.id} className="rounded-xl border border-border bg-card p-4">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div className="flex-1 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/pos/job-orders/${jo.id}`)}
+                    className="flex-1 min-w-0 text-left"
+                  >
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono font-semibold">{jo.jobNumber}</span>
                       <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${STATUS_TINT[jo.status]}`}>
@@ -159,7 +163,7 @@ export default function JobOrdersPage() {
                       {jo.assignedTo && <span>Tech: {jo.assignedTo.name}</span>}
                       {jo.promisedAt && <span>Promised: {new Date(jo.promisedAt).toLocaleDateString('en-PH', { dateStyle: 'medium' })}</span>}
                     </div>
-                  </div>
+                  </button>
                   <div className="shrink-0 text-right">
                     {jo.estimateAmount && (
                       <div className="text-[10px] text-muted-foreground">Est: <span className="font-mono">{fmtPeso(jo.estimateAmount)}</span></div>

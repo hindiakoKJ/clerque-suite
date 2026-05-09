@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant, PLAN_FEATURES, PLAN_LIMITS } from '@repo/shared-types';
@@ -429,14 +429,20 @@ export class AuthService {
     });
     if (!user || !user.isActive) return; // silent — don't reveal user existence
 
-    const token   = randomBytes(32).toString('hex');
-    const expiry  = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const token       = randomBytes(32).toString('hex');
+    const tokenHash   = this.hashResetToken(token);
+    const expiry      = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
+    // Sprint 17 — store the SHA-256 hash, not the raw token. If a DB dump
+    // leaks, attackers can't directly use the rows to mint password-reset
+    // links.
     await this.prisma.user.update({
       where: { id: user.id },
-      data:  { passwordResetToken: token, passwordResetTokenExpiry: expiry },
+      data:  { passwordResetToken: tokenHash, passwordResetTokenExpiry: expiry },
     });
 
+    // Email carries the plaintext token; user clicks the link, server
+    // hashes the URL-passed token and looks up the matching row.
     await this.mail.sendPasswordReset({
       to:         user.email,
       name:       user.name,
@@ -445,13 +451,21 @@ export class AuthService {
     });
   }
 
+  /** Hash a reset token for at-rest storage. SHA-256 is sufficient — the
+   *  pre-image is a 256-bit random; brute-force isn't feasible. */
+  private hashResetToken(plaintext: string): string {
+    return createHash('sha256').update(plaintext).digest('hex');
+  }
+
   /** Validate a reset token and set the new password. */
   async resetPassword(token: string, newPassword: string): Promise<void> {
     if (!token?.trim())         throw new BadRequestException('Reset token is required.');
     if (newPassword.length < 8) throw new BadRequestException('Password must be at least 8 characters.');
 
+    // Sprint 17 — DB stores SHA-256 hash; lookup by hashed value.
+    const tokenHash = this.hashResetToken(token);
     const user = await this.prisma.user.findUnique({
-      where:  { passwordResetToken: token },
+      where:  { passwordResetToken: tokenHash },
       select: { id: true, passwordResetTokenExpiry: true },
     });
 
@@ -582,12 +596,29 @@ export class AuthService {
       },
       select: { id: true, name: true, role: true, supervisorPinHash: true },
     });
+    // Sprint 17 — collect ALL matches instead of returning the first one.
+    // 4-digit PINs across a small team have a real collision probability;
+    // attributing a void to the wrong supervisor in the audit log is
+    // unacceptable. If 2+ users share the PIN, reject with a generic
+    // error and require typed-email disambiguation (separate endpoint).
+    const matches: typeof candidates = [];
     for (const u of candidates) {
+      // eslint-disable-next-line no-await-in-loop
       if (u.supervisorPinHash && await bcrypt.compare(cleaned, u.supervisorPinHash)) {
-        return { userId: u.id, name: u.name, role: u.role };
+        matches.push(u);
       }
     }
-    throw new UnauthorizedException('Invalid PIN.');
+    if (matches.length === 0) {
+      throw new UnauthorizedException('Invalid PIN.');
+    }
+    if (matches.length > 1) {
+      // Don't reveal which supervisors collided; just force disambiguation.
+      throw new UnauthorizedException(
+        'PIN matched multiple supervisors. Please ask one of them to enter their email instead.',
+      );
+    }
+    const u = matches[0];
+    return { userId: u.id, name: u.name, role: u.role };
   }
 
   /**

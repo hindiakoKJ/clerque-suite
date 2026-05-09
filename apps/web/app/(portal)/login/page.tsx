@@ -57,14 +57,8 @@ function LoginInner() {
       const user = jwtDecode<JwtPayload>(data.accessToken);
       setUser(user);
 
-      // Mirror token to cookie for middleware edge access. `Secure` is added
-      // when the page is over https (production); localhost stays unsecured.
-      // `HttpOnly` cannot be set from JS; full HttpOnly migration is a
-      // separate refactor (server-set Set-Cookie on /auth/login response).
-      {
-        const isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
-        document.cookie = `app-session=${data.accessToken}; path=/; SameSite=Lax${isHttps ? '; Secure' : ''}`;
-      }
+      // Sprint 17 — `app-session` cookie is set server-side via Set-Cookie
+      // on the /auth/login response (HttpOnly). No client write needed.
 
       // If app was pre-selected, go directly; otherwise show app selector.
       // On the console subdomain, super-admins land on /admin/dashboard and

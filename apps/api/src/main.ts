@@ -1,6 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import Joi from 'joi';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -169,6 +171,18 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.use(compression());
+  app.use(cookieParser());
+
+  // Sprint 17 — security headers. Defaults:
+  //   - HSTS (max-age 180d, includeSubDomains)
+  //   - X-Frame-Options DENY (no clickjacking)
+  //   - X-Content-Type-Options nosniff
+  //   - Referrer-Policy strict-origin-when-cross-origin
+  //   - X-DNS-Prefetch-Control off
+  //   - Permissions-Policy: empty (no opt-in features)
+  // CSP intentionally NOT enforced here — Next.js sets per-route CSP. The
+  // API responds with JSON only; CSP on JSON has no effect anyway.
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 
   // Allow configured origins + always allow the known production domains.
   // clerque.hnscorpph.com → tenant-facing apps (POS / Ledger / Sync).

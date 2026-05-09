@@ -863,17 +863,51 @@ export class OrdersService {
 
   // ─── Bulk sync from offline queue ────────────────────────────────────────
 
+  /**
+   * Sprint 17 — improved error surfacing.
+   *
+   * Each result now includes `errorCode` (Prisma P-code or HTTP status string)
+   * and `firstFailureIndex` summarises where to resume. The caller (offline
+   * sync queue on the device) can:
+   *   - find the first failed clientUuid and pause that order's retry
+   *   - log subsequent failures without retrying them in a loop
+   *
+   * The sweep is best-effort sequential — same-shift offline orders get
+   * processed in submission order so JE numbering / EOD aggregation isn't
+   * scrambled.
+   */
   async bulkSync(tenantId: string, cashierId: string, orders: OfflineOrder[]) {
-    const results: { clientUuid: string; orderId?: string; error?: string }[] = [];
-    for (const order of orders) {
+    const results: Array<{
+      clientUuid: string;
+      orderId?:   string;
+      error?:     string;
+      errorCode?: string;
+      ok:         boolean;
+    }> = [];
+    let firstFailureIndex: number | null = null;
+
+    for (let i = 0; i < orders.length; i++) {
+      const order = orders[i];
       try {
         const created = await this.create(tenantId, cashierId, order);
-        results.push({ clientUuid: order.clientUuid!, orderId: created.id });
+        results.push({ clientUuid: order.clientUuid!, orderId: created.id, ok: true });
       } catch (err: any) {
-        results.push({ clientUuid: order.clientUuid!, error: err.message });
+        if (firstFailureIndex === null) firstFailureIndex = i;
+        const code = err?.code ?? err?.status ?? err?.name ?? 'UNKNOWN';
+        results.push({
+          clientUuid: order.clientUuid!,
+          error:      err?.message ?? String(err),
+          errorCode:  String(code),
+          ok:         false,
+        });
       }
     }
-    return results;
+    return {
+      results,
+      firstFailureIndex,
+      successCount: results.filter((r) => r.ok).length,
+      failureCount: results.filter((r) => !r.ok).length,
+    };
   }
 
   /**

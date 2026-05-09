@@ -698,6 +698,12 @@ model User {
   separatedAt              DateTime?
   enable2fa                Boolean        @default(false)
   twoFactorSecret          String?
+  /// Sprint 17 — 8 single-use, hashed backup codes (bcrypt). Each consumed
+  /// code is removed from the array; user can regenerate the set.
+  twoFactorBackupCodes     String[]       @default([])
+  /// Sprint 17 — when 2FA enroll begins, store the un-confirmed secret.
+  /// Verified + activated by /auth/2fa/verify; cleared on cancel.
+  twoFactorPendingSecret   String?
   /// Sprint 13 — Compliance-Engine. PRC license number for licensed
   /// pharmacists. Required for `pharmacist:dispense` permission and printed
   /// on Rx-required POS receipts. Null for non-pharmacists.
@@ -742,6 +748,8 @@ model User {
   orderItemRefunds    OrderItemRefund[]
   leaveRequests       LeaveRequest[]       @relation("UserLeaves")
   leaveApprovals      LeaveRequest[]       @relation("LeaveApprover")
+  employeeRequests    EmployeeRequest[]    @relation("UserEmployeeRequests")
+  employeeRequestApprovals EmployeeRequest[] @relation("EmployeeRequestApprover")
   thirteenthMonths    ThirteenthMonth[]
 
   // Sprint 13 — vertical engine back-references
@@ -3232,6 +3240,69 @@ model LeaveRequest {
   @@index([tenantId, status])
   @@index([userId, startDate])
   @@map("leave_requests")
+}
+
+/// Sync-Requests (Sprint 18) — generic employee self-service workflows.
+///
+/// One polymorphic table covers the 4 short-form workflows that share an
+/// approval pattern but differ in specifics:
+///   COA      — Certificate of Attendance (missed-clock log)
+///   SCHEDULE — Schedule Adjustment (temporary shift change)
+///   OB       — Official Business (off-site work)
+///   OT       — Overtime (post-shift extra hours)
+///   UT       — Undertime (early-out / short shift)
+///
+/// LeaveRequest stays separate — it has fundamentally different semantics
+/// (multi-day, leave-credit math, BIR DTR impact, leave-type ledger). These
+/// 5 are all "single-day deviation from a normal shift" and share the same
+/// approve/reject flow and the same UI shell.
+///
+/// `payload` is a Json blob; the shape varies by `kind` and is validated in
+/// the service layer (we want to evolve fields without migrating the table).
+enum EmployeeRequestKind {
+  COA       // Certificate of Attendance (missed clock-in/out)
+  SCHEDULE  // Schedule Adjustment (temporary)
+  OB        // Official Business (off-site)
+  OT        // Overtime
+  UT        // Undertime
+}
+
+enum EmployeeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model EmployeeRequest {
+  id              String                @id @default(cuid())
+  tenantId        String
+  userId          String
+  kind            EmployeeRequestKind
+  status          EmployeeRequestStatus @default(PENDING)
+  /// The day the request applies to (the work day in question).
+  forDate         DateTime              @db.Date
+  /// Free-form reason / justification (mandatory for all kinds).
+  reason          String
+  /// Kind-specific payload — see service for shape per kind.
+  ///   COA      : { clockIn?: ISO, clockOut?: ISO }
+  ///   SCHEDULE : { newStart: HH:MM, newEnd: HH:MM }
+  ///   OB       : { startTime: ISO, endTime: ISO, location: string }
+  ///   OT       : { startTime: ISO, endTime: ISO, hoursClaimed: number }
+  ///   UT       : { earlyOutAt: ISO, hoursMissed: number }
+  payload         Json                  @default("{}")
+  approvedBy      String?
+  approvedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  user     User  @relation("UserEmployeeRequests", fields: [userId], references: [id])
+  approver User? @relation("EmployeeRequestApprover", fields: [approvedBy], references: [id])
+
+  @@index([tenantId, status, kind])
+  @@index([userId, forDate])
+  @@map("employee_requests")
 }
 
 /// 13th-month-pay tracker — one row per employee per year.

@@ -34,6 +34,13 @@ interface Product {
   inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
   bomItems?: Array<{ rawMaterialId: string; quantity: number; rawMaterial?: { id: string; name: string; unit: string } }>;
   imageUrl?: string | null;
+  // Sprint 17 — Pharmacy / Compliance-Engine fields
+  genericName?:      string | null;
+  brandName?:        string | null;
+  dosageForm?:       string | null;
+  strength?:         string | null;
+  isRxRequired?:     boolean;
+  isControlledDrug?: boolean;
   // Server-computed: branch-scoped stock. For UNIT_BASED = InventoryItem.quantity.
   // For RECIPE_BASED = floor(min(rawMatStock / bomQty)) across all BOM lines.
   stockQty?: number | null;
@@ -45,6 +52,13 @@ const EMPTY_FORM = {
   price: '', costPrice: '', isVatable: true, unitOfMeasureId: '',
   inventoryMode: 'UNIT_BASED' as 'UNIT_BASED' | 'RECIPE_BASED',
   imageUrl: '',
+  // Sprint 17 — Pharmacy / Compliance-Engine fields. Optional everywhere.
+  genericName: '',
+  brandName: '',
+  dosageForm: '',
+  strength: '',
+  isRxRequired: false,
+  isControlledDrug: false,
 };
 
 const INPUT_CLS =
@@ -76,8 +90,9 @@ export default function ProductsPage() {
   const isReadOnly = !canManage;
 
   const { data: tenantProfile } = useBusinessSetup(true);
-  const isFnb     = isFnbType(tenantProfile?.businessType);
-  const isLaundry = isLaundryType(tenantProfile?.businessType);
+  const isFnb      = isFnbType(tenantProfile?.businessType);
+  const isLaundry  = isLaundryType(tenantProfile?.businessType);
+  const isPharmacy = tenantProfile?.businessType === 'PHARMACY';
 
   // Vertical-aware copy + recipe gating come from the VerticalPack registry —
   // the single source of truth keyed by businessType. Sprint 12 made
@@ -198,6 +213,12 @@ export default function ProductsPage() {
       unitOfMeasureId: p.unitOfMeasureId ?? '',
       inventoryMode: p.inventoryMode ?? 'UNIT_BASED',
       imageUrl: p.imageUrl ?? '',
+      genericName:      p.genericName     ?? '',
+      brandName:        p.brandName       ?? '',
+      dosageForm:       p.dosageForm      ?? '',
+      strength:         p.strength        ?? '',
+      isRxRequired:     p.isRxRequired    ?? false,
+      isControlledDrug: p.isControlledDrug ?? false,
     });
     setRecipe([]);
 
@@ -265,7 +286,7 @@ export default function ProductsPage() {
       }
       if (Number.isNaN(resolvedCost)) resolvedCost = 0;
 
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: form.name.trim(),
         sku: form.sku.trim() || undefined,
         barcode: form.barcode.trim() || undefined,
@@ -280,6 +301,17 @@ export default function ProductsPage() {
         // On create: send BOM inline
         ...(modal === 'create' && bomItems.length > 0 ? { bomItems } : {}),
       };
+      // Sprint 17 — Pharmacy / Compliance fields, only sent when the
+      // pharmacy fields panel is showing (avoids sending empty strings to
+      // non-pharmacy tenants and triggering DTO validation noise).
+      if (isPharmacy) {
+        payload.genericName      = form.genericName.trim() || undefined;
+        payload.brandName        = form.brandName.trim() || undefined;
+        payload.dosageForm       = form.dosageForm.trim() || undefined;
+        payload.strength         = form.strength.trim() || undefined;
+        payload.isRxRequired     = form.isRxRequired;
+        payload.isControlledDrug = form.isControlledDrug;
+      }
 
       if (modal === 'create') {
         const { data: created } = await api.post<{ id: string; name: string }>('/products', payload);
@@ -1006,6 +1038,94 @@ export default function ProductsPage() {
                       form.isVatable ? 'translate-x-4' : 'translate-x-0'
                     }`} />
                   </button>
+                </div>
+              )}
+
+              {/* Sprint 17 — Pharmacy / Compliance fields. Only render for
+                  PHARMACY tenants. Generics Act (RA 6675) needs generic
+                  name on every Rx product; FDA needs dosage form + strength;
+                  RA 9165 (DDB) needs the controlled-drug toggle so the POS
+                  enforces the dispensing register. */}
+              {isPharmacy && (
+                <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                  <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                    <span>💊 Pharmacy fields</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground -mt-1">
+                    Optional; required only for Rx-controlled products. Generics Act, FDA, and RA 9165 (DDB) compliance.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-sm block">
+                      <span className="text-xs text-muted-foreground">Generic name</span>
+                      <input
+                        type="text" value={form.genericName}
+                        onChange={(e) => setForm((f) => ({ ...f, genericName: e.target.value }))}
+                        className={INPUT_CLS}
+                        placeholder="e.g. Paracetamol"
+                      />
+                    </label>
+                    <label className="text-sm block">
+                      <span className="text-xs text-muted-foreground">Brand name</span>
+                      <input
+                        type="text" value={form.brandName}
+                        onChange={(e) => setForm((f) => ({ ...f, brandName: e.target.value }))}
+                        className={INPUT_CLS}
+                        placeholder="e.g. Biogesic"
+                      />
+                    </label>
+                    <label className="text-sm block">
+                      <span className="text-xs text-muted-foreground">Dosage form</span>
+                      <input
+                        type="text" value={form.dosageForm}
+                        onChange={(e) => setForm((f) => ({ ...f, dosageForm: e.target.value }))}
+                        className={INPUT_CLS}
+                        placeholder="tablet / syrup / cream"
+                      />
+                    </label>
+                    <label className="text-sm block">
+                      <span className="text-xs text-muted-foreground">Strength</span>
+                      <input
+                        type="text" value={form.strength}
+                        onChange={(e) => setForm((f) => ({ ...f, strength: e.target.value }))}
+                        className={INPUT_CLS}
+                        placeholder="500mg / 5mg/ml"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <div>
+                      <p className="text-sm font-medium">Requires prescription</p>
+                      <p className="text-[11px] text-muted-foreground">POS blocks the sale until an Rx is attached at till.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, isRxRequired: !f.isRxRequired }))}
+                      className="w-10 h-6 rounded-full transition-colors"
+                      style={{ background: form.isRxRequired ? 'var(--accent)' : undefined }}
+                    >
+                      <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+                        form.isRxRequired ? 'translate-x-4' : 'translate-x-0'
+                      }`} />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <div>
+                      <p className="text-sm font-medium text-amber-700 dark:text-amber-400">Controlled drug (RA 9165 / DDB)</p>
+                      <p className="text-[11px] text-muted-foreground">Auto-creates a controlled-substance log entry on every dispense.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, isControlledDrug: !f.isControlledDrug, isRxRequired: !f.isControlledDrug ? true : f.isRxRequired }))}
+                      className="w-10 h-6 rounded-full transition-colors"
+                      style={{ background: form.isControlledDrug ? '#B45309' : undefined }}
+                    >
+                      <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+                        form.isControlledDrug ? 'translate-x-4' : 'translate-x-0'
+                      }`} />
+                    </button>
+                  </div>
                 </div>
               )}
 

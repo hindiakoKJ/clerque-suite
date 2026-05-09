@@ -91,7 +91,7 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     const refresh = localStorage.getItem('app-auth');
     if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
     clear();
-    document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    // Server clears the HttpOnly cookie via /auth/logout; no client-side cookie work needed.
     router.push('/login');
   }
 

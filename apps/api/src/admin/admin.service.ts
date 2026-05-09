@@ -36,6 +36,14 @@ export interface CreateTenantDto {
   ownerEmail:    string;
   contactEmail?: string;
   contactPhone?: string;
+  // Sprint 17 — atomic plan provisioning. Operator can pass these in the
+  // same call instead of making a separate PATCH /plan after creation —
+  // closes the half-configured-tenant window if the second call failed.
+  planCode?:        string;
+  modulePos?:       boolean;
+  moduleLedger?:    boolean;
+  modulePayroll?:   boolean;
+  staffSeatAddons?: number;
 }
 
 export interface AddUserDto {
@@ -319,8 +327,28 @@ export class AdminService {
     const generatedPassword = this.generatePassword();
     const passwordHash = await bcrypt.hash(generatedPassword, 12);
 
+    // Sprint 17 — apply plan + module flags atomically within tenant
+    // creation. Avoids the half-configured-tenant window where the
+    // separate PATCH /plan call could fail after the tenant existed.
+    const { PLAN_CAPS } = await import('@repo/shared-types');
+    const planCode = (dto.planCode ?? 'SUITE_T2');
+    const cap      = PLAN_CAPS[planCode as keyof typeof PLAN_CAPS];
+    if (!cap) {
+      throw new BadRequestException(`Unknown plan code: ${planCode}.`);
+    }
+    // Resolve module flags consistent with plan rules: SUITE forces all 3,
+    // STD forces POS-only, PAIR respects the booleans.
+    const isSuite = cap.moduleCount === 3;
+    const isStd   = planCode.startsWith('STD_');
+    const planMods = {
+      modulePos:     isSuite ? true  : (isStd ? true  : (dto.modulePos     ?? true)),
+      moduleLedger:  isSuite ? true  : (isStd ? false : (dto.moduleLedger  ?? true)),
+      modulePayroll: isSuite ? true  : (isStd ? false : (dto.modulePayroll ?? false)),
+    };
+    const staffSeatAddons = Math.min(dto.staffSeatAddons ?? 0, cap.maxAddons);
+
     const tenant = await this.prisma.$transaction(async (tx) => {
-      // 1. Create tenant
+      // 1. Create tenant — plan-aware fields baked in atomically.
       const t = await tx.tenant.create({
         data: {
           name:         dto.name.trim(),
@@ -332,6 +360,12 @@ export class AdminService {
           contactEmail: dto.contactEmail?.trim() ?? dto.ownerEmail.trim(),
           contactPhone: dto.contactPhone?.trim() ?? null,
           status:       'ACTIVE',
+          planCode,
+          modulePos:        planMods.modulePos,
+          moduleLedger:     planMods.moduleLedger,
+          modulePayroll:    planMods.modulePayroll,
+          staffSeatQuota:   cap.baseSeats,
+          staffSeatAddons,
         },
       });
 
@@ -478,15 +512,24 @@ export class AdminService {
 
   // ─── User actions ─────────────────────────────────────────────────────────
 
-  async resetUserPassword(userId: string, actor: ConsoleActor) {
+  async resetUserPassword(userId: string, actor: ConsoleActor, confirmationToken?: string) {
     const user = await this.prisma.user.findUnique({
       where:  { id: userId },
       select: {
-        id: true, email: true, name: true,
+        id: true, email: true, name: true, role: true,
         tenant: { select: { id: true, slug: true } },
       },
     });
     if (!user) throw new NotFoundException('User not found.');
+
+    // Sprint 17 — typed-slug guard for high-privilege role resets. A
+    // SUPER_ADMIN resetting a BUSINESS_OWNER's password is a credential-
+    // takeover vector if the SA's own credential is stolen. Force the
+    // operator to type the tenant slug.
+    const HIGH_PRIVILEGE_ROLES = ['BUSINESS_OWNER', 'PAYROLL_MASTER', 'BOOKKEEPER', 'FINANCE_LEAD'];
+    if (user.tenant && HIGH_PRIVILEGE_ROLES.includes(user.role)) {
+      await this.assertTypedSlug(user.tenant.id, confirmationToken);
+    }
 
     const generatedPassword = this.generatePassword();
     const passwordHash = await bcrypt.hash(generatedPassword, 12);
@@ -1978,6 +2021,7 @@ export class AdminService {
       moduleLedger?:    boolean;
       modulePayroll?:   boolean;
       staffSeatAddons?: number;        // 0..maxAddons (validated against PLAN_CAPS)
+      confirmationToken?: string;      // Required on downgrades (typed-slug)
     },
     actor: ConsoleActor,
   ) {
@@ -1987,11 +2031,26 @@ export class AdminService {
     const before = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: {
-        name: true, planCode: true, modulePos: true, moduleLedger: true,
+        name: true, slug: true, planCode: true, modulePos: true, moduleLedger: true,
         modulePayroll: true, staffSeatQuota: true, staffSeatAddons: true,
       },
     });
     if (!before) throw new NotFoundException('Tenant not found.');
+
+    // Sprint 17 — typed-slug guard on plan downgrades. A downgrade reduces
+    // module count, seat quota, or branch quota — that's destructive (locks
+    // tenant out of features). Requires the operator to type the slug.
+    if (dto.planCode && before.planCode && dto.planCode !== before.planCode) {
+      const beforeCap = PLAN_CAPS[before.planCode as keyof typeof PLAN_CAPS];
+      const afterCap  = PLAN_CAPS[dto.planCode  as keyof typeof PLAN_CAPS];
+      const isDowngrade =
+        afterCap && beforeCap &&
+        (afterCap.moduleCount < beforeCap.moduleCount ||
+         afterCap.maxTotal    < beforeCap.maxTotal);
+      if (isDowngrade) {
+        await this.assertTypedSlug(tenantId, dto.confirmationToken);
+      }
+    }
 
     // Validate plan code if changing.
     if (dto.planCode !== undefined) {

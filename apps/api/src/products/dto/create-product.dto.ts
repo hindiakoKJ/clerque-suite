@@ -126,4 +126,42 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => CreateBomItemDto)
   bomItems?: CreateBomItemDto[];
+
+  // ── Sprint 17 — Pharmacy / Compliance-Engine fields ───────────────────────
+  // Optional on every product; only meaningful for PHARMACY tenants.
+  // FDA + RA 6675 + RA 9165 require generic name on Rx, dosage form, etc.
+
+  @ApiPropertyOptional({ description: 'Generic name (RA 6675 Generics Act)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  genericName?: string;
+
+  @ApiPropertyOptional({ description: 'Brand name shown alongside generic' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  brandName?: string;
+
+  @ApiPropertyOptional({ description: 'Dosage form (tablet/capsule/syrup/etc.)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  dosageForm?: string;
+
+  @ApiPropertyOptional({ description: 'Strength (e.g. 500mg, 5mg/ml)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  strength?: string;
+
+  @ApiPropertyOptional({ description: 'Requires a valid prescription before dispensing' })
+  @IsOptional()
+  @IsBoolean()
+  isRxRequired?: boolean;
+
+  @ApiPropertyOptional({ description: 'RA 9165 controlled drug — DDB log mandatory on sale' })
+  @IsOptional()
+  @IsBoolean()
+  isControlledDrug?: boolean;
 }

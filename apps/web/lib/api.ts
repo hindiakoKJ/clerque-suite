@@ -147,18 +147,11 @@ realApi.interceptors.response.use(
       //   - `Secure` is added when the page is served over https (production
       //     on Vercel + custom domains). Localhost over http omits it so the
       //     dev cookie still works.
-      //   - `HttpOnly` cannot be set here — `document.cookie` is JS-side, and
-      //     HttpOnly cookies are unreadable AND unwritable from JS. Moving to
-      //     a fully HttpOnly model requires the server to set the cookie via
-      //     Set-Cookie on the /auth/refresh response (separate refactor).
-      //   - `SameSite=Lax` blocks cross-site CSRF for top-level navigations.
-      //     We don't use Strict because the OAuth-style demo flow needs the
-      //     cookie to survive a redirect from /demo.
-      if (typeof document !== 'undefined') {
-        const isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
-        const flags = `path=/; SameSite=Lax${isHttps ? '; Secure' : ''}`;
-        document.cookie = `app-session=${newAccess}; ${flags}`;
-      }
+      // Sprint 17 — `app-session` cookie is now server-managed (HttpOnly).
+      // `/auth/refresh` sets it via Set-Cookie. The browser stores it
+      // automatically; JS cannot read or write it (good — closes the XSS
+      // session-token-theft vector). We still keep the access token in
+      // localStorage for the in-page Authorization header (Bearer flow).
 
       processQueue(null, newAccess);
       original.headers.Authorization = `Bearer ${newAccess}`;
@@ -166,10 +159,11 @@ realApi.interceptors.response.use(
     } catch (err) {
       processQueue(err, null);
       localStorage.removeItem('app-auth');
-      // Clear the stale cookie too so middleware doesn't mistake it as still-valid.
-      if (typeof document !== 'undefined') {
-        document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-      }
+      // Server-managed cookie — POST /auth/logout would clear it via
+      // clearCookie. We can't directly expire an HttpOnly cookie from JS,
+      // but the next /auth/refresh will fail with 401 and the user will be
+      // redirected to /login (where backend clears it on success login or
+      // it expires naturally).
       window.location.href = '/login';
       return Promise.reject(err);
     } finally {

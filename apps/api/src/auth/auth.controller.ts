@@ -4,31 +4,168 @@ import {
   Body,
   UseGuards,
   Request,
+  Response,
   HttpCode,
   HttpStatus,
   Delete,
   BadRequestException,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import type { Response as ExpressResponse } from 'express';
 import { AuthService } from './auth.service';
+import { TwoFactorService } from './two-factor.service';
 import { RefreshDto, LogoutDto, PinLoginDto } from './dto/login.dto';
 import { UnauthorizedException } from '@nestjs/common';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from '../prisma/prisma.service';
+
+/**
+ * Sprint 17 — server-side `app-session` cookie management.
+ *
+ * On login / refresh, the access token is set as an HttpOnly cookie so an
+ * XSS on the tenant domain cannot read it via document.cookie. Required
+ * before 2FA can ship; otherwise a stolen session token bypasses TOTP.
+ *
+ * Cross-cutting helpers below; called from login + refresh + logout.
+ */
+const SESSION_COOKIE = 'app-session';
+
+function setSessionCookie(res: ExpressResponse, accessToken: string, isProd: boolean) {
+  res.cookie(SESSION_COOKIE, accessToken, {
+    httpOnly: true,
+    secure:   isProd,           // dev runs over plain HTTP (localhost)
+    sameSite: 'lax',
+    path:     '/',
+    // No explicit `expires` — session-scoped; the JWT itself carries TTL.
+  });
+}
+function clearSessionCookie(res: ExpressResponse, isProd: boolean) {
+  res.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: isProd, sameSite: 'lax', path: '/' });
+}
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  private readonly isProd = process.env.NODE_ENV === 'production';
+
+  constructor(
+    private authService: AuthService,
+    private twoFactor:   TwoFactorService,
+    private jwt:         JwtService,
+    private prisma:      PrismaService,
+  ) {}
 
   @UseGuards(AuthGuard('local'))
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Request() req: any) {
+  async login(@Request() req: any, @Response({ passthrough: true }) res: ExpressResponse) {
     const { id, tenantId, branchId, role, name } = req.user;
+
+    // Sprint 17 — 2FA gate. If the user has 2FA enabled, return a short-lived
+    // challenge token instead of real JWTs. Frontend then prompts for the
+    // code and POSTs /auth/login/2fa with { challengeToken, code }.
+    const u2fa = await this.prisma.user.findUnique({
+      where:  { id },
+      select: { enable2fa: true },
+    });
+    if (u2fa?.enable2fa) {
+      const challengeToken = this.jwt.sign(
+        { sub: id, kind: '2fa-challenge', tenantId, branchId, role, name: name ?? '' },
+        { expiresIn: '5m' },
+      );
+      return { requires2fa: true, challengeToken };
+    }
+
     const deviceInfo = req.headers['user-agent'];
     const ipAddress = req.ip;
-    return this.authService.login(id, tenantId, branchId, role, name ?? '', deviceInfo, ipAddress);
+    const tokens = await this.authService.login(id, tenantId, branchId, role, name ?? '', deviceInfo, ipAddress);
+    setSessionCookie(res, tokens.accessToken, this.isProd);
+    return tokens;
+  }
+
+  /**
+   * Sprint 17 — second-factor completion. Accepts challenge from /auth/login
+   * + a 6-digit TOTP code (or 10-char backup code). On success, issues real
+   * JWTs identical to the no-2FA path.
+   */
+  @Post('login/2fa')
+  @HttpCode(HttpStatus.OK)
+  async loginWith2fa(
+    @Request() req: any,
+    @Response({ passthrough: true }) res: ExpressResponse,
+    @Body() body: { challengeToken: string; code: string },
+  ) {
+    if (!body?.challengeToken || !body?.code) {
+      throw new UnauthorizedException('challengeToken and code required.');
+    }
+    let payload: any;
+    try {
+      payload = this.jwt.verify(body.challengeToken);
+    } catch {
+      throw new UnauthorizedException('Challenge token expired or invalid.');
+    }
+    if (payload.kind !== '2fa-challenge') {
+      throw new UnauthorizedException('Bad challenge token.');
+    }
+    const ok = await this.twoFactor.verify(payload.sub, body.code);
+    if (!ok) throw new UnauthorizedException('Invalid 2FA code.');
+
+    const deviceInfo = req.headers['user-agent'];
+    const ipAddress  = req.ip;
+    const tokens = await this.authService.login(
+      payload.sub, payload.tenantId, payload.branchId, payload.role, payload.name ?? '',
+      deviceInfo, ipAddress,
+    );
+    setSessionCookie(res, tokens.accessToken, this.isProd);
+    return tokens;
+  }
+
+  // ─── 2FA enrollment / management ──────────────────────────────────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/enroll')
+  @HttpCode(HttpStatus.OK)
+  async enrol2fa(@CurrentUser() user: JwtPayload) {
+    return this.twoFactor.beginEnroll(user.sub);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/verify')
+  @HttpCode(HttpStatus.OK)
+  async verify2fa(@CurrentUser() user: JwtPayload, @Body() body: { code: string }) {
+    return this.twoFactor.verifyEnroll(user.sub, body?.code);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/disable')
+  @HttpCode(HttpStatus.OK)
+  async disable2fa(@CurrentUser() user: JwtPayload, @Body() body: { code: string }) {
+    await this.twoFactor.disable(user.sub, body?.code);
+    return { ok: true };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/regenerate-backup')
+  @HttpCode(HttpStatus.OK)
+  async regenBackup(@CurrentUser() user: JwtPayload, @Body() body: { code: string }) {
+    return this.twoFactor.regenerateBackupCodes(user.sub, body?.code);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/cancel-enroll')
+  @HttpCode(HttpStatus.OK)
+  async cancelEnroll(@CurrentUser() user: JwtPayload) {
+    await this.twoFactor.cancelEnroll(user.sub);
+    return { ok: true };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/status')
+  @HttpCode(HttpStatus.OK)
+  async status2fa(@CurrentUser() user: JwtPayload) {
+    return this.twoFactor.status(user.sub);
   }
 
   /**
@@ -38,34 +175,34 @@ export class AuthController {
    */
   @Post('pin-login')
   @HttpCode(HttpStatus.OK)
-  async pinLogin(@Request() req: any, @Body() dto: PinLoginDto) {
+  async pinLogin(@Request() req: any, @Body() dto: PinLoginDto, @Response({ passthrough: true }) res: ExpressResponse) {
     const user = await this.authService.validateUserByPin(dto.email, dto.pin, dto.companyCode);
     if (!user) throw new UnauthorizedException('Invalid PIN, email, or company code.');
     const deviceInfo = req.headers['user-agent'];
     const ipAddress = req.ip;
-    return this.authService.login(
-      user.id,
-      user.tenantId,
-      user.branchId,
-      user.role,
-      user.name ?? '',
-      deviceInfo,
-      ipAddress,
+    const tokens = await this.authService.login(
+      user.id, user.tenantId, user.branchId, user.role, user.name ?? '',
+      deviceInfo, ipAddress,
     );
+    setSessionCookie(res, tokens.accessToken, this.isProd);
+    return tokens;
   }
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refresh(@Body() dto: RefreshDto) {
+  async refresh(@Body() dto: RefreshDto, @Response({ passthrough: true }) res: ExpressResponse) {
     const sub = this.authService.extractRefreshSub(dto.refreshToken);
-    return this.authService.refresh(sub, dto.refreshToken);
+    const tokens = await this.authService.refresh(sub, dto.refreshToken);
+    setSessionCookie(res, tokens.accessToken, this.isProd);
+    return tokens;
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logout(@CurrentUser() user: JwtPayload, @Body() dto: LogoutDto) {
+  async logout(@CurrentUser() user: JwtPayload, @Body() dto: LogoutDto, @Response({ passthrough: true }) res: ExpressResponse) {
     await this.authService.logout(user.sub, dto.refreshToken);
+    clearSessionCookie(res, this.isProd);
   }
 
   @UseGuards(JwtAuthGuard)

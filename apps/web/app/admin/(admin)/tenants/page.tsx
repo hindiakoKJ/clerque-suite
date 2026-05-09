@@ -133,35 +133,11 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
         ownerEmail:    form.ownerEmail,
         contactEmail:  form.contactEmail,
         contactPhone:  form.contactPhone,
+        // Sprint 17 — atomic plan apply (no more two-PATCH dance).
+        planCode:      form.planCode,
+        staffSeatAddons: 0,
       };
       const { data } = await api.post<CreatedResult>('/admin/tenants', createPayload);
-
-      // Immediately apply the modular plan so module gates take effect on first login.
-      // Standalone plans → POS-only forced. Suite → all 3 forced.
-      // Pair → defaults to POS+Ledger, owner can change later via tenant detail.
-      const planCode = form.planCode;
-      const isStd   = planCode.startsWith('STD_');
-      const isSuite = planCode.startsWith('SUITE_') || planCode === 'ENTERPRISE';
-      const planBody: Record<string, unknown> = { planCode, staffSeatAddons: 0 };
-      if (isStd) {
-        planBody.modulePos     = true;
-        planBody.moduleLedger  = false;
-        planBody.modulePayroll = false;
-      } else if (!isSuite) {
-        // Pair default: POS + Ledger (owner can switch via tenant detail)
-        planBody.modulePos     = true;
-        planBody.moduleLedger  = true;
-        planBody.modulePayroll = false;
-      }
-      try {
-        await api.patch(`/admin/tenants/${data.tenantId}/plan`, planBody);
-      } catch (err: unknown) {
-        // Don't block tenant creation if plan-apply fails — surface a warning
-        // and let the operator fix it via the tenant detail page.
-        const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-        toast.warning(`Tenant created but plan apply failed: ${msg ?? 'unknown error'}. Set the plan via the tenant detail page.`);
-      }
-
       onCreated(data);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;

@@ -48,6 +48,7 @@ import { TruckingModule } from './trucking/trucking.module';
 import { ConstructionModule } from './construction/construction.module';
 import { JobOrdersModule } from './job-orders/job-orders.module';
 import { PlatformModule } from './platform/platform.module';
+import { EmployeeRequestsModule } from './employee-requests/employee-requests.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -102,6 +103,7 @@ import { HealthController } from './health/health.controller';
     ConstructionModule,
     JobOrdersModule,
     PlatformModule,
+    EmployeeRequestsModule,
   ],
 })
 export class AppModule {}

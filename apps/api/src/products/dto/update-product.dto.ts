@@ -73,4 +73,12 @@ export class UpdateProductDto {
   @IsOptional()
   @IsEnum(INVENTORY_MODES)
   inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
+
+  // Sprint 17 — Pharmacy/Compliance fields (mirrored from CreateProductDto).
+  @IsOptional() @IsString() @MaxLength(200) genericName?:    string;
+  @IsOptional() @IsString() @MaxLength(200) brandName?:      string;
+  @IsOptional() @IsString() @MaxLength(50)  dosageForm?:     string;
+  @IsOptional() @IsString() @MaxLength(50)  strength?:       string;
+  @IsOptional() @IsBoolean()                isRxRequired?:   boolean;
+  @IsOptional() @IsBoolean()                isControlledDrug?: boolean;
 }

@@ -7,6 +7,7 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { LocalStrategy } from './strategies/local.strategy';
 import { TierQuotaGuard } from './guards/tier-quota.guard';
+import { TwoFactorService } from './two-factor.service';
 
 @Module({
   imports: [
@@ -20,8 +21,8 @@ import { TierQuotaGuard } from './guards/tier-quota.guard';
       }),
     }),
   ],
-  providers: [AuthService, JwtStrategy, LocalStrategy, TierQuotaGuard],
+  providers: [AuthService, JwtStrategy, LocalStrategy, TierQuotaGuard, TwoFactorService],
   controllers: [AuthController],
-  exports: [AuthService, JwtModule, TierQuotaGuard],
+  exports: [AuthService, JwtModule, TierQuotaGuard, TwoFactorService],
 })
 export class AuthModule {}

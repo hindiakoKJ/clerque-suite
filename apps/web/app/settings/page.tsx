@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings, Building2, Users, ArrowLeft, Lock,
@@ -199,16 +199,22 @@ export default function SettingsPage() {
   const { data: profile, isLoading: profileLoading } = useQuery<TenantProfile>({
     queryKey: ['tenant-profile'],
     queryFn: () => api.get('/tenant/profile').then((r) => r.data),
-    onSuccess: (data: TenantProfile) => {
-      setProfileForm({
-        name:         data.name ?? '',
-        tin:          data.tin ?? '',
-        address:      data.address ?? '',
-        contactEmail: data.contactEmail ?? '',
-        contactPhone: data.contactPhone ?? '',
-      });
-    },
-  } as any);
+  });
+
+  // Sprint 17 — TanStack Query v5 dropped the `onSuccess` callback on
+  // queries. Replace it with a useEffect that populates the form whenever
+  // the query data lands or refreshes. Idempotent — only populates once
+  // per profile object identity.
+  useEffect(() => {
+    if (!profile) return;
+    setProfileForm({
+      name:         profile.name ?? '',
+      tin:          profile.tin ?? '',
+      address:      profile.address ?? '',
+      contactEmail: profile.contactEmail ?? '',
+      contactPhone: profile.contactPhone ?? '',
+    });
+  }, [profile]);
 
   const { data: users = [], isLoading: usersLoading } = useQuery<StaffUser[]>({
     queryKey: ['staff-users'],

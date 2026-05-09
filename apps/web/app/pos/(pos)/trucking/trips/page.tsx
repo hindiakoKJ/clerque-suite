@@ -125,7 +125,11 @@ export default function TripsPage() {
             trips.map((t) => (
               <div key={t.id} className="rounded-xl border border-border bg-card p-4 hover:bg-muted/20 transition-colors">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div className="flex-1 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/pos/trucking/trips/${t.id}`)}
+                    className="flex-1 min-w-0 text-left"
+                  >
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono font-semibold">{t.tripNumber}</span>
                       <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${STATUS_TINT[t.status]}`}>
@@ -143,7 +147,7 @@ export default function TripsPage() {
                       <span><UserIcon className="h-3 w-3 inline mr-0.5" />{t.driver.name}</span>
                       {t.cargoDescription && <span>· {t.cargoDescription}</span>}
                     </div>
-                  </div>
+                  </button>
 
                   <div className="flex items-end flex-col gap-1 shrink-0">
                     <div className="text-sm">

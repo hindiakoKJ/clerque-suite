@@ -108,6 +108,18 @@ function SalesDashboard() {
     businessType: floorLayout?.tenant?.businessType ?? null,
   });
 
+  // Sprint 19 — Owner-only revenue gate. Cashiers / cashier-tier roles
+  // see operational counts (orders, voids) but not the money totals
+  // (revenue, gross profit, COGS, margin). Owner / management /
+  // accounting roles see everything.
+  const REVENUE_VIEWER_ROLES = new Set([
+    'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+    'FINANCE_LEAD', 'ACCOUNTANT', 'BOOKKEEPER', 'MDM',
+    'AR_ACCOUNTANT', 'AP_ACCOUNTANT', 'PAYROLL_MASTER',
+    'EXTERNAL_AUDITOR',
+  ]);
+  const canSeeRevenue = user ? REVENUE_VIEWER_ROLES.has(user.role) : false;
+
   const { data, isLoading, refetch, isFetching } = useQuery<DailyReport>({
     queryKey: ['daily-report', branchId, date],
     queryFn: () =>
@@ -201,8 +213,19 @@ function SalesDashboard() {
             items={checklistItems}
           />
 
-          {/* ── Profit-accuracy warning ── */}
-          {((missingCost?.count ?? 0) > 0 || data.itemsMissingCost.lineCount > 0) && (
+          {/* ── Owner-only revenue notice for cashier-tier roles ── */}
+          {!canSeeRevenue && (
+            <div className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground flex items-center gap-2">
+              <Wallet className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                Revenue figures (gross profit, hourly sales, top products) are visible
+                only to owners and management. You see your own operational counts here.
+              </span>
+            </div>
+          )}
+
+          {/* ── Profit-accuracy warning (owner-only — shows ₱ figures) ── */}
+          {canSeeRevenue && ((missingCost?.count ?? 0) > 0 || data.itemsMissingCost.lineCount > 0) && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               <div className="flex-1 text-sm text-amber-900">
@@ -226,7 +249,8 @@ function SalesDashboard() {
             </div>
           )}
 
-          {/* ── Profitability row ── */}
+          {/* ── Profitability row (owner-only) ── */}
+          {canSeeRevenue && (
           <div>
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
               Profitability {date === todayPH() ? '(today)' : `(${date})`}
@@ -277,6 +301,7 @@ function SalesDashboard() {
               ))}
             </div>
           </div>
+          )}
 
           {/* ── Operations / Lead Time strip (Sprint 7) ── */}
           {opsData && (opsData.completedCount > 0 || opsData.inFlightCount > 0) && (
@@ -346,8 +371,8 @@ function SalesDashboard() {
             </div>
           )}
 
-          {/* ── Top products strip cards ── */}
-          {data.topProducts.length > 0 && (
+          {/* ── Top products strip cards (owner-only — shows ₱ revenue per product) ── */}
+          {canSeeRevenue && data.topProducts.length > 0 && (
             <div>
               <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Top Products Today
@@ -393,38 +418,60 @@ function SalesDashboard() {
             </div>
           )}
 
-          {/* ── KPI cards ── */}
+          {/* ── KPI cards ──
+              Sprint 19 — Revenue cards are owner-only. Cashiers see
+              only the operational counts (orders, voids).
+              The CASHIER list is intentionally short so cashiers can
+              still see how many orders + voids they processed today. */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-            {[
-              {
-                icon: ShoppingCart,
-                label: 'Total Revenue',
-                value: formatPeso(data.totalRevenue),
-                sub: `${data.totalOrders} orders`,
-                accentBorder: true,
-              },
-              {
-                icon: TrendingUp,
-                label: 'Avg Order Value',
-                value: formatPeso(data.avgOrderValue),
-                sub: `${data.totalOrders} completed`,
-                color: 'hsl(142 76% 36%)',
-              },
-              {
-                icon: CreditCard,
-                label: 'Non-Cash Sales',
-                value: formatPeso(data.nonCashRevenue),
-                sub: `Cash: ${formatPeso(data.cashRevenue)}`,
-                color: 'hsl(262 70% 58%)',
-              },
-              {
-                icon: Ban,
-                label: 'Voids',
-                value: String(data.voidCount),
-                sub: 'Cancelled orders',
-                color: 'hsl(0 72% 51%)',
-              },
-            ].map((card) => (
+            {(canSeeRevenue
+              ? [
+                  {
+                    icon: ShoppingCart,
+                    label: 'Total Revenue',
+                    value: formatPeso(data.totalRevenue),
+                    sub: `${data.totalOrders} orders`,
+                    accentBorder: true,
+                  },
+                  {
+                    icon: TrendingUp,
+                    label: 'Avg Order Value',
+                    value: formatPeso(data.avgOrderValue),
+                    sub: `${data.totalOrders} completed`,
+                    color: 'hsl(142 76% 36%)',
+                  },
+                  {
+                    icon: CreditCard,
+                    label: 'Non-Cash Sales',
+                    value: formatPeso(data.nonCashRevenue),
+                    sub: `Cash: ${formatPeso(data.cashRevenue)}`,
+                    color: 'hsl(262 70% 58%)',
+                  },
+                  {
+                    icon: Ban,
+                    label: 'Voids',
+                    value: String(data.voidCount),
+                    sub: 'Cancelled orders',
+                    color: 'hsl(0 72% 51%)',
+                  },
+                ]
+              : [
+                  {
+                    icon: ShoppingCart,
+                    label: 'Orders Today',
+                    value: String(data.totalOrders),
+                    sub: 'Completed transactions',
+                    accentBorder: true,
+                  },
+                  {
+                    icon: Ban,
+                    label: 'Voids',
+                    value: String(data.voidCount),
+                    sub: 'Cancelled orders',
+                    color: 'hsl(0 72% 51%)',
+                  },
+                ]
+            ).map((card) => (
               <div
                 key={card.label}
                 className="bg-background rounded-lg border border-border border-l-4 p-3 sm:p-4 flex flex-col justify-between min-h-[88px]"
@@ -437,6 +484,8 @@ function SalesDashboard() {
             ))}
           </div>
 
+          {/* Payment + hourly breakdown — owner-only (both show ₱ figures). */}
+          {canSeeRevenue && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
             {/* Payment method breakdown */}
             <div className="bg-background rounded-lg border border-border p-5">
@@ -511,9 +560,10 @@ function SalesDashboard() {
               )}
             </div>
           </div>
+          )}
 
-          {/* Hourly sales bar chart */}
-          {data.byHour.length > 0 && (
+          {/* Hourly sales bar chart — owner-only (shows ₱ revenue per hour) */}
+          {canSeeRevenue && data.byHour.length > 0 && (
             <div className="bg-background rounded-lg border border-border p-5">
               <h2 className="text-sm font-semibold text-foreground mb-4">Sales by Hour</h2>
               <div className="flex items-end gap-1.5 h-24">

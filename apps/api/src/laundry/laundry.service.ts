@@ -846,6 +846,16 @@ export class LaundryService {
          * DRY → DRYER/COMBO, WASH_DRY_COMBO → COMBO).
          */
         machineId?:  string;
+        /**
+         * Sprint 19 — Optional wash/dry cycle picked at intake time.
+         * Drives cycleEndsAt + cycleAutoComplete on the resulting line so
+         * the fleet dashboard shows a countdown and the cron can
+         * auto-complete. Validated against the picked machine's kind.
+         * Ignored unless machineId is also set.
+         */
+        cycleId?:          string;
+        /** Override the cycle's default autoComplete on a per-line basis. */
+        cycleAutoComplete?: boolean;
       }>;
       productLines?: Array<{ productId: string; quantity: number; notes?: string }>;
       garments?: Array<{ garmentType: string; quantity?: number; condition?: string; tagNumber?: string }>;
@@ -920,6 +930,45 @@ export class LaundryService {
             throw new BadRequestException(`Machine ${code} is referenced by more than one line.`);
           }
           dupCheck.add(id);
+        }
+      }
+
+      // ── Sprint 19 — Cycle pre-assignment ───────────────────────────────
+      // Operator can pick "Premium Wash 60min" / "Heavy Duty Dry 45min"
+      // alongside the machine at intake time. We validate kind compat,
+      // compute cycleEndsAt = now + duration, and stamp the line so the
+      // fleet dashboard shows a countdown immediately + the cron can
+      // auto-complete when the timer elapses (if flagged).
+      const requestedCycleIds = Array.from(
+        new Set(dto.lines.map((l) => l.cycleId).filter((x): x is string => !!x)),
+      );
+      const cyclesById = new Map<string, { id: string; kind: 'WASHER' | 'DRYER' | 'COMBO'; durationMinutes: number; autoComplete: boolean }>();
+      if (requestedCycleIds.length) {
+        const cycles = await tx.laundryWashCycle.findMany({
+          where:  { id: { in: requestedCycleIds }, tenantId, isActive: true },
+          select: { id: true, kind: true, durationMinutes: true, autoComplete: true },
+        });
+        for (const c of cycles) cyclesById.set(c.id, c as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+        if (cycles.length !== requestedCycleIds.length) {
+          throw new BadRequestException('One or more wash cycles not found or inactive.');
+        }
+        // Validate kind compat against the line's chosen machine.
+        for (const l of dto.lines) {
+          if (!l.cycleId) continue;
+          if (!l.machineId) {
+            throw new BadRequestException('Cycle requires a machine on the same line.');
+          }
+          const cycle = cyclesById.get(l.cycleId)!;
+          const machine = machinesById.get(l.machineId)!;
+          const compatible =
+            cycle.kind === machine.kind ||
+            machine.kind === 'COMBO' ||
+            cycle.kind === 'COMBO';
+          if (!compatible) {
+            throw new BadRequestException(
+              `Cycle is for ${cycle.kind} — can't run on ${machine.code} (${machine.kind}).`,
+            );
+          }
         }
       }
       // Service-code → compatible machine kinds.
@@ -1069,6 +1118,18 @@ export class LaundryService {
               machineId:     l.machineId ?? null,
               machineStatus: l.machineId ? 'RUNNING' : 'NOT_STARTED',
               startedAt:     l.machineId ? new Date() : null,
+              // Sprint 19 — wash cycle (drives countdown + auto-complete).
+              // Validated above; safe to look up + compute end time here.
+              ...(l.cycleId && l.machineId
+                ? (() => {
+                    const c = cyclesById.get(l.cycleId)!;
+                    return {
+                      cycleId:           c.id,
+                      cycleEndsAt:       new Date(Date.now() + c.durationMinutes * 60_000),
+                      cycleAutoComplete: l.cycleAutoComplete ?? c.autoComplete,
+                    };
+                  })()
+                : {}),
               addOns: l.addOns.length ? {
                 create: l.addOns.map((a) => ({
                   addOnId:       a.addOnId,

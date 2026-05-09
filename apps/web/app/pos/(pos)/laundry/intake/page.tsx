@@ -54,6 +54,21 @@ interface ServiceLine {
   addOnIds:    string[];
   /** Sprint 14 — optional machine pre-assigned at intake time. */
   machineId?:  string;
+  /** Sprint 19 — optional wash/dry cycle (Premium Wash, Heavy Duty, etc.).
+   *  Drives the fleet countdown + cron auto-complete. Only meaningful
+   *  when machineId is also set. */
+  cycleId?:           string;
+  cycleAutoComplete?: boolean;
+}
+
+interface WashCycle {
+  id:              string;
+  name:            string;
+  kind:            'WASHER' | 'DRYER' | 'COMBO';
+  durationMinutes: number;
+  autoComplete:    boolean;
+  surcharge:       string | null;
+  isActive:        boolean;
 }
 
 /** Map service codes to compatible machine kinds. Mirrors the backend
@@ -140,6 +155,15 @@ export default function LaundryIntakePage() {
     queryKey: ['laundry-machines-intake'],
     queryFn:  () => api.get('/laundry/machines').then((r) => Array.isArray(r.data) ? r.data : (r.data?.data ?? [])),
     staleTime: 30_000,
+  });
+
+  // Sprint 19 — Wash/dry cycle packages. Picker appears next to the
+  // machine dropdown; only active cycles compatible with the chosen
+  // machine kind are shown.
+  const { data: cycles = [] } = useQuery<WashCycle[]>({
+    queryKey: ['laundry-cycles-intake'],
+    queryFn:  () => api.get('/laundry/cycles').then((r) => r.data),
+    staleTime: 60_000,
   });
 
   // ── Form state ──────────────────────────────────────────────────────────
@@ -263,6 +287,9 @@ export default function LaundryIntakePage() {
         // Optional machine assignment at intake. Backend validates kind +
         // IDLE + branch and flips the machine to RUNNING.
         machineId:   l.machineId || undefined,
+        // Sprint 19 — optional wash/dry cycle package.
+        cycleId:           l.cycleId || undefined,
+        cycleAutoComplete: l.cycleAutoComplete,
       })),
       productLines: productLines.length ? productLines : undefined,
     }).then((r) => r.data),
@@ -288,6 +315,8 @@ export default function LaundryIntakePage() {
         serviceCode: l.serviceCode, mode: l.mode, sets: l.sets,
         weightKg: l.weightKg, notes: l.notes, addOnIds: l.addOnIds,
         machineId: l.machineId || undefined,
+        cycleId:   l.cycleId   || undefined,
+        cycleAutoComplete: l.cycleAutoComplete,
       })),
       productLines: productLines.length ? productLines : undefined,
     }).then((r) => r.data),
@@ -605,7 +634,13 @@ export default function LaundryIntakePage() {
                       return (
                         <select
                           value={l.machineId ?? ''}
-                          onChange={(e) => patchLine(idx, { machineId: e.target.value || undefined })}
+                          onChange={(e) => patchLine(idx, {
+                            machineId: e.target.value || undefined,
+                            // Sprint 19 — clear cycle when machine changes;
+                            // the new machine's kind may not match.
+                            cycleId: undefined,
+                            cycleAutoComplete: undefined,
+                          })}
                           className="col-span-3 rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
                           title="Assign a washer / dryer at intake"
                         >
@@ -626,6 +661,64 @@ export default function LaundryIntakePage() {
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
+
+                  {/* ── Cycle picker (Sprint 19) ───────────────────────────
+                      Only meaningful when a machine has been picked AND
+                      the service code routes to a machine. Filter cycles
+                      by machine kind compatibility. */}
+                  {(() => {
+                    if (!l.machineId) return null;
+                    const machine = machines.find((m) => m.id === l.machineId);
+                    if (!machine) return null;
+                    // COMBO machines accept any cycle kind; otherwise the
+                    // cycle must match the machine's kind (WASHER or DRYER).
+                    const compatibleCycles = cycles.filter((c) => {
+                      if (!c.isActive) return false;
+                      if (machine.kind === 'COMBO') return true;
+                      return c.kind === machine.kind || c.kind === 'COMBO';
+                    });
+                    if (compatibleCycles.length === 0) return null; // no cycles configured for this kind
+                    const picked = compatibleCycles.find((c) => c.id === l.cycleId);
+                    return (
+                      <div className="flex items-center gap-2 pt-1 pl-1">
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
+                          Cycle
+                        </span>
+                        <select
+                          value={l.cycleId ?? ''}
+                          onChange={(e) => {
+                            const id = e.target.value || undefined;
+                            const c = cycles.find((cc) => cc.id === id);
+                            patchLine(idx, {
+                              cycleId: id,
+                              cycleAutoComplete: c?.autoComplete ?? undefined,
+                            });
+                          }}
+                          className="flex-1 max-w-[260px] rounded-md border border-border bg-background px-2 py-1 text-xs"
+                        >
+                          <option value="">— no cycle (manual confirmation) —</option>
+                          {compatibleCycles.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name} · {c.durationMinutes}m
+                              {c.autoComplete ? ' · auto' : ''}
+                              {c.surcharge && Number(c.surcharge) > 0 ? ` · +₱${Number(c.surcharge).toFixed(0)}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                        {picked && (
+                          <label className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                            <input
+                              type="checkbox"
+                              checked={l.cycleAutoComplete ?? picked.autoComplete}
+                              onChange={(e) => patchLine(idx, { cycleAutoComplete: e.target.checked })}
+                              className="h-3 w-3"
+                            />
+                            auto-complete
+                          </label>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Add-on chips */}
                   {addons.length > 0 && (

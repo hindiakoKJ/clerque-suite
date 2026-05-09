@@ -115,6 +115,45 @@ realApi.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config;
+
+    // Sprint 19 — Global handler for destructive-op slug confirmation.
+    // Any backend endpoint that throws { code: 'CONFIRMATION_REQUIRED' }
+    // surfaces a window.prompt asking for the tenant slug, then retries
+    // the original request with `confirmationToken` injected into the body.
+    // This replaces the per-component prompt-retry wrappers, so every
+    // destructive op (Reset Demo, Clear All Data, Reset PW for high-priv
+    // roles, plan downgrade, suspend, etc.) gets consistent UX.
+    const errCode = (error.response?.data as { code?: string } | undefined)?.code;
+    const errMsg  = (error.response?.data as { message?: string } | undefined)?.message;
+    if (
+      errCode === 'CONFIRMATION_REQUIRED' &&
+      !original._confirmRetried &&
+      typeof window !== 'undefined' &&
+      original.method && ['post', 'patch', 'put', 'delete'].includes(original.method.toLowerCase())
+    ) {
+      original._confirmRetried = true;
+      const typed = window.prompt(
+        (errMsg ?? 'Destructive operation — type the tenant slug to confirm.') +
+        '\n\n(Leave blank or cancel to abort.)',
+      );
+      if (typed == null || !typed.trim()) {
+        return Promise.reject(error); // user cancelled — bubble original error
+      }
+      // Inject confirmationToken into the body and retry. Multipart bodies
+      // (FormData) don't apply here — they're not destructive endpoints.
+      try {
+        const body = original.data
+          ? (typeof original.data === 'string' ? JSON.parse(original.data) : original.data)
+          : {};
+        body.confirmationToken = typed.trim();
+        original.data = JSON.stringify(body);
+        original.headers = { ...original.headers, 'Content-Type': 'application/json' };
+      } catch {
+        original.data = JSON.stringify({ confirmationToken: typed.trim() });
+      }
+      return realApi(original);
+    }
+
     if (error.response?.status !== 401 || original._retry) {
       return Promise.reject(error);
     }

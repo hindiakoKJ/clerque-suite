@@ -2,6 +2,7 @@ import {
   Injectable, BadRequestException, NotFoundException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NumberingService } from '../numbering/numbering.service';
 import type { Prisma, TripStatus, FleetAssetKind, PMScheduleType } from '@prisma/client';
 
 /**
@@ -21,7 +22,10 @@ import type { Prisma, TripStatus, FleetAssetKind, PMScheduleType } from '@prisma
  */
 @Injectable()
 export class TruckingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:    PrismaService,
+    private readonly numbering: NumberingService,
+  ) {}
 
   // ─── Fleet assets ──────────────────────────────────────────────────────────
 
@@ -181,24 +185,13 @@ export class TruckingService {
       if (!helper) throw new NotFoundException('Helper not found.');
     }
 
-    // Trip number generation: TRIP-YYYY-{6-digit-seq per tenant per year}.
-    const year   = new Date().getFullYear();
-    const prefix = `TRIP-${year}-`;
-    const last   = await this.prisma.tripTicket.findFirst({
-      where:   { tenantId, tripNumber: { startsWith: prefix } },
-      orderBy: { tripNumber: 'desc' },
-      select:  { tripNumber: true },
-    });
-    const lastSeq = last ? Number(last.tripNumber.slice(prefix.length)) || 0 : 0;
-    const tripNumber = `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
-
     const cashAdvance = Number(dto.cashAdvance ?? 0);
 
-    // Atomic: create the trip + queue the cash-advance accounting event so
-    // the kernel JE engine posts DR 1034 / CR 1010 once a handler ships.
-    // Until the handler exists, the event is marked SYNCED no-op by the
-    // cron's default branch (same pattern as MATERIAL_ISSUANCE today).
+    // Atomic: trip-number reservation (race-safe via NumberingService) +
+    // create the trip + queue the cash-advance accounting event so the
+    // kernel JE engine posts DR 1034 / CR 1010.
     return this.prisma.$transaction(async (tx) => {
+      const tripNumber = await this.numbering.next(tenantId, 'TRIP_TICKET', null, tx);
       const trip = await tx.tripTicket.create({
         data: {
           tenantId,

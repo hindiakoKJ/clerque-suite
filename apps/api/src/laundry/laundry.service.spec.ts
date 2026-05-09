@@ -56,7 +56,10 @@ describe('LaundryService', () => {
 
   beforeEach(() => {
     prisma = makePrismaMock();
-    service = new LaundryService(prisma as any);
+    const numberingMock = {
+      next: jest.fn().mockResolvedValue('CLA-2026-000001'),
+    } as any;
+    service = new LaundryService(prisma as any, numberingMock);
   });
 
   // ─────────────────────────────────────────────────────────────────

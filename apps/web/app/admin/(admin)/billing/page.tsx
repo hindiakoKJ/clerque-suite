@@ -13,7 +13,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Receipt, RefreshCw, AlertTriangle, Send, ExternalLink,
+  Receipt, RefreshCw, AlertTriangle, Send, ExternalLink, Download,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -209,11 +209,12 @@ export default function BillingPage() {
                   <th className="text-left px-4 py-2 font-medium">Issued</th>
                   <th className="text-left px-4 py-2 font-medium">Due</th>
                   <th className="text-left px-4 py-2 font-medium">Status</th>
+                  <th className="text-right px-4 py-2 font-medium">Receipt</th>
                 </tr>
               </thead>
               <tbody>
                 {orders.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-10 text-center text-muted-foreground">No subscriptions issued yet.</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No subscriptions issued yet.</td></tr>
                 ) : orders.map((o) => (
                   <tr key={o.id} className="border-t border-border/60 hover:bg-muted/20">
                     <td className="px-4 py-2.5 font-mono text-xs">{o.orderNumber}</td>
@@ -234,6 +235,16 @@ export default function BillingPage() {
                       }>
                         {o.status}
                       </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <a
+                        href={`/api/admin/platform/billing/orders/${o.id}/receipt.pdf`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium hover:bg-muted text-muted-foreground hover:text-foreground"
+                      >
+                        <Download className="h-3 w-3" /> PDF
+                      </a>
                     </td>
                   </tr>
                 ))}

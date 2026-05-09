@@ -1,8 +1,10 @@
 import {
-  Controller, Get, Post, Patch, Body, Param,
+  Controller, Get, Post, Patch, Body, Param, Res,
   UseGuards, HttpCode, HttpStatus, Request,
   BadRequestException, NotFoundException,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { generateSubscriptionReceiptPdf } from './subscription-receipt-pdf';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import * as bcrypt from 'bcryptjs';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -178,6 +180,62 @@ export class PlatformController {
       throw new BadRequestException('periodEnd must be after periodStart.');
     }
     return this.billing.issueSubscription(tenantId, periodStart, periodEnd, req.user.sub);
+  }
+
+  @ApiOperation({ summary: 'Download subscription receipt PDF (AR / SI by taxStatus)' })
+  @Get('billing/orders/:orderId/receipt.pdf')
+  async downloadReceipt(
+    @Param('orderId') orderId: string,
+    @Res() res: Response,
+  ) {
+    const platform = await this.platform.get();
+    if (!platform.hnsTenantId) throw new NotFoundException('HNS Corp PH not bootstrapped.');
+
+    const order = await this.prisma.order.findFirst({
+      where:   { id: orderId, tenantId: platform.hnsTenantId },
+      include: {
+        customer: { select: { name: true, tin: true, address: true } },
+        items:    { select: { productName: true, lineTotal: true } },
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found.');
+
+    const periodLabel = order.completedAt
+      ? new Date(order.completedAt).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })
+      : '—';
+    const planMatch = order.items[0]?.productName.match(/Clerque\s+(\S+)/);
+    const planCode  = planMatch?.[1] ?? '—';
+
+    const pdf = await generateSubscriptionReceiptPdf({
+      hns: {
+        companyName:     platform.companyName,
+        tin:             platform.tin,
+        address:         platform.address,
+        contactPhone:    platform.contactPhone,
+        contactEmail:    platform.contactEmail,
+        taxStatus:       platform.taxStatus,
+        isBirRegistered: platform.isBirRegistered,
+      },
+      customer: {
+        name:    order.customer?.name ?? order.customerName ?? '—',
+        tin:     order.customer?.tin ?? order.customerTin ?? null,
+        address: order.customer?.address ?? order.customerAddress ?? null,
+      },
+      invoice: {
+        number:      order.orderNumber,
+        issueDate:   (order.completedAt ?? order.createdAt).toISOString(),
+        dueDate:     order.dueDate?.toISOString() ?? null,
+        period:      periodLabel,
+        planCode,
+        netAmount:   Number(order.subtotal),
+        vatAmount:   Number(order.vatAmount),
+        totalAmount: Number(order.totalAmount),
+      },
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${order.orderNumber}.pdf"`);
+    res.send(pdf);
   }
 
   @ApiOperation({ summary: 'List subscription bills issued (read from HNS tenant\'s Orders)' })

@@ -8,16 +8,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
+import { NumberingService } from '../numbering/numbering.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
 import { OfflineOrder } from '@repo/shared-types';
 
 @Injectable()
 export class OrdersService {
   constructor(
-    private prisma:   PrismaService,
-    private periods:  AccountingPeriodsService,
-    private taxCalc:  TaxCalculatorService,
-    private audit:    AuditService,
+    private prisma:    PrismaService,
+    private periods:   AccountingPeriodsService,
+    private taxCalc:   TaxCalculatorService,
+    private audit:     AuditService,
+    private numbering: NumberingService,
   ) {}
 
   // ─── Create order (online or from offline sync) ─────────────────────────
@@ -907,9 +909,11 @@ export class OrdersService {
     tx: Parameters<Parameters<typeof this.prisma.$transaction>[0]>[0],
     tenantId: string,
   ): Promise<string> {
-    const year  = new Date().getFullYear();
-    const count = await tx.order.count({ where: { tenantId } });
-    const seq   = String(count + 1).padStart(6, '0');
-    return `ORD-${year}-${seq}`;
+    // Sprint 16 — race-safe via NumberingService (per-tenant counter row,
+    // atomic UPDATE … RETURNING). Replaces the prior count()+1 approach,
+    // which suffered double-issuance under concurrent checkouts on busy
+    // shifts and was only safety-netted by the DB unique constraint
+    // (P2002 → 409 retry storm).
+    return this.numbering.next(tenantId, 'POS_ORDER', null, tx);
   }
 }

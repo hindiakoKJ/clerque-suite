@@ -4,6 +4,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountsService } from './accounts.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
+import { NumberingService } from '../numbering/numbering.service';
 import { Prisma, JournalSource } from '@prisma/client';
 
 type LineInput = { accountId: string; debit?: number; credit?: number; description?: string };
@@ -23,16 +24,17 @@ export class JournalService {
     private prisma: PrismaService,
     private accounts: AccountsService,
     private periods: AccountingPeriodsService,
+    private numbering: NumberingService,
   ) {}
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
   private async nextEntryNumber(tenantId: string): Promise<string> {
-    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
-    const count = await this.prisma.journalEntry.count({
-      where: { tenantId, date: { gte: new Date(new Date().toISOString().split('T')[0]) } },
-    });
-    return `JE-${today}-${String(count + 1).padStart(4, '0')}`;
+    // Sprint 16 — race-safe via NumberingService (atomic counter row,
+    // monthly reset). Replaces the prior `count() + 1 within today` which
+    // raced under concurrent SALE/COGS event processing and was
+    // safety-netted only by the JE.entryNumber unique constraint.
+    return this.numbering.next(tenantId, 'JOURNAL_ENTRY');
   }
 
   private validateLines(lines: LineInput[]) {

@@ -5,6 +5,8 @@ import {
 import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { NumberingService } from '../numbering/numbering.service';
+import { APBillsService } from '../ap/ap-bills.service';
 import { PlatformService } from './platform.service';
 import { PLAN_MONTHLY_PRICE_PHP_CENTS, type PlanCode } from '@repo/shared-types';
 
@@ -40,8 +42,10 @@ export class SubscriptionBillingService {
   private readonly logger = new Logger(SubscriptionBillingService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly platform: PlatformService,
+    private readonly prisma:    PrismaService,
+    private readonly platform:  PlatformService,
+    private readonly numbering: NumberingService,
+    private readonly apBills:   APBillsService,
   ) {}
 
   /**
@@ -270,20 +274,33 @@ export class SubscriptionBillingService {
         `[subscription-billing] Issued ${target.name}: HNS order ${hnsOrder.orderNumber} ↔ tenant bill ${apBill.billNumber} (₱${grossAmount}, VAT ${vatAmount})`,
       );
 
-      // 8. Note: Customer-side JE posting (DR Expense / DR Input VAT / CR AP)
-      //    is deferred until the bill is POSTED (via the existing AP UI
-      //    or a follow-up auto-post step). The bill lands in the customer's
-      //    DRAFT queue, ready for review + posting.
+      // 8. Sprint 16 — auto-post the customer's APBill if PlatformConfig
+      //    flag enabled. Posts the JE: DR 6280 + DR 1040 (when VAT) /
+      //    CR 2010 AP. Otherwise the bill lands in DRAFT for tenant
+      //    review (default behavior).
+      let autoPosted = false;
+      if (platform.subscriptionAutoPost) {
+        try {
+          await this.apBills.post(target.id, apBill.id, actorUserId);
+          autoPosted = true;
+        } catch (err) {
+          this.logger.warn(
+            `[subscription-billing] auto-post failed for bill ${apBill.billNumber} on tenant ${target.id}: ${err instanceof Error ? err.message : String(err)} — bill remains in DRAFT.`,
+          );
+          // Don't block the issuance — the customer can post the bill manually.
+        }
+      }
 
       return {
-        hnsOrderId:     hnsOrder.id,
-        hnsOrderNumber: hnsOrder.orderNumber,
-        customerBillId: apBill.id,
+        hnsOrderId:         hnsOrder.id,
+        hnsOrderNumber:     hnsOrder.orderNumber,
+        customerBillId:     apBill.id,
         customerBillNumber: apBill.billNumber,
-        totalAmount: grossAmount,
+        totalAmount:        grossAmount,
         vatAmount,
         netAmount,
-        targetTenantId: target.id,
+        targetTenantId:     target.id,
+        autoPosted,
       };
     });
   }
@@ -373,27 +390,11 @@ export class SubscriptionBillingService {
   }
 
   private async nextAPBillNumber(tx: Prisma.TransactionClient, tenantId: string): Promise<string> {
-    const year   = new Date().getFullYear();
-    const prefix = `BILL-${year}-`;
-    const last   = await tx.aPBill.findFirst({
-      where:   { tenantId, billNumber: { startsWith: prefix } },
-      orderBy: { billNumber: 'desc' },
-      select:  { billNumber: true },
-    });
-    const lastSeq = last ? Number(last.billNumber.slice(prefix.length)) || 0 : 0;
-    return `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
+    return this.numbering.next(tenantId, 'AP_BILL', null, tx);
   }
 
   private async nextOrderNumber(tx: Prisma.TransactionClient, tenantId: string): Promise<string> {
-    const year   = new Date().getFullYear();
-    const prefix = `ORD-${year}-`;
-    const last   = await tx.order.findFirst({
-      where:   { tenantId, orderNumber: { startsWith: prefix } },
-      orderBy: { orderNumber: 'desc' },
-      select:  { orderNumber: true },
-    });
-    const lastSeq = last ? Number(last.orderNumber.slice(prefix.length)) || 0 : 0;
-    return `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
+    return this.numbering.next(tenantId, 'POS_ORDER', null, tx);
   }
 
   // ─── Cron: monthly auto-issue ────────────────────────────────────────────
@@ -460,4 +461,5 @@ export interface IssueSubscriptionResult {
   vatAmount:          number;
   netAmount:          number;
   targetTenantId:     string;
+  autoPosted:         boolean;
 }

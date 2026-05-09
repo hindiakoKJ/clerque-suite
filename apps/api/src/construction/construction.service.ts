@@ -2,6 +2,7 @@ import {
   Injectable, BadRequestException, NotFoundException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NumberingService } from '../numbering/numbering.service';
 import type { Prisma, ProgressBillingStatus } from '@prisma/client';
 
 /**
@@ -24,7 +25,10 @@ import type { Prisma, ProgressBillingStatus } from '@prisma/client';
  */
 @Injectable()
 export class ConstructionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:    PrismaService,
+    private readonly numbering: NumberingService,
+  ) {}
 
   // ─── Progress billings ────────────────────────────────────────────────────
 
@@ -60,16 +64,8 @@ export class ConstructionService {
     const retentionAmount = +(gross * retentionPct / 100).toFixed(2);
     const netAmount       = +(gross - retentionAmount).toFixed(2);
 
-    // Billing number generation: PB-YYYY-{6-digit-seq per tenant per year}.
-    const year   = new Date().getFullYear();
-    const prefix = `PB-${year}-`;
-    const last   = await this.prisma.progressBilling.findFirst({
-      where:   { tenantId, billingNumber: { startsWith: prefix } },
-      orderBy: { billingNumber: 'desc' },
-      select:  { billingNumber: true },
-    });
-    const lastSeq      = last ? Number(last.billingNumber.slice(prefix.length)) || 0 : 0;
-    const billingNumber = `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
+    // Sprint 16 — race-safe per-tenant counter via NumberingService.
+    const billingNumber = await this.numbering.next(tenantId, 'PROGRESS_BILLING');
 
     return this.prisma.progressBilling.create({
       data: {

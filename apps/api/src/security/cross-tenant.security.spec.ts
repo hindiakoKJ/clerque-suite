@@ -26,6 +26,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 
 // ── Services under test ──────────────────────────────────────────────────────
 import { OrdersService }    from '../orders/orders.service';
+import { NumberingService } from '../numbering/numbering.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ShiftsService }    from '../shifts/shifts.service';
 
@@ -208,6 +209,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
     periods = makePeriodsMock();
     taxCalc = makeTaxCalcMock();
 
+    const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -215,6 +217,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
         { provide: AccountingPeriodsService, useValue: periods },
         { provide: TaxCalculatorService,     useValue: taxCalc },
         { provide: AuditService,             useValue: audit   },
+        { provide: NumberingService,         useValue: numberingMock },
       ],
     }).compile();
 
@@ -739,6 +742,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
 
   beforeEach(async () => {
     prisma  = makePrismaMock();
+    const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
     const module = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -746,6 +750,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
         { provide: AccountingPeriodsService, useValue: makePeriodsMock() },
         { provide: TaxCalculatorService,     useValue: makeTaxCalcMock() },
         { provide: AuditService,             useValue: makeAuditMock()  },
+        { provide: NumberingService,         useValue: numberingMock     },
       ],
     }).compile();
     ordersService = module.get(OrdersService);

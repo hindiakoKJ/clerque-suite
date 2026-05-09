@@ -2,6 +2,7 @@ import {
   Injectable, BadRequestException, NotFoundException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NumberingService } from '../numbering/numbering.service';
 import type { Prisma, JobOrderStatus, JobOrderLineKind } from '@prisma/client';
 
 /**
@@ -23,7 +24,10 @@ import type { Prisma, JobOrderStatus, JobOrderLineKind } from '@prisma/client';
  */
 @Injectable()
 export class JobOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:    PrismaService,
+    private readonly numbering: NumberingService,
+  ) {}
 
   // ─── Job orders ───────────────────────────────────────────────────────────
 
@@ -46,16 +50,8 @@ export class JobOrdersService {
     if (dto.customerId && !customer)     throw new NotFoundException('Customer not found.');
     if (dto.assignedToId && !technician) throw new NotFoundException('Technician not found or inactive.');
 
-    // Job number generation: JO-{YYYY}-{6-digit-seq per tenant per year}.
-    const year   = new Date().getFullYear();
-    const prefix = `JO-${year}-`;
-    const last   = await this.prisma.jobOrder.findFirst({
-      where:   { tenantId, jobNumber: { startsWith: prefix } },
-      orderBy: { jobNumber: 'desc' },
-      select:  { jobNumber: true },
-    });
-    const lastSeq   = last ? Number(last.jobNumber.slice(prefix.length)) || 0 : 0;
-    const jobNumber = `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
+    // Sprint 16 — race-safe per-tenant counter via NumberingService.
+    const jobNumber = await this.numbering.next(tenantId, 'JOB_ORDER');
 
     return this.prisma.jobOrder.create({
       data: {

@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
+import { NumberingService } from '../numbering/numbering.service';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ describe('OrdersService — void()', () => {
     periods = makePeriodsMock();
     taxCalc = makeTaxCalcMock();
 
+    const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -97,6 +99,7 @@ describe('OrdersService — void()', () => {
         { provide: AccountingPeriodsService,   useValue: periods },
         { provide: TaxCalculatorService,       useValue: taxCalc },
         { provide: AuditService,               useValue: audit   },
+        { provide: NumberingService,           useValue: numberingMock },
       ],
     }).compile();
 

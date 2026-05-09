@@ -8,9 +8,10 @@ import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
 import { AccountingScheduler } from './accounting.scheduler';
 import { AccountingPeriodsModule } from '../accounting-periods/accounting-periods.module';
+import { NumberingModule } from '../numbering/numbering.module';
 
 @Module({
-  imports: [AccountingPeriodsModule],
+  imports: [AccountingPeriodsModule, NumberingModule],
   controllers: [AccountsController, JournalController, EventsController],
   providers: [AccountsService, JournalService, JournalImportService, EventsService, AccountingScheduler],
   exports: [AccountsService, JournalService],

@@ -256,7 +256,14 @@ export default function OrdersPage() {
                           : <ChevronDown className="h-3.5 w-3.5" />}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs font-bold text-foreground">
-                        {o.orderNumber}
+                        <a
+                          href={`/pos/orders/${o.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="hover:underline hover:text-[var(--accent)] transition-colors"
+                          title="Open order detail (incl. attachments)"
+                        >
+                          {o.orderNumber}
+                        </a>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground text-xs">
                         {fmtDate(o.paidAt ?? o.completedAt ?? o.createdAt)}

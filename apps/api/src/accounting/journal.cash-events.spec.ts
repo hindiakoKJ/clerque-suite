@@ -55,10 +55,12 @@ function makePrismaMock(event: any) {
 }
 
 function makeService(prisma: any) {
+  const numberingMock = { next: jest.fn().mockResolvedValue('JE-202605-0001') } as any;
   return new JournalService(
     prisma,
     makeAccountsMock() as any,
     makePeriodsMock() as any,
+    numberingMock,
   );
 }
 

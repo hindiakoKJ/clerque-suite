@@ -33,6 +33,7 @@ interface PlatformConfig {
   taxStatus:             'VAT' | 'NON_VAT' | 'UNREGISTERED';
   isBirRegistered:       boolean;
   subscriptionAutoIssue: boolean;
+  subscriptionAutoPost:  boolean;
   subscriptionDueDays:   number;
   hnsTenantId:           string | null;
 }
@@ -260,6 +261,23 @@ function BillingTab() {
             className="mt-1"
           />
           <span>Enable monthly auto-issuance</span>
+        </label>
+
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={cfg.subscriptionAutoPost}
+            onChange={(e) => update.mutate({ subscriptionAutoPost: e.target.checked })}
+            className="mt-1"
+          />
+          <span>
+            <strong className="block">Auto-post customer-side AP bills</strong>
+            <span className="text-xs text-muted-foreground">
+              When ON, the APBill auto-created in each customer&rsquo;s books skips DRAFT and posts the JE
+              immediately (DR 6280 Software + Input VAT / CR AP). When OFF, bills land in the customer&rsquo;s
+              AP queue for manual review and posting.
+            </span>
+          </span>
         </label>
 
         <label className="text-sm block">

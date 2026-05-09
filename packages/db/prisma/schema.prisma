@@ -2284,6 +2284,16 @@ enum SequenceType {
   AR_PAYMENT
   AP_BILL
   AP_PAYMENT
+  // Sprint 16 — race-safe sequencing for every per-tenant document type.
+  // Replaces the legacy MAX+1 / count()+1 generators across modules.
+  POS_ORDER          // Order.orderNumber (ORD-{YYYY}-{####})
+  JOURNAL_ENTRY      // JournalEntry.entryNumber (JE-{YYYYMMDD}-{####})
+  LAUNDRY_CLAIM      // LaundryOrder.claimNumber (CLA-{YYYY}-{######})
+  TRIP_TICKET        // TripTicket.tripNumber (TRIP-{YYYY}-{######})
+  JOB_ORDER          // JobOrder.jobNumber (JO-{YYYY}-{######})
+  PROGRESS_BILLING   // ProgressBilling.billingNumber (PB-{YYYY}-{######})
+  MATERIAL_ISSUANCE  // MaterialIssuance.issuanceNumber (ISS-{YYYY}-{######})
+  PROJECT_CODE       // Project.projectCode (PRJ-{YYYY}-{######})
 }
 
 enum SequenceResetPolicy {
@@ -3878,6 +3888,11 @@ model PlatformConfig {
   subscriptionAutoIssue    Boolean  @default(true)
   /// Days from issuance until invoice flips to PAST_DUE.
   subscriptionDueDays      Int      @default(7)
+  /// Sprint 16 — when true, auto-post the customer-side APBill (DR 6280 +
+  /// optional Input VAT 1040 / CR 2010 AP) immediately after the bill is
+  /// created. When false (default), the bill lands in DRAFT for tenant
+  /// review before they post it themselves.
+  subscriptionAutoPost     Boolean  @default(false)
   /// HNS tenant link — null until bootstrap-hns-corp runs the first time.
   /// Subscription billing creates Orders inside this tenant.
   hnsTenantId              String?

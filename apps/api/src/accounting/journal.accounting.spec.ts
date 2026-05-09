@@ -33,6 +33,7 @@ import { JournalService } from './journal.service';
 import { AccountsService } from './accounts.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
+import { NumberingService } from '../numbering/numbering.service';
 
 // ─── Account-code ↔ ID map ──────────────────────────────────────────────────
 
@@ -168,12 +169,15 @@ async function runProcessEvent(
     assertDateIsOpen: jest.fn().mockResolvedValue(undefined),
   };
 
+  const numbering = { next: jest.fn().mockResolvedValue('JE-202605-0001') };
+
   const moduleRef: TestingModule = await Test.createTestingModule({
     providers: [
       JournalService,
       { provide: PrismaService,             useValue: prisma },
       { provide: AccountsService,           useValue: accounts },
       { provide: AccountingPeriodsService,  useValue: periods },
+      { provide: NumberingService,          useValue: numbering },
     ],
   }).compile();
 

@@ -46,6 +46,7 @@ export class PlatformService {
         taxStatus:             dto.taxStatus,
         isBirRegistered:       dto.isBirRegistered,
         subscriptionAutoIssue: dto.subscriptionAutoIssue,
+        subscriptionAutoPost:  dto.subscriptionAutoPost,
         subscriptionDueDays:   dto.subscriptionDueDays,
         hnsTenantId:           dto.hnsTenantId,
       }),
@@ -79,6 +80,7 @@ export interface UpdatePlatformConfigDto {
   taxStatus?:             TaxStatus;
   isBirRegistered?:       boolean;
   subscriptionAutoIssue?: boolean;
+  subscriptionAutoPost?:  boolean;
   subscriptionDueDays?:   number;
   hnsTenantId?:           string | null;
 }

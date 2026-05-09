@@ -49,6 +49,15 @@ const DEFAULTS: Record<SequenceType, SequenceDefaults> = {
   AR_PAYMENT: { prefix: 'OR',   format: 'OR-{YYYY}-{####}',   padding: 4, resetPolicy: 'NEVER' },
   AP_BILL:    { prefix: 'BILL', format: 'BILL-{YYYY}-{####}', padding: 4, resetPolicy: 'NEVER' },
   AP_PAYMENT: { prefix: 'VP',   format: 'VP-{YYYY}-{####}',   padding: 4, resetPolicy: 'NEVER' },
+  // Sprint 16 — race-safe sequencing for every per-tenant document.
+  POS_ORDER:         { prefix: 'ORD',  format: 'ORD-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
+  JOURNAL_ENTRY:     { prefix: 'JE',   format: 'JE-{YYYY}{MM}-{####}', padding: 4, resetPolicy: 'MONTHLY' },
+  LAUNDRY_CLAIM:     { prefix: 'CLA',  format: 'CLA-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
+  TRIP_TICKET:       { prefix: 'TRIP', format: 'TRIP-{YYYY}-{######}', padding: 6, resetPolicy: 'YEARLY' },
+  JOB_ORDER:         { prefix: 'JO',   format: 'JO-{YYYY}-{######}',   padding: 6, resetPolicy: 'YEARLY' },
+  PROGRESS_BILLING:  { prefix: 'PB',   format: 'PB-{YYYY}-{######}',   padding: 6, resetPolicy: 'YEARLY' },
+  MATERIAL_ISSUANCE: { prefix: 'ISS',  format: 'ISS-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
+  PROJECT_CODE:      { prefix: 'PRJ',  format: 'PRJ-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
 };
 
 @Injectable()

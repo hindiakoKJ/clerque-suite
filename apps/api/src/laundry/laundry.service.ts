@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NumberingService } from '../numbering/numbering.service';
 import {
   LaundryServiceType, LaundryPricingMode, LaundryOrderStatus, BusinessType, Prisma,
   LaundryServiceCode, LaundryServiceMode, LaundryMachineKind, LaundryMachineStatus,
@@ -37,7 +38,10 @@ export interface UpdateStatusDto {
 
 @Injectable()
 export class LaundryService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma:    PrismaService,
+    private numbering: NumberingService,
+  ) {}
 
   /**
    * Guard: tenants must be BusinessType.LAUNDRY to use laundry endpoints.
@@ -60,16 +64,8 @@ export class LaundryService {
    * Race-safe: uses a SELECT-MAX inside a transaction caller wraps.
    */
   private async nextClaimNumber(tx: Prisma.TransactionClient, tenantId: string): Promise<string> {
-    const year = new Date().getUTCFullYear();
-    const prefix = `CLA-${year}-`;
-    const last = await tx.laundryOrder.findFirst({
-      where:   { tenantId, claimNumber: { startsWith: prefix } },
-      orderBy: { claimNumber: 'desc' },
-      select:  { claimNumber: true },
-    });
-    const lastSeq = last ? parseInt(last.claimNumber.slice(prefix.length), 10) : 0;
-    const next = String(lastSeq + 1).padStart(6, '0');
-    return `${prefix}${next}`;
+    // Sprint 16 — atomic per-tenant counter (NumberingService).
+    return this.numbering.next(tenantId, 'LAUNDRY_CLAIM', null, tx);
   }
 
   /** Validates pricingMode → required quantity field combination. */

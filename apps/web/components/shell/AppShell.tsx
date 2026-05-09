@@ -58,6 +58,15 @@ interface AppShellProps {
    * a "Help & Guide" link appears above Settings in the sidebar footer.
    */
   helpHref?: string;
+  /**
+   * Override or hide the Settings link rendered in the sidebar footer.
+   * - undefined (default) → links to "/settings" (tenant Settings page)
+   * - explicit string     → links to the custom URL
+   * - null                → hides the footer Settings link entirely
+   *                         (use this when the app provides its own Settings
+   *                          entry in `navItems`, e.g. /admin/settings)
+   */
+  settingsHref?: string | null;
   /** When provided, a Sign Out button is rendered in the sidebar footer and mobile nav. */
   onSignOut?: () => void;
 }
@@ -72,6 +81,7 @@ export function AppShell({
   headerRight,
   sidebarExtra,
   helpHref,
+  settingsHref,
   onSignOut,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -247,18 +257,21 @@ export function AppShell({
               {!collapsed && <span>Help &amp; Guide</span>}
             </Link>
           )}
-          {/* Settings */}
-          <Link
-            href="/settings"
-            className={cn(
-              'flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors w-full',
-              collapsed && 'justify-center px-2',
-            )}
-            title={collapsed ? 'Settings' : undefined}
-          >
-            <Settings className="h-4 w-4 shrink-0" />
-            {!collapsed && <span>Settings</span>}
-          </Link>
+          {/* Settings — hidden when settingsHref === null (e.g. Console
+              already has /admin/settings in its main nav) */}
+          {settingsHref !== null && (
+            <Link
+              href={settingsHref ?? '/settings'}
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors w-full',
+                collapsed && 'justify-center px-2',
+              )}
+              title={collapsed ? 'Settings' : undefined}
+            >
+              <Settings className="h-4 w-4 shrink-0" />
+              {!collapsed && <span>Settings</span>}
+            </Link>
+          )}
           {/* Sign Out — rendered only when the parent layout provides a handler */}
           {onSignOut && (
             <button

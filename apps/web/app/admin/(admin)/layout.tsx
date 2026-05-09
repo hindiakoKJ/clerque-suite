@@ -56,6 +56,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         logoIcon={ShieldCheck}
         appName="Console"
         helpHref={undefined}
+        settingsHref={null}   // Console has /admin/settings in navItems above; suppress duplicate footer link
         onSignOut={handleLogout}
         headerRight={
           <div className="hidden sm:flex items-center gap-1.5 text-xs text-foreground bg-pink-500/10 border border-pink-400/30 rounded-md px-2.5 py-1.5">

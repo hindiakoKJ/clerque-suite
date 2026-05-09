@@ -132,6 +132,107 @@ export class AdminService {
   }
 
   /**
+   * Sprint 19 — Rate-limit destructive console operations per SUPER_ADMIN.
+   * A stolen credential should not be able to wipe the entire fleet of
+   * demo tenants in seconds. After N destructive ops within the last 24h
+   * for the same actor email, throw 429 with code DESTRUCTIVE_OP_RATE_LIMIT.
+   *
+   * The threshold is intentionally low — legitimate ops need to wipe at
+   * most one tenant per minute or so during a demo prep; an automated
+   * attack would burn through this counter immediately.
+   */
+  private async assertDestructiveOpRateLimit(actor: ConsoleActor) {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentDestructive = await this.prisma.consoleLog.count({
+      where: {
+        superAdminEmail: actor.email,
+        createdAt:       { gte: since },
+        action: { in: ['CLEAR_ALL_DATA', 'DEMO_RESET', 'TENANT_FROZEN'] as any[] }, // eslint-disable-line @typescript-eslint/no-explicit-any
+      },
+    });
+    const LIMIT = 5;
+    if (recentDestructive >= LIMIT) {
+      throw new ForbiddenException({
+        code:    'DESTRUCTIVE_OP_RATE_LIMIT',
+        message:
+          `Rate limit hit: you've run ${recentDestructive} destructive operations in the last 24h. ` +
+          `If this is an automated attack, lock your account immediately. ` +
+          `If legitimate, wait or have another platform admin assist.`,
+      });
+    }
+  }
+
+  /**
+   * Sprint 19 — Tenant read-only kill switch. Sets `readOnlyMode=true`
+   * on the tenant; the global ReadOnlyModeInterceptor rejects all writes
+   * for that tenant until unfreeze. Use case: detect compromise → freeze
+   * → investigate → unfreeze.
+   */
+  async freezeTenant(tenantId: string, actor: ConsoleActor, reason: string) {
+    if (!reason?.trim()) {
+      throw new BadRequestException('A reason is required when freezing a tenant.');
+    }
+    await this.assertDestructiveOpRateLimit(actor);
+
+    const t = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, slug: true, name: true, readOnlyMode: true },
+    });
+    if (!t) throw new NotFoundException('Tenant not found.');
+    if (t.readOnlyMode) {
+      throw new BadRequestException('Tenant is already frozen.');
+    }
+
+    await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        readOnlyMode:    true,
+        readOnlyReason:  reason.trim(),
+        readOnlySetAt:   new Date(),
+        readOnlySetById: null, // ConsoleActor doesn't carry a userId currently
+      },
+    });
+    await this.logAction({
+      actor,
+      tenantId,
+      tenantSlug: t.slug,
+      action:     'TENANT_FROZEN' as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      detail:     { reason: reason.trim() },
+    });
+    this.logger.warn(`[freeze] Tenant ${t.slug} (${t.id}) frozen by ${actor.email}: ${reason}`);
+    return { id: t.id, slug: t.slug, frozen: true };
+  }
+
+  async unfreezeTenant(tenantId: string, actor: ConsoleActor) {
+    const t = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, slug: true, readOnlyMode: true },
+    });
+    if (!t) throw new NotFoundException('Tenant not found.');
+    if (!t.readOnlyMode) {
+      throw new BadRequestException('Tenant is not currently frozen.');
+    }
+
+    await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        readOnlyMode:    false,
+        readOnlyReason:  null,
+        readOnlySetAt:   null,
+        readOnlySetById: null,
+      },
+    });
+    await this.logAction({
+      actor,
+      tenantId,
+      tenantSlug: t.slug,
+      action:     'TENANT_UNFROZEN' as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+    });
+    this.logger.log(`[freeze] Tenant ${t.slug} (${t.id}) unfrozen by ${actor.email}`);
+    return { id: t.id, slug: t.slug, frozen: false };
+  }
+
+  /**
    * Sprint 19 — Pre-destructive snapshot. Captures every row that's about
    * to be deleted into a single `TenantDataSnapshot` JSONB blob, so even
    * if the guard above is somehow bypassed (or a future edit mis-flags a
@@ -312,6 +413,8 @@ export class AdminService {
       recentLoginFailures, recentSignupsLast7d,
       sessionsLast24h,
       totalAiSpend30d,
+      // Sprint 19 — security-posture signals
+      destructiveOps24h, frozenTenants,
     ] = await Promise.all([
       this.prisma.tenant.groupBy({ by: ['status'], _count: true }),
       this.prisma.tenant.groupBy({ by: ['tier'],   _count: true }),
@@ -325,6 +428,16 @@ export class AdminService {
       this.prisma.tenant.count({ where: { createdAt: { gte: day7 } } }),
       this.prisma.userSession.count({ where: { lastUsedAt: { gte: day1 } } }).catch(() => 0),
       this.prisma.aiUsage.aggregate({ where: { createdAt: { gte: day30 } }, _sum: { costUsd: true } }).catch(() => ({ _sum: { costUsd: null } })),
+      // Console-side destructive op count in last 24h. High count = either
+      // a heavy demo-prep day or a compromised credential — surface so
+      // platform staff can sanity-check.
+      this.prisma.consoleLog.count({
+        where: {
+          createdAt: { gte: day1 },
+          action: { in: ['CLEAR_ALL_DATA', 'DEMO_RESET', 'TENANT_FROZEN'] as any[] }, // eslint-disable-line @typescript-eslint/no-explicit-any
+        },
+      }).catch(() => 0),
+      this.prisma.tenant.count({ where: { readOnlyMode: true } }).catch(() => 0),
     ]);
 
     return {
@@ -348,6 +461,14 @@ export class AdminService {
         failedEvents,
         /** Events that haven't been processed for 5+ minutes — possible queue lag. */
         pendingEvents,
+      },
+      // Sprint 19 — security posture. Both metrics are operational, not
+      // financial; safe to surface on the Console dashboard.
+      security: {
+        /** Destructive console ops (CLEAR_ALL_DATA / DEMO_RESET / TENANT_FROZEN) in last 24h. */
+        destructiveOps24h,
+        /** Tenants currently in read-only mode (frozen — likely under investigation). */
+        frozenTenants,
       },
       /** Platform-side AI cost (Anthropic API). Hidden by default in the UI. */
       platformCost: {
@@ -392,6 +513,8 @@ export class AdminService {
         contactEmail: true, contactPhone: true, address: true,
         tinNumber: true, businessName: true,
         isDemoTenant: true, signupSource: true, createdAt: true,
+        // Sprint 19 — ransomware kill switch
+        readOnlyMode: true, readOnlyReason: true, readOnlySetAt: true,
         aiAddonType: true, aiQuotaOverride: true, aiAddonExpiresAt: true,
         // Sprint 3 — surface coffee-shop floor-layout tier in the Console
         coffeeShopTier: true,
@@ -910,6 +1033,10 @@ export class AdminService {
     // from the Console, regardless of slug confirmation.
     await this.assertDemoTenant(tenantId);
 
+    // Sprint 19 — Rate-limit destructive ops per actor. A stolen
+    // SUPER_ADMIN credential should not be able to bulk-wipe at machine speed.
+    await this.assertDestructiveOpRateLimit(actor);
+
     // Sprint 19 — Capture a pre-destructive snapshot. Even on demo tenants
     // this preserves the about-to-be-wiped catalog/orders for 30 days so
     // an accidental wrong-scenario reseed can be unwound from the JSON dump.
@@ -1351,6 +1478,9 @@ export class AdminService {
     // sample data only ever exists on isDemoTenant=true tenants by
     // definition, so the guard does not constrain the legitimate workflow.
     await this.assertDemoTenant(tenantId);
+
+    // Sprint 19 — Rate-limit destructive ops per actor.
+    await this.assertDestructiveOpRateLimit(actor);
 
     // Sprint 19 — Pre-destructive snapshot. Recoverable for 30 days.
     const snapshot = await this.snapshotTenantData(tenantId, 'PRE_CLEAR_ALL', actor);

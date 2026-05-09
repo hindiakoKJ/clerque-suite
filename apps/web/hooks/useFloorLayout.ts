@@ -10,6 +10,9 @@ interface LayoutResponse {
     businessType: string;
     coffeeShopTier: CoffeeShopTier | null;
     hasCustomerDisplay: boolean;
+    /** Sprint 19 — when true, all writes return 423 Locked. */
+    readOnlyMode?: boolean;
+    readOnlyReason?: string | null;
   };
   stations: Array<{
     id: string;

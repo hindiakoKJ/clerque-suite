@@ -29,6 +29,11 @@ interface PlatformMetrics {
     failedEvents: number;
     pendingEvents: number;
   };
+  /** Sprint 19 — security posture (operational signals only, no financial data). */
+  security?: {
+    destructiveOps24h: number;
+    frozenTenants:     number;
+  };
   platformCost: {
     aiSpendUsd30d: number;
   };
@@ -139,6 +144,34 @@ export default function AdminDashboard() {
           ))}
         </div>
       </section>
+
+      {/* ── Security Posture (Sprint 19) ──────────────────────────────────── */}
+      {data.security && (
+        <section>
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Security Posture</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <StatCard
+              label="Destructive ops (24h)"
+              value={String(data.security.destructiveOps24h)}
+              sub="Clear/Reset/Freeze actions; high count = compromise risk"
+              icon={AlertTriangle}
+              severity={
+                data.security.destructiveOps24h === 0 ? 'good' :
+                data.security.destructiveOps24h <= 3 ? 'warn' : 'bad'
+              }
+              onClick={() => router.push('/admin/audit')}
+            />
+            <StatCard
+              label="Frozen tenants"
+              value={String(data.security.frozenTenants)}
+              sub="Tenants in read-only mode (writes blocked)"
+              icon={ShieldAlert}
+              severity={data.security.frozenTenants === 0 ? 'good' : 'warn'}
+              onClick={() => router.push('/admin/tenants')}
+            />
+          </div>
+        </section>
+      )}
 
       {/* ── Operational Health ────────────────────────────────────────────── */}
       <section>

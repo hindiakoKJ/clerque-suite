@@ -44,6 +44,11 @@ export class LayoutsService {
         businessType: true,
         coffeeShopTier: true,
         hasCustomerDisplay: true,
+        // Sprint 19 — surface the kill-switch state so the tenant UI can
+        // render a read-only banner. Reads pass through the interceptor;
+        // writes get 423.
+        readOnlyMode: true,
+        readOnlyReason: true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found.');

@@ -2,7 +2,7 @@ import {
   Controller, Get, Patch, Post, Param, Body, Query,
   UseGuards, HttpCode, HttpStatus, Request,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SuperAdminGuard } from './admin.guard';
 import { AdminService, CreateTenantDto, AddUserDto, UpdateTenantProfileDto } from './admin.service';
@@ -256,6 +256,29 @@ export class AdminController {
     @Body() body: { scenario: ScenarioKey; confirmationToken?: string },
   ) {
     return this.svc.resetDemoData(id, body.scenario, actor(req), body.confirmationToken);
+  }
+
+  // ─── Ransomware kill switch (Sprint 19) ───────────────────────────────────
+
+  @ApiOperation({ summary: 'Freeze a tenant — all writes return 423 Locked until unfrozen' })
+  @Post('tenants/:id/freeze')
+  @HttpCode(HttpStatus.OK)
+  freezeTenant(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+    @Body() body: { reason: string },
+  ) {
+    return this.svc.freezeTenant(id, actor(req), body.reason);
+  }
+
+  @ApiOperation({ summary: 'Unfreeze a tenant — restore write access' })
+  @Post('tenants/:id/unfreeze')
+  @HttpCode(HttpStatus.OK)
+  unfreezeTenant(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+  ) {
+    return this.svc.unfreezeTenant(id, actor(req));
   }
 
   // ─── Tenant data snapshots (Sprint 19) ────────────────────────────────────

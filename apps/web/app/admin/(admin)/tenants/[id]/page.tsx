@@ -6,7 +6,7 @@ import {
   ArrowLeft, Building2, Users, Plus, RotateCcw, LogOut,
   ShieldOff, ShieldCheck, Eye, EyeOff, X, AlertTriangle,
   CheckCircle, Clock, Copy, Pencil, FlaskConical, RefreshCw,
-  Archive, Download,
+  Archive, Download, Lock, Unlock, Snowflake,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -28,6 +28,10 @@ interface TenantDetail {
   tinNumber:    string | null;
   businessName: string | null;
   isDemoTenant: boolean;
+  /** Sprint 19 — ransomware kill switch */
+  readOnlyMode?:    boolean;
+  readOnlyReason?:  string | null;
+  readOnlySetAt?:   string | null;
   signupSource: string;
   createdAt:    string;
   aiAddonType:  string | null;
@@ -906,6 +910,9 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
             <p className="text-[10px] text-muted-foreground mt-1">0 = kill switch · blank = tier default</p>
           </div>
 
+          {/* Sprint 19 — Read-only kill switch (ransomware response) */}
+          <FreezeTenantCard tenant={tenant} onChange={() => qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] })} />
+
           {/* Sprint 19 — Live-tenant lockout banner. Visible only on
               non-demo tenants; replaces the destructive panels below with
               a clear refusal message so the operator immediately
@@ -1491,6 +1498,135 @@ function SnapshotsCard({ tenantId }: { tenantId: string }) {
               </button>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Sprint 19 — Ransomware kill switch panel ───────────────────────────────
+
+function FreezeTenantCard({
+  tenant, onChange,
+}: { tenant: TenantDetail; onChange: () => void }) {
+  const [showFreeze, setShowFreeze] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function freeze() {
+    if (!reason.trim()) {
+      toast.error('A reason is required.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post(`/admin/tenants/${tenant.id}/freeze`, { reason: reason.trim() });
+      toast.success('Tenant frozen — all writes blocked.');
+      setShowFreeze(false);
+      setReason('');
+      onChange();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message ?? 'Failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unfreeze() {
+    if (!window.confirm(`Unfreeze ${tenant.slug}? Writes will be restored immediately.`)) return;
+    setBusy(true);
+    try {
+      await api.post(`/admin/tenants/${tenant.id}/unfreeze`);
+      toast.success('Tenant unfrozen — writes restored.');
+      onChange();
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message ?? 'Failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Visual treatment: red on frozen (urgent), neutral when normal
+  if (tenant.readOnlyMode) {
+    return (
+      <div className="rounded-lg border-2 border-red-400 bg-red-50/60 dark:bg-red-950/30 p-4 space-y-2">
+        <div className="flex items-center gap-1.5">
+          <Snowflake className="w-4 h-4 text-red-600" />
+          <h2 className="text-xs font-bold text-red-700 dark:text-red-400 uppercase tracking-wider">
+            FROZEN — Read-Only Mode Active
+          </h2>
+        </div>
+        {tenant.readOnlyReason && (
+          <p className="text-xs text-red-800 dark:text-red-300">
+            <span className="font-semibold">Reason:</span> {tenant.readOnlyReason}
+          </p>
+        )}
+        {tenant.readOnlySetAt && (
+          <p className="text-[10px] text-red-700/70 dark:text-red-400/70">
+            Set {new Date(tenant.readOnlySetAt).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })}
+          </p>
+        )}
+        <p className="text-[11px] text-muted-foreground">
+          All write endpoints for this tenant return 423 Locked. Cashiers cannot ring up sales,
+          owners cannot edit settings. Reads (reports, history) still work. Use this during a
+          suspected security incident; restore writes once cleared.
+        </p>
+        <button
+          onClick={unfreeze}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50"
+        >
+          <Unlock className="w-3.5 h-3.5" /> Unfreeze (restore writes)
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <Lock className="w-3.5 h-3.5 text-muted-foreground" />
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Emergency Read-Only Mode
+        </h2>
+      </div>
+      <p className="text-[11px] text-muted-foreground leading-relaxed">
+        Use this to instantly freeze all writes for this tenant if you detect compromise —
+        unusual destructive activity, suspected ransomware, leaked credentials. Reads still
+        work; cashiers see a read-only banner. Reversible from here.
+      </p>
+      {!showFreeze ? (
+        <button
+          onClick={() => setShowFreeze(true)}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border border-red-300/60 text-red-600 hover:bg-red-500/10"
+        >
+          <Snowflake className="w-3.5 h-3.5" /> Freeze tenant (read-only)
+        </button>
+      ) : (
+        <div className="space-y-2 pt-1">
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason — e.g. 'investigating unusual void activity 2026-05-09 14:00 UTC'"
+            className="w-full h-9 px-2 rounded-md border border-border bg-background text-xs"
+            autoFocus
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setShowFreeze(false); setReason(''); }}
+              className="h-8 px-3 rounded-md border border-border text-xs hover:bg-muted"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={freeze}
+              disabled={busy || !reason.trim()}
+              className="inline-flex items-center gap-1 h-8 px-3 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-500 disabled:opacity-50"
+            >
+              <Snowflake className="w-3.5 h-3.5" />
+              {busy ? 'Freezing…' : 'Confirm Freeze'}
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -412,6 +412,16 @@ model Tenant {
   /// Marks the public shared demo tenant. Receipts watermarked, settings
   /// locked, nightly cron resets data. Exactly one record should have this true.
   isDemoTenant             Boolean          @default(false)
+
+  /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
+  /// endpoints for this tenant return 423 Locked. Use case: detect
+  /// compromise (e.g. unusual destructive activity), flip flag, freeze
+  /// further damage while you investigate. SUPER_ADMIN can flip on/off
+  /// from Console; tenant operators see a banner and read-only UI.
+  readOnlyMode             Boolean          @default(false)
+  readOnlyReason           String?
+  readOnlySetAt            DateTime?
+  readOnlySetById          String?
   /// Where this tenant originated from. WEB = sales-led signup, PLAYSTORE =
   /// future freemium standalone POS app, IMPORTED = backfill / migration.
   signupSource             SignupSource     @default(WEB)
@@ -622,6 +632,12 @@ enum ConsoleAction {
   AI_OVERRIDE_SET
   PROFILE_UPDATED
   DEMO_RESET
+  /// Sprint 19 — destructive op for ransomware response & audit
+  CLEAR_ALL_DATA
+  /// Sprint 19 — tenant frozen (read-only kill switch)
+  TENANT_FROZEN
+  /// Sprint 19 — tenant unfrozen
+  TENANT_UNFROZEN
 }
 
 /// Immutable audit trail of every action taken in the Clerque Console.

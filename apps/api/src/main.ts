@@ -10,6 +10,8 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/prisma-exception.filter';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
+import { ReadOnlyModeInterceptor } from './common/interceptors/read-only-mode.interceptor';
+import { PrismaService } from './prisma/prisma.service';
 import { envValidationSchema } from './common/config/env.validation';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -212,7 +214,12 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
 
   app.useGlobalFilters(new GlobalExceptionFilter());
-  app.useGlobalInterceptors(new HttpLoggingInterceptor());
+  app.useGlobalInterceptors(
+    new HttpLoggingInterceptor(),
+    // Sprint 19 — Tenant read-only kill switch. Resolves PrismaService from
+    // the DI container so the interceptor shares the connection pool.
+    new ReadOnlyModeInterceptor(app.get(PrismaService)),
+  );
 
   app.useGlobalPipes(
     new ValidationPipe({

@@ -1,8 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload, AlertTriangle } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, resolveAssetUrl } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -254,16 +254,18 @@ export default function ProductsPage() {
 
   async function handleSave() {
     if (!form.name.trim() || !form.price) { toast.error('Name and price are required.'); return; }
-    if (form.costPrice === '' || form.costPrice == null) {
+
+    // Recipe-based products derive cost from the BOM at save time, so the
+    // Cost Price field is read-only and the manual-entry guard does not apply.
+    const isRecipeBased = form.inventoryMode === 'RECIPE_BASED';
+    const validRecipe = recipe.filter((r) => r.rawMaterialId && r.quantity && parseFloat(r.quantity) > 0);
+
+    if (!isRecipeBased && (form.costPrice === '' || form.costPrice == null)) {
       toast.error('Cost Price is required for accurate gross-profit reporting. Enter 0 if intentionally free.');
       return;
     }
-
-    // Validate recipe rows if RECIPE_BASED
-    const isRecipeBased = form.inventoryMode === 'RECIPE_BASED';
-    const validRecipe = recipe.filter((r) => r.rawMaterialId && r.quantity && parseFloat(r.quantity) > 0);
-    if (isRecipeBased && validRecipe.length === 0 && recipe.length > 0) {
-      toast.error('Please complete all recipe rows before saving.');
+    if (isRecipeBased && validRecipe.length === 0) {
+      toast.error('Recipe-based products need at least one ingredient row with a quantity > 0.');
       return;
     }
 
@@ -971,41 +973,10 @@ export default function ProductsPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Product Image (URL)</label>
-                <div className="flex gap-2 items-start">
-                  {form.imageUrl ? (
-                    <div className="w-16 h-16 rounded-lg border border-border overflow-hidden bg-muted shrink-0">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={form.imageUrl}
-                        alt="Preview"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="w-16 h-16 rounded-lg border border-dashed border-border bg-muted/30 shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center px-1">
-                      No image
-                    </div>
-                  )}
-                  <div className="flex-1">
-                    <input
-                      type="url"
-                      value={form.imageUrl}
-                      onChange={(e) => setForm((f) => ({ ...f, imageUrl: e.target.value }))}
-                      className={INPUT_CLS}
-                      placeholder="https://… (paste image URL)"
-                    />
-                    <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
-                      Optional. Paste a public image URL — it appears as a tile on the cashier terminal.
-                      Direct file upload coming soon (cloud storage setup pending).
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <ProductImagePicker
+                value={form.imageUrl}
+                onChange={(url) => setForm((f) => ({ ...f, imageUrl: url }))}
+              />
 
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">Description</label>
@@ -1296,6 +1267,130 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Product image picker (camera + gallery) ─────────────────────────────────
+
+/**
+ * Universal image picker — works on Android / iOS / Windows / macOS.
+ *
+ * Two buttons:
+ *   • Take Photo  — uses `capture="environment"` so phones open the rear
+ *                   camera directly. Desktop browsers ignore `capture` and
+ *                   show a normal file picker (still works fine).
+ *   • Gallery     — standard file picker; phones default to gallery.
+ *
+ * The selected image is uploaded to POST /products/upload-image which
+ * returns `{ url: '/uploads/public/...' }`. That URL gets stored on the
+ * product row so every device — admin, cashier, customer display — renders
+ * the same image without auth (public static asset).
+ */
+function ProductImagePicker({
+  value, onChange,
+}: { value: string; onChange: (url: string) => void }) {
+  const [uploading, setUploading] = useState(false);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
+
+  async function handleFile(f: File | undefined | null) {
+    if (!f) return;
+    if (!f.type.startsWith('image/')) {
+      toast.error('Please pick an image file (JPEG, PNG, WEBP, GIF).');
+      return;
+    }
+    if (f.size > 5 * 1024 * 1024) {
+      toast.error('Image must be 5 MB or smaller.');
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const { data } = await api.post<{ url: string }>(
+        '/products/upload-image', fd,
+        { headers: { 'Content-Type': 'multipart/form-data' } },
+      );
+      onChange(data.url);
+      toast.success('Photo uploaded.');
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message ?? 'Upload failed.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-muted-foreground mb-1">Product Photo</label>
+      <div className="flex gap-3 items-start">
+        {value ? (
+          <div className="relative w-20 h-20 rounded-lg border border-border overflow-hidden bg-muted shrink-0 group">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={resolveAssetUrl(value)}
+              alt="Product"
+              className="w-full h-full object-cover"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+            />
+            <button
+              type="button"
+              onClick={() => onChange('')}
+              className="absolute top-1 right-1 h-5 w-5 rounded-full bg-black/70 text-white text-[11px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Remove photo"
+            >
+              ×
+            </button>
+          </div>
+        ) : (
+          <div className="w-20 h-20 rounded-lg border border-dashed border-border bg-muted/30 shrink-0 flex items-center justify-center text-[10px] text-muted-foreground text-center px-1">
+            No photo
+          </div>
+        )}
+
+        <div className="flex-1 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <input
+              ref={cameraRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => handleFile(e.target.files?.[0])}
+            />
+            <input
+              ref={galleryRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => handleFile(e.target.files?.[0])}
+            />
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => cameraRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-border hover:bg-muted disabled:opacity-50"
+            >
+              📷 Take Photo
+            </button>
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => galleryRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium border border-border hover:bg-muted disabled:opacity-50"
+            >
+              🖼️ Choose from Gallery
+            </button>
+            {uploading && (
+              <span className="inline-flex items-center text-xs text-muted-foreground">Uploading…</span>
+            )}
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            Optional. Up to 5 MB · JPEG / PNG / WEBP / GIF. Visible to every cashier and customer-display device once saved.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

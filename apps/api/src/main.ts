@@ -1,8 +1,10 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
+import * as path from 'path';
 import Joi from 'joi';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -168,10 +170,21 @@ async function bootstrap() {
   }
 
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   app.use(compression());
   app.use(cookieParser());
+
+  // Sprint 19 — serve public-readable uploads (product images etc.) over HTTP.
+  // Files written under uploads/public/** are addressable as /uploads/public/...
+  // No auth required — these are intentionally public assets that must render
+  // in <img src> tags on cashier devices regardless of session. Sensitive
+  // documents (receipts, BIR exports) still flow through /documents/:id/download
+  // which IS auth-gated.
+  app.useStaticAssets(path.join(process.cwd(), 'uploads', 'public'), {
+    prefix: '/uploads/public/',
+    maxAge: '7d',
+  });
 
   // Sprint 17 — security headers. Defaults:
   //   - HSTS (max-age 180d, includeSubDomains)

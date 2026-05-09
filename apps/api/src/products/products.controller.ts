@@ -9,14 +9,24 @@ import {
   Param,
   Query,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ProductsService, CreateProductDto, UpdateProductDto } from './products.service';
+
+const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 @ApiTags('Products')
 @ApiBearerAuth('access-token')
@@ -84,6 +94,48 @@ export class ProductsController {
   @Delete(':id')
   deactivate(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.productsService.deactivate(user.tenantId!, id);
+  }
+
+  /**
+   * Sprint 19 — direct image upload from camera or gallery.
+   *
+   * Stores the file under `uploads/public/products/<tenantId>/<cuid>.<ext>`
+   * and returns its public URL. The URL is what gets saved on the product
+   * row (`imageUrl` column) so every device with a session — admin, cashier,
+   * customer display — renders the same picture without auth.
+   *
+   * Public URL is fine here: image filenames are random cuid-prefixed and
+   * MIME-restricted to images only. There's no PII or financial data in a
+   * product photo. Sensitive documents continue to flow through the
+   * authenticated `/documents/:id/download` path.
+   */
+  @ApiOperation({ summary: 'Upload a product image (camera/gallery), returns public URL' })
+  @Roles('BUSINESS_OWNER', 'MDM')
+  @Post('upload-image')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMAGE_BYTES } }))
+  async uploadImage(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<{ url: string }> {
+    if (!file) throw new BadRequestException('No file received.');
+    if (!ALLOWED_IMAGE_MIMES.has(file.mimetype)) {
+      await fs.promises.unlink(file.path).catch(() => undefined);
+      throw new BadRequestException(`Unsupported image type: ${file.mimetype}. Use JPEG/PNG/WEBP/GIF.`);
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      await fs.promises.unlink(file.path).catch(() => undefined);
+      throw new BadRequestException('Image exceeds the 5 MB size limit.');
+    }
+
+    const ext = (path.extname(file.originalname) || '.bin').toLowerCase().replace(/[^.a-z0-9]/g, '');
+    const id  = crypto.randomBytes(12).toString('hex');
+    const rel = path.posix.join('products', user.tenantId!, `${id}${ext}`);
+    const abs = path.join(process.cwd(), 'uploads', 'public', rel);
+
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    await fs.promises.rename(file.path, abs);
+
+    return { url: `/uploads/public/${rel}` };
   }
 
   /**

@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { Search } from 'lucide-react';
 import { cn, formatPeso } from '@/lib/utils';
+import { resolveAssetUrl } from '@/lib/api';
 import { useCartStore, type CartProduct } from '@/store/pos/cart';
 import { ModifierPickerModal } from '@/components/pos/ModifierPickerModal';
 import type { CartItemModifier } from '@repo/shared-types';
@@ -223,7 +224,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                     {p.imageUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={p.imageUrl}
+                        src={resolveAssetUrl(p.imageUrl)}
                         alt={p.name}
                         className="w-full h-full object-cover"
                         onError={(e) => {

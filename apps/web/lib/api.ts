@@ -6,6 +6,22 @@ import { demoApi } from './demo/api';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
+/**
+ * Resolve a server-relative path (e.g. "/uploads/public/products/..jpg") into
+ * a full URL the browser can render in <img src>. Strips the /api/v1 prefix
+ * if it's baked into NEXT_PUBLIC_API_URL — static assets are served at the
+ * origin level, not under the API prefix.
+ *
+ * Pass-through for absolute URLs so existing rows that store fully-qualified
+ * external URLs (or third-party image hosts) keep rendering unchanged.
+ */
+export function resolveAssetUrl(pathOrUrl: string | null | undefined): string {
+  if (!pathOrUrl) return '';
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  const origin = API_URL.replace(/\/api\/v\d+$/, '');
+  return origin + (pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`);
+}
+
 const realApi = axios.create({
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },

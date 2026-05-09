@@ -29,17 +29,23 @@ interface OrderItem {
   notes:        string | null;
 }
 interface OrderPayment {
-  id:     string;
-  method: string;
-  amount: string;
-  ref:    string | null;
+  id:         string;
+  method:     string;
+  amount:     string;
+  /** Backend returns this as `reference`. Older code referenced it as `ref`
+   *  which always evaluated null — kept for backwards compat. */
+  reference?: string | null;
+  ref?:       string | null;
 }
 interface Order {
   id:                string;
   orderNumber:       string;
   status:            string;
-  invoiceType:       string;
-  taxType:           string;
+  /** Schema default is CASH_SALE so this is non-null on every fresh row,
+   *  but historical rows or alternate code paths may omit it; render
+   *  defensively. */
+  invoiceType?:      string | null;
+  taxType?:          string | null;
   subtotal:          string;
   discountAmount:    string;
   vatAmount:         string;
@@ -54,9 +60,9 @@ interface Order {
   voidedAt:          string | null;
   createdAt:         string;
   customer:          { id: string; name: string } | null;
-  items:             OrderItem[];
-  payments:          OrderPayment[];
-  branch:            { id: string; name: string };
+  items?:            OrderItem[];
+  payments?:         OrderPayment[];
+  branch?:           { id: string; name: string } | null;
 }
 interface Attachment {
   id:           string;
@@ -157,14 +163,18 @@ export default function OrderDetailPage() {
           <ShoppingBag className="h-5 w-5 text-muted-foreground" />
           <div>
             <h1 className="text-xl font-semibold font-mono">{order.orderNumber}</h1>
-            <p className="text-xs text-muted-foreground">{order.branch.name}</p>
+            {order.branch?.name && (
+              <p className="text-xs text-muted-foreground">{order.branch.name}</p>
+            )}
           </div>
           <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${STATUS_TINT[order.status] ?? 'bg-muted text-muted-foreground'}`}>
             {order.status}
           </span>
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
-            {order.invoiceType.replace('_', ' ')}
-          </span>
+          {order.invoiceType && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+              {order.invoiceType.replace(/_/g, ' ')}
+            </span>
+          )}
         </div>
       </header>
 
@@ -206,7 +216,7 @@ export default function OrderDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {order.items.map((it) => (
+              {(order.items ?? []).map((it) => (
                 <tr key={it.id} className="border-t border-border/60">
                   <td className="px-4 py-2.5">
                     <div>{it.productName}</div>
@@ -235,11 +245,11 @@ export default function OrderDetailPage() {
 
           <section className="rounded-xl border border-border bg-card p-4 space-y-1.5 text-sm">
             <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Payments</div>
-            {order.payments.length === 0 ? (
+            {(order.payments ?? []).length === 0 ? (
               <div className="text-xs text-muted-foreground italic">No payment recorded yet.</div>
-            ) : order.payments.map((p) => (
+            ) : (order.payments ?? []).map((p) => (
               <div key={p.id} className="flex items-center justify-between text-xs">
-                <span>{p.method}{p.ref ? ` · ${p.ref}` : ''}</span>
+                <span>{p.method}{(p.reference ?? p.ref) ? ` · ${p.reference ?? p.ref}` : ''}</span>
                 <span className="font-mono">{fmtPeso(p.amount)}</span>
               </div>
             ))}

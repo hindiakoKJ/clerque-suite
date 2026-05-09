@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   LaundryServiceType, LaundryPricingMode, LaundryOrderStatus, BusinessType, Prisma,
@@ -461,6 +461,15 @@ export class LaundryService {
         notes?:      string;
         /** Optional list of add-on IDs to attach to this line. */
         addOnIds?:   string[];
+        /**
+         * Optional machine to assign at intake time. Sets the line as
+         * RUNNING immediately + flips the machine to RUNNING (no separate
+         * /lines/:id/assign call needed). Validated below: machine must
+         * belong to the tenant + same branch, be IDLE, and its `kind`
+         * must be compatible with `serviceCode` (WASH → WASHER/COMBO,
+         * DRY → DRYER/COMBO, WASH_DRY_COMBO → COMBO).
+         */
+        machineId?:  string;
       }>;
       productLines?: Array<{ productId: string; quantity: number; notes?: string }>;
       garments?: Array<{ garmentType: string; quantity?: number; condition?: string; tagNumber?: string }>;
@@ -500,12 +509,77 @@ export class LaundryService {
       }
       const addOnById = new Map(addOns.map((a) => [a.id, a]));
 
+      // ── Optional machine pre-assignment ────────────────────────────────
+      // Cashier can tag a washer / dryer at intake time so the customer
+      // sees exactly which unit their load is in. Validate every requested
+      // machine here, in one batch, before we mutate anything.
+      const requestedMachineIds = Array.from(
+        new Set(dto.lines.map((l) => l.machineId).filter((x): x is string => !!x)),
+      );
+      const machinesById = new Map<string, { id: string; kind: 'WASHER' | 'DRYER' | 'COMBO'; status: string; branchId: string; code: string }>();
+      if (requestedMachineIds.length) {
+        const machines = await tx.laundryMachine.findMany({
+          where:  { id: { in: requestedMachineIds }, tenantId },
+          select: { id: true, kind: true, status: true, branchId: true, code: true },
+        });
+        for (const m of machines) machinesById.set(m.id, m as any);
+        for (const id of requestedMachineIds) {
+          const m = machinesById.get(id);
+          if (!m) throw new NotFoundException(`Machine ${id} not found.`);
+          if (m.branchId !== dto.branchId) {
+            throw new BadRequestException(`Machine ${m.code} belongs to a different branch.`);
+          }
+          if (m.status !== 'IDLE') {
+            throw new BadRequestException(`Machine ${m.code} is ${m.status} — pick another or wait for it to free up.`);
+          }
+        }
+        // Reject duplicate machine IDs in the same intake (the Set above
+        // already de-dups, but two service lines pointing at the same
+        // machine is also ambiguous — fail loudly).
+        const lineMachineIds = dto.lines.map((l) => l.machineId).filter(Boolean) as string[];
+        const dupCheck = new Set<string>();
+        for (const id of lineMachineIds) {
+          if (dupCheck.has(id)) {
+            const code = machinesById.get(id)?.code ?? id;
+            throw new BadRequestException(`Machine ${code} is referenced by more than one line.`);
+          }
+          dupCheck.add(id);
+        }
+      }
+      // Service-code → compatible machine kinds.
+      const KIND_BY_SERVICE: Partial<Record<LaundryServiceCode, Array<'WASHER' | 'DRYER' | 'COMBO'>>> = {
+        WASH:           ['WASHER', 'COMBO'],
+        DRY:            ['DRYER',  'COMBO'],
+        WASH_DRY_COMBO: ['COMBO'],
+        // Other services (DRY_CLEAN / IRON / FOLD / EXTRA_RINSE /
+        // FABRIC_SOFTENER) are inherently human-labor or chemical — no
+        // machine assignment supported.
+      };
+
       // Compute service line subtotals (base + add-on contributions).
       const serviceLines = dto.lines.map((l) => {
         const unit = priceMap.get(priceKey(l.serviceCode, l.mode));
         if (unit == null) {
           throw new BadRequestException(`No price set for ${l.serviceCode} (${l.mode}). Configure under Settings → Laundry.`);
         }
+
+        // If a machine was requested, confirm its kind is compatible with
+        // this line's service code. WASH on a DRYER is nonsensical.
+        if (l.machineId) {
+          const m = machinesById.get(l.machineId)!;
+          const allowed = KIND_BY_SERVICE[l.serviceCode];
+          if (!allowed) {
+            throw new BadRequestException(
+              `${l.serviceCode} doesn't run on a machine — remove the machine assignment.`,
+            );
+          }
+          if (!allowed.includes(m.kind)) {
+            throw new BadRequestException(
+              `Machine ${m.code} is a ${m.kind} — can't run ${l.serviceCode} on it.`,
+            );
+          }
+        }
+
         const baseTotal = Math.round(unit * l.sets * 100) / 100;
 
         // Resolve add-ons for this line and compute contributions.
@@ -614,6 +688,11 @@ export class LaundryService {
               lineTotal:   new Prisma.Decimal(l.lineTotal),
               weightKg:    l.weightKg != null ? new Prisma.Decimal(l.weightKg) : null,
               notes:       l.notes ?? null,
+              // Pre-assigned machine — line starts RUNNING immediately so
+              // the queue board / customer stub shows it as in-progress.
+              machineId:     l.machineId ?? null,
+              machineStatus: l.machineId ? 'RUNNING' : 'NOT_STARTED',
+              startedAt:     l.machineId ? new Date() : null,
               addOns: l.addOns.length ? {
                 create: l.addOns.map((a) => ({
                   addOnId:       a.addOnId,
@@ -663,6 +742,22 @@ export class LaundryService {
           items:             true,
         },
       });
+
+      // Flip every pre-assigned machine to RUNNING in one updateMany.
+      // Idempotent w.r.t. the validation above (we already confirmed all
+      // were IDLE), so any of them flipping in-flight surfaces as count
+      // mismatch and aborts the transaction (TOCTOU-safe).
+      if (requestedMachineIds.length) {
+        const flipped = await tx.laundryMachine.updateMany({
+          where: { id: { in: requestedMachineIds }, tenantId, status: 'IDLE' },
+          data:  { status: 'RUNNING' },
+        });
+        if (flipped.count !== requestedMachineIds.length) {
+          throw new ConflictException(
+            'A selected machine became unavailable mid-intake — please retry.',
+          );
+        }
+      }
 
       // Decrement retail product inventory + write InventoryLog audit row.
       // Skip products that are recipe-mode (BOM-based) since their stock is

@@ -37,6 +37,13 @@ interface Customer {
   loyaltyVisits?: number;
 }
 interface Product  { id: string; name: string; sku: string | null; price: string }
+interface Machine  {
+  id:       string;
+  code:     string;
+  kind:     'WASHER' | 'DRYER' | 'COMBO';
+  status:   'IDLE' | 'RUNNING' | 'OUT_OF_ORDER';
+  branchId: string;
+}
 
 interface ServiceLine {
   serviceCode: ServiceCode;
@@ -45,7 +52,18 @@ interface ServiceLine {
   weightKg?:   number;
   notes?:      string;
   addOnIds:    string[];
+  /** Sprint 14 — optional machine pre-assigned at intake time. */
+  machineId?:  string;
 }
+
+/** Map service codes to compatible machine kinds. Mirrors the backend
+ *  validation in laundry.service.ts createOrderV2. Services not in the map
+ *  don't run on a machine (DRY_CLEAN / IRON / FOLD / etc.) */
+const MACHINE_KINDS_FOR_SERVICE: Partial<Record<ServiceCode, Array<Machine['kind']>>> = {
+  WASH:           ['WASHER', 'COMBO'],
+  DRY:            ['DRYER',  'COMBO'],
+  WASH_DRY_COMBO: ['COMBO'],
+};
 interface ProductLine {
   productId: string;
   quantity:  number;
@@ -115,6 +133,15 @@ export default function LaundryIntakePage() {
     queryFn:  () => api.get('/products').then((r) => Array.isArray(r.data) ? r.data : (r.data?.data ?? [])),
   });
 
+  // Machines — fetched fresh every intake render so the IDLE filter
+  // reflects current state. 30s stale time is enough; the cashier won't
+  // sit on the form longer than that for a typical walk-in.
+  const { data: machines = [] } = useQuery<Machine[]>({
+    queryKey: ['laundry-machines-intake'],
+    queryFn:  () => api.get('/laundry/machines').then((r) => Array.isArray(r.data) ? r.data : (r.data?.data ?? [])),
+    staleTime: 30_000,
+  });
+
   // ── Form state ──────────────────────────────────────────────────────────
   const [branchId,    setBranchId]    = useState('');
   const [customerId,  setCustomerId]  = useState('');
@@ -158,6 +185,18 @@ export default function LaundryIntakePage() {
   useEffect(() => {
     if (!branchId && branches.length > 0) setBranchId(branches[0].id);
   }, [branchId, branches]);
+
+  // Clear any pre-assigned machineId on a line when the branch changes —
+  // a machine assignment is meaningless cross-branch and the backend
+  // rejects it anyway. Keep the dropdown UX self-correcting.
+  useEffect(() => {
+    setLines((prev) => prev.map((l) => {
+      if (!l.machineId) return l;
+      const m = machines.find((mm) => mm.id === l.machineId);
+      return m && m.branchId === branchId ? l : { ...l, machineId: undefined };
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchId]);
 
   // Price lookup
   const priceFor = (code: ServiceCode, mode: ServiceMode): number => {
@@ -210,6 +249,9 @@ export default function LaundryIntakePage() {
         weightKg:    l.weightKg,
         notes:       l.notes,
         addOnIds:    l.addOnIds,
+        // Optional machine assignment at intake. Backend validates kind +
+        // IDLE + branch and flips the machine to RUNNING.
+        machineId:   l.machineId || undefined,
       })),
       productLines: productLines.length ? productLines : undefined,
     }).then((r) => r.data),
@@ -430,7 +472,18 @@ export default function LaundryIntakePage() {
                     <div className="col-span-3 flex items-center gap-2">
                       <select
                         value={l.serviceCode}
-                        onChange={(e) => patchLine(idx, { serviceCode: e.target.value as ServiceCode })}
+                        onChange={(e) => {
+                          const nextCode = e.target.value as ServiceCode;
+                          // Clear machine if the new service can't run on it (or
+                          // its kind no longer matches what we picked before).
+                          const allowed = MACHINE_KINDS_FOR_SERVICE[nextCode];
+                          const m = machines.find((m) => m.id === l.machineId);
+                          const stillValid = !!m && !!allowed && allowed.includes(m.kind);
+                          patchLine(idx, {
+                            serviceCode: nextCode,
+                            machineId:   stillValid ? l.machineId : undefined,
+                          });
+                        }}
                         className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
                       >
                         {(Object.keys(SERVICE_LABEL) as ServiceCode[]).map((c) => (
@@ -438,7 +491,7 @@ export default function LaundryIntakePage() {
                         ))}
                       </select>
                     </div>
-                    <div className="col-span-3 flex gap-1">
+                    <div className="col-span-2 flex gap-1">
                       {(['SELF_SERVICE', 'FULL_SERVICE'] as ServiceMode[]).map((m) => (
                         <button
                           key={m}
@@ -461,9 +514,50 @@ export default function LaundryIntakePage() {
                       className="col-span-1 rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-center"
                       title="Sets"
                     />
-                    <div className="col-span-2 text-xs text-muted-foreground tabular-nums">
-                      @ {fmtPeso(unit)}/set
-                    </div>
+                    {/* Machine dropdown — only renders for service codes that
+                        actually run on a machine. For DRY_CLEAN / IRON / FOLD,
+                        we replace it with a non-clickable dash so the grid
+                        stays aligned. Filter by IDLE + matching kind + same
+                        branch + already-picked-elsewhere-in-this-form. */}
+                    {(() => {
+                      const allowedKinds = MACHINE_KINDS_FOR_SERVICE[l.serviceCode];
+                      if (!allowedKinds) {
+                        return (
+                          <div className="col-span-3 text-xs text-muted-foreground italic text-center">
+                            no machine
+                          </div>
+                        );
+                      }
+                      const usedElsewhere = new Set(
+                        lines
+                          .map((other, oi) => (oi === idx ? null : other.machineId))
+                          .filter((id): id is string => !!id),
+                      );
+                      const eligible = machines.filter((m) =>
+                        m.branchId === branchId &&
+                        allowedKinds.includes(m.kind) &&
+                        (m.status === 'IDLE' || m.id === l.machineId) &&
+                        !usedElsewhere.has(m.id),
+                      );
+                      return (
+                        <select
+                          value={l.machineId ?? ''}
+                          onChange={(e) => patchLine(idx, { machineId: e.target.value || undefined })}
+                          className="col-span-3 rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                          title="Assign a washer / dryer at intake"
+                        >
+                          <option value="">— assign later —</option>
+                          {eligible.length === 0 && (
+                            <option disabled value="__none__">No idle {allowedKinds.join('/').toLowerCase()} available</option>
+                          )}
+                          {eligible.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.code} ({m.kind === 'COMBO' ? 'Combo' : m.kind === 'WASHER' ? 'Washer' : 'Dryer'})
+                            </option>
+                          ))}
+                        </select>
+                      );
+                    })()}
                     <div className="col-span-2 text-right font-semibold tabular-nums">{fmtPeso(lineTotal)}</div>
                     <button onClick={() => removeLine(idx)} className="col-span-1 text-red-500 hover:bg-red-500/10 rounded p-1.5 justify-self-end">
                       <Trash2 className="h-4 w-4" />

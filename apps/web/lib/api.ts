@@ -3,6 +3,7 @@ import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { isDemoMode } from './demo/config';
 import { demoApi } from './demo/api';
+import { requestSlugConfirmation } from '@/components/admin/ConfirmSlugModal';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -132,9 +133,11 @@ realApi.interceptors.response.use(
       original.method && ['post', 'patch', 'put', 'delete'].includes(original.method.toLowerCase())
     ) {
       original._confirmRetried = true;
-      const typed = window.prompt(
-        (errMsg ?? 'Destructive operation — type the tenant slug to confirm.') +
-        '\n\n(Leave blank or cancel to abort.)',
+      // Use the in-page React modal (ConfirmSlugModal) — window.prompt can be
+      // suppressed silently by Chrome / Brave / extensions, leaving the user
+      // with a 400 toast and no path forward. The modal cannot be blocked.
+      const typed = await requestSlugConfirmation(
+        errMsg ?? 'Destructive operation — type the tenant slug to confirm.',
       );
       if (typed == null || !typed.trim()) {
         return Promise.reject(error); // user cancelled — bubble original error

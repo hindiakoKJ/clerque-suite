@@ -744,6 +744,72 @@ export class LaundryService {
     return this.prisma.laundryMachine.findUnique({ where: { id } });
   }
 
+  /**
+   * Sprint 19 — Edit machine metadata (code, kind, capacity, branch, notes).
+   * Cannot change while RUNNING — must be IDLE or OUT_OF_ORDER first.
+   */
+  async updateMachine(
+    tenantId: string,
+    id: string,
+    dto: Partial<{
+      code:       string;
+      kind:       LaundryMachineKind;
+      capacityKg: number;
+      branchId:   string;
+      notes:      string | null;
+    }>,
+  ) {
+    const existing = await this.prisma.laundryMachine.findFirst({ where: { id, tenantId } });
+    if (!existing) throw new NotFoundException('Machine not found.');
+    if (existing.status === 'RUNNING') {
+      throw new BadRequestException('Cannot edit a RUNNING machine — wait for the cycle to finish first.');
+    }
+    // If branch is being changed, validate the new branch belongs to this tenant.
+    if (dto.branchId && dto.branchId !== existing.branchId) {
+      const br = await this.prisma.branch.findFirst({ where: { id: dto.branchId, tenantId } });
+      if (!br) throw new BadRequestException('Branch not found.');
+    }
+    if (dto.code != null && !dto.code.trim()) {
+      throw new BadRequestException('Machine code cannot be empty.');
+    }
+    return this.prisma.laundryMachine.update({
+      where: { id },
+      data: {
+        ...(dto.code       != null ? { code: dto.code.trim() } : {}),
+        ...(dto.kind       != null ? { kind: dto.kind } : {}),
+        ...(dto.capacityKg != null ? { capacityKg: new Prisma.Decimal(dto.capacityKg) } : {}),
+        ...(dto.branchId   != null ? { branchId: dto.branchId } : {}),
+        ...(dto.notes      !== undefined ? { notes: dto.notes } : {}),
+      },
+    });
+  }
+
+  /**
+   * Sprint 19 — Delete a machine. Refuses if there are RUNNING lines on it
+   * (FK + active state). For machines with historical lines, the relation
+   * is `Restrict` on delete, so this throws cleanly via Prisma's P2003 →
+   * the global filter wraps it as 400. Operators should mark machines
+   * OUT_OF_ORDER and stop using them rather than deleting if they have
+   * any historical activity.
+   */
+  async deleteMachine(tenantId: string, id: string) {
+    const existing = await this.prisma.laundryMachine.findFirst({
+      where: { id, tenantId },
+      include: { _count: { select: { lines: true } } },
+    });
+    if (!existing) throw new NotFoundException('Machine not found.');
+    if (existing.status === 'RUNNING') {
+      throw new BadRequestException('Cannot delete a RUNNING machine.');
+    }
+    if (existing._count.lines > 0) {
+      throw new BadRequestException(
+        'This machine has historical loads attached. Mark it OUT_OF_ORDER instead so the audit trail is preserved.',
+      );
+    }
+    await this.prisma.laundryMachine.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
   // ── Multi-line ticket creation ────────────────────────────────────────────
 
   /**

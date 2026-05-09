@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Plus, Trash2, WashingMachine, Wind, Tag, ToggleRight, ToggleLeft, Sparkles } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, WashingMachine, Wind, Tag, ToggleRight, ToggleLeft, Sparkles, Pencil, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -479,6 +479,9 @@ function MachinesTab() {
   const [capacity, setCapacity] = useState('8');
   const [branchId, setBranchId] = useState('');
 
+  // Sprint 19 — edit modal state
+  const [editing, setEditing] = useState<Machine | null>(null);
+
   const create = useMutation({
     mutationFn: () => api.post('/laundry/machines', {
       branchId, code, kind, capacityKg: Number(capacity),
@@ -488,6 +491,28 @@ function MachinesTab() {
       toast.success('Machine added.');
       setShowNew(false);
       setCode('');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  const updateMut = useMutation({
+    mutationFn: (body: { id: string; code: string; kind: MachineKind; capacityKg: number; branchId: string }) =>
+      api.patch(`/laundry/machines/${body.id}`, {
+        code: body.code, kind: body.kind, capacityKg: body.capacityKg, branchId: body.branchId,
+      }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-machines'] });
+      toast.success('Machine updated.');
+      setEditing(null);
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.delete(`/laundry/machines/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-machines'] });
+      toast.success('Machine deleted.');
     },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
   });
@@ -511,6 +536,7 @@ function MachinesTab() {
             <th className="text-left px-4 py-2 font-medium">Branch</th>
             <th className="text-right px-4 py-2 font-medium">Capacity</th>
             <th className="text-center px-4 py-2 font-medium">Status</th>
+            <th className="text-right px-4 py-2 font-medium">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -531,11 +557,46 @@ function MachinesTab() {
                     {m.status.toLowerCase().replace('_', ' ')}
                   </span>
                 </td>
+                <td className="px-4 py-2.5 text-right">
+                  <div className="inline-flex items-center gap-1">
+                    <button
+                      onClick={() => setEditing(m)}
+                      disabled={m.status === 'RUNNING' || updateMut.isPending}
+                      className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30"
+                      title={m.status === 'RUNNING' ? 'Wait for cycle to finish' : 'Edit machine'}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Delete machine ${m.code}? This cannot be undone.`)) {
+                          deleteMut.mutate(m.id);
+                        }
+                      }}
+                      disabled={m.status === 'RUNNING' || deleteMut.isPending}
+                      className="p-1.5 rounded text-muted-foreground hover:text-red-600 hover:bg-red-500/10 disabled:opacity-30"
+                      title={m.status === 'RUNNING' ? 'Wait for cycle to finish' : 'Delete machine'}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+
+      {/* ── Edit machine modal (Sprint 19) ─────────────────────────────── */}
+      {editing && (
+        <EditMachineModal
+          machine={editing}
+          branches={branches}
+          onClose={() => setEditing(null)}
+          onSave={(body) => updateMut.mutate({ id: editing.id, ...body })}
+          saving={updateMut.isPending}
+        />
+      )}
 
       {showNew && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -774,5 +835,90 @@ function CyclesTab() {
         </div>
       )}
     </section>
+  );
+}
+
+// ─── Machine edit modal (Sprint 19) ─────────────────────────────────────────
+function EditMachineModal({
+  machine, branches, onClose, onSave, saving,
+}: {
+  machine:  Machine;
+  branches: Branch[];
+  onClose:  () => void;
+  onSave:   (body: { code: string; kind: MachineKind; capacityKg: number; branchId: string }) => void;
+  saving:   boolean;
+}) {
+  const [code,     setCode]     = useState(machine.code);
+  const [kind,     setKind]     = useState<MachineKind>(machine.kind);
+  const [capacity, setCapacity] = useState(String(Number(machine.capacityKg)));
+  const [branchId, setBranchId] = useState(machine.branch.id);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md">
+        <header className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h3 className="font-semibold flex items-center gap-1.5">
+            <Pencil className="h-4 w-4" /> Edit Machine
+          </h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="p-5 space-y-3">
+          <label className="text-sm block">
+            <span className="text-xs text-muted-foreground">Branch</span>
+            <select
+              value={branchId}
+              onChange={(e) => setBranchId(e.target.value)}
+              className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
+            >
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm block">
+            <span className="text-xs text-muted-foreground">Code</span>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              placeholder="W1, D1, etc."
+              className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm font-mono"
+            />
+          </label>
+          <label className="text-sm block">
+            <span className="text-xs text-muted-foreground">Kind</span>
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as MachineKind)}
+              className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
+            >
+              <option value="WASHER">Washer</option>
+              <option value="DRYER">Dryer</option>
+              <option value="COMBO">Combo (washer+dryer)</option>
+            </select>
+          </label>
+          <label className="text-sm block">
+            <span className="text-xs text-muted-foreground">Capacity (kg)</span>
+            <input
+              type="number"
+              step="0.5"
+              min="0"
+              value={capacity}
+              onChange={(e) => setCapacity(e.target.value)}
+              className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm font-mono"
+            />
+          </label>
+        </div>
+        <footer className="px-5 pb-5 pt-3 flex justify-end gap-2 border-t border-border">
+          <button onClick={onClose} className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted">Cancel</button>
+          <button
+            onClick={() => onSave({ code, kind, capacityKg: Number(capacity), branchId })}
+            disabled={saving || !code.trim() || !branchId || !capacity}
+            className="h-9 px-4 rounded-md bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }

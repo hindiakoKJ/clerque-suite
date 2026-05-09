@@ -155,15 +155,10 @@ export default function LaundryFleetPage() {
             </Link>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-            {machines.map((m) => (
-              <MachineTile
-                key={m.id}
-                machine={m}
-                onClick={() => setActive(m)}
-              />
-            ))}
-          </div>
+          <PairedFleetGrid
+            machines={machines}
+            onSelect={(m) => setActive(m)}
+          />
         )}
       </main>
 
@@ -177,6 +172,76 @@ export default function LaundryFleetPage() {
           busy={markDone.isPending || setStatus.isPending}
         />
       )}
+    </div>
+  );
+}
+
+// ─── Paired fleet grid ──────────────────────────────────────────────────────
+//
+// Laundromats physically stack a dryer on top of a washer ("the pair").
+// Render each lane vertically with the dryer above + the washer below so
+// the screen mirrors the floor layout. Pairing is by sorted index within
+// each kind: D1 pairs with W1, D2 with W2, etc. If the counts are
+// unequal (e.g. 4 washers, 1 dryer), the leftover machines stand alone
+// in a half-empty lane. COMBO units occupy both slots of their lane.
+
+function PairedFleetGrid({
+  machines, onSelect,
+}: {
+  machines: Machine[];
+  onSelect: (m: Machine) => void;
+}) {
+  // Sort by code numerically when possible so 1, 2, 10 align as 1, 2, 10
+  // not 1, 10, 2 (lexicographic).
+  const byCode = (a: Machine, b: Machine) => {
+    const an = parseInt(a.code, 10);
+    const bn = parseInt(b.code, 10);
+    if (!isNaN(an) && !isNaN(bn) && an !== bn) return an - bn;
+    return a.code.localeCompare(b.code);
+  };
+  const dryers  = machines.filter((m) => m.kind === 'DRYER').sort(byCode);
+  const washers = machines.filter((m) => m.kind === 'WASHER').sort(byCode);
+  const combos  = machines.filter((m) => m.kind === 'COMBO').sort(byCode);
+
+  // Lane count = max of dryer/washer rows + each combo gets its own lane.
+  const stackedCount = Math.max(dryers.length, washers.length);
+  const totalLanes   = stackedCount + combos.length;
+  if (totalLanes === 0) return null;
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+      {Array.from({ length: stackedCount }).map((_, i) => {
+        const dryer  = dryers[i]  ?? null;
+        const washer = washers[i] ?? null;
+        return (
+          <div key={`pair-${i}`} className="flex flex-col gap-2">
+            {dryer ? (
+              <MachineTile machine={dryer} onClick={() => onSelect(dryer)} />
+            ) : (
+              <EmptyHalfLane label="No dryer" />
+            )}
+            {washer ? (
+              <MachineTile machine={washer} onClick={() => onSelect(washer)} />
+            ) : (
+              <EmptyHalfLane label="No washer" />
+            )}
+          </div>
+        );
+      })}
+      {/* COMBO units — single tile lane at full height */}
+      {combos.map((m) => (
+        <div key={m.id} className="flex flex-col">
+          <MachineTile machine={m} onClick={() => onSelect(m)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EmptyHalfLane({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border-2 border-dashed border-border/60 bg-muted/10 min-h-[180px] flex items-center justify-center text-[10px] uppercase tracking-wider text-muted-foreground/60">
+      {label}
     </div>
   );
 }

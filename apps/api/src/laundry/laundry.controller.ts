@@ -201,6 +201,32 @@ export class LaundryController {
     return this.svc.updateMachineStatus(user.tenantId!, id, body.status);
   }
 
+  @ApiOperation({ summary: 'Edit machine metadata (code, kind, capacity, branch, notes)' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM')
+  @Patch('machines/:id')
+  @HttpCode(HttpStatus.OK)
+  updateMachine(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Partial<{
+      code:       string;
+      kind:       LaundryMachineKind;
+      capacityKg: number;
+      branchId:   string;
+      notes:      string | null;
+    }>,
+  ) {
+    return this.svc.updateMachine(user.tenantId!, id, body);
+  }
+
+  @ApiOperation({ summary: 'Delete a machine (refused if it has historical loads — use OUT_OF_ORDER instead)' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Delete('machines/:id')
+  @HttpCode(HttpStatus.OK)
+  deleteMachine(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.svc.deleteMachine(user.tenantId!, id);
+  }
+
   // ── Multi-line ticket ──────────────────────────────────────────────────
   @ApiOperation({ summary: 'Create a v2 ticket — multiple service lines + retail products + auto-promo' })
   @Roles(...LaundryController.LAUNDRY_OPS)

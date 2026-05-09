@@ -317,6 +317,12 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '6160', name: 'Project Direct Materials',                  type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6170', name: 'Contractor Fees Expense',                   type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6180', name: 'Commission Expense',                        type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  // Sprint 15 — Software / SaaS subscriptions including Clerque itself.
+  // SYSTEM_ONLY: only the cross-tenant subscription auto-bill writer
+  // posts here; manual JEs would diverge the tenant's books from HNS's
+  // outgoing receipts. Operators can re-route to a custom account in
+  // Settings → Chart of Accounts if their CPA prefers a different code.
+  { code: '6280', name: 'Software Subscriptions & SaaS',              type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY', isSystem: true  },
 
   // ── Taxes & Regulatory ───────────────────────────────────────────────────────
   { code: '6190', name: 'Taxes and Licenses',                        type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },

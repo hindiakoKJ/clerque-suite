@@ -500,12 +500,6 @@ model Tenant {
   progressBillings         ProgressBilling[]
   retentionReleases        RetentionRelease[]
   jobOrders                JobOrder[]
-  /// Sprint 14 — platform-layer subscription billing.
-  /// SubscriptionInvoice rows are HNS Corp PH's invoices to this tenant
-  /// for SaaS usage (plan + module + AI add-ons). NOT tenant-scoped per
-  /// se — they live at the platform layer. The relation here is just for
-  /// cascade-delete when a tenant is offboarded.
-  subscriptionInvoices     SubscriptionInvoice[]
   /// Per-tenant tunable severity thresholds for the Ledger ops dashboard.
   /// JSON shape (keys all numbers, optional):
   ///   { eventLagWarnMs, eventLagBadMs, pendingEventsWarn, failedEventsWarn,
@@ -3845,68 +3839,50 @@ model JobOrderLine {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sprint 14 — Platform-layer subscription billing
+// Sprint 15 — Platform-level configuration (singleton)
 //
-// HNS Corp PH issues SubscriptionInvoice rows to its Clerque tenants for
-// SaaS usage (plan fee + module fee + AI add-ons). This table lives at the
-// PLATFORM layer — it's HNS's relationship with each tenant, NOT tenant
-// business data. The Console may freely read these rows; they are NOT
-// tenant financials and do not violate the privacy invariant.
+// HNS Corp PH's master data — TIN, address, VAT/BIR status, OR series start.
+// One row per environment (id = "platform"). Subscription billing reads this
+// to issue acknowledgement receipts (UNREGISTERED) or BIR-compliant Sales
+// Invoices/ORs (NON_VAT / VAT) to tenants.
 //
-// Lifecycle:  DRAFT → ISSUED → PAID  (or PAST_DUE → WRITTEN_OFF)
-//
-// Receipt: an Acknowledgement Receipt PDF is generated when status flips
-// to PAID. Once HNS Corp PH has BIR ATP for Official Receipts (or routes
-// payment through its own Clerque tenant), an OR is issued there and
-// linked back via hnsOrderId.
+// NOTE: replaces the brief Sprint 14 SubscriptionInvoice approach. Per the
+// dogfood architecture, HNS Corp PH operates its own Clerque tenant — the
+// actual subscription billing happens via Orders + AR in HNS's tenant, with
+// a mirrored APBill auto-created in each customer-tenant's books. This
+// PlatformConfig is just HNS's master data + per-environment toggles
+// (auto-issue cron on/off, due-days window).
 // ─────────────────────────────────────────────────────────────────────────────
 
-enum SubscriptionInvoiceStatus {
-  DRAFT
-  ISSUED
-  PAID
-  PAST_DUE
-  WRITTEN_OFF
-  REFUNDED
-}
+model PlatformConfig {
+  /// Always "platform" — singleton row.
+  id                       String   @id @default("platform")
+  /// HNS Corp PH legal name printed on receipts.
+  companyName              String   @default("HNS Corp PH")
+  /// HNS Corp PH TIN (BIR). Null while pre-registration; set once registered.
+  tin                      String?
+  /// Registered office address.
+  address                  String?
+  /// Contact phone for tenant inquiries on the receipt footer.
+  contactPhone             String?
+  /// Contact email for tenant inquiries.
+  contactEmail             String?
+  /// HNS Corp PH's tax status. Drives whether subscription bills carry VAT.
+  /// Mirrors TaxStatus enum for the HNS tenant; kept here for fast read
+  /// without joining the HNS tenant row.
+  taxStatus                TaxStatus @default(UNREGISTERED)
+  /// True once BIR has issued ATP for Official Receipts. Drives "AR vs OR"
+  /// receipt template selection.
+  isBirRegistered          Boolean  @default(false)
+  /// Auto-issuance cron toggle. False = no monthly invoices auto-created.
+  subscriptionAutoIssue    Boolean  @default(true)
+  /// Days from issuance until invoice flips to PAST_DUE.
+  subscriptionDueDays      Int      @default(7)
+  /// HNS tenant link — null until bootstrap-hns-corp runs the first time.
+  /// Subscription billing creates Orders inside this tenant.
+  hnsTenantId              String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
-model SubscriptionInvoice {
-  id              String                    @id @default(cuid())
-  tenantId        String
-  /// Sequence: SUB-{YYYY}-{6-digit-seq} (per-year, platform-wide).
-  invoiceNumber   String                    @unique
-  /// Billing period this invoice covers.
-  periodStart     DateTime
-  periodEnd       DateTime
-  /// Plan code at issue time (for historical accuracy if the tenant changes plans later).
-  planCode        String
-  /// Base plan fee, before VAT.
-  baseAmount      Decimal                   @db.Decimal(12, 2)
-  /// Add-ons (AI quota top-ups, premium modules, etc.) before VAT.
-  addonAmount     Decimal                   @default(0) @db.Decimal(12, 2)
-  /// Output VAT (12%) when HNS Corp PH is VAT-registered. Otherwise 0.
-  vatAmount       Decimal                   @default(0) @db.Decimal(12, 2)
-  /// baseAmount + addonAmount + vatAmount.
-  totalAmount     Decimal                   @db.Decimal(12, 2)
-  status          SubscriptionInvoiceStatus @default(DRAFT)
-  issuedAt        DateTime?
-  dueDate         DateTime
-  paidAt          DateTime?
-  paidVia         String?
-  externalRef     String?
-  /// URL of the Acknowledgement Receipt PDF stored on object storage.
-  receiptPdfUrl   String?
-  /// Optional link to an Order in HNS Corp PH's own Clerque tenant once
-  /// the formal BIR Official Receipt is issued there.
-  hnsOrderId      String?
-  notes           String?
-  createdAt       DateTime                  @default(now())
-  updatedAt       DateTime                  @updatedAt
-
-  tenant          Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@index([tenantId, status])
-  @@index([status, dueDate])
-  @@index([periodStart])
-  @@map("subscription_invoices")
+  @@map("platform_config")
 }

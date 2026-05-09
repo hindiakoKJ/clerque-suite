@@ -3247,6 +3247,45 @@ model LeaveRequest {
   @@map("leave_requests")
 }
 
+/// Sprint 19 — pre-destructive snapshot taken before any console-initiated
+/// data wipe (resetDemoData / clearAllTenantData). Even though those ops
+/// now refuse to run on live (non-demo) tenants, the snapshot is the
+/// belt-and-suspenders: a downloadable JSON dump of every row about to be
+/// deleted, so a misclassified demo flag or a future code path that
+/// bypasses the guard can still be recovered from.
+///
+/// payload shape (JSONB):
+///   {
+///     orders: [...], orderItems: [...], orderPayments: [...],
+///     accountingEvents: [...], journalEntries: [...], journalLines: [...],
+///     products: [...], categories: [...], bomItems: [...],
+///     rawMaterials: [...], rawMaterialInventory: [...],
+///     inventoryItems: [...], inventoryLogs: [...],
+///     customers: [...]   (when applicable)
+///   }
+///
+/// Auto-purged after 30 days via @Cron — these are recovery tools, not
+/// audit logs.
+model TenantDataSnapshot {
+  id           String   @id @default(cuid())
+  tenantId     String
+  /// Why this snapshot was taken: PRE_RESET_DEMO | PRE_CLEAR_ALL | MANUAL.
+  reason       String
+  /// SUPER_ADMIN user id who triggered the destructive op (or null for cron).
+  takenById    String?
+  takenByEmail String?
+  /// Total rows captured across all tables in payload (for the UI summary).
+  rowCount     Int      @default(0)
+  /// Compressed-ish JSON blob — each top-level key is a Prisma model name.
+  payload      Json     @default("{}")
+  /// Soft cutoff for cron purge. Default 30 days from creation.
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@map("tenant_data_snapshots")
+}
+
 /// Sync-Requests (Sprint 18) — generic employee self-service workflows.
 ///
 /// One polymorphic table covers the 4 short-form workflows that share an

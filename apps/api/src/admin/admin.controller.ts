@@ -258,6 +258,20 @@ export class AdminController {
     return this.svc.resetDemoData(id, body.scenario, actor(req), body.confirmationToken);
   }
 
+  // ─── Tenant data snapshots (Sprint 19) ────────────────────────────────────
+
+  /** List pre-destructive backup snapshots for a tenant. */
+  @Get('tenants/:id/snapshots')
+  listSnapshots(@Param('id') id: string) {
+    return this.svc.listTenantSnapshots(id);
+  }
+
+  /** Download a snapshot's full JSON payload (for offline restore / audit). */
+  @Get('tenants/:id/snapshots/:snapId')
+  getSnapshot(@Param('id') id: string, @Param('snapId') snapId: string) {
+    return this.svc.getSnapshotPayload(id, snapId);
+  }
+
   // ─── Tenant users ─────────────────────────────────────────────────────────
 
   @Get('tenants/:id/users')

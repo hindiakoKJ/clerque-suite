@@ -102,6 +102,112 @@ export class AdminService {
    * shows a typed-slug modal so a misclicked button can't quietly suspend
    * a tenant or wipe their data. Both sides must agree before mutation.
    */
+  /**
+   * Sprint 19 — Hard guard against console-initiated data wipes ever
+   * touching a live (paying) tenant. The tenant table has an explicit
+   * `isDemoTenant` boolean (default `false`); only rows where it's
+   * `true` are wipable from the Console.
+   *
+   * NO override flag. NO `force: true` bypass. If a real paying tenant
+   * legitimately needs a data wipe (e.g. owner request, end of contract,
+   * regulatory takedown), it must be done out-of-band by a DBA with
+   * direct database access — that path requires a separate human in the
+   * loop and isn't reachable from anyone's web session.
+   */
+  private async assertDemoTenant(tenantId: string) {
+    const t = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { id: true, slug: true, isDemoTenant: true, status: true, name: true },
+    });
+    if (!t) throw new NotFoundException('Tenant not found.');
+    if (!t.isDemoTenant) {
+      throw new ForbiddenException({
+        code:    'LIVE_TENANT_PROTECTED',
+        message:
+          `Refusing to run destructive operation on '${t.name}' (${t.slug}) — this is a live tenant. ` +
+          `Console destructive operations are restricted to tenants flagged isDemoTenant=true. ` +
+          `If a wipe is genuinely required for this tenant, it must be performed by a DBA out-of-band.`,
+      });
+    }
+  }
+
+  /**
+   * Sprint 19 — Pre-destructive snapshot. Captures every row that's about
+   * to be deleted into a single `TenantDataSnapshot` JSONB blob, so even
+   * if the guard above is somehow bypassed (or a future edit mis-flags a
+   * tenant's `isDemoTenant`), the data can still be recovered.
+   *
+   * Captures only the tables touched by resetDemoData/clearAllTenantData.
+   * Returns the snapshot id so the caller can reference it in their audit
+   * log + the response body.
+   */
+  private async snapshotTenantData(
+    tenantId: string,
+    reason: 'PRE_RESET_DEMO' | 'PRE_CLEAR_ALL' | 'MANUAL',
+    actor: ConsoleActor,
+  ): Promise<{ id: string; rowCount: number }> {
+    // Pull every table the destructive paths touch. Order matters only
+    // for human readability of the JSON dump; FK ordering is irrelevant
+    // since we're not restoring atomically here.
+    const [
+      orders, accountingEvents, journalEntries,
+      products, categories, rawMaterials,
+      inventoryItems, inventoryLogs,
+    ] = await Promise.all([
+      this.prisma.order.findMany({
+        where: { tenantId },
+        include: { items: true, payments: true, discounts: true },
+      }),
+      this.prisma.accountingEvent.findMany({ where: { tenantId } }),
+      this.prisma.journalEntry.findMany({
+        where: { tenantId },
+        include: { lines: true },
+      }),
+      this.prisma.product.findMany({
+        where: { tenantId },
+        include: { bomItems: true },
+      }),
+      this.prisma.category.findMany({ where: { tenantId } }),
+      this.prisma.rawMaterial.findMany({
+        where: { tenantId },
+        include: { inventory: true },
+      }),
+      this.prisma.inventoryItem.findMany({ where: { tenantId } }),
+      this.prisma.inventoryLog.findMany({ where: { tenantId } }),
+    ]);
+
+    const payload = {
+      orders, accountingEvents, journalEntries,
+      products, categories, rawMaterials,
+      inventoryItems, inventoryLogs,
+    };
+    const rowCount =
+      orders.length + accountingEvents.length + journalEntries.length +
+      products.length + categories.length + rawMaterials.length +
+      inventoryItems.length + inventoryLogs.length;
+
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+    const snap = await this.prisma.tenantDataSnapshot.create({
+      data: {
+        tenantId,
+        reason,
+        takenById:    null,
+        takenByEmail: actor.email ?? null,
+        rowCount,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        payload: payload as any,
+        expiresAt,
+      },
+      select: { id: true, rowCount: true },
+    });
+
+    this.logger.log(
+      `[snapshot] Captured ${rowCount} rows for tenant ${tenantId} (reason=${reason}, snap=${snap.id}, by=${actor.email ?? 'unknown'})`,
+    );
+    return snap;
+  }
+
   private async assertTypedSlug(tenantId: string, confirmationToken: string | undefined) {
     if (!confirmationToken || typeof confirmationToken !== 'string') {
       throw new BadRequestException({
@@ -800,6 +906,15 @@ export class AdminService {
     // multi-minute reseed. Make it deliberate.
     await this.assertTypedSlug(tenantId, confirmationToken);
 
+    // Sprint 19 — Live-tenant guard. Refuse to ever wipe a paying tenant
+    // from the Console, regardless of slug confirmation.
+    await this.assertDemoTenant(tenantId);
+
+    // Sprint 19 — Capture a pre-destructive snapshot. Even on demo tenants
+    // this preserves the about-to-be-wiped catalog/orders for 30 days so
+    // an accidental wrong-scenario reseed can be unwound from the JSON dump.
+    const snapshot = await this.snapshotTenantData(tenantId, 'PRE_RESET_DEMO', actor);
+
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
       select: {
@@ -1071,6 +1186,8 @@ export class AdminService {
       productsSeeded:  catalog.length,
       ordersGenerated: orderCount,
       layoutTier,
+      snapshotId:      snapshot.id,        // pre-wipe backup id, recoverable for 30 days
+      snapshotRowCount: snapshot.rowCount, // total rows preserved
     };
 
     } catch (err) {
@@ -1228,6 +1345,16 @@ export class AdminService {
     // misclick and an unrecoverable state.
     await this.assertTypedSlug(tenantId, confirmationToken);
 
+    // Sprint 19 — Live-tenant guard. Even with the typed slug, refuse to
+    // wipe a live (non-demo) tenant. clearAllTenantData was originally
+    // intended for "tenant onboarding wants to clear sample data" — that
+    // sample data only ever exists on isDemoTenant=true tenants by
+    // definition, so the guard does not constrain the legitimate workflow.
+    await this.assertDemoTenant(tenantId);
+
+    // Sprint 19 — Pre-destructive snapshot. Recoverable for 30 days.
+    const snapshot = await this.snapshotTenantData(tenantId, 'PRE_CLEAR_ALL', actor);
+
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       select: { id: true, slug: true },
@@ -1245,17 +1372,50 @@ export class AdminService {
       await this.prisma.category.deleteMany({ where: { tenantId } });
       await this.prisma.rawMaterial.deleteMany({ where: { tenantId } });
 
-      this.logger.log(`Cleared all data for tenant ${tenant.slug} (${tenantId}) by ${actor.email}`);
+      this.logger.log(`Cleared all data for tenant ${tenant.slug} (${tenantId}) by ${actor.email} (snap=${snapshot.id})`);
       return {
         tenantSlug: tenant.slug,
         cleared: ['products', 'categories', 'rawMaterials', 'orders', 'inventoryLogs', 'accountingEvents', 'journalEntries'],
         preserved: ['tenant', 'users', 'branches', 'floorLayout'],
+        snapshotId:       snapshot.id,
+        snapshotRowCount: snapshot.rowCount,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`clearAllTenantData failed for tenant ${tenantId}: ${msg}`, err instanceof Error ? err.stack : undefined);
       throw new BadRequestException(`Clear data failed: ${msg.slice(0, 300)}`);
     }
+  }
+
+  // ─── Tenant data snapshots ────────────────────────────────────────────────
+
+  /**
+   * List all backup snapshots for a tenant. The `payload` JSON is
+   * deliberately omitted from the list response — it can be huge and is
+   * only fetched on demand via `getSnapshotPayload`.
+   */
+  async listTenantSnapshots(tenantId: string) {
+    return this.prisma.tenantDataSnapshot.findMany({
+      where:   { tenantId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true, reason: true, takenByEmail: true, rowCount: true,
+        createdAt: true, expiresAt: true,
+      },
+    });
+  }
+
+  /**
+   * Fetch a snapshot's full JSON payload — used by the Console download
+   * button. Tenant-scoped lookup so a stale id from a different tenant
+   * cannot be exfiltrated.
+   */
+  async getSnapshotPayload(tenantId: string, snapshotId: string) {
+    const snap = await this.prisma.tenantDataSnapshot.findFirst({
+      where:  { id: snapshotId, tenantId },
+    });
+    if (!snap) throw new NotFoundException('Snapshot not found.');
+    return snap;
   }
 
   /**

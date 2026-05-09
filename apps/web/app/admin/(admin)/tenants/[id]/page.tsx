@@ -6,6 +6,7 @@ import {
   ArrowLeft, Building2, Users, Plus, RotateCcw, LogOut,
   ShieldOff, ShieldCheck, Eye, EyeOff, X, AlertTriangle,
   CheckCircle, Clock, Copy, Pencil, FlaskConical, RefreshCw,
+  Archive, Download,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -905,7 +906,38 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
             <p className="text-[10px] text-muted-foreground mt-1">0 = kill switch · blank = tier default</p>
           </div>
 
-          {/* Demo Data Reset */}
+          {/* Sprint 19 — Live-tenant lockout banner. Visible only on
+              non-demo tenants; replaces the destructive panels below with
+              a clear refusal message so the operator immediately
+              understands why the buttons are gone. */}
+          {!tenant.isDemoTenant && (
+            <div className="rounded-lg border border-emerald-300/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4">
+              <div className="flex items-center gap-1.5 mb-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <h2 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
+                  Live Tenant Protected
+                </h2>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                This is a live (non-demo) tenant. Console destructive
+                operations (<span className="font-mono">Reset Demo Data</span>,{' '}
+                <span className="font-mono">Clear All Data</span>) are blocked at
+                the API layer and hidden here. If a wipe is genuinely required,
+                it must be performed by a DBA out-of-band — there is no
+                in-Console override.
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-2 italic">
+                To enable destructive ops on this tenant, an operator with
+                Tenant Profile edit access must first toggle{' '}
+                <span className="font-mono">isDemoTenant</span> ON in the Edit
+                modal.
+              </p>
+            </div>
+          )}
+
+          {/* Demo Data Reset / Ingredient Pack / Clear All Data — only on demo tenants */}
+          {tenant.isDemoTenant && (
+          <>
           <div className="rounded-lg border border-fuchsia-200/60 bg-fuchsia-50/40 dark:bg-fuchsia-950/20 p-4">
             <div className="flex items-center gap-1.5 mb-1">
               <FlaskConical className="w-3.5 h-3.5 text-fuchsia-600" />
@@ -1000,8 +1032,13 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
               Clear All Data…
             </button>
           </div>
+          </>
+          )}
         </div>
       </div>
+
+      {/* Sprint 19 — Backup snapshots */}
+      <SnapshotsCard tenantId={tenant.id} />
 
       {/* Users table */}
       <div>
@@ -1358,6 +1395,103 @@ function CostingPolicyPanel({
         <p className="text-[10px] text-muted-foreground italic leading-snug">
           Manufacturing overhead allocation is only available for MANUFACTURING tenants.
         </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Sprint 19 — Backup snapshots ─────────────────────────────────────────────
+
+interface Snapshot {
+  id:           string;
+  reason:       'PRE_RESET_DEMO' | 'PRE_CLEAR_ALL' | 'MANUAL';
+  takenByEmail: string | null;
+  rowCount:     number;
+  createdAt:    string;
+  expiresAt:    string;
+}
+
+const REASON_LABEL: Record<Snapshot['reason'], string> = {
+  PRE_RESET_DEMO: 'Pre Reset Demo',
+  PRE_CLEAR_ALL:  'Pre Clear All',
+  MANUAL:         'Manual',
+};
+
+function SnapshotsCard({ tenantId }: { tenantId: string }) {
+  const { data: snapshots = [], isLoading } = useQuery<Snapshot[]>({
+    queryKey: ['tenant-snapshots', tenantId],
+    queryFn:  () => api.get(`/admin/tenants/${tenantId}/snapshots`).then((r) => r.data),
+  });
+
+  async function downloadSnapshot(snap: Snapshot) {
+    try {
+      const { data } = await api.get(`/admin/tenants/${tenantId}/snapshots/${snap.id}`);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `tenant-${tenantId}-snapshot-${snap.id}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Snapshot downloaded.');
+    } catch (e: any) {
+      toast.error(e?.response?.data?.message ?? 'Failed to download snapshot.');
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <Archive className="w-4 h-4 text-[var(--accent)]" />
+        <h2 className="font-semibold text-sm">Backup Snapshots ({snapshots.length})</h2>
+      </div>
+      <p className="text-[11px] text-muted-foreground leading-snug">
+        Pre-destructive backups taken automatically before any{' '}
+        <span className="font-mono">Reset Demo</span> or{' '}
+        <span className="font-mono">Clear All</span> on this tenant. Each
+        snapshot is a JSON dump of the wiped tables (orders, journal entries,
+        products, ingredients, inventory). Auto-purged after 30 days.
+      </p>
+
+      {isLoading ? (
+        <div className="text-xs text-muted-foreground py-4 text-center">Loading…</div>
+      ) : snapshots.length === 0 ? (
+        <div className="text-xs text-muted-foreground py-4 text-center">
+          No snapshots yet. One will be created automatically the next time a
+          destructive operation runs on this tenant.
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          {snapshots.map((s) => (
+            <div key={s.id} className="py-2.5 flex items-center justify-between gap-3 flex-wrap">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-bold tracking-wide px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)]">
+                    {REASON_LABEL[s.reason]}
+                  </span>
+                  <span className="text-xs font-mono text-foreground">
+                    {s.rowCount.toLocaleString()} rows
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {new Date(s.createdAt).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })}
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground mt-0.5">
+                  by {s.takenByEmail ?? 'system'} · expires {new Date(s.expiresAt).toLocaleDateString('en-PH', { dateStyle: 'medium' })}
+                </div>
+              </div>
+              <button
+                onClick={() => downloadSnapshot(s)}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded text-[11px] font-medium border border-border hover:bg-muted shrink-0"
+                title="Download as JSON"
+              >
+                <Download className="h-3 w-3" /> Download
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

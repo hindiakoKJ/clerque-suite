@@ -20,7 +20,7 @@ interface PayRunDto {
   periodStart: string;
   periodEnd: string;
   frequency: 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
-  status: 'DRAFT' | 'COMPLETED' | 'CANCELLED';
+  status: 'DRAFT' | 'COMPLETED' | 'LOCKED' | 'CANCELLED';
   totalGross: number;
   totalDeductions: number;
   totalNet: number;
@@ -30,7 +30,7 @@ interface PayRunDto {
   createdAt: string;
 }
 
-type StatusFilter = 'ALL' | 'DRAFT' | 'COMPLETED' | 'CANCELLED';
+type StatusFilter = 'ALL' | 'DRAFT' | 'COMPLETED' | 'LOCKED' | 'CANCELLED';
 type Frequency    = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -41,9 +41,10 @@ function formatPeriod(start: string, end: string) {
   return `${fmt(start)} → ${fmt(end)}`;
 }
 
-const STATUS_BADGE: Record<PayRunDto['status'], { tone: 'warn' | 'success' | 'danger'; label: string }> = {
+const STATUS_BADGE: Record<PayRunDto['status'], { tone: 'warn' | 'success' | 'danger' | 'locked'; label: string }> = {
   DRAFT:     { tone: 'warn',    label: 'Draft'     },
   COMPLETED: { tone: 'success', label: 'Completed' },
+  LOCKED:    { tone: 'locked',  label: 'Locked'    },
   CANCELLED: { tone: 'danger',  label: 'Cancelled' },
 };
 
@@ -57,6 +58,7 @@ const STATUS_TABS: { value: StatusFilter; label: string }[] = [
   { value: 'ALL',       label: 'All'       },
   { value: 'DRAFT',     label: 'Draft'     },
   { value: 'COMPLETED', label: 'Completed' },
+  { value: 'LOCKED',    label: 'Locked'    },
   { value: 'CANCELLED', label: 'Cancelled' },
 ];
 
@@ -268,6 +270,26 @@ export default function PayRunsPage() {
     }
   }
 
+  async function handleLock(id: string) {
+    if (!confirm(
+      'Lock this pay run?\n\n' +
+      'This will post the salary GL entry (Salaries Expense / Statutory ' +
+      'Payables / Accrued Salaries) and seal the payslips. Once locked, ' +
+      'the run cannot be re-processed or cancelled — only reversed via a ' +
+      'manual journal entry.'
+    )) return;
+    setProcessing(id);
+    try {
+      await api.post(`/payroll/runs/${id}/lock`);
+      toast.success('Pay run locked — salary GL posted.');
+      qc.invalidateQueries({ queryKey: ['payroll-runs'] });
+    } catch (err: any) {
+      toast.error(err.response?.data?.message ?? 'Something went wrong');
+    } finally {
+      setProcessing(null);
+    }
+  }
+
   return (
     <div className="flex flex-col h-full overflow-auto">
       {/* Header */}
@@ -411,12 +433,33 @@ export default function PayRunsPage() {
                               </>
                             )}
                             {run.status === 'COMPLETED' && (
+                              <>
+                                <button
+                                  onClick={() => handleLock(run.id)}
+                                  disabled={isProcessing}
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                                  title="Post salary GL + seal payslips"
+                                >
+                                  {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                  Lock & Post GL
+                                </button>
+                                <button
+                                  onClick={() => router.push(`/payroll/payslips?payRunId=${run.id}`)}
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors hover:opacity-80"
+                                  style={{ color: 'var(--accent)' }}
+                                >
+                                  Payslips
+                                  <ArrowRight className="h-3 w-3" />
+                                </button>
+                              </>
+                            )}
+                            {run.status === 'LOCKED' && (
                               <button
                                 onClick={() => router.push(`/payroll/payslips?payRunId=${run.id}`)}
                                 className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors hover:opacity-80"
                                 style={{ color: 'var(--accent)' }}
                               >
-                                View Payslips
+                                Payslips
                                 <ArrowRight className="h-3 w-3" />
                               </button>
                             )}

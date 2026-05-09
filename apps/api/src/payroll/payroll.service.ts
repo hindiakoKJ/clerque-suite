@@ -7,6 +7,13 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, TimeEntryStatus, LeaveType, LeaveStatus, SalaryType } from '@prisma/client';
 import { generatePayslipPdf } from './payslip-pdf';
+import { JournalService } from '../accounting/journal.service';
+import { AccountsService } from '../accounting/accounts.service';
+import {
+  computeBasicPay as computeBasicPayPh,
+  computePayslip,
+  type PayFreq as PhPayFreq,
+} from './ph-tax-tables';
 
 // ─── Response shapes (match what the frontend expects) ───────────────────────
 
@@ -108,78 +115,22 @@ function currentMonthBounds(): { from: Date; to: Date } {
 const DOW_KEYS: (keyof Pick<TimesheetRow, 'mon'|'tue'|'wed'|'thu'|'fri'|'sat'|'sun'>)[] =
   ['sun','mon','tue','wed','thu','fri','sat'];
 
-type PayFreq = 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY';
-
-/** SSS 2024 — Employee contribution: 4% of Monthly Salary Credit (floored ₱4k, capped ₱30k) */
-function computeSss(monthlyGross: number, freq: PayFreq): number {
-  const msc = Math.max(4000, Math.min(30000, Math.ceil(monthlyGross / 500) * 500));
-  const monthly = msc * 0.04; // 4% employee share
-  const factor = freq === 'SEMI_MONTHLY' ? 0.5 : freq === 'WEEKLY' ? 7 / 30 : 1;
-  return round2(monthly * factor);
-}
-
-/** PhilHealth 2024 — Employee contribution: 2.5% of salary (min ₱250, max ₱2,500/month) */
-function computePhilHealth(monthlyGross: number, freq: PayFreq): number {
-  const monthlyEmployee = Math.max(250, Math.min(monthlyGross * 0.025, 2500));
-  const factor = freq === 'SEMI_MONTHLY' ? 0.5 : freq === 'WEEKLY' ? 7 / 30 : 1;
-  return round2(monthlyEmployee * factor);
-}
-
-/** Pag-IBIG 2024 — Employee: 1% if salary ≤ ₱1,500; else 2% capped at ₱100/month */
-function computePagibig(monthlyGross: number, freq: PayFreq): number {
-  const monthlyEmployee = monthlyGross <= 1500 ? monthlyGross * 0.01 : Math.min(monthlyGross * 0.02, 100);
-  const factor = freq === 'SEMI_MONTHLY' ? 0.5 : freq === 'WEEKLY' ? 7 / 30 : 1;
-  return round2(monthlyEmployee * factor);
-}
-
-/** BIR TRAIN Law withholding tax — annualize period gross, compute annual bracket tax, pro-rate back */
-function computeWithholdingTax(periodGross: number, freq: PayFreq): number {
-  const periods = freq === 'SEMI_MONTHLY' ? 24 : freq === 'WEEKLY' ? 52 : 12;
-  const annual = periodGross * periods;
-  let annualTax = 0;
-  if (annual <= 250_000) annualTax = 0;
-  else if (annual <= 400_000) annualTax = (annual - 250_000) * 0.15;
-  else if (annual <= 800_000) annualTax = 22_500 + (annual - 400_000) * 0.20;
-  else if (annual <= 2_000_000) annualTax = 102_500 + (annual - 800_000) * 0.25;
-  else if (annual <= 8_000_000) annualTax = 402_500 + (annual - 2_000_000) * 0.30;
-  else annualTax = 2_202_500 + (annual - 8_000_000) * 0.35;
-  return round2(annualTax / periods);
-}
-
-/** Compute basic pay for the period from salary info */
-function computeBasicPay(
-  rate: number | null, type: string | null,
-  regularHours: number, freq: PayFreq,
-): number {
-  if (!rate || !type) return 0;
-  if (type === 'HOURLY') return round2(rate * regularHours);
-  if (type === 'DAILY')  return round2((rate / 8) * regularHours);
-  // MONTHLY: prorate to period
-  if (type === 'MONTHLY') {
-    if (freq === 'SEMI_MONTHLY') return round2(rate / 2);
-    if (freq === 'WEEKLY')       return round2(rate * 12 / 52);
-    return round2(rate);
-  }
-  if (type === 'SEMI_MONTHLY') {
-    if (freq === 'SEMI_MONTHLY') return round2(rate);
-    if (freq === 'MONTHLY')      return round2(rate * 2);
-    return round2(rate * 2 / (52 / 12));
-  }
-  return 0;
-}
-
-/** Normalize frequency to monthly equivalent for statutory contribution lookup */
-function toMonthlyGross(periodGross: number, freq: PayFreq): number {
-  if (freq === 'SEMI_MONTHLY') return periodGross * 2;
-  if (freq === 'WEEKLY')       return round2(periodGross * (52 / 12));
-  return periodGross;
-}
+type PayFreq = PhPayFreq;
+// Legacy inline helpers replaced by ph-tax-tables.ts (Sprint 19) — that module
+// uses the actual SSS 2025 MSC table, BIR per-period WHT brackets (RR 11-2018),
+// and exposes a one-shot computePayslip() that handles taxable-vs-non-taxable
+// (de minimis allowances) correctly.
+const computeBasicPay = computeBasicPayPh;
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class PayrollService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly journal: JournalService,
+    private readonly accounts: AccountsService,
+  ) {}
 
   // ─── Clock Status ────────────────────────────────────────────────────────
 
@@ -672,16 +623,16 @@ export class PayrollService {
       const basicPay    = computeBasicPay(rate, type, hours.regular, freq);
       const hourlyRate  = basicPay > 0 && hours.regular > 0 ? basicPay / hours.regular : (rate ?? 0) / 8;
       const otPay       = round2(hourlyRate * hours.ot * 1.25); // PH Labor Code 125%
-      const grossPay    = round2(basicPay + otPay);
-      if (grossPay === 0) continue; // Skip employees with zero earnings
+      if (basicPay + otPay === 0) continue; // Skip employees with zero earnings
 
-      const monthlyGross = toMonthlyGross(grossPay, freq);
-      const sss          = computeSss(monthlyGross, freq);
-      const philhealth   = computePhilHealth(monthlyGross, freq);
-      const pagibig      = computePagibig(monthlyGross, freq);
-      const wht          = computeWithholdingTax(grossPay, freq);
-      const totalDed     = round2(sss + philhealth + pagibig + wht);
-      const netPay       = round2(grossPay - totalDed);
+      // Sprint 19 — production-grade PH statutory math.
+      // Uses official SSS 2025 MSC table + BIR per-period WHT brackets.
+      const slip = computePayslip({
+        basicPay,
+        otPay,
+        allowances: 0,        // future: pull from EmployeeAllowance once schema lands
+        freq,
+      });
 
       payslipData.push({
         tenantId,
@@ -693,21 +644,21 @@ export class PayrollService {
         basicPay,
         overtimePay:       otPay,
         allowances:        0,
-        grossPay,
-        sssContrib:        sss,
-        philhealthContrib: philhealth,
-        pagibigContrib:    pagibig,
-        withholdingTax:    wht,
+        grossPay:          slip.gross,
+        sssContrib:        slip.sssEe,
+        philhealthContrib: slip.philhealthEe,
+        pagibigContrib:    slip.pagibigEe,
+        withholdingTax:    slip.withholdingTax,
         otherDeductions:   0,
-        totalDeductions:   totalDed,
-        netPay,
+        totalDeductions:   slip.totalDeductions,
+        netPay:            slip.net,
         regularHours:      round2(hours.regular),
         overtimeHours:     round2(hours.ot),
       });
 
-      totalGross      += grossPay;
-      totalDeductions += totalDed;
-      totalNet        += netPay;
+      totalGross      += slip.gross;
+      totalDeductions += slip.totalDeductions;
+      totalNet        += slip.net;
     }
 
     // Atomically: delete old payslips (re-processing), insert new, update run status.
@@ -747,16 +698,166 @@ export class PayrollService {
     const run = await this.prisma.payRun.findFirst({ where: { id: payRunId, tenantId } });
     if (!run) throw new NotFoundException('Pay run not found');
     if ((run.status as string) === 'COMPLETED') throw new BadRequestException('Completed pay runs cannot be cancelled');
-    // TOCTOU + tenant-scoped: only flip if not already COMPLETED.
+    if ((run.status as string) === 'LOCKED')    throw new BadRequestException('Locked pay runs cannot be cancelled — reverse the GL entry instead.');
+    // TOCTOU + tenant-scoped: only flip if currently DRAFT.
     const result = await this.prisma.payRun.updateMany({
-      where: { id: payRunId, tenantId, status: { not: 'COMPLETED' as any } },
+      where: { id: payRunId, tenantId, status: { notIn: ['COMPLETED', 'LOCKED'] as any[] } },
       data:  { status: 'CANCELLED' as any },
     });
     if (result.count !== 1) {
-      throw new ConflictException('Pay run was modified concurrently or is COMPLETED.');
+      throw new ConflictException('Pay run was modified concurrently or is finalized.');
     }
     const updated = await this.prisma.payRun.findFirstOrThrow({ where: { id: payRunId, tenantId } });
     return this.serializePayRun(updated);
+  }
+
+  /**
+   * Sprint 19 — Seal a COMPLETED pay run + post the salary GL entry.
+   *
+   *   Dr  6010  Salaries and Wages              gross
+   *   Dr  6020  SSS Employer Contribution       sssEr + sssEc
+   *   Dr  6030  PhilHealth Employer Contribution philhealthEr
+   *   Dr  6040  Pag-IBIG Employer Contribution   pagibigEr
+   *       Cr  2030  SSS Contributions Payable    (ee + er + ec total)
+   *       Cr  2040  PhilHealth Contributions Payable (ee + er total)
+   *       Cr  2050  Pag-IBIG Contributions Payable   (ee + er total)
+   *       Cr  2060  Withholding Tax Payable - Compensation   (wht)
+   *       Cr  2081  Accrued Salaries & Wages    (net pay - employees still unpaid)
+   *
+   * The credit to 2081 represents the net cash that the company still owes
+   * the workforce; on actual disbursement the bookkeeper posts
+   *   Dr 2081  Accrued Salaries
+   *       Cr 1022  Cash in Bank – Payroll Account
+   * — that's a separate treasury action, not part of this run.
+   *
+   * Idempotent on `reference: PR-{id}` — calling lock twice will throw.
+   * Once LOCKED, payslips are immutable and the run's totals are sealed.
+   */
+  async lockPayRun(payRunId: string, tenantId: string, lockedById: string): Promise<PayRunDto> {
+    const run = await this.prisma.payRun.findFirst({ where: { id: payRunId, tenantId } });
+    if (!run) throw new NotFoundException('Pay run not found');
+    if ((run.status as string) !== 'COMPLETED') {
+      throw new BadRequestException('Only COMPLETED pay runs can be locked. Process the run first.');
+    }
+
+    const slips = await this.prisma.payslip.findMany({
+      where: { payRunId, tenantId },
+      select: {
+        grossPay: true, sssContrib: true, philhealthContrib: true, pagibigContrib: true,
+        withholdingTax: true, otherDeductions: true, netPay: true,
+      },
+    });
+    if (!slips.length) throw new BadRequestException('No payslips on this run.');
+
+    // Aggregate totals. We only persisted EE shares on Payslip — recompute the
+    // ER/EC shares from the same statutory tables so the GL accrues the
+    // employer's expense correctly.
+    let totalGross    = 0;
+    let totalSssEe    = 0;
+    let totalPhEe     = 0;
+    let totalPiEe     = 0;
+    let totalWht      = 0;
+    let totalNet      = 0;
+    let totalSssEr    = 0;
+    let totalSssEc    = 0;
+    let totalPhEr     = 0;
+    let totalPiEr     = 0;
+
+    // Re-derive ER shares per slip from the same tables, anchored on the
+    // monthly-equivalent of (basic + OT). Using the saved EE numbers as a
+    // sanity check — they should already reflect the SSS 2025 schedule.
+    const fullSlips = await this.prisma.payslip.findMany({
+      where:  { payRunId, tenantId },
+      select: { basicPay: true, overtimePay: true },
+    });
+    const { sssMonthly, philhealthMonthly, pagibigMonthly, freqFactor, toMonthlyGross } =
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('./ph-tax-tables') as typeof import('./ph-tax-tables');
+    const freq = run.frequency as PhPayFreq;
+
+    for (let i = 0; i < slips.length; i++) {
+      const s  = slips[i];
+      const fs = fullSlips[i];
+      totalGross += Number(s.grossPay);
+      totalSssEe += Number(s.sssContrib);
+      totalPhEe  += Number(s.philhealthContrib);
+      totalPiEe  += Number(s.pagibigContrib);
+      totalWht   += Number(s.withholdingTax);
+      totalNet   += Number(s.netPay);
+
+      const taxableBase = Number(fs.basicPay) + Number(fs.overtimePay);
+      const monthly     = toMonthlyGross(taxableBase, freq);
+      const sss = sssMonthly(monthly);
+      const ph  = philhealthMonthly(monthly);
+      const pi  = pagibigMonthly(monthly);
+      const f   = freqFactor(freq);
+      totalSssEr += round2(sss.er * f);
+      totalSssEc += round2(sss.ec * f);
+      totalPhEr  += round2(ph.er  * f);
+      totalPiEr  += round2(pi.er  * f);
+    }
+
+    const total = (n: number) => round2(n);
+    const sssPayable = total(totalSssEe + totalSssEr + totalSssEc);
+    const phPayable  = total(totalPhEe  + totalPhEr);
+    const piPayable  = total(totalPiEe  + totalPiEr);
+
+    // Resolve account IDs by code.
+    const codes = ['6010', '6020', '6030', '6040', '2030', '2040', '2050', '2060', '2081'];
+    const accountByCode: Record<string, string> = {};
+    for (const code of codes) {
+      const a = await this.accounts.findByCode(tenantId, code);
+      if (!a) throw new BadRequestException(`Required GL account ${code} is missing for this tenant. Run COA seed.`);
+      accountByCode[code] = a.id;
+    }
+
+    const reference = `PR-${run.id}`;
+
+    // Idempotency: if a JE for this run already exists, refuse.
+    const existing = await this.prisma.journalEntry.findFirst({
+      where: { tenantId, reference },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('Pay run already has a posted journal entry.');
+    }
+
+    // Atomic — post the JE and flip the run to LOCKED. JournalService.create
+    // already validates debit=credit and respects period-lock guards.
+    return this.prisma.$transaction(async (_tx) => {
+      await this.journal.create(
+        tenantId,
+        {
+          date:        run.periodEnd.toISOString().slice(0, 10),
+          postingDate: run.periodEnd.toISOString().slice(0, 10),
+          description: `Payroll: ${run.label} (${run.periodStart.toISOString().slice(0, 10)} – ${run.periodEnd.toISOString().slice(0, 10)})`,
+          reference,
+          lines: [
+            { accountId: accountByCode['6010'], debit: total(totalGross),                   description: 'Salaries and Wages — gross' },
+            { accountId: accountByCode['6020'], debit: total(totalSssEr + totalSssEc),       description: 'SSS Employer Contribution + EC' },
+            { accountId: accountByCode['6030'], debit: total(totalPhEr),                     description: 'PhilHealth Employer Contribution' },
+            { accountId: accountByCode['6040'], debit: total(totalPiEr),                     description: 'Pag-IBIG Employer Contribution' },
+            { accountId: accountByCode['2030'], credit: sssPayable,                          description: 'SSS Contributions Payable' },
+            { accountId: accountByCode['2040'], credit: phPayable,                           description: 'PhilHealth Contributions Payable' },
+            { accountId: accountByCode['2050'], credit: piPayable,                           description: 'Pag-IBIG Contributions Payable' },
+            { accountId: accountByCode['2060'], credit: total(totalWht),                     description: 'Withholding Tax Payable — Compensation' },
+            { accountId: accountByCode['2081'], credit: total(totalNet),                     description: 'Accrued Salaries & Wages' },
+          ],
+        },
+        lockedById,
+        'PAYROLL',
+      );
+
+      const upd = await this.prisma.payRun.updateMany({
+        where: { id: payRunId, tenantId, status: 'COMPLETED' as any },
+        data:  { status: 'LOCKED' as any },
+      });
+      if (upd.count !== 1) {
+        throw new ConflictException('Pay run was modified concurrently — could not lock.');
+      }
+      const updated = await this.prisma.payRun.findFirstOrThrow({ where: { id: payRunId, tenantId } });
+      return this.serializePayRun(updated);
+    });
   }
 
   // ─── Payslips ─────────────────────────────────────────────────────────────

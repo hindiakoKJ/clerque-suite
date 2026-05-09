@@ -15,6 +15,7 @@ const badgeVariants = cva(
         warn:    'bg-amber-500/10 text-amber-600 dark:text-amber-400',
         danger:  'bg-red-500/10 text-red-600 dark:text-red-400',
         accent:  'bg-[var(--accent-soft)] text-[var(--accent)]',
+        locked:  'bg-slate-700 text-white dark:bg-slate-600',
       },
     },
     defaultVariants: { tone: 'default' },

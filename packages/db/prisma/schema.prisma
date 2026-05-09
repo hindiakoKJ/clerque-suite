@@ -324,6 +324,7 @@ enum JournalSource {
   SYSTEM // posted by the accounting event queue (@Cron)
   AP // posted by the AP module (Phase 4)
   AR // posted by the AR module (Phase 5)
+  PAYROLL // posted by the Payroll engine on PayRun lock (Sprint 19)
 }
 
 // ─── Super Admin ──────────────────────────────────────────────────────────────
@@ -2446,6 +2447,10 @@ enum PayFrequency {
 enum PayRunStatus {
   DRAFT
   COMPLETED
+  /// Sprint 19 — once a run is LOCKED, payslips become immutable and the
+  /// salary GL has been posted. No re-process, no edit. Use this to seal a
+  /// pay run after the bookkeeper has reviewed and approved the numbers.
+  LOCKED
   CANCELLED
 }
 

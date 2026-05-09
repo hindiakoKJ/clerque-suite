@@ -68,6 +68,13 @@ describe('PayrollService — Sprint 3 endpoints', () => {
       providers: [
         PayrollService,
         { provide: PrismaService, useValue: prisma },
+        // Sprint 19 — PayrollService now depends on JournalService + AccountsService
+        // for the lockPayRun GL posting flow. The Sprint 3 tests don't exercise
+        // lock, so a minimal mock satisfies the DI requirement.
+        { provide: (require('../accounting/journal.service') as typeof import('../accounting/journal.service')).JournalService,
+          useValue: { create: jest.fn() } },
+        { provide: (require('../accounting/accounts.service') as typeof import('../accounting/accounts.service')).AccountsService,
+          useValue: { findByCode: jest.fn() } },
       ],
     }).compile();
     svc = module.get(PayrollService);

@@ -176,6 +176,14 @@ export class PayrollController {
     return this.payrollService.cancelPayRun(id, user.tenantId!);
   }
 
+  @ApiOperation({ summary: 'Lock a COMPLETED pay run — posts the salary GL entry, payslips become immutable' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Post('runs/:id/lock')
+  @HttpCode(HttpStatus.OK)
+  lockPayRun(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.payrollService.lockPayRun(id, user.tenantId!, user.sub);
+  }
+
   // ─── Payslips ─────────────────────────────────────────────────────────────
 
   @ApiOperation({ summary: 'List payslips (optionally filter by pay run)' })

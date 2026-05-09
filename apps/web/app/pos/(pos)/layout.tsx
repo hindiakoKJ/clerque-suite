@@ -6,7 +6,7 @@ import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
-  Shirt, Sparkles, Truck, ClipboardCheck, Hammer,
+  Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity,
   Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
@@ -306,6 +306,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ...withSection('Operations', [
         makeNavItem('/pos/laundry/intake','Intake',     Sparkles,        LAUNDRY_OPS_ROLES,  role),
         makeNavItem('/pos/laundry/queue', 'Queue',      Shirt,           LAUNDRY_OPS_ROLES,  role),
+        makeNavItem('/pos/laundry/fleet', 'Fleet',      Activity,        LAUNDRY_OPS_ROLES,  role),
       ]),
       ...withSection('Records', [
         makeNavItem('/pos/orders',        'Orders',     ShoppingBag,     ORDERS_ROLES,       role),

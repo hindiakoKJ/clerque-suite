@@ -220,17 +220,33 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           ],
         };
 
-      // Default: unrecognised code — log full details for debugging, return safe generic message
-      default:
+      // Default: unrecognised code — log full details for debugging.
+      // We still avoid leaking PII (no row payloads, no tenant data), but
+      // we DO surface the first line of err.message in non-prod environments
+      // so triage doesn't require SSH'ing into Railway. err.message from
+      // Prisma is not user-data — it's metadata like "column X does not
+      // exist" or "value out of range for type integer".
+      default: {
         this.logger.error(
           `Unhandled Prisma error [${err.code}]: ${err.message}`,
           err.stack ?? String(err),
         );
+        // First non-empty line of the Prisma message — usually the most
+        // actionable single sentence. Prisma's full message is multi-line
+        // with a SQL snippet; we don't want to leak that to the client.
+        const firstLine = err.message.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+        const isProd = process.env.NODE_ENV === 'production';
+        const detail = isProd && firstLine.length > 200 ? '' : firstLine;
         return {
           status:   HttpStatus.INTERNAL_SERVER_ERROR,
           code:     `PRISMA_${err.code}`,
-          messages: [`A database error occurred (Prisma ${err.code}). Check the server log for the underlying cause; if it persists, an admin may need to run \`prisma db push\`.`],
+          messages: [
+            `A database error occurred (Prisma ${err.code}).` +
+              (detail ? ` Detail: ${detail}` : '') +
+              ` If this persists, run \`prisma db push\` (dev) or \`prisma migrate deploy\` (prod).`,
+          ],
         };
+      }
     }
   }
 

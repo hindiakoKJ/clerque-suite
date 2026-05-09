@@ -62,9 +62,14 @@ interface BranchLite   { id: string; isActive: boolean }
 
 export function LaundryDashboard() {
   // Active orders — anything not CLAIMED / CANCELLED.
+  // Backend returns paginated shape { data, total, take, skip }, but a
+  // legacy stub returned a bare array. Defensively unwrap both.
   const { data: activeOrders = [] } = useQuery<LaundryOrder[]>({
     queryKey: ['laundry-active-orders'],
-    queryFn:  () => api.get('/laundry/orders?status=active').then((r) => r.data),
+    queryFn:  () => api.get('/laundry/orders?status=active').then((r) => {
+      const payload = r.data;
+      return Array.isArray(payload) ? payload : (payload?.data ?? []);
+    }),
     refetchInterval: 30_000, // 30s — board feels live without hammering the API
   });
 
@@ -99,7 +104,9 @@ export function LaundryDashboard() {
     queryFn:  async () => {
       const { startISO, endISO } = todayBoundsPH();
       const r = await api.get(`/laundry/orders?from=${encodeURIComponent(startISO)}&to=${encodeURIComponent(endISO)}`);
-      return r.data;
+      // Same paginated-shape unwrap as activeOrders above.
+      const payload = r.data;
+      return Array.isArray(payload) ? payload : (payload?.data ?? []);
     },
   });
 

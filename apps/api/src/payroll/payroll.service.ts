@@ -1067,6 +1067,97 @@ export class PayrollService {
     return updated;
   }
 
+  // ── HR: Employee separation (attrition) ─────────────────────────────────
+  /**
+   * Sprint 19 — Mark an employee as separated. This is the offboarding
+   * entry point: sets `separatedAt`, `separationType`, `separationReason`,
+   * and flips `isActive = false` so they no longer count toward the seat
+   * cap, can no longer log in, and don't appear in default staff lists.
+   *
+   * Active sessions are also revoked so the credential goes inert
+   * immediately. The PayRun engine still picks up their attendance for
+   * the FINAL cut-off (they get one last payslip including unused
+   * vacation leave conversion, then drop out of subsequent runs).
+   *
+   * Future: BIR Form 2316 generation should be triggered from here,
+   * gated on a "send certificate to email" boolean. Schema-ready.
+   */
+  async separateEmployee(
+    tenantId: string,
+    targetUserId: string,
+    actorUserId: string,
+    dto: {
+      separationType: 'RESIGNED' | 'TERMINATED' | 'RETIRED' | 'END_OF_CONTRACT' | 'ABANDONED' | 'OTHER';
+      reason?: string;
+      effectiveDate?: string;  // ISO date; defaults to today
+    },
+  ) {
+    if (targetUserId === actorUserId) {
+      throw new BadRequestException('You cannot separate yourself.');
+    }
+    const target = await this.prisma.user.findFirst({
+      where:  { id: targetUserId, tenantId },
+      select: { id: true, role: true, name: true, isActive: true, separatedAt: true },
+    });
+    if (!target) throw new NotFoundException('Employee not found in this tenant.');
+    if (target.role === 'SUPER_ADMIN') {
+      throw new BadRequestException('SUPER_ADMIN accounts cannot be separated via this flow.');
+    }
+    if (target.separatedAt) {
+      throw new BadRequestException(`Already separated on ${target.separatedAt.toISOString().slice(0, 10)}.`);
+    }
+
+    const effectiveAt = dto.effectiveDate ? new Date(dto.effectiveDate) : new Date();
+    if (isNaN(effectiveAt.getTime())) {
+      throw new BadRequestException('effectiveDate is not a valid date.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id: targetUserId },
+        data: {
+          isActive:         false,
+          separatedAt:      effectiveAt,
+          separationType:   dto.separationType as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+          separationReason: dto.reason?.trim() || null,
+        },
+        select: {
+          id: true, name: true, role: true, isActive: true,
+          separatedAt: true, separationType: true, separationReason: true,
+        },
+      });
+      // Revoke active sessions — the credential is now inert.
+      await tx.userSession.deleteMany({ where: { userId: targetUserId } });
+      return updated;
+    });
+  }
+
+  /**
+   * Sprint 19 — Reverse a separation. Used when HR fires somebody and
+   * wants to undo it within the grace period (e.g. rehired before the
+   * cut-off, mistaken termination). Restores isActive=true, clears the
+   * separation fields, but does NOT re-create revoked sessions — the
+   * user logs in fresh.
+   */
+  async reverseSeparation(tenantId: string, targetUserId: string) {
+    const target = await this.prisma.user.findFirst({
+      where: { id: targetUserId, tenantId },
+      select: { id: true, separatedAt: true },
+    });
+    if (!target) throw new NotFoundException('Employee not found.');
+    if (!target.separatedAt) throw new BadRequestException('Employee is not currently separated.');
+    return this.prisma.user.update({
+      where: { id: targetUserId },
+      data: {
+        isActive:         true,
+        separatedAt:      null,
+        separationType:   null,
+        separationReason: null,
+      },
+      select: { id: true, name: true, isActive: true, separatedAt: true },
+    });
+  }
+
   // ── HR: Approve / reject a timesheet entry ────────────────────────────────
   async setTimesheetStatus(
     tenantId: string,

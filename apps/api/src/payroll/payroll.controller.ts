@@ -227,6 +227,34 @@ export class PayrollController {
     return this.payrollService.editEmployeeSalary(user.tenantId!, id, user.sub, body);
   }
 
+  // ─── Employee separation (Sprint 19 attrition flow) ─────────────────────
+  @ApiOperation({ summary: 'Separate (offboard) an employee — sets separatedAt, revokes sessions' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Post('staff/:id/separate')
+  @HttpCode(HttpStatus.OK)
+  separateEmployee(
+    @CurrentUser() user: JwtPayload,
+    @Param('id')   id:   string,
+    @Body() body: {
+      separationType: 'RESIGNED' | 'TERMINATED' | 'RETIRED' | 'END_OF_CONTRACT' | 'ABANDONED' | 'OTHER';
+      reason?:        string;
+      effectiveDate?: string;
+    },
+  ) {
+    return this.payrollService.separateEmployee(user.tenantId!, id, user.sub, body);
+  }
+
+  @ApiOperation({ summary: 'Reverse a separation (rehire / mistake undo)' })
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN')
+  @Post('staff/:id/reverse-separation')
+  @HttpCode(HttpStatus.OK)
+  reverseSeparation(
+    @CurrentUser() user: JwtPayload,
+    @Param('id')   id:   string,
+  ) {
+    return this.payrollService.reverseSeparation(user.tenantId!, id);
+  }
+
   @ApiOperation({ summary: 'Approve a CLOSED timesheet entry' })
   @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'SUPER_ADMIN')
   @Patch('timesheets/:id/approve')

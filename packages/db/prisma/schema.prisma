@@ -130,6 +130,19 @@ enum SalaryType {
   HOURLY
 }
 
+/// Sprint 19 — Reason category for an employee separation. Drives HR
+/// analytics (voluntary attrition rate) and downstream BIR forms (e.g.
+/// Form 2316 must be issued within 30 days of any separation regardless
+/// of cause).
+enum SeparationType {
+  RESIGNED      // Voluntary — employee gave notice
+  TERMINATED    // Involuntary — for cause
+  RETIRED       // Reached retirement age / opted in
+  END_OF_CONTRACT // Contractual / project-based ended
+  ABANDONED     // No-show / AWOL beyond company policy
+  OTHER
+}
+
 enum InventoryMode {
   UNIT_BASED
   RECIPE_BASED
@@ -697,6 +710,13 @@ model User {
   isActive                 Boolean        @default(true)
   hiredAt                  DateTime?
   separatedAt              DateTime?
+  /// Sprint 19 — attrition tracking. Set together with separatedAt at the
+  /// moment a tenant offboards an employee. Drives the BIR Form 2316
+  /// generation flow (separated employees need a year-to-date tax
+  /// statement issued within 30 days of separation per BIR rules) and
+  /// HR analytics (voluntary vs involuntary attrition rate).
+  separationType           SeparationType?
+  separationReason         String?
   enable2fa                Boolean        @default(false)
   twoFactorSecret          String?
   /// Sprint 17 — 8 single-use, hashed backup codes (bcrypt). Each consumed

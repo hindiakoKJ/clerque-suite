@@ -11,6 +11,8 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { Badge } from '@/components/ui/Badge';
+import { GetStartedChecklist } from '@/components/onboarding/GetStartedChecklist';
+import { useSyncChecklist } from '@/components/onboarding/useSyncChecklist';
 
 function currentMonthLabel() {
   return new Date().toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
@@ -72,6 +74,10 @@ export default function PayrollDashboard() {
 
   const monthLabel = currentMonthLabel();
 
+  // Sprint 19 — Get Started checklist for new tenants. Auto-hides when
+  // every required step is done.
+  const checklistItems = useSyncChecklist();
+
   return (
     <div className="flex flex-col h-full overflow-auto">
 
@@ -99,6 +105,12 @@ export default function PayrollDashboard() {
       </div>
 
       <div className="flex-1 p-4 sm:p-6 space-y-5 sm:space-y-6">
+
+        {/* ── First-run setup checklist (Sprint 19) ── */}
+        <GetStartedChecklist
+          subtitle="A handful of one-time steps and you're ready to run your first cut-off. We'll hide this once you're set up."
+          items={checklistItems}
+        />
 
         {/* Hero: Net Pay MTD */}
         <div className="bg-background rounded-lg border border-border border-l-4 border-l-[var(--accent)] p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4">

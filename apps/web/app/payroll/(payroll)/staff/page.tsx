@@ -1,6 +1,6 @@
 'use client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Users, Search, Plus, Mail, Phone, ChevronRight, Pencil, X } from 'lucide-react';
+import { Users, Search, Plus, Mail, Phone, ChevronRight, Pencil, X, UserMinus, UserCheck } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -45,6 +45,39 @@ export default function PayrollStaffPage() {
   const [editShiftEnd,   setEditShiftEnd]   = useState('');
 
   const canEditSalary = !!user && ['BUSINESS_OWNER', 'PAYROLL_MASTER', 'SUPER_ADMIN'].includes(user.role);
+
+  // Sprint 19 — attrition (employee separation) modal state
+  const [separatingEmp, setSeparatingEmp] = useState<Employee | null>(null);
+  const [sepType, setSepType] = useState<'RESIGNED' | 'TERMINATED' | 'RETIRED' | 'END_OF_CONTRACT' | 'ABANDONED' | 'OTHER'>('RESIGNED');
+  const [sepReason, setSepReason] = useState('');
+  const [sepDate, setSepDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  const separateMutation = useMutation({
+    mutationFn: () => {
+      if (!separatingEmp) throw new Error('No employee selected.');
+      return api.post(`/payroll/staff/${separatingEmp.id}/separate`, {
+        separationType: sepType,
+        reason: sepReason.trim() || undefined,
+        effectiveDate:  sepDate,
+      });
+    },
+    onSuccess: () => {
+      toast.success(`${separatingEmp?.name} has been separated.`);
+      qc.invalidateQueries({ queryKey: ['payroll-employees'] });
+      setSeparatingEmp(null);
+      setSepReason('');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Separation failed.'),
+  });
+
+  const reverseSepMutation = useMutation({
+    mutationFn: (empId: string) => api.post(`/payroll/staff/${empId}/reverse-separation`),
+    onSuccess: () => {
+      toast.success('Separation reversed — employee reactivated.');
+      qc.invalidateQueries({ queryKey: ['payroll-employees'] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Reverse failed.'),
+  });
 
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
     queryKey: ['payroll-employees'],
@@ -172,13 +205,43 @@ export default function PayrollStaffPage() {
                     {/* Status + actions */}
                     <div className="flex items-center gap-2 shrink-0">
                       <Badge tone={s.tone}>{s.label}</Badge>
-                      {canEditSalary && (
+                      {canEditSalary && emp.status !== 'INACTIVE' && (
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openEdit(emp); }}
+                            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                            title="Edit salary"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSeparatingEmp(emp);
+                              setSepType('RESIGNED');
+                              setSepReason('');
+                              setSepDate(new Date().toISOString().slice(0, 10));
+                            }}
+                            className="p-1.5 rounded text-muted-foreground hover:text-red-600 hover:bg-red-500/10"
+                            title="Separate employee"
+                          >
+                            <UserMinus className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                      {canEditSalary && emp.status === 'INACTIVE' && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); openEdit(emp); }}
-                          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted"
-                          title="Edit salary"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Reverse separation for ${emp.name}? They'll be reactivated and counted toward seat usage again.`)) {
+                              reverseSepMutation.mutate(emp.id);
+                            }
+                          }}
+                          disabled={reverseSepMutation.isPending}
+                          className="p-1.5 rounded text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10 disabled:opacity-50"
+                          title="Reverse separation (rehire)"
                         >
-                          <Pencil className="h-3.5 w-3.5" />
+                          <UserCheck className="h-3.5 w-3.5" />
                         </button>
                       )}
                       <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -296,6 +359,87 @@ export default function PayrollStaffPage() {
                 className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50"
               >
                 {editMut.isPending ? 'Saving…' : 'Save changes'}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* ── Separation (attrition) modal ─────────────────────────────────── */}
+      {separatingEmp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <header className="px-5 pt-5 pb-3 flex items-start justify-between gap-2 border-b border-border">
+              <div>
+                <h2 className="font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5">
+                  <UserMinus className="h-4 w-4" /> Separate Employee
+                </h2>
+                <p className="text-xs text-muted-foreground mt-0.5">{separatingEmp.name}</p>
+              </div>
+              <button onClick={() => setSeparatingEmp(null)} className="text-muted-foreground hover:text-foreground p-1 rounded">
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+
+            <div className="px-5 py-4 space-y-3">
+              <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+                Marks the employee as separated, deactivates their account, and revokes
+                all sessions. They drop out of seat usage immediately. Their attendance
+                up to the effective date stays on record so the next cut-off can include
+                a final payslip.
+              </div>
+
+              <label className="text-sm block">
+                <span className="text-xs text-muted-foreground">Reason category *</span>
+                <select
+                  value={sepType}
+                  onChange={(e) => setSepType(e.target.value as typeof sepType)}
+                  className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
+                >
+                  <option value="RESIGNED">Resigned (voluntary)</option>
+                  <option value="TERMINATED">Terminated (for cause)</option>
+                  <option value="RETIRED">Retired</option>
+                  <option value="END_OF_CONTRACT">End of contract</option>
+                  <option value="ABANDONED">Abandoned / AWOL</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </label>
+
+              <label className="text-sm block">
+                <span className="text-xs text-muted-foreground">Effective date *</span>
+                <input
+                  type="date"
+                  value={sepDate}
+                  onChange={(e) => setSepDate(e.target.value)}
+                  className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
+                />
+              </label>
+
+              <label className="text-sm block">
+                <span className="text-xs text-muted-foreground">Notes (optional)</span>
+                <textarea
+                  value={sepReason}
+                  onChange={(e) => setSepReason(e.target.value)}
+                  rows={3}
+                  className="mt-1 w-full px-2 py-2 rounded-md border border-border bg-background text-sm"
+                  placeholder="HR notes, ticket reference, etc."
+                />
+              </label>
+            </div>
+
+            <footer className="px-5 pb-5 pt-3 flex justify-end gap-2 border-t border-border">
+              <button
+                onClick={() => setSeparatingEmp(null)}
+                className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => separateMutation.mutate()}
+                disabled={separateMutation.isPending}
+                className="h-9 px-4 rounded-md text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+              >
+                {separateMutation.isPending ? 'Separating…' : 'Confirm Separation'}
               </button>
             </footer>
           </div>

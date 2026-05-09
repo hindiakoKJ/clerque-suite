@@ -14,6 +14,8 @@ import { formatPeso } from '@/lib/utils';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType } from '@repo/shared-types';
 import { LaundryDashboard } from './LaundryDashboard';
+import { GetStartedChecklist } from '@/components/onboarding/GetStartedChecklist';
+import { useSalesChecklist } from '@/components/onboarding/useSalesChecklist';
 
 const METHOD_LABELS: Record<string, string> = {
   CASH: 'Cash',
@@ -97,6 +99,14 @@ function SalesDashboard() {
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? '';
   const [date, setDate] = useState(todayPH());
+
+  // Sprint 19 — vertical-aware Get Started checklist (mirrors the laundry
+  // dashboard pattern users liked). Auto-hides once required steps are
+  // ticked, so established tenants don't see the strip at all.
+  const { layout: floorLayout } = useFloorLayout();
+  const checklistItems = useSalesChecklist({
+    businessType: floorLayout?.tenant?.businessType ?? null,
+  });
 
   const { data, isLoading, refetch, isFetching } = useQuery<DailyReport>({
     queryKey: ['daily-report', branchId, date],
@@ -184,6 +194,12 @@ function SalesDashboard() {
         </div>
       ) : !data ? null : (
         <div className="flex-1 p-4 sm:p-6 space-y-4 sm:space-y-6">
+
+          {/* ── First-run setup checklist (Sprint 19) ── */}
+          <GetStartedChecklist
+            subtitle="A handful of one-time steps and you're ready to ring up your first sale. We'll hide this once you're set up."
+            items={checklistItems}
+          />
 
           {/* ── Profit-accuracy warning ── */}
           {((missingCost?.count ?? 0) > 0 || data.itemsMissingCost.lineCount > 0) && (

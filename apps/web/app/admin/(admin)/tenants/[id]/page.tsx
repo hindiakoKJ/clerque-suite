@@ -533,26 +533,62 @@ function PasswordModal({ password, email, onClose }: { password: string; email?:
 
 // ─── User row actions ────────────────────────────────────────────────────────
 
-function UserActionsMenu({ user, tenantId, onRefresh }: {
-  user: TenantUser; tenantId: string; onRefresh: () => void;
+function UserActionsMenu({ user, tenantId, tenantSlug, onRefresh }: {
+  user: TenantUser; tenantId: string; tenantSlug: string; onRefresh: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [pwResult, setPwResult] = useState<{ password: string; email: string } | null>(null);
+
+  /**
+   * Wrap the API call so that when the backend's typed-slug guard fires
+   * (BUSINESS_OWNER / PAYROLL_MASTER / BOOKKEEPER / FINANCE_LEAD password
+   * resets), we prompt the SUPER_ADMIN for the tenant slug and retry.
+   * This produces the friendly modal flow the toast was missing.
+   */
+  async function callWithConfirmRetry(
+    fn: (body?: { confirmationToken?: string }) => Promise<unknown>,
+    actionLabel: string,
+  ): Promise<unknown> {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
+      if (data?.code === 'CONFIRMATION_REQUIRED') {
+        const typed = window.prompt(
+          `${actionLabel} on a high-privilege user. This is destructive + audit-logged.\n\n` +
+          `Type the tenant slug ('${tenantSlug}') to confirm:`,
+        );
+        if (typed == null) throw new Error('cancelled');
+        if (typed.trim().toLowerCase() !== tenantSlug.toLowerCase()) {
+          toast.error(`Confirmation does not match. Expected '${tenantSlug}'.`);
+          throw new Error('mismatch');
+        }
+        return fn({ confirmationToken: tenantSlug });
+      }
+      throw err;
+    }
+  }
 
   async function action(type: string, path: string, method: 'post' | 'patch' = 'post', label = type) {
     setBusy(type);
     try {
       const fn = method === 'patch' ? api.patch : api.post;
-      const { data } = await fn(`/admin/users/${user.id}/${path}`);
-      if (type === 'reset') {
+      const data = await callWithConfirmRetry(
+        (body) => fn(`/admin/users/${user.id}/${path}`, body).then((r) => r.data),
+        label,
+      ) as { generatedPassword?: string };
+      if (type === 'reset' && data?.generatedPassword) {
         setPwResult({ password: data.generatedPassword, email: user.email });
-      } else {
+      } else if (type !== 'reset') {
         toast.success(`${label} successful.`);
       }
       onRefresh();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      toast.error(msg ?? `${label} failed.`);
+      const msg = (err as { message?: string }).message;
+      // Swallow the user-cancelled / mismatch sentinels — already toasted.
+      if (msg === 'cancelled' || msg === 'mismatch') { setBusy(null); return; }
+      const apiMsg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(apiMsg ?? `${label} failed.`);
     } finally { setBusy(null); }
   }
 
@@ -1036,7 +1072,12 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
                       {u.activeSessions} active
                     </td>
                     <td className="p-2.5">
-                      <UserActionsMenu user={u} tenantId={id} onRefresh={refetchUsers} />
+                      <UserActionsMenu
+                        user={u}
+                        tenantId={id}
+                        tenantSlug={tenant.slug}
+                        onRefresh={refetchUsers}
+                      />
                     </td>
                   </tr>
                 ))}

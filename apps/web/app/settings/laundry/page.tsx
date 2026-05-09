@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Plus, Trash2, WashingMachine, Wind, Tag, ToggleRight, ToggleLeft } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, WashingMachine, Wind, Tag, ToggleRight, ToggleLeft, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -46,7 +46,7 @@ export default function LaundrySettingsPage() {
     // shows nothing useful. We'll just display a friendly note.
   }
 
-  const [tab, setTab] = useState<'prices' | 'addons' | 'promos' | 'machines'>('prices');
+  const [tab, setTab] = useState<'prices' | 'addons' | 'promos' | 'machines' | 'cycles'>('prices');
 
   return (
     <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
@@ -67,7 +67,7 @@ export default function LaundrySettingsPage() {
       </header>
 
       <div className="flex gap-1 border-b border-border">
-        {(['prices', 'addons', 'promos', 'machines'] as const).map((t) => (
+        {(['prices', 'addons', 'promos', 'machines', 'cycles'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -80,6 +80,7 @@ export default function LaundrySettingsPage() {
             {t === 'prices'   ? 'Service Prices'
             : t === 'addons'   ? 'Add-ons'
             : t === 'promos'   ? 'Promos'
+            : t === 'cycles'   ? 'Cycles'
             : 'Machines'}
           </button>
         ))}
@@ -89,6 +90,7 @@ export default function LaundrySettingsPage() {
       {tab === 'addons'   && <AddOnsTab />}
       {tab === 'promos'   && <PromosTab />}
       {tab === 'machines' && <MachinesTab />}
+      {tab === 'cycles'   && <CyclesTab />}
     </div>
   );
 }
@@ -558,6 +560,214 @@ function MachinesTab() {
                 className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50"
               >
                 {create.isPending ? 'Adding…' : 'Add'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─── Cycles tab (Sprint 19) ──────────────────────────────────────────────────
+//
+// Wash/dry packages — the "buttons on the machine". Operator defines
+// {name, kind, durationMinutes, autoComplete} and the queue page uses
+// these as the cycle picker at start time.
+function CyclesTab() {
+  const qc = useQueryClient();
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({
+    name: '', kind: 'WASHER' as 'WASHER' | 'DRYER' | 'COMBO',
+    durationMinutes: '30', autoComplete: false, surcharge: '',
+  });
+
+  interface Cycle {
+    id: string; name: string; kind: 'WASHER' | 'DRYER' | 'COMBO';
+    durationMinutes: number; autoComplete: boolean; surcharge: string | null;
+    isActive: boolean; sortOrder: number;
+  }
+
+  const { data: cycles = [] } = useQuery<Cycle[]>({
+    queryKey: ['laundry-cycles'],
+    queryFn:  () => api.get('/laundry/cycles').then((r) => r.data),
+  });
+
+  const createMut = useMutation({
+    mutationFn: () => api.post('/laundry/cycles', {
+      name:            form.name.trim(),
+      kind:            form.kind,
+      durationMinutes: Number(form.durationMinutes),
+      autoComplete:    form.autoComplete,
+      surcharge:       form.surcharge ? Number(form.surcharge) : null,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['laundry-cycles'] });
+      toast.success('Cycle added.');
+      setShowAdd(false);
+      setForm({ name: '', kind: 'WASHER', durationMinutes: '30', autoComplete: false, surcharge: '' });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+  });
+
+  const toggleActive = useMutation({
+    mutationFn: (c: Cycle) =>
+      api.patch(`/laundry/cycles/${c.id}`, { isActive: !c.isActive }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['laundry-cycles'] }),
+  });
+
+  const toggleAuto = useMutation({
+    mutationFn: (c: Cycle) =>
+      api.patch(`/laundry/cycles/${c.id}`, { autoComplete: !c.autoComplete }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['laundry-cycles'] }),
+  });
+
+  return (
+    <section className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold flex items-center gap-1.5">
+            <Sparkles className="h-4 w-4" /> Wash & Dry Cycles
+          </h2>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            The packages your machines run — Regular Wash, Premium Wash, Heavy Duty Dry, etc.
+            Each carries a duration; turn on Auto-complete to have the system mark cycles
+            DONE and free the machine when the timer elapses (instead of manual confirmation).
+          </p>
+        </div>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--accent)] text-white hover:opacity-90"
+        >
+          <Plus className="h-3.5 w-3.5" /> Add Cycle
+        </button>
+      </div>
+
+      {cycles.length === 0 ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          No cycles yet. Add one to enable the cycle picker on the queue page.
+        </div>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="text-left px-4 py-2 font-medium">Name</th>
+              <th className="text-left px-4 py-2 font-medium">Kind</th>
+              <th className="text-right px-4 py-2 font-medium">Duration</th>
+              <th className="text-right px-4 py-2 font-medium">Surcharge</th>
+              <th className="text-center px-4 py-2 font-medium">Auto-complete</th>
+              <th className="text-center px-4 py-2 font-medium">Active</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cycles.map((c) => (
+              <tr key={c.id} className={`border-t border-border/40 ${!c.isActive ? 'opacity-50' : ''}`}>
+                <td className="px-4 py-2.5 font-medium">{c.name}</td>
+                <td className="px-4 py-2.5">
+                  <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-muted">{c.kind}</span>
+                </td>
+                <td className="px-4 py-2.5 text-right font-mono">{c.durationMinutes} min</td>
+                <td className="px-4 py-2.5 text-right font-mono text-muted-foreground">
+                  {c.surcharge ? `+₱${Number(c.surcharge).toFixed(2)}` : '—'}
+                </td>
+                <td className="px-4 py-2.5 text-center">
+                  <button
+                    onClick={() => toggleAuto.mutate(c)}
+                    className={`text-xs px-2 py-0.5 rounded ${
+                      c.autoComplete
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                        : 'bg-muted text-muted-foreground'
+                    }`}
+                    title="Toggle auto-complete"
+                  >
+                    {c.autoComplete ? 'ON' : 'off'}
+                  </button>
+                </td>
+                <td className="px-4 py-2.5 text-center">
+                  <button
+                    onClick={() => toggleActive.mutate(c)}
+                    className={`text-xs px-2 py-0.5 rounded ${
+                      c.isActive
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                        : 'bg-muted text-muted-foreground'
+                    }`}
+                    title="Toggle active"
+                  >
+                    {c.isActive ? 'active' : 'archived'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-3">
+            <h3 className="font-semibold">Add Cycle</h3>
+            <label className="text-sm block">
+              <span className="text-xs text-muted-foreground">Name *</span>
+              <input
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. Premium Wash"
+                className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-sm block">
+                <span className="text-xs text-muted-foreground">Kind *</span>
+                <select
+                  value={form.kind}
+                  onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value as typeof f.kind }))}
+                  className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
+                >
+                  <option value="WASHER">WASHER</option>
+                  <option value="DRYER">DRYER</option>
+                  <option value="COMBO">COMBO</option>
+                </select>
+              </label>
+              <label className="text-sm block">
+                <span className="text-xs text-muted-foreground">Duration (min) *</span>
+                <input
+                  type="number" min="1" max="1440"
+                  value={form.durationMinutes}
+                  onChange={(e) => setForm((f) => ({ ...f, durationMinutes: e.target.value }))}
+                  className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm font-mono"
+                />
+              </label>
+            </div>
+            <label className="text-sm block">
+              <span className="text-xs text-muted-foreground">Surcharge (₱) — optional</span>
+              <input
+                type="number" step="0.01" min="0"
+                value={form.surcharge}
+                onChange={(e) => setForm((f) => ({ ...f, surcharge: e.target.value }))}
+                placeholder="e.g. 20.00"
+                className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm font-mono"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.autoComplete}
+                onChange={(e) => setForm((f) => ({ ...f, autoComplete: e.target.checked }))}
+              />
+              <span>Auto-complete when timer elapses</span>
+            </label>
+            <p className="text-[11px] text-muted-foreground -mt-1.5">
+              When ON, the system marks the line DONE and frees the machine automatically once the
+              cycle's duration has passed. The operator can still override this on a per-load basis at start time.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowAdd(false)} className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted">Cancel</button>
+              <button
+                onClick={() => createMut.mutate()}
+                disabled={!form.name.trim() || !form.durationMinutes || createMut.isPending}
+                className="h-9 px-4 rounded-md bg-[var(--accent)] text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {createMut.isPending ? 'Saving…' : 'Add'}
               </button>
             </div>
           </div>

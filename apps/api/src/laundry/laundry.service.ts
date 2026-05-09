@@ -564,7 +564,14 @@ export class LaundryService {
         branch: { select: { id: true, name: true } },
         lines: {
           where: { machineStatus: 'RUNNING' },
-          include: {
+          // Sprint 19 — surface cycle info on the running line so the queue
+          // page can render a live countdown.
+          select: {
+            id: true,
+            startedAt: true,
+            cycleEndsAt: true,
+            cycleAutoComplete: true,
+            cycle: { select: { id: true, name: true, durationMinutes: true } },
             order: {
               select: {
                 id: true, claimNumber: true,
@@ -988,7 +995,12 @@ export class LaundryService {
 
   // ── Machine assignment + state transitions ────────────────────────────────
 
-  async assignMachine(tenantId: string, lineId: string, machineId: string) {
+  async assignMachine(
+    tenantId: string,
+    lineId: string,
+    machineId: string,
+    cycleOpts?: { cycleId?: string; autoComplete?: boolean },
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const line = await tx.laundryOrderLine.findFirst({
         where:  { id: lineId, order: { tenantId } },
@@ -1003,12 +1015,194 @@ export class LaundryService {
       if (machine.status !== 'IDLE') {
         throw new BadRequestException(`Machine is ${machine.status}.`);
       }
+
+      // Sprint 19 — Cycle picker. If a cycle was selected, validate it
+      // matches the machine kind and compute cycleEndsAt = now + duration.
+      // The flag also locks in whether the @Cron worker should auto-flip
+      // this line to DONE when the timer elapses.
+      let cycleId: string | null = null;
+      let cycleEndsAt: Date | null = null;
+      let cycleAutoComplete = false;
+      if (cycleOpts?.cycleId) {
+        const cycle = await tx.laundryWashCycle.findFirst({
+          where:  { id: cycleOpts.cycleId, tenantId, isActive: true },
+          select: { id: true, kind: true, durationMinutes: true, autoComplete: true },
+        });
+        if (!cycle) throw new NotFoundException('Wash cycle not found or inactive.');
+        // COMBO machines accept WASHER or DRYER cycles; otherwise kinds must match.
+        const compatible =
+          cycle.kind === machine.kind ||
+          machine.kind === 'COMBO' ||
+          cycle.kind === 'COMBO';
+        if (!compatible) {
+          throw new BadRequestException(
+            `Cycle is for ${cycle.kind} — can't run on a ${machine.kind} machine.`,
+          );
+        }
+        cycleId = cycle.id;
+        cycleEndsAt = new Date(Date.now() + cycle.durationMinutes * 60_000);
+        // Body flag overrides the cycle's default — operator can opt out
+        // of auto-complete on a per-cycle basis ("manual confirmation
+        // tonight, not in the mood to trust the timer").
+        cycleAutoComplete = cycleOpts.autoComplete ?? cycle.autoComplete;
+      }
+
       await tx.laundryMachine.update({ where: { id: machineId }, data: { status: 'RUNNING' } });
       return tx.laundryOrderLine.update({
         where: { id: lineId },
-        data:  { machineId, machineStatus: 'RUNNING', startedAt: new Date() },
+        data:  {
+          machineId,
+          machineStatus: 'RUNNING',
+          startedAt: new Date(),
+          cycleId,
+          cycleEndsAt,
+          cycleAutoComplete,
+        },
       });
     });
+  }
+
+  // ── Wash Cycle CRUD (Sprint 19) ───────────────────────────────────────────
+
+  async listCycles(tenantId: string) {
+    return this.prisma.laundryWashCycle.findMany({
+      where:   { tenantId },
+      orderBy: [{ isActive: 'desc' }, { kind: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  }
+
+  async createCycle(
+    tenantId: string,
+    dto: {
+      name: string;
+      kind: 'WASHER' | 'DRYER' | 'COMBO';
+      durationMinutes: number;
+      autoComplete?: boolean;
+      surcharge?: number | null;
+      sortOrder?: number;
+      isActive?: boolean;
+    },
+  ) {
+    if (!dto.name?.trim())                           throw new BadRequestException('Cycle name is required.');
+    if (!Number.isFinite(dto.durationMinutes) || dto.durationMinutes <= 0) {
+      throw new BadRequestException('durationMinutes must be a positive number.');
+    }
+    if (dto.durationMinutes > 24 * 60) {
+      throw new BadRequestException('durationMinutes cannot exceed 24 hours.');
+    }
+    return this.prisma.laundryWashCycle.create({
+      data: {
+        tenantId,
+        name:            dto.name.trim(),
+        kind:            dto.kind as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+        durationMinutes: dto.durationMinutes,
+        autoComplete:    dto.autoComplete ?? false,
+        surcharge:       dto.surcharge != null ? new Prisma.Decimal(dto.surcharge) : null,
+        sortOrder:       dto.sortOrder ?? 0,
+        isActive:        dto.isActive ?? true,
+      },
+    });
+  }
+
+  async updateCycle(
+    tenantId: string,
+    id: string,
+    dto: Partial<{
+      name: string;
+      kind: 'WASHER' | 'DRYER' | 'COMBO';
+      durationMinutes: number;
+      autoComplete: boolean;
+      surcharge: number | null;
+      sortOrder: number;
+      isActive: boolean;
+    }>,
+  ) {
+    const existing = await this.prisma.laundryWashCycle.findFirst({ where: { id, tenantId } });
+    if (!existing) throw new NotFoundException('Cycle not found.');
+
+    if (dto.durationMinutes != null) {
+      if (!Number.isFinite(dto.durationMinutes) || dto.durationMinutes <= 0) {
+        throw new BadRequestException('durationMinutes must be positive.');
+      }
+      if (dto.durationMinutes > 24 * 60) {
+        throw new BadRequestException('durationMinutes cannot exceed 24 hours.');
+      }
+    }
+
+    return this.prisma.laundryWashCycle.update({
+      where: { id },
+      data: {
+        ...(dto.name             !== undefined ? { name: dto.name.trim() } : {}),
+        ...(dto.kind             !== undefined ? { kind: dto.kind as any } : {}), // eslint-disable-line @typescript-eslint/no-explicit-any
+        ...(dto.durationMinutes  !== undefined ? { durationMinutes: dto.durationMinutes } : {}),
+        ...(dto.autoComplete     !== undefined ? { autoComplete: dto.autoComplete } : {}),
+        ...(dto.surcharge        !== undefined
+          ? { surcharge: dto.surcharge != null ? new Prisma.Decimal(dto.surcharge) : null }
+          : {}),
+        ...(dto.sortOrder        !== undefined ? { sortOrder: dto.sortOrder } : {}),
+        ...(dto.isActive         !== undefined ? { isActive: dto.isActive } : {}),
+      },
+    });
+  }
+
+  async deleteCycle(tenantId: string, id: string) {
+    // Soft delete — keep historical line.cycleId references valid.
+    const existing = await this.prisma.laundryWashCycle.findFirst({ where: { id, tenantId } });
+    if (!existing) throw new NotFoundException('Cycle not found.');
+    return this.prisma.laundryWashCycle.update({
+      where: { id },
+      data:  { isActive: false },
+    });
+  }
+
+  /**
+   * Sprint 19 — @Cron worker target. Scans for RUNNING lines whose timer
+   * has elapsed and which are flagged for auto-complete; promotes them
+   * to DONE and releases the machine. Runs every minute.
+   *
+   * Idempotent: status-conditional updates so two overlapping cron ticks
+   * cannot double-flip a line.
+   */
+  async tickAutoCompleteCycles(): Promise<{ promoted: number }> {
+    const now = new Date();
+    const candidates = await this.prisma.laundryOrderLine.findMany({
+      where: {
+        machineStatus:     'RUNNING',
+        cycleAutoComplete: true,
+        cycleEndsAt:       { lte: now },
+      },
+      select: { id: true, machineId: true },
+      take: 200, // bound batch size
+    });
+    if (!candidates.length) return { promoted: 0 };
+
+    let promoted = 0;
+    for (const c of candidates) {
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          const flipped = await tx.laundryOrderLine.updateMany({
+            where: {
+              id: c.id,
+              machineStatus: 'RUNNING',
+              cycleAutoComplete: true,
+              cycleEndsAt: { lte: now },
+            },
+            data:  { machineStatus: 'DONE', finishedAt: now },
+          });
+          if (flipped.count !== 1) return;
+          if (c.machineId) {
+            await tx.laundryMachine.updateMany({
+              where: { id: c.machineId, status: 'RUNNING' },
+              data:  { status: 'IDLE' },
+            });
+          }
+          promoted++;
+        });
+      } catch {
+        // best-effort; log + continue. We'll catch the next tick.
+      }
+    }
+    return { promoted };
   }
 
   async markLineDone(tenantId: string, lineId: string) {

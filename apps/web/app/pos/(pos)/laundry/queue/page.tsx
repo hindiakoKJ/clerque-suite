@@ -1,5 +1,5 @@
 'use client';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -263,6 +263,36 @@ export default function LaundryQueuePage() {
   );
 }
 
+// ── Helpers (Sprint 19 cycle countdown) ────────────────────────────────────
+
+/**
+ * Forces a re-render at the requested interval. Cheap — used to keep the
+ * machine-grid countdown timers fresh without re-fetching the API.
+ */
+function useTick(ms: number) {
+  const [, setN] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setN((n) => n + 1), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+}
+
+/** "23:45" / "0:42 elapsed" — given an end timestamp. */
+function formatCountdown(endIso: string | null): { label: string; over: boolean } {
+  if (!endIso) return { label: '', over: false };
+  const remainingMs = new Date(endIso).getTime() - Date.now();
+  if (remainingMs <= 0) {
+    const overSec = Math.floor(-remainingMs / 1000);
+    const m = Math.floor(overSec / 60);
+    const s = overSec % 60;
+    return { label: `+${m}:${String(s).padStart(2, '0')}`, over: true };
+  }
+  const totalSec = Math.floor(remainingMs / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return { label: `${m}:${String(s).padStart(2, '0')}`, over: false };
+}
+
 // ── Machine grid (washer/dryer fleet panel) ────────────────────────────────
 interface Machine {
   id:         string;
@@ -273,6 +303,12 @@ interface Machine {
   branch:     { id: string; name: string };
   lines:      Array<{
     id: string;
+    startedAt:         string | null;
+    cycleEndsAt:       string | null;
+    cycleAutoComplete: boolean;
+    cycle: {
+      id: string; name: string; durationMinutes: number;
+    } | null;
     order: {
       id: string;
       claimNumber: string;
@@ -287,8 +323,15 @@ function MachineGrid() {
   const { data: machines = [] } = useQuery<Machine[]>({
     queryKey: ['laundry-machines'],
     queryFn:  () => api.get('/laundry/machines').then((r) => r.data),
-    refetchInterval: 30_000,
+    // Refresh every 10s so the cycle countdown stays roughly accurate and
+    // auto-completed lines disappear from running shortly after the cron tick.
+    refetchInterval: 10_000,
   });
+
+  // Tick every second to re-render the live countdown labels without
+  // burning a network call. The actual machine list still refetches on
+  // the 10-second interval above.
+  useTick(1000);
 
   const setStatus = useMutation({
     mutationFn: ({ id, status }: { id: string; status: Machine['status'] }) =>
@@ -359,6 +402,25 @@ function MachineGrid() {
               </div>
               <div className="text-[10px] opacity-70">{Number(m.capacityKg).toFixed(0)}kg · {m.kind.toLowerCase()}</div>
 
+              {/* Cycle countdown badge (Sprint 19) — only when a cycle was picked at start */}
+              {runningLine?.cycleEndsAt && (() => {
+                const { label, over } = formatCountdown(runningLine.cycleEndsAt);
+                return (
+                  <div
+                    className={
+                      'inline-flex items-center justify-between gap-1 rounded text-[10px] font-mono font-semibold px-1.5 py-0.5 ' +
+                      (over
+                        ? 'bg-red-600/15 text-red-700 dark:text-red-400'
+                        : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400')
+                    }
+                    title={runningLine.cycle?.name ?? 'cycle'}
+                  >
+                    <span className="truncate">{runningLine.cycle?.name ?? 'cycle'}</span>
+                    <span>{over ? `over ${label.replace('+', '')}` : label}</span>
+                  </div>
+                );
+              })()}
+
               {/* Customer + claim # — only for RUNNING */}
               {runningLine ? (
                 <Link
@@ -377,7 +439,10 @@ function MachineGrid() {
 
               {/* Action row */}
               <div className="flex items-center justify-end gap-1 -mt-0.5">
-                {m.status === 'RUNNING' && runningLine && (
+                {/* Manual Done — hidden when auto-complete will handle it
+                    on the next cron tick. The label flips to "auto" so the
+                    operator knows the system is in charge. */}
+                {m.status === 'RUNNING' && runningLine && !runningLine.cycleAutoComplete && (
                   <button
                     onClick={() => markDone.mutate(runningLine.id)}
                     className="inline-flex items-center gap-0.5 rounded text-[10px] bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 font-semibold"
@@ -385,6 +450,14 @@ function MachineGrid() {
                   >
                     <CheckCircle2 className="h-3 w-3" /> done
                   </button>
+                )}
+                {m.status === 'RUNNING' && runningLine?.cycleAutoComplete && (
+                  <span
+                    className="inline-flex items-center gap-0.5 rounded text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5"
+                    title="Will auto-complete when timer elapses"
+                  >
+                    auto
+                  </span>
                 )}
                 {m.status === 'IDLE' && (
                   <button

@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Body, Param, Query,
+  Controller, Get, Post, Patch, Delete, Body, Param, Query,
   UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
@@ -184,9 +184,12 @@ export class LaundryController {
   assignMachine(
     @CurrentUser() user: JwtPayload,
     @Param('lineId') lineId: string,
-    @Body() body: { machineId: string },
+    @Body() body: { machineId: string; cycleId?: string; autoComplete?: boolean },
   ) {
-    return this.svc.assignMachine(user.tenantId!, lineId, body.machineId);
+    return this.svc.assignMachine(user.tenantId!, lineId, body.machineId, {
+      cycleId:      body.cycleId,
+      autoComplete: body.autoComplete,
+    });
   }
 
   @ApiOperation({ summary: 'Mark a running line DONE (frees the machine)' })
@@ -195,6 +198,61 @@ export class LaundryController {
   @HttpCode(HttpStatus.OK)
   markLineDone(@CurrentUser() user: JwtPayload, @Param('lineId') lineId: string) {
     return this.svc.markLineDone(user.tenantId!, lineId);
+  }
+
+  // ── Wash Cycle CRUD (Sprint 19) ───────────────────────────────────────
+  @ApiOperation({ summary: 'List wash/dry cycle packages' })
+  @Roles(...LaundryController.LAUNDRY_OPS)
+  @Get('cycles')
+  listCycles(@CurrentUser() user: JwtPayload) {
+    return this.svc.listCycles(user.tenantId!);
+  }
+
+  @ApiOperation({ summary: 'Create a wash/dry cycle package' })
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'SUPER_ADMIN', 'MDM')
+  @Post('cycles')
+  @HttpCode(HttpStatus.CREATED)
+  createCycle(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: {
+      name: string;
+      kind: 'WASHER' | 'DRYER' | 'COMBO';
+      durationMinutes: number;
+      autoComplete?: boolean;
+      surcharge?: number | null;
+      sortOrder?: number;
+      isActive?: boolean;
+    },
+  ) {
+    return this.svc.createCycle(user.tenantId!, body);
+  }
+
+  @ApiOperation({ summary: 'Update a wash/dry cycle package' })
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'SUPER_ADMIN', 'MDM')
+  @Patch('cycles/:id')
+  @HttpCode(HttpStatus.OK)
+  updateCycle(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: Partial<{
+      name: string;
+      kind: 'WASHER' | 'DRYER' | 'COMBO';
+      durationMinutes: number;
+      autoComplete: boolean;
+      surcharge: number | null;
+      sortOrder: number;
+      isActive: boolean;
+    }>,
+  ) {
+    return this.svc.updateCycle(user.tenantId!, id, body);
+  }
+
+  @ApiOperation({ summary: 'Soft-delete a wash/dry cycle package (sets isActive=false)' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM')
+  @Delete('cycles/:id')
+  @HttpCode(HttpStatus.OK)
+  deleteCycle(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.svc.deleteCycle(user.tenantId!, id);
   }
 
   // ── Promos ─────────────────────────────────────────────────────────────

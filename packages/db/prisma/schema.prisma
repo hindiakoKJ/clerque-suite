@@ -497,6 +497,7 @@ model Tenant {
   laundryOrders        LaundryOrder[]
   laundryMachines      LaundryMachine[]
   laundryServicePrices LaundryServicePrice[]
+  laundryWashCycles    LaundryWashCycle[]
   laundryAddOns        LaundryServiceAddOn[]
   laundryPromos        LaundryPromo[]
   stockTransfers       StockTransfer[]
@@ -3075,6 +3076,42 @@ model LaundryMachine {
   @@map("laundry_machines")
 }
 
+/// Sprint 19 — Wash/dry cycle packages. A laundromat operator defines
+/// the buttons that exist on their physical machines (e.g. "Regular Wash
+/// — 30 min", "Premium Wash — 60 min", "Heavy Duty Dry — 45 min") so the
+/// cashier can pick one at cycle-start and the queue page shows a live
+/// countdown. With `autoComplete=true`, the @Cron worker auto-flips the
+/// line to DONE + the machine back to IDLE when `cycleEndsAt` passes —
+/// no manual click. Otherwise the operator still confirms but at least
+/// has the timer in front of them.
+model LaundryWashCycle {
+  id              String              @id @default(cuid())
+  tenantId        String
+  /// Display label, e.g. "Regular Wash" / "Premium Wash" / "Heavy Duty Dry".
+  name            String
+  /// Which machine kind this cycle runs on. WASHER / DRYER / COMBO.
+  kind            LaundryMachineKind
+  /// Wall-clock duration of the cycle in minutes.
+  durationMinutes Int
+  /// When true, the @Cron worker promotes the line to DONE automatically
+  /// at end of cycle; the operator does NOT need to click "Done".
+  autoComplete    Boolean             @default(false)
+  /// Optional surcharge: cycles like "Premium Wash" can carry a fee
+  /// applied on top of the line's base unitPrice. Null = no surcharge.
+  surcharge       Decimal?            @db.Decimal(10, 2)
+  isActive        Boolean             @default(true)
+  /// Sort order in the cycle picker. Lower = shown first.
+  sortOrder       Int                 @default(0)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines  LaundryOrderLine[]
+
+  @@index([tenantId, kind, isActive])
+  @@map("laundry_wash_cycles")
+}
+
 /// Tenant pricing matrix: service × mode → ₱ per set/piece.
 model LaundryServicePrice {
   id          String             @id @default(cuid())
@@ -3109,12 +3146,24 @@ model LaundryOrderLine {
   startedAt     DateTime?
   finishedAt    DateTime?
 
+  // Sprint 19 — Cycle tracking. When a cycle is picked at start time,
+  // cycleEndsAt is computed = startedAt + cycle.durationMinutes. The
+  // queue page shows a live countdown from this. If
+  // cycleAutoComplete=true, a @Cron worker promotes the line to DONE +
+  // releases the machine when cycleEndsAt passes. Otherwise the
+  // countdown is informational only and the operator clicks Done.
+  cycleId            String?
+  cycleEndsAt        DateTime?
+  cycleAutoComplete  Boolean   @default(false)
+
   order   LaundryOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
   machine LaundryMachine?         @relation(fields: [machineId], references: [id])
+  cycle   LaundryWashCycle?       @relation(fields: [cycleId], references: [id])
   addOns  LaundryOrderLineAddOn[]
 
   @@index([orderId])
   @@index([machineId])
+  @@index([cycleEndsAt, machineStatus, cycleAutoComplete])  // cron scan target
   @@map("laundry_order_lines")
 }
 

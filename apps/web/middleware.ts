@@ -37,7 +37,12 @@ const APP_RULES: Array<{
 const PUBLIC_PATHS = ['/', '/login', '/select'];
 // /stub/* — laundry public claim ticket. /stamps/* — Sprint 19 public
 // loyalty stamp card pull-up (QR on printed receipts, SMS links).
-const PUBLIC_PREFIXES = ['/legal', '/forgot-password', '/reset-password', '/stub', '/stamps'];
+// /payroll/kiosk — Sprint 19 shared clock-in tablet (PIN-based punch);
+//   the device authenticates via apiKey in the URL, no JWT involved.
+const PUBLIC_PREFIXES = [
+  '/legal', '/forgot-password', '/reset-password',
+  '/stub', '/stamps', '/payroll/kiosk',
+];
 
 function getToken(req: NextRequest): string | null {
   return req.cookies.get('app-session')?.value ?? null;

@@ -523,6 +523,7 @@ model Tenant {
   laundryWashCycles    LaundryWashCycle[]
   stampCardTemplates   StampCardTemplate[]
   stampCards           CustomerStampCard[]
+  kioskTerminals       KioskTerminal[]
   laundryAddOns        LaundryServiceAddOn[]
   laundryPromos        LaundryPromo[]
   stockTransfers       StockTransfer[]
@@ -710,6 +711,7 @@ model Branch {
   fleetAssets     FleetAsset[]
   tripTickets     TripTicket[]
   jobOrders       JobOrder[]
+  kioskTerminals  KioskTerminal[]
 
   @@map("branches")
 }
@@ -2142,6 +2144,41 @@ model StampCardEvent {
 
   @@index([cardId, createdAt])
   @@map("stamp_card_events")
+}
+
+// ─── Sync Kiosk Terminals (Sprint 19) ────────────────────────────────────────
+// Shared on-site clock-in/out device. Owner enrolls a tablet once; staff
+// punch their kiosk PIN to clock in or out. The kiosk authenticates with a
+// long-lived apiKey scoped to a (tenant, optional branch); per-staff
+// authentication is the User.kioskPin lookup performed server-side. Only
+// punches; no read access to any other tenant data.
+
+model KioskTerminal {
+  id         String   @id @default(cuid())
+  tenantId   String
+  /// Optional branch scope. When set, only users assigned to that branch
+  /// (or no branch) can punch from this kiosk. Null = any branch.
+  branchId   String?
+  name       String
+  /// Owner-issued long-lived bearer key. Embedded in the kiosk URL once
+  /// at enrollment; rotate by revoking + re-issuing.
+  apiKey     String   @unique
+  isActive   Boolean  @default(true)
+  /// Telemetry — last successful or failed punch attempt from this kiosk.
+  lastUsedAt DateTime?
+  /// Sliding-window failure counter for PIN brute-force throttling.
+  failedAttempts Int     @default(0)
+  /// When failedAttempts hit the limit, this is set; punches return 429
+  /// until now() > lockedUntil.
+  lockedUntil    DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, isActive])
+  @@map("kiosk_terminals")
 }
 
 // ─── AR (Accounts Receivable) ────────────────────────────────────────────────

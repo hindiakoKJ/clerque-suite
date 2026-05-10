@@ -175,12 +175,15 @@ export class KioskService {
    * (apiKey vs PIN) — we only want to confirm "we found you and recorded
    * the punch" or "no, retype".
    */
-  async punch(apiKey: string, pin: string) {
+  async punch(apiKey: string, pin: string, intent?: 'IN' | 'OUT') {
     if (!apiKey || !pin) {
       throw new BadRequestException('apiKey and pin are required.');
     }
     if (!/^\d{4,8}$/.test(pin)) {
       throw new BadRequestException('PIN must be 4–8 digits.');
+    }
+    if (intent && intent !== 'IN' && intent !== 'OUT') {
+      throw new BadRequestException('intent must be "IN" or "OUT".');
     }
 
     const kiosk = await this.prisma.kioskTerminal.findUnique({
@@ -250,6 +253,23 @@ export class KioskService {
       orderBy: { clockIn: 'desc' },
       select: { id: true, clockIn: true },
     });
+
+    // Sprint 19 — When the kiosk UI sends an explicit intent, validate
+    // against the user's actual state so we never silently do the wrong
+    // thing. The legacy auto-detect path (no intent supplied) is preserved
+    // for clients that haven't been updated.
+    if (intent === 'IN' && open) {
+      throw new BadRequestException({
+        code:    'ALREADY_CLOCKED_IN',
+        message: `${user.name}, you're already clocked in. Tap Clock Out instead.`,
+      });
+    }
+    if (intent === 'OUT' && !open) {
+      throw new BadRequestException({
+        code:    'NOT_CLOCKED_IN',
+        message: `${user.name}, you're not clocked in. Tap Clock In first.`,
+      });
+    }
 
     let action: 'CLOCKED_IN' | 'CLOCKED_OUT';
     let at: Date;

@@ -91,8 +91,8 @@ export class KioskPublicController {
   @ApiOperation({ summary: 'Punch clock-in or clock-out (auth via apiKey + PIN)' })
   @Post('punch')
   @HttpCode(HttpStatus.OK)
-  punch(@Body() body: { apiKey: string; pin: string }) {
-    return this.svc.punch(body.apiKey, body.pin);
+  punch(@Body() body: { apiKey: string; pin: string; intent?: 'IN' | 'OUT' }) {
+    return this.svc.punch(body.apiKey, body.pin, body.intent);
   }
 
   /**

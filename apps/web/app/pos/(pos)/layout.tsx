@@ -341,9 +341,10 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/orders',            'Orders',          ShoppingBag,     ORDERS_ROLES,    role),
       ]),
       ...withSection('Pharmacy', [
-        makeNavItem('/pos/pharmacy/rx',       'Prescriptions',   FileBadge,       PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/pharmacy/lots',     'Product Lots',    Pill,            INVENTORY_ROLES, role),
-        makeNavItem('/pos/pharmacy/register', 'DDB Register',    ShieldAlert,     PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/pharmacy/rx',         'Prescriptions',   FileBadge,       PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/pharmacy/lots',       'Product Lots',    Pill,            INVENTORY_ROLES, role),
+        makeNavItem('/pos/pharmacy/deliveries', 'Deliveries',      Truck,           INVENTORY_ROLES, role),
+        makeNavItem('/pos/pharmacy/register',   'DDB Register',    ShieldAlert,     PRODUCTS_ROLES,  role),
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',          'Products',        Package,         PRODUCTS_ROLES,  role),

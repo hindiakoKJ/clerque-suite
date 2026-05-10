@@ -586,6 +586,7 @@ model Tenant {
   stampCardTemplates   StampCardTemplate[]
   stampCards           CustomerStampCard[]
   kioskTerminals       KioskTerminal[]
+  deliveryReceipts     DeliveryReceipt[]
   laundryAddOns        LaundryServiceAddOn[]
   laundryPromos        LaundryPromo[]
   stockTransfers       StockTransfer[]
@@ -774,6 +775,7 @@ model Branch {
   tripTickets     TripTicket[]
   jobOrders       JobOrder[]
   kioskTerminals  KioskTerminal[]
+  deliveryReceipts DeliveryReceipt[]
 
   @@map("branches")
 }
@@ -1041,6 +1043,7 @@ model Product {
   laundryProductLines LaundryProductLine[]
   // Sprint 13 — Compliance-Engine
   productLots         ProductLot[]
+  deliveryReceiptItems DeliveryReceiptItem[]
   // Sprint 13 — Service-Engine
   jobOrderLines       JobOrderLine[]         @relation("JobOrderLineProduct")
 
@@ -2012,6 +2015,7 @@ model Vendor {
   expenses ExpenseEntry[]
   bills    APBill[]
   payments APPayment[]
+  deliveryReceipts DeliveryReceipt[]
 
   @@index([tenantId, tin])
   @@index([tenantId, isActive])
@@ -2267,6 +2271,61 @@ model KioskTerminal {
 
   @@index([tenantId, isActive])
   @@map("kiosk_terminals")
+}
+
+// ─── Sprint 19 — Supplier delivery receiving ─────────────────────────────────
+// Pharmacies receive stock from distributors (Mercury, Watsons-DSI, Zuellig,
+// Pharma) and need to log it with lot + expiry → inventory atomically. The
+// optional apBillId link lets the owner manually create the AP bill from the
+// existing /ledger/ap/bills page and tie it back. Future sprint: auto-post
+// the bill from the receipt.
+
+model DeliveryReceipt {
+  id           String   @id @default(cuid())
+  tenantId     String
+  branchId     String
+  vendorId     String
+  /// Distributor's DR / invoice number printed on the paper receipt
+  drNumber     String
+  receivedAt   DateTime @default(now())
+  /// User.id of the staff member who received + logged the delivery
+  receivedById String
+  notes        String?
+  /// Optional link to the AP bill posted for this delivery (created later
+  /// from /ledger/ap/bills; null until the owner posts the bill).
+  apBillId     String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+  items  DeliveryReceiptItem[]
+
+  @@unique([tenantId, vendorId, drNumber])
+  @@index([tenantId, branchId, receivedAt])
+  @@map("delivery_receipts")
+}
+
+model DeliveryReceiptItem {
+  id           String   @id @default(cuid())
+  receiptId    String
+  productId    String
+  /// Lot/batch number from the distributor's slip
+  lotNumber    String
+  expiresAt    DateTime
+  quantity     Decimal  @db.Decimal(12, 3)
+  costPrice    Decimal  @db.Decimal(12, 2)
+  /// FK to the ProductLot row created when this receipt item posted
+  productLotId String?  @unique
+  createdAt    DateTime @default(now())
+
+  receipt    DeliveryReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  product    Product         @relation(fields: [productId], references: [id])
+  productLot ProductLot?     @relation(fields: [productLotId], references: [id])
+
+  @@index([receiptId])
+  @@map("delivery_receipt_items")
 }
 
 // ─── AR (Accounts Receivable) ────────────────────────────────────────────────
@@ -3968,6 +4027,7 @@ model ProductLot {
   product    Product     @relation(fields: [productId], references: [id])
   branch     Branch      @relation(fields: [branchId], references: [id])
   orderItems OrderItem[]
+  deliveryReceiptItems DeliveryReceiptItem[]
 
   @@unique([tenantId, productId, lotNumber])
   @@index([tenantId, productId, branchId, expiresAt])

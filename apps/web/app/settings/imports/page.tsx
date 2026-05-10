@@ -16,7 +16,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Download, Package, Boxes, Users as UsersIcon, Truck,
-  FileSpreadsheet, Loader2, BookOpen, Scroll, Box, Info,
+  FileSpreadsheet, Loader2, BookOpen, Scroll, Box, Info, Sprout, ChefHat,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -66,6 +66,11 @@ export default function ImportTemplatesPage() {
   const businessType = profile?.businessType ?? null;
   const verticalLabel = businessType ? (VERTICAL_NAME[businessType] ?? businessType) : '—';
   const isPharmacy = businessType === 'PHARMACY';
+  // F&B + manufacturing benefit from Ingredients + Recipes (recipe-based COGS).
+  // Other verticals can technically use them too, but most don't need them.
+  const isRecipeFriendly = businessType
+    ? ['COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING', 'MANUFACTURING'].includes(businessType)
+    : false;
 
   const [downloading, setDownloading] = useState<string | null>(null);
 
@@ -107,11 +112,31 @@ export default function ImportTemplatesPage() {
       name: `Products${isPharmacy ? ' (with drug class + lot)' : ''}`,
       desc: isPharmacy
         ? '15 columns including Generic Name, Brand, Dosage Form, Strength, Drug Class, Initial Lot # + Expiry, and Initial Stock. Drug-class drives the till workflow at sale.'
-        : `7-column lean template tailored to ${verticalLabel}. Sample rows show the kind of items in your catalog.`,
+        : isRecipeFriendly
+          ? `Menu items / SKUs tailored to ${verticalLabel}. For recipe-based COGS (drinks, dishes, fabricated goods), use the Ingredients + Recipes templates AFTER this — Cost Price here is a fallback used only when no recipe exists.`
+          : `7-column lean template tailored to ${verticalLabel}. Sample rows show the kind of items in your catalog.`,
       endpoint: '/import/template/products',
       filename: `clerque-products-${(businessType ?? 'general').toLowerCase()}.xlsx`,
       Icon: Package,
     },
+    ...(isRecipeFriendly ? [
+      {
+        id: 'ingredients',
+        name: 'Ingredients (Raw Materials)',
+        desc: `For recipe-based COGS. Define every raw material your products are made from (espresso beans, milk, rice, sauce…) with cost per unit. Required before importing Recipes.`,
+        endpoint: '/import/template/ingredients',
+        filename: 'clerque-ingredients.xlsx',
+        Icon: Sprout,
+      },
+      {
+        id: 'recipes',
+        name: 'Recipes (BOM)',
+        desc: `One row per ingredient × product. Maps your menu items to ingredients with quantities — Iced Latte 16oz = 18g beans + 200ml milk + 1 cup + 1 lid + 1 stirrer. Auto-flips matched products to RECIPE_BASED so COGS is derived live from ingredients × WAC.`,
+        endpoint: '/import/template/recipes',
+        filename: 'clerque-recipes.xlsx',
+        Icon: ChefHat,
+      },
+    ] as TemplateInfo[] : []),
     {
       id: 'inventory',
       name: 'Inventory (opening stock)',
@@ -238,7 +263,9 @@ export default function ImportTemplatesPage() {
       <div className="rounded-xl border border-border bg-muted/20 p-4 text-xs text-muted-foreground space-y-1.5">
         <p className="flex items-start gap-1.5">
           <span className="font-semibold text-foreground">Order matters.</span>
-          For first-time setup, use the <strong>Setup Pack</strong> — it bundles everything with a Read Me sheet that walks you through the order (Products → Inventory → Customers → Vendors).
+          {isRecipeFriendly
+            ? <>For recipe-based businesses (coffee shops, restaurants, bakeries, manufacturing), the right order is: <strong>Ingredients → Products → Recipes → Inventory</strong>. The Setup Pack only covers the basics; for full recipe COGS, use the Ingredients + Recipes templates separately.</>
+            : <>For first-time setup, use the <strong>Setup Pack</strong> — it bundles everything with a Read Me sheet that walks you through the order (Products → Inventory → Customers → Vendors).</>}
         </p>
         <p>
           Each template has a Read Me / Instructions section at the top of the sheet. Open the
@@ -246,9 +273,14 @@ export default function ImportTemplatesPage() {
           matching Import button on each module&apos;s page.
         </p>
         <p>
-          <strong className="text-foreground">Existing products / customers / vendors are updated, not duplicated</strong> — the importer
+          <strong className="text-foreground">Existing products / customers / vendors / ingredients are updated, not duplicated</strong> — the importer
           matches by Name (and Barcode for products). To add new rows, just add new names.
         </p>
+        {isRecipeFriendly && (
+          <p>
+            <strong className="text-foreground">Why recipe COGS matters:</strong> a 16oz iced latte costing ~₱35 in ingredients (18g beans + 200ml milk + cup/lid/stirrer) sold at ₱150 = ~76% gross margin. Without a recipe, COGS is whatever you typed in the Cost Price column — usually wrong.
+          </p>
+        )}
       </div>
     </div>
   );

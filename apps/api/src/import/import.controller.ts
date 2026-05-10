@@ -211,4 +211,38 @@ export class ImportController {
     });
     res.send(buf);
   }
+
+  // ── Ingredients / Raw Materials (Sprint 19) ────────────────────────────
+  @Post('ingredients')
+  @UseInterceptors(FileInterceptor('file'))
+  importIngredients(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importIngredients(file, req.user.tenantId!);
+  }
+  @Get('template/ingredients')
+  async ingredientsTemplate(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.ingredientsTemplate(req.user.tenantId ?? undefined);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-ingredients-template.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  // ── Recipes / BOM (Sprint 19) ──────────────────────────────────────────
+  @Post('recipes')
+  @UseInterceptors(FileInterceptor('file'))
+  importRecipes(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importRecipes(file, req.user.tenantId!);
+  }
+  @Get('template/recipes')
+  async recipesTemplate(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.recipesTemplate(req.user.tenantId ?? undefined);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-recipes-template.xlsx"',
+    });
+    res.send(buf);
+  }
 }

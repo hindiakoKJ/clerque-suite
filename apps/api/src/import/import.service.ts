@@ -557,7 +557,7 @@ export class ImportService {
     switch (businessType) {
       case 'COFFEE_SHOP':
         title = 'Clerque — Coffee Shop Product Master Import Template';
-        helperLine = 'Tip: For drinks with milk + size variants, set up modifiers from POS → Products after import.';
+        helperLine = 'Tip: For drinks made from beans + milk + cups (recipe-based COGS), use the Ingredients + Recipes templates after this — true cost is auto-derived from the recipe at sale time. The Cost Price below is a FALLBACK used only when no recipe exists.';
         sampleRows = [
           ['Espresso Solo',    'Beverages',   '85',  '22',  'Y', '',              'Single shot espresso'],
           ['Iced Latte 16oz',  'Beverages',   '150', '38',  'Y', '',              'Espresso + cold milk + ice'],
@@ -575,7 +575,7 @@ export class ImportService {
       case 'BAR_LOUNGE':
       case 'CATERING':
         title = 'Clerque — Restaurant Product Master Import Template';
-        helperLine = 'Tip: For recipe-based dishes (track ingredient COGS), set up BOM from POS → Products after import.';
+        helperLine = 'Tip: For dishes made from rice + meat + sauce (recipe-based COGS), use the Ingredients + Recipes templates after this — true cost is auto-derived from the recipe at sale time. The Cost Price below is a FALLBACK used only when no recipe exists.';
         sampleRows = [
           ['Garlic Rice',         'Mains',     '60',  '12',  'Y', '', 'Steamed rice with toasted garlic'],
           ['Tapsilog',            'Mains',     '180', '85',  'Y', '', 'Tapa + sinangag + itlog'],
@@ -1499,6 +1499,366 @@ export class ImportService {
           'Optional. WC158/WC160/WI160/WI010/WI011.',
           'Optional. 0-1 (e.g. 0.05 for 5%).',
           'Optional. Free text.',
+        ],
+      },
+    );
+  }
+
+  // ── Ingredients (Raw Materials) Import — Sprint 19 ────────────────────────
+  // For F&B / manufacturing tenants where COGS lives at the recipe level.
+  // Ingredients (espresso beans, milk, flour) carry the cost per unit; the
+  // Recipes importer then maps menu items to ingredients × quantity. Together
+  // they replace the per-product Cost Price column on the Products import for
+  // recipe-based businesses.
+  //
+  // Columns: Name*, Unit*, Cost per Unit (₱)*, Low Stock Alert, Notes
+
+  async importIngredients(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
+    const rows = await this.parseFile(file);
+    const headerIdx = this.findHeaderRow(rows, ['Name*', 'Name']);
+    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (rows.length <= dataStart) {
+      throw new BadRequestException('File must have a header row and at least one data row.');
+    }
+
+    const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
+    let dataRows = rows.slice(dataStart);
+    if (dataRows.length > 0) {
+      const looksLikeHints = (dataRows[0][0] ?? '').toLowerCase().includes('required');
+      if (looksLikeHints) dataRows = dataRows.slice(1);
+    }
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNum = dataStart + i + 2;
+      const [name, unit, costStr, lowStockStr, notes] = dataRows[i];
+      void notes; // currently unused — RawMaterial has no notes column
+
+      if (!name?.trim()) { result.skipped++; continue; }
+      if (!unit?.trim()) {
+        result.errors.push({ row: rowNum, message: 'Unit is required (e.g. g, ml, kg, L, pc).' });
+        continue;
+      }
+      if (costStr == null || costStr.trim() === '') {
+        result.errors.push({ row: rowNum, message: 'Cost per Unit is required for COGS calculation.' });
+        continue;
+      }
+      const costPrice = parseFloat(costStr);
+      if (isNaN(costPrice) || costPrice < 0) {
+        result.errors.push({ row: rowNum, message: `Invalid Cost per Unit: "${costStr}".` });
+        continue;
+      }
+      let lowStockAlert: number | null = null;
+      if (lowStockStr && lowStockStr.trim()) {
+        lowStockAlert = parseFloat(lowStockStr);
+        if (isNaN(lowStockAlert) || lowStockAlert < 0) {
+          result.errors.push({ row: rowNum, message: `Invalid Low Stock Alert: "${lowStockStr}".` });
+          continue;
+        }
+      }
+
+      try {
+        const existing = await this.prisma.rawMaterial.findFirst({
+          where: { tenantId, name: name.trim() },
+        });
+        const data = {
+          tenantId,
+          name:          name.trim(),
+          unit:          unit.trim(),
+          costPrice:     new Prisma.Decimal(costPrice),
+          lowStockAlert: lowStockAlert != null ? new Prisma.Decimal(lowStockAlert) : null,
+          isActive:      true,
+        };
+        if (existing) {
+          await this.prisma.rawMaterial.update({ where: { id: existing.id }, data });
+          result.updated++;
+        } else {
+          await this.prisma.rawMaterial.create({ data });
+          result.imported++;
+        }
+      } catch (err: any) {
+        result.errors.push({ row: rowNum, message: err.message ?? 'Unknown error' });
+      }
+    }
+    return result;
+  }
+
+  async ingredientsTemplate(tenantId?: string): Promise<Buffer> {
+    let businessType: string = 'RETAIL';
+    if (tenantId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { businessType: true },
+      });
+      businessType = tenant?.businessType ?? 'RETAIL';
+    }
+
+    let title = 'Clerque — Ingredients (Raw Materials) Import Template';
+    let sampleRows: string[][];
+    switch (businessType) {
+      case 'COFFEE_SHOP':
+        title = 'Clerque — Coffee Shop Ingredients Import Template';
+        sampleRows = [
+          ['Espresso Beans (Single-Origin)', 'g',   '0.65',  '500',   'Specialty 250g bag = ₱600 ÷ 250 ≈ ₱2.40 per gram; here we use whole beans bulk pricing'],
+          ['Whole Milk',                     'ml',  '0.085', '2000',  'Magnolia 1L ≈ ₱85'],
+          ['Soy Milk',                       'ml',  '0.18',  '1000',  'Vitasoy / oatside alternative'],
+          ['Vanilla Syrup',                  'ml',  '0.95',  '500',   'Monin / Torani 750ml ≈ ₱700'],
+          ['Caramel Syrup',                  'ml',  '0.95',  '500',   ''],
+          ['Hot Cup 16oz',                   'pc',  '4.50',  '200',   'Paper cup with sleeve'],
+          ['Cold Cup 16oz',                  'pc',  '5.00',  '200',   'Plastic cup'],
+          ['Lid (universal)',                'pc',  '1.50',  '300',   ''],
+          ['Stirrer',                        'pc',  '0.30',  '500',   ''],
+          ['Sugar Sachet',                   'pc',  '0.50',  '300',   '5g'],
+        ];
+        break;
+      case 'RESTAURANT':
+      case 'BAKERY':
+      case 'FOOD_STALL':
+      case 'BAR_LOUNGE':
+      case 'CATERING':
+        title = 'Clerque — Restaurant Ingredients Import Template';
+        sampleRows = [
+          ['Jasmine Rice',     'g',  '0.055', '5000',  '50kg sack ≈ ₱2,750'],
+          ['Pork Belly',       'g',  '0.42',  '2000',  '₱420 per kilo'],
+          ['Chicken Thigh',    'g',  '0.32',  '2000',  '₱320 per kilo'],
+          ['Onion',            'g',  '0.08',  '1000',  '₱80 per kilo'],
+          ['Garlic',           'g',  '0.18',  '500',   '₱180 per kilo'],
+          ['Soy Sauce',        'ml', '0.06',  '500',   'Datu Puti 1L ≈ ₱60'],
+          ['Vinegar',          'ml', '0.05',  '500',   'Datu Puti 1L ≈ ₱50'],
+          ['Cooking Oil',      'ml', '0.15',  '1000',  'Baguio 1L ≈ ₱150'],
+          ['Iodized Salt',     'g',  '0.025', '500',   '500g pack ≈ ₱12'],
+          ['Bottled Coke',     'pc', '22.00', '24',    'Coca-Cola 240ml glass'],
+        ];
+        break;
+      case 'MANUFACTURING':
+        title = 'Clerque — Manufacturing Raw Materials Import Template';
+        sampleRows = [
+          ['Pine Wood Plank',     'pc', '420',  '20',  '8ft x 1in x 6in'],
+          ['Steel Bracket',       'pc', '85',   '50',  ''],
+          ['Wood Screws (box)',   'pc', '180',  '10',  '500-pc box'],
+          ['Wood Stain (Oak)',    'ml', '0.55', '1000','1L can ≈ ₱550'],
+          ['Sandpaper 180-grit',  'pc', '12',   '50',  ''],
+        ];
+        break;
+      default:
+        title = 'Clerque — Ingredients / Raw Materials Import Template';
+        sampleRows = [
+          ['Sample Ingredient', 'g',  '0.50', '500',  'Cost = ₱0.50 per gram'],
+        ];
+        break;
+    }
+
+    return this.makeTemplate(
+      'Ingredients',
+      ['Name*', 'Unit*', 'Cost per Unit (₱)*', 'Low Stock Alert', 'Notes'],
+      sampleRows,
+      {
+        title,
+        instructions: [
+          'How to use:',
+          '  1. List every ingredient / raw material your products are made from. Name must be unique within your tenant.',
+          '  2. Unit is the smallest unit you measure in (g, ml, pc, kg, L, oz). Recipes will reference this unit.',
+          '  3. Cost per Unit is the COST per unit (₱). Drives recipe-based COGS at sale time.',
+          '  4. Low Stock Alert (optional): system flags the ingredient when any branch quantity falls below this number.',
+          '  5. Save as .xlsx (or .csv). Upload via POS → Inventory → Ingredients → Import.',
+          '',
+          'Tip: To convert bulk pricing, divide the bulk cost by the bulk unit. Example: 1L milk at ₱85 → 0.085 per ml.',
+          'Next: Once ingredients are loaded, use the Recipes template to map menu items (Products) to ingredient quantities.',
+        ],
+        columnHints: [
+          'Required. Unique within tenant.',
+          'Required. g / ml / kg / L / pc / oz.',
+          'REQUIRED. Cost per unit (₱), drives recipe COGS.',
+          'Optional. Stock-low threshold.',
+          'Optional. Free text.',
+        ],
+      },
+    );
+  }
+
+  // ── Recipes (BOM) Import — Sprint 19 ─────────────────────────────────────
+  // Maps existing menu items (Products) to existing ingredients (RawMaterial)
+  // with a per-line quantity. Run AFTER Products import + Ingredients import.
+  // The product is auto-flipped to RECIPE_BASED so its COGS is derived from
+  // ingredients × WAC at sale time, not from Product.costPrice.
+  //
+  // Columns: Product Name*, Ingredient Name*, Quantity*
+
+  async importRecipes(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
+    const rows = await this.parseFile(file);
+    const headerIdx = this.findHeaderRow(rows, ['Product Name*', 'Product Name']);
+    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (rows.length <= dataStart) {
+      throw new BadRequestException('File must have a header row and at least one data row.');
+    }
+
+    const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
+    let dataRows = rows.slice(dataStart);
+    if (dataRows.length > 0) {
+      const looksLikeHints = (dataRows[0][0] ?? '').toLowerCase().includes('required');
+      if (looksLikeHints) dataRows = dataRows.slice(1);
+    }
+
+    // Track which products have at least one BOM line so we can flip them to
+    // RECIPE_BASED at the end. If a row imports but the product is missing,
+    // we skip the row (no auto-create — products must be loaded first).
+    const productsToFlip = new Set<string>();
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNum = dataStart + i + 2;
+      const [productName, ingredientName, qtyStr] = dataRows[i];
+
+      if (!productName?.trim() || !ingredientName?.trim()) { result.skipped++; continue; }
+      if (qtyStr == null || qtyStr.trim() === '') {
+        result.errors.push({ row: rowNum, message: 'Quantity is required.' });
+        continue;
+      }
+      const quantity = parseFloat(qtyStr);
+      if (isNaN(quantity) || quantity <= 0) {
+        result.errors.push({ row: rowNum, message: `Invalid Quantity "${qtyStr}". Must be > 0.` });
+        continue;
+      }
+
+      try {
+        const product = await this.prisma.product.findFirst({
+          where:  { tenantId, name: productName.trim() },
+          select: { id: true },
+        });
+        if (!product) {
+          result.errors.push({ row: rowNum, message: `Product "${productName}" not found. Run the Products import first.` });
+          continue;
+        }
+        const rm = await this.prisma.rawMaterial.findFirst({
+          where:  { tenantId, name: ingredientName.trim() },
+          select: { id: true },
+        });
+        if (!rm) {
+          result.errors.push({ row: rowNum, message: `Ingredient "${ingredientName}" not found. Run the Ingredients import first.` });
+          continue;
+        }
+
+        // Upsert the BOM row by (productId, rawMaterialId)
+        const existing = await this.prisma.bomItem.findFirst({
+          where: { productId: product.id, rawMaterialId: rm.id },
+          select: { id: true },
+        });
+        if (existing) {
+          await this.prisma.bomItem.update({
+            where: { id: existing.id },
+            data:  { quantity: new Prisma.Decimal(quantity) },
+          });
+          result.updated++;
+        } else {
+          await this.prisma.bomItem.create({
+            data: {
+              productId:     product.id,
+              rawMaterialId: rm.id,
+              quantity:      new Prisma.Decimal(quantity),
+            },
+          });
+          result.imported++;
+        }
+        productsToFlip.add(product.id);
+      } catch (err: any) {
+        result.errors.push({ row: rowNum, message: err.message ?? 'Unknown error' });
+      }
+    }
+
+    // Flip every product that received a BOM line to RECIPE_BASED. Idempotent.
+    if (productsToFlip.size > 0) {
+      await this.prisma.product.updateMany({
+        where: { id: { in: Array.from(productsToFlip) }, tenantId, inventoryMode: 'UNIT_BASED' },
+        data:  { inventoryMode: 'RECIPE_BASED' },
+      });
+    }
+    return result;
+  }
+
+  async recipesTemplate(tenantId?: string): Promise<Buffer> {
+    let businessType: string = 'RETAIL';
+    if (tenantId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { businessType: true },
+      });
+      businessType = tenant?.businessType ?? 'RETAIL';
+    }
+
+    let title = 'Clerque — Recipes (BOM) Import Template';
+    let sampleRows: string[][];
+    switch (businessType) {
+      case 'COFFEE_SHOP':
+        title = 'Clerque — Coffee Shop Recipes Import Template';
+        sampleRows = [
+          ['Espresso Solo',     'Espresso Beans (Single-Origin)', '18'],
+          ['Espresso Solo',     'Hot Cup 16oz',                   '1'],
+          ['Espresso Solo',     'Lid (universal)',                '1'],
+          ['Iced Latte 16oz',   'Espresso Beans (Single-Origin)', '18'],
+          ['Iced Latte 16oz',   'Whole Milk',                     '180'],
+          ['Iced Latte 16oz',   'Cold Cup 16oz',                  '1'],
+          ['Iced Latte 16oz',   'Lid (universal)',                '1'],
+          ['Iced Latte 16oz',   'Stirrer',                        '1'],
+          ['Cappuccino 12oz',   'Espresso Beans (Single-Origin)', '18'],
+          ['Cappuccino 12oz',   'Whole Milk',                     '150'],
+          ['Cappuccino 12oz',   'Hot Cup 16oz',                   '1'],
+          ['Cappuccino 12oz',   'Lid (universal)',                '1'],
+          ['Matcha Latte 16oz', 'Whole Milk',                     '200'],
+          ['Matcha Latte 16oz', 'Cold Cup 16oz',                  '1'],
+          ['Matcha Latte 16oz', 'Lid (universal)',                '1'],
+        ];
+        break;
+      case 'RESTAURANT':
+      case 'BAKERY':
+      case 'FOOD_STALL':
+      case 'BAR_LOUNGE':
+      case 'CATERING':
+        title = 'Clerque — Restaurant Recipes Import Template';
+        sampleRows = [
+          ['Garlic Rice',     'Jasmine Rice',     '180'],
+          ['Garlic Rice',     'Garlic',           '8'],
+          ['Garlic Rice',     'Cooking Oil',      '15'],
+          ['Garlic Rice',     'Iodized Salt',     '2'],
+          ['Tapsilog',        'Pork Belly',       '180'],
+          ['Tapsilog',        'Jasmine Rice',     '180'],
+          ['Tapsilog',        'Soy Sauce',        '15'],
+          ['Tapsilog',        'Garlic',           '5'],
+          ['Adobong Manok',   'Chicken Thigh',    '250'],
+          ['Adobong Manok',   'Soy Sauce',        '30'],
+          ['Adobong Manok',   'Vinegar',          '20'],
+          ['Adobong Manok',   'Garlic',           '10'],
+          ['Adobong Manok',   'Onion',            '50'],
+        ];
+        break;
+      default:
+        title = 'Clerque — Recipes (BOM) Import Template';
+        sampleRows = [
+          ['Sample Product', 'Sample Ingredient', '10'],
+        ];
+        break;
+    }
+
+    return this.makeTemplate(
+      'Recipes',
+      ['Product Name*', 'Ingredient Name*', 'Quantity*'],
+      sampleRows,
+      {
+        title,
+        instructions: [
+          'How to use:',
+          '  1. One row per ingredient PER product. A drink with 5 ingredients = 5 rows for that product.',
+          '  2. Product Name must match an existing Product (run the Products template first).',
+          '  3. Ingredient Name must match an existing Ingredient (run the Ingredients template first).',
+          '  4. Quantity is in the ingredient\'s native unit (g / ml / pc / etc.) — see the Ingredients sheet.',
+          '  5. Importing a recipe FLIPS the product to RECIPE_BASED — its COGS now derives from ingredients × WAC at sale time.',
+          '  6. Re-importing a row UPDATES the existing recipe line (matched by Product + Ingredient), not duplicates it.',
+          '',
+          'Order:  Ingredients → Products → Recipes  (in that order, every time).',
+          '',
+          'Tip: Cost is computed automatically. A 16oz latte with 18g beans @ ₱0.65/g + 200ml milk @ ₱0.085/ml + 1 cold cup @ ₱5 + 1 lid @ ₱1.50 + 1 stirrer @ ₱0.30 = ₱35.50 cost; if you sell at ₱150, gross margin is ~76%.',
+        ],
+        columnHints: [
+          'Required. Existing Product name.',
+          'Required. Existing Ingredient name.',
+          'REQUIRED. Qty per finished item.',
         ],
       },
     );

@@ -202,10 +202,32 @@ export class ImportService {
       if (!priceCellLooksNumeric) dataRows = dataRows.slice(1);
     }
 
+    // Sprint 19 — Pharmacy columns are appended to the template AFTER the
+    // 7 standard columns. They're optional for every vertical; pharmacy
+    // tenants get a tailored sheet with example rows that fill them in.
+    //
+    //   Column 8:  Generic Name
+    //   Column 9:  Brand Name
+    //   Column 10: Dosage Form
+    //   Column 11: Strength
+    //   Column 12: Drug Class (OTC / RX_ONLY / DDB_S2 / etc.)
+    //   Column 13: Initial Lot # (optional — creates ProductLot if filled)
+    //   Column 14: Initial Lot Expiry (ISO YYYY-MM-DD; required when col 13 is set)
+    //   Column 15: Initial Stock (qty for the default branch when given)
+    const VALID_DRUG_CLASSES = new Set([
+      'OTC', 'OTC_BTC', 'RX_ONLY',
+      'DDB_S2', 'DDB_S3', 'DDB_S4', 'DDB_S5',
+      'VACCINE', 'DEVICE', 'SUPPLEMENT', 'COSMETIC', 'OTHER',
+    ]);
+
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = i + 2;
-      const [name, categoryName, priceStr, costStr, vatStr, barcode, description] =
-        dataRows[i];
+      const [
+        name, categoryName, priceStr, costStr, vatStr, barcode, description,
+        // Sprint 19 — pharmacy-specific (all optional)
+        genericName, brandName, dosageForm, strength, drugClassRaw,
+        lotNumber, lotExpiryStr, initialStockStr,
+      ] = dataRows[i];
 
       if (!name?.trim()) {
         result.skipped++;
@@ -240,6 +262,50 @@ export class ImportService {
         (vatStr || '').toLowerCase(),
       );
 
+      // Sprint 19 — Validate optional pharmacy fields
+      const drugClassRawTrim = (drugClassRaw ?? '').toUpperCase().trim();
+      if (drugClassRawTrim && !VALID_DRUG_CLASSES.has(drugClassRawTrim)) {
+        result.errors.push({
+          row: rowNum,
+          message: `Invalid Drug Class "${drugClassRaw}". Use one of: ${Array.from(VALID_DRUG_CLASSES).join(', ')}.`,
+        });
+        continue;
+      }
+      const drugClass = (drugClassRawTrim || 'OTC') as
+        'OTC' | 'OTC_BTC' | 'RX_ONLY' | 'DDB_S2' | 'DDB_S3' | 'DDB_S4' | 'DDB_S5'
+        | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
+      const isRxRequired = ['RX_ONLY', 'DDB_S2', 'DDB_S3', 'DDB_S4', 'DDB_S5'].includes(drugClass);
+      const isControlledDrug = ['DDB_S2', 'DDB_S3', 'DDB_S4', 'DDB_S5'].includes(drugClass);
+
+      // Initial lot validation
+      let lotExpiryDate: Date | null = null;
+      if (lotNumber?.trim()) {
+        if (!lotExpiryStr?.trim()) {
+          result.errors.push({
+            row: rowNum,
+            message: 'Initial Lot Expiry is required when Initial Lot # is set (use ISO date YYYY-MM-DD).',
+          });
+          continue;
+        }
+        const parsed = new Date(lotExpiryStr.trim());
+        if (isNaN(parsed.getTime())) {
+          result.errors.push({
+            row: rowNum,
+            message: `Invalid Initial Lot Expiry "${lotExpiryStr}". Use ISO date YYYY-MM-DD.`,
+          });
+          continue;
+        }
+        lotExpiryDate = parsed;
+      }
+      const initialStock = initialStockStr?.trim() ? parseFloat(initialStockStr) : 0;
+      if (initialStockStr?.trim() && (isNaN(initialStock) || initialStock < 0)) {
+        result.errors.push({
+          row: rowNum,
+          message: `Invalid Initial Stock "${initialStockStr}". Must be a number ≥ 0.`,
+        });
+        continue;
+      }
+
       try {
         // Find or create category
         let categoryId: string | undefined;
@@ -270,6 +336,18 @@ export class ImportService {
           },
         });
 
+        // Sprint 19 — pharmacy field set, applied uniformly to create + update.
+        const pharmacyFields = {
+          ...(genericName?.trim() && { genericName: genericName.trim() }),
+          ...(brandName?.trim()   && { brandName:   brandName.trim() }),
+          ...(dosageForm?.trim()  && { dosageForm:  dosageForm.trim() }),
+          ...(strength?.trim()    && { strength:    strength.trim() }),
+          drugClass,
+          isRxRequired,
+          isControlledDrug,
+        };
+
+        let productId: string;
         if (existing) {
           await this.prisma.product.update({
             where: { id: existing.id },
@@ -280,11 +358,13 @@ export class ImportService {
               ...(categoryId && { categoryId }),
               ...(description?.trim() && { description: description.trim() }),
               ...(barcode?.trim() && { barcode: barcode.trim() }),
+              ...pharmacyFields,
             },
           });
+          productId = existing.id;
           result.updated++;
         } else {
-          await this.prisma.product.create({
+          const created = await this.prisma.product.create({
             data: {
               tenantId,
               name: name.trim(),
@@ -296,9 +376,62 @@ export class ImportService {
               ...(categoryId && { categoryId }),
               ...(description?.trim() && { description: description.trim() }),
               ...(barcode?.trim() && { barcode: barcode.trim() }),
+              ...pharmacyFields,
             },
+            select: { id: true },
           });
+          productId = created.id;
           result.imported++;
+        }
+
+        // Sprint 19 — If an initial lot is provided, create the ProductLot
+        // row at the tenant's first branch. Pharmacy import shorthand —
+        // for full lot management, owners use /pos/pharmacy/lots after.
+        if (lotNumber?.trim() && lotExpiryDate) {
+          const branch = await this.prisma.branch.findFirst({
+            where:  { tenantId, isActive: true },
+            select: { id: true },
+            orderBy: { createdAt: 'asc' },
+          });
+          if (branch) {
+            const lotData = {
+              tenantId,
+              productId,
+              branchId:  branch.id,
+              lotNumber: lotNumber.trim(),
+              expiresAt: lotExpiryDate,
+              quantity:  new Prisma.Decimal(Math.max(initialStock, 0)),
+              costPrice: new Prisma.Decimal(costPrice),
+            };
+            try {
+              await this.prisma.productLot.upsert({
+                where: {
+                  // matches @@unique([tenantId, productId, lotNumber])
+                  tenantId_productId_lotNumber: {
+                    tenantId, productId, lotNumber: lotNumber.trim(),
+                  },
+                } as any,
+                update: { quantity: lotData.quantity, expiresAt: lotData.expiresAt, costPrice: lotData.costPrice },
+                create: lotData,
+              });
+              // Sync InventoryItem at the branch so the till sees the stock.
+              if (initialStock > 0) {
+                await this.prisma.inventoryItem.upsert({
+                  where:  { productId_branchId: { productId, branchId: branch.id } } as any,
+                  update: { quantity: { increment: new Prisma.Decimal(initialStock) } },
+                  create: {
+                    tenantId, productId, branchId: branch.id,
+                    quantity: new Prisma.Decimal(initialStock),
+                  },
+                });
+              }
+            } catch (err: any) {
+              result.errors.push({
+                row: rowNum,
+                message: `Initial lot create failed: ${err?.message ?? 'unknown'}`,
+              });
+            }
+          }
         }
       } catch (err: any) {
         result.errors.push({
@@ -321,12 +454,24 @@ export class ImportService {
         'VAT (Y/N)',
         'Barcode',
         'Description',
+        // Sprint 19 — pharmacy columns. Optional for non-pharmacy tenants.
+        'Generic Name',
+        'Brand Name',
+        'Dosage Form',
+        'Strength',
+        'Drug Class',
+        'Initial Lot #',
+        'Initial Lot Expiry',
+        'Initial Stock',
       ],
       [
-        ['Garlic Rice',     'Food',    '35',  '12',  'Y', '',           'Steamed garlic fried rice'],
-        ['Bottled Water',   'Drinks',  '20',  '8',   'N', '4806507000123', '500ml'],
-        ['Iced Latte 16oz', 'Drinks',  '110', '35',  'Y', '',           'Espresso + cold milk + ice'],
-        ['Plain Donut',     'Bakery',  '25',  '9',   'N', '',           'Sugar-glazed cake donut'],
+        // Standard rows (pharmacy columns blank — non-drug import)
+        ['Garlic Rice',     'Food',    '35',  '12',  'Y', '',           'Steamed garlic fried rice', '', '', '', '', '', '', '', ''],
+        ['Bottled Water',   'Drinks',  '20',  '8',   'N', '4806507000123', '500ml',                  '', '', '', '', '', '', '', ''],
+        // Pharmacy example rows showcasing the optional columns
+        ['Paracetamol 500mg', 'Pain & Fever',   '2.50',  '1.20', 'Y', '', 'Tablet', 'Paracetamol',  'Biogesic', 'Tablet',  '500mg',  'OTC',     'PAR-2025-114', '2027-12-31', '500'],
+        ['Amoxicillin 500mg', 'Antibiotics',    '12.00', '4.50', 'Y', '', 'Capsule','Amoxicillin',  'Amoxil',   'Capsule', '500mg',  'RX_ONLY', 'AMX-2025-042', '2026-09-30', '200'],
+        ['Diazepam 5mg',      'Anxiolytics',    '8.00',  '3.20', 'Y', '', 'Tablet', 'Diazepam',     'Valium',   'Tablet',  '5mg',    'DDB_S4',  'DIA-2025-018', '2027-03-15', '100'],
       ],
       {
         title: 'Clerque — Product Master Import Template',
@@ -338,7 +483,12 @@ export class ImportService {
           '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
           '  5. Category — if it doesn\'t exist yet, Clerque creates it. Use consistent spelling across rows.',
           '  6. Save as .xlsx (or .csv). Upload via POS → Products → Import.',
-          'Tip: After import, head to Inventory and import opening stock for each branch using the Inventory template.',
+          '',
+          'Pharmacy columns (Generic Name through Initial Stock) are OPTIONAL:',
+          '  - Drug Class: OTC, OTC_BTC, RX_ONLY, DDB_S2, DDB_S3, DDB_S4, DDB_S5, VACCINE, DEVICE, SUPPLEMENT, COSMETIC, OTHER. Defaults OTC.',
+          '  - Drug Class drives the till workflow: RX_ONLY+ requires pharmacist PIN at sale; DDB_S2 also requires Yellow Rx serial.',
+          '  - Initial Lot # + Expiry: optional shorthand to seed FDA lot tracking on import. If set, Initial Stock is dispensed against this lot. For full lot management, use /pos/pharmacy/lots after import.',
+          'Tip: After import, head to Inventory and import opening stock for each branch using the Inventory template (or use Initial Stock here to seed the tenant\'s first branch).',
         ],
         columnHints: [
           'Required. Unique within tenant.',
@@ -348,6 +498,14 @@ export class ImportService {
           'Y or N. Default N.',
           'Optional. EAN-13 / UPC etc.',
           'Optional. Free text.',
+          'Optional. RA 6675 generic name.',
+          'Optional. Brand name on label.',
+          'Optional. Tablet/Capsule/Syrup.',
+          'Optional. e.g. 500mg, 5mg/ml.',
+          'Optional. Defaults OTC.',
+          'Optional. Lot/batch number.',
+          'Required if Initial Lot # set (YYYY-MM-DD).',
+          'Optional. Initial qty at default branch.',
         ],
       },
     );

@@ -46,6 +46,42 @@ export class InventoryController {
     });
   }
 
+  /**
+   * Sprint 19 — Cross-branch inventory summary, owner-only.
+   * Returns one row per product with quantities-by-branch and lot expiry
+   * roll-ups across all branches. Powers the "what do I have where"
+   * dashboard. SUPER_ADMIN reads via tenant-scope just like everywhere
+   * else (see middleware).
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Get('cross-branch')
+  crossBranch(
+    @CurrentUser() user: JwtPayload,
+    @Query('search') search?: string,
+  ) {
+    return this.inventoryService.crossBranchSummary(user.tenantId!, { search });
+  }
+
+  /**
+   * Sprint 19 — One-shot product transfer between branches, owner only.
+   * No DRAFT/SEND/RECEIVE state machine — most pharmacy / retail transfers
+   * are physical hand-carries within the same day. Decrements source +
+   * increments destination atomically with InventoryLog entries on both
+   * legs. Existing /warehouse/transfers handles raw-material transfers
+   * with a richer state machine; this endpoint is for finished products.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Post('transfer-product')
+  @HttpCode(HttpStatus.OK)
+  transferProduct(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { fromBranchId: string; toBranchId: string; productId: string; quantity: number; notes?: string },
+  ) {
+    return this.inventoryService.transferProductBetweenBranches(
+      user.tenantId!, user.sub, body,
+    );
+  }
+
   /** Items at or below their low-stock threshold */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
   @Get('low-stock')

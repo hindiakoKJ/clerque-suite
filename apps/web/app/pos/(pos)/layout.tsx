@@ -296,7 +296,10 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // Warehouse group is shared across F&B / Service / Mfg / Retail. Empty for
   // single-branch tenants and laundry tenants (Cycle Counts hidden) — withSection
   // drops the header automatically when items.length === 0.
+  // Sprint 19 — owner-only Cross-Branch dashboard alongside Transfers.
+  const OWNER_ONLY = ['BUSINESS_OWNER', 'SUPER_ADMIN'] as const;
   const warehouseSection = withSection('Warehouse', [
+    ...(isMultiBranch   ? [makeNavItem('/pos/inventory/cross-branch', 'Cross-Branch', Activity,       OWNER_ONLY,      role)] : []),
     ...(showTransfers   ? [makeNavItem('/pos/warehouse/transfers',    'Transfers',    Truck,          WAREHOUSE_ROLES, role)] : []),
     ...(showCycleCounts ? [makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role)] : []),
   ]);

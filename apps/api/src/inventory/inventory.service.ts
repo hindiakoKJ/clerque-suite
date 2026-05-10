@@ -37,6 +37,257 @@ export class InventoryService {
     private periods: AccountingPeriodsService,
   ) {}
 
+  // ─── One-shot product transfer between branches (Sprint 19, owner) ─────
+  // Decrements source branch inventory + increments destination atomically.
+  // Logs an InventoryLog row at both branches so the audit trail is intact.
+  // No DRAFT/SEND/RECEIVE state machine — most pharmacy transfers are
+  // physical hand-carries between same-day branches.
+
+  async transferProductBetweenBranches(
+    tenantId: string,
+    callerId: string,
+    dto: { fromBranchId: string; toBranchId: string; productId: string; quantity: number; notes?: string },
+  ) {
+    if (dto.fromBranchId === dto.toBranchId) {
+      throw new BadRequestException('Source and destination branches must differ.');
+    }
+    if (!dto.quantity || dto.quantity <= 0) {
+      throw new BadRequestException('Quantity must be > 0.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      // Validate branches + product belong to tenant
+      const [fromBranch, toBranch, product] = await Promise.all([
+        tx.branch.findFirst({  where: { id: dto.fromBranchId, tenantId }, select: { id: true, name: true } }),
+        tx.branch.findFirst({  where: { id: dto.toBranchId,   tenantId }, select: { id: true, name: true } }),
+        tx.product.findFirst({ where: { id: dto.productId,    tenantId }, select: { id: true, name: true } }),
+      ]);
+      if (!fromBranch) throw new BadRequestException('Source branch does not belong to your tenant.');
+      if (!toBranch)   throw new BadRequestException('Destination branch does not belong to your tenant.');
+      if (!product)    throw new BadRequestException('Product does not belong to your tenant.');
+
+      // Source must have enough stock
+      const src = await tx.inventoryItem.findUnique({
+        where:  { branchId_productId: { branchId: dto.fromBranchId, productId: dto.productId } },
+        select: { id: true, quantity: true, avgCost: true },
+      });
+      const srcQty = src ? Number(src.quantity) : 0;
+      if (srcQty < dto.quantity) {
+        throw new BadRequestException({
+          code:    'INSUFFICIENT_STOCK',
+          message: `Source branch has only ${srcQty} of ${product.name}; cannot transfer ${dto.quantity}.`,
+        });
+      }
+
+      const qty = new Prisma.Decimal(dto.quantity);
+      const cost = src?.avgCost ?? null; // use source WAC if available
+
+      // Source: capture before/after for the audit log, then decrement.
+      const srcBefore = srcQty;
+      const srcAfter  = srcBefore - dto.quantity;
+      await tx.inventoryItem.update({
+        where: { id: src!.id },
+        data:  { quantity: { decrement: qty } },
+      });
+
+      // Increment destination (upsert for first-time receivers).
+      // WAC re-blend at destination: (oldQty*oldAvg + qty*srcAvg) / (oldQty + qty)
+      const dst = await tx.inventoryItem.findUnique({
+        where:  { branchId_productId: { branchId: dto.toBranchId, productId: dto.productId } },
+        select: { id: true, quantity: true, avgCost: true },
+      });
+      const dstBefore = dst ? Number(dst.quantity) : 0;
+      const dstAfter  = dstBefore + dto.quantity;
+      if (dst) {
+        const oldQty = Number(dst.quantity);
+        const oldAvg = dst.avgCost != null ? Number(dst.avgCost) : (cost != null ? Number(cost) : 0);
+        const newQty = oldQty + dto.quantity;
+        const srcAvg = cost != null ? Number(cost) : oldAvg;
+        const newAvg = newQty > 0
+          ? (oldQty * oldAvg + dto.quantity * srcAvg) / newQty
+          : srcAvg;
+        await tx.inventoryItem.update({
+          where: { id: dst.id },
+          data: {
+            quantity: { increment: qty },
+            avgCost:  new Prisma.Decimal(newAvg.toFixed(4)),
+          },
+        });
+      } else {
+        await tx.inventoryItem.create({
+          data: {
+            tenantId,
+            branchId:  dto.toBranchId,
+            productId: dto.productId,
+            quantity:  qty,
+            avgCost:   cost ?? undefined,
+          },
+        });
+      }
+
+      // Log both legs in InventoryLog for the audit trail. Reuse the
+      // existing STOCK_OUT / STOCK_IN types (a separate TRANSFER_* enum
+      // would require another migration; the note disambiguates).
+      await tx.inventoryLog.createMany({
+        data: [
+          {
+            tenantId, productId: dto.productId, branchId: dto.fromBranchId,
+            type: 'STOCK_OUT' as any,
+            quantity:       new Prisma.Decimal(-dto.quantity),
+            quantityBefore: new Prisma.Decimal(srcBefore),
+            quantityAfter:  new Prisma.Decimal(srcAfter),
+            note: `Transfer OUT to ${toBranch.name}${dto.notes ? ` — ${dto.notes}` : ''}`,
+            createdById: callerId,
+          },
+          {
+            tenantId, productId: dto.productId, branchId: dto.toBranchId,
+            type: 'STOCK_IN' as any,
+            quantity:       new Prisma.Decimal(dto.quantity),
+            quantityBefore: new Prisma.Decimal(dstBefore),
+            quantityAfter:  new Prisma.Decimal(dstAfter),
+            note: `Transfer IN from ${fromBranch.name}${dto.notes ? ` — ${dto.notes}` : ''}`,
+            createdById: callerId,
+          },
+        ],
+      });
+
+      return {
+        productId:    product.id,
+        productName:  product.name,
+        fromBranchId: fromBranch.id,
+        fromBranchName: fromBranch.name,
+        toBranchId:   toBranch.id,
+        toBranchName: toBranch.name,
+        quantity:     dto.quantity,
+        at:           new Date().toISOString(),
+      };
+    });
+  }
+
+  // ─── Cross-branch inventory summary (Sprint 19, owner) ─────────────────
+  // Returns one row per product × branch with current quantity, low-stock
+  // threshold, plus a per-product expiry summary (earliest non-expired lot
+  // expiry across all branches + count of lots expiring within 90 days).
+  // Powers the "what do I have where" dashboard for multi-branch tenants.
+
+  async crossBranchSummary(tenantId: string, opts?: { search?: string }) {
+    const branches = await this.prisma.branch.findMany({
+      where:   { tenantId, isActive: true },
+      orderBy: { name: 'asc' },
+      select:  { id: true, name: true },
+    });
+
+    const products = await this.prisma.product.findMany({
+      where: {
+        tenantId,
+        isActive: true,
+        ...(opts?.search ? {
+          OR: [
+            { name:        { contains: opts.search, mode: 'insensitive' } },
+            { genericName: { contains: opts.search, mode: 'insensitive' } },
+            { brandName:   { contains: opts.search, mode: 'insensitive' } },
+            { sku:         { contains: opts.search, mode: 'insensitive' } },
+            { barcode:     { contains: opts.search, mode: 'insensitive' } },
+          ],
+        } : {}),
+      },
+      orderBy: [{ name: 'asc' }],
+      select: {
+        id: true, name: true, sku: true,
+        genericName: true, brandName: true,
+        drugClass: true, isRxRequired: true, isControlledDrug: true,
+        unitOfMeasure: { select: { abbreviation: true } },
+      },
+      take: 1000, // hard cap to keep the dashboard quick
+    });
+    const productIds = products.map((p) => p.id);
+
+    // Inventory rows indexed by (productId, branchId).
+    const invRows = productIds.length
+      ? await this.prisma.inventoryItem.findMany({
+          where:  { productId: { in: productIds } },
+          select: { productId: true, branchId: true, quantity: true, lowStockAlert: true },
+        })
+      : [];
+    const invMap = new Map<string, Map<string, { qty: number; threshold: number | null }>>();
+    for (const row of invRows) {
+      let perProduct = invMap.get(row.productId);
+      if (!perProduct) { perProduct = new Map(); invMap.set(row.productId, perProduct); }
+      perProduct.set(row.branchId, {
+        qty:       Number(row.quantity),
+        threshold: row.lowStockAlert ?? null,
+      });
+    }
+
+    // Lot expiry summary per product (across all branches; FDA-compliant view).
+    const lots = productIds.length
+      ? await this.prisma.productLot.findMany({
+          where:  { tenantId, productId: { in: productIds }, isActive: true },
+          select: { productId: true, branchId: true, expiresAt: true, quantity: true, lotNumber: true },
+          orderBy: { expiresAt: 'asc' },
+        })
+      : [];
+    const now = Date.now();
+    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const lotSummary = new Map<string, {
+      earliestExpiry: Date | null;
+      expiringSoon:   number;
+      expired:        number;
+      lots:           Array<{ branchId: string; lotNumber: string; expiresAt: string; quantity: number }>;
+    }>();
+    for (const lot of lots) {
+      let s = lotSummary.get(lot.productId);
+      if (!s) {
+        s = { earliestExpiry: null, expiringSoon: 0, expired: 0, lots: [] };
+        lotSummary.set(lot.productId, s);
+      }
+      const ts = lot.expiresAt.getTime();
+      if (ts < now)                                  s.expired++;
+      else if (ts - now < NINETY_DAYS_MS)            s.expiringSoon++;
+      if (s.earliestExpiry == null || ts < s.earliestExpiry.getTime()) {
+        s.earliestExpiry = lot.expiresAt;
+      }
+      s.lots.push({
+        branchId:  lot.branchId,
+        lotNumber: lot.lotNumber,
+        expiresAt: lot.expiresAt.toISOString(),
+        quantity:  Number(lot.quantity),
+      });
+    }
+
+    // Build the rolled-up response. Each row carries quantities per branch
+    // (sparse — branches with no row are explicitly absent so the UI can
+    // render a "—" cell).
+    return {
+      branches,
+      rows: products.map((p) => {
+        const perBranch = invMap.get(p.id) ?? new Map();
+        const summary   = lotSummary.get(p.id);
+        const totalQty  = Array.from(perBranch.values()).reduce((sum, b) => sum + b.qty, 0);
+        return {
+          productId:        p.id,
+          name:             p.name,
+          sku:              p.sku,
+          genericName:      p.genericName,
+          brandName:        p.brandName,
+          drugClass:        p.drugClass,
+          isRxRequired:     p.isRxRequired,
+          isControlledDrug: p.isControlledDrug,
+          uom:              p.unitOfMeasure?.abbreviation ?? null,
+          totalQty,
+          // { branchId: { qty, threshold } } sparse map
+          quantitiesByBranch: Object.fromEntries(
+            Array.from(perBranch.entries()).map(([bid, info]) => [bid, info]),
+          ),
+          earliestExpiry: summary?.earliestExpiry?.toISOString() ?? null,
+          expiringSoon:   summary?.expiringSoon ?? 0,
+          expired:        summary?.expired ?? 0,
+          lots:           summary?.lots ?? [],
+        };
+      }),
+    };
+  }
+
   // ─── List inventory for a branch ─────────────────────────────────────────
 
   async list(

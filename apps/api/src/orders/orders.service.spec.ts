@@ -10,6 +10,7 @@ import { AccountingPeriodsService } from '../accounting-periods/accounting-perio
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -92,6 +93,11 @@ describe('OrdersService — void()', () => {
     taxCalc = makeTaxCalcMock();
 
     const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
+    // Sprint 19 — OrdersService now optionally invokes LoyaltyService after a
+    // sale lands (stamp-card accrual). Tests don't exercise that path; mock it
+    // out so the module compiles. The catch in OrdersService.create swallows
+    // any error here, but a no-op mock keeps logs clean.
+    const loyaltyMock = { accrueStampsForOrder: jest.fn().mockResolvedValue(undefined) } as any;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -100,6 +106,7 @@ describe('OrdersService — void()', () => {
         { provide: TaxCalculatorService,       useValue: taxCalc },
         { provide: AuditService,               useValue: audit   },
         { provide: NumberingService,           useValue: numberingMock },
+        { provide: LoyaltyService,             useValue: loyaltyMock   },
       ],
     }).compile();
 

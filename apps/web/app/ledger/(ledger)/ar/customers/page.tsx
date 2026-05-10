@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, X, Pencil, Users, ChevronRight, Search, Upload } from 'lucide-react';
+import { Plus, X, Pencil, Users, ChevronRight, Search, Upload, Stamp } from 'lucide-react';
+import { StampCardsModal } from '@/components/loyalty/StampCardsModal';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
@@ -277,6 +278,7 @@ export default function CustomersPage() {
   const [showImport,   setShowImport]   = useState(false);
   const [showModal,    setShowModal]    = useState(false);
   const [editTarget,   setEditTarget]   = useState<Customer | null>(null);
+  const [stampsTarget, setStampsTarget] = useState<Customer | null>(null);
 
   const params = new URLSearchParams();
   if (search)       params.set('search', search);
@@ -428,6 +430,13 @@ export default function CustomersPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           <button
+                            onClick={() => setStampsTarget(c)}
+                            title="Stamp cards"
+                            className="p-1.5 rounded text-muted-foreground hover:text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors"
+                          >
+                            <Stamp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
                             onClick={() => openEdit(c)}
                             title="Edit"
                             className="p-1.5 rounded text-muted-foreground hover:text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors"
@@ -460,6 +469,10 @@ export default function CustomersPage() {
 
       {showModal && (
         <CustomerModal editing={editTarget} onClose={() => setShowModal(false)} onSaved={onSaved} />
+      )}
+
+      {stampsTarget && (
+        <StampCardsModal customer={stampsTarget} onClose={() => setStampsTarget(null)} />
       )}
 
       <ImportModal

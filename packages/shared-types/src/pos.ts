@@ -79,6 +79,13 @@ export interface OfflineOrder {
   customerTin?: string;
   /** Registered address of the corporate buyer — required for invoices > ₱1,000 */
   customerAddress?: string;
+
+  /**
+   * Sprint 19 — Loyalty: optional Customer master FK. When set, the order
+   * is linked to that customer (drives stamp-card accrual + AR aging for
+   * CHARGE invoices). Walk-in / anonymous retail sales leave it null.
+   */
+  customerId?: string;
 }
 
 export interface OfflineDiscount {

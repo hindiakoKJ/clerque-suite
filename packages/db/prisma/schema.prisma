@@ -521,6 +521,8 @@ model Tenant {
   laundryMachines      LaundryMachine[]
   laundryServicePrices LaundryServicePrice[]
   laundryWashCycles    LaundryWashCycle[]
+  stampCardTemplates   StampCardTemplate[]
+  stampCards           CustomerStampCard[]
   laundryAddOns        LaundryServiceAddOn[]
   laundryPromos        LaundryPromo[]
   stockTransfers       StockTransfer[]
@@ -2027,9 +2029,119 @@ model Customer {
   trips         TripTicket[]   @relation("TripCustomer")
   jobOrders     JobOrder[]     @relation("JobOrderCustomer")
 
+  // Sprint 19 — Loyalty stamp cards (digital + printable)
+  stampCards    CustomerStampCard[]
+
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
   @@map("customers")
+}
+
+// ─── Loyalty Stamp Cards (Sprint 19) ─────────────────────────────────────────
+//
+// "Buy 9 coffees, get the 10th free" — the classic SMB coffee-shop
+// loyalty mechanic. Tenant defines templates; customers earn stamps
+// automatically on qualifying sales; redemption is a cashier-side action
+// at the till. Each customer has a per-template card with a permanent
+// public token so they can pull up their stamp count from any phone
+// (digital wallet replacement) and the tenant can print a thermal-sized
+// physical card with the same QR code.
+
+enum StampAccrualBasis {
+  /// One stamp per qualifying order (regardless of quantity / amount).
+  /// Default — matches the typical "buy 1 drink = 1 punch" model.
+  PER_ORDER
+  /// One stamp per ₱X spent on the order (set via accrualThreshold).
+  /// Bigger orders earn more stamps.
+  PER_AMOUNT
+}
+
+model StampCardTemplate {
+  id              String            @id @default(cuid())
+  tenantId        String
+  /// Display name on the card (e.g. "Coffee Lovers Card").
+  name            String
+  /// Description of the reward — printed on the back of the card and
+  /// shown digitally. Free-form. (e.g. "Free drink up to ₱150")
+  rewardLabel     String
+  /// How many stamps to earn the reward.
+  requiredStamps  Int
+  /// How stamps are earned. PER_ORDER is the safe default.
+  accrualBasis    StampAccrualBasis @default(PER_ORDER)
+  /// Only meaningful when accrualBasis = PER_AMOUNT. Stamp = floor(orderTotal / threshold).
+  accrualThreshold Decimal?         @db.Decimal(10, 2)
+  /// Optional: minimum order subtotal to earn ANY stamp (cuts low-value gaming).
+  /// Null = no minimum. Applied AFTER discounts.
+  minOrderTotal   Decimal?          @db.Decimal(10, 2)
+  /// Days until a customer's accrued stamps expire if no new earn activity.
+  /// Null = stamps never expire. Common values: 90 / 180 / 365.
+  expiryDays      Int?
+  isActive        Boolean           @default(true)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  cards  CustomerStampCard[]
+
+  @@index([tenantId, isActive])
+  @@map("stamp_card_templates")
+}
+
+model CustomerStampCard {
+  id           String   @id @default(cuid())
+  tenantId     String
+  customerId   String
+  templateId   String
+  /// Current stamp count toward the next reward. Resets to 0 on redemption.
+  stamps       Int      @default(0)
+  /// Lifetime stamps earned (never resets — analytics).
+  lifetimeStamps Int    @default(0)
+  /// Number of times this card has been redeemed.
+  redemptionCount Int   @default(0)
+  /// Unguessable URL slug for the public /stamps/<token> page.
+  /// Format: <8-hex>-<8-hex>; safe to print on physical cards / QR codes.
+  publicToken  String   @unique
+  /// Last earn event — drives the expiry warning ("stamps expire in 14 days").
+  lastEarnedAt DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  template StampCardTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  events   StampCardEvent[]
+
+  @@unique([customerId, templateId])
+  @@index([tenantId, customerId])
+  @@map("customer_stamp_cards")
+}
+
+enum StampEventKind {
+  EARN     // +N stamps from a sale
+  REDEEM   // reward claimed; stamps reset to 0
+  EXPIRE   // cron-triggered when expiryDays elapsed
+  ADJUST   // manual adjustment by owner (audit purposes)
+}
+
+model StampCardEvent {
+  id          String         @id @default(cuid())
+  cardId      String
+  kind        StampEventKind
+  /// Signed delta. EARN positive, REDEEM negative, ADJUST either.
+  delta       Int
+  /// Stamps after this event landed (snapshot for audit).
+  stampsAfter Int
+  /// Optional FK to the Order that triggered the EARN — null for ADJUST/EXPIRE.
+  orderId     String?
+  /// Free-form note, e.g. "Manual: card lost; restored from old paper card".
+  note        String?
+  performedBy String?
+  createdAt   DateTime       @default(now())
+
+  card        CustomerStampCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId, createdAt])
+  @@map("stamp_card_events")
 }
 
 // ─── AR (Accounts Receivable) ────────────────────────────────────────────────

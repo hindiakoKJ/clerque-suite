@@ -35,7 +35,9 @@ const APP_RULES: Array<{
 // /legal/* (privacy policy, terms of service) must be reachable from the
 // unauthenticated login page footer for Data Privacy Act compliance.
 const PUBLIC_PATHS = ['/', '/login', '/select'];
-const PUBLIC_PREFIXES = ['/legal', '/forgot-password', '/reset-password'];
+// /stub/* — laundry public claim ticket. /stamps/* — Sprint 19 public
+// loyalty stamp card pull-up (QR on printed receipts, SMS links).
+const PUBLIC_PREFIXES = ['/legal', '/forgot-password', '/reset-password', '/stub', '/stamps'];
 
 function getToken(req: NextRequest): string | null {
   return req.cookies.get('app-session')?.value ?? null;

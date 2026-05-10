@@ -7,6 +7,7 @@ import {
   ChevronDown, Shield, FileText, AlertTriangle, Info,
   KeyRound, Eye, EyeOff, ShieldCheck,
   LayoutGrid, CreditCard, ShieldAlert, ChevronRight, Sparkles,
+  Stamp,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -424,6 +425,12 @@ export default function SettingsPage() {
               icon={ShieldAlert}
               title="SOD Violations"
               desc="Audit-trail of permission overrides"
+            />
+            <SettingsCard
+              href="/settings/loyalty"
+              icon={Stamp}
+              title="Stamp Cards"
+              desc="Customer loyalty programs (digital + printed)"
             />
           </div>
         </section>

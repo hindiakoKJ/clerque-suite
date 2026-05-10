@@ -9,6 +9,7 @@ import { AccountingPeriodsService } from '../accounting-periods/accounting-perio
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
+import { LoyaltyService } from '../loyalty/loyalty.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
 import { OfflineOrder } from '@repo/shared-types';
 
@@ -20,6 +21,7 @@ export class OrdersService {
     private taxCalc:   TaxCalculatorService,
     private audit:     AuditService,
     private numbering: NumberingService,
+    private loyalty:   LoyaltyService,
   ) {}
 
   // ─── Create order (online or from offline sync) ─────────────────────────
@@ -77,7 +79,7 @@ export class OrdersService {
     // cause inventory deductions and order records to be created at another tenant's branch.
     await this.assertBranchBelongsToTenant(tenantId, payload.branchId);
 
-    return this.prisma.$transaction(async (tx) => {
+    const order = await this.prisma.$transaction(async (tx) => {
       // Generate order number inside the transaction so the count is stable.
       // Relies on @@unique([tenantId, orderNumber]) as the final race guard.
       const orderNumber = await this.generateOrderNumberInTx(tx, tenantId);
@@ -136,6 +138,10 @@ export class OrdersService {
           customerName:    payload.customerName,
           customerTin:     payload.customerTin,
           customerAddress: payload.customerAddress,
+          // Sprint 19 — Loyalty: link to Customer master when present (also
+          // drives AR aging for CHARGE invoices via the existing dueDate
+          // computation downstream).
+          customerId:      payload.customerId,
           items: {
             create: payload.items.map((item) => ({
               productId: item.productId,
@@ -456,6 +462,27 @@ export class OrdersService {
       maxWait: 10_000,
       timeout: 30_000,
     });
+
+    // Sprint 19 — Loyalty stamp accrual. Runs AFTER the transaction commits
+    // so stamp-card writes never roll back the order itself. Errors are
+    // logged but never propagated — a loyalty hiccup must not fail a sale.
+    if (payload.customerId) {
+      try {
+        await this.loyalty.accrueStampsForOrder(
+          tenantId,
+          order.id,
+          payload.customerId,
+          Number(payload.totalAmount),
+        );
+      } catch (err: any) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[orders] Loyalty accrual failed for order ${order.id} customer ${payload.customerId}: ${err?.message}`,
+        );
+      }
+    }
+
+    return order;
   }
 
   // ─── Void order (same-day; CASHIER requires supervisor co-auth) ─────────

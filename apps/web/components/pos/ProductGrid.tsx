@@ -57,6 +57,10 @@ interface Product {
   isOutOfStock?: boolean;
   imageUrl?: string | null;
   modifierGroups?: ProductModifierGroup[];
+  /** Pharmacy: needs Rx attached at the till before sale. */
+  isRxRequired?: boolean;
+  /** Pharmacy: RA 9165 controlled substance — DDB Register auto-logged. */
+  isControlledDrug?: boolean;
 }
 
 interface ProductGridProps {
@@ -69,6 +73,10 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   const [search, setSearch] = useState('');
   const [activeCat, setActiveCat] = useState<string | null>(null);
   const [pickerProduct, setPickerProduct] = useState<Product | null>(null);
+  // Sprint 19 — Pharmacy. When the cashier taps an Rx-required product, we
+  // pause and confirm the customer presented a prescription before adding
+  // it to the cart. RxConfirmModal reads this state.
+  const [rxConfirmProduct, setRxConfirmProduct] = useState<Product | null>(null);
   const addItem = useCartStore((s) => s.addItem);
 
   // Quantity multiplier: leading "3x ", "3* ", or "3 " is parsed off the search
@@ -91,11 +99,31 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   });
 
   function handleAdd(p: Product) {
+    // Sprint 19 — Pharmacy: Rx-required products need a prescription
+    // attached at the till. Intercept the add and show the confirm
+    // dialog. The cashier confirms the customer presented an Rx;
+    // proceedRxAdd then runs the normal add flow.
+    if (p.isRxRequired) {
+      setRxConfirmProduct(p);
+      return;
+    }
     const activeGroups = (p.modifierGroups ?? []).filter(
       (g) => g.modifierGroup.options.some((o) => o.isActive),
     );
     if (activeGroups.length > 0) {
       // Modifier picker handles a single item at a time — multiplier doesn't apply.
+      setPickerProduct(p);
+      return;
+    }
+    commitAdd(p, [], multiplier);
+  }
+
+  function proceedRxAdd(p: Product) {
+    setRxConfirmProduct(null);
+    const activeGroups = (p.modifierGroups ?? []).filter(
+      (g) => g.modifierGroup.options.some((o) => o.isActive),
+    );
+    if (activeGroups.length > 0) {
       setPickerProduct(p);
       return;
     }
@@ -110,6 +138,8 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
       costPrice: p.costPrice != null ? Number(p.costPrice) : undefined,
       isVatable: p.isVatable,
       categoryId: p.categoryId ?? undefined,
+      isRxRequired:     p.isRxRequired,
+      isControlledDrug: p.isControlledDrug,
     };
     for (let i = 0; i < qty; i++) {
       addItem(product, undefined, modifiers);
@@ -240,6 +270,24 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                   </div>
 
                   <p className="text-xs sm:text-sm font-medium text-foreground leading-tight line-clamp-2">{p.name}</p>
+
+                  {/* Pharmacy badges — Rx and DDB controlled. Sit just above
+                      the price so the cashier sees them before tapping. */}
+                  {(p.isRxRequired || p.isControlledDrug) && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {p.isRxRequired && (
+                        <span className="inline-flex items-center gap-0.5 text-[9px] sm:text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 dark:text-rose-400">
+                          ℞ Rx required
+                        </span>
+                      )}
+                      {p.isControlledDrug && (
+                        <span className="inline-flex items-center gap-0.5 text-[9px] sm:text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                          DDB
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   <p className="text-sm sm:text-base font-bold mt-auto pt-1" style={{ color: 'var(--accent)' }}>{formatPeso(Number(p.price))}</p>
 
                   {/* Stock badge — shows "X left" so cashier knows max sellable units.
@@ -273,6 +321,74 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
           onClose={() => setPickerProduct(null)}
         />
       )}
+
+      {rxConfirmProduct && (
+        <RxConfirmModal
+          product={rxConfirmProduct}
+          onConfirm={() => proceedRxAdd(rxConfirmProduct)}
+          onCancel={() => setRxConfirmProduct(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Sprint 19 — Pharmacy Rx confirmation gate.
+ *
+ * Surfaced when the cashier taps an isRxRequired product. The Rx itself is
+ * attached at checkout via a separate Rx selector (so a single Rx covers
+ * multiple lines from the same patient), but this is the in-the-moment
+ * "are we even allowed to ring this up" gate. Refusing here removes the
+ * product from consideration; confirming adds it to the cart with no Rx
+ * attached yet — the Charge button blocks until one is linked.
+ */
+function RxConfirmModal({
+  product, onConfirm, onCancel,
+}: { product: { name: string; isControlledDrug?: boolean }; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-xl bg-card border border-border p-5 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="rounded-full bg-rose-500/15 p-2.5 shrink-0">
+            <span className="text-rose-600 dark:text-rose-400 font-bold">℞</span>
+          </div>
+          <div>
+            <h2 className="font-semibold text-base">Prescription required</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              <span className="font-medium text-foreground">{product.name}</span> is{' '}
+              {product.isControlledDrug
+                ? <>a controlled substance under <strong>RA 9165</strong>. A valid prescription <em>and</em> the dispensing pharmacist&apos;s entry in the DDB Register are required.</>
+                : <>an Rx-only product under <strong>RA 6675</strong>. A valid doctor&apos;s prescription is required to dispense it.</>}
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-lg bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground">
+          Has the customer presented a written prescription from a licensed physician?
+          <ul className="mt-1.5 space-y-0.5 list-disc list-inside text-[11px]">
+            <li>Verify the doctor&apos;s name + PRC license + signature</li>
+            <li>Issue date should be within 1 year (6 months for controlled)</li>
+            <li>Patient name + age + diagnosis on the Rx</li>
+            {product.isControlledDrug && <li className="text-amber-600 dark:text-amber-400 font-medium">Controlled drugs need a Yellow DDB Form</li>}
+          </ul>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            onClick={onCancel}
+            className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
+          >
+            Cancel — no Rx
+          </button>
+          <button
+            onClick={onConfirm}
+            className="rounded-lg bg-[var(--accent)] text-white text-sm px-4 py-2 hover:opacity-90 inline-flex items-center gap-1.5"
+          >
+            <span>Yes, Rx presented</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

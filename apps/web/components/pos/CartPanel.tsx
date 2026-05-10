@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { Minus, Plus, Trash2, Tag, ShieldOff, Sparkles, Pause, FolderOpen, Percent } from 'lucide-react';
+import { Minus, Plus, Trash2, Tag, ShieldOff, Sparkles, Pause, FolderOpen, Percent, FileBadge, AlertTriangle } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useCartStore } from '@/store/pos/cart';
 import { useParkedSalesStore } from '@/store/pos/parkedSales';
@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/auth';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ManualDiscountModal } from '@/components/pos/ManualDiscountModal';
+import { RxAttachModal } from '@/components/pos/RxAttachModal';
 import { toast } from 'sonner';
 
 /** Roles allowed to apply manual discounts. Mirrors PERMISSION_MATRIX entry for order:apply_discount. */
@@ -32,6 +33,14 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
   const [parkOpen, setParkOpen]           = useState(false);
   const [parkName, setParkName]           = useState('');
   const [discountOpen, setDiscountOpen]   = useState(false);
+  const [rxModalOpen, setRxModalOpen]     = useState(false);
+
+  // Sprint 19 — Pharmacy: any Rx-required line without a prescriptionId
+  // blocks the Charge button. Cashier opens the Rx attach modal to search
+  // an existing Rx record or quick-create one for this customer.
+  const rxRequiredLines       = lines.filter((l) => l.product.isRxRequired);
+  const unattachedRxLineCount = rxRequiredLines.filter((l) => !l.prescriptionId).length;
+  const hasUnattachedRx       = unattachedRxLineCount > 0;
 
   const sub = subtotal();
   const disc = totalDiscount();
@@ -120,6 +129,21 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                         <Sparkles className="h-2.5 w-2.5" />
                         {line.promotionApplied.promoName} −{formatPeso(line.itemDiscount * line.quantity)}
                       </span>
+                    )}
+
+                    {/* Sprint 19 — Pharmacy: Rx attached / missing badge */}
+                    {line.product.isRxRequired && (
+                      line.prescriptionId ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full mt-0.5">
+                          <FileBadge className="h-2.5 w-2.5" />
+                          Rx · {line.prescriptionLabel ?? 'attached'}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded-full mt-0.5">
+                          <AlertTriangle className="h-2.5 w-2.5" />
+                          Rx required — not attached
+                        </span>
+                      )
                     )}
                   </div>
                   <button
@@ -332,6 +356,21 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
             </div>
           </div>
 
+          {/* Sprint 19 — Pharmacy: prominent Rx attachment row when one or
+              more Rx-required lines lack a prescription. */}
+          {hasUnattachedRx && (
+            <button
+              onClick={() => setRxModalOpen(true)}
+              className="w-full flex items-center justify-between gap-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-400 px-3 py-2.5 hover:bg-rose-500/15 transition-colors"
+            >
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <FileBadge className="h-4 w-4" />
+                Attach prescription · {unattachedRxLineCount} item{unattachedRxLineCount === 1 ? '' : 's'}
+              </span>
+              <span className="text-xs">Required to charge</span>
+            </button>
+          )}
+
           <div className="flex gap-2 mt-1">
             <Button
               onClick={() => setParkOpen(true)}
@@ -358,15 +397,31 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
           </div>
 
           <Button
-            onClick={onCheckout}
+            onClick={() => {
+              if (hasUnattachedRx) {
+                toast.error(`Attach a prescription to ${unattachedRxLineCount} Rx item${unattachedRxLineCount === 1 ? '' : 's'} before charging.`);
+                setRxModalOpen(true);
+                return;
+              }
+              onCheckout();
+            }}
             size="lg"
             className="w-full"
-            style={{ background: 'var(--accent)' }}
+            style={{ background: hasUnattachedRx ? 'hsl(var(--muted))' : 'var(--accent)' }}
             disabled={isEmpty}
           >
             Charge {formatPeso(total)}
           </Button>
         </div>
+      )}
+
+      {rxModalOpen && (
+        <RxAttachModal
+          rxRequiredLineNames={rxRequiredLines
+            .filter((l) => !l.prescriptionId)
+            .map((l) => l.product.name)}
+          onClose={() => setRxModalOpen(false)}
+        />
       )}
 
       {/* Park-sale name dialog */}

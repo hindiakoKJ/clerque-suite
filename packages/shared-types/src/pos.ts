@@ -46,6 +46,12 @@ export interface CartItem {
   /** BIR per-line tax classification. Defaults to VAT_12 for vatable items. */
   taxType?: TaxType;
   modifiers?: CartItemModifier[];
+  /**
+   * Sprint 19 — Pharmacy Rx attachment. Set at the till when the cashier
+   * confirms the customer presented an Rx for an isRxRequired product.
+   * The backend rejects sale of Rx-required products without it.
+   */
+  prescriptionId?: string;
 }
 
 export interface OfflineOrder {

@@ -15,6 +15,14 @@ export interface CartProduct {
   costPrice?: number;
   isVatable: boolean;
   categoryId?: string;
+  /** Sprint 19 — Pharmacy. When true, the till MUST attach a prescriptionId
+   *  before the product can be sold. The terminal warns and blocks add-to-cart
+   *  until the cashier confirms the customer presented an Rx. */
+  isRxRequired?: boolean;
+  /** Sprint 19 — Pharmacy. RA 9165 Schedule II/III/IV/V — the DDB Register
+   *  auto-logs the sale at till. Display-only here so the cashier sees a
+   *  badge on the cart line. */
+  isControlledDrug?: boolean;
 }
 
 export interface CartLine {
@@ -27,6 +35,13 @@ export interface CartLine {
   lineKey: string;        // unique key: productId + variantId + sorted optionIds
   /** Set when a promotion is auto-applied to this line. */
   promotionApplied?: { promoId: string; promoName: string };
+  /** Sprint 19 — Attached prescription ID for Rx-required pharmacy products.
+   *  The cashier sets this via the "Customer presented Rx" dialog when adding
+   *  the product. The backend rejects sale of isRxRequired lines without it. */
+  prescriptionId?: string;
+  /** Sprint 19 — Display-only label shown on the cart line so the cashier
+   *  knows which Rx is attached without re-opening the dialog. */
+  prescriptionLabel?: string;
 }
 
 export interface CartDiscount {
@@ -109,6 +124,19 @@ interface CartState {
   removeItem: (lineKey: string) => void;
   updateQty: (lineKey: string, qty: number) => void;
   setItemDiscount: (lineKey: string, discount: number) => void;
+  /**
+   * Sprint 19 — Pharmacy. Attach a Prescription record to one or more lines.
+   * When `lineKeys` is omitted, the Rx is applied to ALL Rx-required lines
+   * currently in the cart that have no Rx attached yet (the common case
+   * after the cashier confirms in the "Customer presented Rx" dialog).
+   */
+  attachPrescription: (
+    prescriptionId: string,
+    prescriptionLabel: string,
+    lineKeys?: string[],
+  ) => void;
+  /** Sprint 19 — Detach a previously-attached prescription from a line. */
+  detachPrescription: (lineKey: string) => void;
 
   /**
    * Auto-apply the best active promotion to each cart line.
@@ -212,6 +240,23 @@ export const useCartStore = create<CartState>()(
         additionalPwdScEntries: nextLines.length === 0 ? []   : state.additionalPwdScEntries,
       };
     });
+  },
+
+  attachPrescription: (prescriptionId, prescriptionLabel, lineKeys) => {
+    set((state) => ({
+      lines: state.lines.map((l) => {
+        const targeted = lineKeys ? lineKeys.includes(l.lineKey) : (l.product.isRxRequired && !l.prescriptionId);
+        return targeted ? { ...l, prescriptionId, prescriptionLabel } : l;
+      }),
+    }));
+  },
+
+  detachPrescription: (lineKey) => {
+    set((state) => ({
+      lines: state.lines.map((l) =>
+        l.lineKey === lineKey ? { ...l, prescriptionId: undefined, prescriptionLabel: undefined } : l,
+      ),
+    }));
   },
 
   updateQty: (lineKey, qty) => {

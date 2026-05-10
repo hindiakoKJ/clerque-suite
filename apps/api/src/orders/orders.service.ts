@@ -79,6 +79,46 @@ export class OrdersService {
     // cause inventory deductions and order records to be created at another tenant's branch.
     await this.assertBranchBelongsToTenant(tenantId, payload.branchId);
 
+    // Sprint 19 — Pharmacy: every line whose product has Product.isRxRequired
+    // = true MUST carry a prescriptionId. This is the server-side defence-in-
+    // depth — the till's RxAttachModal already enforces it, but a stale or
+    // malicious offline client could submit a payload missing the field.
+    {
+      const productIds = Array.from(new Set(payload.items.map((i) => i.productId)));
+      if (productIds.length > 0) {
+        const rxProducts = await this.prisma.product.findMany({
+          where:  { id: { in: productIds }, tenantId, isRxRequired: true },
+          select: { id: true, name: true },
+        });
+        const rxProductIds = new Set(rxProducts.map((p) => p.id));
+        const missing = payload.items
+          .filter((i) => rxProductIds.has(i.productId) && !i.prescriptionId)
+          .map((i) => i.productName);
+        if (missing.length > 0) {
+          throw new BadRequestException({
+            code:    'RX_REQUIRED_NO_PRESCRIPTION',
+            message: `Cannot dispense without a prescription: ${missing.join(', ')}.`,
+          });
+        }
+        // Also ensure the supplied prescriptionIds belong to this tenant.
+        const suppliedIds = Array.from(new Set(
+          payload.items.map((i) => i.prescriptionId).filter((id): id is string => !!id),
+        ));
+        if (suppliedIds.length > 0) {
+          const ownedRx = await this.prisma.prescription.findMany({
+            where:  { id: { in: suppliedIds }, tenantId },
+            select: { id: true },
+          });
+          if (ownedRx.length !== suppliedIds.length) {
+            throw new BadRequestException({
+              code:    'RX_NOT_FOUND',
+              message: 'One or more prescriptions could not be found in your tenant.',
+            });
+          }
+        }
+      }
+    }
+
     const order = await this.prisma.$transaction(async (tx) => {
       // Generate order number inside the transaction so the count is stable.
       // Relies on @@unique([tenantId, orderNumber]) as the final race guard.
@@ -155,6 +195,10 @@ export class OrdersService {
               costPrice: item.costPrice != null ? new Prisma.Decimal(item.costPrice) : undefined,
               isVatable: item.isVatable,
               taxType: (item.taxType ?? (item.isVatable ? 'VAT_12' : 'VAT_EXEMPT')) as any,
+              // Sprint 19 — Pharmacy: attach Rx (only meaningful when the
+              // product has isRxRequired=true; the till's RxAttachModal
+              // ensures every Rx-required line carries this).
+              prescriptionId: item.prescriptionId,
               modifiers: item.modifiers?.length
                 ? {
                     create: item.modifiers.map((m) => ({

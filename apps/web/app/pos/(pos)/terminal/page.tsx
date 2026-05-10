@@ -208,6 +208,9 @@ export default function PosTerminal() {
         modifiers: l.modifiers ?? [],
         promoId:   l.promotionApplied?.promoId,
         promoName: l.promotionApplied?.promoName,
+        // Sprint 19 — Pharmacy: per-line Rx attachment (RA 6675 / RA 9165).
+        // Backend rejects sale of isRxRequired products without it.
+        prescriptionId: l.prescriptionId,
       })),
       payments,
       discounts: [

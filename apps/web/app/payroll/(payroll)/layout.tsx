@@ -115,6 +115,12 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
 
   const role = user?.role;
 
+  // Sprint 19 — Self-clock policy hides the in-app Clock link when the
+  // tenant has not opted in. Only the kiosk path is visible to employees;
+  // HR keeps Timesheets / Pay Runs / etc. so kiosk-recorded hours can be
+  // reviewed and processed normally.
+  const allowSelfClockIn = (user as any)?.allowSelfClockIn === true;
+
   // Build payroll nav — items differ based on whether this is an HR-view role
   // (dashboard-first, with Staff + Pay Runs + Leaves admin) or an employee
   // self-service role (lands on /payroll/me with the Requests landing).
@@ -127,9 +133,11 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
       ? [
           // Overview
           makePayNavItem('/payroll/dashboard',     'Dashboard',      LayoutDashboard, PAY_DASHBOARD_ROLES, role, 'Overview'),
-          // Time & Attendance
-          makePayNavItem('/payroll/clock',         'Clock In / Out', Timer,           CLOCK_ROLES,         role, 'Time & Attendance'),
-          makePayNavItem('/payroll/timesheets',    'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role),
+          // Time & Attendance — Clock link only when self-service clocking is enabled
+          ...(allowSelfClockIn
+            ? [makePayNavItem('/payroll/clock',         'Clock In / Out', Timer,           CLOCK_ROLES,         role, 'Time & Attendance')]
+            : []),
+          makePayNavItem('/payroll/timesheets',    'Timesheets',     CalendarDays,    TIMESHEETS_ROLES,    role, allowSelfClockIn ? undefined : 'Time & Attendance'),
           makePayNavItem('/payroll/leaves',        'Leaves',         Plane,           HR_VIEW_ROLES,       role),
           // People
           makePayNavItem('/payroll/staff',         'Staff',          UserCheck,       PAY_STAFF_ROLES,     role, 'People'),
@@ -142,9 +150,11 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
       : [
           // Overview
           makePayNavItem('/payroll/me',          'Home',           UserIcon,        CLOCK_ROLES,         role, 'Overview'),
-          // Time & Attendance
-          makePayNavItem('/payroll/clock',       'Clock In / Out', Timer,           CLOCK_ROLES,         role, 'Time & Attendance'),
-          makePayNavItem('/payroll/attendance',  'My Attendance',  CalendarDays,    CLOCK_ROLES,         role),
+          // Time & Attendance — Clock link only when self-service clocking is enabled
+          ...(allowSelfClockIn
+            ? [makePayNavItem('/payroll/clock',       'Clock In / Out', Timer,           CLOCK_ROLES,         role, 'Time & Attendance')]
+            : []),
+          makePayNavItem('/payroll/attendance',  'My Attendance',  CalendarDays,    CLOCK_ROLES,         role, allowSelfClockIn ? undefined : 'Time & Attendance'),
           makePayNavItem('/payroll/me/requests', 'Requests',       ClipboardList,   CLOCK_ROLES,         role),
           // Payroll & Finance
           makePayNavItem('/payroll/payslips',    'My Payslips',    FileText,        PAYSLIPS_ROLES,      role, 'Payroll & Finance'),

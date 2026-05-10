@@ -115,6 +115,10 @@ export interface JwtPayload {
   receiptHeaderNote?: string | null;
   receiptFooterNote?: string | null;
   receiptLogoUrl?:    string | null;
+  /** Sprint 19 — When false (default), staff cannot clock in/out from
+   *  their own Sync account; only the shared kiosk tablet works. The
+   *  frontend uses this to hide the Clock sidebar link. */
+  allowSelfClockIn?:  boolean;
   /** Tenant subscription tier — drives tier-locked permission gating in the UI. */
   tier?:              import('./tiers').TierId;
   /**

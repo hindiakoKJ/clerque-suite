@@ -12,7 +12,7 @@
  */
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Plus, Tv, Copy, Trash2, Pause, Play, X, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Plus, Tv, Copy, Trash2, Pause, Play, X, ExternalLink, Smartphone } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -39,6 +39,22 @@ export default function KioskSettingsPage() {
     queryKey: ['kiosk-terminals'],
     queryFn:  () => api.get('/payroll/kiosk/terminals').then((r) => r.data),
     enabled:  !!user,
+  });
+
+  // Sprint 19 — Self-service clock-in policy. Default off (kiosk-only).
+  const { data: policy } = useQuery<{ allowSelfClockIn: boolean }>({
+    queryKey: ['kiosk-policy'],
+    queryFn:  () => api.get('/payroll/kiosk/policy').then((r) => r.data),
+    enabled:  !!user,
+  });
+  const policyMut = useMutation({
+    mutationFn: (next: boolean) =>
+      api.patch('/payroll/kiosk/policy', { allowSelfClockIn: next }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['kiosk-policy'] });
+      toast.success('Policy updated. Staff need to log out and back in to see the change in their app.');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed.'),
   });
 
   const { data: branches = [] } = useQuery<Branch[]>({
@@ -123,6 +139,34 @@ export default function KioskSettingsPage() {
         >
           <Plus className="h-4 w-4" /> Enroll kiosk
         </button>
+      </div>
+
+      {/* Self-service clock-in policy */}
+      <div className="rounded-xl border border-border p-4 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <Smartphone className="h-5 w-5 text-[var(--accent)] mt-0.5 shrink-0" />
+            <div>
+              <div className="font-semibold">Allow staff to clock in from their own account</div>
+              <p className="text-xs text-muted-foreground mt-1 max-w-xl">
+                When this is OFF (default), staff can&apos;t clock in/out from the Sync app on their personal device — they
+                must punch their PIN at the shared kiosk tablet onsite. Turn it ON to give every employee the
+                option to track their own attendance from their phone or laptop.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => policyMut.mutate(!(policy?.allowSelfClockIn))}
+            disabled={policyMut.isPending}
+            className="w-11 h-6 rounded-full transition-colors shrink-0 mt-0.5"
+            style={{ background: policy?.allowSelfClockIn ? 'var(--accent)' : 'hsl(var(--muted-foreground) / 0.3)' }}
+            aria-label="Toggle self-service clock-in"
+          >
+            <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+              policy?.allowSelfClockIn ? 'translate-x-5' : 'translate-x-0'
+            }`} />
+          </button>
+        </div>
       </div>
 
       {isLoading ? (

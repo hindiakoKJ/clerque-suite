@@ -426,6 +426,15 @@ model Tenant {
   /// 1-bit PNG ideally; thermal printers don't render full color anyway.
   receiptLogoUrl           String?
 
+  /// Sprint 19 — Self-service clock-in policy. When false (default), staff
+  /// cannot clock in/out from their own Sync account; only the shared
+  /// kiosk tablet works. Owner flips this on in Settings → Kiosk Terminals
+  /// when they trust employees to track their own hours from a phone or
+  /// personal device. The /payroll/clock/in and /clock/out endpoints
+  /// reject with code SELF_CLOCK_DISABLED while this is false; kiosk
+  /// punches always work either way.
+  allowSelfClockIn         Boolean          @default(false)
+
   /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
   /// endpoints for this tenant return 423 Locked. Use case: detect
   /// compromise (e.g. unusual destructive activity), flip flag, freeze

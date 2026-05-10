@@ -29,6 +29,67 @@ const LOCKOUT_MS = 30_000; // 30 seconds — discourages brute-force without
 export class KioskService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // ── Tenant policy: allow self-service clock-in? ─────────────────────────
+
+  async getSelfClockPolicy(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { allowSelfClockIn: true },
+    });
+    return { allowSelfClockIn: tenant?.allowSelfClockIn ?? false };
+  }
+
+  async setSelfClockPolicy(tenantId: string, allow: boolean) {
+    await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data:  { allowSelfClockIn: allow },
+    });
+    return { allowSelfClockIn: allow };
+  }
+
+  // ── Live roster: who is currently clocked in (anywhere via any path) ────
+
+  async getRosterByApiKey(apiKey: string) {
+    const kiosk = await this.prisma.kioskTerminal.findUnique({
+      where:  { apiKey },
+      select: { tenantId: true, branchId: true, isActive: true },
+    });
+    if (!kiosk || !kiosk.isActive) {
+      throw new ForbiddenException('Kiosk is not active.');
+    }
+
+    // Currently-open TimeEntry rows joined to user info. If the kiosk is
+    // branch-scoped, restrict the roster to that branch (otherwise show
+    // every clocked-in employee in the tenant).
+    const where: any = {
+      tenantId: kiosk.tenantId,
+      status:   TimeEntryStatus.OPEN,
+    };
+    if (kiosk.branchId) {
+      where.user = {
+        OR: [{ branchId: kiosk.branchId }, { branchId: null }],
+      };
+    }
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where,
+      orderBy: { clockIn: 'desc' },
+      take:    20,
+      select:  {
+        id:      true,
+        clockIn: true,
+        user:    { select: { id: true, name: true, role: true } },
+      },
+    });
+
+    return entries.map((e) => ({
+      userId:      e.user.id,
+      name:        e.user.name,
+      role:        e.user.role,
+      clockedInAt: e.clockIn.toISOString(),
+    }));
+  }
+
   // ── Enrollment / management (owner / manager) ───────────────────────────
 
   list(tenantId: string) {

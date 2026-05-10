@@ -259,7 +259,7 @@ export class AuthService {
       try {
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, receiptLogoUrl: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, receiptLogoUrl: true, allowSelfClockIn: true },
         });
       } catch (err: any) {
         // PrismaClientValidationError or P2022 (column doesn't exist) means
@@ -308,6 +308,9 @@ export class AuthService {
       receiptHeaderNote: tenant?.receiptHeaderNote ?? null,
       receiptFooterNote: tenant?.receiptFooterNote ?? null,
       receiptLogoUrl:    tenant?.receiptLogoUrl ?? null,
+      // Sprint 19 — self-clock policy. Default false (kiosk-only) so the
+      // frontend hides the Clock sidebar link unless explicitly enabled.
+      allowSelfClockIn:  tenant?.allowSelfClockIn ?? false,
       tier:              (tenant?.tier ?? undefined) as JwtPayload['tier'],
       // AI quota — resolves tier-included + active addon + SUPER_ADMIN override
       // (see pricing.ts → getAiQuotaForTenant). Baked into JWT at login so the

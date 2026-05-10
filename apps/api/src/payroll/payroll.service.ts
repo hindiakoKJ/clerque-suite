@@ -3,6 +3,7 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, TimeEntryStatus, LeaveType, LeaveStatus, SalaryType } from '@prisma/client';
@@ -132,6 +133,24 @@ export class PayrollService {
     private readonly accounts: AccountsService,
   ) {}
 
+  // ─── Self-clock policy ───────────────────────────────────────────────────
+  // Sprint 19 — Tenant.allowSelfClockIn gates the in-app clock endpoints.
+  // Defaults false: kiosk-only is the safer starting point. Owner opts in
+  // from Settings → Kiosk Terminals.
+
+  private async assertSelfClockEnabled(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { allowSelfClockIn: true },
+    });
+    if (!tenant?.allowSelfClockIn) {
+      throw new ForbiddenException({
+        code:    'SELF_CLOCK_DISABLED',
+        message: 'Your shop only accepts clock-in from the kiosk tablet. Punch your PIN onsite to clock in.',
+      });
+    }
+  }
+
   // ─── Clock Status ────────────────────────────────────────────────────────
 
   async getClockStatus(tenantId: string, userId: string): Promise<ClockStatusDto> {
@@ -157,6 +176,12 @@ export class PayrollService {
   // ─── Clock In ────────────────────────────────────────────────────────────
 
   async clockIn(tenantId: string, userId: string, notes?: string): Promise<ClockStatusDto> {
+    // Sprint 19 — Self-service clock-in policy gate. When the tenant has
+    // not opted in to in-app clocking, this endpoint is dead and only
+    // the kiosk path works. Returns SELF_CLOCK_DISABLED so the frontend
+    // can show a helpful "Use the kiosk" hint instead of a generic error.
+    await this.assertSelfClockEnabled(tenantId);
+
     // Prevent double clock-in
     const existing = await this.prisma.timeEntry.findFirst({
       where:  { tenantId, userId, status: TimeEntryStatus.OPEN },
@@ -190,6 +215,12 @@ export class PayrollService {
   // ─── Clock Out ───────────────────────────────────────────────────────────
 
   async clockOut(tenantId: string, userId: string, breakMins = 0): Promise<ClockStatusDto> {
+    // Intentional: clockOut is NOT gated by allowSelfClockIn. If an owner
+    // flips the toggle off mid-shift, employees already clocked in via
+    // app must still be able to close their session cleanly — otherwise
+    // hours never close, payroll math breaks. Once they clock out, the
+    // next clockIn will be blocked.
+
     const open = await this.prisma.timeEntry.findFirst({
       where:  { tenantId, userId, status: TimeEntryStatus.OPEN },
       select: { id: true, clockIn: true },

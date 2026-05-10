@@ -1,20 +1,27 @@
 'use client';
 /**
- * Sprint 19 — Sync kiosk fullscreen keypad (UNAUTHENTICATED).
+ * Sprint 19 — Sync kiosk fullscreen UI (UNAUTHENTICATED).
  *
- * The shared on-site tablet visits this URL with ?key=<apiKey>. Staff type
- * their User.kioskPin → backend authenticates the kiosk + finds the user
- * by PIN within the tenant + records a clock-in or clock-out punch. The
- * device never holds a JWT.
+ * Three states:
+ *   1. DASHBOARD (default, idle) — live clock + "Currently clocked in" list
+ *      filling the screen, with a single giant "Clock In / Out" CTA at the
+ *      bottom. Public-friendly: a passing customer sees a tidy in-out board,
+ *      not a numeric keypad waiting to be tampered with.
+ *   2. PIN ENTRY — after tapping the CTA, the keypad opens. Cancel returns
+ *      to the dashboard; submit punches.
+ *   3. CONFIRMATION — green "Clocked in, Maria, 7:54am" / blue clocked out
+ *      flash for 3 seconds, then auto-returns to the dashboard.
  *
- * Idle behavior: after a confirmation flashes for 3 seconds, the page
- * resets to an empty keypad. There is no logout — the kiosk is shared.
+ * Authentication: the kiosk's apiKey (from ?key=) authenticates the device;
+ * each punch authenticates the staff member by their User.kioskPin.
  */
 import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Delete, ArrowRight, CheckCircle2, AlertCircle, Loader2, Users } from 'lucide-react';
+import { Delete, ArrowRight, CheckCircle2, AlertCircle, Loader2, Users, Clock, X } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+
+type View = 'dashboard' | 'pin';
 
 type Result =
   | { kind: 'ok'; action: 'CLOCKED_IN' | 'CLOCKED_OUT'; userName: string; at: string }
@@ -32,6 +39,7 @@ export default function KioskPage() {
   const params = useSearchParams();
   const apiKey = params.get('key') ?? '';
 
+  const [view,   setView]   = useState<View>('dashboard');
   const [pin,    setPin]    = useState('');
   const [busy,   setBusy]   = useState(false);
   const [result, setResult] = useState<Result>(null);
@@ -60,12 +68,25 @@ export default function KioskPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Auto-clear the result after 3 seconds and reset the keypad.
+  // Auto-clear the result and return to the dashboard after 3 seconds.
   useEffect(() => {
     if (!result) return;
-    const t = setTimeout(() => { setResult(null); setPin(''); }, 3000);
+    const t = setTimeout(() => {
+      setResult(null);
+      setPin('');
+      setView('dashboard');
+    }, 3000);
     return () => clearTimeout(t);
   }, [result]);
+
+  // Auto-return to dashboard if the user opens the PIN page and then walks
+  // away without typing anything for 30 seconds. Prevents a half-typed PIN
+  // from sitting on the screen.
+  useEffect(() => {
+    if (view !== 'pin' || pin.length > 0 || busy || result) return;
+    const t = setTimeout(() => setView('dashboard'), 30_000);
+    return () => clearTimeout(t);
+  }, [view, pin, busy, result]);
 
   if (!apiKey) {
     return (
@@ -91,6 +112,10 @@ export default function KioskPage() {
     if (busy || result) return;
     setPin((p) => p.slice(0, -1));
   }
+  function cancelPin() {
+    setPin('');
+    setView('dashboard');
+  }
 
   async function submit() {
     if (busy || pin.length < 4) return;
@@ -112,8 +137,6 @@ export default function KioskPage() {
         userName: data.user?.name ?? 'Welcome',
         at:       data.at,
       });
-      // Refresh the roster panel so the just-punched user appears (or
-      // disappears, on clock-out) without waiting 10 seconds.
       fetchRoster();
     } catch (err: any) {
       setResult({ kind: 'err', message: err?.message ?? 'Network error.' });
@@ -122,7 +145,7 @@ export default function KioskPage() {
     }
   }
 
-  // Confirmation overlay
+  // ── Confirmation overlay (covers everything) ──────────────────────────
   if (result) {
     if (result.kind === 'ok') {
       const greeting = result.action === 'CLOCKED_IN' ? 'Clocked in' : 'Clocked out';
@@ -138,7 +161,7 @@ export default function KioskPage() {
           <div className="text-3xl font-semibold mb-1">{greeting}</div>
           <div className="text-5xl font-bold mb-3">{result.userName}</div>
           <div className="text-xl opacity-90">{at}</div>
-          <div className="mt-8 text-xs opacity-70">Returning to keypad…</div>
+          <div className="mt-8 text-xs opacity-70">Returning to dashboard…</div>
         </div>
       );
     }
@@ -151,23 +174,30 @@ export default function KioskPage() {
     );
   }
 
-  // ── Idle keypad ────────────────────────────────────────────────────────
   const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const date = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
-  return (
-    <div className="min-h-screen flex flex-col bg-slate-900 text-white">
-      {/* Top: clock */}
-      <div className="text-center py-6">
-        <div className="text-5xl font-bold tabular-nums">{time}</div>
-        <div className="text-sm text-slate-300 mt-1">{date}</div>
-      </div>
+  // ── PIN entry view ─────────────────────────────────────────────────────
+  if (view === 'pin') {
+    return (
+      <div className="min-h-screen flex flex-col bg-slate-900 text-white">
+        {/* Top: clock + cancel */}
+        <div className="flex items-center justify-between px-6 py-4">
+          <div>
+            <div className="text-3xl font-bold tabular-nums">{time}</div>
+            <div className="text-xs text-slate-400 mt-0.5">{date}</div>
+          </div>
+          <button
+            onClick={cancelPin}
+            className="rounded-full bg-slate-800 hover:bg-slate-700 active:bg-slate-600 p-2 transition-colors"
+            aria-label="Cancel"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
 
-      {/* Two-column on landscape tablets: keypad + roster.
-          Stacks to single column on portrait/small. */}
-      <div className="flex-1 flex flex-col lg:flex-row lg:items-stretch gap-6 px-4 pb-4 max-w-6xl mx-auto w-full">
-        {/* Keypad (left) */}
-        <div className="flex-1 flex flex-col items-center justify-center">
+        {/* Middle: PIN entry */}
+        <div className="flex-1 flex flex-col items-center justify-center px-4">
           <div className="text-base text-slate-300 mb-4">Enter your PIN to clock in or out</div>
 
           <div className="flex gap-2 mb-8">
@@ -221,52 +251,81 @@ export default function KioskPage() {
           </div>
         </div>
 
-        {/* Roster (right) — currently clocked-in staff visible from this kiosk */}
-        <div className="lg:w-80 lg:shrink-0">
-          <div className="bg-slate-800/60 rounded-2xl p-4 h-full flex flex-col">
-            <div className="flex items-center gap-2 text-slate-300 mb-3">
-              <Users className="h-4 w-4" />
-              <span className="text-sm font-semibold uppercase tracking-wider">
-                Currently clocked in · {roster.length}
-              </span>
-            </div>
+        <div className="text-center pb-4 text-[11px] text-slate-500">
+          Clerque Sync · Kiosk
+        </div>
+      </div>
+    );
+  }
 
-            {roster.length === 0 ? (
-              <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-                No one is clocked in yet.
-              </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto space-y-2">
-                {roster.map((r) => {
-                  const since = new Date(r.clockedInAt);
-                  const ago = Math.max(1, Math.floor((Date.now() - since.getTime()) / 60_000));
-                  const agoLabel = ago < 60 ? `${ago}m` : `${Math.floor(ago / 60)}h ${ago % 60}m`;
-                  return (
-                    <div
-                      key={r.userId}
-                      className="flex items-center justify-between gap-2 rounded-lg bg-slate-700/40 px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium truncate">{r.name}</div>
-                        <div className="text-[11px] text-slate-400 truncate">
-                          since {since.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                        </div>
-                      </div>
-                      <div className="text-[11px] text-emerald-400 font-medium tabular-nums shrink-0">
-                        {agoLabel}
+  // ── Dashboard view (default) ───────────────────────────────────────────
+  return (
+    <div className="min-h-screen flex flex-col bg-slate-900 text-white">
+      {/* Top: live clock */}
+      <div className="text-center pt-8 pb-6">
+        <div className="text-7xl sm:text-8xl font-bold tabular-nums">{time}</div>
+        <div className="text-base text-slate-300 mt-2">{date}</div>
+      </div>
+
+      {/* Middle: roster fills the available space */}
+      <div className="flex-1 px-4 sm:px-6 max-w-3xl mx-auto w-full pb-4">
+        <div className="bg-slate-800/60 rounded-2xl p-5 h-full flex flex-col">
+          <div className="flex items-center gap-2 text-slate-300 mb-4">
+            <Users className="h-5 w-5" />
+            <span className="text-sm font-semibold uppercase tracking-wider">
+              Currently clocked in · {roster.length}
+            </span>
+          </div>
+
+          {roster.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-slate-500 text-sm gap-2">
+              <Clock className="h-12 w-12" />
+              <div>No one is clocked in yet.</div>
+              <div className="text-xs text-slate-600">Tap the button below to be the first.</div>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2 content-start">
+              {roster.map((r) => {
+                const since = new Date(r.clockedInAt);
+                const ago = Math.max(1, Math.floor((Date.now() - since.getTime()) / 60_000));
+                const agoLabel = ago < 60 ? `${ago}m` : `${Math.floor(ago / 60)}h ${ago % 60}m`;
+                return (
+                  <div
+                    key={r.userId}
+                    className="flex items-center justify-between gap-2 rounded-lg bg-slate-700/40 px-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium truncate">{r.name}</div>
+                      <div className="text-[11px] text-slate-400 truncate">
+                        since {since.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                    <div className="text-[11px] text-emerald-400 font-medium tabular-nums shrink-0">
+                      {agoLabel}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Bottom: branding */}
-      <div className="text-center pb-4 text-[11px] text-slate-500">
-        Clerque Sync · Kiosk
+      {/* Bottom: giant CTA. The kiosk is shared, so we don't pre-select
+          clock-in vs clock-out — the punch endpoint auto-detects from the
+          user's open TimeEntry. One button does both, label stays
+          neutral. */}
+      <div className="px-4 sm:px-6 pb-6 max-w-3xl mx-auto w-full">
+        <button
+          onClick={() => setView('pin')}
+          className="w-full h-24 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-2xl font-semibold flex items-center justify-center gap-3 shadow-lg shadow-emerald-900/40 transition-colors"
+        >
+          <Clock className="h-7 w-7" />
+          Clock In / Clock Out
+        </button>
+        <div className="text-center mt-3 text-[11px] text-slate-500">
+          Tap to enter your PIN · Clerque Sync · Kiosk
+        </div>
       </div>
     </div>
   );

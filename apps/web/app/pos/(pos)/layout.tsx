@@ -327,8 +327,11 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     ];
   } else if (isPharmacy) {
     // ── PHARMACY (Sprint 13 Compliance-Engine) ───────────────────────────────
-    // Adds Rx + Lots + DDB Register on top of standard retail nav. Inventory
-    // management is critical here (lot/expiry tracking is FDA-mandated).
+    // Adds Rx + Lots + DDB Register on top of standard retail nav. Stock
+    // tracking happens at the Product level + Product Lots (lot/expiry
+    // FDA-mandated); the F&B-style /pos/inventory ingredients page does
+    // not apply to a retail pharmacy and was just rendering "Not used for
+    // your business type" — removed from this nav.
     verticalNav = [
       ...withSection('Overview', [
         makeNavItem('/pos/dashboard',         'Dashboard',       LayoutDashboard, DASHBOARD_ROLES, role),
@@ -344,7 +347,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',          'Products',        Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',         'Inventory',       ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/settings/uom',      'Units (UoM)',     Ruler,           UOM_ROLES,       role),
       ]),
       ...warehouseSection,

@@ -49,6 +49,12 @@ export class UsersService {
         // existing SOD permission filters apply at the controller level.
         kioskPin:  true,
         kioskOnly: true,
+        // Sprint 13 — pharmacist credentials. Drives the Settings → Pharmacy
+        // roster + the receipt's "Dispensed by RPh ..." line. Returned to
+        // every caller of /users; PRC numbers are not sensitive (they're on
+        // the dispensing pharmacist's own receipts).
+        prcLicense:          true,
+        prcLicenseExpiresAt: true,
         // SOD Salary Privacy Wall — only OWNER + PAYROLL_MASTER see these fields
         salaryType: canViewSalary,
         salaryRate: canViewSalary,

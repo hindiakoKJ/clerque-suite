@@ -52,7 +52,9 @@ interface LaundryDetail {
     unitPrice: string;
     lineTotal: string;
     machineStatus: 'NOT_STARTED' | 'RUNNING' | 'DONE';
-    machine: { id: string; code: string; kind: 'WASHER' | 'DRYER' | 'COMBO' } | null;
+    machine:      { id: string; code: string; kind: 'WASHER' | 'DRYER' | 'COMBO' } | null;
+    /** Sprint 19 — dryer slot for WASH_DRY_COMBO lines. */
+    dryerMachine?: { id: string; code: string; kind: 'WASHER' | 'DRYER' | 'COMBO' } | null;
     addOns?: Array<{ id: string; code: string; name: string; totalAmount: string }>;
   }>;
 }
@@ -352,9 +354,21 @@ export default function LaundryDetailPage() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-center">
-                    {l.machine ? (
-                      <span className="inline-flex items-center gap-0.5 rounded-full border border-border bg-background px-2 py-0.5 text-xs font-mono font-bold">
-                        {l.machine.code}
+                    {l.machine || l.dryerMachine ? (
+                      <span className="inline-flex items-center gap-1">
+                        {l.machine && (
+                          <span className="inline-flex items-center gap-0.5 rounded-full border border-border bg-background px-2 py-0.5 text-xs font-mono font-bold">
+                            {l.machine.code}
+                          </span>
+                        )}
+                        {l.dryerMachine && (
+                          <>
+                            <span className="text-xs text-muted-foreground">→</span>
+                            <span className="inline-flex items-center gap-0.5 rounded-full border border-border bg-background px-2 py-0.5 text-xs font-mono font-bold">
+                              {l.dryerMachine.code}
+                            </span>
+                          </>
+                        )}
                       </span>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>

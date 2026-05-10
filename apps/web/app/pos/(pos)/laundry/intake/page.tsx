@@ -52,8 +52,13 @@ interface ServiceLine {
   weightKg?:   number;
   notes?:      string;
   addOnIds:    string[];
-  /** Sprint 14 — optional machine pre-assigned at intake time. */
+  /** Sprint 14 — optional machine pre-assigned at intake time. For
+   *  WASH_DRY_COMBO this is the WASHER (or COMBO) used in the wash phase. */
   machineId?:  string;
+  /** Sprint 19 — Wash+Dry combo support. When serviceCode is
+   *  WASH_DRY_COMBO, this is the DRYER (or COMBO) used for the dry phase.
+   *  null/undefined for single-machine services. */
+  dryerMachineId?: string;
   /** Sprint 19 — optional wash/dry cycle (Premium Wash, Heavy Duty, etc.).
    *  Drives the fleet countdown + cron auto-complete. Only meaningful
    *  when machineId is also set. */
@@ -71,13 +76,20 @@ interface WashCycle {
   isActive:        boolean;
 }
 
-/** Map service codes to compatible machine kinds. Mirrors the backend
- *  validation in laundry.service.ts createOrderV2. Services not in the map
- *  don't run on a machine (DRY_CLEAN / IRON / FOLD / etc.) */
-const MACHINE_KINDS_FOR_SERVICE: Partial<Record<ServiceCode, Array<Machine['kind']>>> = {
+/** Sprint 19 — Per-service machine slot definitions. Combos run on TWO
+ *  machines (a washer for the wash phase + a dryer for the dry phase) so
+ *  Filipino laundromats with separate washers + dryers can use combo
+ *  packages without inventing fictional COMBO units. Mirrors the backend
+ *  KIND_BY_SERVICE table in laundry.service.ts.
+ */
+const WASHER_KINDS_FOR_SERVICE: Partial<Record<ServiceCode, Array<Machine['kind']>>> = {
   WASH:           ['WASHER', 'COMBO'],
   DRY:            ['DRYER',  'COMBO'],
-  WASH_DRY_COMBO: ['COMBO'],
+  WASH_DRY_COMBO: ['WASHER', 'COMBO'],
+};
+/** Only WASH_DRY_COMBO has a separate DRYER slot. */
+const DRYER_KINDS_FOR_SERVICE: Partial<Record<ServiceCode, Array<Machine['kind']>>> = {
+  WASH_DRY_COMBO: ['DRYER', 'COMBO'],
 };
 interface ProductLine {
   productId: string;
@@ -221,14 +233,21 @@ export default function LaundryIntakePage() {
     if (!branchId && branches.length > 0) setBranchId(branches[0].id);
   }, [branchId, branches]);
 
-  // Clear any pre-assigned machineId on a line when the branch changes —
-  // a machine assignment is meaningless cross-branch and the backend
-  // rejects it anyway. Keep the dropdown UX self-correcting.
+  // Clear any pre-assigned machineId / dryerMachineId on a line when the
+  // branch changes — a machine assignment is meaningless cross-branch and
+  // the backend rejects it anyway. Keep the dropdown UX self-correcting.
   useEffect(() => {
     setLines((prev) => prev.map((l) => {
-      if (!l.machineId) return l;
-      const m = machines.find((mm) => mm.id === l.machineId);
-      return m && m.branchId === branchId ? l : { ...l, machineId: undefined };
+      const washerOk = !l.machineId
+        || (machines.find((mm) => mm.id === l.machineId)?.branchId === branchId);
+      const dryerOk  = !l.dryerMachineId
+        || (machines.find((mm) => mm.id === l.dryerMachineId)?.branchId === branchId);
+      if (washerOk && dryerOk) return l;
+      return {
+        ...l,
+        machineId:      washerOk ? l.machineId      : undefined,
+        dryerMachineId: dryerOk  ? l.dryerMachineId : undefined,
+      };
     }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchId]);
@@ -286,7 +305,9 @@ export default function LaundryIntakePage() {
         addOnIds:    l.addOnIds,
         // Optional machine assignment at intake. Backend validates kind +
         // IDLE + branch and flips the machine to RUNNING.
-        machineId:   l.machineId || undefined,
+        machineId:      l.machineId      || undefined,
+        // Sprint 19 — Wash+Dry combo dryer slot (only set on combo lines).
+        dryerMachineId: l.dryerMachineId || undefined,
         // Sprint 19 — optional wash/dry cycle package.
         cycleId:           l.cycleId || undefined,
         cycleAutoComplete: l.cycleAutoComplete,
@@ -314,7 +335,8 @@ export default function LaundryIntakePage() {
       lines:      lines.map((l) => ({
         serviceCode: l.serviceCode, mode: l.mode, sets: l.sets,
         weightKg: l.weightKg, notes: l.notes, addOnIds: l.addOnIds,
-        machineId: l.machineId || undefined,
+        machineId:      l.machineId      || undefined,
+        dryerMachineId: l.dryerMachineId || undefined,
         cycleId:   l.cycleId   || undefined,
         cycleAutoComplete: l.cycleAutoComplete,
       })),
@@ -566,14 +588,19 @@ export default function LaundryIntakePage() {
                         value={l.serviceCode}
                         onChange={(e) => {
                           const nextCode = e.target.value as ServiceCode;
-                          // Clear machine if the new service can't run on it (or
-                          // its kind no longer matches what we picked before).
-                          const allowed = MACHINE_KINDS_FOR_SERVICE[nextCode];
-                          const m = machines.find((m) => m.id === l.machineId);
-                          const stillValid = !!m && !!allowed && allowed.includes(m.kind);
+                          // Clear machine slots if the new service can't run
+                          // on them. Only WASH_DRY_COMBO uses the dryer slot —
+                          // switching to anything else nukes it.
+                          const washerKinds = WASHER_KINDS_FOR_SERVICE[nextCode];
+                          const dryerKinds  = DRYER_KINDS_FOR_SERVICE[nextCode];
+                          const wm = machines.find((m) => m.id === l.machineId);
+                          const dm = machines.find((m) => m.id === l.dryerMachineId);
+                          const washerStillValid = !!wm && !!washerKinds && washerKinds.includes(wm.kind);
+                          const dryerStillValid  = !!dm && !!dryerKinds  && dryerKinds.includes(dm.kind);
                           patchLine(idx, {
-                            serviceCode: nextCode,
-                            machineId:   stillValid ? l.machineId : undefined,
+                            serviceCode:    nextCode,
+                            machineId:      washerStillValid ? l.machineId      : undefined,
+                            dryerMachineId: dryerStillValid  ? l.dryerMachineId : undefined,
                           });
                         }}
                         className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
@@ -612,48 +639,107 @@ export default function LaundryIntakePage() {
                         stays aligned. Filter by IDLE + matching kind + same
                         branch + already-picked-elsewhere-in-this-form. */}
                     {(() => {
-                      const allowedKinds = MACHINE_KINDS_FOR_SERVICE[l.serviceCode];
-                      if (!allowedKinds) {
+                      const washerKinds = WASHER_KINDS_FOR_SERVICE[l.serviceCode];
+                      const dryerKinds  = DRYER_KINDS_FOR_SERVICE[l.serviceCode];
+                      if (!washerKinds) {
                         return (
                           <div className="col-span-3 text-xs text-muted-foreground italic text-center">
                             no machine
                           </div>
                         );
                       }
+                      // Machines used in OTHER lines' slots (washer or dryer)
+                      // can't be reused — but the same line's washer slot
+                      // doesn't block its own dryer slot from selecting.
                       const usedElsewhere = new Set(
-                        lines
-                          .map((other, oi) => (oi === idx ? null : other.machineId))
-                          .filter((id): id is string => !!id),
+                        lines.flatMap((other, oi) =>
+                          oi === idx ? [] : [other.machineId, other.dryerMachineId],
+                        ).filter((id): id is string => !!id),
                       );
-                      const eligible = machines.filter((m) =>
+
+                      const washerEligible = machines.filter((m) =>
                         m.branchId === branchId &&
-                        allowedKinds.includes(m.kind) &&
+                        washerKinds.includes(m.kind) &&
                         (m.status === 'IDLE' || m.id === l.machineId) &&
-                        !usedElsewhere.has(m.id),
+                        !usedElsewhere.has(m.id) &&
+                        m.id !== l.dryerMachineId, // can't be in both slots of the same line
+                      );
+
+                      // Single-slot service (WASH / DRY): full-width dropdown.
+                      if (!dryerKinds) {
+                        return (
+                          <select
+                            value={l.machineId ?? ''}
+                            onChange={(e) => patchLine(idx, {
+                              machineId: e.target.value || undefined,
+                              cycleId: undefined,
+                              cycleAutoComplete: undefined,
+                            })}
+                            className="col-span-3 rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                            title="Assign a washer / dryer at intake"
+                          >
+                            <option value="">— assign later —</option>
+                            {washerEligible.length === 0 && (
+                              <option disabled value="__none__">No idle {washerKinds.join('/').toLowerCase()} available</option>
+                            )}
+                            {washerEligible.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.code} ({m.kind === 'COMBO' ? 'Combo' : m.kind === 'WASHER' ? 'Washer' : 'Dryer'})
+                              </option>
+                            ))}
+                          </select>
+                        );
+                      }
+
+                      // WASH_DRY_COMBO: two side-by-side dropdowns.
+                      const dryerEligible = machines.filter((m) =>
+                        m.branchId === branchId &&
+                        dryerKinds.includes(m.kind) &&
+                        (m.status === 'IDLE' || m.id === l.dryerMachineId) &&
+                        !usedElsewhere.has(m.id) &&
+                        m.id !== l.machineId,
                       );
                       return (
-                        <select
-                          value={l.machineId ?? ''}
-                          onChange={(e) => patchLine(idx, {
-                            machineId: e.target.value || undefined,
-                            // Sprint 19 — clear cycle when machine changes;
-                            // the new machine's kind may not match.
-                            cycleId: undefined,
-                            cycleAutoComplete: undefined,
-                          })}
-                          className="col-span-3 rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
-                          title="Assign a washer / dryer at intake"
-                        >
-                          <option value="">— assign later —</option>
-                          {eligible.length === 0 && (
-                            <option disabled value="__none__">No idle {allowedKinds.join('/').toLowerCase()} available</option>
-                          )}
-                          {eligible.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.code} ({m.kind === 'COMBO' ? 'Combo' : m.kind === 'WASHER' ? 'Washer' : 'Dryer'})
-                            </option>
-                          ))}
-                        </select>
+                        <div className="col-span-3 grid grid-cols-2 gap-1">
+                          <select
+                            value={l.machineId ?? ''}
+                            onChange={(e) => patchLine(idx, {
+                              machineId: e.target.value || undefined,
+                              cycleId: undefined,
+                              cycleAutoComplete: undefined,
+                            })}
+                            className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                            title="Washer for the wash phase"
+                          >
+                            <option value="">Washer —</option>
+                            {washerEligible.length === 0 && (
+                              <option disabled value="__none__">no washer free</option>
+                            )}
+                            {washerEligible.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.code} {m.kind === 'COMBO' ? '(combo)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={l.dryerMachineId ?? ''}
+                            onChange={(e) => patchLine(idx, {
+                              dryerMachineId: e.target.value || undefined,
+                            })}
+                            className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                            title="Dryer for the dry phase"
+                          >
+                            <option value="">Dryer —</option>
+                            {dryerEligible.length === 0 && (
+                              <option disabled value="__none__">no dryer free</option>
+                            )}
+                            {dryerEligible.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.code} {m.kind === 'COMBO' ? '(combo)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       );
                     })()}
                     <div className="col-span-2 text-right font-semibold tabular-nums">{fmtPeso(lineTotal)}</div>

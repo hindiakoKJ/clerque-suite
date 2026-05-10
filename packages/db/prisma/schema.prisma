@@ -3406,7 +3406,10 @@ model LaundryMachine {
 
   tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch Branch             @relation(fields: [branchId], references: [id])
-  lines  LaundryOrderLine[]
+  /// Lines where this machine is the washer (or sole machine for non-combo).
+  lines       LaundryOrderLine[] @relation("LineWasherMachine")
+  /// Sprint 19 — Lines where this machine is the dryer half of a combo.
+  dryerLines  LaundryOrderLine[] @relation("LineDryerMachine")
 
   @@unique([tenantId, branchId, code])
   @@index([tenantId, branchId, status])
@@ -3479,6 +3482,14 @@ model LaundryOrderLine {
   weightKg      Decimal?                 @db.Decimal(6, 2)
   notes         String?
   machineId     String?
+  /// Sprint 19 — Wash+Dry combo support. When serviceCode is WASH_DRY_COMBO,
+  /// `machineId` is the WASHER (or COMBO) used for the wash phase, and
+  /// `dryerMachineId` is the DRYER (or COMBO) used for the dry phase. Most
+  /// Filipino laundromats have separate washers + dryers, not all-in-one
+  /// COMBO machines, so a combo package needs to be able to pick a washer
+  /// + dryer pair instead of being forced onto a non-existent COMBO unit.
+  /// For non-combo lines this field is always null.
+  dryerMachineId String?
   machineStatus LaundryMachineLineStatus @default(NOT_STARTED)
   startedAt     DateTime?
   finishedAt    DateTime?
@@ -3493,13 +3504,15 @@ model LaundryOrderLine {
   cycleEndsAt        DateTime?
   cycleAutoComplete  Boolean   @default(false)
 
-  order   LaundryOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  machine LaundryMachine?         @relation(fields: [machineId], references: [id])
-  cycle   LaundryWashCycle?       @relation(fields: [cycleId], references: [id])
-  addOns  LaundryOrderLineAddOn[]
+  order        LaundryOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  machine      LaundryMachine?         @relation("LineWasherMachine", fields: [machineId],      references: [id])
+  dryerMachine LaundryMachine?         @relation("LineDryerMachine",  fields: [dryerMachineId], references: [id])
+  cycle        LaundryWashCycle?       @relation(fields: [cycleId], references: [id])
+  addOns       LaundryOrderLineAddOn[]
 
   @@index([orderId])
   @@index([machineId])
+  @@index([dryerMachineId])
   @@index([cycleEndsAt, machineStatus, cycleAutoComplete])  // cron scan target
   @@map("laundry_order_lines")
 }

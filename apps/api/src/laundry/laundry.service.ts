@@ -175,7 +175,8 @@ export class LaundryService {
           lines: {
             select: {
               id: true, machineStatus: true,
-              machine: { select: { id: true, code: true, kind: true } },
+              machine:      { select: { id: true, code: true, kind: true } },
+              dryerMachine: { select: { id: true, code: true, kind: true } },
             },
           },
         },
@@ -195,7 +196,8 @@ export class LaundryService {
         order:    { select: { id: true, orderNumber: true, totalAmount: true } },
         lines: {
           include: {
-            machine: { select: { id: true, code: true, kind: true } },
+            machine:      { select: { id: true, code: true, kind: true } },
+              dryerMachine: { select: { id: true, code: true, kind: true } },
             addOns:  true,
           },
         },
@@ -899,8 +901,15 @@ export class LaundryService {
       // Cashier can tag a washer / dryer at intake time so the customer
       // sees exactly which unit their load is in. Validate every requested
       // machine here, in one batch, before we mutate anything.
+      //
+      // Sprint 19 — WASH_DRY_COMBO lines accept TWO machines (washer slot
+      // via `machineId`, dryer slot via `dryerMachineId`) so the combo can
+      // run on a real washer + real dryer instead of a fictional COMBO unit.
       const requestedMachineIds = Array.from(
-        new Set(dto.lines.map((l) => l.machineId).filter((x): x is string => !!x)),
+        new Set(
+          dto.lines.flatMap((l) => [l.machineId, (l as any).dryerMachineId])
+            .filter((x): x is string => !!x),
+        ),
       );
       const machinesById = new Map<string, { id: string; kind: 'WASHER' | 'DRYER' | 'COMBO'; status: string; branchId: string; code: string }>();
       if (requestedMachineIds.length) {
@@ -919,15 +928,17 @@ export class LaundryService {
             throw new BadRequestException(`Machine ${m.code} is ${m.status} — pick another or wait for it to free up.`);
           }
         }
-        // Reject duplicate machine IDs in the same intake (the Set above
-        // already de-dups, but two service lines pointing at the same
-        // machine is also ambiguous — fail loudly).
-        const lineMachineIds = dto.lines.map((l) => l.machineId).filter(Boolean) as string[];
+        // Reject duplicate machine IDs across all line slots (washer +
+        // dryer combined). Two lines on the same machine is ambiguous;
+        // ditto a single combo with the same machine in both slots.
+        const lineMachineIds = dto.lines
+          .flatMap((l) => [l.machineId, (l as any).dryerMachineId])
+          .filter(Boolean) as string[];
         const dupCheck = new Set<string>();
         for (const id of lineMachineIds) {
           if (dupCheck.has(id)) {
             const code = machinesById.get(id)?.code ?? id;
-            throw new BadRequestException(`Machine ${code} is referenced by more than one line.`);
+            throw new BadRequestException(`Machine ${code} is referenced by more than one slot — pick a different machine.`);
           }
           dupCheck.add(id);
         }
@@ -971,11 +982,16 @@ export class LaundryService {
           }
         }
       }
-      // Service-code → compatible machine kinds.
-      const KIND_BY_SERVICE: Partial<Record<LaundryServiceCode, Array<'WASHER' | 'DRYER' | 'COMBO'>>> = {
-        WASH:           ['WASHER', 'COMBO'],
-        DRY:            ['DRYER',  'COMBO'],
-        WASH_DRY_COMBO: ['COMBO'],
+      // Service-code → compatible machine kinds. Sprint 19: combo lines
+      // run on a washer (or COMBO) for the wash phase + a dryer (or COMBO)
+      // for the dry phase. Two slots, validated independently.
+      const KIND_BY_SERVICE: Partial<Record<LaundryServiceCode, {
+        washer?: Array<'WASHER' | 'DRYER' | 'COMBO'>;
+        dryer?:  Array<'WASHER' | 'DRYER' | 'COMBO'>;
+      }>> = {
+        WASH:           { washer: ['WASHER', 'COMBO'] },
+        DRY:            { washer: ['DRYER',  'COMBO'] }, // single slot — repurpose 'washer' field
+        WASH_DRY_COMBO: { washer: ['WASHER', 'COMBO'], dryer: ['DRYER', 'COMBO'] },
         // Other services (DRY_CLEAN / IRON / FOLD / EXTRA_RINSE /
         // FABRIC_SOFTENER) are inherently human-labor or chemical — no
         // machine assignment supported.
@@ -988,19 +1004,44 @@ export class LaundryService {
           throw new BadRequestException(`No price set for ${l.serviceCode} (${l.mode}). Configure under Settings → Laundry.`);
         }
 
-        // If a machine was requested, confirm its kind is compatible with
-        // this line's service code. WASH on a DRYER is nonsensical.
-        if (l.machineId) {
+        // If machines were requested, confirm their kinds are compatible
+        // with this line's service code. WASH on a DRYER is nonsensical.
+        const slots = KIND_BY_SERVICE[l.serviceCode];
+        const dryerMachineId = (l as any).dryerMachineId as string | undefined;
+        if ((l.machineId || dryerMachineId) && !slots) {
+          throw new BadRequestException(
+            `${l.serviceCode} doesn't run on a machine — remove the machine assignment.`,
+          );
+        }
+        if (l.machineId && slots?.washer) {
           const m = machinesById.get(l.machineId)!;
-          const allowed = KIND_BY_SERVICE[l.serviceCode];
-          if (!allowed) {
+          if (!slots.washer.includes(m.kind)) {
             throw new BadRequestException(
-              `${l.serviceCode} doesn't run on a machine — remove the machine assignment.`,
+              `Machine ${m.code} is a ${m.kind} — can't run ${l.serviceCode}'s ` +
+              `${l.serviceCode === 'WASH_DRY_COMBO' ? 'wash phase' : 'cycle'} on it.`,
             );
           }
-          if (!allowed.includes(m.kind)) {
+        }
+        if (dryerMachineId) {
+          if (l.serviceCode !== 'WASH_DRY_COMBO') {
             throw new BadRequestException(
-              `Machine ${m.code} is a ${m.kind} — can't run ${l.serviceCode} on it.`,
+              `dryerMachineId is only meaningful for WASH_DRY_COMBO lines.`,
+            );
+          }
+          const m = machinesById.get(dryerMachineId)!;
+          if (!slots?.dryer || !slots.dryer.includes(m.kind)) {
+            throw new BadRequestException(
+              `Machine ${m.code} is a ${m.kind} — can't run the dry phase on it.`,
+            );
+          }
+        }
+        // Sprint 19 — for combos, both slots should be filled. The cashier
+        // CAN leave both blank (assign machines later) but supplying only
+        // one half is ambiguous and we reject it.
+        if (l.serviceCode === 'WASH_DRY_COMBO') {
+          if ((l.machineId && !dryerMachineId) || (!l.machineId && dryerMachineId)) {
+            throw new BadRequestException(
+              `Wash + Dry combo needs both a washer and a dryer assigned (or leave both blank to assign later).`,
             );
           }
         }
@@ -1115,9 +1156,12 @@ export class LaundryService {
               notes:       l.notes ?? null,
               // Pre-assigned machine — line starts RUNNING immediately so
               // the queue board / customer stub shows it as in-progress.
-              machineId:     l.machineId ?? null,
-              machineStatus: l.machineId ? 'RUNNING' : 'NOT_STARTED',
-              startedAt:     l.machineId ? new Date() : null,
+              // Sprint 19 — combos carry both a washer (machineId) and a
+              // dryer (dryerMachineId); single-machine lines leave the dryer slot null.
+              machineId:      l.machineId ?? null,
+              dryerMachineId: (l as any).dryerMachineId ?? null,
+              machineStatus:  l.machineId ? 'RUNNING' : 'NOT_STARTED',
+              startedAt:      l.machineId ? new Date() : null,
               // Sprint 19 — wash cycle (drives countdown + auto-complete).
               // Validated above; safe to look up + compute end time here.
               ...(l.cycleId && l.machineId
@@ -1170,7 +1214,8 @@ export class LaundryService {
         include: {
           lines: {
             include: {
-              machine: { select: { id: true, code: true, kind: true } },
+              machine:      { select: { id: true, code: true, kind: true } },
+              dryerMachine: { select: { id: true, code: true, kind: true } },
               addOns:  true,
             },
           },

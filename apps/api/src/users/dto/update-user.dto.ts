@@ -5,9 +5,9 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  IsUUID,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -27,13 +27,19 @@ export class UpdateUserDto {
   role?: StaffRole;
 
   /**
-   * Pass the UUID to assign a branch, or explicitly pass `null` to unassign.
-   * class-transformer converts the empty string to null.
+   * Pass the branch ID (CUID) to assign a branch, or explicitly pass `null`
+   * to unassign. class-transformer converts the empty string to null.
+   *
+   * NOTE: Branch.id uses Prisma `@default(cuid())`, not UUID. We previously
+   * validated with @IsUUID('all') which rejected every legitimate CUID and
+   * blocked Save on the staff edit modal. Use @IsString + length bounds.
    */
-  @ApiPropertyOptional({ example: 'clxyz123...', nullable: true })
+  @ApiPropertyOptional({ example: 'clxyz123abcdef0123456789', nullable: true })
   @IsOptional()
   @Transform(({ value }) => (value === '' ? null : value))
-  @IsUUID('all', { message: 'branchId must be a valid UUID or null.' })
+  @ValidateIf((_, value) => value !== null)
+  @IsString({ message: 'branchId must be a string or null.' })
+  @MaxLength(64)
   branchId?: string | null;
 
   @ApiPropertyOptional({ example: true })

@@ -58,6 +58,22 @@ export class ReportsController {
   }
 
   /**
+   * Sprint 19 — Unified all-branch report (owner-only). Per-branch
+   * breakdown of sales, COGS, AP, AR, inventory value rolled into one
+   * payload. Used by /pos/reports/unified to give the owner a single
+   * read-out of the whole business across branches.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Get('unified')
+  getUnified(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to')   to:   string,
+  ) {
+    return this.reportsService.getUnifiedReport(user.tenantId!, from, to);
+  }
+
+  /**
    * Sprint 7 — Daily lead-time KPIs (production wait times).
    *   - Avg, P50, P90, P95 lead time
    *   - Counts of orders > 5 min and > 10 min (alarm thresholds)

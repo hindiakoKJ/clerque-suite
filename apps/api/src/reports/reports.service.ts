@@ -589,4 +589,185 @@ export class ReportsService {
         .slice(0, 20),
     };
   }
+
+  // ─── Unified all-branch report (Sprint 19, owner-only) ───────────────────
+  // Rolls sales / AP / AR / inventory value into a per-branch breakdown so
+  // the owner of a multi-branch tenant sees the whole business in one view
+  // without bouncing between branch filters. Date range applies to sales
+  // and to AP/AR document creation; inventory value is point-in-time as of
+  // the call.
+
+  async getUnifiedReport(tenantId: string, fromDate: string, toDate: string) {
+    const start = new Date(`${fromDate}T00:00:00+08:00`);
+    const end   = new Date(`${toDate}T23:59:59.999+08:00`);
+
+    const [branches, orders, apBills, arInvoices, inventoryRows] = await Promise.all([
+      this.prisma.branch.findMany({
+        where:   { tenantId, isActive: true },
+        orderBy: { name: 'asc' },
+        select:  { id: true, name: true },
+      }),
+      this.prisma.order.findMany({
+        where: { tenantId, paidAt: { gte: start, lte: end } },
+        select: {
+          id: true, branchId: true, status: true,
+          totalAmount: true, paidAt: true,
+          items: { select: { quantity: true, costPrice: true } },
+        },
+      }),
+      this.prisma.aPBill.findMany({
+        where: {
+          tenantId,
+          createdAt: { gte: start, lte: end },
+          status: { not: 'VOID' as any },
+        },
+        select: { branchId: true, totalAmount: true, balanceAmount: true },
+      }),
+      this.prisma.aRInvoice.findMany({
+        where: {
+          tenantId,
+          invoiceDate: { gte: start, lte: end },
+          status: { not: 'VOID' as any },
+        },
+        select: { branchId: true, totalAmount: true, balanceAmount: true },
+      }).catch(() => []), // ARInvoice may not exist in all schemas
+      this.prisma.inventoryItem.findMany({
+        where: { tenantId, quantity: { gt: 0 } },
+        select: { branchId: true, quantity: true, avgCost: true, product: { select: { costPrice: true } } },
+      }),
+    ]);
+
+    // Per-branch buckets
+    interface Bucket {
+      branchId:        string;
+      branchName:      string;
+      revenue:         number;
+      cogs:            number;
+      grossProfit:     number;
+      orderCount:      number;
+      voidCount:       number;
+      avgOrderValue:   number;
+      apBilled:        number;
+      apOutstanding:   number;
+      arInvoiced:      number;
+      arOutstanding:   number;
+      inventoryValue:  number;
+    }
+    const initBucket = (b: { id: string; name: string }): Bucket => ({
+      branchId:       b.id,
+      branchName:     b.name,
+      revenue:        0,
+      cogs:           0,
+      grossProfit:    0,
+      orderCount:     0,
+      voidCount:      0,
+      avgOrderValue:  0,
+      apBilled:       0,
+      apOutstanding:  0,
+      arInvoiced:     0,
+      arOutstanding:  0,
+      inventoryValue: 0,
+    });
+    const map = new Map<string, Bucket>(branches.map((b) => [b.id, initBucket(b)]));
+
+    // Sales
+    for (const o of orders) {
+      const bucket = map.get(o.branchId);
+      if (!bucket) continue;
+      if (o.status === 'VOIDED') {
+        bucket.voidCount++;
+        continue;
+      }
+      const total = Number(o.totalAmount);
+      const cogs  = o.items.reduce((s, it) => s + Number(it.costPrice ?? 0) * Number(it.quantity), 0);
+      bucket.revenue   += total;
+      bucket.cogs      += cogs;
+      bucket.orderCount++;
+    }
+    // AP (branchId may be null → assign to a synthetic "shared" pool)
+    const sharedBucket: Bucket = {
+      branchId: '_shared', branchName: 'Shared / no branch',
+      revenue: 0, cogs: 0, grossProfit: 0,
+      orderCount: 0, voidCount: 0, avgOrderValue: 0,
+      apBilled: 0, apOutstanding: 0, arInvoiced: 0, arOutstanding: 0,
+      inventoryValue: 0,
+    };
+    for (const b of apBills) {
+      const bucket = b.branchId ? (map.get(b.branchId) ?? sharedBucket) : sharedBucket;
+      bucket.apBilled      += Number(b.totalAmount);
+      bucket.apOutstanding += Number(b.balanceAmount);
+    }
+    for (const inv of arInvoices as any[]) {
+      const bucket = inv.branchId ? (map.get(inv.branchId) ?? sharedBucket) : sharedBucket;
+      bucket.arInvoiced    += Number(inv.totalAmount);
+      bucket.arOutstanding += Number(inv.balanceAmount);
+    }
+    // Inventory value (qty × avgCost, falling back to product.costPrice)
+    for (const row of inventoryRows) {
+      const bucket = map.get(row.branchId);
+      if (!bucket) continue;
+      const qty  = Number(row.quantity);
+      const cost = row.avgCost != null
+        ? Number(row.avgCost)
+        : Number(row.product.costPrice ?? 0);
+      bucket.inventoryValue += qty * cost;
+    }
+    // Derived metrics
+    for (const b of map.values()) {
+      b.grossProfit   = b.revenue - b.cogs;
+      b.avgOrderValue = b.orderCount > 0 ? b.revenue / b.orderCount : 0;
+    }
+
+    // Round to 2 decimals everywhere for the wire response
+    const round = (n: number) => Math.round(n * 100) / 100;
+    const finalize = (b: Bucket) => ({
+      ...b,
+      revenue:        round(b.revenue),
+      cogs:           round(b.cogs),
+      grossProfit:    round(b.grossProfit),
+      avgOrderValue:  round(b.avgOrderValue),
+      apBilled:       round(b.apBilled),
+      apOutstanding:  round(b.apOutstanding),
+      arInvoiced:     round(b.arInvoiced),
+      arOutstanding:  round(b.arOutstanding),
+      inventoryValue: round(b.inventoryValue),
+    });
+
+    const branchRows = Array.from(map.values()).map(finalize);
+    const sharedRow  = (sharedBucket.apBilled || sharedBucket.arInvoiced)
+      ? [finalize(sharedBucket)]
+      : [];
+
+    // Tenant-wide totals
+    const totals = branchRows.reduce(
+      (acc, b) => ({
+        revenue:        acc.revenue + b.revenue,
+        cogs:           acc.cogs + b.cogs,
+        grossProfit:    acc.grossProfit + b.grossProfit,
+        orderCount:     acc.orderCount + b.orderCount,
+        voidCount:      acc.voidCount + b.voidCount,
+        apBilled:       acc.apBilled + b.apBilled,
+        apOutstanding:  acc.apOutstanding + b.apOutstanding + (sharedRow[0]?.apOutstanding ?? 0),
+        arInvoiced:     acc.arInvoiced + b.arInvoiced,
+        arOutstanding:  acc.arOutstanding + b.arOutstanding + (sharedRow[0]?.arOutstanding ?? 0),
+        inventoryValue: acc.inventoryValue + b.inventoryValue,
+      }),
+      {
+        revenue: 0, cogs: 0, grossProfit: 0, orderCount: 0, voidCount: 0,
+        apBilled: 0, apOutstanding: 0, arInvoiced: 0, arOutstanding: 0, inventoryValue: 0,
+      },
+    );
+    const grossMargin = totals.revenue > 0 ? totals.grossProfit / totals.revenue : 0;
+
+    return {
+      from: fromDate,
+      to:   toDate,
+      branches: branchRows,
+      shared:   sharedRow,
+      totals: {
+        ...totals,
+        grossMargin: Math.round(grossMargin * 10000) / 10000,
+      },
+    };
+  }
 }

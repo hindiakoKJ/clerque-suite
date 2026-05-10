@@ -306,8 +306,12 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
 
   // Sprint 19 — Owner-only Sales Report, available across all verticals.
   // MGMT_POS = Owner + Branch Manager (cashier never sees revenue here).
+  // Unified all-branch report is owner-only (multi-branch only).
   const reportsSection = withSection('Reports', [
     makeNavItem('/pos/reports/sales', 'Sales Report', ChartBar, MGMT_POS, role),
+    ...(isMultiBranch
+      ? [makeNavItem('/pos/reports/unified', 'All Branches', ChartBar, OWNER_ONLY, role)]
+      : []),
   ]);
 
   let verticalNav: NavItem[];

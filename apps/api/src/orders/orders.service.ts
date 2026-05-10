@@ -79,28 +79,95 @@ export class OrdersService {
     // cause inventory deductions and order records to be created at another tenant's branch.
     await this.assertBranchBelongsToTenant(tenantId, payload.branchId);
 
-    // Sprint 19 — Pharmacy: every line whose product has Product.isRxRequired
-    // = true MUST carry a prescriptionId. This is the server-side defence-in-
-    // depth — the till's RxAttachModal already enforces it, but a stale or
-    // malicious offline client could submit a payload missing the field.
+    // Sprint 19 — Pharmacy PIN-attest validation. Replaces the earlier
+    // RX_REQUIRED_NO_PRESCRIPTION guard (commit 2d30c97 → revised plan).
+    // Real Filipino pharmacy workflow: the assistant has already verified
+    // the paper Rx; the till just needs the pharmacist's PIN to attest.
+    //
+    //   1. For every line whose product is Rx-required, item.attestPin must
+    //      belong to a tenant user with prcLicense set + isActive.
+    //   2. For every line whose product.drugClass = DDB_S2, also require
+    //      a Yellow Rx serial number (RA 9165 §61).
+    //   3. We stamp OrderItem.dispensedByPrc + dispensedById from the
+    //      attesting pharmacist on success — that's the legal audit trail.
+    //
+    // The optional prescriptionId field is preserved for back-compat (older
+    // clients still send it) but is no longer required at the till; owners
+    // backfill it later from /pos/pharmacy/rx if they want to formally tie
+    // the sale to a paper Rx record.
+    let attestedByLine = new Map<number, { prc: string; userId: string }>();
     {
       const productIds = Array.from(new Set(payload.items.map((i) => i.productId)));
       if (productIds.length > 0) {
         const rxProducts = await this.prisma.product.findMany({
           where:  { id: { in: productIds }, tenantId, isRxRequired: true },
-          select: { id: true, name: true },
+          select: { id: true, name: true, drugClass: true },
         });
         const rxProductIds = new Set(rxProducts.map((p) => p.id));
-        const missing = payload.items
-          .filter((i) => rxProductIds.has(i.productId) && !i.prescriptionId)
-          .map((i) => i.productName);
-        if (missing.length > 0) {
+        const s2ProductIds = new Set(
+          rxProducts.filter((p) => (p as any).drugClass === 'DDB_S2').map((p) => p.id),
+        );
+
+        // Collect distinct PINs across all Rx-required lines, look them up
+        // once, then reuse the resolved user info per line.
+        const pinsToResolve = Array.from(new Set(
+          payload.items
+            .filter((i) => rxProductIds.has(i.productId))
+            .map((i) => (i as any).attestPin)
+            .filter((p): p is string => !!p),
+        ));
+        const usersByPin = new Map<string, { id: string; prcLicense: string | null; name: string }>();
+        if (pinsToResolve.length > 0) {
+          const users = await this.prisma.user.findMany({
+            where:  { tenantId, isActive: true, kioskPin: { in: pinsToResolve } },
+            select: { id: true, kioskPin: true, prcLicense: true, name: true },
+          });
+          for (const u of users) {
+            if (u.kioskPin) usersByPin.set(u.kioskPin, { id: u.id, prcLicense: u.prcLicense, name: u.name });
+          }
+        }
+
+        const missingAttest: string[] = [];
+        const notPharmacist: string[] = [];
+        const missingS2:     string[] = [];
+
+        payload.items.forEach((i, idx) => {
+          if (!rxProductIds.has(i.productId)) return;
+          const pin = (i as any).attestPin as string | undefined;
+          if (!pin) { missingAttest.push(i.productName); return; }
+          const user = usersByPin.get(pin);
+          if (!user) { missingAttest.push(i.productName); return; }
+          if (!user.prcLicense) { notPharmacist.push(i.productName); return; }
+          attestedByLine.set(idx, { prc: user.prcLicense, userId: user.id });
+          if (s2ProductIds.has(i.productId)) {
+            const serial = (i as any).yellowRxSerial as string | undefined;
+            if (!serial || !/^[A-Z0-9-]{4,32}$/i.test(serial.trim())) {
+              missingS2.push(i.productName);
+            }
+          }
+        });
+
+        if (missingAttest.length > 0) {
           throw new BadRequestException({
-            code:    'RX_REQUIRED_NO_PRESCRIPTION',
-            message: `Cannot dispense without a prescription: ${missing.join(', ')}.`,
+            code:    'RX_ATTEST_PIN_INVALID',
+            message: `Pharmacist PIN required (or wrong PIN) for: ${missingAttest.join(', ')}.`,
           });
         }
-        // Also ensure the supplied prescriptionIds belong to this tenant.
+        if (notPharmacist.length > 0) {
+          throw new BadRequestException({
+            code:    'RX_ATTEST_NOT_PHARMACIST',
+            message: `That PIN belongs to a non-pharmacist staff member; cannot dispense: ${notPharmacist.join(', ')}.`,
+          });
+        }
+        if (missingS2.length > 0) {
+          throw new BadRequestException({
+            code:    'S2_YELLOW_RX_REQUIRED',
+            message: `Yellow Rx serial required for DDB Schedule II: ${missingS2.join(', ')}.`,
+          });
+        }
+
+        // Tolerate clients that still send prescriptionId — validate it
+        // belongs to this tenant if supplied.
         const suppliedIds = Array.from(new Set(
           payload.items.map((i) => i.prescriptionId).filter((id): id is string => !!id),
         ));
@@ -183,7 +250,7 @@ export class OrdersService {
           // computation downstream).
           customerId:      payload.customerId,
           items: {
-            create: payload.items.map((item) => ({
+            create: payload.items.map((item, idx) => ({
               productId: item.productId,
               variantId: item.variantId,
               productName: item.productName,
@@ -195,10 +262,14 @@ export class OrdersService {
               costPrice: item.costPrice != null ? new Prisma.Decimal(item.costPrice) : undefined,
               isVatable: item.isVatable,
               taxType: (item.taxType ?? (item.isVatable ? 'VAT_12' : 'VAT_EXEMPT')) as any,
-              // Sprint 19 — Pharmacy: attach Rx (only meaningful when the
-              // product has isRxRequired=true; the till's RxAttachModal
-              // ensures every Rx-required line carries this).
+              // Sprint 19 — Pharmacy: prescriptionId is optional + back-compat.
               prescriptionId: item.prescriptionId,
+              // Sprint 19 — PIN-attest stamps the dispensing pharmacist on the
+              // line. Computed above in `attestedByLine` from the validated
+              // attestPin → User.kioskPin lookup.
+              dispensedByPrc: attestedByLine.get(idx)?.prc,
+              dispensedById:  attestedByLine.get(idx)?.userId,
+              yellowRxSerial: (item as any).yellowRxSerial,
               modifiers: item.modifiers?.length
                 ? {
                     create: item.modifiers.map((m) => ({

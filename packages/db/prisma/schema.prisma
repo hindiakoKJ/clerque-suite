@@ -84,6 +84,52 @@ enum BusinessType {
   CONSTRUCTION // Construction / civil works / fit-out — Project-Engine (WIP, progress billing)
 }
 
+/// Sprint 19 — Philippine drug-classification taxonomy.
+/// Drives the till workflow at sale (zero friction for OTC, PIN-attest for
+/// Rx-only, PIN-attest + Yellow Rx for DDB Schedule II). The two derived
+/// booleans on Product (isRxRequired, isControlledDrug) are auto-projected
+/// from this enum by ProductsService — drugClass is the single source of truth.
+enum DrugClass {
+  // Tier 1 — non-prescription
+  /// Over the counter (paracetamol, antacids, ORS) — tap and charge
+  OTC
+  /// Behind the counter — pharmacist counsel required, no Rx
+  /// (Plan B emergency contraceptives, some pseudoephedrine cold meds)
+  OTC_BTC
+
+  // Tier 2 — Rx-only, non-controlled
+  /// White prescription — most antibiotics, antihypertensives, antidiabetics
+  RX_ONLY
+
+  // Tier 3 — DDB controlled (RA 9165 — Comprehensive Dangerous Drugs Act)
+  /// Schedule II — Yellow Rx + S2-licensed pharmacist
+  /// (morphine, oxycodone, fentanyl, methadone, methylphenidate, ketamine)
+  DDB_S2
+  /// Schedule III — Regular Rx + DDB Register entry (codeine combinations, some barbiturates)
+  DDB_S3
+  /// Schedule IV — Regular Rx + DDB Register entry
+  /// (diazepam/Valium, alprazolam/Xanax, lorazepam, zolpidem)
+  DDB_S4
+  /// Schedule V — Regular Rx + DDB Register entry
+  /// (low-dose codeine cough syrups < 200mg/100mL)
+  DDB_S5
+
+  // Tier 4 — special handling, non-Rx
+  /// Vaccines / biologicals — cold-chain + lot/expiry mandatory at sale
+  /// (Hep B, Pneumococcal, COVID, insulin)
+  VACCINE
+
+  // Tier 5 — non-drugs sold in drugstores
+  /// Glucometer, BP monitor, thermometer, pulse oximeter
+  DEVICE
+  /// Vitamins, probiotics, herbal products
+  SUPPLEMENT
+  /// Sunscreen, soaps, personal care
+  COSMETIC
+  /// First-aid, gauze, alcohol, miscellaneous
+  OTHER
+}
+
 enum TenantStatus {
   ACTIVE
   GRACE
@@ -956,11 +1002,19 @@ model Product {
   dosageForm      String?
   /// Strength (e.g. "500mg", "5mg/ml"). Free-text — formularies vary.
   strength        String?
-  /// True = requires a valid prescription before dispensing. Pharmacy POS
-  /// blocks the sale at the till until a prescriptionId is attached.
+  /// Sprint 19 — PH drug-classification taxonomy. Drives till workflow per
+  /// product (OTC = tap-and-charge; RX_ONLY = pharmacist PIN-attest; DDB_S2 =
+  /// PIN + Yellow Rx serial; etc). Single source of truth — the two booleans
+  /// below are auto-derived from this in ProductsService for backward-compat
+  /// with queries that filter on them.
+  drugClass       DrugClass     @default(OTC)
+  /// DERIVED from drugClass via ProductsService.deriveBooleans(). Kept as a
+  /// real column so existing Prisma queries that filter on it (including
+  /// the OrdersService Rx guard from commit 2d30c97) keep working without
+  /// a coordinated rename across N callsites.
   isRxRequired    Boolean       @default(false)
-  /// True = DDB-regulated (RA 9165 dangerous drugs). Sale auto-creates a
-  /// ControlledSubstanceLog row with patient + doctor + dispensing pharmacist.
+  /// DERIVED from drugClass. RA 9165 dangerous drugs (any DDB schedule).
+  /// ControlledSubstanceLog continues to auto-create on sale of these.
   isControlledDrug Boolean      @default(false)
   /// Unit of Measure for this product (PC, KG, BOX, LITER, etc.)
   unitOfMeasureId String?
@@ -1333,6 +1387,17 @@ model OrderItem {
   /// PRC license number of the pharmacist who approved the dispense.
   /// Required for `isRxRequired` items; printed on the OR.
   dispensedByPrc String?
+  /// Sprint 19 — Yellow Rx serial number (DDB Form 1, pre-numbered accountable
+  /// form). Required for DDB Schedule II sales (RA 9165 §61). The actual
+  /// patient/doctor details remain in the paper Yellow Rx held by the
+  /// pharmacy; this column is the link from the sale back to that paper.
+  /// Format: alphanumeric + hyphens, 4-32 chars (no strict regex — actual
+  /// DDB serial formats vary by issuing region).
+  yellowRxSerial String?
+  /// Sprint 19 — User.id of the pharmacist who attested at the till.
+  /// Set together with dispensedByPrc by the OrdersService PIN-attest flow.
+  /// Lets us join back to User for the dispensing pharmacist's name on the OR.
+  dispensedById  String?
 
   order        Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product      Product             @relation(fields: [productId], references: [id])

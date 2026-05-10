@@ -1,7 +1,48 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { Prisma, DrugClass } from '@prisma/client';
 import { hasPermission } from '@repo/shared-types';
+
+/**
+ * Sprint 19 — Single source of truth for the Product.isRxRequired and
+ * Product.isControlledDrug booleans, derived from drugClass. The migration
+ * 20260530000000_drug_class_taxonomy backfilled drugClass from the existing
+ * booleans; from now on, booleans are projected back from drugClass in
+ * create/update so the till logic (commit 2d30c97 Rx guard) keeps working.
+ */
+function deriveDrugBooleans(drugClass: DrugClass): { isRxRequired: boolean; isControlledDrug: boolean } {
+  switch (drugClass) {
+    case 'RX_ONLY':
+      return { isRxRequired: true,  isControlledDrug: false };
+    case 'DDB_S2':
+    case 'DDB_S3':
+    case 'DDB_S4':
+    case 'DDB_S5':
+      return { isRxRequired: true,  isControlledDrug: true };
+    case 'OTC':
+    case 'OTC_BTC':
+    case 'VACCINE':
+    case 'DEVICE':
+    case 'SUPPLEMENT':
+    case 'COSMETIC':
+    case 'OTHER':
+    default:
+      return { isRxRequired: false, isControlledDrug: false };
+  }
+}
+
+/**
+ * Inverse map for legacy clients that still send the booleans without
+ * drugClass. Conservative: Rx + controlled defaults to DDB_S4 (most common
+ * controlled schedule for Filipino drugstores). Owner can re-classify to
+ * S2/S3/S5 from the product editor.
+ */
+function inferDrugClass(isRxRequired: boolean | undefined, isControlledDrug: boolean | undefined): DrugClass {
+  if (isRxRequired && isControlledDrug) return 'DDB_S4';
+  if (isRxRequired) return 'RX_ONLY';
+  if (isControlledDrug) return 'RX_ONLY'; // inconsistent input → safe upgrade
+  return 'OTC';
+}
 
 /** Roles that may NOT edit price/cost fields under any circumstances (SOD Price Wall). */
 const PRICE_WALL_BLOCKED = ['CASHIER', 'SALES_LEAD', 'WAREHOUSE_STAFF', 'BOOKKEEPER',
@@ -192,10 +233,20 @@ export class ProductsService {
       );
     }
 
+    // Sprint 19 — Drug taxonomy. drugClass is the source of truth; isRxRequired
+    // and isControlledDrug are projected from it. If the caller supplied
+    // drugClass, use it; otherwise infer from the legacy booleans.
+    const drugClass: DrugClass = (rest.drugClass as DrugClass | undefined)
+      ?? inferDrugClass(rest.isRxRequired, rest.isControlledDrug);
+    const drugBools = deriveDrugBooleans(drugClass);
+
     return this.prisma.product.create({
       data: {
         tenantId,
         ...rest,
+        drugClass,
+        isRxRequired:    drugBools.isRxRequired,
+        isControlledDrug: drugBools.isControlledDrug,
         price: new Prisma.Decimal(rest.price),
         costPrice: resolvedCostPrice != null ? new Prisma.Decimal(resolvedCostPrice) : undefined,
         // Auto-set inventoryMode based on whether a BOM was supplied.
@@ -226,10 +277,34 @@ export class ProductsService {
       );
     }
 
+    // Sprint 19 — Drug taxonomy. When the caller updates drugClass (or the
+    // legacy booleans), re-derive both booleans from the canonical class.
+    // Untouched if neither field is supplied, so plain "edit price" updates
+    // don't churn the taxonomy.
+    const drugUpdate: { drugClass?: DrugClass; isRxRequired?: boolean; isControlledDrug?: boolean } = {};
+    if (rest.drugClass) {
+      const drugClass = rest.drugClass as DrugClass;
+      const drugBools = deriveDrugBooleans(drugClass);
+      drugUpdate.drugClass = drugClass;
+      drugUpdate.isRxRequired = drugBools.isRxRequired;
+      drugUpdate.isControlledDrug = drugBools.isControlledDrug;
+    } else if (rest.isRxRequired !== undefined || rest.isControlledDrug !== undefined) {
+      // Legacy boolean-only path: infer the class from the booleans, then
+      // re-project them so they're always consistent with the class.
+      const drugClass = inferDrugClass(rest.isRxRequired, rest.isControlledDrug);
+      const drugBools = deriveDrugBooleans(drugClass);
+      drugUpdate.drugClass = drugClass;
+      drugUpdate.isRxRequired = drugBools.isRxRequired;
+      drugUpdate.isControlledDrug = drugBools.isControlledDrug;
+    }
+    // Strip the raw fields from rest so they don't override our derived values.
+    const { drugClass: _dc, isRxRequired: _rx, isControlledDrug: _cd, ...restClean } = rest as any;
+
     return this.prisma.product.update({
       where: { id },
       data: {
-        ...rest,
+        ...restClean,
+        ...drugUpdate,
         ...(price != null ? { price: new Prisma.Decimal(price) } : {}),
         ...(costPrice != null ? { costPrice: new Prisma.Decimal(costPrice) } : {}),
       },

@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/auth';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ManualDiscountModal } from '@/components/pos/ManualDiscountModal';
-import { RxAttachModal } from '@/components/pos/RxAttachModal';
+import { RxAttestModal } from '@/components/pos/RxAttestModal';
 import { toast } from 'sonner';
 
 /** Roles allowed to apply manual discounts. Mirrors PERMISSION_MATRIX entry for order:apply_discount. */
@@ -35,12 +35,12 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
   const [discountOpen, setDiscountOpen]   = useState(false);
   const [rxModalOpen, setRxModalOpen]     = useState(false);
 
-  // Sprint 19 — Pharmacy: any Rx-required line without a prescriptionId
-  // blocks the Charge button. Cashier opens the Rx attach modal to search
-  // an existing Rx record or quick-create one for this customer.
-  const rxRequiredLines       = lines.filter((l) => l.product.isRxRequired);
-  const unattachedRxLineCount = rxRequiredLines.filter((l) => !l.prescriptionId).length;
-  const hasUnattachedRx       = unattachedRxLineCount > 0;
+  // Sprint 19 — Pharmacy: any Rx-required line without an attestPin blocks
+  // the Charge button. Cashier opens the PIN-attest modal where the
+  // pharmacist enters their kioskPin (and Yellow Rx serials for DDB_S2).
+  const rxRequiredLines        = lines.filter((l) => l.product.isRxRequired);
+  const unattestedRxLineCount  = rxRequiredLines.filter((l) => !l.attestPin).length;
+  const hasUnattestedRx        = unattestedRxLineCount > 0;
 
   const sub = subtotal();
   const disc = totalDiscount();
@@ -131,17 +131,18 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                       </span>
                     )}
 
-                    {/* Sprint 19 — Pharmacy: Rx attached / missing badge */}
+                    {/* Sprint 19 — Pharmacy: PIN-attest verified / missing badge */}
                     {line.product.isRxRequired && (
-                      line.prescriptionId ? (
+                      line.attestPin ? (
                         <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full mt-0.5">
                           <FileBadge className="h-2.5 w-2.5" />
-                          Rx · {line.prescriptionLabel ?? 'attached'}
+                          Verified by {line.attestPharmacistName ?? 'pharmacist'}
+                          {line.yellowRxSerial ? ` · Y-${line.yellowRxSerial}` : ''}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-700 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded-full mt-0.5">
                           <AlertTriangle className="h-2.5 w-2.5" />
-                          Rx required — not attached
+                          Verify Rx required
                         </span>
                       )
                     )}
@@ -356,18 +357,18 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
             </div>
           </div>
 
-          {/* Sprint 19 — Pharmacy: prominent Rx attachment row when one or
-              more Rx-required lines lack a prescription. */}
-          {hasUnattachedRx && (
+          {/* Sprint 19 — Pharmacy: prominent Verify Rx row when one or
+              more Rx-required lines lack a pharmacist PIN-attest. */}
+          {hasUnattestedRx && (
             <button
               onClick={() => setRxModalOpen(true)}
               className="w-full flex items-center justify-between gap-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-400 px-3 py-2.5 hover:bg-rose-500/15 transition-colors"
             >
               <span className="flex items-center gap-2 text-sm font-medium">
                 <FileBadge className="h-4 w-4" />
-                Attach prescription · {unattachedRxLineCount} item{unattachedRxLineCount === 1 ? '' : 's'}
+                Verify Rx · {unattestedRxLineCount} item{unattestedRxLineCount === 1 ? '' : 's'}
               </span>
-              <span className="text-xs">Required to charge</span>
+              <span className="text-xs">Pharmacist PIN required</span>
             </button>
           )}
 
@@ -398,8 +399,8 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
 
           <Button
             onClick={() => {
-              if (hasUnattachedRx) {
-                toast.error(`Attach a prescription to ${unattachedRxLineCount} Rx item${unattachedRxLineCount === 1 ? '' : 's'} before charging.`);
+              if (hasUnattestedRx) {
+                toast.error(`Pharmacist PIN required for ${unattestedRxLineCount} Rx item${unattestedRxLineCount === 1 ? '' : 's'} before charging.`);
                 setRxModalOpen(true);
                 return;
               }
@@ -407,7 +408,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
             }}
             size="lg"
             className="w-full"
-            style={{ background: hasUnattachedRx ? 'hsl(var(--muted))' : 'var(--accent)' }}
+            style={{ background: hasUnattestedRx ? 'hsl(var(--muted))' : 'var(--accent)' }}
             disabled={isEmpty}
           >
             Charge {formatPeso(total)}
@@ -416,12 +417,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
       )}
 
       {rxModalOpen && (
-        <RxAttachModal
-          rxRequiredLineNames={rxRequiredLines
-            .filter((l) => !l.prescriptionId)
-            .map((l) => l.product.name)}
-          onClose={() => setRxModalOpen(false)}
-        />
+        <RxAttestModal onClose={() => setRxModalOpen(false)} />
       )}
 
       {/* Park-sale name dialog */}

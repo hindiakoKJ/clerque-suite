@@ -40,6 +40,29 @@ export class PharmacyController {
     'SALES_LEAD', 'CASHIER', 'GENERAL_EMPLOYEE', 'MDM',
   ] as const;
 
+  // ─── Pharmacist PIN-attest preview ─────────────────────────────────────────
+
+  /**
+   * Sprint 19 — Live PIN check for the till's Verify Rx modal. Looks up
+   * User.kioskPin within the caller's tenant and returns the pharmacist's
+   * name + PRC license if (a) the PIN matches, (b) the user is active, and
+   * (c) they have a prcLicense on file. Otherwise returns valid:false plus
+   * a coarse reason code (no enumeration of which staff exist).
+   *
+   * The PIN is RE-VALIDATED at order create time (see OrdersService) — this
+   * preview is purely UX so the cart line shows the pharmacist's name
+   * before the order POSTs.
+   */
+  @ApiOperation({ summary: 'Verify a pharmacist PIN for till Rx-attest preview' })
+  @Roles(...PharmacyController.RX_OPS)
+  @Get('verify-attest')
+  verifyAttest(
+    @CurrentUser() user: JwtPayload,
+    @Query('pin') pin: string,
+  ) {
+    return this.svc.verifyAttestPin(user.tenantId!, pin ?? '');
+  }
+
   // ─── Prescriptions ─────────────────────────────────────────────────────────
 
   @ApiOperation({ summary: 'Create a prescription record (intake from a doctor\'s Rx)' })

@@ -24,6 +24,33 @@ import type { Prisma } from '@prisma/client';
 export class PharmacyService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // ─── Pharmacist PIN-attest preview ─────────────────────────────────────────
+
+  /**
+   * Sprint 19 — Look up a User by kioskPin within the tenant. Returns just
+   * enough info for the till's Verify Rx modal to render "✓ Verified by
+   * RPh [name]". Errors are coarse (no per-failure enumeration that would
+   * leak which PINs map to which staff).
+   */
+  async verifyAttestPin(tenantId: string, pin: string): Promise<{
+    valid:           boolean;
+    pharmacistName?: string;
+    prcLicense?:     string;
+    reason?:         'PIN_NOT_FOUND' | 'NOT_PHARMACIST' | 'INACTIVE';
+  }> {
+    if (!pin || !/^\d{4,8}$/.test(pin)) {
+      return { valid: false, reason: 'PIN_NOT_FOUND' };
+    }
+    const user = await this.prisma.user.findFirst({
+      where:  { tenantId, kioskPin: pin },
+      select: { name: true, prcLicense: true, isActive: true },
+    });
+    if (!user)            return { valid: false, reason: 'PIN_NOT_FOUND' };
+    if (!user.isActive)   return { valid: false, reason: 'INACTIVE' };
+    if (!user.prcLicense) return { valid: false, reason: 'NOT_PHARMACIST' };
+    return { valid: true, pharmacistName: user.name, prcLicense: user.prcLicense };
+  }
+
   // ─── Prescriptions ─────────────────────────────────────────────────────────
 
   async createPrescription(

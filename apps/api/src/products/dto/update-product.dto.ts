@@ -81,4 +81,9 @@ export class UpdateProductDto {
   @IsOptional() @IsString() @MaxLength(50)  strength?:       string;
   @IsOptional() @IsBoolean()                isRxRequired?:   boolean;
   @IsOptional() @IsBoolean()                isControlledDrug?: boolean;
+
+  // Sprint 19 — PH drug-classification taxonomy. See create-product.dto for docs.
+  @IsOptional() @IsString()
+  drugClass?: 'OTC' | 'OTC_BTC' | 'RX_ONLY' | 'DDB_S2' | 'DDB_S3' | 'DDB_S4' | 'DDB_S5'
+            | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
 }

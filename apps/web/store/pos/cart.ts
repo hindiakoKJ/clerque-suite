@@ -15,14 +15,19 @@ export interface CartProduct {
   costPrice?: number;
   isVatable: boolean;
   categoryId?: string;
-  /** Sprint 19 — Pharmacy. When true, the till MUST attach a prescriptionId
-   *  before the product can be sold. The terminal warns and blocks add-to-cart
-   *  until the cashier confirms the customer presented an Rx. */
+  /** Sprint 19 — Pharmacy. When true, the till requires a pharmacist PIN-attest
+   *  before the product can be charged. */
   isRxRequired?: boolean;
   /** Sprint 19 — Pharmacy. RA 9165 Schedule II/III/IV/V — the DDB Register
-   *  auto-logs the sale at till. Display-only here so the cashier sees a
-   *  badge on the cart line. */
+   *  auto-logs the sale at till. Display-only badge on the cart line. */
   isControlledDrug?: boolean;
+  /** Sprint 19 — PH drug-classification taxonomy. The till branches on this:
+   *  DDB_S2 lines additionally require a Yellow Rx serial in the attest modal;
+   *  VACCINE lines force lot selection. */
+  drugClass?:
+    | 'OTC' | 'OTC_BTC' | 'RX_ONLY'
+    | 'DDB_S2' | 'DDB_S3' | 'DDB_S4' | 'DDB_S5'
+    | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
 }
 
 export interface CartLine {
@@ -35,13 +40,24 @@ export interface CartLine {
   lineKey: string;        // unique key: productId + variantId + sorted optionIds
   /** Set when a promotion is auto-applied to this line. */
   promotionApplied?: { promoId: string; promoName: string };
-  /** Sprint 19 — Attached prescription ID for Rx-required pharmacy products.
-   *  The cashier sets this via the "Customer presented Rx" dialog when adding
-   *  the product. The backend rejects sale of isRxRequired lines without it. */
+  /** Sprint 19 — DEPRECATED (kept for back-compat): per-line Rx attachment.
+   *  Owners now backfill prescriptionId from /pos/pharmacy/rx after the sale
+   *  if they want to formally tie a sale to a paper Rx. */
   prescriptionId?: string;
-  /** Sprint 19 — Display-only label shown on the cart line so the cashier
-   *  knows which Rx is attached without re-opening the dialog. */
+  /** Sprint 19 — DEPRECATED display-only label; kept while the old badge
+   *  rendering still references it during the transition. */
   prescriptionLabel?: string;
+  /** Sprint 19 — Pharmacist PIN-attest. Set when the pharmacist enters their
+   *  kioskPin in the RxAttestModal. The PIN itself is not displayed back to
+   *  the user; we keep it only until the order POSTs. */
+  attestPin?: string;
+  /** Sprint 19 — Display name of the pharmacist who attested (e.g.
+   *  "RPh Maria Santos"). Looked up by /pharmacy/verify-attest at PIN entry
+   *  so the line shows "✓ Verified by RPh Maria Santos" before submit. */
+  attestPharmacistName?: string;
+  /** Sprint 19 — Yellow Rx serial number (DDB_S2 lines only). Captured in
+   *  the RxAttestModal alongside the PIN. */
+  yellowRxSerial?: string;
 }
 
 export interface CartDiscount {
@@ -125,18 +141,18 @@ interface CartState {
   updateQty: (lineKey: string, qty: number) => void;
   setItemDiscount: (lineKey: string, discount: number) => void;
   /**
-   * Sprint 19 — Pharmacy. Attach a Prescription record to one or more lines.
-   * When `lineKeys` is omitted, the Rx is applied to ALL Rx-required lines
-   * currently in the cart that have no Rx attached yet (the common case
-   * after the cashier confirms in the "Customer presented Rx" dialog).
+   * Sprint 19 — Pharmacy PIN-attest. Sets `attestPin` + `attestPharmacistName`
+   * on every Rx-required line in the cart that doesn't already have an
+   * attest. For `DDB_S2` lines, also requires per-line yellowRxSerial values.
    */
-  attachPrescription: (
-    prescriptionId: string,
-    prescriptionLabel: string,
-    lineKeys?: string[],
+  attestPharmacistForRxLines: (
+    pin: string,
+    pharmacistName: string,
+    yellowRxSerialsByLineKey?: Record<string, string>,
   ) => void;
-  /** Sprint 19 — Detach a previously-attached prescription from a line. */
-  detachPrescription: (lineKey: string) => void;
+  /** Sprint 19 — Clear attest from a single line (lets the cashier redo it
+   *  without removing/re-adding the product). */
+  clearAttest: (lineKey: string) => void;
 
   /**
    * Auto-apply the best active promotion to each cart line.
@@ -242,19 +258,31 @@ export const useCartStore = create<CartState>()(
     });
   },
 
-  attachPrescription: (prescriptionId, prescriptionLabel, lineKeys) => {
+  attestPharmacistForRxLines: (pin, pharmacistName, yellowRxSerialsByLineKey) => {
     set((state) => ({
       lines: state.lines.map((l) => {
-        const targeted = lineKeys ? lineKeys.includes(l.lineKey) : (l.product.isRxRequired && !l.prescriptionId);
-        return targeted ? { ...l, prescriptionId, prescriptionLabel } : l;
+        // Apply attest to every Rx-required line that doesn't have one yet.
+        // Lines that already have an attest (e.g., from a previous PIN entry)
+        // are left alone — re-running attest on them would silently switch
+        // the pharmacist of record, which we don't want.
+        if (!l.product.isRxRequired || l.attestPin) return l;
+        const yellowRxSerial = yellowRxSerialsByLineKey?.[l.lineKey];
+        return {
+          ...l,
+          attestPin:            pin,
+          attestPharmacistName: pharmacistName,
+          ...(yellowRxSerial ? { yellowRxSerial } : {}),
+        };
       }),
     }));
   },
 
-  detachPrescription: (lineKey) => {
+  clearAttest: (lineKey) => {
     set((state) => ({
       lines: state.lines.map((l) =>
-        l.lineKey === lineKey ? { ...l, prescriptionId: undefined, prescriptionLabel: undefined } : l,
+        l.lineKey === lineKey
+          ? { ...l, attestPin: undefined, attestPharmacistName: undefined, yellowRxSerial: undefined }
+          : l,
       ),
     }));
   },

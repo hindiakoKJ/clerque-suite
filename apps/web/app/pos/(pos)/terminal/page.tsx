@@ -208,9 +208,15 @@ export default function PosTerminal() {
         modifiers: l.modifiers ?? [],
         promoId:   l.promotionApplied?.promoId,
         promoName: l.promotionApplied?.promoName,
-        // Sprint 19 — Pharmacy: per-line Rx attachment (RA 6675 / RA 9165).
-        // Backend rejects sale of isRxRequired products without it.
+        // Sprint 19 — Pharmacy. Per-line PIN-attest from the pharmacist
+        // (replaces the heavier Rx-attach modal — see migration 20260531
+        // and the plan). prescriptionId is kept for back-compat but is no
+        // longer required at the till; owners backfill it later from
+        // /pos/pharmacy/rx if they want to formally tie the sale to a
+        // paper Rx record.
         prescriptionId: l.prescriptionId,
+        attestPin:      l.attestPin,
+        yellowRxSerial: l.yellowRxSerial,
       })),
       payments,
       discounts: [

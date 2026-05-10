@@ -164,4 +164,21 @@ export class CreateProductDto {
   @IsOptional()
   @IsBoolean()
   isControlledDrug?: boolean;
+
+  /**
+   * Sprint 19 — PH drug-classification taxonomy. Single source of truth.
+   * When supplied, isRxRequired + isControlledDrug are derived from this
+   * server-side and any DTO-supplied values for those booleans are ignored.
+   * When omitted, booleans are accepted (legacy path) and drugClass is
+   * inferred via inverse map.
+   */
+  @ApiPropertyOptional({
+    enum: ['OTC', 'OTC_BTC', 'RX_ONLY', 'DDB_S2', 'DDB_S3', 'DDB_S4', 'DDB_S5',
+           'VACCINE', 'DEVICE', 'SUPPLEMENT', 'COSMETIC', 'OTHER'],
+    description: 'PH drug class — drives till workflow per product.',
+  })
+  @IsOptional()
+  @IsString()
+  drugClass?: 'OTC' | 'OTC_BTC' | 'RX_ONLY' | 'DDB_S2' | 'DDB_S3' | 'DDB_S4' | 'DDB_S5'
+            | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
 }

@@ -47,11 +47,25 @@ export interface CartItem {
   taxType?: TaxType;
   modifiers?: CartItemModifier[];
   /**
-   * Sprint 19 — Pharmacy Rx attachment. Set at the till when the cashier
-   * confirms the customer presented an Rx for an isRxRequired product.
-   * The backend rejects sale of Rx-required products without it.
+   * Sprint 19 — Pharmacy Rx attachment. OPTIONAL going forward — the till
+   * no longer requires this at sale time (commit 2d30c97 + plan revision).
+   * Owners can backfill prescriptionId from /pos/pharmacy/rx after the sale.
    */
   prescriptionId?: string;
+  /**
+   * Sprint 19 — Pharmacist PIN-attest (4–8 digits). Required at sale time
+   * for any product whose drugClass triggers an Rx (RX_ONLY, DDB_S3-S5,
+   * DDB_S2, VACCINE). The backend looks up User.kioskPin to identify the
+   * pharmacist, validates their User.prcLicense, and stamps OrderItem
+   * .dispensedByPrc + dispensedById on the line.
+   */
+  attestPin?: string;
+  /**
+   * Sprint 19 — Yellow Rx serial number (DDB Form 1). Required for DDB_S2
+   * (Schedule II) sales per RA 9165 §61. Format: alphanumeric + hyphens,
+   * 4–32 chars (regional DDB serial formats vary).
+   */
+  yellowRxSerial?: string;
 }
 
 export interface OfflineOrder {

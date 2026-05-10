@@ -61,6 +61,11 @@ interface Product {
   isRxRequired?: boolean;
   /** Pharmacy: RA 9165 controlled substance — DDB Register auto-logged. */
   isControlledDrug?: boolean;
+  /** Pharmacy: PH drug-classification taxonomy. DDB_S2 needs Yellow Rx. */
+  drugClass?:
+    | 'OTC' | 'OTC_BTC' | 'RX_ONLY'
+    | 'DDB_S2' | 'DDB_S3' | 'DDB_S4' | 'DDB_S5'
+    | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
 }
 
 interface ProductGridProps {
@@ -73,10 +78,6 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   const [search, setSearch] = useState('');
   const [activeCat, setActiveCat] = useState<string | null>(null);
   const [pickerProduct, setPickerProduct] = useState<Product | null>(null);
-  // Sprint 19 — Pharmacy. When the cashier taps an Rx-required product, we
-  // pause and confirm the customer presented a prescription before adding
-  // it to the cart. RxConfirmModal reads this state.
-  const [rxConfirmProduct, setRxConfirmProduct] = useState<Product | null>(null);
   const addItem = useCartStore((s) => s.addItem);
 
   // Quantity multiplier: leading "3x ", "3* ", or "3 " is parsed off the search
@@ -99,31 +100,16 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   });
 
   function handleAdd(p: Product) {
-    // Sprint 19 — Pharmacy: Rx-required products need a prescription
-    // attached at the till. Intercept the add and show the confirm
-    // dialog. The cashier confirms the customer presented an Rx;
-    // proceedRxAdd then runs the normal add flow.
-    if (p.isRxRequired) {
-      setRxConfirmProduct(p);
-      return;
-    }
+    // Sprint 19 — Pharmacy: Rx-required products are added to cart freely;
+    // PIN-attest happens later from the cart panel right before Charge. The
+    // old "Has the customer presented Rx?" confirmation that lived here was
+    // friction the assistant didn't need — they've already eyeballed the
+    // paper Rx in their hand by the time they're tapping the till.
     const activeGroups = (p.modifierGroups ?? []).filter(
       (g) => g.modifierGroup.options.some((o) => o.isActive),
     );
     if (activeGroups.length > 0) {
       // Modifier picker handles a single item at a time — multiplier doesn't apply.
-      setPickerProduct(p);
-      return;
-    }
-    commitAdd(p, [], multiplier);
-  }
-
-  function proceedRxAdd(p: Product) {
-    setRxConfirmProduct(null);
-    const activeGroups = (p.modifierGroups ?? []).filter(
-      (g) => g.modifierGroup.options.some((o) => o.isActive),
-    );
-    if (activeGroups.length > 0) {
       setPickerProduct(p);
       return;
     }
@@ -140,6 +126,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
       categoryId: p.categoryId ?? undefined,
       isRxRequired:     p.isRxRequired,
       isControlledDrug: p.isControlledDrug,
+      drugClass:        p.drugClass,
     };
     for (let i = 0; i < qty; i++) {
       addItem(product, undefined, modifiers);
@@ -322,73 +309,6 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
         />
       )}
 
-      {rxConfirmProduct && (
-        <RxConfirmModal
-          product={rxConfirmProduct}
-          onConfirm={() => proceedRxAdd(rxConfirmProduct)}
-          onCancel={() => setRxConfirmProduct(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-/**
- * Sprint 19 — Pharmacy Rx confirmation gate.
- *
- * Surfaced when the cashier taps an isRxRequired product. The Rx itself is
- * attached at checkout via a separate Rx selector (so a single Rx covers
- * multiple lines from the same patient), but this is the in-the-moment
- * "are we even allowed to ring this up" gate. Refusing here removes the
- * product from consideration; confirming adds it to the cart with no Rx
- * attached yet — the Charge button blocks until one is linked.
- */
-function RxConfirmModal({
-  product, onConfirm, onCancel,
-}: { product: { name: string; isControlledDrug?: boolean }; onConfirm: () => void; onCancel: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-      <div className="w-full max-w-md rounded-xl bg-card border border-border p-5 space-y-4">
-        <div className="flex items-start gap-3">
-          <div className="rounded-full bg-rose-500/15 p-2.5 shrink-0">
-            <span className="text-rose-600 dark:text-rose-400 font-bold">℞</span>
-          </div>
-          <div>
-            <h2 className="font-semibold text-base">Prescription required</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              <span className="font-medium text-foreground">{product.name}</span> is{' '}
-              {product.isControlledDrug
-                ? <>a controlled substance under <strong>RA 9165</strong>. A valid prescription <em>and</em> the dispensing pharmacist&apos;s entry in the DDB Register are required.</>
-                : <>an Rx-only product under <strong>RA 6675</strong>. A valid doctor&apos;s prescription is required to dispense it.</>}
-            </p>
-          </div>
-        </div>
-
-        <div className="rounded-lg bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground">
-          Has the customer presented a written prescription from a licensed physician?
-          <ul className="mt-1.5 space-y-0.5 list-disc list-inside text-[11px]">
-            <li>Verify the doctor&apos;s name + PRC license + signature</li>
-            <li>Issue date should be within 1 year (6 months for controlled)</li>
-            <li>Patient name + age + diagnosis on the Rx</li>
-            {product.isControlledDrug && <li className="text-amber-600 dark:text-amber-400 font-medium">Controlled drugs need a Yellow DDB Form</li>}
-          </ul>
-        </div>
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button
-            onClick={onCancel}
-            className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted"
-          >
-            Cancel — no Rx
-          </button>
-          <button
-            onClick={onConfirm}
-            className="rounded-lg bg-[var(--accent)] text-white text-sm px-4 py-2 hover:opacity-90 inline-flex items-center gap-1.5"
-          >
-            <span>Yes, Rx presented</span>
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

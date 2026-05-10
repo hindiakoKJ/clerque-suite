@@ -51,6 +51,8 @@ interface TenantProfile {
   receiptHeaderNote?:   string | null;
   receiptFooterNote?:   string | null;
   receiptLogoUrl?:      string | null;
+  // Sprint 19 — returns/refunds owner-only policy.
+  returnsOwnerOnly?:    boolean | null;
 }
 
 interface StaffUser {
@@ -647,6 +649,11 @@ export default function SettingsPage() {
                   </button>
                 </div>
               </div>
+            )}
+
+            {/* ── Returns/refunds owner-only policy (Sprint 19) ────────────── */}
+            {isOwner && profile && (
+              <ReturnsPolicyCard profile={profile} qc={qc} />
             )}
 
             {/* Read-only system info — driven by modular pricing (planCode + module flags). */}
@@ -1482,6 +1489,67 @@ function CostingCard({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Sprint 19 — Returns/refunds policy card ───────────────────────────────
+
+function ReturnsPolicyCard({
+  profile, qc,
+}: { profile: { returnsOwnerOnly?: boolean | null }; qc: ReturnType<typeof useQueryClient> }) {
+  const initial = profile.returnsOwnerOnly === true;
+  const [enabled, setEnabled] = useState(initial);
+
+  const updateMut = useMutation({
+    mutationFn: (next: boolean) =>
+      api.patch('/tenant/profile', { returnsOwnerOnly: next }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      toast.success('Returns policy updated. Staff need to log out + back in for the change to take effect on their tills.');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Failed to update policy.');
+      setEnabled(initial); // roll back local state
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Returns &amp; Refunds Policy</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          When ON, only the Business Owner can void an order or refund a line. Cashiers, sales leads, and
+          branch managers are blocked even with supervisor PIN. Pharmacy tenants default to ON; other
+          verticals default OFF.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2.5">
+        <div className="text-sm">
+          <div className="font-medium text-foreground">Owner-only returns</div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {enabled
+              ? 'Only the Business Owner can void or refund.'
+              : 'Cashiers may initiate void/refund with supervisor PIN co-auth.'}
+          </div>
+        </div>
+        <button
+          onClick={() => {
+            const next = !enabled;
+            setEnabled(next);
+            updateMut.mutate(next);
+          }}
+          disabled={updateMut.isPending}
+          className="w-11 h-6 rounded-full transition-colors shrink-0"
+          style={{ background: enabled ? 'var(--accent)' : 'hsl(var(--muted-foreground) / 0.3)' }}
+          aria-label="Toggle owner-only returns"
+        >
+          <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+            enabled ? 'translate-x-5' : 'translate-x-0'
+          }`} />
+        </button>
+      </div>
     </div>
   );
 }

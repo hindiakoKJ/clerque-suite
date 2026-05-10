@@ -619,6 +619,12 @@ export class OrdersService {
     reason:       string,
     supervisorId?: string,
   ) {
+    // Sprint 19 — Returns/refunds owner-only policy. When tenant.returnsOwnerOnly
+    // is true (default for pharmacy tenants), only BUSINESS_OWNER + SUPER_ADMIN
+    // can void. Pharmacy owners explicitly asked for this — Rx-required +
+    // controlled-drug returns need owner-level oversight on every event.
+    await this.assertReturnsAllowedForRole(tenantId, callerRole);
+
     // ── SOD: Dual-authorization for CASHIER voids ─────────────────────────────
     const VOID_DIRECT_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'];
     let resolvedManagerId: string;
@@ -879,8 +885,15 @@ export class OrdersService {
     refundMethod:  string;
     restock:       boolean;
     refundedById:  string;
+    /** Sprint 19 — caller's role for the returns-owner-only gate. */
+    callerRole?:   string;
   }) {
-    const { tenantId, orderId, orderItemId, quantity, reason, refundMethod, restock, refundedById } = args;
+    const { tenantId, orderId, orderItemId, quantity, reason, refundMethod, restock, refundedById, callerRole } = args;
+
+    // Sprint 19 — Returns/refunds owner-only policy. See void() for context.
+    if (callerRole) {
+      await this.assertReturnsAllowedForRole(tenantId, callerRole);
+    }
 
     if (quantity <= 0) throw new BadRequestException('Refund quantity must be positive.');
     if (!reason?.trim()) throw new BadRequestException('Refund reason is required.');
@@ -1066,6 +1079,26 @@ export class OrdersService {
       throw new ForbiddenException(
         'The provided branchId does not belong to your organization.',
       );
+    }
+  }
+
+  /**
+   * Sprint 19 — Returns/refunds owner-only gate. When tenant.returnsOwnerOnly
+   * is true, only BUSINESS_OWNER + SUPER_ADMIN can void or refund. Pharmacy
+   * tenants get this on by default (RA 6675 + RA 9165 audit pressure); other
+   * verticals default off and preserve the existing dual-auth flow.
+   */
+  private async assertReturnsAllowedForRole(tenantId: string, callerRole: string): Promise<void> {
+    if (callerRole === 'BUSINESS_OWNER' || callerRole === 'SUPER_ADMIN') return;
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { returnsOwnerOnly: true },
+    });
+    if (tenant?.returnsOwnerOnly) {
+      throw new ForbiddenException({
+        code:    'RETURNS_OWNER_ONLY',
+        message: 'Returns and refunds are restricted to the business owner. Please ask the owner to void this sale.',
+      });
     }
   }
 

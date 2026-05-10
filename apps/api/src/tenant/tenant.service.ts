@@ -19,6 +19,8 @@ export interface UpdateTenantProfileDto {
   receiptHeaderNote?: string;
   receiptFooterNote?: string;
   receiptLogoUrl?:    string;
+  /** Sprint 19 — returns/refunds owner-only policy. */
+  returnsOwnerOnly?:  boolean;
 }
 
 export interface UpdateTaxSettingsDto {
@@ -586,6 +588,8 @@ export class TenantService {
         receiptHeaderNote: true,
         receiptFooterNote: true,
         receiptLogoUrl:    true,
+        // Sprint 19 — returns/refunds owner-only policy.
+        returnsOwnerOnly:  true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found');

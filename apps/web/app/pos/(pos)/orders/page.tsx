@@ -80,14 +80,22 @@ export default function OrdersPage() {
   const [refundPin, setRefundPin] = useState('');
   const [refunding, setRefunding] = useState(false);
 
+  // Sprint 19 — Returns/refunds owner-only policy. When the tenant flag
+  // is on (default for pharmacy), only BUSINESS_OWNER + SUPER_ADMIN can
+  // void/refund regardless of supervisor PIN. Hide the buttons entirely
+  // for everyone else so the UX matches the backend gate.
+  const returnsOwnerOnly = (user as any)?.returnsOwnerOnly === true;
+  const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
+
   // Cashiers can INITIATE a void but a supervisor must enter their PIN.
   // Direct-void roles (Owner / Branch Manager / Sales Lead / Super Admin)
   // skip the PIN step.
-  const canInitiateVoid =
-    user?.role === 'CASHIER' || user?.role === 'SALES_LEAD' ||
-    user?.role === 'BRANCH_MANAGER' || user?.role === 'BUSINESS_OWNER' ||
-    user?.role === 'SUPER_ADMIN';
-  const needsSupervisorPin = user?.role === 'CASHIER';
+  const canInitiateVoid = returnsOwnerOnly
+    ? isOwner
+    : (user?.role === 'CASHIER' || user?.role === 'SALES_LEAD' ||
+       user?.role === 'BRANCH_MANAGER' || user?.role === 'BUSINESS_OWNER' ||
+       user?.role === 'SUPER_ADMIN');
+  const needsSupervisorPin = !returnsOwnerOnly && user?.role === 'CASHIER';
   // Backwards-compat alias for existing UI bindings below.
   const canVoid = canInitiateVoid;
 

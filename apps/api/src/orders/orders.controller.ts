@@ -173,6 +173,7 @@ export class OrdersController {
       refundMethod: body.refundMethod,
       restock:      body.restock ?? true,
       refundedById: body.supervisorId ?? user.sub,
+      callerRole:   user.role,
     });
   }
 }

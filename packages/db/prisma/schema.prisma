@@ -481,6 +481,13 @@ model Tenant {
   /// punches always work either way.
   allowSelfClockIn         Boolean          @default(false)
 
+  /// Sprint 19 — Returns / refunds policy. When true, only BUSINESS_OWNER
+  /// (and SUPER_ADMIN) can void an order or refund a line; cashiers,
+  /// sales leads, and branch managers are blocked even with supervisor
+  /// PIN. Pharmacy tenants get this on by default (regulatory + audit
+  /// pressure); other verticals default off. Owner toggles in Settings.
+  returnsOwnerOnly         Boolean          @default(false)
+
   /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
   /// endpoints for this tenant return 423 Locked. Use case: detect
   /// compromise (e.g. unusual destructive activity), flip flag, freeze

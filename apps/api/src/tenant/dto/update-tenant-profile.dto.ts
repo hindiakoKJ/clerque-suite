@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsNotEmpty,
@@ -65,4 +66,10 @@ export class UpdateTenantProfileDto {
   @IsString()
   @MaxLength(2048)
   receiptLogoUrl?: string;
+
+  /** Sprint 19 — Returns/refunds owner-only policy. Pharmacy default true;
+   *  others default false. Owner toggles in Settings → Business profile. */
+  @IsOptional()
+  @IsBoolean()
+  returnsOwnerOnly?: boolean;
 }

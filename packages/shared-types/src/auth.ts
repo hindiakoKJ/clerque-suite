@@ -119,6 +119,10 @@ export interface JwtPayload {
    *  their own Sync account; only the shared kiosk tablet works. The
    *  frontend uses this to hide the Clock sidebar link. */
   allowSelfClockIn?:  boolean;
+  /** Sprint 19 — Returns/refunds owner-only policy. When true, only
+   *  BUSINESS_OWNER + SUPER_ADMIN can void or refund. Pharmacy tenants
+   *  default to true; other verticals default false. */
+  returnsOwnerOnly?:  boolean;
   /** Tenant subscription tier — drives tier-locked permission gating in the UI. */
   tier?:              import('./tiers').TierId;
   /**

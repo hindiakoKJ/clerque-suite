@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Plus, Trash2, WashingMachine, Wind, Tag, ToggleRight, ToggleLeft, Sparkles, Pencil, X } from 'lucide-react';
 import Link from 'next/link';
@@ -41,12 +41,23 @@ export default function LaundrySettingsPage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
 
+  // Sprint 19 — Owner / Manager only. Service prices, machine config,
+  // and promo settings drive revenue per cycle; cashiers don't change these.
+  const canManage = user?.role === 'BUSINESS_OWNER'
+    || user?.role === 'SUPER_ADMIN'
+    || user?.role === 'BRANCH_MANAGER';
+  useEffect(() => {
+    if (user && !canManage) router.replace('/settings');
+  }, [user, canManage, router]);
+
   if (user && !isLaundryType((user as any).businessType ?? null)) {
     // Don't hard-block; this page is harmless on non-LAUNDRY tenants but
     // shows nothing useful. We'll just display a friendly note.
   }
 
   const [tab, setTab] = useState<'prices' | 'addons' | 'promos' | 'machines' | 'cycles'>('prices');
+
+  if (user && !canManage) return null;
 
   return (
     <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">

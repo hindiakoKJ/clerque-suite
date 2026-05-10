@@ -390,10 +390,11 @@ export default function SettingsPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Configuration</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {/* Vertical-specific cards come from the VerticalPack registry —
-                no hardcoded `if (isFnbType(...))` branches here. Adding a new
-                vertical with its own settings card is a one-line addition to
-                the pack's `settings.extraCards`. */}
-            {getVerticalPack((profile?.businessType ?? null) as any).settings.extraCards.map((card) => {
+                no hardcoded `if (isFnbType(...))` branches here. Sprint 19 —
+                gated to owner + branch manager since these pages configure
+                business policy (pharmacy roster, laundry prices, etc.). */}
+            {(isOwner || user?.role === 'BRANCH_MANAGER') &&
+              getVerticalPack((profile?.businessType ?? null) as any).settings.extraCards.map((card) => {
               const Icon = (Icons as any)[card.iconName] ?? Icons.Settings;
               return (
                 <SettingsCard
@@ -407,8 +408,10 @@ export default function SettingsPage() {
             })}
             {/* Branches — only relevant on multi-branch plans. Solo plan
                 tenants (maxBranches=1) can't have a second location anyway,
-                so the card would just lead to a single read-only row. */}
-            {((user as any)?.planLimits?.maxBranches ?? 1) > 1 && (
+                so the card would just lead to a single read-only row.
+                Sprint 19 — owner-only (creating / deactivating branches is
+                a structural change). */}
+            {isOwner && ((user as any)?.planLimits?.maxBranches ?? 1) > 1 && (
               <SettingsCard
                 href="/settings/branches"
                 icon={Building2}
@@ -416,36 +419,50 @@ export default function SettingsPage() {
                 desc="Add / rename / deactivate locations"
               />
             )}
-            <SettingsCard
-              href="/settings/subscription"
-              icon={CreditCard}
-              title="Subscription"
-              desc="Plan, staff cap, billing, upgrade"
-            />
-            <SettingsCard
-              href="/settings/sod-violations"
-              icon={ShieldAlert}
-              title="SOD Violations"
-              desc="Audit-trail of permission overrides"
-            />
-            <SettingsCard
-              href="/settings/loyalty"
-              icon={Stamp}
-              title="Stamp Cards"
-              desc="Customer loyalty programs (digital + printed)"
-            />
-            <SettingsCard
-              href="/settings/kiosk"
-              icon={Tv}
-              title="Kiosk Terminals"
-              desc="Shared on-site clock-in tablet (PIN-based)"
-            />
-            <SettingsCard
-              href="/settings/imports"
-              icon={FileSpreadsheet}
-              title="Import Templates"
-              desc="Download Excel templates for bulk product / inventory / customer / vendor imports"
-            />
+            {/* Subscription + SOD audit are owner-only billing/audit surfaces. */}
+            {isOwner && (
+              <SettingsCard
+                href="/settings/subscription"
+                icon={CreditCard}
+                title="Subscription"
+                desc="Plan, staff cap, billing, upgrade"
+              />
+            )}
+            {isOwner && (
+              <SettingsCard
+                href="/settings/sod-violations"
+                icon={ShieldAlert}
+                title="SOD Violations"
+                desc="Audit-trail of permission overrides"
+              />
+            )}
+            {/* Sprint 19 — Stamp Cards: owner + branch manager (run promotions). */}
+            {(isOwner || user?.role === 'BRANCH_MANAGER') && (
+              <SettingsCard
+                href="/settings/loyalty"
+                icon={Stamp}
+                title="Stamp Cards"
+                desc="Customer loyalty programs (digital + printed)"
+              />
+            )}
+            {/* Sprint 19 — Kiosk Terminals: owner-only (apiKey is sensitive). */}
+            {isOwner && (
+              <SettingsCard
+                href="/settings/kiosk"
+                icon={Tv}
+                title="Kiosk Terminals"
+                desc="Shared on-site clock-in tablet (PIN-based)"
+              />
+            )}
+            {/* Sprint 19 — Import Templates: owner-only (bulk imports can replace catalog). */}
+            {isOwner && (
+              <SettingsCard
+                href="/settings/imports"
+                icon={FileSpreadsheet}
+                title="Import Templates"
+                desc="Download Excel templates for bulk product / inventory / customer / vendor imports"
+              />
+            )}
           </div>
         </section>
 

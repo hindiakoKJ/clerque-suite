@@ -10,7 +10,7 @@
  * deleting the row would orphan customer cards. Deactivating hides it from
  * the cashier UI but preserves history.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Plus, Pencil, Power, PowerOff, Stamp, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -59,11 +59,22 @@ export default function LoyaltySettingsPage() {
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
 
+  // Sprint 19 — Owner-only (BRANCH_MANAGER also OK — they run promotions
+  // day-to-day). Cashiers + employees don't configure stamp programs.
+  const canManage = user?.role === 'BUSINESS_OWNER'
+    || user?.role === 'SUPER_ADMIN'
+    || user?.role === 'BRANCH_MANAGER';
+  useEffect(() => {
+    if (user && !canManage) router.replace('/settings');
+  }, [user, canManage, router]);
+
   const { data: templates = [], isLoading } = useQuery<Template[]>({
     queryKey: ['loyalty-templates'],
     queryFn: () => api.get('/loyalty/templates').then((r) => r.data),
-    enabled: !!user,
+    enabled: !!user && canManage,
   });
+
+  if (!canManage) return null;
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Template | null>(null);

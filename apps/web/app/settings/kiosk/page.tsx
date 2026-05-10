@@ -10,7 +10,7 @@
  * Each row shows: name, branch scope, status, last-used, and a Revoke button
  * that immediately rotates the apiKey (the device on site stops working).
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Plus, Tv, Copy, Trash2, Pause, Play, X, ExternalLink, Smartphone } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -33,6 +33,15 @@ interface Terminal {
 export default function KioskSettingsPage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+
+  // Sprint 19 — Owner-only. Cashier-level staff don't enroll kiosks; the
+  // apiKey is sensitive enough that exposing it to a CASHIER would let
+  // them spin up unauthorised punch-in stations.
+  const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
+  useEffect(() => {
+    if (user && !isOwner) router.replace('/settings');
+  }, [user, isOwner, router]);
+  if (user && !isOwner) return null;
   const qc = useQueryClient();
 
   const { data: terminals = [], isLoading } = useQuery<Terminal[]>({

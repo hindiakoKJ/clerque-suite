@@ -14,6 +14,7 @@
  * from POS → Staff (so the SOD audit trail captures the change with the
  * editing user attached). This page is the consolidated read-out.
  */
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Pill, FileBadge, ShieldAlert, ClipboardList, ExternalLink,
@@ -69,11 +70,23 @@ export default function PharmacySettingsPage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
 
+  // Sprint 19 — Owner-only. Non-owners (cashier, branch manager, sales lead,
+  // employee) see the Pharmacy Setup card on /settings only when isOwner is
+  // true; this redirect closes the URL-hack path. Pharmacist roster + PRC
+  // expiry + compliance reminders are policy-level data that the day-to-day
+  // till crew shouldn't see.
+  const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
+  useEffect(() => {
+    if (user && !isOwner) router.replace('/settings');
+  }, [user, isOwner, router]);
+
   const { data: staff = [], isLoading } = useQuery<StaffMember[]>({
     queryKey: ['staff'],
     queryFn:  () => api.get('/users').then((r) => r.data),
-    enabled:  !!user,
+    enabled:  !!user && isOwner,
   });
+
+  if (!isOwner) return null;
 
   const pharmacists = staff.filter((s) => s.prcLicense && s.isActive);
   const expiredCount  = pharmacists.filter((p) => expiryStatus(p.prcLicenseExpiresAt).kind === 'expired').length;

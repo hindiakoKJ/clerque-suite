@@ -12,7 +12,7 @@
  * Server generates the .xlsx on the fly per request, so there's no
  * static file to keep up to date.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Download, Package, Boxes, Users as UsersIcon, Truck,
@@ -57,11 +57,20 @@ export default function ImportTemplatesPage() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
 
+  // Sprint 19 — Owner-only. Bulk imports can replace the entire catalog
+  // and should never be triggered by a cashier or front-of-house staff.
+  const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
+  useEffect(() => {
+    if (user && !isOwner) router.replace('/settings');
+  }, [user, isOwner, router]);
+
   const { data: profile } = useQuery<TenantProfile>({
     queryKey: ['tenant-profile'],
     queryFn:  () => api.get('/tenant/profile').then((r) => r.data),
-    enabled:  !!user,
+    enabled:  !!user && isOwner,
   });
+
+  if (user && !isOwner) return null;
 
   const businessType = profile?.businessType ?? null;
   const verticalLabel = businessType ? (VERTICAL_NAME[businessType] ?? businessType) : '—';

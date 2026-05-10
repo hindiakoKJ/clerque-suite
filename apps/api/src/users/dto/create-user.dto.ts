@@ -1,13 +1,15 @@
 import {
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
-  
+
   MaxLength,
   MinLength,
   Matches,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -42,7 +44,8 @@ export class CreateUserDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ example: 'SecurePass123!', minLength: 8 })
+  @ApiProperty({ example: 'SecurePass123!', minLength: 8, required: false })
+  @ValidateIf((o) => !o.kioskOnly)
   @IsString()
   @MinLength(8)
   @MaxLength(128)
@@ -63,4 +66,16 @@ export class CreateUserDto {
   @IsString()
   @Matches(/^\d{4,8}$/, { message: 'kioskPin must be 4–8 digits.' })
   kioskPin?: string;
+
+  /**
+   * Sprint 19 — Kiosk-only employees clock in/out at the shared tablet
+   * but never log into Sync via password. Owners onboard cooks /
+   * dishwashers / drivers without inventing credentials. When true,
+   * password is not required and a synthetic hash is stored server-side.
+   * kioskPin is required.
+   */
+  @ApiPropertyOptional({ example: false, description: 'Clock-only employee — no Sync login' })
+  @IsOptional()
+  @IsBoolean()
+  kioskOnly?: boolean;
 }

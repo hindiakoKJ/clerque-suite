@@ -44,6 +44,11 @@ export class UsersService {
         branchId: true,
         isActive: true,
         createdAt: true,
+        // Sprint 19 — kioskPin is plaintext (low-stakes 4–8 digit clock-in
+        // credential). Only owners + managers can read this list, and the
+        // existing SOD permission filters apply at the controller level.
+        kioskPin:  true,
+        kioskOnly: true,
         // SOD Salary Privacy Wall — only OWNER + PAYROLL_MASTER see these fields
         salaryType: canViewSalary,
         salaryRate: canViewSalary,
@@ -90,7 +95,33 @@ export class UsersService {
     });
     if (existing) throw new ConflictException('Email already in use within this business.');
 
-    if (dto.password.length < 8) {
+    // Sprint 19 — Kiosk PIN must be unique within the tenant. The DB has a
+    // partial unique index (users_tenant_kiosk_pin_unique) as the final
+    // race guard, but we check + return a friendly error here so the
+    // owner sees "PIN 1234 is already used by Maria" instead of a P2002.
+    if (dto.kioskPin) {
+      const pinTaken = await this.prisma.user.findFirst({
+        where:  { tenantId, kioskPin: dto.kioskPin, isActive: true },
+        select: { name: true },
+      });
+      if (pinTaken) {
+        throw new ConflictException({
+          code:    'DUPLICATE_KIOSK_PIN',
+          message: `PIN already used by ${pinTaken.name}. Choose a different PIN.`,
+        });
+      }
+    }
+
+    // Sprint 19 — Kiosk-only accounts skip the password requirement: they
+    // can never log into Sync via password (auth.service blocks them with
+    // KIOSK_ONLY_ACCOUNT). They authenticate ONLY via kioskPin at the
+    // shared tablet. We still set a strong random hash so the column stays
+    // NOT NULL and the row never accidentally accepts a blank password.
+    if (dto.kioskOnly) {
+      if (!dto.kioskPin) {
+        throw new BadRequestException('Kiosk-only accounts require a PIN.');
+      }
+    } else if (!dto.password || dto.password.length < 8) {
       throw new BadRequestException('Password must be at least 8 characters.');
     }
 
@@ -128,7 +159,13 @@ export class UsersService {
       }
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 12);
+    // For kiosk-only accounts, store an unguessable random hash so the
+    // user can never authenticate via /auth/login (also gated explicitly
+    // there with code KIOSK_ONLY_ACCOUNT). For normal accounts, hash the
+    // owner-supplied password.
+    const passwordHash = dto.kioskOnly
+      ? await bcrypt.hash(`kiosk-only-${Math.random()}-${Date.now()}`, 12)
+      : await bcrypt.hash(dto.password, 12);
 
     // Seed default app access rows from role defaults
     const defaultAccess = DEFAULT_APP_ACCESS[dto.role] ?? [];
@@ -141,9 +178,14 @@ export class UsersService {
         passwordHash,
         role: dto.role,
         branchId: dto.branchId ?? null,
-        // PIN is stored hashed (bcrypt cost 8 — 4-8 digits brute-force easily, so
-        // lockout via LoginLog after MAX_FAILED_ATTEMPTS is the real defense)
-        kioskPin: dto.kioskPin ? await bcrypt.hash(dto.kioskPin, 8) : null,
+        kioskOnly: dto.kioskOnly ?? false,
+        // Sprint 19 — kioskPin is stored as plaintext (4–8 digits, low-stakes
+        // clock-in credential). Hashing was tried but broke kiosk lookups
+        // (raw vs hash compare) AND defeated the uniqueness constraint
+        // (every bcrypt hash is salted). Threat model: worst case for a
+        // leaked PIN is one staff member punching another's clock — already
+        // audit-logged on the TimeEntry row.
+        kioskPin: dto.kioskPin ?? null,
         appAccess: {
           create: defaultAccess.map((a) => ({
             appCode: a.app,
@@ -170,6 +212,28 @@ export class UsersService {
 
   async update(tenantId: string, id: string, dto: UpdateUserDto, callerRole?: string, callerId?: string) {
     await this.findOne(tenantId, id, callerRole);
+
+    // Sprint 19 — friendly duplicate-PIN error before the DB constraint fires.
+    // dto.kioskPin === null clears it; a non-null value must be unique within
+    // the tenant (excluding the user being edited so re-saving the same PIN
+    // is a no-op).
+    if (dto.kioskPin !== undefined && dto.kioskPin !== null) {
+      const pinTaken = await this.prisma.user.findFirst({
+        where:  {
+          tenantId,
+          kioskPin: dto.kioskPin,
+          isActive: true,
+          NOT:      { id },
+        },
+        select: { name: true },
+      });
+      if (pinTaken) {
+        throw new ConflictException({
+          code:    'DUPLICATE_KIOSK_PIN',
+          message: `PIN already used by ${pinTaken.name}. Choose a different PIN.`,
+        });
+      }
+    }
 
     // SOD pre-check: if customPermissions are being changed (or role is changing),
     // evaluate the FINAL intended permission set against SOD_RULES. A BLOCK
@@ -207,11 +271,13 @@ export class UsersService {
         ...(dto.name     !== undefined ? { name:     dto.name }     : {}),
         ...(dto.role     !== undefined ? { role:     dto.role }     : {}),
         ...(dto.branchId !== undefined ? { branchId: dto.branchId } : {}),
-        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-        // null clears the PIN; otherwise re-hash the provided plaintext
-        ...(dto.kioskPin !== undefined
-          ? { kioskPin: dto.kioskPin === null ? null : await bcrypt.hash(dto.kioskPin, 8) }
-          : {}),
+        ...(dto.isActive  !== undefined ? { isActive:  dto.isActive }  : {}),
+        ...(dto.kioskOnly !== undefined ? { kioskOnly: dto.kioskOnly } : {}),
+        // null clears the PIN; otherwise store the plaintext PIN. (Was
+        // bcrypt-hashed previously — see migration 20260528000000 for why
+        // we switched to plaintext. Uniqueness is enforced both here and
+        // by the partial unique index users_tenant_kiosk_pin_unique.)
+        ...(dto.kioskPin !== undefined ? { kioskPin: dto.kioskPin } : {}),
         ...(dto.personaKey        !== undefined ? { personaKey:        dto.personaKey }                       : {}),
         ...(dto.customPermissions !== undefined ? { customPermissions: dto.customPermissions }                : {}),
         ...(dto.sodOverrides      !== undefined ? { sodOverrides:      dto.sodOverrides as Prisma.InputJsonValue } : {}),

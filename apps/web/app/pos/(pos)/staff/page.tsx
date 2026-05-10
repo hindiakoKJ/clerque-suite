@@ -26,6 +26,11 @@ interface StaffMember {
   branch?: Branch | null;
   isActive: boolean;
   createdAt: string;
+  /** Sprint 19 — present only when an owner has set one. Returned by /users
+   *  for owners + managers; we use it to prefill the edit modal. */
+  kioskPin?: string | null;
+  /** Sprint 19 — clock-only employee, can never log in via password. */
+  kioskOnly?: boolean;
 }
 
 /**
@@ -66,10 +71,12 @@ const ROLE_COLORS: Partial<Record<StaffRole, string>> = {
 
 const EMPTY_CREATE = {
   name: '', email: '', password: '', role: 'CASHIER' as StaffRole,
-  branchId: '', kioskPin: '',
+  branchId: '', kioskPin: '', kioskOnly: false,
 };
 const EMPTY_EDIT = {
   name: '', role: 'CASHIER' as StaffRole, branchId: '', isActive: true,
+  kioskPin: '' as string,
+  kioskOnly: false,
   personaKey: null as string | null,
   customPermissions: [] as string[],
 };
@@ -135,6 +142,8 @@ export default function StaffPage() {
       role: s.role,
       branchId: s.branchId ?? '',
       isActive: s.isActive,
+      kioskPin: s.kioskPin ?? '',
+      kioskOnly: s.kioskOnly ?? false,
       personaKey: (s as { personaKey?: string | null }).personaKey ?? null,
       customPermissions: (s as { customPermissions?: string[] }).customPermissions ?? [],
     });
@@ -148,8 +157,17 @@ export default function StaffPage() {
   }
 
   async function handleCreate() {
-    if (!createForm.name.trim() || !createForm.email.trim() || !createForm.password) {
-      toast.error('Name, email, and password are required.');
+    if (!createForm.name.trim() || !createForm.email.trim()) {
+      toast.error('Name and email are required.');
+      return;
+    }
+    if (createForm.kioskOnly) {
+      if (!createForm.kioskPin) {
+        toast.error('Clock-only employees need a PIN.');
+        return;
+      }
+    } else if (!createForm.password) {
+      toast.error('Password is required (or check Clock-only).');
       return;
     }
     setSaving(true);
@@ -157,10 +175,13 @@ export default function StaffPage() {
       await api.post('/users', {
         name: createForm.name.trim(),
         email: createForm.email.trim().toLowerCase(),
-        password: createForm.password,
+        // Server ignores password for kiosk-only accounts; sending it
+        // anyway is harmless but we avoid sending an empty string.
+        password: createForm.kioskOnly ? undefined : createForm.password,
         role: createForm.role,
         branchId: createForm.branchId || undefined,
         kioskPin: createForm.kioskPin || undefined,
+        kioskOnly: createForm.kioskOnly,
       });
       toast.success(`${createForm.name} added to your team.`);
       invalidate();
@@ -171,6 +192,10 @@ export default function StaffPage() {
         toast.error(data.message ?? 'Staff cap reached.', {
           action: { label: 'Upgrade', onClick: () => { window.location.href = '/settings/subscription'; } },
         });
+      } else if (data?.code === 'DUPLICATE_KIOSK_PIN') {
+        // Friendly inline error: the message includes the conflicting
+        // staff member's name so the owner knows who to ask.
+        toast.error(data.message ?? 'PIN already in use. Choose another.');
       } else {
         toast.error(data?.message ?? 'Failed to create staff member.');
       }
@@ -188,6 +213,10 @@ export default function StaffPage() {
         role: editForm.role,
         branchId: editForm.branchId || null,
         isActive: editForm.isActive,
+        // Sprint 19 — kioskPin: '' from the form means "clear", non-empty
+        // means "set/change". undefined would skip the field entirely.
+        kioskPin:  editForm.kioskPin.trim() === '' ? null : editForm.kioskPin.trim(),
+        kioskOnly: editForm.kioskOnly,
         personaKey:        editForm.personaKey,
         customPermissions: editForm.customPermissions,
       });
@@ -196,7 +225,9 @@ export default function StaffPage() {
       setModal(null);
     } catch (err: unknown) {
       const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
-      if (data?.code === 'SOD_BLOCK') {
+      if (data?.code === 'DUPLICATE_KIOSK_PIN') {
+        toast.error(data.message ?? 'PIN already in use. Choose another.');
+      } else if (data?.code === 'SOD_BLOCK') {
         toast.error(data.message ?? 'Permission change rejected by Segregation of Duties rules.');
       } else {
         toast.error(data?.message ?? 'Failed to update.');
@@ -418,22 +449,24 @@ export default function StaffPage() {
                   placeholder="maria@example.com"
                 />
               </FormField>
-              <FormField label="Temporary Password *">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={createForm.password}
-                  onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
-                  className={INPUT_CLS}
-                  placeholder="Min 8 characters"
-                />
-                <button
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="text-xs mt-1 hover:underline"
-                  style={{ color: 'var(--accent)' }}
-                >
-                  {showPassword ? 'Hide' : 'Show'} password
-                </button>
-              </FormField>
+              {!createForm.kioskOnly && (
+                <FormField label="Temporary Password *">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={createForm.password}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
+                    className={INPUT_CLS}
+                    placeholder="Min 8 characters"
+                  />
+                  <button
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="text-xs mt-1 hover:underline"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    {showPassword ? 'Hide' : 'Show'} password
+                  </button>
+                </FormField>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <FormField label="Role *">
                   <select
@@ -465,18 +498,37 @@ export default function StaffPage() {
                   <span>{ROLES.find((r) => r.value === createForm.role)!.access}</span>
                 </div>
               )}
-              {(createForm.role === 'CASHIER' || createForm.role === 'SALES_LEAD') && (
-                <FormField label="Kiosk PIN (optional — 4 digits)">
-                  <input
-                    type="text"
-                    maxLength={4}
-                    value={createForm.kioskPin}
-                    onChange={(e) => setCreateForm((f) => ({ ...f, kioskPin: e.target.value.replace(/\D/g, '') }))}
-                    className={INPUT_CLS}
-                    placeholder="e.g. 1234"
-                  />
-                </FormField>
-              )}
+              {/* Sprint 19 — Kiosk PIN is now universal, not role-gated.
+                  Any employee may have a PIN to clock in at the shared
+                  kiosk tablet. Plus an opt-in "Clock-only" checkbox to
+                  onboard cooks / dishwashers without a Sync login. */}
+              <FormField label={`Kiosk PIN ${createForm.kioskOnly ? '(required for clock-only)' : '(optional — 4–8 digits)'}`}>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={8}
+                  value={createForm.kioskPin}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, kioskPin: e.target.value.replace(/\D/g, '') }))}
+                  className={INPUT_CLS}
+                  placeholder="e.g. 1234"
+                />
+              </FormField>
+
+              <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={createForm.kioskOnly}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, kioskOnly: e.target.checked }))}
+                />
+                <div className="text-xs">
+                  <div className="font-medium text-foreground">Clock-only employee</div>
+                  <div className="text-muted-foreground mt-0.5">
+                    Punches at the kiosk tablet but cannot sign into Sync, POS, or Ledger.
+                    Use this for cooks, dishwashers, drivers — no password needed.
+                  </div>
+                </div>
+              </label>
             </div>
             <ModalFooter
               onCancel={() => setModal(null)}
@@ -531,6 +583,40 @@ export default function StaffPage() {
                   <span>{ROLES.find((r) => r.value === editForm.role)!.access}</span>
                 </div>
               )}
+
+              {/* Sprint 19 — Kiosk PIN editable from Edit (was create-only).
+                  Empty value clears the PIN. Duplicate PINs are rejected by
+                  the API with code DUPLICATE_KIOSK_PIN; toast names the
+                  conflicting staff member. */}
+              <FormField label="Kiosk PIN (4–8 digits — leave blank to clear)">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={8}
+                  value={editForm.kioskPin}
+                  onChange={(e) => setEditForm((f) => ({ ...f, kioskPin: e.target.value.replace(/\D/g, '') }))}
+                  className={INPUT_CLS}
+                  placeholder={editTarget.kioskPin ? '••••' : 'No PIN set'}
+                />
+              </FormField>
+
+              <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={editForm.kioskOnly}
+                  onChange={(e) => setEditForm((f) => ({ ...f, kioskOnly: e.target.checked }))}
+                />
+                <div className="text-xs">
+                  <div className="font-medium text-foreground">Clock-only employee</div>
+                  <div className="text-muted-foreground mt-0.5">
+                    {editForm.kioskOnly
+                      ? 'Cannot sign into Sync, POS, or Ledger. Only the kiosk works.'
+                      : 'Punches PIN at kiosk and signs into apps with email + password.'}
+                  </div>
+                </div>
+              </label>
+
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-foreground">Active</p>

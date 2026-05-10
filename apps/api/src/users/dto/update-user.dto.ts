@@ -47,6 +47,16 @@ export class UpdateUserDto {
   @IsBoolean()
   isActive?: boolean;
 
+  /**
+   * Sprint 19 — Toggle clock-only mode on an existing account. Going
+   * kiosk-only doesn't clear the password (so support can re-enable
+   * login if needed) — it just gates /auth/login from this user.
+   */
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @IsBoolean()
+  kioskOnly?: boolean;
+
   /** Pass null to clear the kiosk PIN. */
   @ApiPropertyOptional({ example: '1234', nullable: true })
   @IsOptional()

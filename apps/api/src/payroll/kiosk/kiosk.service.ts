@@ -143,11 +143,12 @@ export class KioskService {
       );
     }
 
-    // Find user by PIN within this tenant.
-    // (Multiple users with the same PIN within the same tenant would be a
-    //  data-quality bug; we pick the most recently active to avoid silently
-    //  punching the wrong user, but the staff page should already prevent
-    //  duplicates at create time.)
+    // Find user by PIN within this tenant. Sprint 19 — PIN uniqueness is
+    // enforced by a partial unique index on (tenantId, kioskPin), AND by
+    // the create/update validators in users.service. The findMany +
+    // length-check below is defence-in-depth: if duplicates ever sneak in
+    // (e.g. raw SQL bypass), we fail closed instead of silently punching
+    // for whoever sorted first.
     const userWhere: any = {
       tenantId: kiosk.tenantId,
       kioskPin: pin,
@@ -161,17 +162,25 @@ export class KioskService {
         { branchId: null },
       ];
     }
-    const user = await this.prisma.user.findFirst({
-      where: userWhere,
-      orderBy: { updatedAt: 'desc' },
+    const matches = await this.prisma.user.findMany({
+      where:  userWhere,
       select: { id: true, name: true, role: true },
+      take:   2, // we only need to detect "more than one"
     });
 
-    if (!user) {
+    if (matches.length === 0) {
       // Wrong PIN — bump throttle.
       await this.recordFailure(kiosk.id, kiosk.failedAttempts + 1);
       throw new ForbiddenException('Wrong PIN — try again.');
     }
+    if (matches.length > 1) {
+      // Should be impossible after migration 20260528000000_unique_kiosk_pin,
+      // but if it ever happens, refuse rather than risk mis-attribution.
+      throw new ForbiddenException(
+        'Multiple staff share this PIN. Ask your manager to fix duplicate PINs in the staff page before clocking in.',
+      );
+    }
+    const user = matches[0];
 
     // Determine clock-in vs clock-out. Reuse PayrollService logic shape:
     // any open entry for this user → close it. Otherwise → open a new one.

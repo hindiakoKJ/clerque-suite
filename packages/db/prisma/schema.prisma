@@ -737,6 +737,13 @@ model User {
   tin                      String?
   photo                    String?
   kioskPin                 String?
+  /// Sprint 19 — when true, this user exists ONLY for kiosk clock-in/out.
+  /// They cannot log into Sync (or any product) via password — /auth/login
+  /// rejects with code KIOSK_ONLY_ACCOUNT. Lets owners onboard cooks /
+  /// dishwashers / drivers without having to invent + manage credentials
+  /// for staff who never use the apps. Their TimeEntry records flow into
+  /// the same payroll runs as login-using employees.
+  kioskOnly                Boolean        @default(false)
   /// Mobile / contact number for HR records
   phone                    String?
   /// Job title / position (e.g. "Barista", "Shift Supervisor")

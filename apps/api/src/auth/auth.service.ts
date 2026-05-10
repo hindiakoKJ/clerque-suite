@@ -59,6 +59,7 @@ export class AuthService {
         name: true,
         passwordHash: true,
         isActive: true,
+        kioskOnly: true,
         tenant: { select: { status: true } },
         appAccess: { select: { appCode: true, level: true } },
       },
@@ -83,6 +84,16 @@ export class AuthService {
     // companyCode path already checked it above).
     if (!tenantId && user.tenant?.status === 'SUSPENDED') {
       throw new ForbiddenException('This account has been suspended. Please contact support.');
+    }
+
+    // Sprint 19 — Kiosk-only accounts cannot log in via password. They
+    // exist for clock-in/out only at the shared kiosk tablet. Friendly
+    // code so the frontend can show a tailored message.
+    if (user.kioskOnly) {
+      throw new ForbiddenException({
+        code:    'KIOSK_ONLY_ACCOUNT',
+        message: 'This account is for kiosk clock-in only. Punch your PIN at the kiosk tablet.',
+      });
     }
 
     // ── Account lockout check ──────────────────────────────────────────────
@@ -122,10 +133,15 @@ export class AuthService {
    * Inputs: tenantSlug + email + 4-8 digit PIN.
    *
    * Security model:
-   *   - PIN is bcrypt-hashed at rest (set in users.service.ts)
+   *   - PIN stored as plaintext (Sprint 19 — was bcrypt-hashed but that
+   *     defeated kiosk lookups + the (tenantId, kioskPin) uniqueness
+   *     constraint; PIN is a low-stakes shared-terminal credential).
    *   - Same lockout as email login (MAX_FAILED_ATTEMPTS in LOCKOUT_MINUTES window)
    *   - Failed attempts logged to LoginLog with success=false
    *   - PIN must be exactly 4-8 digits (DTO validates input shape)
+   *   - kioskOnly accounts are rejected here too (only the kiosk endpoint
+   *     accepts them; this path issues a JWT, which kiosk-only must not
+   *     receive).
    *
    * Returns the user record (same shape as validateUser) or null on bad PIN.
    * Lockout / suspended-tenant cases throw ForbiddenException.
@@ -149,6 +165,7 @@ export class AuthService {
         role:         true,
         name:         true,
         kioskPin:     true,
+        kioskOnly:    true,
         appAccess:    { select: { appCode: true, level: true } },
       },
     });
@@ -156,6 +173,14 @@ export class AuthService {
 
     // No PIN set on this account — owner must set one before PIN login works
     if (!user.kioskPin) return null;
+
+    // Kiosk-only accounts are NEVER issued JWTs, even via PIN login.
+    if (user.kioskOnly) {
+      throw new ForbiddenException({
+        code:    'KIOSK_ONLY_ACCOUNT',
+        message: 'This account is for kiosk clock-in only. Punch your PIN at the kiosk tablet.',
+      });
+    }
 
     const windowStart = new Date(Date.now() - LOCKOUT_MINUTES * 60 * 1000);
     const recentFailures = await this.prisma.loginLog.count({
@@ -167,8 +192,9 @@ export class AuthService {
       );
     }
 
-    const valid = await bcrypt.compare(pin, user.kioskPin);
-    if (!valid) {
+    // Plaintext exact match. Sprint 19 — was bcrypt.compare, which broke
+    // when we switched kioskPin storage to plaintext.
+    if (pin !== user.kioskPin) {
       await this.prisma.loginLog.create({
         data: { userId: user.id, tenantId: user.tenantId, email, success: false },
       });

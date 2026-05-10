@@ -23,6 +23,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { StorageService } from '../storage/storage.service';
 import { ProductsService, CreateProductDto, UpdateProductDto } from './products.service';
 
 const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -33,7 +34,10 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('products')
 export class ProductsController {
-  constructor(private productsService: ProductsService) {}
+  constructor(
+    private productsService: ProductsService,
+    private storage: StorageService,
+  ) {}
 
   @Get()
   findAll(
@@ -129,13 +133,17 @@ export class ProductsController {
 
     const ext = (path.extname(file.originalname) || '.bin').toLowerCase().replace(/[^.a-z0-9]/g, '');
     const id  = crypto.randomBytes(12).toString('hex');
-    const rel = path.posix.join('products', user.tenantId!, `${id}${ext}`);
-    const abs = path.join(process.cwd(), 'uploads', 'public', rel);
+    // Sprint 19 — public/ prefix kept so the static-asset middleware in
+    // main.ts continues to serve LOCAL-driver uploads. On S3/R2 the prefix
+    // is just part of the object key and getPublicUrl() returns the CDN URL.
+    const storageKey = path.posix.join('public', 'products', user.tenantId!, `${id}${ext}`);
 
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    await fs.promises.rename(file.path, abs);
+    await this.storage.putFromTempPath(file.path, storageKey, {
+      contentType: file.mimetype,
+      publicRead:  true, // for AWS S3; ignored on R2 (uses bucket-level public access)
+    });
 
-    return { url: `/uploads/public/${rel}` };
+    return { url: this.storage.getPublicUrl(storageKey) };
   }
 
   /**

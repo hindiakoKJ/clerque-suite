@@ -8,8 +8,8 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 
-const UPLOADS_ROOT = path.resolve('./uploads');
 const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIMES = new Set([
   'application/pdf',
@@ -20,10 +20,10 @@ const ALLOWED_MIMES = new Set([
 
 @Injectable()
 export class DocumentsService {
-  constructor(private readonly prisma: PrismaService) {
-    // Ensure the uploads root exists on startup
-    fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
-  }
+  constructor(
+    private readonly prisma:  PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   /** Upload a file and persist a Document record. */
   async upload(
@@ -53,13 +53,13 @@ export class DocumentsService {
     const uniquePrefix = crypto.randomBytes(6).toString('hex');
     const storedFilename = `${uniquePrefix}_${safeBasename}`;
     const storagePath = `tenants/${tenantId}/${entityType.toLowerCase()}/${entityId}/${storedFilename}`;
-    const destAbs = path.join(UPLOADS_ROOT, storagePath);
 
-    // Ensure the sub-directory exists
-    fs.mkdirSync(path.dirname(destAbs), { recursive: true });
-
-    // Move the temp file to its permanent location
-    await fs.promises.rename(file.path, destAbs);
+    // Sprint 19 — abstracted via StorageService. Falls back to local disk
+    // when S3_BUCKET isn't configured; uses Cloudflare R2 / AWS S3 in prod
+    // so uploads survive Railway redeploys.
+    await this.storage.putFromTempPath(file.path, storagePath, {
+      contentType: file.mimetype,
+    });
 
     return this.prisma.document.create({
       data: {
@@ -94,8 +94,7 @@ export class DocumentsService {
     // Delete from DB first so it disappears even if file removal fails
     await this.prisma.document.delete({ where: { id: documentId } });
 
-    const absPath = path.join(UPLOADS_ROOT, doc.storagePath);
-    await fs.promises.unlink(absPath).catch(() => undefined);
+    await this.storage.delete(doc.storagePath).catch(() => undefined);
 
     return { deleted: true, id: documentId };
   }
@@ -107,12 +106,6 @@ export class DocumentsService {
     });
     if (!doc) throw new NotFoundException('Document not found.');
 
-    const absPath = path.join(UPLOADS_ROOT, doc.storagePath);
-
-    if (!fs.existsSync(absPath)) {
-      throw new NotFoundException('File not found on disk.');
-    }
-
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="${encodeURIComponent(doc.filename)}"`,
@@ -120,7 +113,7 @@ export class DocumentsService {
     res.setHeader('Content-Type', doc.mimeType);
     res.setHeader('Content-Length', doc.sizeBytes);
 
-    const stream = fs.createReadStream(absPath);
+    const { stream } = await this.storage.getStream(doc.storagePath);
     stream.pipe(res);
   }
 }

@@ -52,6 +52,7 @@ import { EmployeeRequestsModule } from './employee-requests/employee-requests.mo
 import { BackupModule } from './backup/backup.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { KioskModule } from './payroll/kiosk/kiosk.module';
+import { StorageModule } from './storage/storage.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -110,6 +111,7 @@ import { HealthController } from './health/health.controller';
     BackupModule,
     LoyaltyModule,
     KioskModule,
+    StorageModule,
   ],
 })
 export class AppModule {}

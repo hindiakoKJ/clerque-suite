@@ -27,13 +27,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 
 @Injectable()
 export class BackupScheduler {
   private readonly logger = new Logger(BackupScheduler.name);
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:  PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   /**
    * 02:00 server time every day. Picks 02:00 because:
@@ -66,8 +70,19 @@ export class BackupScheduler {
   async backupAllTenants(): Promise<{ uploaded: number; skipped: number; failed: number }> {
     const url   = process.env.BACKUP_WEBHOOK_URL;
     const token = process.env.BACKUP_WEBHOOK_TOKEN;
-    if (!url) {
-      this.logger.warn('[backup] BACKUP_WEBHOOK_URL not set — daily backup skipped (configure env to enable).');
+    const useS3 = this.storage.getDriver() === 'S3';
+
+    // Sprint 19 — two destinations supported. S3/R2 (preferred — direct
+    // write, ransomware-proof when bucket has Object Lock + immutable
+    // versioning) takes priority. The legacy webhook stays as a fallback
+    // for tenants who already wired up a Cloudflare Worker. If both are
+    // configured, both run (defence in depth — webhook is allowed to fail
+    // independently of the S3 write).
+    if (!useS3 && !url) {
+      this.logger.warn(
+        '[backup] No backup destination configured — daily backup skipped. ' +
+        'Set S3_BUCKET (recommended) or BACKUP_WEBHOOK_URL to enable.',
+      );
       return { uploaded: 0, skipped: 0, failed: 0 };
     }
 
@@ -76,11 +91,44 @@ export class BackupScheduler {
       select: { id: true, slug: true, isDemoTenant: true },
     });
 
+    // PH-local YYYY-MM-DD folder so the S3 listing groups daily snapshots.
+    const phDay = (() => {
+      const ph = new Date(Date.now() + 8 * 60 * 60_000);
+      return ph.toISOString().slice(0, 10);
+    })();
+
     let uploaded = 0, skipped = 0, failed = 0;
     for (const t of tenants) {
       try {
         const payload = await this.buildPayload(t.id);
-        const ok = await this.postToWebhook(url, token, t.slug, payload);
+        const json = JSON.stringify(payload);
+        let ok = true;
+
+        if (useS3) {
+          // Cloudflare R2 / AWS S3 — direct write. Per-tenant per-day key
+          // means we keep ~30 days of history (use bucket lifecycle rules
+          // to purge older). Object Lock on the bucket gives immutable
+          // versioning — the ransomware-proof shape recommended in the
+          // earlier audit.
+          const key = `backups/${phDay}/${t.slug}.json`;
+          try {
+            await this.storage.putBuffer(Buffer.from(json), key, {
+              contentType: 'application/json',
+            });
+          } catch (err) {
+            ok = false;
+            this.logger.error(`[backup] S3 write failed for ${t.slug}: ${(err as Error).message}`);
+          }
+        }
+
+        if (url) {
+          // Legacy webhook — kept for tenants already wired up to a
+          // Cloudflare Worker. A webhook failure does NOT mark the backup
+          // as failed if S3 already succeeded.
+          const webhookOk = await this.postToWebhook(url, token, t.slug, payload);
+          if (!webhookOk && !useS3) ok = false;
+        }
+
         if (ok) uploaded++;
         else failed++;
       } catch (err) {
@@ -88,7 +136,8 @@ export class BackupScheduler {
         this.logger.error(`[backup] tenant ${t.slug} failed: ${(err as Error).message}`);
       }
     }
-    this.logger.log(`[backup] daily run: uploaded=${uploaded} failed=${failed} skipped=${skipped} of ${tenants.length} tenants`);
+    const dest = useS3 && url ? 'S3+webhook' : useS3 ? 'S3' : 'webhook';
+    this.logger.log(`[backup] daily run (${dest}): uploaded=${uploaded} failed=${failed} skipped=${skipped} of ${tenants.length} tenants`);
     return { uploaded, skipped, failed };
   }
 

@@ -51,13 +51,18 @@ const POS_ACCENT_SOFT = 'hsl(217 91% 55% / 0.08)';
 // Nav items are ALWAYS shown to every POS user but grayed-out (with lock icon)
 // when the current role doesn't have access — so staff can see the full system
 // capability and understand what each role unlocks.
-const ALL_POS  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'CASHIER'] as const;
-const MGMT_POS = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER'] as const;
+const ALL_POS    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'CASHIER'] as const;
+const MGMT_POS   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER'] as const;
+// Sprint 19 — Separation of Duties. The till operator cannot also be the
+// supervisor who approves voids/discounts. Manager APPROVES cashier
+// actions; they don't ring sales themselves. Owner is exempt because in
+// solo / small-shop plans the owner IS the cashier (matches PH SMB reality).
+const TILL_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'CASHIER'] as const;
 
-const TERMINAL_ROLES   = ALL_POS;
-const PENDING_SYNC_ROLES = ALL_POS;
-const ORDERS_ROLES     = ALL_POS;        // cashier sees own till's orders
-const LAUNDRY_OPS_ROLES = ALL_POS;       // till-floor laundromat work
+const TERMINAL_ROLES     = TILL_ROLES;   // ring up sales — SoD: no manager
+const PENDING_SYNC_ROLES = TILL_ROLES;   // offline order queue belongs to till operators
+const ORDERS_ROLES       = ALL_POS;      // read access for everyone (manager reviews / cashier sees own till)
+const LAUNDRY_OPS_ROLES  = ALL_POS;      // intake / queue / fleet are operational, not financial — manager OK
 
 const DASHBOARD_ROLES  = MGMT_POS;       // owner + manager (revenue gate is separate)
 const PRODUCTS_ROLES   = MGMT_POS;       // edit catalog

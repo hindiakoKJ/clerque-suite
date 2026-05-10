@@ -228,7 +228,14 @@ realApi.interceptors.response.use(
       // stale token. The API's own HttpOnly copy gets cleared by the next
       // failed /auth/refresh (401) or an explicit POST /auth/logout.
       document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-      window.location.href = '/login';
+      // Sprint 19 hotfix — guard the redirect. If we're already on /login
+      // (e.g. an unauth'd query like /layouts fired from a globally-mounted
+      // component), don't force-reload the page — that creates an infinite
+      // refresh loop. Just bubble the error and let the page render its
+      // login form normally.
+      if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
       return Promise.reject(err);
     } finally {
       isRefreshing = false;

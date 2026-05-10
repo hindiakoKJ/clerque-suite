@@ -1,6 +1,7 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { useAuthStore } from '@/store/auth';
 import type { CoffeeShopTier } from '@repo/shared-types';
 import type { PrinterConfig, StationConfig } from '@/lib/pos/printer-dispatch';
 
@@ -52,11 +53,21 @@ interface LayoutResponse {
  *   - Customer-facing display: to know if it's enabled
  */
 export function useFloorLayout() {
+  // Sprint 19 hotfix — only fire when the user is authenticated AND has a
+  // tenant context. SUPER_ADMIN sessions on console.* (and the unauth login
+  // page itself) don't have a real tenant; firing /layouts there returns
+  // 401, which the api.ts interceptor handles by force-redirecting to /login,
+  // causing an infinite reload loop on console.hnscorpph.com/login.
+  const user        = useAuthStore((s) => s.user);
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const enabled     = !!accessToken && !!user?.tenantId && !user?.isSuperAdmin;
+
   const query = useQuery<LayoutResponse>({
     queryKey: ['floor-layout'],
     queryFn:  () => api.get('/layouts').then((r) => r.data),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    enabled,
   });
 
   // Map to the shapes printer-dispatch expects.

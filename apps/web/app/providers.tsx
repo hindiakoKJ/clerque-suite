@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Toaster } from 'sonner';
 import { ConfirmSlugModal } from '@/components/admin/ConfirmSlugModal';
 import { ReadOnlyBanner } from '@/components/security/ReadOnlyBanner';
+import { ToastHistoryDrawer } from '@/components/debug/ToastHistoryDrawer';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -29,6 +30,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
           CONFIRMATION_REQUIRED, instead of using window.prompt (which
           some browsers / extensions silently suppress). */}
       <ConfirmSlugModal />
+      {/* Sprint 19 — Toast history drawer. Captures every sonner toast
+          into a session buffer; floating bottom-right button opens a
+          slide-up panel with the last 50. Useful when a transient error
+          flashed during checkout but the cashier didn't catch it. */}
+      <ToastHistoryDrawer />
     </QueryClientProvider>
   );
 }

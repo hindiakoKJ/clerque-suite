@@ -20,9 +20,9 @@ export class AuditController {
 
   /**
    * List audit log entries for the current tenant, paginated.
-   * Access: BUSINESS_OWNER, SUPER_ADMIN, ACCOUNTANT, FINANCE_LEAD, EXTERNAL_AUDITOR (read-only).
+   * Access: BUSINESS_OWNER, SUPER_ADMIN, BRANCH_MANAGER, ACCOUNTANT, FINANCE_LEAD, EXTERNAL_AUDITOR.
    */
-  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   @Get()
   findAll(
     @CurrentUser() user: JwtPayload,
@@ -35,5 +35,20 @@ export class AuditController {
       action:     action as AuditAction | undefined,
       entityType: entityType ?? undefined,
     });
+  }
+
+  /**
+   * Sprint 19 — Login history for the tenant (success + failed attempts
+   * in the last N days). Owner / Manager see "who logged in when, from
+   * where, on what device". Failed-login burst is the early warning sign
+   * for credential stuffing or brute force.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'EXTERNAL_AUDITOR')
+  @Get('logins')
+  loginHistory(
+    @CurrentUser() user: JwtPayload,
+    @Query('days') days?: string,
+  ) {
+    return this.audit.recentLogins(user.tenantId!, days ? Math.min(Number(days), 90) : 14);
   }
 }

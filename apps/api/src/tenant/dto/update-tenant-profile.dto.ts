@@ -49,4 +49,20 @@ export class UpdateTenantProfileDto {
   @IsString()
   @MaxLength(20)
   contactPhone?: string;
+
+  /** Sprint 19 — receipt template fields (owner-editable). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  receiptHeaderNote?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  receiptFooterNote?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  receiptLogoUrl?: string;
 }

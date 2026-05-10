@@ -413,6 +413,19 @@ model Tenant {
   /// locked, nightly cron resets data. Exactly one record should have this true.
   isDemoTenant             Boolean          @default(false)
 
+  /// Sprint 19 — Customizable receipt template. All optional. When null,
+  /// the existing baked-in copy is used. Owner edits these from
+  /// Settings → Receipt template.
+  /// Header note printed BELOW the business name (e.g. tagline / branch
+  /// supplemental line). 2 lines max recommended.
+  receiptHeaderNote        String?
+  /// Footer note printed at the bottom (Wi-Fi password, social media,
+  /// "thank you" message). 3 lines max recommended.
+  receiptFooterNote        String?
+  /// Optional logo URL printed at the top of the receipt. Should be a
+  /// 1-bit PNG ideally; thermal printers don't render full color anyway.
+  receiptLogoUrl           String?
+
   /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
   /// endpoints for this tenant return 423 Locked. Use case: detect
   /// compromise (e.g. unusual destructive activity), flip flag, freeze

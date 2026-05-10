@@ -233,7 +233,7 @@ export class AuthService {
       try {
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, receiptLogoUrl: true },
         });
       } catch (err: any) {
         // PrismaClientValidationError or P2022 (column doesn't exist) means
@@ -278,6 +278,10 @@ export class AuthService {
       isPtuHolder:       tenant?.isPtuHolder ?? false,
       ptuNumber:         tenant?.ptuNumber ?? null,
       minNumber:         tenant?.minNumber ?? null,
+      // Sprint 19 — receipt template fields baked into JWT for fast render
+      receiptHeaderNote: tenant?.receiptHeaderNote ?? null,
+      receiptFooterNote: tenant?.receiptFooterNote ?? null,
+      receiptLogoUrl:    tenant?.receiptLogoUrl ?? null,
       tier:              (tenant?.tier ?? undefined) as JwtPayload['tier'],
       // AI quota — resolves tier-included + active addon + SUPER_ADMIN override
       // (see pricing.ts → getAiQuotaForTenant). Baked into JWT at login so the

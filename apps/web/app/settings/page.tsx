@@ -46,6 +46,10 @@ interface TenantProfile {
   overheadRatePerUnit?: number | string | null;
   // Sprint 12 — accounting basis (CASH vs ACCRUAL). Console-controlled.
   accountingMethod?:    'CASH' | 'ACCRUAL' | null;
+  // Sprint 19 — receipt template (owner-editable from Settings).
+  receiptHeaderNote?:   string | null;
+  receiptFooterNote?:   string | null;
+  receiptLogoUrl?:      string | null;
 }
 
 interface StaffUser {
@@ -171,6 +175,14 @@ export default function SettingsPage() {
   });
   const [profileDirty, setProfileDirty] = useState(false);
 
+  // Sprint 19 — receipt template form (owner-only edit).
+  const [receiptForm, setReceiptForm] = useState({
+    receiptHeaderNote: '',
+    receiptFooterNote: '',
+    receiptLogoUrl:    '',
+  });
+  const [receiptDirty, setReceiptDirty] = useState(false);
+
   // ── BIR / Tax settings state ──────────────────────────────────────────────
   const [taxForm, setTaxForm] = useState({
     taxStatus:         (user?.taxStatus ?? 'UNREGISTERED') as TaxStatus,
@@ -214,6 +226,11 @@ export default function SettingsPage() {
       contactEmail: profile.contactEmail ?? '',
       contactPhone: profile.contactPhone ?? '',
     });
+    setReceiptForm({
+      receiptHeaderNote: profile.receiptHeaderNote ?? '',
+      receiptFooterNote: profile.receiptFooterNote ?? '',
+      receiptLogoUrl:    profile.receiptLogoUrl ?? '',
+    });
   }, [profile]);
 
   const { data: users = [], isLoading: usersLoading } = useQuery<StaffUser[]>({
@@ -231,6 +248,21 @@ export default function SettingsPage() {
       toast.success('Business profile updated.');
     },
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed to update profile.'),
+  });
+
+  // Sprint 19 — Receipt template editor mutation
+  const updateReceiptMut = useMutation({
+    mutationFn: (body: typeof receiptForm) => api.patch('/tenant/profile', {
+      receiptHeaderNote: body.receiptHeaderNote.trim() || null,
+      receiptFooterNote: body.receiptFooterNote.trim() || null,
+      receiptLogoUrl:    body.receiptLogoUrl.trim()    || null,
+    }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      setReceiptDirty(false);
+      toast.success('Receipt template saved. Sign out and back in to see it on new sales.');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed to save receipt template.'),
   });
 
   const updateTaxMut = useMutation({
@@ -519,6 +551,89 @@ export default function SettingsPage() {
             {/* ── Inventory Costing (Sprint 4A + Sprint 6) ────────────────────── */}
             {isOwner && profile && (
               <CostingCard profile={profile} qc={qc} />
+            )}
+
+            {/* ── Receipt template (Sprint 19, owner-only) ────────────────────── */}
+            {isOwner && (
+              <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Receipt Template</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Customise what appears on every printed receipt. Header note shows
+                    below your business name; footer note replaces "Thank you for your
+                    purchase!" Logo prints at the top (1-bit PNG works best for thermal
+                    printers).
+                  </p>
+                </div>
+
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">Logo URL</span>
+                  <input
+                    type="url"
+                    value={receiptForm.receiptLogoUrl}
+                    onChange={(e) => { setReceiptForm((f) => ({ ...f, receiptLogoUrl: e.target.value })); setReceiptDirty(true); }}
+                    placeholder="https://… (paste image URL)"
+                    className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">Header note (below business name)</span>
+                  <textarea
+                    value={receiptForm.receiptHeaderNote}
+                    onChange={(e) => { setReceiptForm((f) => ({ ...f, receiptHeaderNote: e.target.value })); setReceiptDirty(true); }}
+                    rows={2}
+                    maxLength={200}
+                    placeholder="e.g. Your favourite cup of coffee since 2019"
+                    className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{receiptForm.receiptHeaderNote.length}/200</p>
+                </label>
+
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">Footer note (replaces "Thank you" line)</span>
+                  <textarea
+                    value={receiptForm.receiptFooterNote}
+                    onChange={(e) => { setReceiptForm((f) => ({ ...f, receiptFooterNote: e.target.value })); setReceiptDirty(true); }}
+                    rows={3}
+                    maxLength={300}
+                    placeholder={'e.g. Thanks for visiting!\nWi-Fi: cafe-guest\nFB: @cafe.philips'}
+                    className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{receiptForm.receiptFooterNote.length}/300 · multi-line OK</p>
+                </label>
+
+                {/* Live preview */}
+                <div className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-[11px] font-mono text-center space-y-0.5 max-w-xs mx-auto">
+                  {receiptForm.receiptLogoUrl && (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={receiptForm.receiptLogoUrl}
+                      alt="logo preview"
+                      className="mx-auto max-h-10 object-contain mb-1"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  )}
+                  <p className="font-bold">{profile?.name ?? 'Your Business Name'}</p>
+                  {receiptForm.receiptHeaderNote && (
+                    <p className="italic text-muted-foreground whitespace-pre-line">{receiptForm.receiptHeaderNote}</p>
+                  )}
+                  <p className="text-muted-foreground">— receipt body —</p>
+                  <p className="text-muted-foreground whitespace-pre-line">
+                    {receiptForm.receiptFooterNote || 'Thank you for your purchase!'}
+                  </p>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    onClick={() => updateReceiptMut.mutate(receiptForm)}
+                    disabled={!receiptDirty || updateReceiptMut.isPending}
+                    className={BTN_PRIMARY}
+                  >
+                    {updateReceiptMut.isPending ? 'Saving…' : 'Save Receipt Template'}
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* Read-only system info — driven by modular pricing (planCode + module flags). */}

@@ -179,6 +179,11 @@ export default function AuditLogPage() {
         </div>
       </div>
 
+      {/* Sprint 19 — Login History panel (collapsible) */}
+      <div className="px-4 sm:px-6 pt-3 shrink-0">
+        <LoginHistoryPanel />
+      </div>
+
       {/* Content */}
       <div className="flex-1 p-4 sm:p-6 space-y-3 overflow-auto">
         {isLoading ? (
@@ -313,6 +318,157 @@ export default function AuditLogPage() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Sprint 19 — Login History panel ────────────────────────────────────────
+//
+// Collapsible card that surfaces recent login attempts (success + failed)
+// for the tenant. Owner / Manager use this to spot brute-force / credential-
+// stuffing bursts before they breach.
+
+interface LoginEntry {
+  id:         string;
+  email:      string;
+  success:    boolean;
+  reason:     string | null;
+  ipAddress:  string | null;
+  deviceInfo: string | null;
+  createdAt:  string;
+  userName:   string | null;
+  userRole:   string | null;
+}
+interface LoginHistory {
+  windowDays:    number;
+  total:         number;
+  successCount:  number;
+  failedCount:   number;
+  failureBursts: { email: string; count: number }[];
+  entries:       LoginEntry[];
+}
+
+function LoginHistoryPanel() {
+  const [open, setOpen] = useState(true);
+  const [days, setDays] = useState(14);
+
+  const { data, isLoading } = useQuery<LoginHistory>({
+    queryKey: ['login-history', days],
+    queryFn:  () => api.get('/audit/logins', { params: { days } }).then((r) => r.data),
+    staleTime: 30_000,
+  });
+
+  return (
+    <div className="rounded-lg border border-border bg-card overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/40 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <UserIcon className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">Login History</h2>
+          {data && (
+            <span className="text-xs text-muted-foreground">
+              · {data.successCount} success / {data.failedCount} failed
+              {' '}in last {data.windowDays} days
+            </span>
+          )}
+          {data && data.failureBursts.length > 0 && (
+            <Badge tone="danger">
+              <AlertTriangle className="h-3 w-3" />
+              {data.failureBursts.length} burst{data.failureBursts.length === 1 ? '' : 's'}
+            </Badge>
+          )}
+        </div>
+        {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+      </button>
+
+      {open && (
+        <div className="border-t border-border">
+          <div className="px-4 py-2 flex items-center gap-2 border-b border-border bg-muted/30">
+            <span className="text-xs text-muted-foreground">Window:</span>
+            {[7, 14, 30, 90].map((d) => (
+              <button
+                key={d}
+                onClick={() => setDays(d)}
+                className={`text-xs px-2 py-0.5 rounded ${
+                  days === d
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'border border-border text-muted-foreground hover:bg-background'
+                }`}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
+
+          {/* Burst alert */}
+          {data && data.failureBursts.length > 0 && (
+            <div className="px-4 py-2.5 border-b border-border bg-red-500/10 text-xs">
+              <div className="font-semibold text-red-700 dark:text-red-400 mb-1 flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                Failed-login bursts (5+ failures from same email)
+              </div>
+              <ul className="space-y-0.5 ml-5">
+                {data.failureBursts.map((b) => (
+                  <li key={b.email} className="text-red-700 dark:text-red-400">
+                    <span className="font-mono">{b.email}</span>: <strong>{b.count}</strong> failed attempts
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Recent entries */}
+          {isLoading ? (
+            <div className="p-6 text-center text-xs text-muted-foreground">Loading…</div>
+          ) : !data || data.entries.length === 0 ? (
+            <div className="p-6 text-center text-xs text-muted-foreground">
+              No login activity in this window.
+            </div>
+          ) : (
+            <div className="max-h-72 overflow-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground sticky top-0">
+                  <tr>
+                    <th className="text-left px-4 py-1.5">When</th>
+                    <th className="text-left px-4 py-1.5">User</th>
+                    <th className="text-left px-4 py-1.5">Result</th>
+                    <th className="text-left px-4 py-1.5">IP / device</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.entries.slice(0, 200).map((e) => (
+                    <tr key={e.id} className="border-t border-border/40">
+                      <td className="px-4 py-1.5 font-mono text-muted-foreground whitespace-nowrap">
+                        {new Date(e.createdAt).toLocaleString('en-PH', { dateStyle: 'short', timeStyle: 'short' })}
+                      </td>
+                      <td className="px-4 py-1.5">
+                        <span className="font-mono">{e.email}</span>
+                        {e.userName && <span className="text-muted-foreground"> · {e.userName}</span>}
+                        {e.userRole && <span className="text-muted-foreground"> · {e.userRole}</span>}
+                      </td>
+                      <td className="px-4 py-1.5">
+                        {e.success ? (
+                          <span className="text-emerald-700 dark:text-emerald-400 font-semibold">success</span>
+                        ) : (
+                          <span className="text-red-600 dark:text-red-400">
+                            failed{e.reason ? ` · ${e.reason}` : ''}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-1.5 text-muted-foreground truncate max-w-[300px]">
+                        {e.ipAddress ?? '—'}
+                        {e.deviceInfo && <span className="text-[10px] ml-2">{e.deviceInfo.slice(0, 60)}</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

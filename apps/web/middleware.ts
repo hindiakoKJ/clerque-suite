@@ -131,16 +131,31 @@ export function middleware(req: NextRequest) {
   // Super admin (on tenant domain) bypasses tenant app checks too
   if (isSuper) return NextResponse.next();
 
-  // Sprint 19 — POS role gate. Per business requirement, only Owner /
-  // Manager / Cashier are till-floor roles. Other tenant roles
-  // (PAYROLL_MASTER, BOOKKEEPER, MDM, FINANCE_LEAD, AR/AP_ACCOUNTANT,
-  // WAREHOUSE_STAFF, ACCOUNTANT, EXTERNAL_AUDITOR, GENERAL_EMPLOYEE,
-  // SALES_LEAD) belong in Ledger / Sync / Console depending on their
-  // function, not the POS plane. Hard-block at the route layer here so
-  // a user with stale appAccess.POS rights can't reach the till.
-  const POS_ROLES = new Set(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER']);
+  // Sprint 19 — Per-app role hard-gates. appAccess gives granular
+  // OPERATOR/READ_ONLY levels, but the practical role-to-app mapping is
+  // simpler than that:
+  //
+  //   POS     = till floor — Owner + Manager + Cashier only
+  //   LEDGER  = back-office accounting — Owner, accounting roles, auditor
+  //   PAYROLL = HR + employee self-service — anyone with a tenant
+  //
+  // These hard gates run BEFORE the appAccess check below so a stale
+  // legacy appAccess record can't smuggle a wrong-role user past.
+  const POS_ROLES     = new Set(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER']);
+  const LEDGER_ROLES  = new Set([
+    'BUSINESS_OWNER', 'BRANCH_MANAGER',
+    'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD',
+    'AR_ACCOUNTANT', 'AP_ACCOUNTANT', 'EXTERNAL_AUDITOR',
+  ]);
+  // Sync (/payroll) is unrestricted by role — every employee uses it for
+  // self-service (clock-in, payslips, leave requests). Specific HR pages
+  // are gated client-side via the layout role lists.
+
   if (pathname.startsWith('/pos') && !POS_ROLES.has(user.role)) {
     return NextResponse.redirect(new URL('/select?reason=pos-restricted', req.url));
+  }
+  if (pathname.startsWith('/ledger') && !LEDGER_ROLES.has(user.role)) {
+    return NextResponse.redirect(new URL('/select?reason=ledger-restricted', req.url));
   }
 
   // Tenant app access checks

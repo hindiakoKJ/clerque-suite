@@ -16,22 +16,33 @@ const PAYROLL_ACCENT_SOFT = 'hsl(262 70% 58% / 0.08)';
 // Staff        → HR/Payroll management only
 // Pay Runs & financial payroll → PAYROLL_MASTER + BUSINESS_OWNER only
 // Note: EXTERNAL_AUDITOR is read-only outside staff — no clock-in/out, no own-payslip view.
-const CLOCK_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER',
-                              'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
-                              'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
-                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE'] as const;
-const PAY_DASHBOARD_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'FINANCE_LEAD'] as const;
-const TIMESHEETS_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'SALES_LEAD'] as const;
-const PAY_STAFF_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER', 'MDM'] as const;
-const PAY_RUNS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER'] as const;
-const PAYSLIPS_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER',
-                              'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'BOOKKEEPER', 'ACCOUNTANT',
-                              'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
-                              'PAYROLL_MASTER', 'GENERAL_EMPLOYEE'] as const;
-// HR view roles — these get the dashboard-first experience and Leaves admin tab.
-const HR_VIEW_ROLES       = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'FINANCE_LEAD'] as const;
-// My Expenses — personal-reimbursement claims; every authenticated employee can submit.
-const MY_EXPENSES_ROLES   = PAYSLIPS_ROLES;
+// Sprint 19 — Sync (Payroll) role consolidation.
+//
+// Sync has two audiences: HR managers + employees. Roles split accordingly:
+//   - HR_MGMT      = Owner + Branch Manager + Payroll Master
+//                    (the 3 people who run HR/payroll)
+//   - PAYROLL_ONLY = Owner + Payroll Master
+//                    (the sensitive payroll-finance work — cap salaries,
+//                     run pay runs, view contributions)
+//   - EMPLOYEE     = literally every authenticated user with a tenant,
+//                    incl. CASHIER / WAREHOUSE_STAFF / AR_ACCOUNTANT etc.
+//                    (clock in/out + see own payslips + file own
+//                     requests/leaves — every staff member needs this)
+const HR_MGMT      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'PAYROLL_MASTER'] as const;
+const PAYROLL_ONLY = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'PAYROLL_MASTER'] as const;
+const EMPLOYEE     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'CASHIER', 'SALES_LEAD',
+                      'PAYROLL_MASTER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD',
+                      'BOOKKEEPER', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
+                      'GENERAL_EMPLOYEE'] as const;
+
+const CLOCK_ROLES         = EMPLOYEE;
+const PAY_DASHBOARD_ROLES = HR_MGMT;
+const TIMESHEETS_ROLES    = HR_MGMT;
+const PAY_STAFF_ROLES     = HR_MGMT;
+const PAY_RUNS_ROLES      = PAYROLL_ONLY;
+const PAYSLIPS_ROLES      = EMPLOYEE;
+const HR_VIEW_ROLES       = HR_MGMT;
+const MY_EXPENSES_ROLES   = EMPLOYEE;
 
 function inPayrollRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));

@@ -15,18 +15,45 @@ const LEDGER_ACCENT_SOFT = 'hsl(173 70% 40% / 0.08)';
 // Finance Lead: everything except journal entry creation.
 // AR/AP Accountant: settlement + ledger view (no period close, no journal write).
 // External Auditor: read-only — sees dashboard, accounts, trial balance only.
-const DASHBOARD_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT', 'EXTERNAL_AUDITOR'] as const;
-const ACCOUNTS_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR'] as const;
-const TRIAL_BAL_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR'] as const;
+// Sprint 19 — Ledger role consolidation.
+//
+// Ledger is the back-office accounting plane. CASHIER / SALES_LEAD /
+// CLERICAL roles never reach this app — they live in POS or Sync.
+//
+//   ACCOUNTING_LEAD  = Owner + Branch Manager + the senior accounting roles
+//                      (Accountant, Bookkeeper, Finance Lead).
+//                      Manager is here so they can see margins / AP / AR
+//                      for branch oversight.
+//   AR_TEAM / AP_TEAM = the specialist accountants + the leads above
+//   AUDITOR_VIEW      = read-only; auditor + leads
+//
+// The previous ad-hoc lists (10+ variations) collapse into 4 tiers below.
+const ACCOUNTING_LEAD = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+                         'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD'] as const;
+const AR_TEAM         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER',
+                         'FINANCE_LEAD', 'AR_ACCOUNTANT'] as const;
+const AP_TEAM         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER',
+                         'FINANCE_LEAD', 'AP_ACCOUNTANT'] as const;
+const AUDITOR_VIEW    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER',
+                         'FINANCE_LEAD', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT',
+                         'EXTERNAL_AUDITOR'] as const;
+// Period close + JE post are sensitive — restrict to actual accountants.
+const SENSITIVE_GL    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT'] as const;
+
+const DASHBOARD_ROLES  = AUDITOR_VIEW;
+const ACCOUNTS_ROLES   = AUDITOR_VIEW;
+const TRIAL_BAL_ROLES  = AUDITOR_VIEW;
 const JOURNAL_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER'] as const;
-const EVENT_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT'] as const;
-const SETTLEMENT_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'AR_ACCOUNTANT', 'AP_ACCOUNTANT'] as const;
+const EVENT_ROLES      = SENSITIVE_GL;
+const SETTLEMENT_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD',
+                          'AR_ACCOUNTANT', 'AP_ACCOUNTANT'] as const;
 const PERIODS_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD'] as const;
-const BIR_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD'] as const;
-const AP_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
-const AR_ROLES         = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
-const AUDIT_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR'] as const;
-const EXPENSE_APPROVAL_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'FINANCE_LEAD', 'ACCOUNTANT'] as const;
+const BIR_ROLES        = ACCOUNTING_LEAD;
+const AP_ROLES         = AP_TEAM;
+const AR_ROLES         = AR_TEAM;
+const AUDIT_ROLES      = AUDITOR_VIEW;
+const EXPENSE_APPROVAL_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+                                'FINANCE_LEAD', 'ACCOUNTANT'] as const;
 
 function inLedgerRoles(role: string | undefined | null, set: readonly string[]) {
   return !!(role && set.includes(role));

@@ -249,6 +249,10 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const isPtuHolder           = user?.isPtuHolder ?? false;
   const ptuNumber             = user?.ptuNumber;
   const minNumber             = user?.minNumber;
+  // Sprint 19 — owner-customizable receipt template
+  const receiptHeaderNote     = user?.receiptHeaderNote;
+  const receiptFooterNote     = user?.receiptFooterNote;
+  const receiptLogoUrl        = user?.receiptLogoUrl;
 
   // ── In-receipt void (role-gated) ───────────────────────────────────────────
   // Visible only when:
@@ -401,9 +405,23 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
 
             {/* ── Header: business info + BIR classification ── */}
             <div className="text-center space-y-0.5 mb-3">
+              {/* Sprint 19 — Optional logo (owner-uploaded). Thermal printers
+                  don't render full color but the on-screen receipt does. */}
+              {receiptLogoUrl && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={receiptLogoUrl}
+                  alt="logo"
+                  className="mx-auto mb-1 max-h-12 object-contain"
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                />
+              )}
               <p className="font-bold text-sm">{businessName ?? data.branchName ?? 'Demo Store'}</p>
               {data.branchName && businessName && (
                 <p className="text-gray-500 text-[10px]">{data.branchName}</p>
+              )}
+              {receiptHeaderNote && (
+                <p className="text-gray-600 text-[10px] italic whitespace-pre-line">{receiptHeaderNote}</p>
               )}
               {/* TIN line per RR No. 1-2026 (Phase 2 only) */}
               <TinLine taxStatus={taxStatus} tinNumber={tinNumber} />
@@ -557,10 +575,10 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             />
 
             <hr className="border-dashed border-gray-300 my-2" />
-            <p className="text-center text-gray-400 text-[10px]">
+            <p className="text-center text-gray-400 text-[10px] whitespace-pre-line">
               {data.isOffline
                 ? 'Order queued — will sync when connection is restored.'
-                : 'Thank you for your purchase!'}
+                : (receiptFooterNote ?? 'Thank you for your purchase!')}
             </p>
           </div>
 

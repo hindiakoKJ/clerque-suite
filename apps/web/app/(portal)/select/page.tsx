@@ -173,6 +173,8 @@ export default function SelectPage() {
     const reason = new URLSearchParams(window.location.search).get('reason');
     if (reason === 'pos-restricted') {
       toast.error('POS is restricted to Owner / Manager / Cashier. Use Ledger or Sync if those apply to your role.');
+    } else if (reason === 'ledger-restricted') {
+      toast.error('Ledger is restricted to accounting roles. Use POS or Sync if those apply to your role.');
       // Clean the URL
       const url = new URL(window.location.href);
       url.searchParams.delete('reason');

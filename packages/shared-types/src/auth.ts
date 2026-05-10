@@ -110,6 +110,11 @@ export interface JwtPayload {
   ptuNumber?:         string | null;
   /** Machine Identification Number (MIN) assigned by BIR during CAS accreditation. */
   minNumber?:         string | null;
+  /** Sprint 19 — Receipt template fields (owner-editable). All optional;
+   *  fall back to baked-in defaults when null. */
+  receiptHeaderNote?: string | null;
+  receiptFooterNote?: string | null;
+  receiptLogoUrl?:    string | null;
   /** Tenant subscription tier — drives tier-locked permission gating in the UI. */
   tier?:              import('./tiers').TierId;
   /**

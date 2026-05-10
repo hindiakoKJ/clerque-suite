@@ -254,6 +254,54 @@ export class AuditService {
       pages: Math.ceil(total / take),
     };
   }
+
+  /**
+   * Sprint 19 — Recent login history (success + failure) for the tenant.
+   * Used by /ledger/audit's Login History panel. Last N days, capped at
+   * 500 rows to keep the UI snappy.
+   */
+  async recentLogins(tenantId: string, days: number) {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const rows = await this.prisma.loginLog.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+      include: { user: { select: { id: true, name: true, role: true } } },
+    });
+
+    // Aggregate failure counts per email so the UI can highlight bursts.
+    const failedByEmail = new Map<string, number>();
+    for (const r of rows) {
+      if (!r.success) failedByEmail.set(r.email, (failedByEmail.get(r.email) ?? 0) + 1);
+    }
+
+    return {
+      windowDays: days,
+      total: rows.length,
+      successCount: rows.filter((r) => r.success).length,
+      failedCount:  rows.filter((r) => !r.success).length,
+      // Email addresses with 5+ failures in the window — credential-stuffing
+      // / brute-force candidates. UI badges these red.
+      failureBursts: Array.from(failedByEmail.entries())
+        .filter(([, n]) => n >= 5)
+        .map(([email, count]) => ({ email, count }))
+        .sort((a, b) => b.count - a.count),
+      entries: rows.map((r) => ({
+        id:         r.id,
+        email:      r.email,
+        success:    r.success,
+        reason:     r.reason,
+        ipAddress:  r.ipAddress,
+        deviceInfo: r.deviceInfo,
+        createdAt:  r.createdAt.toISOString(),
+        userName:   r.user?.name ?? null,
+        userRole:   r.user?.role ?? null,
+      })),
+    };
+  }
 }
 
 /** Plain-language description for ConsoleAction values shown to tenants. */

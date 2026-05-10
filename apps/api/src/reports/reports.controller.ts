@@ -42,6 +42,22 @@ export class ReportsController {
   }
 
   /**
+   * Sprint 19 — Sales report over an arbitrary date range.
+   * Powers /pos/reports/sales (owner-only).
+   * Owner + Manager only — accountants pull this from Ledger via journal entries.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER')
+  @Get('sales-range')
+  getSalesRange(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to')   to:   string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.reportsService.getSalesRange(user.tenantId!, branchId ?? null, from, to);
+  }
+
+  /**
    * Sprint 7 — Daily lead-time KPIs (production wait times).
    *   - Avg, P50, P90, P95 lead time
    *   - Counts of orders > 5 min and > 10 min (alarm thresholds)

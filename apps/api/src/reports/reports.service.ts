@@ -454,4 +454,139 @@ export class ReportsService {
       include: { payments: true, items: true },
     });
   }
+
+  /**
+   * Sprint 19 — Sales report over an arbitrary date range. Powers the new
+   * /pos/reports/sales owner-only page. Returns:
+   *   - Per-day buckets (date, totalRevenue, orderCount, voidCount)
+   *   - Totals across the range (revenue, orders, AOV, voidCount, totalCogs,
+   *     grossProfit)
+   *   - Top 20 products across the range (qty, revenue, lineCount)
+   *   - Per-payment-method totals
+   *
+   * All time bucketing in PH local time (UTC+8). Date strings are inclusive
+   * "YYYY-MM-DD" boundaries. Voided orders excluded from revenue but
+   * counted under voidCount for visibility.
+   */
+  async getSalesRange(
+    tenantId: string,
+    branchId: string | null,
+    fromDate: string,
+    toDate: string,
+  ) {
+    const start = new Date(`${fromDate}T00:00:00+08:00`);
+    const end   = new Date(`${toDate}T23:59:59.999+08:00`);
+
+    const where = {
+      tenantId,
+      ...(branchId ? { branchId } : {}),
+      paidAt: { gte: start, lte: end },
+    };
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      include: { items: true, payments: true },
+      orderBy: { paidAt: 'asc' },
+    });
+
+    // Per-day buckets — group by PH-local YYYY-MM-DD.
+    const buckets = new Map<string, {
+      date:         string;
+      orderCount:   number;
+      voidCount:    number;
+      totalRevenue: number;
+      totalCogs:    number;
+    }>();
+    const isoDay = (d: Date) => {
+      // PH = UTC+8; shift before slicing so day boundaries align.
+      const ph = new Date(d.getTime() + 8 * 60 * 60_000);
+      return ph.toISOString().slice(0, 10);
+    };
+
+    let totalRevenue = 0;
+    let totalCogs    = 0;
+    let totalOrders  = 0;
+    let voidCount    = 0;
+    const byPayment      = new Map<string, { method: string; total: number; count: number }>();
+    const byProduct      = new Map<string, { productName: string; qty: number; revenue: number; lineCount: number }>();
+
+    for (const o of orders) {
+      const day = isoDay(new Date(o.paidAt ?? o.createdAt));
+      let bucket = buckets.get(day);
+      if (!bucket) {
+        bucket = { date: day, orderCount: 0, voidCount: 0, totalRevenue: 0, totalCogs: 0 };
+        buckets.set(day, bucket);
+      }
+
+      if (o.status === 'VOIDED') {
+        voidCount++;
+        bucket.voidCount++;
+        continue;
+      }
+
+      const orderTotal = Number(o.totalAmount);
+      const orderCogs  = o.items.reduce((s, it) => s + Number(it.costPrice ?? 0) * Number(it.quantity), 0);
+      totalRevenue += orderTotal;
+      totalCogs    += orderCogs;
+      totalOrders  += 1;
+      bucket.totalRevenue += orderTotal;
+      bucket.totalCogs    += orderCogs;
+      bucket.orderCount   += 1;
+
+      // Payment breakdown
+      for (const p of o.payments) {
+        const cur = byPayment.get(p.method) ?? { method: p.method, total: 0, count: 0 };
+        cur.total += Number(p.amount);
+        cur.count++;
+        byPayment.set(p.method, cur);
+      }
+
+      // Product breakdown
+      for (const it of o.items) {
+        const key = it.productId;
+        const cur = byProduct.get(key) ?? { productName: it.productName, qty: 0, revenue: 0, lineCount: 0 };
+        cur.qty       += Number(it.quantity);
+        cur.revenue   += Number(it.lineTotal);
+        cur.lineCount += 1;
+        byProduct.set(key, cur);
+      }
+    }
+
+    const grossProfit = totalRevenue - totalCogs;
+    const grossMargin = totalRevenue > 0 ? grossProfit / totalRevenue : 0;
+    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+    return {
+      from: fromDate,
+      to:   toDate,
+      branchId: branchId ?? null,
+      totals: {
+        totalRevenue:  Math.round(totalRevenue * 100) / 100,
+        totalCogs:     Math.round(totalCogs * 100) / 100,
+        grossProfit:   Math.round(grossProfit * 100) / 100,
+        grossMargin:   Math.round(grossMargin * 10000) / 10000,
+        totalOrders,
+        voidCount,
+        avgOrderValue: Math.round(avgOrderValue * 100) / 100,
+      },
+      byDay: Array.from(buckets.values())
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((b) => ({
+          ...b,
+          totalRevenue: Math.round(b.totalRevenue * 100) / 100,
+          totalCogs:    Math.round(b.totalCogs * 100) / 100,
+          grossProfit:  Math.round((b.totalRevenue - b.totalCogs) * 100) / 100,
+        })),
+      byPaymentMethod: Array.from(byPayment.values())
+        .sort((a, b) => b.total - a.total)
+        .map((p) => ({ ...p, total: Math.round(p.total * 100) / 100 })),
+      topProducts: Array.from(byProduct.entries())
+        .map(([productId, v]) => ({
+          productId, ...v,
+          revenue: Math.round(v.revenue * 100) / 100,
+        }))
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 20),
+    };
+  }
 }

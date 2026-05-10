@@ -15,6 +15,10 @@ export interface UpdateTenantProfileDto {
   address?: string;
   contactEmail?: string;
   contactPhone?: string;
+  /** Sprint 19 — receipt template fields */
+  receiptHeaderNote?: string;
+  receiptFooterNote?: string;
+  receiptLogoUrl?:    string;
 }
 
 export interface UpdateTaxSettingsDto {
@@ -577,6 +581,11 @@ export class TenantService {
         overheadRatePerUnit: true,        // Sprint 6 — manufacturing overhead
         hasTimeMonitoring: true,
         hasBirForms: true,
+        // Sprint 19 — receipt template fields (nullable; render falls back
+        // to baked-in defaults when null).
+        receiptHeaderNote: true,
+        receiptFooterNote: true,
+        receiptLogoUrl:    true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found');

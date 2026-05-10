@@ -6,7 +6,7 @@ import {
   ShoppingCart, LayoutDashboard, ShoppingBag, Package, ClipboardList,
   Users, Clock, Timer, RefreshCw, User, Ruler, AlertTriangle, Tag, Wallet,
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
-  Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity,
+  Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity, ChartBar,
   Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
@@ -301,6 +301,12 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     ...(showCycleCounts ? [makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role)] : []),
   ]);
 
+  // Sprint 19 — Owner-only Sales Report, available across all verticals.
+  // MGMT_POS = Owner + Branch Manager (cashier never sees revenue here).
+  const reportsSection = withSection('Reports', [
+    makeNavItem('/pos/reports/sales', 'Sales Report', ChartBar, MGMT_POS, role),
+  ]);
+
   let verticalNav: NavItem[];
 
   if (isLaundry) {
@@ -466,6 +472,12 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]),
     ];
   }
+
+  // Sprint 19 — Reports section appended to every vertical's nav.
+  // Cashiers don't see it (MGMT_POS gated); makeNavItem still emits the
+  // disabled+grayed entry for transparency, then the filter pass below
+  // removes it from cashier nav since the role check fails.
+  verticalNav = [...verticalNav, ...reportsSection];
 
   // Filter disabled items, hoisting any orphaned sectionStart label onto the
   // next visible item in that section. Without this, hiding the first item

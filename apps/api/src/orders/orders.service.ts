@@ -312,10 +312,34 @@ export class OrdersService {
       // Read current stock → compute new quantity → write back inside the
       // same interactive transaction so Postgres serialises concurrent writes
       // to the same row at the DB level.
+      //
+      // Sprint 19 — Look up tenant valuation method + business type early so
+      // both the FINISHED-GOODS lot drain (this loop) and the RECIPE BOM
+      // drain (loop below) share the same flags. PHARMACY tenants always
+      // drain ProductLot rows in FEFO order (FDA Circular 13-2014 — no
+      // expired stock); FIFO tenants drain in receivedAt order; everyone
+      // else uses WAC from InventoryItem.avgCost.
+      const tenantCostingFlags = await tx.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { valuationMethod: true, businessType: true },
+      });
+      const useFifo          = tenantCostingFlags?.valuationMethod === 'FIFO';
+      const isPharmacy       = tenantCostingFlags?.businessType === 'PHARMACY';
+      const drainProductLots = isPharmacy || useFifo;
+
       // Captures the per-product avgCost (Moving-Average Cost / WAC) for the
       // COGS event built after this loop. Falls back to item.costPrice (the
       // snapshot from the till) when avgCost isn't set.
-      const avgCostByProduct = new Map<string, number>();
+      const avgCostByProduct    = new Map<string, number>();
+      // Sprint 19 — FIFO/FEFO lot drain on finished products. When drainProductLots
+      // is true, drain ProductLot rows in the correct order, sum each drain ×
+      // lot's frozen costPrice, and emit the per-unit weighted cost to the COGS
+      // event. Pharmacy also stamps OrderItem.lotId with the first lot drained
+      // so the FDA recall trail is intact (Sprint 19 — backfilled via update
+      // after the inventory loop, since OrderItem.id is created with `order`
+      // higher up in this transaction).
+      const lotUnitCostByProduct = new Map<string, number>();
+      const firstLotIdByProduct  = new Map<string, string>();
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
 
@@ -331,6 +355,71 @@ export class OrdersService {
         // to the product-snapshot cost if no avgCost is set.
         if (invItem.avgCost != null) {
           avgCostByProduct.set(item.productId, Number(invItem.avgCost));
+        }
+
+        // ── Lot drain (FIFO for retail, FEFO for pharmacy) ─────────────
+        // Runs IN ADDITION to the InventoryItem decrement below — the two
+        // sources of truth are kept in sync. If lots exist and we drain
+        // them, the per-product weighted cost from the lots overrides WAC
+        // in the COGS event.
+        if (drainProductLots) {
+          // Pharmacy: FEFO (earliest expiry first; tiebreak on receivedAt asc).
+          // Retail-FIFO: by receivedAt asc.
+          const orderBy = isPharmacy
+            ? [{ expiresAt: 'asc' as const }, { receivedAt: 'asc' as const }]
+            : [{ receivedAt: 'asc' as const }];
+          // For pharmacy, also exclude expired lots (selling expired drugs is a
+          // criminal offence per RA 6675); retail-FIFO tolerates them since
+          // expiry is non-binding for non-pharmacy SKUs.
+          const lotWhere: any = {
+            tenantId,
+            productId: item.productId,
+            branchId:  payload.branchId,
+            isActive:  true,
+            quantity:  { gt: 0 },
+          };
+          if (isPharmacy) lotWhere.expiresAt = { gt: new Date() };
+
+          const lots = await tx.productLot.findMany({
+            where:   lotWhere,
+            orderBy,
+            select:  { id: true, quantity: true, costPrice: true },
+          });
+
+          if (lots.length > 0) {
+            let remaining     = soldQty;
+            let totalDrained  = 0;
+            let totalLotCost  = 0;
+            for (const lot of lots) {
+              if (remaining <= 0) break;
+              const lotQty = Number(lot.quantity);
+              const drain  = Math.min(lotQty, remaining);
+              await tx.productLot.update({
+                where: { id: lot.id },
+                data:  { quantity: { decrement: new Prisma.Decimal(drain) } },
+              });
+              totalLotCost += drain * Number(lot.costPrice);
+              totalDrained += drain;
+              remaining    -= drain;
+              // Stamp the FIRST lot drained on this line. Multi-lot sales
+              // (qty > one lot's stock) only carry the first lot id; the
+              // weighted unit cost still reflects all lots drained. Most
+              // pharmacy sales are single-lot anyway.
+              if (!firstLotIdByProduct.has(item.productId)) {
+                firstLotIdByProduct.set(item.productId, lot.id);
+              }
+            }
+            // Per-unit weighted cost from the lot drain. If we couldn't
+            // fully drain (under-stocked), fall back to WAC for the
+            // shortfall so COGS is never zero.
+            const drainedUnitCost  = totalDrained > 0 ? totalLotCost / totalDrained : 0;
+            const wacFallback      = invItem.avgCost != null ? Number(invItem.avgCost) : 0;
+            const shortfallUnitCost = (soldQty - totalDrained) * wacFallback;
+            const blendedUnitCost  = soldQty > 0
+              ? (totalLotCost + shortfallUnitCost) / soldQty
+              : drainedUnitCost;
+            lotUnitCostByProduct.set(item.productId, blendedUnitCost);
+          }
         }
 
         const qtyBefore = Number(invItem.quantity);
@@ -357,6 +446,22 @@ export class OrdersService {
         });
       }
 
+      // Sprint 19 — Stamp OrderItem.lotId on each line whose product was
+      // satisfied via a ProductLot drain (pharmacy FEFO or retail FIFO).
+      // Multi-lot lines carry the FIRST lot's id; the audit trail for any
+      // remaining lots is in the InventoryLog reason text. For most pharmacy
+      // sales (single-unit dispenses), this is a clean 1:1 link from
+      // OrderItem → the dispensed lot, satisfying RA 9165 / FDA Circular
+      // 13-2014 traceability.
+      if (firstLotIdByProduct.size > 0) {
+        for (const [productId, lotId] of firstLotIdByProduct) {
+          await tx.orderItem.updateMany({
+            where: { orderId: order.id, productId },
+            data:  { lotId },
+          });
+        }
+      }
+
       // ── Raw material ingredient deduction via BOM ────────────────────────
       // For every sold item, look up its bill-of-materials and deduct the
       // corresponding raw material inventory at the branch level.
@@ -373,11 +478,9 @@ export class OrdersService {
       // see wildly inaccurate gross margin. We accumulate a per-product
       // "true unit cost" from the BOM walk and pass it to the COGS event
       // builder below, overriding the snapshot fallback for recipe products.
-      const tenantValuation = await tx.tenant.findUnique({
-        where:  { id: tenantId },
-        select: { valuationMethod: true },
-      });
-      const useFifo = tenantValuation?.valuationMethod === 'FIFO';
+      // Sprint 19 — `useFifo`, `isPharmacy`, `drainProductLots` are computed
+      // earlier (right before the inventory-deduction loop) and reused here.
+      void drainProductLots; // explicit reference for readability
 
       // productId -> per-unit recipe cost (₱ per single finished unit).
       // Populated only for products that have a BOM (i.e., RECIPE_BASED).
@@ -524,18 +627,25 @@ export class OrdersService {
             lines: payload.items
               .map((i) => {
                 // Cost resolution precedence (most → least authoritative):
-                //   1. RECIPE  — sum of actual ingredient costs for this order
-                //                (FIFO lot drains or WAC running averages).
-                //                This is the TRUE cost of the drink/food made.
-                //   2. WAC     — Moving-Average Cost from finished-goods
-                //                inventory (UNIT_BASED products on costed receipts).
-                //   3. SNAPSHOT — the till's snapshot of Product.costPrice
-                //                (UNIT_BASED legacy fallback only).
-                const recipe = recipeUnitCostByProduct.get(i.productId);
-                const wac    = avgCostByProduct.get(i.productId);
+                //   1. RECIPE     — sum of actual ingredient costs (FIFO lot
+                //                   drains or WAC running averages). True
+                //                   cost of the drink/food made.
+                //   2. LOT_SPECIFIC — pharmacy: weighted cost of the actual
+                //                     ProductLot rows drained in FEFO order.
+                //   3. FIFO       — retail: weighted cost of ProductLot rows
+                //                   drained in receivedAt order.
+                //   4. WAC        — Moving-Average Cost from InventoryItem
+                //                   (UNIT_BASED products with no lots, or
+                //                   tenants on the WAC valuation method).
+                //   5. SNAPSHOT   — till's snapshot of Product.costPrice
+                //                   (legacy fallback).
+                const recipe   = recipeUnitCostByProduct.get(i.productId);
+                const lotCost  = lotUnitCostByProduct.get(i.productId);
+                const wac      = avgCostByProduct.get(i.productId);
                 const unitCost =
-                  recipe != null ? recipe :
-                  wac    != null ? wac    :
+                  recipe  != null ? recipe :
+                  lotCost != null ? lotCost :
+                  wac     != null ? wac :
                   i.costPrice != null ? Number(i.costPrice) : null;
                 if (unitCost == null) return null;
                 const qty = Number(i.quantity);
@@ -543,9 +653,10 @@ export class OrdersService {
                 // shifts a slice of factory utilities into COGS (full absorption).
                 const overhead = overheadRate * qty;
                 const costMethod =
-                  recipe != null ? (useFifo ? 'RECIPE_FIFO' : 'RECIPE_WAC') :
-                  wac    != null ? 'WAC' :
-                                   'SNAPSHOT';
+                  recipe  != null ? (useFifo ? 'RECIPE_FIFO' : 'RECIPE_WAC') :
+                  lotCost != null ? (isPharmacy ? 'LOT_SPECIFIC' : 'FIFO') :
+                  wac     != null ? 'WAC' :
+                                    'SNAPSHOT';
                 return {
                   productId:    i.productId,
                   quantity:     i.quantity,

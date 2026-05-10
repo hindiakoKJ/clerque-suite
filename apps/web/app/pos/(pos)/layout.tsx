@@ -37,35 +37,36 @@ const POS_ACCENT_SOFT = 'hsl(217 91% 55% / 0.08)';
 //
 // Roles that can operate the register (open/close shifts):
 //   CASHIER, SALES_LEAD
-// Roles that are supervisors (view-only in POS, bypass ShiftGate):
-//   BUSINESS_OWNER, BRANCH_MANAGER, SUPER_ADMIN, FINANCE_LEAD, MDM, WAREHOUSE_STAFF,
-//   BOOKKEEPER, ACCOUNTANT, PAYROLL_MASTER, EXTERNAL_AUDITOR, GENERAL_EMPLOYEE
+// Sprint 19 — POS is restricted to three roles at the route layer:
+// BUSINESS_OWNER, BRANCH_MANAGER, CASHIER (+ SUPER_ADMIN for platform support).
+// Other tenant roles (PAYROLL_MASTER, BOOKKEEPER, MDM, FINANCE_LEAD, etc.)
+// live in Ledger / Sync / Console — they no longer reach /pos/*.
+//
+// Within those three, features cascade by hierarchy:
+//   OWNER   → everything (Dashboard, Terminal, Orders, Products, Inventory,
+//             Staff, Promotions, Vertical workflows, Settings)
+//   MANAGER → everything except destructive ops + staff salary edits
+//   CASHIER → till-floor only: Terminal, Pending Sync, own Orders, Help
 //
 // Nav items are ALWAYS shown to every POS user but grayed-out (with lock icon)
 // when the current role doesn't have access — so staff can see the full system
 // capability and understand what each role unlocks.
-// Owner is a legitimate till operator on Solo / small-tenant plans where
-// the owner IS the cashier. Backend already permits BUSINESS_OWNER on
-// shifts.controller and orders.controller — frontend now mirrors that.
-const TERMINAL_ROLES   = ['SALES_LEAD', 'CASHIER', 'BUSINESS_OWNER', 'SUPER_ADMIN'] as const;
-const DASHBOARD_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'FINANCE_LEAD'] as const;
-const ORDERS_ROLES     = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD', 'CASHIER', 'EXTERNAL_AUDITOR'] as const;
-const PRODUCTS_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
-const INVENTORY_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD'] as const;
-const STAFF_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'SALES_LEAD', 'PAYROLL_MASTER'] as const;
-const UOM_ROLES        = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'] as const;
-const PROMOTIONS_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM', 'BRANCH_MANAGER'] as const;
-// Pending Sync is operational — only relevant to roles that create offline orders
-const PENDING_SYNC_ROLES = ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER'] as const;
-// Laundry workflow — same realistic crew of a small laundromat as the API guard.
-const LAUNDRY_OPS_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
-                              'SALES_LEAD', 'CASHIER', 'GENERAL_EMPLOYEE', 'MDM'] as const;
-// Warehousing — multi-branch transfers + cycle counts. Same roles as inventory mgmt.
-const WAREHOUSE_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
-                              'WAREHOUSE_STAFF', 'MDM'] as const;
-// Projects (construction / job-cost) — Owner + Branch Manager primary.
-const PROJECT_ROLES      = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
-                              'MDM', 'WAREHOUSE_STAFF'] as const;
+const ALL_POS  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'CASHIER'] as const;
+const MGMT_POS = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER'] as const;
+
+const TERMINAL_ROLES   = ALL_POS;
+const PENDING_SYNC_ROLES = ALL_POS;
+const ORDERS_ROLES     = ALL_POS;        // cashier sees own till's orders
+const LAUNDRY_OPS_ROLES = ALL_POS;       // till-floor laundromat work
+
+const DASHBOARD_ROLES  = MGMT_POS;       // owner + manager (revenue gate is separate)
+const PRODUCTS_ROLES   = MGMT_POS;       // edit catalog
+const INVENTORY_ROLES  = MGMT_POS;
+const STAFF_ROLES      = MGMT_POS;
+const UOM_ROLES        = MGMT_POS;
+const PROMOTIONS_ROLES = MGMT_POS;
+const WAREHOUSE_ROLES  = MGMT_POS;       // multi-branch stock transfers
+const PROJECT_ROLES    = MGMT_POS;       // construction / job-cost
 // My Expenses moved to /payroll/my-expenses — it's a personal-reimbursement
 // concept (HR territory), not a POS sale-floor concept. POS will instead get
 // a dedicated Cash Paid-Out / Cash Drop feature for till petty-cash.

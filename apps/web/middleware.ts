@@ -131,6 +131,18 @@ export function middleware(req: NextRequest) {
   // Super admin (on tenant domain) bypasses tenant app checks too
   if (isSuper) return NextResponse.next();
 
+  // Sprint 19 — POS role gate. Per business requirement, only Owner /
+  // Manager / Cashier are till-floor roles. Other tenant roles
+  // (PAYROLL_MASTER, BOOKKEEPER, MDM, FINANCE_LEAD, AR/AP_ACCOUNTANT,
+  // WAREHOUSE_STAFF, ACCOUNTANT, EXTERNAL_AUDITOR, GENERAL_EMPLOYEE,
+  // SALES_LEAD) belong in Ledger / Sync / Console depending on their
+  // function, not the POS plane. Hard-block at the route layer here so
+  // a user with stale appAccess.POS rights can't reach the till.
+  const POS_ROLES = new Set(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER']);
+  if (pathname.startsWith('/pos') && !POS_ROLES.has(user.role)) {
+    return NextResponse.redirect(new URL('/select?reason=pos-restricted', req.url));
+  }
+
   // Tenant app access checks
   for (const rule of APP_RULES) {
     if (!pathname.startsWith(rule.prefix)) continue;

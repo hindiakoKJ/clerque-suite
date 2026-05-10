@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ShoppingCart, BookOpen, Users, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
 import type { AccessLevel } from '@repo/shared-types';
@@ -164,6 +165,20 @@ export default function SelectPage() {
   useEffect(() => {
     if (onlyApp) router.replace(onlyApp.resolvedRoute);
   }, [onlyApp, router]);
+
+  // Sprint 19 — toast when redirected from a restricted app (e.g. middleware
+  // hard-blocked POS for a non-till role).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const reason = new URLSearchParams(window.location.search).get('reason');
+    if (reason === 'pos-restricted') {
+      toast.error('POS is restricted to Owner / Manager / Cashier. Use Ledger or Sync if those apply to your role.');
+      // Clean the URL
+      const url = new URL(window.location.href);
+      url.searchParams.delete('reason');
+      window.history.replaceState({}, '', url.pathname);
+    }
+  }, []);
 
   if (!user) return null;
 

@@ -108,15 +108,15 @@ function SalesDashboard() {
     businessType: floorLayout?.tenant?.businessType ?? null,
   });
 
-  // Sprint 19 — Owner-only revenue gate. Cashiers / cashier-tier roles
-  // see operational counts (orders, voids) but not the money totals
-  // (revenue, gross profit, COGS, margin). Owner / management /
-  // accounting roles see everything.
+  // Sprint 19 — POS is restricted to Owner / Manager / Cashier at the
+  // route layer (see middleware.ts). Within those three:
+  //   - Owner + Manager see revenue (Profitability, Top Products, etc.)
+  //   - Cashier sees only operational counts (Orders Today, Voids)
+  // Cashiers can't actually navigate to /pos/dashboard from the sidebar
+  // (DASHBOARD_ROLES excludes them), but if they URL-poke their way
+  // here, the revenue sections still hide.
   const REVENUE_VIEWER_ROLES = new Set([
     'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
-    'FINANCE_LEAD', 'ACCOUNTANT', 'BOOKKEEPER', 'MDM',
-    'AR_ACCOUNTANT', 'AP_ACCOUNTANT', 'PAYROLL_MASTER',
-    'EXTERNAL_AUDITOR',
   ]);
   const canSeeRevenue = user ? REVENUE_VIEWER_ROLES.has(user.role) : false;
 

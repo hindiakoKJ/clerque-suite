@@ -7,7 +7,7 @@ import {
   ChevronDown, Shield, FileText, AlertTriangle, Info,
   KeyRound, Eye, EyeOff, ShieldCheck,
   LayoutGrid, CreditCard, ShieldAlert, ChevronRight, Sparkles,
-  Stamp, Tv,
+  Stamp, Tv, FileSpreadsheet,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -439,6 +439,12 @@ export default function SettingsPage() {
               icon={Tv}
               title="Kiosk Terminals"
               desc="Shared on-site clock-in tablet (PIN-based)"
+            />
+            <SettingsCard
+              href="/settings/imports"
+              icon={FileSpreadsheet}
+              title="Import Templates"
+              desc="Download Excel templates for bulk product / inventory / customer / vendor imports"
             />
           </div>
         </section>

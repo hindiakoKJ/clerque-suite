@@ -443,23 +443,25 @@ export class ImportService {
     return result;
   }
 
+  /**
+   * Sprint 19 — Vertical-aware product template. Pharmacy tenants get the
+   * 15-column template with the medicine-specific fields + lot/expiry seed.
+   * Other verticals get the lean 7-column template with sample rows tailored
+   * to the vertical (coffee-shop / restaurant / laundry / retail / etc.).
+   * The import parser still accepts both shapes, so a 7-column upload works
+   * regardless of which template was downloaded.
+   */
   async productsTemplate(tenantId?: string): Promise<Buffer> {
-    // Sprint 19 — Vertical-aware template. Pharmacy tenants get the
-    // pharmacy-specific columns + sample rows; everyone else gets the
-    // lean F&B / retail template they had before. The import parser
-    // accepts either shape — the new pharmacy columns are appended at
-    // position 8+ so a 7-column upload from a non-pharmacy tenant still
-    // works regardless of which template was downloaded.
-    let isPharmacy = false;
+    let businessType: string = 'RETAIL';
     if (tenantId) {
       const tenant = await this.prisma.tenant.findUnique({
         where:  { id: tenantId },
         select: { businessType: true },
       });
-      isPharmacy = tenant?.businessType === 'PHARMACY';
+      businessType = tenant?.businessType ?? 'RETAIL';
     }
 
-    if (isPharmacy) {
+    if (businessType === 'PHARMACY') {
       return this.makeTemplate(
         'Products',
         [
@@ -482,7 +484,12 @@ export class ImportService {
         [
           ['Paracetamol 500mg', 'Pain & Fever',   '2.50',  '1.20', 'Y', '', 'Tablet', 'Paracetamol',  'Biogesic', 'Tablet',  '500mg',  'OTC',     'PAR-2025-114', '2027-12-31', '500'],
           ['Amoxicillin 500mg', 'Antibiotics',    '12.00', '4.50', 'Y', '', 'Capsule','Amoxicillin',  'Amoxil',   'Capsule', '500mg',  'RX_ONLY', 'AMX-2025-042', '2026-09-30', '200'],
+          ['Loratadine 10mg',   'Antihistamines', '8.00',  '3.50', 'Y', '', 'Tablet', 'Loratadine',   'Claritin', 'Tablet',  '10mg',   'RX_ONLY', 'LOR-2025-007', '2027-08-15', '300'],
           ['Diazepam 5mg',      'Anxiolytics',    '8.00',  '3.20', 'Y', '', 'Tablet', 'Diazepam',     'Valium',   'Tablet',  '5mg',    'DDB_S4',  'DIA-2025-018', '2027-03-15', '100'],
+          ['Insulin (Humulin)', 'Vaccines & Bio', '850',   '420',  'Y', '', 'Cold-chain insulin',     'Insulin',  'Humulin','Vial',   '100IU/ml','VACCINE','INS-2025-022', '2026-11-30', '20'],
+          ['BP Monitor',        'Devices',        '2500',  '1450', 'Y', '', '',       '',             '',         '',         '',       'DEVICE',  '',             '',             '5'],
+          ['Vitamin C 500mg',   'Supplements',    '6.00',  '2.40', 'Y', '', 'Tablet', '',             'Cecon',    'Tablet',   '500mg',  'SUPPLEMENT','',           '',             '600'],
+          ['Sunscreen SPF 50',  'Personal Care',  '380',   '180',  'Y', '', '',       '',             'Belo',     '',         '',       'COSMETIC','',             '',             '40'],
         ],
         {
           title: 'Clerque — Pharmacy Product Master Import Template',
@@ -521,45 +528,141 @@ export class ImportService {
       );
     }
 
-    // Non-pharmacy template — lean 7 columns, no medicine fields.
+    // Non-pharmacy template — lean 7 columns. Sample rows + title tailored
+    // to the vertical so a coffee-shop owner sees beverages and a laundry
+    // owner sees wash-and-fold services.
+    const HEADERS = [
+      'Name*',
+      'Category',
+      'Price*',
+      'Cost Price*',
+      'VAT (Y/N)',
+      'Barcode',
+      'Description',
+    ];
+    const HINTS = [
+      'Required. Unique within tenant.',
+      'Optional. Auto-creates if new.',
+      'Required. Selling price (₱).',
+      'REQUIRED. Unit cost (₱) for COGS.',
+      'Y or N. Default N.',
+      'Optional. EAN-13 / UPC etc.',
+      'Optional. Free text.',
+    ];
+
+    let title = 'Clerque — Product Master Import Template';
+    let sampleRows: string[][];
+    let helperLine: string | null = null;
+
+    switch (businessType) {
+      case 'COFFEE_SHOP':
+        title = 'Clerque — Coffee Shop Product Master Import Template';
+        helperLine = 'Tip: For drinks with milk + size variants, set up modifiers from POS → Products after import.';
+        sampleRows = [
+          ['Espresso Solo',    'Beverages',   '85',  '22',  'Y', '',              'Single shot espresso'],
+          ['Iced Latte 16oz',  'Beverages',   '150', '38',  'Y', '',              'Espresso + cold milk + ice'],
+          ['Cappuccino 12oz',  'Beverages',   '130', '32',  'Y', '',              'Espresso + steamed milk + foam'],
+          ['Matcha Latte 16oz','Beverages',   '170', '45',  'Y', '',              'Ceremonial matcha + steamed milk'],
+          ['Croissant',        'Bakery',      '85',  '28',  'Y', '',              'Butter croissant, baked daily'],
+          ['Banana Bread',     'Bakery',      '95',  '32',  'Y', '',              'Slice of banana loaf'],
+          ['Bottled Water',    'Beverages',   '40',  '12',  'N', '4806507000123', '500ml'],
+          ['Espresso Beans',   'Retail',      '550', '320', 'Y', '',              '250g whole beans, single origin'],
+        ];
+        break;
+      case 'RESTAURANT':
+      case 'BAKERY':
+      case 'FOOD_STALL':
+      case 'BAR_LOUNGE':
+      case 'CATERING':
+        title = 'Clerque — Restaurant Product Master Import Template';
+        helperLine = 'Tip: For recipe-based dishes (track ingredient COGS), set up BOM from POS → Products after import.';
+        sampleRows = [
+          ['Garlic Rice',         'Mains',     '60',  '12',  'Y', '', 'Steamed rice with toasted garlic'],
+          ['Tapsilog',            'Mains',     '180', '85',  'Y', '', 'Tapa + sinangag + itlog'],
+          ['Adobong Manok',       'Mains',     '220', '110', 'Y', '', 'Chicken adobo with rice'],
+          ['Sinigang na Baboy',   'Soups',     '280', '140', 'Y', '', 'Pork in sour tamarind broth'],
+          ['Ice Cold Coke',       'Drinks',    '60',  '22',  'Y', '4801968501068', 'Coca-Cola in glass bottle'],
+          ['San Mig Light',       'Drinks',    '110', '55',  'Y', '4806504020010', 'San Miguel Light beer 330ml'],
+          ['Halo-Halo',           'Desserts',  '180', '70',  'Y', '', 'Mixed shaved ice dessert'],
+        ];
+        break;
+      case 'LAUNDRY':
+        title = 'Clerque — Laundry Service Master Import Template';
+        helperLine = 'Tip: Wash / dry / iron / fold are services priced per kilo. Detergent + softener are retail add-ons.';
+        sampleRows = [
+          ['Wash & Dry per kilo',  'Services',     '60',   '18',   'Y', '', 'Self-service wash + dry, 8kg minimum'],
+          ['Wash + Dry + Fold',    'Services',     '85',   '25',   'Y', '', 'Full-service per kilo'],
+          ['Press / Iron per pc',  'Services',     '15',   '4',    'Y', '', 'Per garment, hand-pressed'],
+          ['Dry Clean Suit',       'Services',     '350',  '180',  'Y', '', '2-piece suit, dry clean only'],
+          ['Detergent Sachet',     'Retail',       '15',   '8',    'Y', '4806504050103', 'Tide single-use sachet'],
+          ['Fabric Softener 1L',   'Retail',       '180',  '95',   'Y', '4806504051040', 'Downy 1L bottle'],
+          ['Hanger 5-pack',        'Retail',       '60',   '30',   'Y', '', 'Plastic hangers, set of 5'],
+        ];
+        break;
+      case 'MANUFACTURING':
+        title = 'Clerque — Manufacturing Product Master Import Template';
+        helperLine = 'Tip: For BOM-based products (track raw material COGS), set up the recipe from POS → Products after import.';
+        sampleRows = [
+          ['Wooden Chair',        'Furniture',     '3500', '1850', 'Y', '', 'Ash hardwood, 4 legs, no armrest'],
+          ['Office Desk',         'Furniture',     '5500', '2400', 'Y', '', '120x60cm pine top, steel legs'],
+          ['Bookshelf 5-tier',    'Furniture',     '4200', '1950', 'Y', '', 'Plywood, 180cm tall'],
+          ['Custom Cabinet',      'Custom',       '12000', '4500', 'Y', '', 'Made-to-order — see job order'],
+        ];
+        break;
+      case 'TRUCKING':
+        title = 'Clerque — Trucking / Logistics Service Import Template';
+        helperLine = 'Tip: Freight rates vary by distance + load. Set per-route pricing in Settings → Trucking after import.';
+        sampleRows = [
+          ['Manila → Cebu',       'Long Haul',     '12000', '8500', 'Y', '', '6-wheeler, 5-ton load, door-to-door'],
+          ['Manila → Davao',      'Long Haul',     '18000', '12500', 'Y', '', '10-wheeler, 10-ton load'],
+          ['Metro Manila Local',  'Local Delivery','2500',  '900',   'Y', '', 'Same-city, < 50km'],
+          ['Diesel surcharge',    'Surcharge',     '500',   '0',     'Y', '', 'Per trip, indexed to fuel price'],
+        ];
+        break;
+      case 'CONSTRUCTION':
+        title = 'Clerque — Construction Service Import Template';
+        helperLine = 'Tip: Track per-project labor + materials separately. Use Job Orders for project-based billing.';
+        sampleRows = [
+          ['Bag of Cement (40kg)',  'Materials', '320',  '180', 'Y', '', 'Holcim Excel'],
+          ['Rebar #4 (12mm)',       'Materials', '450',  '280', 'Y', '', '7.5m length'],
+          ['G.I. Sheet 8ft',        'Materials', '1200', '750', 'Y', '', 'Galvanized iron roofing'],
+          ['Mason day rate',        'Labor',     '1200', '0',   'Y', '', 'Per worker per 8-hour day'],
+          ['Helper day rate',       'Labor',     '700',  '0',   'Y', '', 'Per worker per 8-hour day'],
+        ];
+        break;
+      case 'SERVICE':
+      case 'RETAIL':
+      default:
+        title = 'Clerque — Product Master Import Template';
+        sampleRows = [
+          ['T-Shirt — Plain',      'Apparel',     '350',  '120', 'Y', '4806504070101', 'Cotton, white, S/M/L'],
+          ['Jeans — Blue Denim',   'Apparel',     '950',  '420', 'Y', '4806504070118', 'Slim-cut, all sizes'],
+          ['Sneakers',             'Footwear',    '1800', '850', 'Y', '4806504070125', 'Canvas, lace-up'],
+          ['Backpack',             'Accessories', '850',  '380', 'Y', '4806504070132', '20L school/office bag'],
+          ['Notebook',             'Stationery',  '85',   '32',  'Y', '4806504070149', '120-page A5 ruled'],
+          ['Ballpen',              'Stationery',  '15',   '5',   'Y', '4806504070156', 'Pilot G2 black, fine tip'],
+        ];
+        break;
+    }
+
     return this.makeTemplate(
       'Products',
-      [
-        'Name*',
-        'Category',
-        'Price*',
-        'Cost Price*',
-        'VAT (Y/N)',
-        'Barcode',
-        'Description',
-      ],
-      [
-        ['Garlic Rice',     'Food',    '35',  '12',  'Y', '',              'Steamed garlic fried rice'],
-        ['Bottled Water',   'Drinks',  '20',  '8',   'N', '4806507000123', '500ml'],
-        ['Iced Latte 16oz', 'Drinks',  '110', '35',  'Y', '',              'Espresso + cold milk + ice'],
-        ['Plain Donut',     'Bakery',  '25',  '9',   'N', '',              'Sugar-glazed cake donut'],
-      ],
+      HEADERS,
+      sampleRows,
       {
-        title: 'Clerque — Product Master Import Template',
+        title,
         instructions: [
           'How to use:',
           '  1. Fill the rows below the headers. Remove the sample rows when you\'re ready.',
           '  2. Columns marked with * are required. Existing products are matched by Name (or Barcode if provided) and updated.',
-          '  3. Cost Price is REQUIRED. It drives COGS posting on every sale. Enter 0 for complimentary items.',
+          '  3. Cost Price is REQUIRED. It drives COGS posting on every sale. Enter 0 for services or complimentary items.',
           '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
           '  5. Category — if it doesn\'t exist yet, Clerque creates it. Use consistent spelling across rows.',
           '  6. Save as .xlsx (or .csv). Upload via POS → Products → Import.',
+          ...(helperLine ? [helperLine] : []),
           'Tip: After import, head to Inventory and import opening stock for each branch using the Inventory template.',
         ],
-        columnHints: [
-          'Required. Unique within tenant.',
-          'Optional. Auto-creates if new.',
-          'Required. Selling price (₱).',
-          'REQUIRED. Unit cost (₱) for COGS.',
-          'Y or N. Default N.',
-          'Optional. EAN-13 / UPC etc.',
-          'Optional. Free text.',
-        ],
+        columnHints: HINTS,
       },
     );
   }

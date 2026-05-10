@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
 
 interface Vendor   { id: string; name: string }
 interface Branch   { id: string; name: string }
@@ -45,11 +46,28 @@ export default function DeliveryReceiptsPage() {
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
 
+  // Sprint 19 — gate the page on PHARMACY tenants. Non-pharmacy users
+  // who URL-hack their way in are bounced to the dashboard. The backend
+  // endpoints stay vertical-agnostic (any tenant can technically post
+  // a delivery if they have vendors), but the UI is pharmacy-only for
+  // now to keep other verticals' POS clean.
+  const { layout } = useFloorLayout();
+  const businessType = layout?.tenant?.businessType ?? null;
+  const isPharmacy = businessType === 'PHARMACY';
+  useEffect(() => {
+    if (user && layout && !isPharmacy) router.replace('/pos/dashboard');
+  }, [user, layout, isPharmacy, router]);
+
   const { data: receipts = [], isLoading } = useQuery<Receipt[]>({
     queryKey: ['delivery-receipts'],
     queryFn:  () => api.get('/pharmacy/deliveries').then((r) => r.data),
-    enabled:  !!user,
+    enabled:  !!user && isPharmacy,
   });
+
+  // While layout is loading, render a thin skeleton instead of nothing —
+  // avoids a flash if the user is legitimately on a pharmacy tenant.
+  if (!layout) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
+  if (!isPharmacy) return null;
 
   const [showCreate, setShowCreate] = useState(false);
   const [openReceipt, setOpenReceipt] = useState<Receipt | null>(null);

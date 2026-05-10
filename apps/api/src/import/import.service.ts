@@ -443,7 +443,85 @@ export class ImportService {
     return result;
   }
 
-  async productsTemplate(): Promise<Buffer> {
+  async productsTemplate(tenantId?: string): Promise<Buffer> {
+    // Sprint 19 — Vertical-aware template. Pharmacy tenants get the
+    // pharmacy-specific columns + sample rows; everyone else gets the
+    // lean F&B / retail template they had before. The import parser
+    // accepts either shape — the new pharmacy columns are appended at
+    // position 8+ so a 7-column upload from a non-pharmacy tenant still
+    // works regardless of which template was downloaded.
+    let isPharmacy = false;
+    if (tenantId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { businessType: true },
+      });
+      isPharmacy = tenant?.businessType === 'PHARMACY';
+    }
+
+    if (isPharmacy) {
+      return this.makeTemplate(
+        'Products',
+        [
+          'Name*',
+          'Category',
+          'Price*',
+          'Cost Price*',
+          'VAT (Y/N)',
+          'Barcode',
+          'Description',
+          'Generic Name',
+          'Brand Name',
+          'Dosage Form',
+          'Strength',
+          'Drug Class',
+          'Initial Lot #',
+          'Initial Lot Expiry',
+          'Initial Stock',
+        ],
+        [
+          ['Paracetamol 500mg', 'Pain & Fever',   '2.50',  '1.20', 'Y', '', 'Tablet', 'Paracetamol',  'Biogesic', 'Tablet',  '500mg',  'OTC',     'PAR-2025-114', '2027-12-31', '500'],
+          ['Amoxicillin 500mg', 'Antibiotics',    '12.00', '4.50', 'Y', '', 'Capsule','Amoxicillin',  'Amoxil',   'Capsule', '500mg',  'RX_ONLY', 'AMX-2025-042', '2026-09-30', '200'],
+          ['Diazepam 5mg',      'Anxiolytics',    '8.00',  '3.20', 'Y', '', 'Tablet', 'Diazepam',     'Valium',   'Tablet',  '5mg',    'DDB_S4',  'DIA-2025-018', '2027-03-15', '100'],
+        ],
+        {
+          title: 'Clerque — Pharmacy Product Master Import Template',
+          instructions: [
+            'How to use:',
+            '  1. Fill the rows below the headers. Remove the sample rows when you\'re ready.',
+            '  2. Columns marked with * are required. Existing products are matched by Name (or Barcode if provided) and updated.',
+            '  3. Cost Price is REQUIRED. It drives COGS posting on every sale. Enter 0 for complimentary items.',
+            '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
+            '  5. Category — if it doesn\'t exist yet, Clerque creates it. Use consistent spelling across rows.',
+            '  6. Save as .xlsx (or .csv). Upload via POS → Products → Import.',
+            '',
+            'Pharmacy columns:',
+            '  - Drug Class: OTC, OTC_BTC, RX_ONLY, DDB_S2, DDB_S3, DDB_S4, DDB_S5, VACCINE, DEVICE, SUPPLEMENT, COSMETIC, OTHER. Defaults OTC.',
+            '  - Drug Class drives the till workflow: RX_ONLY+ requires pharmacist PIN at sale; DDB_S2 also requires Yellow Rx serial.',
+            '  - Initial Lot # + Expiry: optional shorthand to seed FDA lot tracking on import. If set, Initial Stock is dispensed against this lot. For full lot management, use /pos/pharmacy/lots after import.',
+          ],
+          columnHints: [
+            'Required. Unique within tenant.',
+            'Optional. Auto-creates if new.',
+            'Required. Selling price (₱).',
+            'REQUIRED. Unit cost (₱) for COGS.',
+            'Y or N. Default N.',
+            'Optional. EAN-13 / UPC etc.',
+            'Optional. Free text.',
+            'Optional. RA 6675 generic name.',
+            'Optional. Brand name on label.',
+            'Optional. Tablet/Capsule/Syrup.',
+            'Optional. e.g. 500mg, 5mg/ml.',
+            'Optional. Defaults OTC.',
+            'Optional. Lot/batch number.',
+            'Required if Initial Lot # set (YYYY-MM-DD).',
+            'Optional. Initial qty at default branch.',
+          ],
+        },
+      );
+    }
+
+    // Non-pharmacy template — lean 7 columns, no medicine fields.
     return this.makeTemplate(
       'Products',
       [
@@ -454,24 +532,12 @@ export class ImportService {
         'VAT (Y/N)',
         'Barcode',
         'Description',
-        // Sprint 19 — pharmacy columns. Optional for non-pharmacy tenants.
-        'Generic Name',
-        'Brand Name',
-        'Dosage Form',
-        'Strength',
-        'Drug Class',
-        'Initial Lot #',
-        'Initial Lot Expiry',
-        'Initial Stock',
       ],
       [
-        // Standard rows (pharmacy columns blank — non-drug import)
-        ['Garlic Rice',     'Food',    '35',  '12',  'Y', '',           'Steamed garlic fried rice', '', '', '', '', '', '', '', ''],
-        ['Bottled Water',   'Drinks',  '20',  '8',   'N', '4806507000123', '500ml',                  '', '', '', '', '', '', '', ''],
-        // Pharmacy example rows showcasing the optional columns
-        ['Paracetamol 500mg', 'Pain & Fever',   '2.50',  '1.20', 'Y', '', 'Tablet', 'Paracetamol',  'Biogesic', 'Tablet',  '500mg',  'OTC',     'PAR-2025-114', '2027-12-31', '500'],
-        ['Amoxicillin 500mg', 'Antibiotics',    '12.00', '4.50', 'Y', '', 'Capsule','Amoxicillin',  'Amoxil',   'Capsule', '500mg',  'RX_ONLY', 'AMX-2025-042', '2026-09-30', '200'],
-        ['Diazepam 5mg',      'Anxiolytics',    '8.00',  '3.20', 'Y', '', 'Tablet', 'Diazepam',     'Valium',   'Tablet',  '5mg',    'DDB_S4',  'DIA-2025-018', '2027-03-15', '100'],
+        ['Garlic Rice',     'Food',    '35',  '12',  'Y', '',              'Steamed garlic fried rice'],
+        ['Bottled Water',   'Drinks',  '20',  '8',   'N', '4806507000123', '500ml'],
+        ['Iced Latte 16oz', 'Drinks',  '110', '35',  'Y', '',              'Espresso + cold milk + ice'],
+        ['Plain Donut',     'Bakery',  '25',  '9',   'N', '',              'Sugar-glazed cake donut'],
       ],
       {
         title: 'Clerque — Product Master Import Template',
@@ -483,12 +549,7 @@ export class ImportService {
           '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
           '  5. Category — if it doesn\'t exist yet, Clerque creates it. Use consistent spelling across rows.',
           '  6. Save as .xlsx (or .csv). Upload via POS → Products → Import.',
-          '',
-          'Pharmacy columns (Generic Name through Initial Stock) are OPTIONAL:',
-          '  - Drug Class: OTC, OTC_BTC, RX_ONLY, DDB_S2, DDB_S3, DDB_S4, DDB_S5, VACCINE, DEVICE, SUPPLEMENT, COSMETIC, OTHER. Defaults OTC.',
-          '  - Drug Class drives the till workflow: RX_ONLY+ requires pharmacist PIN at sale; DDB_S2 also requires Yellow Rx serial.',
-          '  - Initial Lot # + Expiry: optional shorthand to seed FDA lot tracking on import. If set, Initial Stock is dispensed against this lot. For full lot management, use /pos/pharmacy/lots after import.',
-          'Tip: After import, head to Inventory and import opening stock for each branch using the Inventory template (or use Initial Stock here to seed the tenant\'s first branch).',
+          'Tip: After import, head to Inventory and import opening stock for each branch using the Inventory template.',
         ],
         columnHints: [
           'Required. Unique within tenant.',
@@ -498,14 +559,6 @@ export class ImportService {
           'Y or N. Default N.',
           'Optional. EAN-13 / UPC etc.',
           'Optional. Free text.',
-          'Optional. RA 6675 generic name.',
-          'Optional. Brand name on label.',
-          'Optional. Tablet/Capsule/Syrup.',
-          'Optional. e.g. 500mg, 5mg/ml.',
-          'Optional. Defaults OTC.',
-          'Optional. Lot/batch number.',
-          'Required if Initial Lot # set (YYYY-MM-DD).',
-          'Optional. Initial qty at default branch.',
         ],
       },
     );
@@ -1027,7 +1080,7 @@ export class ImportService {
    *   Sheet 2: "Inventory" — same as the standalone Inventory template
    * Plus a leading "Read Me" sheet explaining the two-step flow.
    */
-  async setupPackTemplate(): Promise<Buffer> {
+  async setupPackTemplate(tenantId?: string): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Clerque';
 
@@ -1068,7 +1121,7 @@ export class ImportService {
     }
 
     // ── Products sheet ──
-    const productsBuf = await this.productsTemplate();
+    const productsBuf = await this.productsTemplate(tenantId);
     const productsWb = new ExcelJS.Workbook();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await productsWb.xlsx.load(productsBuf as any);

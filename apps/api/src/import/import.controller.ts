@@ -37,8 +37,11 @@ export class ImportController {
   }
 
   @Get('template/products')
-  async productsTemplate(@Res() res: Response) {
-    const buf = await this.importService.productsTemplate();
+  async productsTemplate(@Req() req: AuthRequest, @Res() res: Response) {
+    // Sprint 19 — Vertical-aware template: pharmacy tenants get pharmacy
+    // sample rows + pharmacy columns. Other verticals get the lean F&B
+    // template without the medicine-specific columns.
+    const buf = await this.importService.productsTemplate(req.user.tenantId ?? undefined);
     res.set({
       'Content-Type':
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -147,8 +150,8 @@ export class ImportController {
   }
 
   @Get('template/setup-pack')
-  async setupPackTemplate(@Res() res: Response) {
-    const buf = await this.importService.setupPackTemplate();
+  async setupPackTemplate(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.setupPackTemplate(req.user.tenantId ?? undefined);
     res.set({
       'Content-Type':
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

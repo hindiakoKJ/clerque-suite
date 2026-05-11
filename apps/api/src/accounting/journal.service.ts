@@ -314,6 +314,30 @@ export class JournalService {
     if (!event) throw new NotFoundException('Accounting event not found');
     if (event.status === 'SYNCED') return { skipped: true };
 
+    // Idempotency reconciliation: an event can land here as PENDING or FAILED
+    // even though its JournalEntry was already written — possible causes:
+    //   (a) an older code path created the JE outside the status-flip
+    //       transaction and then crashed before SYNCING the event,
+    //   (b) someone re-queued / hand-edited the event row,
+    //   (c) the outer `catch (err)` flipped the event to FAILED on a non-DB
+    //       error that happened after the inner $transaction had already
+    //       committed the JE.
+    // In every case the JournalEntry uniquely-keyed on accountingEventId is
+    // already present, and naively re-running this method would hit
+    // P2002 (unique constraint on accountingEventId) forever. Detect it and
+    // self-heal by flipping the event to SYNCED without writing a duplicate.
+    const existingJe = await this.prisma.journalEntry.findFirst({
+      where:  { tenantId, accountingEventId: eventId },
+      select: { id: true, entryNumber: true },
+    });
+    if (existingJe) {
+      await this.prisma.accountingEvent.update({
+        where: { id: eventId },
+        data:  { status: 'SYNCED', syncedAt: new Date(), lastError: null },
+      });
+      return { skipped: true, journalEntry: existingJe };
+    }
+
     await this.accounts.seedDefaultAccounts(tenantId);
 
     const getAccount = async (code: string) => {
@@ -877,6 +901,21 @@ export class JournalService {
       return { journalEntry: je };
 
     } catch (err) {
+      // Belt-and-suspenders: re-check whether the JE actually committed
+      // before marking FAILED. The inner $transaction is atomic, but a
+      // network blip / serialization issue between commit and the response
+      // could otherwise wedge a successfully-posted event back to FAILED.
+      const committed = await this.prisma.journalEntry.findFirst({
+        where:  { tenantId, accountingEventId: eventId },
+        select: { id: true },
+      });
+      if (committed) {
+        await this.prisma.accountingEvent.update({
+          where: { id: eventId },
+          data:  { status: 'SYNCED', syncedAt: new Date(), lastError: null },
+        });
+        return { skipped: true, journalEntry: committed };
+      }
       await this.prisma.accountingEvent.update({
         where: { id: eventId },
         data: {

@@ -35,8 +35,10 @@ function makePrismaMock(event: any) {
       update:    accountingEventUpdate,
     },
     journalEntry: {
-      create: journalEntryCreate,
-      count:  jest.fn().mockResolvedValue(0),
+      create:    journalEntryCreate,
+      count:     jest.fn().mockResolvedValue(0),
+      // Idempotency reconciliation in processEvent calls findFirst first.
+      findFirst: jest.fn().mockResolvedValue(null),
     },
     // sequence helper
     $queryRaw:    jest.fn().mockResolvedValue([{ next_seq: BigInt(1) }]),

@@ -143,8 +143,12 @@ async function runProcessEvent(
       update:    jest.fn().mockResolvedValue({}),
     },
     journalEntry: {
-      count:  jest.fn().mockResolvedValue(0),
-      create: journalEntryCreate,
+      count:     jest.fn().mockResolvedValue(0),
+      create:    journalEntryCreate,
+      // Idempotency guard in processEvent: returns null on first attempt so
+      // the create path runs; tests that need to simulate a pre-existing
+      // JE should override this before calling processEvent.
+      findFirst: jest.fn().mockResolvedValue(null),
     },
     tenant: {
       findUnique: jest.fn().mockResolvedValue({ taxStatus: tenantTaxStatus }),

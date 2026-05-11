@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt, User as UserIcon, Plane, ClipboardList } from 'lucide-react';
+import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt, User as UserIcon, Plane, ClipboardList, Gift } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
@@ -144,8 +144,9 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
           // Payroll & Finance
           makePayNavItem('/payroll/runs',          'Pay Runs',       DollarSign,      PAY_RUNS_ROLES,      role, 'Payroll & Finance'),
           makePayNavItem('/payroll/payslips',      'Payslips',       FileText,        PAYSLIPS_ROLES,      role),
-          makePayNavItem('/payroll/contributions', 'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
-          makePayNavItem('/payroll/reports',       'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
+          makePayNavItem('/payroll/contributions',     'Contributions',  HeartHandshake,  PAY_RUNS_ROLES,      role),
+          makePayNavItem('/payroll/thirteenth-month',  '13th-Month',     Gift,            PAY_RUNS_ROLES,      role),
+          makePayNavItem('/payroll/reports',           'Reports',        Clock,           PAY_DASHBOARD_ROLES, role),
         ]
       : [
           // Overview

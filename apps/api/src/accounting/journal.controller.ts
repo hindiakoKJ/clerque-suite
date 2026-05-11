@@ -56,6 +56,21 @@ export class JournalController {
     return this.svc.create(user.tenantId!, dto, user.sub);
   }
 
+  /**
+   * Year-end close — owner-only. Builds and posts the closing JE that
+   * zeroes every REVENUE / EXPENSE account into Retained Earnings.
+   */
+  @Post('close-year')
+  @HttpCode(HttpStatus.OK)
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  closeYear(@CurrentUser() user: JwtPayload, @Query('year') yearQ?: string) {
+    const year = yearQ ? Number(yearQ) : new Date().getFullYear() - 1;
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      throw new BadRequestException(`Invalid year: ${yearQ}`);
+    }
+    return this.svc.closeYear(user.tenantId!, year, user.sub);
+  }
+
   /** Approve & post a DRAFT entry */
   @Patch(':id/post')
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT')

@@ -293,6 +293,18 @@ export function AppShell({
           >
             {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           </button>
+          {/* Sprint 19 — Build version indicator. When a tenant reports a
+              bug, the support engineer can ask "what does the bottom of
+              your sidebar say?" to know exactly which commit they're on.
+              The SHA + build date are baked at deploy time via
+              NEXT_PUBLIC_BUILD_SHA + NEXT_PUBLIC_BUILD_DATE; Vercel
+              auto-populates these from VERCEL_GIT_COMMIT_SHA. */}
+          {!collapsed && (
+            <div className="text-[10px] text-muted-foreground/60 text-center font-mono leading-tight pt-1">
+              <div title="Build commit">{(process.env.NEXT_PUBLIC_BUILD_SHA ?? 'dev').slice(0, 7)}</div>
+              <div title="Build date">{process.env.NEXT_PUBLIC_BUILD_DATE ?? 'local'}</div>
+            </div>
+          )}
         </div>
       </aside>
 

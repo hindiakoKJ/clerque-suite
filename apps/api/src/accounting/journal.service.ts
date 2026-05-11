@@ -979,4 +979,130 @@ export class JournalService {
     if (!entry) throw new NotFoundException('Journal entry not found');
     return entry;
   }
+
+  // ── Year-end close ────────────────────────────────────────────────────────
+  /**
+   * Post the year-end closing entry for `year`. Zeroes out every REVENUE and
+   * EXPENSE account by booking the opposite side, with net income (or loss)
+   * flowing to Retained Earnings (account code 3030 by default).
+   *
+   *   For each REVENUE account with balance R (credit-normal):
+   *     DR  Revenue account          R
+   *   For each EXPENSE account with balance E (debit-normal):
+   *     CR  Expense account          E
+   *   Plug Retained Earnings:
+   *     CR  Retained Earnings      (R - E)    if net income
+   *     DR  Retained Earnings      (E - R)    if net loss
+   *
+   * Idempotency: rejects if a CLOSING entry already exists for the same year.
+   * Period guard: the closing date (Dec 31, 23:59:59) must be in an open
+   * accounting period — the close itself remains POSTED in that period.
+   */
+  async closeYear(tenantId: string, year: number, createdBy: string) {
+    const yEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59));
+    const reference = `YEAR_CLOSE_${year}`;
+
+    // Idempotency check
+    const existing = await this.prisma.journalEntry.findFirst({
+      where:  { tenantId, reference, status: { in: ['POSTED', 'PENDING_APPROVAL'] } },
+      select: { id: true, entryNumber: true },
+    });
+    if (existing) {
+      throw new BadRequestException(
+        `Year ${year} is already closed (entry ${existing.entryNumber}). Reverse it first if you need to re-close.`,
+      );
+    }
+
+    // Pull every REVENUE/EXPENSE account with its YTD balance
+    const yStart = new Date(Date.UTC(year, 0, 1));
+    const yEndIncl = new Date(Date.UTC(year, 11, 31, 23, 59, 59));
+    const dateRange = { gte: yStart, lte: yEndIncl };
+    const plAccounts = await this.prisma.account.findMany({
+      where: { tenantId, isActive: true, type: { in: ['REVENUE', 'EXPENSE'] } },
+      include: {
+        journalLines: {
+          where: {
+            journalEntry: {
+              tenantId, status: 'POSTED',
+              OR: [
+                { postingDate: dateRange },
+                { postingDate: null, date: dateRange },
+              ],
+            },
+          },
+          select: { debit: true, credit: true },
+        },
+      },
+    });
+
+    let totalRevenue = 0;
+    let totalExpense = 0;
+    const lines: LineInput[] = [];
+    for (const acct of plAccounts) {
+      const debit  = acct.journalLines.reduce((s, l) => s + Number(l.debit),  0);
+      const credit = acct.journalLines.reduce((s, l) => s + Number(l.credit), 0);
+      const bal    = acct.normalBalance === 'DEBIT' ? debit - credit : credit - debit;
+      if (Math.abs(bal) < 0.005) continue; // skip zero-balance accounts
+      if (acct.type === 'REVENUE') {
+        // revenue is credit-normal → zero it with a debit
+        lines.push({ accountId: acct.id, debit: bal, description: `Close ${acct.code} for FY${year}` });
+        totalRevenue += bal;
+      } else {
+        // expense is debit-normal → zero it with a credit
+        lines.push({ accountId: acct.id, credit: bal, description: `Close ${acct.code} for FY${year}` });
+        totalExpense += bal;
+      }
+    }
+
+    const netIncome = totalRevenue - totalExpense;
+
+    if (Math.abs(netIncome) < 0.005 && lines.length === 0) {
+      throw new BadRequestException(`No revenue or expense activity to close for ${year}.`);
+    }
+
+    // Find Retained Earnings account (code 3030 standard; fallback to name match)
+    const retained = await this.prisma.account.findFirst({
+      where: {
+        tenantId, isActive: true, type: 'EQUITY',
+        OR: [{ code: '3030' }, { name: { contains: 'retained earnings', mode: 'insensitive' } }],
+      },
+      select: { id: true, code: true },
+    });
+    if (!retained) {
+      throw new BadRequestException('Retained Earnings account (code 3030) not found in COA.');
+    }
+
+    if (netIncome > 0) {
+      // Net income → credit Retained Earnings
+      lines.push({ accountId: retained.id, credit: netIncome, description: `Net income FY${year} closed to Retained Earnings` });
+    } else if (netIncome < 0) {
+      lines.push({ accountId: retained.id, debit: -netIncome, description: `Net loss FY${year} closed to Retained Earnings` });
+    }
+
+    // Build the JE via the standard create() flow (handles numbering, balance check,
+    // period guard, posting-control bypass via SYSTEM source).
+    const entry = await this.create(
+      tenantId,
+      {
+        date:        yEnd.toISOString(),
+        postingDate: yEnd.toISOString(),
+        description: `Year-end closing entry for FY${year}`,
+        reference,
+        lines,
+        saveDraft:   false,
+      },
+      createdBy,
+      'SYSTEM',  // bypass posting-control restrictions on system-only accounts
+    );
+
+    return {
+      year,
+      entryId:       entry.id,
+      entryNumber:   entry.entryNumber,
+      totalRevenue,
+      totalExpense,
+      netIncome,
+      lineCount:     lines.length,
+    };
+  }
 }

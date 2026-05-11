@@ -15,6 +15,7 @@ import {
   Injectable, BadRequestException, NotFoundException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NumberingService } from '../numbering/numbering.service';
 import { Prisma } from '@prisma/client';
 
 export interface CreateDeliveryDto {
@@ -33,7 +34,46 @@ export interface CreateDeliveryDto {
 
 @Injectable()
 export class DeliveryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:    PrismaService,
+    private readonly numbering: NumberingService,
+  ) {}
+
+  /**
+   * Best-effort lookup of an Inventory asset account for auto-posting the AP
+   * bill in DRAFT. Tries PFRS-for-SMEs standard code 1310 first; falls back
+   * to any ASSET account whose name contains "inventory" / "merchandise".
+   * Returns null if nothing reasonable exists — caller skips the auto-bill
+   * in that case (delivery still posts to inventory + WAC; the owner can
+   * create the bill manually).
+   */
+  private async findInventoryAccount(
+    tx:       Prisma.TransactionClient,
+    tenantId: string,
+  ): Promise<string | null> {
+    const byCode = await tx.account.findFirst({
+      where:  { tenantId, code: '1310', isActive: true, type: 'ASSET' },
+      select: { id: true },
+    });
+    if (byCode) return byCode.id;
+    const byName = await tx.account.findFirst({
+      where: {
+        tenantId, isActive: true, type: 'ASSET',
+        OR: [
+          { name: { contains: 'inventory',   mode: 'insensitive' } },
+          { name: { contains: 'merchandise', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+    });
+    return byName?.id ?? null;
+  }
+
+  private addDays(date: Date, days: number): Date {
+    const d = new Date(date);
+    d.setDate(d.getDate() + days);
+    return d;
+  }
 
   list(tenantId: string, q?: { branchId?: string; take?: number; skip?: number }) {
     return this.prisma.deliveryReceipt.findMany({
@@ -86,7 +126,10 @@ export class DeliveryService {
 
     // Validate vendor + branch belong to this tenant.
     const [vendor, branch] = await Promise.all([
-      this.prisma.vendor.findFirst({ where: { id: dto.vendorId, tenantId }, select: { id: true } }),
+      this.prisma.vendor.findFirst({
+        where:  { id: dto.vendorId, tenantId },
+        select: { id: true, name: true },
+      }),
       this.prisma.branch.findFirst({ where: { id: dto.branchId, tenantId }, select: { id: true } }),
     ]);
     if (!vendor) throw new BadRequestException('Vendor does not belong to this tenant.');
@@ -229,6 +272,64 @@ export class DeliveryService {
               quantity:  qty,
               avgCost:   cost,
             },
+          });
+        }
+      }
+
+      // Auto-create a DRAFT AP bill so the owner doesn't have to re-key the
+      // same totals in /ledger/ap/bills. Net 30 default; vendor's stored TIN /
+      // WHT rate carry through. The bill stays DRAFT — owner reviews, splits
+      // VAT/WHT if needed, then posts (which does the actual GL hit).
+      const totalCost = dto.items.reduce(
+        (s, it) => s + Number(it.quantity) * Number(it.costPrice),
+        0,
+      );
+      let createdApBillId: string | null = null;
+      if (totalCost > 0) {
+        const inventoryAccountId = await this.findInventoryAccount(tx, tenantId);
+        if (inventoryAccountId) {
+          const billNumber = await this.numbering.next(tenantId, 'AP_BILL', null, tx);
+          const today      = new Date();
+          const termsDays  = 30;
+          const dueDate    = this.addDays(today, termsDays);
+          const bill = await tx.aPBill.create({
+            data: {
+              tenantId,
+              branchId:        dto.branchId,
+              billNumber,
+              vendorBillRef:   drNumberTrim,            // distributor's DR#
+              reference:       `DR ${drNumberTrim}`,
+              vendorId:        dto.vendorId,
+              billDate:        today,
+              postingDate:     today,
+              dueDate,
+              termsDays,
+              subtotal:        new Prisma.Decimal(totalCost.toFixed(2)),
+              vatAmount:       new Prisma.Decimal(0),
+              whtAmount:       new Prisma.Decimal(0),
+              totalAmount:     new Prisma.Decimal(totalCost.toFixed(2)),
+              paidAmount:      new Prisma.Decimal(0),
+              balanceAmount:   new Prisma.Decimal(totalCost.toFixed(2)),
+              status:          'DRAFT',
+              description:     `Auto-posted from delivery receipt DR ${drNumberTrim}`,
+              createdById:     receivedById,
+              lines: {
+                create: dto.items.map((it) => ({
+                  accountId:   inventoryAccountId,
+                  description: `Lot ${it.lotNumber.trim()} exp ${it.expiresAt}`,
+                  quantity:    new Prisma.Decimal(it.quantity),
+                  unitPrice:   new Prisma.Decimal(it.costPrice),
+                  taxAmount:   new Prisma.Decimal(0),
+                  lineTotal:   new Prisma.Decimal((Number(it.quantity) * Number(it.costPrice)).toFixed(2)),
+                })),
+              },
+            },
+            select: { id: true },
+          });
+          createdApBillId = bill.id;
+          await tx.deliveryReceipt.update({
+            where: { id: receipt.id },
+            data:  { apBillId: createdApBillId },
           });
         }
       }

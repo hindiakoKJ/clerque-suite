@@ -125,13 +125,19 @@ export class AiService {
           : params.systemPrompt;
 
     try {
+      // Note: extended/adaptive thinking is intentionally NOT enabled here.
+      // The `{ type: 'adaptive' }` shape we tried earlier is rejected by the
+      // current opus/sonnet snapshots with `invalid_request_error: adaptive
+      // thinking is not supported on this model`. The proper shape is
+      // `{ type: 'enabled', budget_tokens: N }` and only some snapshots
+      // accept it. For the JE drafter/guide the prompts are small enough
+      // that plain completion is fine; if we ever want thinking back, gate
+      // it on a known-good model alias (env-driven) and use the `enabled`
+      // shape.
       const response = await this.client.messages.create({
         model,
         max_tokens: params.maxTokens ?? 1024,
         ...(systemParam !== undefined ? { system: systemParam } : {}),
-        ...(params.adaptiveThinking
-          ? { thinking: { type: 'adaptive' as const } }
-          : {}),
         messages: params.messages,
       });
       inputTokens      = response.usage.input_tokens;

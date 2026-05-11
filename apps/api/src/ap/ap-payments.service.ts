@@ -11,7 +11,7 @@
  */
 
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException,
+  Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from '../accounting/journal.service';
@@ -65,7 +65,7 @@ export class APPaymentsService {
     throw new BadRequestException(`No matching cash/bank account found for method ${method}.`);
   }
 
-  async create(tenantId: string, userId: string, dto: CreateAPPaymentDto) {
+  async create(tenantId: string, userId: string, dto: CreateAPPaymentDto, callerRole?: string) {
     if (dto.totalAmount <= 0) throw new BadRequestException('totalAmount must be > 0.');
 
     const vendor = await this.prisma.vendor.findFirst({
@@ -85,7 +85,7 @@ export class APPaymentsService {
       const billIds = applications.map((a) => a.billId);
       const bills = await this.prisma.aPBill.findMany({
         where: { id: { in: billIds }, tenantId, vendorId: dto.vendorId },
-        select: { id: true, status: true, balanceAmount: true, billNumber: true },
+        select: { id: true, status: true, balanceAmount: true, billNumber: true, postedById: true },
       });
       if (bills.length !== applications.length) {
         throw new BadRequestException('One or more bills not found for this vendor.');
@@ -98,6 +98,14 @@ export class APPaymentsService {
         if (a.appliedAmount > Number(bill.balanceAmount) + 0.01) {
           throw new BadRequestException(
             `Cannot apply ${a.appliedAmount.toFixed(2)} to bill ${bill.billNumber} — balance is only ${Number(bill.balanceAmount).toFixed(2)}.`,
+          );
+        }
+        // SECURITY H5 — Separation of Duties: an AP_ACCOUNTANT who posted a
+        // bill cannot also disburse against it. Prevents one person fabricating
+        // a vendor invoice and silently paying themselves out.
+        if (callerRole === 'AP_ACCOUNTANT' && bill.postedById && bill.postedById === userId) {
+          throw new ForbiddenException(
+            `SoD violation: you posted bill ${bill.billNumber} and cannot also issue payment against it. A different approver must release this disbursement.`,
           );
         }
       }

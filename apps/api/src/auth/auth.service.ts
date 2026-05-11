@@ -618,9 +618,49 @@ export class AuthService {
    *    eligible supervisors in the tenant; total time scales with #supers)
    *  - Generic 401 on no match (no enumeration of which PINs are taken)
    */
-  async verifySupervisorPin(tenantId: string, pin: string): Promise<{ userId: string; name: string; role: string }> {
+  /**
+   * In-memory per-actor brute-force ledger. Acceptable for single-instance
+   * Railway deployment; if we scale horizontally, swap for Redis or a DB
+   * counter row. Entries auto-expire after WINDOW_MS so memory stays bounded.
+   */
+  private readonly supervisorPinAttempts = new Map<string, number[]>();
+  private readonly SUPERVISOR_PIN_MAX_FAILS = 5;
+  private readonly SUPERVISOR_PIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+  private recordPinAttempt(actorUserId: string, success: boolean) {
+    if (success) {
+      this.supervisorPinAttempts.delete(actorUserId);
+      return;
+    }
+    const now = Date.now();
+    const cutoff = now - this.SUPERVISOR_PIN_WINDOW_MS;
+    const prev = (this.supervisorPinAttempts.get(actorUserId) ?? []).filter((t) => t > cutoff);
+    prev.push(now);
+    this.supervisorPinAttempts.set(actorUserId, prev);
+  }
+
+  private isPinActorLocked(actorUserId: string): boolean {
+    const cutoff = Date.now() - this.SUPERVISOR_PIN_WINDOW_MS;
+    const recent = (this.supervisorPinAttempts.get(actorUserId) ?? []).filter((t) => t > cutoff);
+    return recent.length >= this.SUPERVISOR_PIN_MAX_FAILS;
+  }
+
+  async verifySupervisorPin(
+    tenantId: string,
+    pin: string,
+    actorUserId?: string,
+  ): Promise<{ userId: string; name: string; role: string }> {
+    // SECURITY H3 — per-actor throttle. A 4-digit PIN space is only 10K
+    // combos; without this, an authenticated CASHIER could harvest a
+    // supervisor PIN in a few hours and then authorize their own voids.
+    if (actorUserId && this.isPinActorLocked(actorUserId)) {
+      throw new UnauthorizedException(
+        'Too many supervisor-PIN attempts. Wait 15 minutes or have a supervisor log in.',
+      );
+    }
     const cleaned = pin.trim();
     if (!/^\d{4,6}$/.test(cleaned)) {
+      if (actorUserId) this.recordPinAttempt(actorUserId, false);
       throw new UnauthorizedException('Invalid PIN.');
     }
     const VOID_DIRECT_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'] as const;
@@ -646,15 +686,19 @@ export class AuthService {
       }
     }
     if (matches.length === 0) {
+      if (actorUserId) this.recordPinAttempt(actorUserId, false);
       throw new UnauthorizedException('Invalid PIN.');
     }
     if (matches.length > 1) {
       // Don't reveal which supervisors collided; just force disambiguation.
+      // (Doesn't count as a "wrong PIN" attempt — they got it right, just
+      //  ambiguously.)
       throw new UnauthorizedException(
         'PIN matched multiple supervisors. Please ask one of them to enter their email instead.',
       );
     }
     const u = matches[0];
+    if (actorUserId) this.recordPinAttempt(actorUserId, true);
     return { userId: u.id, name: u.name, role: u.role };
   }
 

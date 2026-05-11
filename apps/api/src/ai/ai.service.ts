@@ -207,7 +207,22 @@ export class AiService {
     );
   }
 
-  /** Reject if tenant has spent more than DEFAULT_MONTHLY_BUDGET_USD this calendar month. */
+  /**
+   * Reject if tenant has spent more than its monthly cap this calendar month.
+   *
+   * SECURITY M1 — per-tenant budget isolation. The cap is resolved
+   * per-tenant so heavy usage by tenant A cannot drain a shared global
+   * budget and lock out tenant B. Resolution order:
+   *   1. `AI_MONTHLY_BUDGET_USD_BY_TENANT` env var (JSON map of
+   *      tenantId → USD cap) — ops override for individual tenants.
+   *   2. `DEFAULT_MONTHLY_BUDGET_USD` env fallback.
+   *
+   * TODO(billing): once a per-tenant USD cap column lands on Tenant
+   * (e.g. `aiMonthlyBudgetUsd`) wire it in here ahead of the env map.
+   * `tenant.aiQuotaOverride` exists today but is a PROMPT count, not USD,
+   * so it cannot stand in for this budget without a unit conversion that
+   * would have to assume an average prompt cost.
+   */
   private async assertWithinBudget(tenantId: string): Promise<void> {
     const startOfMonth = new Date();
     startOfMonth.setUTCDate(1);
@@ -218,12 +233,29 @@ export class AiService {
       _sum:  { costUsd: true },
     });
     const spent = Number(agg._sum.costUsd ?? 0);
-    if (spent >= DEFAULT_MONTHLY_BUDGET_USD) {
+    const budget = this.resolveMonthlyBudgetUsd(tenantId);
+    if (spent >= budget) {
       throw new ForbiddenException(
-        `AI monthly budget reached ($${spent.toFixed(2)} of $${DEFAULT_MONTHLY_BUDGET_USD}). ` +
+        `AI monthly budget reached ($${spent.toFixed(2)} of $${budget}). ` +
         `Contact your owner to raise the cap.`,
       );
     }
+  }
+
+  /** Resolve per-tenant monthly USD cap. See M1 note on assertWithinBudget. */
+  private resolveMonthlyBudgetUsd(tenantId: string): number {
+    const raw = process.env.AI_MONTHLY_BUDGET_USD_BY_TENANT;
+    if (raw) {
+      try {
+        const map = JSON.parse(raw) as Record<string, number>;
+        const perTenant = map?.[tenantId];
+        if (typeof perTenant === 'number' && perTenant > 0) return perTenant;
+      } catch {
+        // malformed map — fall through to default rather than fail-open
+        this.logger.warn('AI_MONTHLY_BUDGET_USD_BY_TENANT is not valid JSON; using default.');
+      }
+    }
+    return DEFAULT_MONTHLY_BUDGET_USD;
   }
 
   /** Per-tenant usage summary for the current calendar month. */

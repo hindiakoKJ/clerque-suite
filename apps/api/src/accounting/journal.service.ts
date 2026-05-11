@@ -1052,6 +1052,56 @@ export class JournalService {
       );
     }
 
+    // SECURITY H6 — Pre-flight integrity checks before closing the fiscal year.
+    // Closing a year while subledger items are still unposted (queued events,
+    // draft invoices/bills) silently makes retained earnings wrong: the close
+    // snapshots R/E balances NOW, and any later posting in this period either
+    // fails the period guard or skews the next year's opening figures. Force
+    // the user to resolve them first.
+    {
+      const yStart = new Date(Date.UTC(year, 0, 1));
+      const yEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59));
+
+      const stuckEvents = await this.prisma.accountingEvent.count({
+        where: {
+          tenantId,
+          status: { in: ['PENDING', 'FAILED'] },
+          createdAt: { gte: yStart, lte: yEnd },
+        },
+      });
+      if (stuckEvents > 0) {
+        throw new BadRequestException(
+          `Cannot close FY${year} — ${stuckEvents} accounting event(s) are still PENDING/FAILED. Process them first via Ledger → Events.`,
+        );
+      }
+
+      const openInvoices = await this.prisma.aRInvoice.count({
+        where: {
+          tenantId,
+          status: 'DRAFT',
+          invoiceDate: { gte: yStart, lte: yEnd },
+        },
+      });
+      if (openInvoices > 0) {
+        throw new BadRequestException(
+          `Cannot close FY${year} — ${openInvoices} AR invoice(s) are still DRAFT. Post or void them first via AR → Invoices.`,
+        );
+      }
+
+      const openBills = await this.prisma.aPBill.count({
+        where: {
+          tenantId,
+          status: 'DRAFT',
+          billDate: { gte: yStart, lte: yEnd },
+        },
+      });
+      if (openBills > 0) {
+        throw new BadRequestException(
+          `Cannot close FY${year} — ${openBills} AP bill(s) are still DRAFT. Post or void them first via AP → Bills.`,
+        );
+      }
+    }
+
     // Pull every REVENUE/EXPENSE account with its YTD balance
     const yStart = new Date(Date.UTC(year, 0, 1));
     const yEndIncl = new Date(Date.UTC(year, 11, 31, 23, 59, 59));

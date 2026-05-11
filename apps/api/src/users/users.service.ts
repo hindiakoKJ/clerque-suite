@@ -26,6 +26,15 @@ export class UsersService {
 
   async findAll(tenantId: string, branchId?: string, callerRole?: string) {
     const canViewSalary = hasPermission(callerRole, 'payroll:view_salary');
+    // SECURITY H1: kioskPin is a 4-8 digit plaintext credential that doubles
+    // as the pharmacist Rx-attest PIN, the kiosk clock-in PIN, and (via the
+    // supervisor-PIN endpoint) the void/refund authorizer. It MUST NOT be
+    // returned to anyone but the owner; otherwise a SALES_LEAD/MDM who can
+    // legitimately list staff can harvest every employee's PIN and use them
+    // to authorize their own voids / clock other people in / dispense Rx
+    // drugs under another pharmacist's identity. UIs that need to know "does
+    // this user have a PIN set" can read `hasKioskPin` instead.
+    const canViewKioskPin = callerRole === 'BUSINESS_OWNER' || callerRole === 'SUPER_ADMIN';
 
     const users = await this.prisma.user.findMany({
       where: {
@@ -44,10 +53,9 @@ export class UsersService {
         branchId: true,
         isActive: true,
         createdAt: true,
-        // Sprint 19 — kioskPin is plaintext (low-stakes 4–8 digit clock-in
-        // credential). Only owners + managers can read this list, and the
-        // existing SOD permission filters apply at the controller level.
-        kioskPin:  true,
+        // Owner-only — see comment above. Non-owners get `hasKioskPin` only
+        // (computed below from the raw value).
+        kioskPin:  canViewKioskPin,
         kioskOnly: true,
         // Sprint 13 — pharmacist credentials. Drives the Settings → Pharmacy
         // roster + the receipt's "Dispensed by RPh ..." line. Returned to
@@ -63,7 +71,13 @@ export class UsersService {
       orderBy: [{ role: 'asc' }, { name: 'asc' }],
     });
 
-    return users;
+    // Always include `hasKioskPin` so UIs can show "PIN set ✓" / "Not set"
+    // without ever exposing the actual digits to non-owners.
+    return users.map((u) => ({
+      ...u,
+      hasKioskPin: Boolean((u as { kioskPin?: string | null }).kioskPin),
+      ...(canViewKioskPin ? {} : { kioskPin: undefined as unknown as string }),
+    }));
   }
 
   // ─── Get one user ─────────────────────────────────────────────────────────

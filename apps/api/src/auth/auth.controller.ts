@@ -279,7 +279,10 @@ export class AuthController {
     @Body() body: { pin?: string },
   ) {
     if (!body.pin) throw new BadRequestException('pin is required.');
-    return this.authService.verifySupervisorPin(user.tenantId!, body.pin);
+    // SECURITY H3: pass the caller's userId so the service can rate-limit
+    // per-actor brute-force attempts (a 4-digit PIN space is only 10K combos
+    // — without a throttle a CASHIER could exhaust the PIN space in minutes).
+    return this.authService.verifySupervisorPin(user.tenantId!, body.pin, user.sub);
   }
 
   /**

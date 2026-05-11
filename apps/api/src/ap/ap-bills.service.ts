@@ -171,7 +171,7 @@ export class APBillsService {
     });
   }
 
-  async post(tenantId: string, billId: string, userId: string) {
+  async post(tenantId: string, billId: string, userId: string, callerRole?: string) {
     const bill = await this.prisma.aPBill.findFirst({
       where:   { id: billId, tenantId },
       include: { lines: true, vendor: { select: { name: true } } },
@@ -179,6 +179,16 @@ export class APBillsService {
     if (!bill) throw new NotFoundException('Bill not found.');
     if (bill.status !== 'DRAFT') {
       throw new BadRequestException(`Cannot post bill in status ${bill.status}.`);
+    }
+    // SECURITY H4 — SOD: an AP_ACCOUNTANT cannot both create and post a bill.
+    // BUSINESS_OWNER / ACCOUNTANT can self-approve (they are the approver
+    // tier). This blocks the lone-wolf embezzlement loop where one AP clerk
+    // fabricates a vendor bill in DRAFT, posts it themselves, and then
+    // records the cash-out payment — all under one identity.
+    if (callerRole === 'AP_ACCOUNTANT' && bill.createdById === userId) {
+      throw new ForbiddenException(
+        'You cannot post a bill that you created. Ask the owner or accountant to post it.',
+      );
     }
 
     const tenant = await this.prisma.tenant.findUniqueOrThrow({

@@ -48,7 +48,7 @@ export class APPaymentsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateAPPaymentDto) {
-    return this.svc.create(user.tenantId!, user.sub, dto);
+    return this.svc.create(user.tenantId!, user.sub, dto, user.role);
   }
 
   /** Apply unallocated portion of an existing payment to bills. */

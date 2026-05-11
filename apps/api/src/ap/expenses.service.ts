@@ -4,12 +4,18 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
+import { NumberingService } from '../numbering/numbering.service';
 import { Prisma, ExpenseStatus } from '@prisma/client';
 import { CreateExpenseDto, UpdateExpenseDto, RecordPaymentDto } from './dto/expense.dto';
 
 @Injectable()
 export class ExpensesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:    PrismaService,
+    private readonly periods:   AccountingPeriodsService,
+    private readonly numbering: NumberingService,
+  ) {}
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -242,13 +248,24 @@ export class ExpensesService {
       });
     }
 
+    // SECURITY H2: previously this JE was written with a hard-coded
+    // `entryNumber: 'AP-${Date.now()}'` and zero period validation, so an
+    // AP_ACCOUNTANT could post into a closed period (FY closing entries
+    // get overstated) and dodge the global JOURNAL_ENTRY sequence (audit
+    // trail goes non-contiguous). Now we route through the same guards
+    // every other JE uses: period-lock check on the posting date, and a
+    // proper sequence-allocated entry number inside the transaction.
+    const postingDate = new Date();
+    await this.periods.assertDateIsOpen(tenantId, postingDate);
+
     await this.prisma.$transaction(async (tx) => {
+      const entryNumber = await this.numbering.next(tenantId, 'JOURNAL_ENTRY', null, tx);
       await tx.journalEntry.create({
         data: {
           tenantId,
-          entryNumber: `AP-${Date.now()}`,
+          entryNumber,
           date: expense.expenseDate,
-          postingDate: new Date(),
+          postingDate,
           description: `AP: ${expense.description}`,
           reference: expense.referenceNumber ?? null,
           status: 'POSTED',

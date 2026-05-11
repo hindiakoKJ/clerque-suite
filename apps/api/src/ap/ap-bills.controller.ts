@@ -76,7 +76,7 @@ export class APBillsController {
   @Patch(':id/post')
   @HttpCode(HttpStatus.OK)
   post(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.svc.post(user.tenantId!, id, user.sub);
+    return this.svc.post(user.tenantId!, id, user.sub, user.role);
   }
 
   /** Void a posted bill — reverses the JE. */

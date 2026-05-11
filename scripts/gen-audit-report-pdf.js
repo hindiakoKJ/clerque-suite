@@ -328,26 +328,38 @@ const AUDIT = {
 
 // ─── Page setup ───────────────────────────────────────────────────────────
 const PAGE = { width: 612, height: 792 };  // US Letter in points
-const M    = { top: 60, bottom: 60, left: 50, right: 50 };
+// PDFKit auto-paginates if any text() call would write past
+// (page.height - margins.bottom). The footer sits at y=757 (35 from bottom),
+// so margins.bottom MUST be small enough that 757 stays inside the writable
+// area — otherwise EVERY footer write triggers `continueOnNewPage` and the
+// page count explodes. 28pt bottom margin keeps 757 < (792-28)=764 = safe.
+const M = { top: 60, bottom: 28, left: 50, right: 50 };
 const CONTENT_W = PAGE.width - M.left - M.right;
-const BOTTOM_LIMIT = PAGE.height - M.bottom;
+// Body content stays well above the footer:
+const BOTTOM_LIMIT = PAGE.height - 60;
 
 let pageNum = 0;
 
 function addPageWithChrome(doc) {
-  // With autoFirstPage:false, every page (including the first) must be added
-  // explicitly. Skipping the first addPage call leaves the doc.page === null
-  // and any draw call (save/text/rect) crashes with "Cannot read properties
-  // of null (reading 'write')".
   doc.addPage();
   pageNum++;
-  // Footer
+
+  // PDFKit aggressively auto-paginates via `continueOnNewPage` whenever
+  // text() lands near or past margins.bottom — and BOTH our footer writes
+  // (at y=757) trip it, even with lineBreak:false, even after shrinking
+  // margins.bottom to 28pt. The only reliable way to keep one PDF page per
+  // logical page is to monkey-patch `continueOnNewPage` to a no-op while we
+  // draw chrome, then restore it. Without this, every section produced
+  // 3 PDF pages (one explicit, two phantom) and the 16-page report came
+  // out as 48 pages of mostly-blank space.
+  const _origContinue = doc.continueOnNewPage;
+  doc.continueOnNewPage = function () { /* no-op during chrome */ };
+
   doc.save();
   doc.fontSize(8).fillColor(MUTED).font('Helvetica-Oblique')
     .text(AUDIT.cover.classification, M.left, PAGE.height - 35, { width: 300, lineBreak: false });
   doc.font('Helvetica')
     .text(`Page ${pageNum}`, PAGE.width - M.right - 80, PAGE.height - 35, { width: 80, align: 'right', lineBreak: false });
-  // Top rule on non-cover pages
   if (pageNum > 1) {
     doc.strokeColor(BROWN).lineWidth(0.6)
       .moveTo(M.left, M.top - 12).lineTo(PAGE.width - M.right, M.top - 12).stroke();
@@ -355,7 +367,9 @@ function addPageWithChrome(doc) {
       .text('Internal Audit Report — Clerque Application', M.left, M.top - 25, { width: CONTENT_W, lineBreak: false });
   }
   doc.restore();
-  // Reset flow cursor to top of content area
+
+  // Restore real pagination behaviour and reset the flow cursor.
+  doc.continueOnNewPage = _origContinue;
   doc.x = M.left;
   doc.y = M.top;
 }

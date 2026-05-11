@@ -7,7 +7,7 @@ import {
   ChevronDown, Shield, FileText, AlertTriangle, Info,
   KeyRound, Eye, EyeOff, ShieldCheck,
   LayoutGrid, CreditCard, ShieldAlert, ChevronRight, Sparkles,
-  Stamp, Tv, FileSpreadsheet,
+  Stamp, Tv, FileSpreadsheet, Database,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -461,6 +461,15 @@ export default function SettingsPage() {
                 icon={FileSpreadsheet}
                 title="Import Templates"
                 desc="Download Excel templates for bulk product / inventory / customer / vendor imports"
+              />
+            )}
+            {/* Sprint 20 — Data Backups: owner sees cutoff RPO + can download nightly snapshots */}
+            {isOwner && (
+              <SettingsCard
+                href="/settings/data"
+                icon={Database}
+                title="Data Backups"
+                desc="Nightly off-box cloud snapshots — download for cold storage or share with your accountant"
               />
             )}
           </div>

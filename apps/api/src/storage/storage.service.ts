@@ -20,7 +20,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand,
-  HeadObjectCommand,
+  HeadObjectCommand, ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -175,6 +175,63 @@ export class StorageService {
         contentLength: stat.size,
       };
     }
+  }
+
+  /**
+   * List keys under a prefix. Returns each object with its key + size + last
+   * modified time. Capped at 1000 results per call (S3 page limit); pass a
+   * tighter prefix if a tenant accumulates more than that. Used by the
+   * backup admin/owner endpoints to enumerate available snapshots.
+   */
+  async list(prefix: string): Promise<Array<{ key: string; size: number; lastModified: Date | null }>> {
+    if (this.driver === 'S3') {
+      const res = await this.s3!.send(new ListObjectsV2Command({
+        Bucket: this.bucket!,
+        Prefix: prefix,
+        MaxKeys: 1000,
+      }));
+      return (res.Contents ?? [])
+        .filter((c) => c.Key)
+        .map((c) => ({
+          key:          c.Key!,
+          size:         Number(c.Size ?? 0),
+          lastModified: c.LastModified ?? null,
+        }));
+    }
+    // LOCAL fallback — walk the uploads tree under the prefix
+    const baseAbs = path.resolve(this.localRoot, prefix);
+    if (!fs.existsSync(baseAbs)) return [];
+    const out: Array<{ key: string; size: number; lastModified: Date | null }> = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(abs);
+        else if (entry.isFile()) {
+          const stat = fs.statSync(abs);
+          out.push({
+            key:          path.relative(this.localRoot, abs).replace(/\\/g, '/'),
+            size:         stat.size,
+            lastModified: stat.mtime,
+          });
+        }
+      }
+    };
+    walk(baseAbs);
+    return out;
+  }
+
+  /**
+   * Read a JSON file end-to-end into memory. Convenience wrapper around
+   * getStream for the backup preview / restore endpoints.
+   */
+  async getJson<T = unknown>(storageKey: string): Promise<T> {
+    const { stream } = await this.getStream(storageKey);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const text = Buffer.concat(chunks).toString('utf8');
+    return JSON.parse(text) as T;
   }
 
   /** Delete a file. Returns true if it was deleted, false if it didn't exist. */

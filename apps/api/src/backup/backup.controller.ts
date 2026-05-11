@@ -17,7 +17,7 @@
  * loop.
  */
 import {
-  Controller, Get, Param, Query, Res, UseGuards, NotFoundException,
+  Controller, Get, Post, Param, Query, Body, Res, UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -124,5 +124,61 @@ export class BackupController {
       `attachment; filename="clerque-backup-${slug}-${meta.date}.json"`,
     );
     stream.pipe(res);
+  }
+
+  // ─── Restore (write-side) ───────────────────────────────────────────────
+
+  /**
+   * GET /admin/backups/:slug/restore-preview?date=YYYY-MM-DD
+   * Dry-run: shows what would be inserted + what would be deleted, without
+   * touching the database. Drives the admin UI's confirmation step.
+   */
+  @Roles('SUPER_ADMIN')
+  @Get('admin/backups/:slug/restore-preview')
+  async restorePreview(
+    @Param('slug') slug: string,
+    @Query('date') date: string,
+  ) {
+    if (!date) {
+      // Pick latest by listing first
+      const all = await this.svc.listForTenantSlug(slug);
+      if (all.length === 0) {
+        return { error: 'No snapshots available.' };
+      }
+      date = all[0].date;
+    }
+    return this.svc.previewRestore(slug, date);
+  }
+
+  /**
+   * POST /admin/backups/:slug/restore
+   * Body: { date: 'YYYY-MM-DD', confirmationToken: '<slug>' }
+   *
+   * Wipes the tenant's operational data tables and re-inserts from the
+   * snapshot. Takes a pre-restore snapshot first so the operation is
+   * itself reversible (recovery handle returned in the response).
+   *
+   * Operational data ONLY: orders, journal entries/lines, accounting events,
+   * products, categories, raw materials, inventory items/logs, bom items.
+   * Identity tables (Tenant, Branch, User, Customer, Vendor) are NOT
+   * touched — those should NEVER roll back during a disaster recovery
+   * because they intersect with current state (new hires, password resets,
+   * etc.). If identity rollback is also needed, that's a separate manual
+   * procedure on top of this restore.
+   */
+  @Roles('SUPER_ADMIN')
+  @Post('admin/backups/:slug/restore')
+  @HttpCode(HttpStatus.OK)
+  async restore(
+    @CurrentUser() user: JwtPayload,
+    @Param('slug') slug: string,
+    @Body() body: { date: string; confirmationToken: string },
+  ) {
+    return this.svc.applyRestore({
+      slug,
+      date:              body.date,
+      confirmationToken: body.confirmationToken,
+      actorEmail:        user.sub,
+    });
   }
 }

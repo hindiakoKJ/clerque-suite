@@ -292,6 +292,19 @@ export class DeliveryService {
           const today      = new Date();
           const termsDays  = 30;
           const dueDate    = this.addDays(today, termsDays);
+          // SECURITY H8 — `createdById` should reflect "who would normally
+          // have created this bill" so it appears in the AP workspace under
+          // the right actor. A WAREHOUSE_STAFF receiver doesn't have AP-
+          // creation rights normally; attributing the bill to them lets a
+          // warehouse user accumulate AP-bill audit history they shouldn't
+          // own. Stamp the tenant's BUSINESS_OWNER instead so the bill lands
+          // in the owner's queue for review + post.
+          const owner = await tx.user.findFirst({
+            where:  { tenantId, role: 'BUSINESS_OWNER', isActive: true },
+            select: { id: true },
+            orderBy: { createdAt: 'asc' }, // earliest-registered owner if multiple
+          });
+          const billCreatedById = owner?.id ?? receivedById;
           const bill = await tx.aPBill.create({
             data: {
               tenantId,
@@ -311,8 +324,8 @@ export class DeliveryService {
               paidAmount:      new Prisma.Decimal(0),
               balanceAmount:   new Prisma.Decimal(totalCost.toFixed(2)),
               status:          'DRAFT',
-              description:     `Auto-posted from delivery receipt DR ${drNumberTrim}`,
-              createdById:     receivedById,
+              description:     `Auto-posted from delivery receipt DR ${drNumberTrim} (received by user ${receivedById})`,
+              createdById:     billCreatedById,
               lines: {
                 create: dto.items.map((it) => ({
                   accountId:   inventoryAccountId,

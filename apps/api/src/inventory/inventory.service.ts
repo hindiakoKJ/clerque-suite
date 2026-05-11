@@ -398,6 +398,36 @@ export class InventoryService {
     // Verify branch belongs to tenant (CRITICAL-2 fix — prevents cross-tenant branch injection)
     await this.assertBranchBelongsToTenant(tenantId, branchId);
 
+    // SECURITY H10 — bound `unitCost` against `product.costPrice`. Without
+    // this, a BRANCH_MANAGER or WAREHOUSE_STAFF could STOCK_IN qty=1 at a
+    // wildly inflated unitCost, poisoning the WAC `avgCost` upward — every
+    // subsequent SALE_DEDUCTION would then drain inflated COGS, silently
+    // hiding shrinkage. Meanwhile the INVENTORY_ADJUSTMENT accounting event
+    // uses `product.costPrice` (not unitCost) so the GL doesn't show the
+    // spike — books and ops diverge.
+    //
+    // We allow up to ±50% drift from costPrice without ceremony (real-world
+    // suppliers change prices); beyond that, the operator must update the
+    // product master costPrice first (audit-logged) and retry. STOCK_OUT /
+    // ADJUSTMENT / write-off types skip this check — they don't update
+    // avgCost anyway.
+    if (
+      quantity > 0 &&
+      unitCost != null &&
+      product.costPrice != null &&
+      Number(product.costPrice) > 0
+    ) {
+      const baseline = Number(product.costPrice);
+      const ratio = unitCost / baseline;
+      if (ratio < 0.5 || ratio > 1.5) {
+        throw new BadRequestException(
+          `Unit cost ₱${unitCost.toFixed(2)} is more than 50% off the product master cost ` +
+          `(₱${baseline.toFixed(2)}). Update the product's cost price first, then retry — this ` +
+          `prevents accidental WAC poisoning. Ratio: ${(ratio * 100).toFixed(0)}%.`,
+        );
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // Upsert inventory item
       const existing = await tx.inventoryItem.findUnique({

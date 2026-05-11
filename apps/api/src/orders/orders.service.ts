@@ -1012,9 +1012,26 @@ export class OrdersService {
     return this.prisma.$transaction(async (tx) => {
       const item = await tx.orderItem.findFirst({
         where: { id: orderItemId, orderId, order: { tenantId } },
-        include: { order: true, product: { select: { id: true, costPrice: true, name: true } } },
+        include: {
+          order: true,
+          product: {
+            select: { id: true, costPrice: true, name: true, inventoryMode: true },
+          },
+        },
       });
       if (!item) throw new NotFoundException('Order item not found.');
+
+      // SECURITY H9 — force restock=false for RECIPE_BASED items.
+      // A coffee shop's espresso is made from beans+milk drained at sale
+      // time. If the customer changes their mind, we refund the cash but
+      // the ingredients are already poured. Restocking the *finished
+      // product* InventoryItem (which doesn't exist or is meaningless)
+      // and reversing COGS in the GL would create a phantom inventory
+      // increase with no actual stock and silently understate COGS.
+      // Mirrors the VOID handler's explicit recipe-skip at the journal
+      // layer; this is the matching guard at the refund entry point.
+      const isRecipeBased = item.product?.inventoryMode === 'RECIPE_BASED';
+      const effectiveRestock = isRecipeBased ? false : restock;
       // Sprint 7: PAID orders (still in production) can also be refunded —
       // customer changes mind before the drink is ready. Only OPEN, VOIDED,
       // or RETURNED block refunds.
@@ -1044,13 +1061,14 @@ export class OrdersService {
           refundAmount: new Prisma.Decimal(refundAmount.toFixed(2)),
           reason:       reason.trim(),
           refundMethod: refundMethod as Prisma.OrderItemRefundCreateInput['refundMethod'],
-          restocked:    restock,
+          restocked:    effectiveRestock,
           refundedById,
         },
       });
 
-      // Inventory restock — only if requested and the order had a branchId
-      if (restock && item.order.branchId) {
+      // Inventory restock — only if requested and the order had a branchId.
+      // H9: `effectiveRestock` already coerced to false for RECIPE_BASED.
+      if (effectiveRestock && item.order.branchId) {
         const inv = await tx.inventoryItem.findFirst({
           where: { tenantId, branchId: item.order.branchId, productId: item.productId },
           select: { id: true, quantity: true },
@@ -1087,7 +1105,7 @@ export class OrdersService {
       const itemUnitCost = item.costPrice != null
         ? Number(item.costPrice)
         : (item.product?.costPrice != null ? Number(item.product.costPrice) : 0);
-      const restockedCogsAmount = restock ? itemUnitCost * quantity : 0;
+      const restockedCogsAmount = effectiveRestock ? itemUnitCost * quantity : 0;
 
       // Queue a partial reversal accounting event. The journal processor
       // posts: DR Sales (proportional) / DR Output VAT / CR Cash (or AR)
@@ -1107,7 +1125,7 @@ export class OrdersService {
             originalQty:    Number(item.quantity),
             refundAmount,
             refundMethod,
-            restocked:      restock,
+            restocked:      effectiveRestock,
             // Sprint 9: pre-computed proportional COGS reversal. Zero for
             // non-restocked refunds (waste); cost × qty for restocked items.
             restockedCogsTotal: restockedCogsAmount,

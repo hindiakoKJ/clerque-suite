@@ -87,7 +87,36 @@ export class ExpensesService {
     return expense;
   }
 
+  /**
+   * SECURITY H7 — every foreign-key id in the dto must belong to the caller's
+   * tenant. Otherwise an AP_ACCOUNTANT who knows another tenant's vendor or
+   * branch UUID (UUIDs leak via dashboards, error pages, audit-log shares)
+   * can attach an expense to that vendor — polluting their AP totals and
+   * printing their TIN on this tenant's 2307. Mirrors the validation pattern
+   * in delivery.service.ts:create().
+   */
+  private async assertReferencesBelongToTenant(
+    tenantId: string,
+    vendorId: string | null | undefined,
+    branchId: string | null | undefined,
+  ): Promise<void> {
+    if (vendorId) {
+      const ok = await this.prisma.vendor.findFirst({
+        where: { id: vendorId, tenantId }, select: { id: true },
+      });
+      if (!ok) throw new BadRequestException('Vendor does not belong to your tenant.');
+    }
+    if (branchId) {
+      const ok = await this.prisma.branch.findFirst({
+        where: { id: branchId, tenantId }, select: { id: true },
+      });
+      if (!ok) throw new BadRequestException('Branch does not belong to your tenant.');
+    }
+  }
+
   async create(tenantId: string, userId: string, dto: CreateExpenseDto) {
+    await this.assertReferencesBelongToTenant(tenantId, dto.vendorId, dto.branchId);
+
     const gross = Number(dto.grossAmount);
     const whtRate = dto.whtRate ? Number(dto.whtRate) : 0;
     const { whtAmount, netAmount } = this.computeAmounts(gross, whtRate);
@@ -123,6 +152,9 @@ export class ExpensesService {
     if (expense.status !== 'DRAFT') {
       throw new BadRequestException('Only DRAFT expenses can be edited');
     }
+    // H7 — re-check FK ownership on every edit; a DRAFT expense could be
+    // re-vendored to a foreign vendor before posting otherwise.
+    await this.assertReferencesBelongToTenant(tenantId, dto.vendorId, dto.branchId);
 
     // Recompute if gross or whtRate changes
     const gross = dto.grossAmount !== undefined ? Number(dto.grossAmount) : Number(expense.grossAmount);

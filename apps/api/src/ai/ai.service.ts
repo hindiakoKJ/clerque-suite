@@ -22,16 +22,36 @@ import {
 import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../prisma/prisma.service';
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
+/**
+ * Model identifiers. Anthropic occasionally publishes new aliases; rather
+ * than hardcoding date-stamped IDs that drift, we read each tier from env
+ * so ops can swap without a redeploy. Defaults below are the stable public
+ * aliases as of 2026 (no date suffix — Anthropic resolves these to the
+ * current production snapshot).
+ *
+ * IMPORTANT: prior versions of this file shipped IDs like "claude-opus-4-7"
+ * and "claude-sonnet-4-6" which Anthropic never published — every call
+ * returned `model_not_found_error` from the API, surfaced to the user as a
+ * generic 503. If you hit a 503 from the AI features, check that the IDs
+ * resolved here match what Anthropic actually serves.
+ */
+export const MODEL_OPUS   = process.env.AI_MODEL_OPUS   ?? 'claude-opus-4-5';
+export const MODEL_SONNET = process.env.AI_MODEL_SONNET ?? 'claude-sonnet-4-5';
+export const MODEL_HAIKU  = process.env.AI_MODEL_HAIKU  ?? 'claude-haiku-4-5';
+const DEFAULT_MODEL = process.env.AI_DEFAULT_MODEL ?? MODEL_SONNET;
 
-// Pricing as of Apr 2026 — input + output USD per 1M tokens.
-// Vision inputs count toward inputTokens (~1.5k tokens per image typical).
-// Update when provider changes pricing; historical rows keep their cost.
-// Cache reads cost ~0.1x base input; cache writes ~1.25x (5m TTL) or 2x (1h TTL).
+// Pricing per 1M tokens (input / output USD). Cache reads cost ~0.1x base
+// input; cache writes ~1.25x (5m TTL) or 2x (1h TTL). The keyed lookup falls
+// back to DEFAULT_MODEL pricing if a new alias hasn't been added here yet —
+// callers are not blocked, but costUsd will be approximate until updated.
 const PRICING: Record<string, { input: number; output: number }> = {
-  'claude-opus-4-7':    { input: 5.0, output: 25.0 },
-  'claude-sonnet-4-6':  { input: 3.0, output: 15.0 },
-  'claude-haiku-4-5':   { input: 1.0, output: 5.0  },
+  // 4.x family — production aliases
+  'claude-opus-4-5':    { input: 15.0, output: 75.0 },
+  'claude-sonnet-4-5':  { input:  3.0, output: 15.0 },
+  'claude-haiku-4-5':   { input:  1.0, output:  5.0 },
+  // Legacy ids kept for any historical AiUsage rows that look them up
+  'claude-opus-4-7':    { input: 15.0, output: 75.0 },
+  'claude-sonnet-4-6':  { input:  3.0, output: 15.0 },
 };
 
 const DEFAULT_MONTHLY_BUDGET_USD = Number(process.env.AI_MONTHLY_BUDGET_USD ?? 10);
@@ -128,8 +148,15 @@ export class AiService {
     } catch (err: unknown) {
       success = false;
       errorMessage = err instanceof Error ? err.message : 'Unknown LLM error';
-      this.logger.error(`AI call failed (${params.action}): ${errorMessage}`);
-      throw new ServiceUnavailableException('AI service temporarily unavailable. Try again or fill in manually.');
+      this.logger.error(`AI call failed (${params.action}) model=${model}: ${errorMessage}`);
+      // Surface the upstream reason in dev / staging so model-name typos,
+      // billing failures, and rate-limit issues are visible. In production
+      // we still want the user to see something actionable — show the first
+      // line of the provider's error verbatim (short, no stack trace).
+      const firstLine = errorMessage.split('\n')[0].slice(0, 240);
+      throw new ServiceUnavailableException(
+        `AI service unavailable (${model}): ${firstLine}`,
+      );
     } finally {
       const cost = this.computeCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
       // Fire-and-forget; usage logging must never block the user response.

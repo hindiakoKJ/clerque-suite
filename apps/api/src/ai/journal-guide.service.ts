@@ -22,9 +22,9 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AiService } from './ai.service';
+import { AiService, MODEL_OPUS } from './ai.service';
 
-const GUIDE_MODEL = 'claude-opus-4-7';
+const GUIDE_MODEL = MODEL_OPUS;
 const GUIDE_PROMPT_VERSION = 'v1.0.0';
 
 const GUIDE_SYSTEM_PROMPT = `You are a Philippine accounting reviewer. The user will give you a draft Journal Entry plus the tenant's Chart of Accounts and tax status. Your job is to surface issues a non-accountant might miss, before they post.

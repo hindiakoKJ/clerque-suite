@@ -22,9 +22,9 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AiService } from './ai.service';
+import { AiService, MODEL_OPUS } from './ai.service';
 
-const DRAFTER_MODEL = 'claude-opus-4-7';
+const DRAFTER_MODEL = MODEL_OPUS;
 const DRAFTER_PROMPT_VERSION = 'v1.0.0';
 
 /**

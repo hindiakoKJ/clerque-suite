@@ -89,6 +89,23 @@ export class UsersController {
   }
 
   /**
+   * SECURITY D3-04 — Deprovision a user atomically. Replaces the implicit
+   * 5-step manual offboarding (deactivate, clear kiosk PIN, clear supervisor
+   * PIN, clear 2FA, revoke sessions) with one call. Owner-only. Reason is
+   * recorded against the user's separationReason for the HR audit trail.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Post(':id/deprovision')
+  @HttpCode(HttpStatus.OK)
+  deprovision(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.usersService.deprovisionUser(user.tenantId!, id, user.sub, body?.reason ?? 'Offboarded');
+  }
+
+  /**
    * Toggle MDM role — BUSINESS_OWNER only.
    *
    * Promotes a staff member to MDM (Master Data Manager) or demotes them back

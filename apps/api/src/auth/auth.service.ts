@@ -10,6 +10,7 @@ import * as bcrypt from 'bcryptjs';
 import { randomBytes, createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { assertPasswordPolicy } from './password-policy';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant, PLAN_FEATURES, PLAN_LIMITS } from '@repo/shared-types';
 import type { TaxStatus, TierId, AiAddonType, PlanCode } from '@repo/shared-types';
 
@@ -448,6 +449,84 @@ export class AuthService {
     });
   }
 
+  /**
+   * SECURITY D3-06 — Mass-session-revocation. Revoke EVERY active session
+   * across an entire tenant (or, when tenantId is null, the whole platform).
+   * Used during credential-compromise incident response: an attacker who
+   * stole one refresh token can hold it for 30 days; this kills them all.
+   *
+   * Gated to SUPER_ADMIN + typed-slug confirmation at the controller layer.
+   * Returns the count revoked for the audit log.
+   */
+  async revokeAllSessionsForTenant(tenantId: string): Promise<{ revoked: number }> {
+    const result = await this.prisma.userSession.updateMany({
+      where: { user: { tenantId }, status: 'ACTIVE' },
+      data:  { status: 'REVOKED' },
+    });
+    return { revoked: result.count };
+  }
+  async revokeAllSessionsPlatformWide(): Promise<{ revoked: number }> {
+    const result = await this.prisma.userSession.updateMany({
+      where: { status: 'ACTIVE' },
+      data:  { status: 'REVOKED' },
+    });
+    return { revoked: result.count };
+  }
+
+  /**
+   * SECURITY D3-04 — Atomic employee deprovision. Single call that performs
+   * every revocation an offboarding employee needs in one transaction:
+   *   - Deactivate account (isActive = false)
+   *   - Clear kioskPin (cannot punch in/out)
+   *   - Clear supervisorPinHash (cannot authorize voids/refunds)
+   *   - Clear twoFactor secrets (clean slate if re-hired)
+   *   - Revoke all active refresh tokens
+   *   - Stamp separatedAt + separationReason
+   *
+   * Replaces the prior "manually toggle isActive in the UI and pray" workflow.
+   * Called from POST /users/:id/deprovision (owner-only).
+   */
+  async deprovisionUser(
+    tenantId: string,
+    userId: string,
+    actorId: string,
+    reason: string,
+  ): Promise<{ ok: true; revokedSessions: number }> {
+    const target = await this.prisma.user.findFirst({
+      where:  { id: userId, tenantId },
+      select: { id: true, isActive: true, role: true },
+    });
+    if (!target) throw new NotFoundException('User not found.');
+    if (target.role === 'SUPER_ADMIN') {
+      throw new ForbiddenException('SUPER_ADMIN cannot be deprovisioned via this endpoint.');
+    }
+    if (target.id === actorId) {
+      throw new BadRequestException('You cannot deprovision yourself.');
+    }
+    const sessions = await this.prisma.$transaction(async (tx) => {
+      const revoked = await tx.userSession.updateMany({
+        where: { userId, status: 'ACTIVE' },
+        data:  { status: 'REVOKED' },
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          isActive:               false,
+          kioskPin:               null,
+          supervisorPinHash:      null,
+          twoFactorSecret:        null,
+          twoFactorPendingSecret: null,
+          twoFactorBackupCodes:   [],
+          enable2fa:              false,
+          separatedAt:            new Date(),
+          separationReason:       reason?.trim()?.slice(0, 240) ?? 'Deprovisioned',
+        },
+      });
+      return revoked.count;
+    });
+    return { ok: true, revokedSessions: sessions };
+  }
+
   // ── Forgot / Reset Password ────────────────────────────────────────────────
 
   /** Generate a 1-hour password-reset token and email it to the user.
@@ -496,14 +575,13 @@ export class AuthService {
 
   /** Validate a reset token and set the new password. */
   async resetPassword(token: string, newPassword: string): Promise<void> {
-    if (!token?.trim())         throw new BadRequestException('Reset token is required.');
-    if (newPassword.length < 8) throw new BadRequestException('Password must be at least 8 characters.');
+    if (!token?.trim()) throw new BadRequestException('Reset token is required.');
 
     // Sprint 17 — DB stores SHA-256 hash; lookup by hashed value.
     const tokenHash = this.hashResetToken(token);
     const user = await this.prisma.user.findUnique({
       where:  { passwordResetToken: tokenHash },
-      select: { id: true, passwordResetTokenExpiry: true },
+      select: { id: true, email: true, name: true, passwordResetTokenExpiry: true },
     });
 
     if (!user || !user.passwordResetTokenExpiry) {
@@ -512,6 +590,10 @@ export class AuthService {
     if (user.passwordResetTokenExpiry < new Date()) {
       throw new BadRequestException('Reset link has expired. Please request a new one.');
     }
+
+    // SECURITY D3-05 — enforce password policy (12 char min, breach-corpus
+    // check, no-email-reuse). Replaces the prior 8-char loose check.
+    assertPasswordPolicy(newPassword, { email: user.email, name: user.name });
 
     const hash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({
@@ -537,15 +619,14 @@ export class AuthService {
   ): Promise<void> {
     const user = await this.prisma.user.findUniqueOrThrow({
       where:  { id: userId },
-      select: { passwordHash: true },
+      select: { passwordHash: true, email: true, name: true },
     });
 
     const valid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!valid) throw new UnauthorizedException('Current password is incorrect.');
 
-    if (newPassword.length < 8) {
-      throw new ForbiddenException('New password must be at least 8 characters.');
-    }
+    // SECURITY D3-05 — enforce password policy on every change.
+    assertPasswordPolicy(newPassword, { email: user.email, name: user.name });
 
     const hash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({

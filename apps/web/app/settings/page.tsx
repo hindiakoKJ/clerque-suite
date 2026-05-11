@@ -472,6 +472,13 @@ export default function SettingsPage() {
                 desc="Nightly off-box cloud snapshots — download for cold storage or share with your accountant"
               />
             )}
+            {/* Sprint 20 — 2FA / Security: any logged-in user can enrol */}
+            <SettingsCard
+              href="/settings/security"
+              icon={KeyRound}
+              title="Security &amp; 2FA"
+              desc="Enable two-factor authentication and manage backup codes for your account"
+            />
           </div>
         </section>
 

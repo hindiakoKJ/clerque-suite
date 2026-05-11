@@ -168,6 +168,48 @@ export class AuthController {
     return this.twoFactor.status(user.sub);
   }
 
+  // SECURITY D3-06 — mass session revocation. Tenant-scope is the common
+  // case during a credential-compromise incident: owner discovers a session
+  // is leaked, hits this endpoint, every active refresh token in the tenant
+  // dies and all users must log in fresh. Platform-wide variant is the same
+  // panic button at the SUPER_ADMIN level. Typed-slug confirmation is the
+  // safety pin so a misclick can't lock out an entire fleet.
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/revoke-all-tenant')
+  @HttpCode(HttpStatus.OK)
+  async revokeAllTenantSessions(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { confirmationToken: string },
+  ) {
+    if (user.role !== 'BUSINESS_OWNER' && user.role !== 'SUPER_ADMIN') {
+      throw new UnauthorizedException('Only BUSINESS_OWNER or SUPER_ADMIN may revoke all tenant sessions.');
+    }
+    if (!user.tenantId) throw new BadRequestException('No tenant context on session.');
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: user.tenantId }, select: { slug: true },
+    });
+    if (body?.confirmationToken !== tenant.slug) {
+      throw new BadRequestException(`Type the tenant slug exactly: "${tenant.slug}".`);
+    }
+    return this.authService.revokeAllSessionsForTenant(user.tenantId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/revoke-all-platform')
+  @HttpCode(HttpStatus.OK)
+  async revokeAllPlatformSessions(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { confirmationToken: string },
+  ) {
+    if (user.role !== 'SUPER_ADMIN') {
+      throw new UnauthorizedException('SUPER_ADMIN only.');
+    }
+    if (body?.confirmationToken !== 'REVOKE-ALL') {
+      throw new BadRequestException('Confirm by sending confirmationToken: "REVOKE-ALL".');
+    }
+    return this.authService.revokeAllSessionsPlatformWide();
+  }
+
   /**
    * POST /auth/pin-login
    * Cashier fast-login. tenantSlug + email + 4-8 digit PIN.

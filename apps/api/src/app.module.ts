@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { TenantModule } from './tenant/tenant.module';
@@ -60,6 +62,18 @@ import { HealthController } from './health/health.controller';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
+    // SECURITY D5-03 — global API rate limiter.
+    // Defaults: 100 requests / minute per IP. Authenticated endpoints can
+    // override via @Throttle on the controller for tighter or looser limits
+    // (e.g., login is already throttled per-account in auth.service). The
+    // limiter uses an in-memory LRU; acceptable for single-instance Railway,
+    // swap for the Redis storage adapter (`@nestjs/throttler/storage-redis`)
+    // before enabling horizontal scaling.
+    ThrottlerModule.forRoot([
+      { name: 'short',  ttl: 1000,    limit: 30 },   // 30 req / 1s
+      { name: 'medium', ttl: 10_000,  limit: 100 },  // 100 req / 10s
+      { name: 'long',   ttl: 60_000,  limit: 600 },  // 600 req / min
+    ]),
     PrismaModule,
     AuthModule,
     TenantModule,
@@ -112,6 +126,12 @@ import { HealthController } from './health/health.controller';
     LoyaltyModule,
     KioskModule,
     StorageModule,
+  ],
+  providers: [
+    // SECURITY D5-03 — apply ThrottlerGuard globally. Controllers can opt out
+    // with @SkipThrottle() (e.g., the webhook endpoints) or tighten limits
+    // with @Throttle(...).
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

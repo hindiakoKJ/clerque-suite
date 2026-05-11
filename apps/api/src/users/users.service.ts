@@ -12,6 +12,7 @@ import { AuditService } from '../audit/audit.service';
 import { DEFAULT_APP_ACCESS, hasPermission, hasBlockingViolation, detectViolations } from '@repo/shared-types';
 import { CreateUserDto, StaffRole } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { assertPasswordPolicy } from '../auth/password-policy';
 
 export { CreateUserDto, UpdateUserDto, StaffRole };
 
@@ -141,8 +142,11 @@ export class UsersService {
       if (!dto.kioskPin) {
         throw new BadRequestException('Kiosk-only accounts require a PIN.');
       }
-    } else if (!dto.password || dto.password.length < 8) {
-      throw new BadRequestException('Password must be at least 8 characters.');
+    } else {
+      // SECURITY D3-05 — enforce password policy at user creation. Replaces
+      // the prior 8-char loose check.
+      if (!dto.password) throw new BadRequestException('Password is required.');
+      assertPasswordPolicy(dto.password, { email: dto.email, name: dto.name });
     }
 
     // ── Plan-tier seat-quota check (modular pricing, 2026-05-08) ──────────
@@ -391,10 +395,12 @@ export class UsersService {
   // ─── Reset password ───────────────────────────────────────────────────────
 
   async resetPassword(tenantId: string, id: string, newPassword: string) {
-    await this.findOne(tenantId, id);
-    if (newPassword.length < 8) {
-      throw new BadRequestException('Password must be at least 8 characters.');
-    }
+    const target = await this.prisma.user.findFirst({
+      where: { id, tenantId }, select: { email: true, name: true },
+    });
+    if (!target) throw new NotFoundException('User not found.');
+    // SECURITY D3-05 — enforce password policy on admin-driven resets too.
+    assertPasswordPolicy(newPassword, { email: target.email, name: target.name });
     const passwordHash = await bcrypt.hash(newPassword, 12);
 
     // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId } for atomic tenant scope.
@@ -411,6 +417,69 @@ export class UsersService {
       data:  { status: 'REVOKED' },
     });
     return { message: 'Password reset. All active sessions revoked.' };
+  }
+
+  // ─── Deprovision user (SECURITY D3-04) ────────────────────────────────────
+
+  /**
+   * Atomically perform every revocation an offboarding employee needs:
+   * deactivate, clear kioskPin, clear supervisorPinHash, clear 2FA state,
+   * revoke all active refresh tokens, stamp separatedAt + separationReason.
+   *
+   * Replaces the prior "manually toggle isActive in the UI and pray"
+   * workflow. Called from POST /users/:id/deprovision (owner-only).
+   */
+  async deprovisionUser(
+    tenantId: string,
+    id: string,
+    actorId: string,
+    reason: string,
+  ): Promise<{ ok: true; revokedSessions: number }> {
+    const target = await this.prisma.user.findFirst({
+      where:  { id, tenantId },
+      select: { id: true, role: true },
+    });
+    if (!target) throw new NotFoundException('User not found.');
+    if (target.role === 'SUPER_ADMIN') {
+      throw new ForbiddenException('SUPER_ADMIN cannot be deprovisioned via this endpoint.');
+    }
+    if (target.id === actorId) {
+      throw new BadRequestException('You cannot deprovision yourself.');
+    }
+    const result = await this.prisma.$transaction(async (tx) => {
+      const revoked = await tx.userSession.updateMany({
+        where: { userId: id, status: 'ACTIVE' },
+        data:  { status: 'REVOKED' },
+      });
+      await tx.user.update({
+        where: { id },
+        data: {
+          isActive:               false,
+          kioskPin:               null,
+          supervisorPinHash:      null,
+          twoFactorSecret:        null,
+          twoFactorPendingSecret: null,
+          twoFactorBackupCodes:   [],
+          enable2fa:              false,
+          separatedAt:            new Date(),
+          separationReason:       (reason?.trim() ?? 'Deprovisioned').slice(0, 240),
+        },
+      });
+      return revoked.count;
+    });
+    // Use PERMISSIONS_UPDATED (existing AuditAction enum value); a future
+    // migration may add a dedicated USER_DEPROVISIONED value but this is
+    // semantically correct enough — deprovision IS a permissions change.
+    await this.audit.log({
+      tenantId,
+      action:      'PERMISSIONS_UPDATED',
+      entityType:  'User',
+      entityId:    id,
+      performedBy: actorId,
+      description: `Deprovisioned: ${reason?.slice(0, 200) ?? 'no reason'}. Sessions revoked: ${result}.`,
+      after:       { isActive: false, separationReason: reason?.slice(0, 240) ?? null },
+    });
+    return { ok: true, revokedSessions: result };
   }
 
   // ─── Toggle MDM role (BUSINESS_OWNER only) ───────────────────────────────

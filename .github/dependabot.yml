@@ -1,0 +1,51 @@
+# SECURITY D1-05, D6-02 — automated dependency vulnerability scanning.
+#
+# Opens PRs against master whenever a HIGH/CRITICAL advisory lands on any
+# package in the monorepo. Patch + minor updates are bundled into a weekly
+# digest to avoid PR-spam; security-only PRs land immediately.
+#
+# Per the audit's recommended SLA: HIGH/CRITICAL advisories triaged + merged
+# within 7 days. Dependabot does the "detect" half; the founder does the
+# "merge" half.
+
+version: 2
+updates:
+  # Root + apps/api + apps/web are all npm workspaces under the same lock.
+  # We point at the root once; Dependabot follows the workspace map.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Asia/Manila"
+    open-pull-requests-limit: 10
+    versioning-strategy: "increase"
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+      include: "scope"
+    # Security advisories override the weekly schedule — open immediately.
+    # (Dependabot's default behaviour for `security-updates`; documented here
+    # so the policy is explicit and reviewable.)
+    groups:
+      patch-updates:
+        update-types:
+          - "patch"
+      minor-updates:
+        update-types:
+          - "minor"
+
+  # GitHub Actions workflows under .github/workflows/* are checked separately.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"

@@ -207,10 +207,13 @@ export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
 };
 
 /**
- * All STD_* (Single Module) plans are POS-only by design. Ledger and Payroll
- * standalone don't make business sense — they need a transactional source
- * (POS) to be useful. Anyone needing Ledger or Payroll should start at a
- * Pair plan (any 2 modules) or higher.
+ * STD_* (Single Module) plans must have exactly one of {POS, Ledger, Payroll}
+ * enabled — the user picks which module they want at the plan-selection step.
+ *
+ * Previously this was hard-coded to POS-only; Sprint 21 broadened to support
+ * Ledger-only signups (accounting-firm tenants, bookkeepers servicing
+ * multiple SMEs) and Payroll-only signups (HR-outsource shops). Pricing is
+ * unchanged — a Single Module plan at any module costs the same.
  *
  * Returns the validation error message if the combination is invalid for
  * the standalone tier, or null if valid. PAIR / SUITE / ENTERPRISE plans
@@ -223,19 +226,17 @@ export function validateSoloModuleCombo(
   moduleLedger: boolean,
   modulePayroll: boolean,
 ): string | null {
-  // Only standalone (single-module) plans are subject to POS-only enforcement.
+  // Only standalone (single-module) plans are subject to the "exactly 1" rule.
   if (!planCode.startsWith('STD_')) return null;
 
   const planLabel = planCode.replace('STD_', '').toLowerCase().replace(/^./, (c) => c.toUpperCase());
 
-  if (!modulePos) {
-    return `${planLabel} plan requires POS to be enabled — Single Module tier is POS-only.`;
+  const enabledCount = [modulePos, moduleLedger, modulePayroll].filter(Boolean).length;
+  if (enabledCount === 0) {
+    return `${planLabel} plan requires exactly one module to be enabled (POS, Ledger, or Payroll).`;
   }
-  if (moduleLedger) {
-    return `${planLabel} plan does not include Ledger. Choose a Pair plan (POS + Ledger) for accounting access.`;
-  }
-  if (modulePayroll) {
-    return `${planLabel} plan does not include Payroll. Choose a Pair plan (POS + Payroll) for payroll access.`;
+  if (enabledCount > 1) {
+    return `${planLabel} plan is Single Module — only one of POS / Ledger / Payroll can be enabled. Choose a Pair plan for 2 modules.`;
   }
   return null;
 }

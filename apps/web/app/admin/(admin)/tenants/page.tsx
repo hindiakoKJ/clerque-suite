@@ -58,10 +58,10 @@ const PLAN_CODES = [
   'ENTERPRISE',
 ] as const;
 const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
-  STD_SOLO:   'Solo (POS only · 1 staff · ₱199/mo)',
-  STD_DUO:    'Duo (POS only · 3 staff · ₱499/mo)',
-  STD_TEAM:   'Team (POS only · 10 staff · ₱999/mo)',
-  STD_BIZ:    'Business (POS only · 25 staff · ₱1,899/mo)',
+  STD_SOLO:   'Solo (1 module · 1 staff · ₱199/mo)',
+  STD_DUO:    'Duo (1 module · 3 staff · ₱499/mo)',
+  STD_TEAM:   'Team (1 module · 10 staff · ₱999/mo)',
+  STD_BIZ:    'Business (1 module · 25 staff · ₱1,899/mo)',
   PAIR_T1:    'Pair T1 (any 2 modules · 3 staff · ₱799/mo)',
   PAIR_T2:    'Pair T2 (any 2 modules · 10 staff · ₱1,599/mo)',
   PAIR_T3:    'Pair T3 (any 2 modules · 25 staff · ₱2,899/mo)',
@@ -106,6 +106,10 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
     ownerName: '', ownerEmail: '',
     contactEmail: '', contactPhone: '',
   });
+  // Sprint 21 — explicit module selection. Plan code drives the defaults
+  // but the operator can opt-in to Ledger-only or Payroll-only on STD plans,
+  // or any 2-of-3 combo on PAIR plans. SUITE plans always have all 3 on.
+  const [modules, setModules] = useState({ pos: true, ledger: false, payroll: false });
   const [busy, setBusy] = useState(false);
 
   function set(key: keyof typeof form, val: string) {
@@ -114,7 +118,34 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
     if (key === 'name' && !form.slug) {
       setForm((f) => ({ ...f, name: val, slug: val.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-') }));
     }
+    // Auto-adjust modules to match plan-tier rules when plan changes.
+    if (key === 'planCode') {
+      if (val.startsWith('SUITE_') || val === 'ENTERPRISE') {
+        setModules({ pos: true, ledger: true, payroll: true });
+      } else if (val.startsWith('PAIR_')) {
+        // Default to POS + Ledger for PAIR; operator can toggle to POS + Payroll
+        // or Ledger + Payroll.
+        setModules({ pos: true, ledger: true, payroll: false });
+      } else if (val.startsWith('STD_')) {
+        // Default to POS-only for backwards compat; operator can flip.
+        setModules({ pos: true, ledger: false, payroll: false });
+      }
+    }
   }
+
+  function toggleModule(key: 'pos' | 'ledger' | 'payroll') {
+    setModules((m) => ({ ...m, [key]: !m[key] }));
+  }
+
+  const isSuite  = form.planCode.startsWith('SUITE_') || form.planCode === 'ENTERPRISE';
+  const isStd    = form.planCode.startsWith('STD_');
+  const isPair   = form.planCode.startsWith('PAIR_');
+  const onCount  = [modules.pos, modules.ledger, modules.payroll].filter(Boolean).length;
+  // Validation messages mirror server-side validateSoloModuleCombo + PAIR rules.
+  const moduleError =
+    isStd && onCount !== 1 ? 'Single Module plan requires exactly one of POS / Ledger / Payroll.'
+    : isPair && onCount !== 2 ? 'Pair plan requires exactly two modules.'
+    : null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -136,6 +167,11 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
         // Sprint 17 — atomic plan apply (no more two-PATCH dance).
         planCode:      form.planCode,
         staffSeatAddons: 0,
+        // Sprint 21 — explicit module flags so Single Module plans can choose
+        // Ledger-only / Payroll-only and Pair plans can pick any 2 modules.
+        modulePos:     modules.pos,
+        moduleLedger:  modules.ledger,
+        modulePayroll: modules.payroll,
       };
       const { data } = await api.post<CreatedResult>('/admin/tenants', createPayload);
       onCreated(data);
@@ -202,8 +238,42 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
                 </optgroup>
               </select>
               <p className="text-[10px] text-muted-foreground mt-0.5">
-                Single Module = POS only. For Ledger or Payroll, pick a Pair plan or Suite. Module flags + staff cap auto-applied from this code.
+                Single Module = pick ONE of POS / Ledger / Payroll · Pair = pick any 2 · Suite = all 3. Staff cap auto-applied.
               </p>
+            </div>
+            {/* Sprint 21 — module selector */}
+            <div className="col-span-2 border-t border-border pt-3">
+              <p className="text-xs font-medium mb-2">Modules</p>
+              <div className="flex flex-wrap gap-3">
+                {([
+                  { key: 'pos',     label: 'POS / Counter',     hint: 'Sales, orders, cash drawer, receipts' },
+                  { key: 'ledger',  label: 'Ledger / Accounting', hint: 'JE, AR, AP, BIR, financial statements' },
+                  { key: 'payroll', label: 'Payroll',           hint: 'Staff, time entries, pay runs, BIR 2316' },
+                ] as const).map(({ key, label, hint }) => (
+                  <label key={key}
+                    className={`flex-1 min-w-[140px] flex items-start gap-2 rounded-md border p-2 cursor-pointer ${
+                      modules[key] ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-border bg-background'
+                    } ${isSuite ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  >
+                    <input type="checkbox" checked={modules[key]}
+                      disabled={isSuite /* SUITE always has all 3 on */}
+                      onChange={() => toggleModule(key)}
+                      className="mt-0.5 accent-[var(--accent)]" />
+                    <span>
+                      <span className="block text-xs font-medium">{label}</span>
+                      <span className="block text-[10px] text-muted-foreground">{hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {moduleError && (
+                <p className="text-[11px] text-amber-600 mt-2">{moduleError}</p>
+              )}
+              {isStd && modules.ledger && !modules.pos && (
+                <p className="text-[10px] text-emerald-600 mt-1">
+                  Ledger-only tenant — they'll be seeded with a Ledger-focused Chart of Accounts (no POS-specific accounts).
+                </p>
+              )}
             </div>
             <div className="col-span-2 border-t border-border pt-3">
               <p className="text-xs font-medium mb-2">Business Owner</p>
@@ -234,7 +304,7 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
           <div className="flex justify-end gap-2 pt-2 border-t border-border">
             <button type="button" onClick={onClose}
               className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted">Cancel</button>
-            <button type="submit" disabled={busy}
+            <button type="submit" disabled={busy || !!moduleError}
               className="h-9 px-4 rounded-md text-sm font-medium text-white disabled:opacity-50"
               style={{ background: 'var(--accent)' }}>
               {busy ? 'Creating…' : 'Create Tenant'}

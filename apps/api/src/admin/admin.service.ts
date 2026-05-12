@@ -565,15 +565,27 @@ export class AdminService {
     if (!cap) {
       throw new BadRequestException(`Unknown plan code: ${planCode}.`);
     }
-    // Resolve module flags consistent with plan rules: SUITE forces all 3,
-    // STD forces POS-only, PAIR respects the booleans.
+    // Resolve module flags consistent with plan rules:
+    //   - SUITE: always forces all 3 modules on
+    //   - STD (Single Module, Sprint 21): respects dto.module* flags, but
+    //     `validateSoloModuleCombo` will reject any combo that doesn't have
+    //     exactly one module enabled. Default to POS-only if caller passed
+    //     nothing, for backward compat with the prior POS-only behaviour.
+    //   - PAIR: respects dto.module* booleans (2 of 3 must be on)
     const isSuite = cap.moduleCount === 3;
     const isStd   = planCode.startsWith('STD_');
     const planMods = {
-      modulePos:     isSuite ? true  : (isStd ? true  : (dto.modulePos     ?? true)),
-      moduleLedger:  isSuite ? true  : (isStd ? false : (dto.moduleLedger  ?? true)),
-      modulePayroll: isSuite ? true  : (isStd ? false : (dto.modulePayroll ?? false)),
+      modulePos:     isSuite ? true  : (dto.modulePos     ?? (isStd ? true  : true)),
+      moduleLedger:  isSuite ? true  : (dto.moduleLedger  ?? (isStd ? false : true)),
+      modulePayroll: isSuite ? true  : (dto.modulePayroll ?? (isStd ? false : false)),
     };
+    // Validate STD plans have exactly one module enabled.
+    const { validateSoloModuleCombo } = await import('@repo/shared-types');
+    const soloErr = validateSoloModuleCombo(
+      planCode as Parameters<typeof validateSoloModuleCombo>[0],
+      planMods.modulePos, planMods.moduleLedger, planMods.modulePayroll,
+    );
+    if (soloErr) throw new BadRequestException(soloErr);
     const staffSeatAddons = Math.min(dto.staffSeatAddons ?? 0, cap.maxAddons);
 
     const tenant = await this.prisma.$transaction(async (tx) => {
@@ -628,6 +640,16 @@ export class AdminService {
       return { tenant: t, branch, user };
     });
 
+    // Sprint 21 — eager-seed Chart of Accounts with the right template based
+    // on module selection. Ledger-only tenants (moduleLedger=true,
+    // modulePos=false) get the LEDGER_ONLY template that omits POS-coupled
+    // accounts (Sales Revenue – POS, COGS – POS, Merchandise Inventory,
+    // Output VAT) and substitutes generic service-business equivalents.
+    // Everyone else gets FULL. If they later activate POS, the lazy back-fill
+    // in `findAll()` will add the missing POS accounts non-destructively.
+    const coaTemplate = planMods.moduleLedger && !planMods.modulePos ? 'LEDGER_ONLY' : 'FULL';
+    await this.accounts.seedDefaultAccounts(tenant.tenant.id, coaTemplate);
+
     // Log to ConsoleLog
     await this.logAction({
       actor,
@@ -636,7 +658,7 @@ export class AdminService {
       userId:     tenant.user.id,
       userEmail:  dto.ownerEmail,
       action:     'TENANT_CREATED',
-      detail:     { ownerName: dto.ownerName, tier: dto.tier, businessType: dto.businessType },
+      detail:     { ownerName: dto.ownerName, tier: dto.tier, businessType: dto.businessType, coaTemplate },
     });
 
     return {

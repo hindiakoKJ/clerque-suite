@@ -358,21 +358,57 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '8020', name: 'Deferred Tax Expense / (Benefit)',          type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
 ];
 
+/**
+ * LEDGER_ONLY_ACCOUNTS — Chart of Accounts variant for tenants who signed up
+ * for the Ledger app without POS. Strips the four accounts that are wired
+ * to POS event posting (1050 Merchandise Inventory, 2020 Output VAT, 4010
+ * Sales Revenue – POS, 5010 COGS – POS) and substitutes service-business
+ * equivalents (4000 Service Revenue, 5000 Cost of Services). A Ledger-only
+ * tenant who later activates POS can call `seedDefaultAccounts(tenantId)`
+ * with no template arg — it will back-fill the missing POS-specific codes
+ * without disturbing existing entries.
+ */
+const POS_ONLY_CODES = new Set(['1050', '2020', '4010', '5010']);
+
+export const LEDGER_ONLY_ACCOUNTS: typeof DEFAULT_ACCOUNTS = [
+  // Filter out the four POS-only codes and append generics in their place.
+  ...DEFAULT_ACCOUNTS.filter((a) => !POS_ONLY_CODES.has(a.code)),
+  { code: '2025', name: 'Output VAT Payable',          type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN', isSystem: false },
+  { code: '4000', name: 'Service Revenue',             type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN', isSystem: false },
+  { code: '5000', name: 'Cost of Services',            type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN', isSystem: false },
+];
+
+/** Template selector for `seedDefaultAccounts`. */
+export type CoaTemplate = 'FULL' | 'LEDGER_ONLY';
+
 @Injectable()
 export class AccountsService {
   constructor(private prisma: PrismaService) {}
 
   // ── Seed defaults for a new tenant ──────────────────────────────────────────
 
-  async seedDefaultAccounts(tenantId: string): Promise<void> {
+  async seedDefaultAccounts(
+    tenantId: string,
+    template: CoaTemplate = 'FULL',
+  ): Promise<void> {
     // Fetch only the codes that already exist so we can insert the missing ones.
     // This lets new accounts added to DEFAULT_ACCOUNTS be back-filled for
     // existing tenants without touching or duplicating anything already there.
+    //
+    // Template:
+    //   - 'FULL' (default): all DEFAULT_ACCOUNTS — used by POS + Ledger tenants
+    //     and by `findAll()` back-fill (so a Ledger-only tenant who later
+    //     activates POS gets the missing POS-specific codes automatically).
+    //   - 'LEDGER_ONLY': LEDGER_ONLY_ACCOUNTS — service-business CoA without
+    //     POS-coupled accounts. Used by the onboarding wizard for Ledger-only
+    //     signups.
+    const source = template === 'LEDGER_ONLY' ? LEDGER_ONLY_ACCOUNTS : DEFAULT_ACCOUNTS;
+
     const existingCodes = await this.prisma.account
       .findMany({ where: { tenantId }, select: { code: true } })
       .then((rows) => new Set(rows.map((r) => r.code)));
 
-    const missing = DEFAULT_ACCOUNTS.filter((a) => !existingCodes.has(a.code));
+    const missing = source.filter((a) => !existingCodes.has(a.code));
     if (missing.length === 0) return;
 
     await this.prisma.account.createMany({

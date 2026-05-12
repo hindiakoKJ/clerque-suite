@@ -68,6 +68,16 @@ const SEVERITY_STYLES: Record<Severity, { border: string; text: string; bg: stri
   neutral: { border: 'border-border',         text: 'text-foreground',   bg: 'bg-background' },
 };
 
+// Sprint 21 — when a tenant is Ledger-only (modulePos === false), several
+// dashboard widgets are meaningless (POS event lag, order voids, products-
+// missing-cost). Wrap them in this helper so the JSX reads cleanly. Keeping
+// the default to `true` so the existing full-suite tenants (where JWT pre-
+// dates the modulePos field or has it explicitly true) see no change.
+function PosOnly({ enabled, children }: { enabled: boolean; children: React.ReactNode }) {
+  if (!enabled) return null;
+  return <>{children}</>;
+}
+
 function MetricCard({
   label, value, sub, severity = 'neutral', icon: Icon, onClick,
 }: {
@@ -119,6 +129,12 @@ function SectionHeader({ icon: Icon, title, subtitle }: {
 export default function LedgerDashboardPage() {
   const { user } = useAuthStore();
   const router   = useRouter();
+
+  // Sprint 21 — Ledger-only tenants (modulePos=false) shouldn't see widgets
+  // that surface POS-coupled signals (POS→JE lag, event queue, void rate,
+  // missing-cost products, offline syncs). Default to true so the existing
+  // tenants and pre-modular JWTs continue to see everything.
+  const posEnabled = user?.modulePos !== false;
 
   const { data, isLoading, refetch, isFetching } = useQuery<ProcessMetrics>({
     queryKey: ['ledger-process-metrics'],
@@ -237,29 +253,31 @@ export default function LedgerDashboardPage() {
               subtitle="How fresh is the data? Lag, backlog, and cycle times."
             />
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <MetricCard
-                label="POS → JE Lag"
-                value={fmtLag(data.timeliness.avgEventLagMs)}
-                sub="Avg time PENDING → POSTED, last 24h. Target: under 1 minute."
-                severity={sev.eventLag}
-                icon={Zap}
-              />
-              <MetricCard
-                label="Pending Events"
-                value={String(data.timeliness.pendingEvents)}
-                sub="Awaiting auto-post. Cron runs every minute."
-                severity={sev.pending}
-                icon={Inbox}
-                onClick={() => router.push('/ledger/events')}
-              />
-              <MetricCard
-                label="Failed Events"
-                value={String(data.timeliness.failedEvents)}
-                sub="Stuck — needs manual triage."
-                severity={sev.failed}
-                icon={XCircle}
-                onClick={() => router.push('/ledger/events')}
-              />
+              <PosOnly enabled={posEnabled}>
+                <MetricCard
+                  label="POS → JE Lag"
+                  value={fmtLag(data.timeliness.avgEventLagMs)}
+                  sub="Avg time PENDING → POSTED, last 24h. Target: under 1 minute."
+                  severity={sev.eventLag}
+                  icon={Zap}
+                />
+                <MetricCard
+                  label="Pending Events"
+                  value={String(data.timeliness.pendingEvents)}
+                  sub="Awaiting auto-post. Cron runs every minute."
+                  severity={sev.pending}
+                  icon={Inbox}
+                  onClick={() => router.push('/ledger/events')}
+                />
+                <MetricCard
+                  label="Failed Events"
+                  value={String(data.timeliness.failedEvents)}
+                  sub="Stuck — needs manual triage."
+                  severity={sev.failed}
+                  icon={XCircle}
+                  onClick={() => router.push('/ledger/events')}
+                />
+              </PosOnly>
               <MetricCard
                 label="DSO"
                 value={`${data.timeliness.daysSalesOutstanding.toFixed(1)} d`}
@@ -300,12 +318,14 @@ export default function LedgerDashboardPage() {
                 icon={data.accuracy.isBalanced ? CheckCircle2 : AlertTriangle}
                 onClick={() => router.push('/ledger/trial-balance')}
               />
-              <MetricCard
-                label="Voids (30d)"
-                value={String(data.accuracy.voidsLast30d)}
-                sub={`${fmtPct(data.accuracy.voidRateLast30d)} of orders. Target: under 2%.`}
-                severity={sev.voidRate}
-              />
+              <PosOnly enabled={posEnabled}>
+                <MetricCard
+                  label="Voids (30d)"
+                  value={String(data.accuracy.voidsLast30d)}
+                  sub={`${fmtPct(data.accuracy.voidRateLast30d)} of orders. Target: under 2%.`}
+                  severity={sev.voidRate}
+                />
+              </PosOnly>
               <MetricCard
                 label="Period Reopens (90d)"
                 value={String(data.accuracy.reopensLast90d)}
@@ -349,12 +369,14 @@ export default function LedgerDashboardPage() {
                 sub="Month-to-date."
                 severity="neutral"
               />
-              <MetricCard
-                label="Events (24h)"
-                value={String(data.volume.eventsProcessedLast24h)}
-                sub="Auto-processed in the last day."
-                severity="neutral"
-              />
+              <PosOnly enabled={posEnabled}>
+                <MetricCard
+                  label="Events (24h)"
+                  value={String(data.volume.eventsProcessedLast24h)}
+                  sub="Auto-processed in the last day."
+                  severity="neutral"
+                />
+              </PosOnly>
               <MetricCard
                 label="Open AR"
                 value={String(data.volume.openArInvoices)}
@@ -369,12 +391,14 @@ export default function LedgerDashboardPage() {
                 severity="neutral"
                 onClick={() => router.push('/ledger/ap/bills')}
               />
-              <MetricCard
-                label="Offline Syncs (24h)"
-                value={String(data.control.offlineSyncsLast24h)}
-                sub="POS orders posted from offline queue."
-                severity="neutral"
-              />
+              <PosOnly enabled={posEnabled}>
+                <MetricCard
+                  label="Offline Syncs (24h)"
+                  value={String(data.control.offlineSyncsLast24h)}
+                  sub="POS orders posted from offline queue."
+                  severity="neutral"
+                />
+              </PosOnly>
             </div>
           </section>
 
@@ -402,14 +426,16 @@ export default function LedgerDashboardPage() {
                 icon={ShieldAlert}
                 onClick={() => router.push('/settings/sod-violations')}
               />
-              <MetricCard
-                label="Products Missing Cost"
-                value={String(data.control.productsMissingCost)}
-                sub="No cost price → COGS not booked → profit overstated."
-                severity={sev.missingCost}
-                icon={FileWarning}
-                onClick={() => router.push('/pos/products')}
-              />
+              <PosOnly enabled={posEnabled}>
+                <MetricCard
+                  label="Products Missing Cost"
+                  value={String(data.control.productsMissingCost)}
+                  sub="No cost price → COGS not booked → profit overstated."
+                  severity={sev.missingCost}
+                  icon={FileWarning}
+                  onClick={() => router.push('/pos/products')}
+                />
+              </PosOnly>
               <MetricCard
                 label="Audit Entries (24h)"
                 value={String(data.control.auditEntriesLast24h)}

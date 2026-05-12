@@ -74,6 +74,7 @@ const REPORTS: ReportDef[] = [
   { id: 'journal-templates',   name: 'Journal Templates',      desc: 'Recurring JE patterns and next-run schedules.',                              filter: 'none',       roles: BASE, section: 'General Ledger' },
 
   // ── Accounts Receivable ──────────────────────────────────────────────────
+  { id: 'quotes',              name: 'Quotes Register',        desc: 'Sales quotes in the period — status, totals, and converted invoice link.',  filter: 'dateRangeStatus', roles: AR_ROLES, section: 'AR' },
   { id: 'ar-invoice-register', name: 'AR Invoice Register',    desc: 'All AR invoices in the period with status and balances.',                   filter: 'dateRangeStatus', roles: AR_ROLES, section: 'AR' },
   { id: 'ar-aging',            name: 'AR Aging',               desc: 'Outstanding receivables bucketed by age (1-30, 31-60, 61-90, 90+).',        filter: 'none',       roles: AR_ROLES, section: 'AR' },
   { id: 'ar-customer-statement', name: 'AR Customer Statement', desc: 'Per-customer invoice + payment history for the period.',                 filter: 'customerId', roles: AR_ROLES, section: 'AR' },

@@ -248,6 +248,22 @@ export class ExportController {
     sendXlsx(res, buffer, filename);
   }
 
+  /** GET /export/quotes?from=&to=&status= */
+  @Get('quotes')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'SALES_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async quotes(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from:   string | undefined,
+    @Query('to')   to:     string | undefined,
+    @Query('status') status: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportQuotes(user.tenantId!, { from, to, status });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `quotes-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
   /** GET /export/ar-invoice-register?from=&to=&status= */
   @Get('ar-invoice-register')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')

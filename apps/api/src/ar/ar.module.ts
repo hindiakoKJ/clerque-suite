@@ -8,14 +8,16 @@ import { ARInvoicesController } from './ar-invoices.controller';
 import { ARInvoicesService } from './ar-invoices.service';
 import { ARPaymentsController } from './ar-payments.controller';
 import { ARPaymentsService } from './ar-payments.service';
+import { QuotesController } from './quotes.controller';
+import { QuotesService } from './quotes.service';
 import { AccountingModule } from '../accounting/accounting.module';
 import { AccountingPeriodsModule } from '../accounting-periods/accounting-periods.module';
 import { NumberingModule } from '../numbering/numbering.module';
 
 @Module({
   imports:     [PrismaModule, AccountingModule, AccountingPeriodsModule, NumberingModule],
-  controllers: [CustomersController, ArController, ARInvoicesController, ARPaymentsController],
-  providers:   [CustomersService, ArService, ARInvoicesService, ARPaymentsService],
-  exports:     [CustomersService, ArService, ARInvoicesService, ARPaymentsService],
+  controllers: [CustomersController, ArController, ARInvoicesController, ARPaymentsController, QuotesController],
+  providers:   [CustomersService, ArService, ARInvoicesService, ARPaymentsService, QuotesService],
+  exports:     [CustomersService, ArService, ARInvoicesService, ARPaymentsService, QuotesService],
 })
 export class ArModule {}

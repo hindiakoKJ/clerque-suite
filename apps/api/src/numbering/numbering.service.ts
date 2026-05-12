@@ -58,6 +58,7 @@ const DEFAULTS: Record<SequenceType, SequenceDefaults> = {
   PROGRESS_BILLING:  { prefix: 'PB',   format: 'PB-{YYYY}-{######}',   padding: 6, resetPolicy: 'YEARLY' },
   MATERIAL_ISSUANCE: { prefix: 'ISS',  format: 'ISS-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
   PROJECT_CODE:      { prefix: 'PRJ',  format: 'PRJ-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
+  QUOTE:             { prefix: 'Q',    format: 'Q-{YYYY}-{####}',      padding: 4, resetPolicy: 'YEARLY' },
 };
 
 @Injectable()

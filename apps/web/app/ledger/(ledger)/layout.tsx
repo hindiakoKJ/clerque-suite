@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart, FileSignature } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -132,8 +132,9 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
       { sectionStart: 'Overview' }),
 
     // ── Receivables (sub-ledger) ────────────────────────────────────────────
-    makeLedgerNavItem('/ledger/ar/billing',    'Customer Billing',   FileSpreadsheet, AR_ROLES,         role,
+    makeLedgerNavItem('/ledger/ar/quotes',     'Quotes',             FileSignature,   AR_ROLES,         role,
       { sectionStart: 'Receivables' }),
+    makeLedgerNavItem('/ledger/ar/billing',    'Customer Billing',   FileSpreadsheet, AR_ROLES,         role),
     makeLedgerNavItem('/ledger/ar/invoices',   'POS Collections',    TrendingUp,      AR_ROLES,         role),
 
     // ── Payables (sub-ledger) ───────────────────────────────────────────────

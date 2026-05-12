@@ -1126,6 +1126,69 @@ export class ExportService {
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
+  // ── Quotes Register ───────────────────────────────────────────────────────
+
+  async exportQuotes(
+    tenantId: string,
+    opts: { from?: string; to?: string; status?: string },
+  ): Promise<Buffer> {
+    const name = await this.tenantName(tenantId);
+    const where: any = { tenantId };
+    if (opts.status) where.status = opts.status;
+    if (opts.from)   where.quoteDate = { ...(where.quoteDate ?? {}), gte: new Date(opts.from) };
+    if (opts.to)     where.quoteDate = { ...(where.quoteDate ?? {}), lte: new Date(opts.to) };
+
+    const quotes = await this.prisma.quote.findMany({
+      where,
+      orderBy: [{ quoteDate: 'desc' }, { quoteNumber: 'desc' }],
+      include: {
+        customer:         { select: { name: true } },
+        convertedInvoice: { select: { invoiceNumber: true } },
+      },
+    });
+
+    const wb = buildWorkbook();
+    const ws = wb.addWorksheet('Quotes', { views: [{ state: 'frozen', ySplit: 4 }] });
+    ws.properties.tabColor = { argb: 'FF268BD2' };
+
+    const range = [opts.from, opts.to].filter(Boolean).join(' – ') || 'All dates';
+    writeReportHeader(ws, name, 'Quotes Register', `${range}   |   Generated: ${new Date().toLocaleString()}`, 9);
+
+    ws.columns = [
+      { key: 'quoteNumber',  header: 'Quote #',         width: 16 },
+      { key: 'quoteDate',    header: 'Quote Date',      width: 14, style: { numFmt: DATE_FMT } },
+      { key: 'validUntil',   header: 'Valid Until',     width: 14, style: { numFmt: DATE_FMT } },
+      { key: 'customerName', header: 'Customer',        width: 32 },
+      { key: 'status',       header: 'Status',          width: 14 },
+      { key: 'subtotal',     header: 'Subtotal',        width: 16, style: { numFmt: PESO_FMT } },
+      { key: 'vatAmount',    header: 'VAT',             width: 14, style: { numFmt: PESO_FMT } },
+      { key: 'totalAmount',  header: 'Total',           width: 16, style: { numFmt: PESO_FMT } },
+      { key: 'invoiceNumber', header: 'Converted To',   width: 16 },
+    ];
+
+    applyHeaderStyle(ws.getRow(4));
+
+    quotes.forEach((q, idx) => {
+      applyAlternatingFill(
+        ws.addRow({
+          quoteNumber:   q.quoteNumber,
+          quoteDate:     new Date(q.quoteDate),
+          validUntil:    new Date(q.validUntil),
+          customerName:  q.customer?.name ?? '',
+          status:        q.status,
+          subtotal:      Number(q.subtotal),
+          vatAmount:     Number(q.vatAmount),
+          totalAmount:   Number(q.totalAmount),
+          invoiceNumber: q.convertedInvoice?.invoiceNumber ?? '',
+        }),
+        idx,
+      );
+    });
+
+    autoWidth(ws);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
   // ── AR Customer Statement ─────────────────────────────────────────────────
 
   async exportArCustomerStatement(

@@ -534,6 +534,48 @@ export class ExportController {
     this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
+  /** GET /export/bir-2307?vendorId=&year=&quarter=  — single vendor */
+  @Get('bir-2307')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT')
+  @RequirePlanFeature('birForms')
+  async bir2307(
+    @CurrentUser() user: JwtPayload,
+    @Query('vendorId') vendorId: string,
+    @Query('year')     yearStr:    string,
+    @Query('quarter')  quarterStr: string,
+    @Res() res: Response,
+  ) {
+    if (!vendorId) throw new BadRequestException('vendorId is required');
+    const year    = parseInt(yearStr,    10);
+    const quarter = parseInt(quarterStr, 10) as 1 | 2 | 3 | 4;
+    if (!year || ![1, 2, 3, 4].includes(quarter)) {
+      throw new BadRequestException('year and quarter (1-4) are required');
+    }
+    const buffer   = await this.svc.exportBir2307(user.tenantId!, vendorId, year, quarter);
+    const filename = `bir-2307-${year}-Q${quarter}-${vendorId}.xlsx`;
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
+  }
+
+  /** GET /export/bir-2307-all?year=&quarter=  — one sheet per vendor with WHT in the period */
+  @Get('bir-2307-all')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT')
+  @RequirePlanFeature('birForms')
+  async bir2307All(
+    @CurrentUser() user: JwtPayload,
+    @Query('year')    yearStr:    string,
+    @Query('quarter') quarterStr: string,
+    @Res() res: Response,
+  ) {
+    const year    = parseInt(yearStr,    10);
+    const quarter = parseInt(quarterStr, 10) as 1 | 2 | 3 | 4;
+    if (!year || ![1, 2, 3, 4].includes(quarter)) {
+      throw new BadRequestException('year and quarter (1-4) are required');
+    }
+    const buffer   = await this.svc.exportBir2307All(user.tenantId!, year, quarter);
+    const filename = `bir-2307-all-${year}-Q${quarter}.xlsx`;
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
+  }
+
   /** GET /export/z-read-history?from=&to= */
   @Get('z-read-history')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')

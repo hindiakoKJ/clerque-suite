@@ -1,6 +1,8 @@
 import {
-  Controller, Get, Post, Patch, Param, Body, Query, UseGuards, HttpCode, HttpStatus,
+  Controller, Get, Post, Patch, Param, Body, Query, Res, UseGuards, HttpCode, HttpStatus,
+  BadRequestException, NotFoundException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -12,6 +14,10 @@ import { JwtPayload } from '@repo/shared-types';
 import { InvoiceStatus } from '@prisma/client';
 import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { ARInvoicesService } from './ar-invoices.service';
+import { InvoicePdfService } from './invoice-pdf.service';
+import { MailService } from '../mail/mail.service';
+import { AuditService } from '../audit/audit.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { CreateARInvoiceDto } from './dto/ar-invoice.dto';
 
 @ApiTags('AR Invoices')
@@ -20,7 +26,13 @@ import { CreateARInvoiceDto } from './dto/ar-invoice.dto';
 @RequireApp('LEDGER', 'READ_ONLY')
 @Controller('ar/invoices')
 export class ARInvoicesController {
-  constructor(private svc: ARInvoicesService) {}
+  constructor(
+    private svc:        ARInvoicesService,
+    private invoicePdf: InvoicePdfService,
+    private mail:       MailService,
+    private audit:      AuditService,
+    private prisma:     PrismaService,
+  ) {}
 
   /** List with filters: status, customerId, date range, onlyOpen, onlyOverdue */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
@@ -103,5 +115,82 @@ export class ARInvoicesController {
     @Body() body: { reason?: string },
   ) {
     return this.svc.cancel(user.tenantId!, id, user.sub, body.reason ?? 'No reason given');
+  }
+
+  // ── Sprint 22 — Invoice PDF + Email ─────────────────────────────────────
+
+  /** GET /ar/invoices/:id/pdf — download a single-page PDF rendering. */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'AR_ACCOUNTANT', 'FINANCE_LEAD')
+  @Get(':id/pdf')
+  async downloadPdf(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const invoice = await this.svc.findOne(user.tenantId!, id);
+    const buffer  = await this.invoicePdf.renderInvoicePdf(user.tenantId!, id);
+    const filename = `${invoice.invoiceNumber}.pdf`;
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length':      buffer.length,
+    });
+    res.send(buffer);
+  }
+
+  /**
+   * POST /ar/invoices/:id/email — render the PDF + send via Resend.
+   * Body { to?: string }. Defaults to customer.contactEmail; 400 if neither set.
+   * Audit-logs DATA_EXPORTED on success.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD')
+  @Post(':id/email')
+  @HttpCode(HttpStatus.OK)
+  async emailInvoice(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { to?: string },
+  ) {
+    const invoice = await this.svc.findOne(user.tenantId!, id);
+    const recipient = body.to?.trim() || invoice.customer?.contactEmail?.trim();
+    if (!recipient) {
+      throw new BadRequestException(
+        'No recipient email provided and the customer has no contactEmail on file. Provide { to: "user@example.com" } or set the customer contactEmail first.',
+      );
+    }
+
+    const pdfBuffer = await this.invoicePdf.renderInvoicePdf(user.tenantId!, id);
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: user.tenantId! }, select: { name: true, businessName: true },
+    });
+
+    const fmtPeso = (v: { toString(): string } | number | string) => {
+      const n = typeof v === 'number' ? v : Number(v.toString());
+      return '₱ ' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+
+    await this.mail.sendInvoice({
+      to:            recipient,
+      customerName:  invoice.customer?.name ?? 'Customer',
+      tenantName:    tenant.businessName ?? tenant.name,
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceTotal:  fmtPeso(invoice.totalAmount),
+      dueDate:       new Date(invoice.dueDate).toLocaleDateString('en-PH', {
+        day: '2-digit', month: 'short', year: 'numeric',
+      }),
+      pdfBuffer,
+    });
+
+    void this.audit.log({
+      tenantId:    user.tenantId!,
+      action:      'DATA_EXPORTED',
+      entityType:  'ARInvoice',
+      entityId:    invoice.id,
+      performedBy: user.sub,
+      description: `Emailed AR invoice ${invoice.invoiceNumber} to ${recipient}`,
+      after:       { invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber, recipient },
+    });
+
+    return { ok: true, recipient, invoiceNumber: invoice.invoiceNumber };
   }
 }

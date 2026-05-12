@@ -243,9 +243,70 @@ export class MailService {
     });
   }
 
+  // ── AR Invoice delivery (Sprint 22) ─────────────────────────────────────
+  //
+  // Sends a customer-facing invoice email with the PDF attached. Reuses the
+  // existing branded HTML layout. Body intentionally short — the PDF is the
+  // load-bearing artifact; this email is just the cover letter.
+
+  async sendInvoice(opts: {
+    to:             string;
+    customerName:   string;
+    tenantName:     string;
+    invoiceNumber:  string;
+    invoiceTotal:   string;       // pre-formatted e.g. "₱ 12,345.00"
+    dueDate:        string;       // pre-formatted human date
+    pdfBuffer:      Buffer;
+    paymentInstructionsUrl?: string;
+  }): Promise<void> {
+    const filename = `${opts.invoiceNumber}.pdf`;
+    await this.send({
+      to:          opts.to,
+      subject:     `Invoice ${opts.invoiceNumber} from ${opts.tenantName}`,
+      html:        this.layout(`
+        <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
+          Invoice ${this.escape(opts.invoiceNumber)}
+        </h2>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Hi <strong>${this.escape(opts.customerName)}</strong>,
+        </p>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Please find attached invoice <strong>${this.escape(opts.invoiceNumber)}</strong>
+          from <strong>${this.escape(opts.tenantName)}</strong>.
+        </p>
+        <table style="border-collapse:collapse;width:100%;margin-bottom:24px;">
+          <tr>
+            <td style="padding:8px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;width:140px;border-radius:4px 0 0 4px;">Amount Due</td>
+            <td style="padding:8px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#1a1a1a;">${this.escape(opts.invoiceTotal)}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;">Due Date</td>
+            <td style="padding:8px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#1a1a1a;">${this.escape(opts.dueDate)}</td>
+          </tr>
+        </table>
+        ${opts.paymentInstructionsUrl ? `
+          <a href="${opts.paymentInstructionsUrl}"
+             style="display:inline-block;background:#2AA198;color:#fff;text-decoration:none;
+                    padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">
+            Payment Instructions
+          </a>` : ''}
+        <p style="margin:24px 0 0;color:#888;font-size:13px;line-height:1.6;">
+          Reply to this email if you have any questions about this invoice.
+          Thank you for your business.
+        </p>
+      `),
+      attachments: [{ filename, content: opts.pdfBuffer }],
+    });
+  }
+
   // ── Internal helpers ───────────────────────────────────────────────────────
 
-  private async send(opts: { to: string; subject: string; html: string }) {
+  private async send(opts: {
+    to:          string;
+    subject:     string;
+    html:        string;
+    attachments?: { filename: string; content: Buffer }[];
+  }) {
     if (!this.resend) {
       // No API key configured — skip silently with a debug-level note.
       // The constructor already logged a single warn at startup.
@@ -258,6 +319,9 @@ export class MailService {
         to:      opts.to,
         subject: opts.subject,
         html:    opts.html,
+        ...(opts.attachments && opts.attachments.length > 0
+          ? { attachments: opts.attachments }
+          : {}),
       });
       if (error) {
         this.logger.warn(`Resend delivery error to ${opts.to}: ${error.message}`);

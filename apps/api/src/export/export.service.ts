@@ -11,6 +11,7 @@ import { APBillsService } from '../ap/ap-bills.service';
 import { APPaymentsService } from '../ap/ap-payments.service';
 import { PayrollService } from '../payroll/payroll.service';
 import { BirService } from '../bir/bir.service';
+import { Bir2307Service, type Bir2307Data } from '../bir/bir-2307.service';
 import { AuditService } from '../audit/audit.service';
 import { LedgerMetricsService } from '../ledger-metrics/ledger-metrics.service';
 import type { AuditAction } from '@prisma/client';
@@ -95,6 +96,7 @@ export class ExportService {
     private apBills:     APBillsService,
     private apPayments:  APPaymentsService,
     private bir:         BirService,
+    private bir2307:     Bir2307Service,
     private audit:       AuditService,
     private ledgerMetrics: LedgerMetricsService,
   ) {}
@@ -2473,6 +2475,188 @@ export class ExportService {
     writeKpi('Control', 'Offline Syncs (24h)',           metrics.control.offlineSyncsLast24h);
 
     autoWidth(ws);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  // ── BIR Form 2307 — Certificate of Creditable Tax Withheld at Source ──────
+
+  /**
+   * Render ONE BIR-2307 worksheet onto an existing workbook. Sheet layout
+   * follows the official RR-2-98 / Sept-2005 form revision: header + payor
+   * block + payee block + ATC table with monthly columns + grand total +
+   * signature block. Designed to print legibly on A4 portrait.
+   *
+   * Reuses applyHeaderStyle so column-header rows look consistent with the
+   * other XLSX exports. Returns the worksheet for chaining.
+   */
+  buildBir2307Workbook(data: Bir2307Data, wb?: ExcelJS.Workbook): ExcelJS.Workbook {
+    const book = wb ?? buildWorkbook();
+    // Sheet names: 31-char max + no [ ] : * ? / \
+    const safeVendor = (data.payee.registeredName || 'vendor')
+      .replace(/[\\\/\?\*\[\]:]/g, ' ')
+      .slice(0, 28);
+    const ws = book.addWorksheet(`2307 ${safeVendor}`, {
+      pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true },
+    });
+    ws.properties.tabColor = { argb: 'FF8B5E3C' };
+
+    // ── Title block ────────────────────────────────────────────────────────
+    ws.mergeCells('A1:G1');
+    ws.getCell('A1').value = 'BIR FORM 2307';
+    ws.getCell('A1').font  = { bold: true, size: 14 };
+    ws.getCell('A1').alignment = { horizontal: 'center' };
+
+    ws.mergeCells('A2:G2');
+    ws.getCell('A2').value = 'Certificate of Creditable Tax Withheld at Source';
+    ws.getCell('A2').font  = { bold: true, size: 11 };
+    ws.getCell('A2').alignment = { horizontal: 'center' };
+
+    ws.mergeCells('A3:G3');
+    ws.getCell('A3').value = data.quarter
+      ? `Period: Q${data.quarter} ${data.year}  (${data.periodFrom} – ${data.periodTo})`
+      : `Period: ${data.year}  (${data.periodFrom} – ${data.periodTo})`;
+    ws.getCell('A3').alignment = { horizontal: 'center' };
+    ws.getCell('A3').font      = { italic: true, size: 10 };
+
+    let row = 5;
+    // ── Payor block (the withholding agent — our tenant) ──────────────────
+    ws.getCell(`A${row}`).value = 'Payor (Withholding Agent)';
+    ws.getCell(`A${row}`).font  = { bold: true };
+    row++;
+    ws.getCell(`A${row}`).value = 'Registered Name:';
+    ws.mergeCells(`B${row}:G${row}`);
+    ws.getCell(`B${row}`).value = data.payor.registeredName;
+    row++;
+    ws.getCell(`A${row}`).value = 'TIN:';
+    ws.getCell(`B${row}`).value = data.payor.tin || 'N/A';
+    row++;
+    ws.getCell(`A${row}`).value = 'Address:';
+    ws.mergeCells(`B${row}:G${row}`);
+    ws.getCell(`B${row}`).value = data.payor.address || 'N/A';
+    row += 2;
+
+    // ── Payee block (the vendor) ──────────────────────────────────────────
+    ws.getCell(`A${row}`).value = 'Payee (Vendor)';
+    ws.getCell(`A${row}`).font  = { bold: true };
+    row++;
+    ws.getCell(`A${row}`).value = 'Registered Name:';
+    ws.mergeCells(`B${row}:G${row}`);
+    ws.getCell(`B${row}`).value = data.payee.registeredName;
+    row++;
+    ws.getCell(`A${row}`).value = 'TIN:';
+    ws.getCell(`B${row}`).value = data.payee.tin || 'N/A';
+    row++;
+    ws.getCell(`A${row}`).value = 'Address:';
+    ws.mergeCells(`B${row}:G${row}`);
+    ws.getCell(`B${row}`).value = data.payee.address || 'N/A';
+    row += 2;
+
+    // ── ATC + monthly tax-base table ──────────────────────────────────────
+    const headerRowIdx = row;
+    const headers = ['ATC', 'Income Payments / Description', '1st Month', '2nd Month', '3rd Month', 'Total Tax Base', 'Tax Withheld'];
+    headers.forEach((h, i) => {
+      const cell = ws.getCell(headerRowIdx, i + 1);
+      cell.value = h;
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    applyHeaderStyle(ws.getRow(headerRowIdx));
+    ws.getRow(headerRowIdx).height = 28;
+    row++;
+
+    const monthIdxs: number[] = data.quarter
+      ? [(data.quarter - 1) * 3, (data.quarter - 1) * 3 + 1, (data.quarter - 1) * 3 + 2]
+      : [0, 1, 2];
+
+    for (const atc of data.atcRows) {
+      const byMonth = new Map(atc.months.map((m) => [m.month, m]));
+      const m1 = byMonth.get(monthIdxs[0])?.taxBase ?? 0;
+      const m2 = byMonth.get(monthIdxs[1])?.taxBase ?? 0;
+      const m3 = byMonth.get(monthIdxs[2])?.taxBase ?? 0;
+      const values: (string | number)[] = [
+        atc.atcCode, '', m1, m2, m3, atc.totalTaxBase, atc.totalWithheld,
+      ];
+      values.forEach((v, i) => {
+        const cell = ws.getCell(row, i + 1);
+        cell.value = v;
+        if (i >= 2) cell.numFmt = PESO_FMT;
+        cell.border = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      });
+      row++;
+    }
+
+    // Grand total
+    const totals: (string | number)[] = [
+      '', 'GRAND TOTAL', '', '', '',
+      data.grandTotalTaxBase, data.grandTotalWithheld,
+    ];
+    totals.forEach((v, i) => {
+      const cell = ws.getCell(row, i + 1);
+      cell.value = v;
+      cell.font  = { bold: true };
+      if (i >= 2) cell.numFmt = PESO_FMT;
+      cell.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+      cell.border = { top: { style: 'medium' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    row += 3;
+
+    // ── Signature block (left blank — owner signs the printout) ───────────
+    ws.getCell(`A${row}`).value = 'Signature of Withholding Agent / Authorised Representative';
+    ws.getCell(`A${row}`).font  = { italic: true, color: { argb: 'FF666666' } };
+    row += 3;
+    ws.getCell(`A${row}`).value = '___________________________________';
+    row++;
+    ws.getCell(`A${row}`).value = 'Printed Name + Position + Date';
+    ws.getCell(`A${row}`).font  = { italic: true, color: { argb: 'FF666666' } };
+    row += 2;
+
+    ws.mergeCells(`A${row}:G${row}`);
+    ws.getCell(`A${row}`).value =
+      `Generated by Clerque on ${new Date(data.generatedAt).toLocaleString('en-PH')} | ` +
+      `Bills counted: ${data.billCount}. Review against vendor copies before signing.`;
+    ws.getCell(`A${row}`).font = { italic: true, size: 9, color: { argb: 'FF666666' } };
+    ws.getCell(`A${row}`).alignment = { wrapText: true };
+
+    // Column widths — A is labels, B is the long description, C-G are amounts
+    ws.getColumn(1).width = 14;
+    ws.getColumn(2).width = 32;
+    ws.getColumn(3).width = 14;
+    ws.getColumn(4).width = 14;
+    ws.getColumn(5).width = 14;
+    ws.getColumn(6).width = 16;
+    ws.getColumn(7).width = 16;
+
+    return book;
+  }
+
+  /** Single-vendor 2307 → XLSX buffer. */
+  async exportBir2307(
+    tenantId: string,
+    vendorId: string,
+    year:     number,
+    quarter:  1 | 2 | 3 | 4,
+  ): Promise<Buffer> {
+    const data = await this.bir2307.generateForVendor(tenantId, vendorId, year, quarter);
+    const wb   = this.buildBir2307Workbook(data);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /** All vendors with WHT in the period → one workbook, one sheet per vendor. */
+  async exportBir2307All(
+    tenantId: string,
+    year:     number,
+    quarter:  1 | 2 | 3 | 4,
+  ): Promise<Buffer> {
+    const datasets = await this.bir2307.generateForAllVendors(tenantId, year, quarter);
+    const wb = buildWorkbook();
+    if (datasets.length === 0) {
+      // Avoid emitting a zero-sheet workbook — Excel refuses to open them.
+      const ws = wb.addWorksheet('No data', { pageSetup: { paperSize: 9, orientation: 'portrait' } });
+      ws.getCell('A1').value = `No vendor-WHT activity in Q${quarter} ${year}.`;
+      ws.getCell('A1').font  = { italic: true };
+    } else {
+      for (const d of datasets) this.buildBir2307Workbook(d, wb);
+    }
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
 }

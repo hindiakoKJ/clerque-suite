@@ -5,5 +5,6 @@ import { BirController } from './bir.controller';
 @Module({
   providers:   [BirService],
   controllers: [BirController],
+  exports:     [BirService],
 })
 export class BirModule {}

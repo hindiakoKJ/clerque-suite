@@ -1,8 +1,9 @@
-import { Controller, Get, Param, Query, Res, UseGuards, Header } from '@nestjs/common';
+import { Controller, Get, Param, Query, Res, UseGuards, Header, BadRequestException } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
@@ -204,5 +205,348 @@ export class ExportController {
       'Content-Disposition': `attachment; filename="${filename}"`,
     });
     res.send('﻿' + csv); // UTF-8 BOM for Excel compatibility
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ── New endpoints (Commit 1) ─────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** GET /export/balance-sheet?asOf=YYYY-MM-DD */
+  @Get('balance-sheet')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async balanceSheet(
+    @CurrentUser() user: JwtPayload,
+    @Query('asOf') asOf: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportBalanceSheet(user.tenantId!, asOf);
+    const filename = `balance-sheet-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/cash-flow?from=YYYY-MM-DD&to=YYYY-MM-DD */
+  @Get('cash-flow')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async cashFlow(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to')   to:   string,
+    @Res() res: Response,
+  ) {
+    if (!from || !to) throw new BadRequestException('from and to are required');
+    const buffer   = await this.svc.exportCashFlow(user.tenantId!, from, to);
+    const filename = `cash-flow-${from}_to_${to}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/journal-templates */
+  @Get('journal-templates')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async journalTemplates(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const buffer   = await this.svc.exportJournalTemplates(user.tenantId!);
+    const filename = `journal-templates-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ar-invoice-register?from=&to=&status= */
+  @Get('ar-invoice-register')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async arInvoiceRegister(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from:   string | undefined,
+    @Query('to')   to:     string | undefined,
+    @Query('status') status: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportArInvoiceRegister(user.tenantId!, { from, to, status });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `ar-invoice-register-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ar-customer-statement/:customerId?from=&to= */
+  @Get('ar-customer-statement/:customerId')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async arCustomerStatement(
+    @CurrentUser() user: JwtPayload,
+    @Param('customerId') customerId: string,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportArCustomerStatement(user.tenantId!, customerId, { from, to });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `ar-customer-statement-${customerId}-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ar-payments?from=&to= */
+  @Get('ar-payments')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async arPayments(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportArPayments(user.tenantId!, { from, to });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `ar-payments-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ap-bill-register?from=&to=&status= */
+  @Get('ap-bill-register')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async apBillRegister(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Query('status') status: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportApBillRegister(user.tenantId!, { from, to, status });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `ap-bill-register-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ap-vendor-statement/:vendorId?from=&to= */
+  @Get('ap-vendor-statement/:vendorId')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async apVendorStatement(
+    @CurrentUser() user: JwtPayload,
+    @Param('vendorId') vendorId: string,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportApVendorStatement(user.tenantId!, vendorId, { from, to });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `ap-vendor-statement-${vendorId}-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ap-payments?from=&to= */
+  @Get('ap-payments')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async apPayments(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportApPayments(user.tenantId!, { from, to });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `ap-payments-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ap-expenses?from=&to= */
+  @Get('ap-expenses')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async apExpenses(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportApExpenses(user.tenantId!, { from, to });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `ap-expenses-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/expense-claims?from=&to=&status= */
+  @Get('expense-claims')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
+  async expenseClaims(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Query('status') status: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportExpenseClaims(user.tenantId!, { from, to, status });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `expense-claims-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/bank-reconciliation/:accountId?asOf= */
+  @Get('bank-reconciliation/:accountId')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async bankReconciliation(
+    @CurrentUser() user: JwtPayload,
+    @Param('accountId') accountId: string,
+    @Query('asOf') asOf: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportBankReconciliation(user.tenantId!, accountId, asOf);
+    const filename = `bank-reconciliation-${accountId}-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/settlement-batches?from=&to= */
+  @Get('settlement-batches')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async settlementBatches(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportSettlementBatches(user.tenantId!, { from, to });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `settlement-batches-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/cash-position?asOf= */
+  @Get('cash-position')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async cashPosition(
+    @CurrentUser() user: JwtPayload,
+    @Query('asOf') asOf: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportCashPosition(user.tenantId!, asOf);
+    const filename = `cash-position-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/bir-2550q?year=&quarter= */
+  @Get('bir-2550q')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT')
+  @RequirePlanFeature('birForms')
+  async bir2550q(
+    @CurrentUser() user: JwtPayload,
+    @Query('year')    yearStr:    string,
+    @Query('quarter') quarterStr: string,
+    @Res() res: Response,
+  ) {
+    const year    = parseInt(yearStr,    10);
+    const quarter = parseInt(quarterStr, 10) as 1 | 2 | 3 | 4;
+    if (!year || ![1, 2, 3, 4].includes(quarter)) {
+      throw new BadRequestException('year and quarter (1-4) are required');
+    }
+    const buffer   = await this.svc.exportBir2550Q(user.tenantId!, year, quarter);
+    const filename = `bir-2550q-${year}-Q${quarter}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/bir-1701q?year=&quarter= */
+  @Get('bir-1701q')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT')
+  @RequirePlanFeature('birForms')
+  async bir1701q(
+    @CurrentUser() user: JwtPayload,
+    @Query('year')    yearStr:    string,
+    @Query('quarter') quarterStr: string,
+    @Res() res: Response,
+  ) {
+    const year    = parseInt(yearStr,    10);
+    const quarter = parseInt(quarterStr, 10) as 1 | 2 | 3 | 4;
+    if (!year || ![1, 2, 3, 4].includes(quarter)) {
+      throw new BadRequestException('year and quarter (1-4) are required');
+    }
+    const buffer   = await this.svc.exportBir1701Q(user.tenantId!, year, quarter);
+    const filename = `bir-1701q-${year}-Q${quarter}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/bir-2551q?year=&quarter= */
+  @Get('bir-2551q')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT')
+  @RequirePlanFeature('birForms')
+  async bir2551q(
+    @CurrentUser() user: JwtPayload,
+    @Query('year')    yearStr:    string,
+    @Query('quarter') quarterStr: string,
+    @Res() res: Response,
+  ) {
+    const year    = parseInt(yearStr,    10);
+    const quarter = parseInt(quarterStr, 10) as 1 | 2 | 3 | 4;
+    if (!year || ![1, 2, 3, 4].includes(quarter)) {
+      throw new BadRequestException('year and quarter (1-4) are required');
+    }
+    const buffer   = await this.svc.exportBir2551Q(user.tenantId!, year, quarter);
+    const filename = `bir-2551q-${year}-Q${quarter}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/z-read-history?from=&to= */
+  @Get('z-read-history')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async zReadHistory(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string | undefined,
+    @Query('to')   to:   string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportZReadHistory(user.tenantId!, { from, to });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `z-read-history-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/audit-log?from=&to=&action= */
+  @Get('audit-log')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  @RequirePlanFeature('auditLog')
+  async auditLog(
+    @CurrentUser() user: JwtPayload,
+    @Query('from')   from:   string | undefined,
+    @Query('to')     to:     string | undefined,
+    @Query('action') action: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportAuditLog(user.tenantId!, { from, to, action });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `audit-log-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/accounting-events?status=&from=&to= */
+  @Get('accounting-events')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async accountingEvents(
+    @CurrentUser() user: JwtPayload,
+    @Query('from')   from:   string | undefined,
+    @Query('to')     to:     string | undefined,
+    @Query('status') status: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportAccountingEvents(user.tenantId!, { from, to, status });
+    const range    = [from, to].filter(Boolean).join('_to_') || 'all';
+    const filename = `accounting-events-${range}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/period-close-summary?periodId= */
+  @Get('period-close-summary')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async periodCloseSummary(
+    @CurrentUser() user: JwtPayload,
+    @Query('periodId') periodId: string,
+    @Res() res: Response,
+  ) {
+    if (!periodId) throw new BadRequestException('periodId is required');
+    const buffer   = await this.svc.exportPeriodCloseSummary(user.tenantId!, periodId);
+    const filename = `period-close-summary-${periodId}.xlsx`;
+    sendXlsx(res, buffer, filename);
+  }
+
+  /** GET /export/ledger-kpi-snapshot?asOf= */
+  @Get('ledger-kpi-snapshot')
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
+  async ledgerKpiSnapshot(
+    @CurrentUser() user: JwtPayload,
+    @Query('asOf') asOf: string | undefined,
+    @Res() res: Response,
+  ) {
+    const buffer   = await this.svc.exportLedgerKpiSnapshot(user.tenantId!, asOf);
+    const filename = `ledger-kpi-snapshot-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
+    sendXlsx(res, buffer, filename);
   }
 }

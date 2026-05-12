@@ -7,5 +7,6 @@ import { LedgerMetricsService } from './ledger-metrics.service';
   imports:     [PrismaModule],
   controllers: [LedgerMetricsController],
   providers:   [LedgerMetricsService],
+  exports:     [LedgerMetricsService],
 })
 export class LedgerMetricsModule {}

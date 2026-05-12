@@ -1,11 +1,12 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { FileText, X, DollarSign, AlertCircle, CheckCircle2, Clock } from 'lucide-react';
+import { FileText, X, DollarSign, AlertCircle, CheckCircle2, Clock, Paperclip } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import DocumentAttachments from '@/components/shared/DocumentAttachments';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -244,6 +245,7 @@ export default function InvoicesPage() {
   const [to,           setTo]           = useState('');
   const [page,         setPage]         = useState(1);
   const [collectTarget, setCollectTarget] = useState<ArInvoice | null>(null);
+  const [attachTarget,  setAttachTarget]  = useState<ArInvoice | null>(null);
 
   // Build query string
   function queryParams() {
@@ -446,15 +448,24 @@ export default function InvoicesPage() {
                           </td>
                           {canCollect && (
                             <td className="px-4 py-3">
-                              {inv.balance > 0 && inv.status !== 'VOIDED' && (
+                              <div className="flex items-center gap-1">
+                                {inv.balance > 0 && inv.status !== 'VOIDED' && (
+                                  <button
+                                    onClick={() => setCollectTarget(inv)}
+                                    className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg border border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors whitespace-nowrap"
+                                  >
+                                    <DollarSign className="w-3 h-3" />
+                                    Collect
+                                  </button>
+                                )}
                                 <button
-                                  onClick={() => setCollectTarget(inv)}
-                                  className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg border border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors whitespace-nowrap"
+                                  onClick={() => setAttachTarget(inv)}
+                                  title="Attachments"
+                                  className="flex items-center text-xs px-2 py-1 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                                 >
-                                  <DollarSign className="w-3 h-3" />
-                                  Collect
+                                  <Paperclip className="w-3 h-3" />
                                 </button>
-                              )}
+                              </div>
                             </td>
                           )}
                         </tr>
@@ -499,6 +510,39 @@ export default function InvoicesPage() {
           onClose={() => setCollectTarget(null)}
           onSaved={onCollectSaved}
         />
+      )}
+
+      {attachTarget && (
+        <div
+          className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4"
+          onClick={() => setAttachTarget(null)}
+        >
+          <div
+            className="bg-background w-full max-w-lg rounded-xl border border-border shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+              <div>
+                <div className="text-xs text-muted-foreground">AR Invoice</div>
+                <h2 className="text-lg font-semibold">{attachTarget.orderNumber}</h2>
+              </div>
+              <button
+                onClick={() => setAttachTarget(null)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5">
+              <DocumentAttachments
+                entityType="ARInvoice"
+                entityId={attachTarget.id}
+                canManage={canCollect}
+                emptyText="No attachments yet. Add the signed customer copy or proof of delivery so it's always traceable to source."
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

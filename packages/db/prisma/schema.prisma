@@ -573,6 +573,7 @@ model Tenant {
   expenseClaimSeq      ExpenseClaimSequence?
   arInvoices           ARInvoice[]
   arPayments           ARPayment[]
+  quotes               Quote[]
   apBills              APBill[]
   apPayments           APPayment[]
   documentSequences    DocumentNumberSequence[]
@@ -760,6 +761,7 @@ model Branch {
   shifts          Shift[]
   arInvoices      ARInvoice[]
   arPayments      ARPayment[]
+  quotes          Quote[]
   apBills         APBill[]
   apPayments      APPayment[]
   laundryOrders   LaundryOrder[]
@@ -2116,6 +2118,7 @@ model Customer {
   orders        Order[]
   invoices      ARInvoice[]
   payments      ARPayment[]
+  quotes        Quote[]
   laundryOrders LaundryOrder[]
   projects      Project[]
   // Sprint 13
@@ -2399,6 +2402,7 @@ model ARInvoice {
   journalEntry JournalEntry?          @relation("ARInvoiceJE", fields: [journalEntryId], references: [id])
   lines        ARInvoiceLine[]
   applications ARPaymentApplication[]
+  convertedFromQuote Quote? @relation("QuoteConversion")
 
   @@unique([tenantId, invoiceNumber])
   @@index([tenantId, customerId, status])
@@ -2425,6 +2429,67 @@ model ARInvoiceLine {
 
   @@index([invoiceId])
   @@map("ar_invoice_lines")
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CONVERTED
+}
+
+/// Sales Quote (a.k.a. Proforma / Estimate). Pre-revenue: no GL impact.
+/// Converts to an ARInvoice on acceptance, which is when the JE posts.
+model Quote {
+  id                String        @id @default(cuid())
+  tenantId          String
+  branchId          String?
+  /// Tenant-scoped sequence. Format: Q-YYYY-####
+  quoteNumber       String
+  customerId        String
+  quoteDate         DateTime
+  /// When the quote auto-expires if not accepted.
+  validUntil        DateTime
+  /// Free-text terms (payment terms, scope of work). Owner-set per quote.
+  terms             String?
+  notes             String?
+  /// Set when status becomes CONVERTED; FK to the ARInvoice it became.
+  convertedToInvoiceId String?    @unique
+  status            QuoteStatus   @default(DRAFT)
+  subtotal          Decimal       @db.Decimal(14, 2)
+  vatAmount         Decimal       @default(0) @db.Decimal(14, 2)
+  totalAmount       Decimal       @db.Decimal(14, 2)
+  createdById       String
+  acceptedAt        DateTime?
+  sentAt            DateTime?
+  convertedAt       DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  tenant            Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch            Branch?       @relation(fields: [branchId], references: [id])
+  customer          Customer      @relation(fields: [customerId], references: [id])
+  convertedInvoice  ARInvoice?    @relation("QuoteConversion", fields: [convertedToInvoiceId], references: [id])
+  lines             QuoteLine[]
+  @@unique([tenantId, quoteNumber])
+  @@index([tenantId, customerId, status])
+  @@index([tenantId, status, validUntil])
+  @@map("quotes")
+}
+
+model QuoteLine {
+  id          String   @id @default(cuid())
+  quoteId     String
+  description String
+  quantity    Decimal  @default(1) @db.Decimal(14, 4)
+  unitPrice   Decimal  @db.Decimal(14, 2)
+  taxAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+  quote       Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  @@index([quoteId])
+  @@map("quote_lines")
 }
 
 /// Customer payment received. May apply to one or many invoices via ARPaymentApplication.
@@ -2649,6 +2714,7 @@ enum SequenceType {
   PROGRESS_BILLING   // ProgressBilling.billingNumber (PB-{YYYY}-{######})
   MATERIAL_ISSUANCE  // MaterialIssuance.issuanceNumber (ISS-{YYYY}-{######})
   PROJECT_CODE       // Project.projectCode (PRJ-{YYYY}-{######})
+  QUOTE              // Quote.quoteNumber (Q-{YYYY}-{####})
 }
 
 enum SequenceResetPolicy {
@@ -2807,7 +2873,7 @@ enum PayRunStatus {
 model Document {
   id           String   @id @default(cuid())
   tenantId     String
-  /// Discriminator: "Order" | "ExpenseEntry" | "JournalEntry" | "ExpenseClaim"
+  /// Discriminator: "Order" | "ExpenseEntry" | "JournalEntry" | "ExpenseClaim" | "APBill" | "ARInvoice" | "BankReconciliation"
   entityType   String
   entityId     String
   /// Original filename as uploaded by the user

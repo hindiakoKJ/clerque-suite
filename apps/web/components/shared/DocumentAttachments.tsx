@@ -12,13 +12,18 @@ export type DocumentEntityType =
   | 'Order'
   | 'ExpenseEntry'
   | 'JournalEntry'
-  | 'ExpenseClaim';
+  | 'ExpenseClaim'
+  | 'APBill'
+  | 'ARInvoice'
+  | 'BankReconciliation';
 
 export interface DocumentAttachmentsProps {
   entityType: DocumentEntityType;
   entityId: string;
   /** When false (default), upload and delete controls are hidden. */
   canManage?: boolean;
+  /** Custom empty-state copy. */
+  emptyText?: string;
 }
 
 interface DocumentRecord {
@@ -51,6 +56,7 @@ export default function DocumentAttachments({
   entityType,
   entityId,
   canManage = false,
+  emptyText,
 }: DocumentAttachmentsProps) {
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -231,7 +237,7 @@ export default function DocumentAttachments({
           ))}
         </ul>
       ) : (
-        <p className="text-xs text-muted-foreground">No attachments yet.</p>
+        <p className="text-xs text-muted-foreground">{emptyText ?? 'No attachments yet.'}</p>
       )}
 
       {/* Upload controls */}

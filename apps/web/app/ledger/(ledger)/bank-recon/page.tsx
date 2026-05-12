@@ -1,11 +1,12 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, Plus, Save, FileCheck, Upload, Trash2 } from 'lucide-react';
+import { Banknote, Plus, Save, FileCheck, Upload, Trash2, Paperclip, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import DocumentAttachments from '@/components/shared/DocumentAttachments';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,7 @@ export default function BankReconPage() {
   const [notes,       setNotes]       = useState('');
   const [stmtRows,    setStmtRows]    = useState<StatementRow[]>([]);
   const [saving,      setSaving]      = useState(false);
+  const [attachTarget, setAttachTarget] = useState<Recon | null>(null);
 
   // Past reconciliations
   const { data: history = [] } = useQuery<Recon[]>({
@@ -424,6 +426,7 @@ export default function BankReconPage() {
                 <th className="text-right p-2">Variance</th>
                 <th className="text-left p-2">Status</th>
                 <th className="text-left p-2">Prepared by</th>
+                <th className="text-left p-2 w-20">Files</th>
               </tr>
             </thead>
             <tbody>
@@ -446,11 +449,60 @@ export default function BankReconPage() {
                       </span>
                     </td>
                     <td className="p-2 text-muted-foreground">{r.preparedBy.name}</td>
+                    <td className="p-2">
+                      <button
+                        onClick={() => setAttachTarget(r)}
+                        title="Attachments"
+                        className="inline-flex items-center text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      >
+                        <Paperclip className="w-3 h-3" />
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {attachTarget && (
+        <div
+          className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center p-4"
+          onClick={() => setAttachTarget(null)}
+        >
+          <div
+            className="bg-background w-full max-w-lg rounded-xl border border-border shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+              <div>
+                <div className="text-xs text-muted-foreground">Bank Reconciliation</div>
+                <h2 className="text-sm font-semibold">
+                  {attachTarget.account.code} — {attachTarget.account.name}
+                </h2>
+                <div className="text-xs text-muted-foreground">
+                  {new Date(attachTarget.periodStart).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}
+                  {' – '}
+                  {new Date(attachTarget.periodEnd).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </div>
+              </div>
+              <button
+                onClick={() => setAttachTarget(null)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5">
+              <DocumentAttachments
+                entityType="BankReconciliation"
+                entityId={attachTarget.id}
+                canManage={canRead}
+                emptyText="No attachments yet. Add the bank statement PDF so it's always traceable to source."
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

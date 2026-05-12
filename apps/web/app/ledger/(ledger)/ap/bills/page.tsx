@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import DocumentAttachments from '@/components/shared/DocumentAttachments';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -497,6 +498,16 @@ function DetailDrawer({
                 <Ban className="w-4 h-4" /> Void
               </button>
             )}
+          </div>
+
+          {/* Attachments */}
+          <div className="pt-4 border-t border-border">
+            <DocumentAttachments
+              entityType="APBill"
+              entityId={bill.id}
+              canManage={canWrite}
+              emptyText="No attachments yet. Add the PDF/scan of the original vendor bill so it's always traceable to source."
+            />
           </div>
         </div>
 

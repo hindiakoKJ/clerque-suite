@@ -82,7 +82,31 @@ export const api = {
   },
 };
 
-/* ─── Request interceptor — attach Bearer token ──────────────────────────── */
+/* ─── Idempotency-Key endpoints (D5-06) ──────────────────────────────────
+ * Mutating financial endpoints on the API require an Idempotency-Key header
+ * so a double-click during a slow network doesn't post the same payment
+ * twice. Match the exact path shape the API exposes (the API mounts under
+ * /api/v1, but baseURL already strips/includes the prefix per env). We use
+ * tolerant regexes so both "/orders" and "/api/v1/orders" match.
+ */
+const IDEMPOTENCY_PATTERNS: RegExp[] = [
+  /\/orders\/?(\?.*)?$/,                            // POST /orders
+  /\/orders\/[^/]+\/items\/[^/]+\/refund\/?$/,      // POST /orders/:id/items/:itemId/refund
+  /\/ap\/payments\/?(\?.*)?$/,                      // POST /ap/payments
+  /\/ar\/payments\/?(\?.*)?$/,                      // POST /ar/payments
+  /\/inventory\/adjust\/?$/,                        // POST /inventory/adjust
+  /\/ap\/bills\/[^/]+\/post\/?$/,                   // PATCH /ap/bills/:id/post
+  /\/ar\/invoices\/[^/]+\/post\/?$/,                // PATCH /ar/invoices/:id/post
+];
+
+function needsIdempotencyKey(method: string | undefined, url: string | undefined): boolean {
+  if (!url) return false;
+  const m = (method ?? '').toUpperCase();
+  if (m !== 'POST' && m !== 'PATCH') return false;
+  return IDEMPOTENCY_PATTERNS.some((re) => re.test(url));
+}
+
+/* ─── Request interceptor — attach Bearer token + Idempotency-Key ────────── */
 realApi.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     try {
@@ -95,6 +119,18 @@ realApi.interceptors.request.use((config) => {
       }
     } catch {
       // ignore parse errors
+    }
+
+    // Sprint 21 — D5-06: attach a fresh uuid Idempotency-Key on financial
+    // mutation routes. Generated once per call, so a retry by the response
+    // interceptor (the 401-refresh path or the slug-confirm retry) replays
+    // the SAME key and gets the cached response back, not a duplicate post.
+    if (needsIdempotencyKey(config.method, config.url) && !config.headers['Idempotency-Key']) {
+      const uuid = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        // Extremely defensive fallback for ancient browsers without crypto.randomUUID.
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+      config.headers['Idempotency-Key'] = uuid;
     }
   }
   return config;

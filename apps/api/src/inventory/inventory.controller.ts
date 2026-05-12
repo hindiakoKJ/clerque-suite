@@ -16,6 +16,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { InventoryService } from './inventory.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
@@ -132,6 +133,7 @@ export class InventoryController {
 
   /** Manual stock-in / stock-out / adjustment — WAREHOUSE_STAFF is the new gatekeeper */
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @RequireIdempotency()
   @Post('adjust')
   @HttpCode(HttpStatus.OK)
   adjust(@CurrentUser() user: JwtPayload, @Body() body: AdjustStockDto) {

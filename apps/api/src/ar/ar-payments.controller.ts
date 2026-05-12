@@ -9,6 +9,7 @@ import { RequireApp } from '../auth/decorators/require-app.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { ARPaymentsService } from './ar-payments.service';
 import { CreateARPaymentDto, ApplyARPaymentDto } from './dto/ar-payment.dto';
 
@@ -45,6 +46,7 @@ export class ARPaymentsController {
 
   /** Record a customer payment + (optionally) apply to invoices. */
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'CASHIER')
+  @RequireIdempotency()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateARPaymentDto) {

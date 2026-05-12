@@ -10,6 +10,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { BillStatus } from '@prisma/client';
+import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { APBillsService } from './ap-bills.service';
 import { CreateAPBillDto } from './dto/ap-bill.dto';
 
@@ -73,6 +74,7 @@ export class APBillsController {
 
   /** Post a DRAFT bill → OPEN, creating the GL JE. */
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'AP_ACCOUNTANT')
+  @RequireIdempotency()
   @Patch(':id/post')
   @HttpCode(HttpStatus.OK)
   post(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

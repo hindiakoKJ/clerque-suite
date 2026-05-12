@@ -20,6 +20,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { OrdersService } from './orders.service';
 import { OfflineOrder } from '@repo/shared-types';
 
@@ -104,6 +105,7 @@ export class OrdersController {
   }
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @RequireIdempotency()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() body: CreateOrderBody) {
@@ -145,6 +147,7 @@ export class OrdersController {
    * Body: { quantity, reason, refundMethod, restock, supervisorId? }
    */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @RequireIdempotency()
   @Post(':orderId/items/:itemId/refund')
   @HttpCode(HttpStatus.OK)
   refundItem(

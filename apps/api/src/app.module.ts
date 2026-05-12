@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -56,6 +56,8 @@ import { LoyaltyModule } from './loyalty/loyalty.module';
 import { KioskModule } from './payroll/kiosk/kiosk.module';
 import { StorageModule } from './storage/storage.module';
 import { HealthController } from './health/health.controller';
+import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
+import { CleanupScheduler } from './common/cleanup.scheduler';
 
 @Module({
   controllers: [HealthController],
@@ -132,6 +134,12 @@ import { HealthController } from './health/health.controller';
     // with @SkipThrottle() (e.g., the webhook endpoints) or tighten limits
     // with @Throttle(...).
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // SECURITY D5-06 — Idempotency-Key replay protection. Acts only on routes
+    // decorated with @RequireIdempotency() (financial mutations). Pass-through
+    // for every other route, so the cost is one Reflector lookup per request.
+    { provide: APP_INTERCEPTOR, useClass: IdempotencyInterceptor },
+    // Nightly purge of expired IdempotencyKey rows (24h TTL).
+    CleanupScheduler,
   ],
 })
 export class AppModule {}

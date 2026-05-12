@@ -9,6 +9,7 @@ import { RequireApp } from '../auth/decorators/require-app.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { APPaymentsService } from './ap-payments.service';
 import { CreateAPPaymentDto, ApplyAPPaymentDto } from './dto/ap-payment.dto';
 
@@ -45,6 +46,7 @@ export class APPaymentsController {
 
   /** Record a vendor payment + (optionally) apply to bills. */
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'AP_ACCOUNTANT')
+  @RequireIdempotency()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateAPPaymentDto) {

@@ -592,6 +592,13 @@ model Tenant {
   quotes               Quote[]
   apBills              APBill[]
   apPayments           APPayment[]
+  // Sprint 22 — AR/AP standalone-accounting parity
+  creditMemos               CreditMemo[]
+  vendorCreditNotes         VendorCreditNote[]
+  customerAdvances          CustomerAdvance[]
+  vendorAdvances            VendorAdvance[]
+  recurringInvoiceTemplates RecurringInvoiceTemplate[]
+  recurringBillTemplates    RecurringBillTemplate[]
   documentSequences    DocumentNumberSequence[]
   notifications        Notification[]
   bankReconciliations  BankReconciliation[]
@@ -814,6 +821,13 @@ model Branch {
   quotes          Quote[]
   apBills         APBill[]
   apPayments      APPayment[]
+  // Sprint 22 — AR/AP standalone-accounting parity
+  creditMemos               CreditMemo[]
+  vendorCreditNotes         VendorCreditNote[]
+  customerAdvances          CustomerAdvance[]
+  vendorAdvances            VendorAdvance[]
+  recurringInvoiceTemplates RecurringInvoiceTemplate[]
+  recurringBillTemplates    RecurringBillTemplate[]
   laundryOrders   LaundryOrder[]
   laundryMachines LaundryMachine[]
   transfersOut    StockTransfer[]    @relation("TransferFromBranch")
@@ -1693,6 +1707,11 @@ model Account {
   arInvoiceLines      ARInvoiceLine[]
   apBillLines         APBillLine[]
   bankReconciliations BankReconciliation[]
+  // Sprint 22 — AR/AP parity
+  creditMemoLines              CreditMemoLine[]
+  vendorCreditNoteLines        VendorCreditNoteLine[]
+  recurringInvoiceTemplateLines RecurringInvoiceTemplateLine[]
+  recurringBillTemplateLines    RecurringBillTemplateLine[]
 
   @@unique([tenantId, code])
   @@index([tenantId, type])
@@ -1746,6 +1765,11 @@ model JournalEntry {
   arPayment       ARPayment?       @relation("ARPaymentJE")
   apBill          APBill?          @relation("APBillJE")
   apPayment       APPayment?       @relation("APPaymentJE")
+  // Sprint 22 — AR/AP parity. Each is also at-most-one per JE.
+  creditMemo       CreditMemo?       @relation("CreditMemoJE")
+  vendorCreditNote VendorCreditNote? @relation("VendorCreditNoteJE")
+  customerAdvance  CustomerAdvance?  @relation("CustomerAdvanceJE")
+  vendorAdvance    VendorAdvance?    @relation("VendorAdvanceJE")
 
   @@index([tenantId, postingDate])
   @@index([tenantId, date])
@@ -2069,6 +2093,11 @@ model Vendor {
   payments APPayment[]
   deliveryReceipts DeliveryReceipt[]
 
+  // Sprint 22 — AP standalone-accounting parity
+  creditNotes      VendorCreditNote[]
+  vendorAdvances   VendorAdvance[]
+  recurringBills   RecurringBillTemplate[]
+
   @@index([tenantId, tin])
   @@index([tenantId, isActive])
   @@map("vendors")
@@ -2178,6 +2207,11 @@ model Customer {
 
   // Sprint 19 — Loyalty stamp cards (digital + printable)
   stampCards    CustomerStampCard[]
+
+  // Sprint 22 — AR standalone-accounting parity
+  creditMemos        CreditMemo[]
+  customerAdvances   CustomerAdvance[]
+  recurringInvoices  RecurringInvoiceTemplate[]
 
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
@@ -2443,6 +2477,10 @@ model ARInvoice {
   /// JE created on POST. Null while DRAFT.
   journalEntryId String? @unique
 
+  /// Sprint 22 — set when this invoice was materialized by the recurring
+  /// template @Cron runner. Null for manually-created invoices.
+  recurringTemplateId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2453,11 +2491,15 @@ model ARInvoice {
   lines        ARInvoiceLine[]
   applications ARPaymentApplication[]
   convertedFromQuote Quote? @relation("QuoteConversion")
+  recurringTemplate    RecurringInvoiceTemplate?    @relation("ARInvoiceFromRecurringTemplate", fields: [recurringTemplateId], references: [id])
+  creditApplications   CreditMemoApplication[]      @relation("ARInvoiceCreditApplications")
+  advanceApplications  CustomerAdvanceApplication[] @relation("ARInvoiceAdvanceApplications")
 
   @@unique([tenantId, invoiceNumber])
   @@index([tenantId, customerId, status])
   @@index([tenantId, status, dueDate]) // FBL5N-style: open items past due
   @@index([tenantId, postingDate])
+  @@index([tenantId, recurringTemplateId])
   @@map("ar_invoices")
 }
 
@@ -2656,6 +2698,9 @@ model APBill {
 
   journalEntryId String? @unique
 
+  /// Sprint 22 — set when materialized by the recurring bill template runner.
+  recurringTemplateId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2665,11 +2710,15 @@ model APBill {
   journalEntry JournalEntry?          @relation("APBillJE", fields: [journalEntryId], references: [id])
   lines        APBillLine[]
   applications APPaymentApplication[]
+  recurringTemplate    RecurringBillTemplate?      @relation("APBillFromRecurringTemplate", fields: [recurringTemplateId], references: [id])
+  creditApplications   VendorCreditNoteApplication[] @relation("APBillCreditApplications")
+  advanceApplications  VendorAdvanceApplication[]    @relation("APBillAdvanceApplications")
 
   @@unique([tenantId, billNumber])
   @@index([tenantId, vendorId, status])
   @@index([tenantId, status, dueDate]) // FBL1N-style: open items past due
   @@index([tenantId, postingDate])
+  @@index([tenantId, recurringTemplateId])
   @@map("ap_bills")
 }
 
@@ -2747,6 +2796,540 @@ model APPaymentApplication {
   @@map("ap_payment_applications")
 }
 
+// ─── Sprint 22 — AR/AP standalone-accounting parity ─────────────────────────
+//
+// Six new models bring Clerque AR/AP to Xero/QuickBooks feature parity:
+//   1. CreditMemo            — AR credit issued against an invoice (refund / write-off / adjustment)
+//   2. VendorCreditNote      — AP credit received from vendor (returns, vendor refund)
+//   3. CustomerAdvance       — customer down payment / deposit before invoice
+//   4. VendorAdvance         — vendor prepayment / deposit before bill
+//   5. RecurringInvoiceTemplate — subscription billing (Xero killer feature)
+//   6. RecurringBillTemplate    — recurring payables (rent, utilities)
+//
+// Design notes:
+// - Credit Memos / Credit Notes POST their own JE rather than reversing the
+//   original's JE. This preserves the original invoice's audit trail and
+//   matches Xero/QB behaviour (the original stays OPEN/PAID, the credit
+//   reduces customer/vendor balance separately).
+// - Advances are unallocated cash on the customer/vendor account, applied
+//   against future invoices/bills via the same Application-row pattern AR
+//   and AP already use for payments.
+// - Recurring templates are NOT documents themselves — they spawn child
+//   invoices/bills on a @Cron schedule. The child is a normal ARInvoice /
+//   APBill with `recurringTemplateId` set, so all existing reporting,
+//   posting, and aging code works unchanged.
+
+enum CreditMemoStatus {
+  DRAFT
+  POSTED   // GL impact recorded; appears on customer statement
+  APPLIED  // Fully applied to one or more invoices (or refunded in cash)
+  VOIDED
+}
+
+enum CreditMemoReason {
+  RETURN              // Customer returned goods
+  PRICE_ADJUSTMENT    // Negotiated discount after invoice
+  BILLING_ERROR       // We over-billed
+  GOODWILL            // Customer-service gesture
+  BAD_DEBT_WRITE_OFF  // Uncollectable; written off
+  OTHER
+}
+
+/// AR Credit Memo. Reduces a customer's outstanding balance without
+/// reversing the original invoice. Posts its own JE on POST:
+///   DR Revenue (or Sales Returns)   CR Accounts Receivable
+/// Applied against open invoices via CreditMemoApplication. Unapplied
+/// portion sits as customer credit (mirror of unappliedAmount on ARPayment).
+model CreditMemo {
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
+
+  memoNumber String   // Tenant-scoped sequence (CM-YYYY-####)
+  customerId String
+
+  memoDate    DateTime
+  postingDate DateTime
+
+  reason      CreditMemoReason @default(OTHER)
+  reasonNotes String?
+
+  /// Optional FK to the invoice this credit relates to (informational only —
+  /// the actual application is via CreditMemoApplication rows so a single
+  /// credit can apply across multiple invoices).
+  relatedInvoiceId String?
+
+  subtotal      Decimal @db.Decimal(14, 2)
+  vatAmount     Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount   Decimal @db.Decimal(14, 2)
+  /// Sum of CreditMemoApplication.appliedAmount.
+  appliedAmount Decimal @default(0) @db.Decimal(14, 2)
+  /// totalAmount - appliedAmount.
+  unappliedAmount Decimal @db.Decimal(14, 2)
+
+  status CreditMemoStatus @default(DRAFT)
+
+  description String?
+  notes       String?
+  createdById String
+  postedById  String?
+  postedAt    DateTime?
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
+
+  journalEntryId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                 @relation(fields: [branchId], references: [id])
+  customer     Customer                @relation(fields: [customerId], references: [id])
+  journalEntry JournalEntry?           @relation("CreditMemoJE", fields: [journalEntryId], references: [id])
+  lines        CreditMemoLine[]
+  applications CreditMemoApplication[]
+
+  @@unique([tenantId, memoNumber])
+  @@index([tenantId, customerId, status])
+  @@index([tenantId, postingDate])
+  @@map("credit_memos")
+}
+
+model CreditMemoLine {
+  id          String   @id @default(cuid())
+  memoId      String
+  /// GL account to DEBIT on POST (Sales Returns / Revenue contra).
+  accountId   String
+  description String?
+  quantity    Decimal  @default(1) @db.Decimal(14, 4)
+  unitPrice   Decimal  @db.Decimal(14, 2)
+  taxAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+
+  memo    CreditMemo @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  account Account    @relation(fields: [accountId], references: [id])
+
+  @@index([memoId])
+  @@map("credit_memo_lines")
+}
+
+/// Junction: applies a CreditMemo against an ARInvoice. A single memo can
+/// span multiple invoices (e.g., a goodwill credit applied across several
+/// open invoices). Mirrors ARPaymentApplication.
+model CreditMemoApplication {
+  id            String   @id @default(cuid())
+  memoId        String
+  invoiceId     String
+  appliedAmount Decimal  @db.Decimal(14, 2)
+  appliedAt     DateTime @default(now())
+  appliedById   String
+
+  memo    CreditMemo @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  invoice ARInvoice  @relation("ARInvoiceCreditApplications", fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([memoId, invoiceId])
+  @@index([invoiceId])
+  @@map("credit_memo_applications")
+}
+
+enum VendorCreditNoteStatus {
+  DRAFT
+  POSTED
+  APPLIED
+  VOIDED
+}
+
+enum VendorCreditNoteReason {
+  RETURN
+  PRICE_ADJUSTMENT
+  BILLING_ERROR
+  REBATE
+  OTHER
+}
+
+/// AP Vendor Credit Note. Vendor credits us (we returned goods, vendor
+/// over-billed, rebate). Posts:
+///   DR Accounts Payable    CR Expense / Inventory
+/// Applied against open bills via VendorCreditNoteApplication.
+model VendorCreditNote {
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
+
+  noteNumber    String   // Tenant-scoped (VCN-YYYY-####)
+  /// Vendor's credit-note reference printed on their document.
+  vendorNoteRef String?
+  vendorId      String
+
+  noteDate    DateTime
+  postingDate DateTime
+
+  reason      VendorCreditNoteReason @default(OTHER)
+  reasonNotes String?
+
+  relatedBillId String?
+
+  subtotal      Decimal @db.Decimal(14, 2)
+  vatAmount     Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount   Decimal @db.Decimal(14, 2)
+  appliedAmount Decimal @default(0) @db.Decimal(14, 2)
+  unappliedAmount Decimal @db.Decimal(14, 2)
+
+  status VendorCreditNoteStatus @default(DRAFT)
+
+  description String?
+  notes       String?
+  createdById String
+  postedById  String?
+  postedAt    DateTime?
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
+
+  journalEntryId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                       @relation(fields: [branchId], references: [id])
+  vendor       Vendor                        @relation(fields: [vendorId], references: [id])
+  journalEntry JournalEntry?                 @relation("VendorCreditNoteJE", fields: [journalEntryId], references: [id])
+  lines        VendorCreditNoteLine[]
+  applications VendorCreditNoteApplication[]
+
+  @@unique([tenantId, noteNumber])
+  @@index([tenantId, vendorId, status])
+  @@index([tenantId, postingDate])
+  @@map("vendor_credit_notes")
+}
+
+model VendorCreditNoteLine {
+  id          String   @id @default(cuid())
+  noteId      String
+  /// GL account to CREDIT on POST (Expense reversal / Inventory contra).
+  accountId   String
+  description String?
+  quantity    Decimal  @default(1) @db.Decimal(14, 4)
+  unitPrice   Decimal  @db.Decimal(14, 2)
+  taxAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal  @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+
+  note    VendorCreditNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  account Account          @relation(fields: [accountId], references: [id])
+
+  @@index([noteId])
+  @@map("vendor_credit_note_lines")
+}
+
+model VendorCreditNoteApplication {
+  id            String   @id @default(cuid())
+  noteId        String
+  billId        String
+  appliedAmount Decimal  @db.Decimal(14, 2)
+  appliedAt     DateTime @default(now())
+  appliedById   String
+
+  note VendorCreditNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  bill APBill           @relation("APBillCreditApplications", fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, billId])
+  @@index([billId])
+  @@map("vendor_credit_note_applications")
+}
+
+enum AdvanceStatus {
+  DRAFT
+  POSTED   // Cash received/sent; sits as liability/asset
+  APPLIED  // Fully applied to invoices/bills
+  REFUNDED // Returned to customer/vendor
+  VOIDED
+}
+
+/// Customer down payment / deposit received before invoicing.
+/// Posts on receive:  DR Cash  CR Customer Deposits Liability (Acct 2031 / 1063 contra)
+/// Posts on apply:    DR Customer Deposits Liability   CR AR (invoice balance)
+model CustomerAdvance {
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
+
+  advanceNumber String  // Tenant-scoped (CA-YYYY-####)
+  customerId    String
+
+  advanceDate   DateTime
+  postingDate   DateTime
+
+  method      PaymentMethod
+  reference   String?
+  totalAmount Decimal       @db.Decimal(14, 2)
+  appliedAmount   Decimal       @default(0) @db.Decimal(14, 2)
+  unappliedAmount Decimal       @db.Decimal(14, 2)
+
+  status      AdvanceStatus @default(DRAFT)
+  description String?
+  notes       String?
+  createdById String
+  postedById  String?
+  postedAt    DateTime?
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
+
+  journalEntryId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                      @relation(fields: [branchId], references: [id])
+  customer     Customer                     @relation(fields: [customerId], references: [id])
+  journalEntry JournalEntry?                @relation("CustomerAdvanceJE", fields: [journalEntryId], references: [id])
+  applications CustomerAdvanceApplication[]
+
+  @@unique([tenantId, advanceNumber])
+  @@index([tenantId, customerId, status])
+  @@index([tenantId, postingDate])
+  @@map("customer_advances")
+}
+
+model CustomerAdvanceApplication {
+  id            String   @id @default(cuid())
+  advanceId     String
+  invoiceId     String
+  appliedAmount Decimal  @db.Decimal(14, 2)
+  appliedAt     DateTime @default(now())
+  appliedById   String
+
+  advance CustomerAdvance @relation(fields: [advanceId], references: [id], onDelete: Cascade)
+  invoice ARInvoice       @relation("ARInvoiceAdvanceApplications", fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([advanceId, invoiceId])
+  @@index([invoiceId])
+  @@map("customer_advance_applications")
+}
+
+/// Vendor prepayment / deposit we paid before receiving the bill.
+/// Posts on send:   DR Vendor Prepayments (Acct 1063)   CR Cash
+/// Posts on apply:  DR Accounts Payable   CR Vendor Prepayments
+model VendorAdvance {
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
+
+  advanceNumber String   // Tenant-scoped (VA-YYYY-####)
+  vendorId      String
+
+  advanceDate DateTime
+  postingDate DateTime
+
+  method      PaymentMethod
+  reference   String?
+  totalAmount Decimal       @db.Decimal(14, 2)
+  appliedAmount   Decimal       @default(0) @db.Decimal(14, 2)
+  unappliedAmount Decimal       @db.Decimal(14, 2)
+
+  status      AdvanceStatus @default(DRAFT)
+  description String?
+  notes       String?
+  createdById String
+  postedById  String?
+  postedAt    DateTime?
+  voidedById  String?
+  voidedAt    DateTime?
+  voidReason  String?
+
+  journalEntryId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch?                    @relation(fields: [branchId], references: [id])
+  vendor       Vendor                     @relation(fields: [vendorId], references: [id])
+  journalEntry JournalEntry?              @relation("VendorAdvanceJE", fields: [journalEntryId], references: [id])
+  applications VendorAdvanceApplication[]
+
+  @@unique([tenantId, advanceNumber])
+  @@index([tenantId, vendorId, status])
+  @@index([tenantId, postingDate])
+  @@map("vendor_advances")
+}
+
+model VendorAdvanceApplication {
+  id            String   @id @default(cuid())
+  advanceId     String
+  billId        String
+  appliedAmount Decimal  @db.Decimal(14, 2)
+  appliedAt     DateTime @default(now())
+  appliedById   String
+
+  advance VendorAdvance @relation(fields: [advanceId], references: [id], onDelete: Cascade)
+  bill    APBill        @relation("APBillAdvanceApplications", fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([advanceId, billId])
+  @@index([billId])
+  @@map("vendor_advance_applications")
+}
+
+enum RecurrenceFrequency {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  YEARLY
+}
+
+enum RecurringTemplateStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED   // End date reached
+  CANCELLED
+}
+
+/// Recurring AR Invoice template. The template itself never posts —
+/// the @Cron materializer creates ARInvoice rows on the schedule and
+/// links them back via ARInvoice.recurringTemplateId. Customer / lines /
+/// terms are copied verbatim into each child invoice.
+model RecurringInvoiceTemplate {
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
+
+  templateNumber String  // Tenant-scoped (RI-YYYY-####)
+  /// Human label shown in lists ("Monthly retainer — ACME Corp").
+  name           String
+
+  customerId String
+
+  frequency   RecurrenceFrequency
+  /// Day-of-month for MONTHLY / QUARTERLY / etc., or day-of-week for WEEKLY (0=Sun).
+  dayOfPeriod Int
+  /// First invoice date.
+  startDate   DateTime
+  /// Optional end date. If null, runs forever (until paused/cancelled).
+  endDate     DateTime?
+  /// Net terms copied into each child invoice.
+  termsDays   Int      @default(0)
+
+  /// When the next child invoice should be materialized. Cron advances this
+  /// after each successful materialization.
+  nextRunAt   DateTime
+  /// When the last child invoice was materialized (audit).
+  lastRunAt   DateTime?
+  /// Count of children materialized to date (audit).
+  runCount    Int      @default(0)
+
+  /// Template totals (denormalized from lines; recomputed on update).
+  subtotal    Decimal  @db.Decimal(14, 2)
+  vatAmount   Decimal  @default(0) @db.Decimal(14, 2)
+  totalAmount Decimal  @db.Decimal(14, 2)
+
+  status      RecurringTemplateStatus @default(ACTIVE)
+  description String?
+  notes       String?
+  createdById String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch   Branch?                         @relation(fields: [branchId], references: [id])
+  customer Customer                        @relation(fields: [customerId], references: [id])
+  lines    RecurringInvoiceTemplateLine[]
+  children ARInvoice[]                     @relation("ARInvoiceFromRecurringTemplate")
+
+  @@unique([tenantId, templateNumber])
+  @@index([tenantId, customerId, status])
+  @@index([tenantId, status, nextRunAt]) // cron-scan-friendly
+  @@map("recurring_invoice_templates")
+}
+
+model RecurringInvoiceTemplateLine {
+  id          String  @id @default(cuid())
+  templateId  String
+  accountId   String
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(14, 4)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  taxAmount   Decimal @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal @db.Decimal(14, 2)
+
+  template RecurringInvoiceTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  account  Account                  @relation(fields: [accountId], references: [id])
+
+  @@index([templateId])
+  @@map("recurring_invoice_template_lines")
+}
+
+/// Recurring AP Bill template. Mirror of RecurringInvoiceTemplate for payables.
+model RecurringBillTemplate {
+  id       String  @id @default(cuid())
+  tenantId String
+  branchId String?
+
+  templateNumber String
+  name           String
+
+  vendorId String
+
+  frequency   RecurrenceFrequency
+  dayOfPeriod Int
+  startDate   DateTime
+  endDate     DateTime?
+  termsDays   Int      @default(0)
+
+  nextRunAt DateTime
+  lastRunAt DateTime?
+  runCount  Int      @default(0)
+
+  subtotal    Decimal @db.Decimal(14, 2)
+  vatAmount   Decimal @default(0) @db.Decimal(14, 2)
+  /// Default WHT for the recurring bill (rent typically WI160 = 5%).
+  whtAmount   Decimal @default(0) @db.Decimal(14, 2)
+  whtAtcCode  String?
+  totalAmount Decimal @db.Decimal(14, 2)
+
+  status      RecurringTemplateStatus @default(ACTIVE)
+  description String?
+  notes       String?
+  createdById String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch   Branch?                      @relation(fields: [branchId], references: [id])
+  vendor   Vendor                       @relation(fields: [vendorId], references: [id])
+  lines    RecurringBillTemplateLine[]
+  children APBill[]                     @relation("APBillFromRecurringTemplate")
+
+  @@unique([tenantId, templateNumber])
+  @@index([tenantId, vendorId, status])
+  @@index([tenantId, status, nextRunAt])
+  @@map("recurring_bill_templates")
+}
+
+model RecurringBillTemplateLine {
+  id          String  @id @default(cuid())
+  templateId  String
+  accountId   String
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(14, 4)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  taxAmount   Decimal @default(0) @db.Decimal(14, 2)
+  lineTotal   Decimal @db.Decimal(14, 2)
+
+  template RecurringBillTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  account  Account               @relation(fields: [accountId], references: [id])
+
+  @@index([templateId])
+  @@map("recurring_bill_template_lines")
+}
+
 // ─── Document Number Sequences (per-tenant, per-type, optional per-branch) ───
 
 enum SequenceType {
@@ -2765,6 +3348,13 @@ enum SequenceType {
   MATERIAL_ISSUANCE  // MaterialIssuance.issuanceNumber (ISS-{YYYY}-{######})
   PROJECT_CODE       // Project.projectCode (PRJ-{YYYY}-{######})
   QUOTE              // Quote.quoteNumber (Q-{YYYY}-{####})
+  // Sprint 22 — AR/AP standalone-accounting parity (Xero/QB feature set).
+  AR_CREDIT_MEMO     // CreditMemo.memoNumber (CM-{YYYY}-{####})
+  AP_CREDIT_NOTE     // VendorCreditNote.noteNumber (VCN-{YYYY}-{####})
+  CUSTOMER_ADVANCE   // CustomerAdvance.advanceNumber (CA-{YYYY}-{####})
+  VENDOR_ADVANCE     // VendorAdvance.advanceNumber (VA-{YYYY}-{####})
+  RECURRING_INVOICE  // RecurringInvoiceTemplate.templateNumber (RI-{YYYY}-{####})
+  RECURRING_BILL     // RecurringBillTemplate.templateNumber (RB-{YYYY}-{####})
 }
 
 enum SequenceResetPolicy {

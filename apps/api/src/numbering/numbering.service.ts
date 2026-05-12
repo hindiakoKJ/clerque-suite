@@ -59,6 +59,13 @@ const DEFAULTS: Record<SequenceType, SequenceDefaults> = {
   MATERIAL_ISSUANCE: { prefix: 'ISS',  format: 'ISS-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
   PROJECT_CODE:      { prefix: 'PRJ',  format: 'PRJ-{YYYY}-{######}',  padding: 6, resetPolicy: 'YEARLY' },
   QUOTE:             { prefix: 'Q',    format: 'Q-{YYYY}-{####}',      padding: 4, resetPolicy: 'YEARLY' },
+  // Sprint 22 — AR/AP standalone-accounting parity (Xero/QB feature set).
+  AR_CREDIT_MEMO:    { prefix: 'CM',   format: 'CM-{YYYY}-{####}',     padding: 4, resetPolicy: 'YEARLY' },
+  AP_CREDIT_NOTE:    { prefix: 'VCN',  format: 'VCN-{YYYY}-{####}',    padding: 4, resetPolicy: 'YEARLY' },
+  CUSTOMER_ADVANCE:  { prefix: 'CA',   format: 'CA-{YYYY}-{####}',     padding: 4, resetPolicy: 'YEARLY' },
+  VENDOR_ADVANCE:    { prefix: 'VA',   format: 'VA-{YYYY}-{####}',     padding: 4, resetPolicy: 'YEARLY' },
+  RECURRING_INVOICE: { prefix: 'RI',   format: 'RI-{YYYY}-{####}',     padding: 4, resetPolicy: 'YEARLY' },
+  RECURRING_BILL:    { prefix: 'RB',   format: 'RB-{YYYY}-{####}',     padding: 4, resetPolicy: 'YEARLY' },
 };
 
 @Injectable()

@@ -134,8 +134,12 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     // ── Receivables (sub-ledger) ────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ar/quotes',     'Quotes',             FileSignature,   AR_ROLES,         role,
       { sectionStart: 'Receivables' }),
-    makeLedgerNavItem('/ledger/ar/billing',    'Customer Billing',   FileSpreadsheet, AR_ROLES,         role),
-    makeLedgerNavItem('/ledger/ar/invoices',   'POS Collections',    TrendingUp,      AR_ROLES,         role),
+    // Sprint 21 — clearer labels. Flow is Customer → Quote → Invoice →
+    // Payment. "Customer Billing" was ambiguous; renamed to "Invoices"
+    // which matches what people actually click for. POS-derived AR keeps
+    // the POS-collections lens but with a label that says what it IS.
+    makeLedgerNavItem('/ledger/ar/billing',    'Invoices',           FileSpreadsheet, AR_ROLES,         role),
+    makeLedgerNavItem('/ledger/ar/invoices',   'POS-derived AR',     TrendingUp,      AR_ROLES,         role),
 
     // ── Payables (sub-ledger) ───────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role,

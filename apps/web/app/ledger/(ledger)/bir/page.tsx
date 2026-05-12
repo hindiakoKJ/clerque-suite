@@ -1,12 +1,65 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { FileText, Download, ChevronDown, ChevronRight, AlertTriangle, TableIcon, Settings2, BookOpen } from 'lucide-react';
+import { FileText, Download, ChevronDown, ChevronRight, AlertTriangle, TableIcon, Settings2, BookOpen, Play, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
 import { ComingSoon } from '@/components/ui/ComingSoon';
 import { toast } from 'sonner';
+
+// Sprint 21 — video walkthrough URLs per BIR form. Empty string renders a
+// "coming soon" placeholder; once the Loom/YouTube recording exists, drop
+// the embed URL here and the modal will play it. Keep these env-driven so
+// marketing can swap URLs without a deploy:
+const BIR_VIDEO_URLS = {
+  '2550Q': process.env.NEXT_PUBLIC_BIR_2550Q_VIDEO ?? '',
+  '1701Q': process.env.NEXT_PUBLIC_BIR_1701Q_VIDEO ?? '',
+  '2551Q': process.env.NEXT_PUBLIC_BIR_2551Q_VIDEO ?? '',
+} as const;
+
+function HowToVideoButton({ form }: { form: keyof typeof BIR_VIDEO_URLS }) {
+  const [open, setOpen] = useState(false);
+  const url = BIR_VIDEO_URLS[form];
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border border-border text-muted-foreground hover:bg-muted"
+        title={`Show me how to file ${form}`}
+      >
+        <Play className="h-3 w-3" /> How to file
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setOpen(false)}>
+          <div className="bg-background rounded-xl w-full max-w-3xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <h3 className="font-semibold text-sm">How to file BIR Form {form}</h3>
+              <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="aspect-video bg-muted flex items-center justify-center">
+              {url ? (
+                <iframe
+                  src={url}
+                  className="w-full h-full"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title={`How to file BIR ${form}`}
+                />
+              ) : (
+                <div className="text-center p-8 text-sm text-muted-foreground">
+                  <Play className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                  <p>Video walkthrough coming soon.</p>
+                  <p className="text-xs mt-1">Meanwhile: every line in the form has a tooltip — hover for the BIR-line reference.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
@@ -64,13 +117,16 @@ function Section2550Q({ year, quarter }: { year: number; quarter: Quarter }) {
             </p>
           )}
         </div>
-        <button
-          onClick={handleDownload}
-          disabled={!data}
-          className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Download className="w-3.5 h-3.5" /> Export JSON
-        </button>
+        <div className="flex items-center gap-2">
+          <HowToVideoButton form="2550Q" />
+          <button
+            onClick={handleDownload}
+            disabled={!data}
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" /> Export JSON
+          </button>
+        </div>
       </div>
 
       {isLoading && (
@@ -184,13 +240,16 @@ function Section1701Q({ year, quarter }: { year: number; quarter: Quarter }) {
             </p>
           )}
         </div>
-        <button
-          onClick={handleDownload}
-          disabled={!data}
-          className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Download className="w-3.5 h-3.5" /> Export JSON
-        </button>
+        <div className="flex items-center gap-2">
+          <HowToVideoButton form="1701Q" />
+          <button
+            onClick={handleDownload}
+            disabled={!data}
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" /> Export JSON
+          </button>
+        </div>
       </div>
 
       {isLoading && <div className="px-5 py-6 text-sm text-muted-foreground">Loading income data…</div>}
@@ -321,13 +380,16 @@ function Section2551Q({ year, quarter }: { year: number; quarter: Quarter }) {
             {data && ` • Period: ${data.periodFrom} – ${data.periodTo}`}
           </p>
         </div>
-        <button
-          onClick={handleDownload}
-          disabled={!data}
-          className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Download className="w-3.5 h-3.5" /> Export JSON
-        </button>
+        <div className="flex items-center gap-2">
+          <HowToVideoButton form="2551Q" />
+          <button
+            onClick={handleDownload}
+            disabled={!data}
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" /> Export JSON
+          </button>
+        </div>
       </div>
 
       {isLoading && <div className="px-5 py-6 text-sm text-muted-foreground">Loading percentage tax data…</div>}

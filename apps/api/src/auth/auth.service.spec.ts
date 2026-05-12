@@ -63,6 +63,7 @@ describe('AuthService — validateUser()', () => {
     prisma = makePrismaMock();
 
     const { MailService } = await import('../mail/mail.service');
+    const { AccountsService } = await import('../accounting/accounts.service');
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -72,7 +73,13 @@ describe('AuthService — validateUser()', () => {
         // reset / lockout notifications. Mock it so the spec compiles.
         { provide: MailService, useValue: {
           sendPasswordReset: jest.fn(), sendLockoutNotice: jest.fn(),
-          sendPasswordResetEmail: jest.fn(),
+          sendPasswordResetEmail: jest.fn(), sendWelcome: jest.fn(),
+        } },
+        // Sprint 21 — AccountsService added for the public Ledger self-
+        // signup path. The lockout/login tests don't exercise it; a stub
+        // keeps the DI container happy.
+        { provide: AccountsService, useValue: {
+          seedDefaultAccounts: jest.fn(),
         } },
       ],
     }).compile();

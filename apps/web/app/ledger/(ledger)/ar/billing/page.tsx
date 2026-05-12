@@ -1,10 +1,79 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   FileText, Plus, X, Send, Ban, DollarSign, ChevronRight, Trash2,
+  Info, Quote as QuoteIcon, FileSignature, Wallet,
 } from 'lucide-react';
+
+// Sprint 21 — Start-Here guide on the AR Billing page. Renders a small
+// dismissible explainer of the AR flow (Customer → Optional Quote → Invoice
+// → Payment) so first-time users aren't lost between /ar/billing,
+// /ar/quotes, /ar/customers, and /ar/invoices. Dismissal persists in
+// localStorage so it stops showing once they get it.
+function StartHereGuide() {
+  const [dismissed, setDismissed] = useState(true);
+  useEffect(() => {
+    setDismissed(typeof window !== 'undefined' && localStorage.getItem('ar-start-here-dismissed') === '1');
+  }, []);
+  if (dismissed) return null;
+  function dismiss() {
+    localStorage.setItem('ar-start-here-dismissed', '1');
+    setDismissed(true);
+  }
+  return (
+    <div className="rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <Info className="w-4 h-4 text-[var(--accent)]" />
+            <h3 className="text-sm font-semibold text-foreground">How AR works in Clerque</h3>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+            <div className="flex items-start gap-2">
+              <div className="w-6 h-6 rounded-full bg-[var(--accent)] text-white flex items-center justify-center text-[10px] font-bold shrink-0">1</div>
+              <div>
+                <p className="font-medium text-foreground">Add a Customer</p>
+                <p className="text-muted-foreground mt-0.5">Once per client. Stores their TIN, credit term, contact.</p>
+                <Link href="/ledger/ar/customers" className="text-[var(--accent)] hover:underline mt-1 inline-block">→ Customers</Link>
+              </div>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-6 h-6 rounded-full bg-[var(--accent)] text-white flex items-center justify-center text-[10px] font-bold shrink-0">2</div>
+              <div>
+                <p className="font-medium text-foreground">Quote (optional)</p>
+                <p className="text-muted-foreground mt-0.5">Send a quote first if you bill on acceptance. Skip if you invoice directly.</p>
+                <Link href="/ledger/ar/quotes" className="text-[var(--accent)] hover:underline mt-1 inline-block">→ Quotes</Link>
+              </div>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-6 h-6 rounded-full bg-[var(--accent)] text-white flex items-center justify-center text-[10px] font-bold shrink-0">3</div>
+              <div>
+                <p className="font-medium text-foreground">Issue Invoice</p>
+                <p className="text-muted-foreground mt-0.5">Create new invoice here. Posts DR AR / CR Revenue / CR VAT on confirm.</p>
+                <span className="text-muted-foreground text-[10px] mt-1 inline-block">← You are here</span>
+              </div>
+            </div>
+            <div className="flex items-start gap-2">
+              <div className="w-6 h-6 rounded-full bg-[var(--accent)] text-white flex items-center justify-center text-[10px] font-bold shrink-0">4</div>
+              <div>
+                <p className="font-medium text-foreground">Record Payment</p>
+                <p className="text-muted-foreground mt-0.5">When customer pays, click the invoice → Record Payment. DR Cash / CR AR.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <button onClick={dismiss}
+          className="text-muted-foreground hover:text-foreground p-1"
+          title="Got it — don't show again">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
@@ -646,6 +715,10 @@ export default function ARBillingPage() {
           </Link>
         )}
       </div>
+
+      {/* Sprint 21 — Start-Here guide. Dismissible per-user via localStorage. */}
+      <StartHereGuide />
+
 
       {aging && aging.total > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-6 gap-2">

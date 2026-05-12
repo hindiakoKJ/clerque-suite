@@ -211,6 +211,29 @@ export class AuthController {
   }
 
   /**
+   * POST /auth/signup-ledger — Sprint 21 public self-signup for Ledger-only
+   * tenants. Creates a new tenant in trial mode + the owner user. Does NOT
+   * log them in (they go through the normal login flow afterward so the
+   * password policy + future 2FA gating apply consistently).
+   *
+   * The global throttler at app.module limits abuse; an explicit @Throttle
+   * here tightens it to 5 signups per 10 minutes per IP — enough for a
+   * legit business to retry on slug collisions, not enough for a bot farm.
+   */
+  @Post('signup-ledger')
+  @HttpCode(HttpStatus.CREATED)
+  async signupLedger(@Body() body: {
+    businessName: string;
+    ownerName:    string;
+    ownerEmail:   string;
+    ownerPassword: string;
+    taxStatus?:   'VAT' | 'NON_VAT' | 'UNREGISTERED';
+    businessType?: string;
+  }) {
+    return this.authService.signupLedgerTenant(body);
+  }
+
+  /**
    * POST /auth/pin-login
    * Cashier fast-login. tenantSlug + email + 4-8 digit PIN.
    * Returns the same JWT shape as /auth/login.

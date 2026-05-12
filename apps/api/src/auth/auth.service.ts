@@ -10,6 +10,7 @@ import * as bcrypt from 'bcryptjs';
 import { randomBytes, createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { AccountsService } from '../accounting/accounts.service';
 import { assertPasswordPolicy } from './password-policy';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant, PLAN_FEATURES, PLAN_LIMITS } from '@repo/shared-types';
 import type { TaxStatus, TierId, AiAddonType, PlanCode } from '@repo/shared-types';
@@ -28,7 +29,158 @@ export class AuthService {
     private prisma: PrismaService,
     private jwt:    JwtService,
     private mail:   MailService,
+    private accounts: AccountsService,
   ) {}
+
+  /**
+   * SECURITY / Sprint 21 — Public Ledger self-signup.
+   *
+   * Creates a new tenant in Ledger-only trial mode (modulePos=false,
+   * moduleLedger=true, modulePayroll=false). Plan defaults to STD_DUO (the
+   * lowest tier that includes BIR forms). Seeds the LEDGER_ONLY Chart of
+   * Accounts so the tenant lands with no POS-coupled accounts.
+   *
+   * The throttler at the app level rate-limits this endpoint along with
+   * the others; specific tighter limits can be added at the controller
+   * decorator if abuse becomes a problem.
+   *
+   * Does NOT auto-log the new owner in — they receive a welcome email and
+   * go through normal login afterward. This keeps the surface aligned with
+   * the standard auth flow (2FA gate, throttle, password-policy enforcement
+   * on first login) and lets us send a "verify your email" link if we add
+   * verification later.
+   */
+  async signupLedgerTenant(dto: {
+    businessName: string;
+    ownerName:    string;
+    ownerEmail:   string;
+    ownerPassword: string;
+    /** Optional. Defaults to 'NON_VAT' which is the most common SME case. */
+    taxStatus?:   'VAT' | 'NON_VAT' | 'UNREGISTERED';
+    /** Optional. Defaults to 'SERVICE' since this is the Ledger-only audience. */
+    businessType?: string;
+  }): Promise<{ tenantId: string; tenantSlug: string; ownerUserId: string }> {
+    const businessName = dto.businessName?.trim();
+    const ownerName    = dto.ownerName?.trim();
+    const ownerEmail   = dto.ownerEmail?.toLowerCase().trim();
+    if (!businessName) throw new BadRequestException('Business name is required.');
+    if (!ownerName)    throw new BadRequestException('Owner name is required.');
+    if (!ownerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+      throw new BadRequestException('Valid owner email is required.');
+    }
+    // Reuse the same password policy enforced on admin-created accounts.
+    assertPasswordPolicy(dto.ownerPassword, { email: ownerEmail, name: ownerName });
+
+    // Slug from business name, with collision-check + counter suffix.
+    const baseSlug = businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 40) || 'tenant';
+    let slug = baseSlug;
+    for (let i = 1; i < 50; i++) {
+      const exists = await this.prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+      if (!exists) break;
+      slug = `${baseSlug}-${i}`;
+    }
+    // Email-must-not-already-exist check. Reject loudly to avoid silently
+    // creating a second account for the same person.
+    const emailTaken = await this.prisma.user.findFirst({ where: { email: ownerEmail }, select: { id: true } });
+    if (emailTaken) {
+      throw new BadRequestException(
+        'An account with this email already exists. Sign in instead, or use a different email.',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
+
+    // STD_DUO chosen because it includes BIR forms (the headline value
+    // prop). Solo would block the BIR/Audit log feature gates.
+    // PLAN_CAPS resolves STD_DUO to baseSeats=3 — fine for a Ledger SME.
+    const { PLAN_CAPS } = await import('@repo/shared-types');
+    const planCode = 'STD_DUO' as const;
+    const cap = PLAN_CAPS[planCode];
+
+    const { DEFAULT_APP_ACCESS } = await import('@repo/shared-types');
+    const appAccess = DEFAULT_APP_ACCESS['BUSINESS_OWNER'] ?? [];
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.create({
+        data: {
+          name:         businessName,
+          slug,
+          // SERVICE is the default — owner can change later from Settings.
+          businessType: (dto.businessType as 'SERVICE') ?? 'SERVICE',
+          tier:         'TIER_2',
+          taxStatus:    (dto.taxStatus ?? 'NON_VAT'),
+          contactEmail: ownerEmail,
+          status:       'ACTIVE',
+          planCode,
+          modulePos:        false,   // Ledger-only
+          moduleLedger:     true,
+          modulePayroll:    false,
+          staffSeatQuota:   cap.baseSeats,
+          staffSeatAddons:  0,
+        },
+      });
+
+      const branch = await tx.branch.create({
+        data: { tenantId: tenant.id, name: 'Main', isActive: true },
+      });
+
+      const user = await tx.user.create({
+        data: {
+          tenantId:     tenant.id,
+          branchId:     branch.id,
+          name:         ownerName,
+          email:        ownerEmail,
+          passwordHash,
+          role:         'BUSINESS_OWNER',
+          isActive:     true,
+          appAccess: {
+            // Cast deferred to Prisma's own types via `as any` because the
+            // shared-types AccessLevel union pre-dates the schema enum
+            // values (NONE | CLOCK_ONLY | READ_ONLY | OPERATOR | FULL) and
+            // we don't want a cross-package refactor here. AdminService
+            // creates accounts with the same shape via the same pattern.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            create: appAccess.map((a: { app: string; level: string }) => ({
+              appCode: a.app as 'POS' | 'LEDGER' | 'PAYROLL',
+              level:   a.level as any,
+            })),
+          },
+        },
+      });
+
+      return { tenant, branch, user };
+    });
+
+    // Eager-seed the Ledger-only CoA so they don't have to wait for the
+    // lazy back-fill on first /ledger/accounts open. Outside the
+    // transaction because seedDefaultAccounts uses its own DB session.
+    await this.accounts.seedDefaultAccounts(result.tenant.id, 'LEDGER_ONLY');
+
+    // Welcome email (best-effort — failure here doesn't roll back signup).
+    // The user picked their own password, so we don't echo it back — they
+    // already know it. The mail's "Temp Password" line is replaced with
+    // "(the password you just set)".
+    try {
+      await this.mail.sendWelcome({
+        to:           result.user.email,
+        name:         result.user.name,
+        tenantName:   result.tenant.name,
+        tenantSlug:   result.tenant.slug,
+        tempPassword: '(the password you just set)',
+        appName:      'LEDGER',
+      });
+    } catch {
+      // Swallow — mail service may not be configured in dev. The signup
+      // itself succeeded; the user can log in immediately with their
+      // credentials.
+    }
+
+    return {
+      tenantId:    result.tenant.id,
+      tenantSlug:  result.tenant.slug,
+      ownerUserId: result.user.id,
+    };
+  }
 
   async validateUser(email: string, password: string, companyCode?: string) {
     // If company code supplied, resolve tenant first

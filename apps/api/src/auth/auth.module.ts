@@ -8,6 +8,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { LocalStrategy } from './strategies/local.strategy';
 import { TierQuotaGuard } from './guards/tier-quota.guard';
 import { TwoFactorService } from './two-factor.service';
+import { AccountingModule } from '../accounting/accounting.module';
 
 @Module({
   imports: [
@@ -20,6 +21,9 @@ import { TwoFactorService } from './two-factor.service';
         signOptions: { expiresIn: '15m' },
       }),
     }),
+    // Sprint 21 — public Ledger self-signup endpoint needs to seed CoA on
+    // tenant create. AccountingModule exports AccountsService.
+    AccountingModule,
   ],
   providers: [AuthService, JwtStrategy, LocalStrategy, TierQuotaGuard, TwoFactorService],
   controllers: [AuthController],

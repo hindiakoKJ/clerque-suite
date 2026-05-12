@@ -34,6 +34,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from '../accounting/journal.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { NumberingService } from '../numbering/numbering.service';
+import { AuditService } from '../audit/audit.service';
 import { Prisma, InvoiceStatus, type TaxStatus } from '@prisma/client';
 
 /**
@@ -83,6 +84,7 @@ export class ARInvoicesService {
     private journal:   JournalService,
     private periods:   AccountingPeriodsService,
     private numbering: NumberingService,
+    private audit:     AuditService,
   ) {}
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -291,7 +293,7 @@ export class ARInvoicesService {
       );
 
       // Move invoice to OPEN + link to JE
-      return tx.aRInvoice.update({
+      const updated = await tx.aRInvoice.update({
         where: { id: invoice.id },
         data: {
           status:         'OPEN',
@@ -301,6 +303,26 @@ export class ARInvoicesService {
         },
         include: { lines: true, customer: { select: { id: true, name: true } } },
       });
+
+      // Audit D3-07 — immutable post record.
+      void this.audit.log({
+        tenantId,
+        action:      'AR_INVOICE_POSTED',
+        entityType:  'ARInvoice',
+        entityId:    invoice.id,
+        performedBy: userId,
+        description: `AR invoice ${invoice.invoiceNumber} posted (customer ${invoice.customer.name}, ₱${Number(invoice.totalAmount).toFixed(2)})`,
+        before:      { status: 'DRAFT' },
+        after:       {
+          status:         'OPEN',
+          invoiceNumber:  invoice.invoiceNumber,
+          customerName:   invoice.customer.name,
+          totalAmount:    Number(invoice.totalAmount),
+          journalEntryId: je.id,
+        },
+      });
+
+      return updated;
     }, { timeout: 30_000 });
   }
 
@@ -341,6 +363,19 @@ export class ARInvoicesService {
         },
       });
       if (voided.count === 0) throw new NotFoundException('Invoice not found.');
+
+      // Audit D3-07 — immutable void record.
+      void this.audit.log({
+        tenantId,
+        action:      'AR_INVOICE_VOIDED',
+        entityType:  'ARInvoice',
+        entityId:    invoice.id,
+        performedBy: userId,
+        description: `AR invoice voided: ${reason.trim().slice(0, 200)}`,
+        before:      { status: invoice.status },
+        after:       { status: 'VOIDED', voidReason: reason.trim() },
+      });
+
       return tx.aRInvoice.findUnique({ where: { id: invoice.id } });
     }, { timeout: 30_000 });
   }

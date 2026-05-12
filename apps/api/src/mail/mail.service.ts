@@ -205,6 +205,44 @@ export class MailService {
     });
   }
 
+  /**
+   * Audit D10-D — Notify the tenant owner when a user crosses the bulk-export
+   * threshold (>5 report exports in one rolling hour). Best-effort: the
+   * caller fires this from the scheduler and swallows errors itself.
+   */
+  async sendBulkExportAlert(opts: {
+    to:           string;
+    ownerName:    string | null;
+    actorName:    string | null;
+    actorEmail:   string | null;
+    exportCount:  number;
+  }): Promise<void> {
+    await this.send({
+      to:      opts.to,
+      subject: `[Clerque] Bulk export alert — ${opts.actorName ?? 'a user'} exported ${opts.exportCount} reports in an hour`,
+      html: this.layout(`
+        <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
+          Bulk Export Detected
+        </h2>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Hi <strong>${this.escape(opts.ownerName ?? 'there')}</strong>,
+        </p>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Our audit system detected <strong>${opts.exportCount} report exports</strong>
+          in the last hour by
+          <strong>${this.escape(opts.actorName ?? 'a staff member')}</strong>
+          ${opts.actorEmail ? `(${this.escape(opts.actorEmail)})` : ''}.
+        </p>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          This may be normal end-of-month reporting, but it can also be an
+          early signal of data exfiltration. Please review the audit log and
+          confirm the activity is expected.
+        </p>
+        <p style="margin:0;color:#aaa;font-size:12px;">— Clerque audit</p>
+      `),
+    });
+  }
+
   // ── Internal helpers ───────────────────────────────────────────────────────
 
   private async send(opts: { to: string; subject: string; html: string }) {

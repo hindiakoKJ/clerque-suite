@@ -61,9 +61,11 @@ function makePrismaMock() {
 describe('PayrollService — Sprint 3 endpoints', () => {
   let svc:    PayrollService;
   let prisma: ReturnType<typeof makePrismaMock>;
+  let audit:  { log: jest.Mock; findSodViolations: jest.Mock };
 
   beforeEach(async () => {
     prisma = makePrismaMock();
+    audit  = { log: jest.fn(), findSodViolations: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PayrollService,
@@ -75,6 +77,10 @@ describe('PayrollService — Sprint 3 endpoints', () => {
           useValue: { create: jest.fn() } },
         { provide: (require('../accounting/accounts.service') as typeof import('../accounting/accounts.service')).AccountsService,
           useValue: { findByCode: jest.fn() } },
+        // Audit D3-07 — PayrollService now logs SALARY_CHANGED + PAYSLIP_PUBLISHED.
+        // Tests below assert on `audit.log` instead of the legacy prisma.auditLog stub.
+        { provide: (require('../audit/audit.service') as typeof import('../audit/audit.service')).AuditService,
+          useValue: audit },
       ],
     }).compile();
     svc = module.get(PayrollService);
@@ -113,7 +119,7 @@ describe('PayrollService — Sprint 3 endpoints', () => {
         .rejects.toThrow(NotFoundException);
     });
 
-    it('attempts to write an audit log row (best-effort)', async () => {
+    it('writes a SALARY_CHANGED audit row when the rate actually changes', async () => {
       prisma.user.findFirst.mockResolvedValue({
         id: TARGET, name: 'Maria', role: 'CASHIER',
         salaryRate: 15000, salaryType: 'MONTHLY', hiredAt: null,
@@ -127,13 +133,16 @@ describe('PayrollService — Sprint 3 endpoints', () => {
       });
 
       await svc.editEmployeeSalary(TENANT, TARGET, ACTOR, { salaryRate: 18000 });
-      // auditLog.create is best-effort; if available it's called
-      // (in our mock it is, so verify the before/after payload shape)
-      expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
-        data: expect.objectContaining({
-          tenantId: TENANT, actorId: ACTOR, action: 'SETTING_CHANGED',
-          targetType: 'User', targetId: TARGET,
-        }),
+      // Audit D3-07 — SALARY_CHANGED with before/after numeric rates and a
+      // privacy-safe description (no amount in the human-readable text).
+      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId:    TENANT,
+        action:      'SALARY_CHANGED',
+        entityType:  'User',
+        entityId:    TARGET,
+        performedBy: ACTOR,
+        before:      expect.objectContaining({ salaryRate: 15000 }),
+        after:       expect.objectContaining({ salaryRate: 18000 }),
       }));
     });
   });

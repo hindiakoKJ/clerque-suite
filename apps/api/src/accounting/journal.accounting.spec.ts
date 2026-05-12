@@ -182,6 +182,11 @@ async function runProcessEvent(
       { provide: AccountsService,           useValue: accounts },
       { provide: AccountingPeriodsService,  useValue: periods },
       { provide: NumberingService,          useValue: numbering },
+      // Audit D3-07 — JournalService now writes audit rows on post / reverse
+      // / closeYear. The processEvent path under test never touches it, so
+      // a no-op stub is sufficient.
+      { provide: (require('../audit/audit.service') as typeof import('../audit/audit.service')).AuditService,
+        useValue: { log: jest.fn(), findSodViolations: jest.fn() } },
     ],
   }).compile();
 

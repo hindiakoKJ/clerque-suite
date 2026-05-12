@@ -9,6 +9,7 @@ import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ExportService } from './export.service';
 import { TenantExportService } from './tenant-export.service';
+import { AuditService } from '../audit/audit.service';
 
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -21,6 +22,30 @@ function sendXlsx(res: Response, buffer: Buffer, filename: string) {
   res.send(buffer);
 }
 
+/**
+ * Audit D3-07 — record every XLSX/CSV export against the tenant + actor.
+ * Fire-and-forget: a failed audit write must not break the download.
+ * The reportId becomes the AuditLog.entityId so bulk-export detection can
+ * group rows per (tenantId, performedBy, hour) cheaply.
+ */
+function logDataExport(
+  audit: AuditService,
+  user: JwtPayload,
+  reportId: string,
+  reportName: string,
+  filename: string,
+): void {
+  void audit.log({
+    tenantId:    user.tenantId!,
+    action:      'DATA_EXPORTED',
+    entityType:  'Report',
+    entityId:    reportId,
+    performedBy: user.sub,
+    description: `Exported ${reportName}`,
+    after:       { reportId, reportName, filename },
+  });
+}
+
 @ApiTags('Export')
 @ApiBearerAuth('access-token')
 @Controller('export')
@@ -30,7 +55,25 @@ export class ExportController {
   constructor(
     private readonly svc: ExportService,
     private readonly tenantExport: TenantExportService,
+    private readonly audit: AuditService,
   ) {}
+
+  /**
+   * Audit D3-07 — send the XLSX buffer AND record a DATA_EXPORTED row.
+   * reportId is used as AuditLog.entityId so the D10-D scheduler can
+   * group per (tenantId, performedBy) within an hour cheaply.
+   */
+  private sendAndLog(
+    res: Response,
+    buffer: Buffer,
+    filename: string,
+    user: JwtPayload,
+    reportId: string,
+    reportName: string,
+  ) {
+    logDataExport(this.audit, user, reportId, reportName, filename);
+    sendXlsx(res, buffer, filename);
+  }
 
   /**
    * GET /export/tenant-all
@@ -42,7 +85,7 @@ export class ExportController {
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   async exportTenantAll(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const { buffer, filename } = await this.tenantExport.exportAllData(user.tenantId!);
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /**
@@ -57,7 +100,7 @@ export class ExportController {
   ) {
     const buffer   = await this.svc.exportTrialBalance(user.tenantId!, asOf);
     const filename = `trial-balance-${asOf ?? 'current'}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /**
@@ -75,7 +118,7 @@ export class ExportController {
     const buffer   = await this.svc.exportJournal(user.tenantId!, { from, to, status });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `journal-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /**
@@ -93,7 +136,7 @@ export class ExportController {
     const buffer   = await this.svc.exportAccountLedger(user.tenantId!, accountId, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ledger-${accountId}-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /**
@@ -109,7 +152,7 @@ export class ExportController {
   ) {
     const buffer   = await this.svc.exportPLSummary(user.tenantId!, from, to);
     const filename = `pl-summary-${from}_to_${to}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /**
@@ -178,7 +221,7 @@ export class ExportController {
   async chartOfAccounts(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const buffer   = await this.svc.exportChartOfAccounts(user.tenantId!);
     const filename = `chart-of-accounts-${new Date().toISOString().slice(0, 10)}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /**
@@ -221,7 +264,7 @@ export class ExportController {
   ) {
     const buffer   = await this.svc.exportBalanceSheet(user.tenantId!, asOf);
     const filename = `balance-sheet-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/cash-flow?from=YYYY-MM-DD&to=YYYY-MM-DD */
@@ -236,7 +279,7 @@ export class ExportController {
     if (!from || !to) throw new BadRequestException('from and to are required');
     const buffer   = await this.svc.exportCashFlow(user.tenantId!, from, to);
     const filename = `cash-flow-${from}_to_${to}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/journal-templates */
@@ -245,7 +288,7 @@ export class ExportController {
   async journalTemplates(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const buffer   = await this.svc.exportJournalTemplates(user.tenantId!);
     const filename = `journal-templates-${new Date().toISOString().slice(0, 10)}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/quotes?from=&to=&status= */
@@ -261,7 +304,7 @@ export class ExportController {
     const buffer   = await this.svc.exportQuotes(user.tenantId!, { from, to, status });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `quotes-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ar-invoice-register?from=&to=&status= */
@@ -277,7 +320,7 @@ export class ExportController {
     const buffer   = await this.svc.exportArInvoiceRegister(user.tenantId!, { from, to, status });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ar-invoice-register-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ar-customer-statement/:customerId?from=&to= */
@@ -293,7 +336,7 @@ export class ExportController {
     const buffer   = await this.svc.exportArCustomerStatement(user.tenantId!, customerId, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ar-customer-statement-${customerId}-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ar-payments?from=&to= */
@@ -308,7 +351,7 @@ export class ExportController {
     const buffer   = await this.svc.exportArPayments(user.tenantId!, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ar-payments-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ap-bill-register?from=&to=&status= */
@@ -324,7 +367,7 @@ export class ExportController {
     const buffer   = await this.svc.exportApBillRegister(user.tenantId!, { from, to, status });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ap-bill-register-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ap-vendor-statement/:vendorId?from=&to= */
@@ -340,7 +383,7 @@ export class ExportController {
     const buffer   = await this.svc.exportApVendorStatement(user.tenantId!, vendorId, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ap-vendor-statement-${vendorId}-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ap-payments?from=&to= */
@@ -355,7 +398,7 @@ export class ExportController {
     const buffer   = await this.svc.exportApPayments(user.tenantId!, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ap-payments-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ap-expenses?from=&to= */
@@ -370,7 +413,7 @@ export class ExportController {
     const buffer   = await this.svc.exportApExpenses(user.tenantId!, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `ap-expenses-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/expense-claims?from=&to=&status= */
@@ -386,7 +429,7 @@ export class ExportController {
     const buffer   = await this.svc.exportExpenseClaims(user.tenantId!, { from, to, status });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `expense-claims-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/bank-reconciliation/:accountId?asOf= */
@@ -400,7 +443,7 @@ export class ExportController {
   ) {
     const buffer   = await this.svc.exportBankReconciliation(user.tenantId!, accountId, asOf);
     const filename = `bank-reconciliation-${accountId}-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/settlement-batches?from=&to= */
@@ -415,7 +458,7 @@ export class ExportController {
     const buffer   = await this.svc.exportSettlementBatches(user.tenantId!, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `settlement-batches-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/cash-position?asOf= */
@@ -428,7 +471,7 @@ export class ExportController {
   ) {
     const buffer   = await this.svc.exportCashPosition(user.tenantId!, asOf);
     const filename = `cash-position-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/bir-2550q?year=&quarter= */
@@ -448,7 +491,7 @@ export class ExportController {
     }
     const buffer   = await this.svc.exportBir2550Q(user.tenantId!, year, quarter);
     const filename = `bir-2550q-${year}-Q${quarter}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/bir-1701q?year=&quarter= */
@@ -468,7 +511,7 @@ export class ExportController {
     }
     const buffer   = await this.svc.exportBir1701Q(user.tenantId!, year, quarter);
     const filename = `bir-1701q-${year}-Q${quarter}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/bir-2551q?year=&quarter= */
@@ -488,7 +531,7 @@ export class ExportController {
     }
     const buffer   = await this.svc.exportBir2551Q(user.tenantId!, year, quarter);
     const filename = `bir-2551q-${year}-Q${quarter}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/z-read-history?from=&to= */
@@ -503,7 +546,7 @@ export class ExportController {
     const buffer   = await this.svc.exportZReadHistory(user.tenantId!, { from, to });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `z-read-history-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/audit-log?from=&to=&action= */
@@ -520,7 +563,7 @@ export class ExportController {
     const buffer   = await this.svc.exportAuditLog(user.tenantId!, { from, to, action });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `audit-log-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/accounting-events?status=&from=&to= */
@@ -536,7 +579,7 @@ export class ExportController {
     const buffer   = await this.svc.exportAccountingEvents(user.tenantId!, { from, to, status });
     const range    = [from, to].filter(Boolean).join('_to_') || 'all';
     const filename = `accounting-events-${range}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/period-close-summary?periodId= */
@@ -550,7 +593,7 @@ export class ExportController {
     if (!periodId) throw new BadRequestException('periodId is required');
     const buffer   = await this.svc.exportPeriodCloseSummary(user.tenantId!, periodId);
     const filename = `period-close-summary-${periodId}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 
   /** GET /export/ledger-kpi-snapshot?asOf= */
@@ -563,6 +606,6 @@ export class ExportController {
   ) {
     const buffer   = await this.svc.exportLedgerKpiSnapshot(user.tenantId!, asOf);
     const filename = `ledger-kpi-snapshot-${asOf ?? new Date().toISOString().slice(0, 10)}.xlsx`;
-    sendXlsx(res, buffer, filename);
+    this.sendAndLog(res, buffer, filename, user, filename.replace(/\.xlsx$/, ''), filename.replace(/\.xlsx$/, ''));
   }
 }

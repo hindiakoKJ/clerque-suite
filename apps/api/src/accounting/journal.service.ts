@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AccountsService } from './accounts.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { NumberingService } from '../numbering/numbering.service';
+import { AuditService } from '../audit/audit.service';
 import { Prisma, JournalSource } from '@prisma/client';
 
 type LineInput = { accountId: string; debit?: number; credit?: number; description?: string };
@@ -25,6 +26,9 @@ export class JournalService {
     private accounts: AccountsService,
     private periods: AccountingPeriodsService,
     private numbering: NumberingService,
+    // Optional so existing unit tests that don't wire AuditService still construct.
+    // Real DI in AccountingModule (which imports AuditModule) always supplies it.
+    private audit?: AuditService,
   ) {}
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -181,12 +185,30 @@ export class JournalService {
     });
 
     // Re-fetch with full includes for the response (updateMany does not return rows)
-    return this.prisma.journalEntry.findFirst({
+    const posted = await this.prisma.journalEntry.findFirst({
       where: { id, tenantId },
       include: {
         lines: { include: { account: { select: { code: true, name: true } } } },
       },
     });
+
+    // Audit D3-07 — immutable record of the DRAFT → POSTED transition.
+    void this.audit?.log({
+      tenantId,
+      action:      'JOURNAL_POSTED',
+      entityType:  'JournalEntry',
+      entityId:    id,
+      performedBy: postedBy,
+      description: `JE ${entry.entryNumber} posted`,
+      before:      { status: 'DRAFT' },
+      after:       {
+        status:      'POSTED',
+        totalDebit:  entry.lines.reduce((s, l) => s + Number(l.debit),  0),
+        totalCredit: entry.lines.reduce((s, l) => s + Number(l.credit), 0),
+      },
+    });
+
+    return posted;
   }
 
   // ── Approve a PENDING_APPROVAL entry ────────────────────────────────────────
@@ -300,6 +322,19 @@ export class JournalService {
       include: {
         lines: { include: { account: { select: { code: true, name: true } } } },
       },
+    });
+
+    // Audit D3-07 — immutable reversal record. Description carries the
+    // original entry id so investigators can pivot from either side.
+    void this.audit?.log({
+      tenantId,
+      action:      'JOURNAL_REVERSED',
+      entityType:  'JournalEntry',
+      entityId:    reversal.id,
+      performedBy: reversedBy,
+      description: `JE ${original.entryNumber} reversed by ${reversal.entryNumber} (original id ${original.id})`,
+      before:      { originalEntryNumber: original.entryNumber, originalId: original.id },
+      after:       { reversalEntryNumber: reversal.entryNumber, reversalId: reversal.id },
     });
 
     return reversal;
@@ -1183,6 +1218,24 @@ export class JournalService {
       createdBy,
       'SYSTEM',  // bypass posting-control restrictions on system-only accounts
     );
+
+    // Audit D3-07 — immutable year-end close record.
+    void this.audit?.log({
+      tenantId,
+      action:      'YEAR_END_CLOSED',
+      entityType:  'JournalEntry',
+      entityId:    entry.id,
+      performedBy: createdBy,
+      description: `Year-end FY${year} closed via JE ${entry.entryNumber}`,
+      after:       {
+        year,
+        closingEntryId:     entry.id,
+        closingEntryNumber: entry.entryNumber,
+        totalRevenue,
+        totalExpense,
+        netIncome,
+      },
+    });
 
     return {
       year,

@@ -154,10 +154,11 @@ export class AccountingPeriodsService {
       },
     });
 
-    // Immutable audit record — fire-and-forget
+    // Audit D3-07 — switched from generic SETTING_CHANGED to the dedicated
+    // PERIOD_REOPENED action so governance reports filter on it directly.
     void this.audit.log({
       tenantId,
-      action:      'SETTING_CHANGED',
+      action:      'PERIOD_REOPENED',
       entityType:  'AccountingPeriod',
       entityId:    periodId,
       before:      { status: 'CLOSED', closedById: period.closedById, closedAt: period.closedAt },

@@ -256,6 +256,128 @@ export class AuditService {
   }
 
   /**
+   * Audit D4-05 — Historical Segregation-of-Duties conflict detection.
+   *
+   * Walks AuditLog rows with action='PERMISSIONS_UPDATED' or
+   * action='USER_DEPROVISIONED', reconstructs each user's role history,
+   * and flags any user whose history crosses one of the SOD-conflict pairs.
+   *
+   * The "same person controlled both sides" risk is real even when the
+   * roles never overlapped in time — e.g. an AP_ACCOUNTANT who fabricated
+   * bills last quarter then moved to PAYROLL_MASTER could now pay
+   * themselves through the bills they wrote. This report surfaces those
+   * lifetime conflicts so auditors can sample-check the suspect periods.
+   */
+  async findSodViolations(
+    tenantId: string,
+    opts: { fromDate?: string; toDate?: string } = {},
+  ) {
+    const { fromDate, toDate } = opts;
+    const createdAt: { gte?: Date; lte?: Date } = {};
+    if (fromDate) createdAt.gte = new Date(fromDate);
+    if (toDate)   createdAt.lte = new Date(toDate);
+
+    // Role-change history. We don't have a dedicated event yet — but
+    // PERMISSIONS_UPDATED writes are emitted by users.service.update when
+    // role changes, and store before/after.role on the row.
+    const rows = await this.prisma.auditLog.findMany({
+      where: {
+        tenantId,
+        action: 'PERMISSIONS_UPDATED',
+        ...(Object.keys(createdAt).length ? { createdAt } : {}),
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true, entityId: true, before: true, after: true, createdAt: true,
+      },
+    });
+
+    // SOD-conflict matrix. Bidirectional — order in pair does not matter
+    // for the lifetime check. CASHIER↔BRANCH_MANAGER is time-sensitive
+    // (same person voiding what they sold within 24h is the real signal).
+    const PAIRS: { a: string; b: string; label: string; windowMs?: number }[] = [
+      { a: 'AP_ACCOUNTANT', b: 'PAYROLL_MASTER', label: 'AP_ACCOUNTANT↔PAYROLL_MASTER (create bills + pay self)' },
+      { a: 'AR_ACCOUNTANT', b: 'ACCOUNTANT',     label: 'AR_ACCOUNTANT↔ACCOUNTANT (issue invoice + post payment)' },
+      { a: 'BOOKKEEPER',    b: 'ACCOUNTANT',     label: 'BOOKKEEPER↔ACCOUNTANT (record + approve)' },
+      { a: 'CASHIER',       b: 'BRANCH_MANAGER', label: 'CASHIER↔BRANCH_MANAGER (sell + supervise voids)', windowMs: 24 * 60 * 60 * 1000 },
+    ];
+
+    // Group history per user (entityId of a PERMISSIONS_UPDATED row IS the user id).
+    type Hop = { role: string; at: Date; fromRole: string | null };
+    const byUser = new Map<string, Hop[]>();
+    for (const r of rows) {
+      const before = (r.before ?? {}) as { role?: string };
+      const after  = (r.after  ?? {}) as { role?: string };
+      const next   = after.role;
+      if (!next) continue;
+      if (!byUser.has(r.entityId)) byUser.set(r.entityId, []);
+      byUser.get(r.entityId)!.push({ role: next, at: r.createdAt, fromRole: before.role ?? null });
+    }
+
+    // Resolve user names + current role in one round-trip.
+    const userIds = [...byUser.keys()];
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where:  { id: { in: userIds }, tenantId },
+          select: { id: true, name: true, role: true },
+        })
+      : [];
+    const userById = new Map(users.map((u) => [u.id, u]));
+
+    const out: Array<{
+      userId:       string;
+      userName:     string;
+      currentRole:  string | null;
+      history:      Array<{ role: string; fromDate: string; toDate: string | null }>;
+      conflicts:    string[];
+    }> = [];
+
+    for (const [userId, hops] of byUser) {
+      // Build "tenure intervals" — each hop is the start of a new role.
+      const intervals: { role: string; fromDate: Date; toDate: Date | null }[] = [];
+      for (let i = 0; i < hops.length; i++) {
+        const h    = hops[i];
+        const next = hops[i + 1];
+        intervals.push({ role: h.role, fromDate: h.at, toDate: next?.at ?? null });
+      }
+
+      const rolesSeen = new Set(intervals.map((it) => it.role));
+      const conflicts: string[] = [];
+
+      for (const p of PAIRS) {
+        if (!(rolesSeen.has(p.a) && rolesSeen.has(p.b))) continue;
+        // Find the two intervals + check windowMs constraint (if set).
+        const aInt = intervals.find((it) => it.role === p.a)!;
+        const bInt = intervals.find((it) => it.role === p.b)!;
+        if (p.windowMs !== undefined) {
+          const gap = Math.abs(aInt.fromDate.getTime() - bInt.fromDate.getTime());
+          if (gap > p.windowMs) continue;
+        }
+        const flagDate = (aInt.fromDate > bInt.fromDate ? aInt.fromDate : bInt.fromDate)
+          .toISOString().slice(0, 10);
+        conflicts.push(`${p.label} (${flagDate})`);
+      }
+
+      if (conflicts.length === 0) continue;
+
+      const u = userById.get(userId);
+      out.push({
+        userId,
+        userName:    u?.name ?? 'Unknown (removed)',
+        currentRole: u?.role ?? null,
+        history:     intervals.map((it) => ({
+          role:     it.role,
+          fromDate: it.fromDate.toISOString(),
+          toDate:   it.toDate?.toISOString() ?? null,
+        })),
+        conflicts,
+      });
+    }
+
+    return out;
+  }
+
+  /**
    * Sprint 19 — Recent login history (success + failure) for the tenant.
    * Used by /ledger/audit's Login History panel. Last N days, capped at
    * 500 rows to keep the UI snappy.

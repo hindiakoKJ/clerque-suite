@@ -66,6 +66,23 @@ export default function SodViolationsPage() {
     enabled:  !!user && !!user.role && ALLOWED_ROLES.has(user.role),
   });
 
+  // Audit D4-05 — Historical role-change conflicts. Pulls the list of
+  // users whose role history crosses an SOD-conflict pair (e.g. someone
+  // who was AP_ACCOUNTANT and is now PAYROLL_MASTER could have invoiced
+  // a fake supplier and is now in a position to pay themselves).
+  interface SodViolation {
+    userId:      string;
+    userName:    string;
+    currentRole: string | null;
+    history:     Array<{ role: string; fromDate: string; toDate: string | null }>;
+    conflicts:   string[];
+  }
+  const { data: sodViolations, isLoading: sodLoading } = useQuery<SodViolation[]>({
+    queryKey: ['audit-sod-violations'],
+    queryFn:  async () => (await api.get('/audit/sod-violations')).data,
+    enabled:  !!user && !!user.role && ALLOWED_ROLES.has(user.role),
+  });
+
   if (!mounted) return null;
   if (!user?.role || !ALLOWED_ROLES.has(user.role)) {
     return (
@@ -107,6 +124,64 @@ export default function SodViolationsPage() {
             </p>
           </div>
         </div>
+
+        {/* Audit D4-05 — Historical role-change conflicts */}
+        <section className="space-y-3 pt-2">
+          <h2 className="text-sm font-semibold text-foreground">
+            Historical role-change conflicts
+          </h2>
+          <p className="text-xs text-muted-foreground -mt-1">
+            Users whose role history crosses an SOD-conflict pair. Even if the
+            two roles never overlapped in time, the same person could have
+            controlled both sides at different points — worth sampling.
+          </p>
+          {sodLoading ? (
+            <div className="h-16 rounded-xl bg-muted animate-pulse" />
+          ) : !sodViolations || sodViolations.length === 0 ? (
+            <div className="rounded-xl border border-border bg-card p-4 text-center">
+              <p className="text-xs text-muted-foreground">
+                No historical role-change conflicts detected.
+              </p>
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {sodViolations.map((v) => (
+                <li
+                  key={v.userId}
+                  className="rounded-xl border border-rose-300/50 dark:border-rose-700/40 bg-rose-50/50 dark:bg-rose-950/20 p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded font-bold uppercase tracking-wide bg-rose-500/20 text-rose-800 dark:text-rose-300">
+                          {v.currentRole ?? '—'}
+                        </span>
+                        <span className="text-muted-foreground inline-flex items-center gap-1">
+                          <User className="w-3 h-3" />
+                          {v.userName}
+                        </span>
+                      </div>
+                      <ul className="text-sm text-foreground list-disc list-inside">
+                        {v.conflicts.map((c) => (
+                          <li key={c}>{c}</li>
+                        ))}
+                      </ul>
+                      <p className="text-[11px] text-muted-foreground pt-1">
+                        Role history:{' '}
+                        {v.history
+                          .map(
+                            (h) =>
+                              `${h.role} (${new Date(h.fromDate).toLocaleDateString('en-PH')})`,
+                          )
+                          .join(' → ')}
+                      </p>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         {isLoading ? (
           <div className="space-y-2">

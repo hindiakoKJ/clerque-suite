@@ -11,9 +11,10 @@ import { APPaymentsService } from './ap-payments.service';
 import { AccountingModule } from '../accounting/accounting.module';
 import { AccountingPeriodsModule } from '../accounting-periods/accounting-periods.module';
 import { NumberingModule } from '../numbering/numbering.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
-  imports:     [PrismaModule, AccountingModule, AccountingPeriodsModule, NumberingModule],
+  imports:     [PrismaModule, AccountingModule, AccountingPeriodsModule, NumberingModule, AuditModule],
   controllers: [VendorsController, ExpensesController, APBillsController, APPaymentsController],
   providers:   [VendorsService, ExpensesService, APBillsService, APPaymentsService],
   exports:     [VendorsService, ExpensesService, APBillsService, APPaymentsService],

@@ -27,6 +27,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from '../accounting/journal.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { NumberingService } from '../numbering/numbering.service';
+import { AuditService } from '../audit/audit.service';
 import { Prisma, BillStatus, type TaxStatus } from '@prisma/client';
 import { CreateAPBillDto } from './dto/ap-bill.dto';
 
@@ -37,6 +38,7 @@ export class APBillsService {
     private journal:   JournalService,
     private periods:   AccountingPeriodsService,
     private numbering: NumberingService,
+    private audit:     AuditService,
   ) {}
 
   private addDays(date: Date, days: number): Date {
@@ -252,7 +254,7 @@ export class APBillsService {
         userId,
       );
 
-      return tx.aPBill.update({
+      const updated = await tx.aPBill.update({
         where: { id: bill.id },
         data: {
           status:         'OPEN',
@@ -262,6 +264,26 @@ export class APBillsService {
         },
         include: { lines: true, vendor: { select: { id: true, name: true } } },
       });
+
+      // Audit D3-07 — immutable record of the DRAFT → OPEN transition.
+      void this.audit.log({
+        tenantId,
+        action:      'AP_BILL_POSTED',
+        entityType:  'APBill',
+        entityId:    bill.id,
+        performedBy: userId,
+        description: `AP bill ${bill.billNumber} posted (vendor ${bill.vendor.name}, ₱${Number(bill.totalAmount).toFixed(2)})`,
+        before:      { status: 'DRAFT' },
+        after:       {
+          status:         'OPEN',
+          billNumber:     bill.billNumber,
+          vendorName:     bill.vendor.name,
+          totalAmount:    Number(bill.totalAmount),
+          journalEntryId: je.id,
+        },
+      });
+
+      return updated;
     }, { timeout: 30_000 });
   }
 
@@ -278,10 +300,24 @@ export class APBillsService {
 
     return this.prisma.$transaction(async (tx) => {
       await this.journal.reverse(tenantId, bill.journalEntryId!, userId);
-      return tx.aPBill.update({
+      const updated = await tx.aPBill.update({
         where: { id: bill.id },
         data: { status: 'VOIDED', voidedById: userId, voidedAt: new Date(), voidReason: reason.trim() },
       });
+
+      // Audit D3-07 — immutable void record.
+      void this.audit.log({
+        tenantId,
+        action:      'AP_BILL_VOIDED',
+        entityType:  'APBill',
+        entityId:    bill.id,
+        performedBy: userId,
+        description: `AP bill ${bill.billNumber} voided: ${reason.trim().slice(0, 200)}`,
+        before:      { status: bill.status },
+        after:       { status: 'VOIDED', voidReason: reason.trim() },
+      });
+
+      return updated;
     }, { timeout: 30_000 });
   }
 

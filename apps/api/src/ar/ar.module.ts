@@ -13,9 +13,10 @@ import { QuotesService } from './quotes.service';
 import { AccountingModule } from '../accounting/accounting.module';
 import { AccountingPeriodsModule } from '../accounting-periods/accounting-periods.module';
 import { NumberingModule } from '../numbering/numbering.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
-  imports:     [PrismaModule, AccountingModule, AccountingPeriodsModule, NumberingModule],
+  imports:     [PrismaModule, AccountingModule, AccountingPeriodsModule, NumberingModule, AuditModule],
   controllers: [CustomersController, ArController, ARInvoicesController, ARPaymentsController, QuotesController],
   providers:   [CustomersService, ArService, ARInvoicesService, ARPaymentsService, QuotesService],
   exports:     [CustomersService, ArService, ARInvoicesService, ARPaymentsService, QuotesService],

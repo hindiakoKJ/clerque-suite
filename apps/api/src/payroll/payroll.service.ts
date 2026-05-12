@@ -10,6 +10,7 @@ import { Prisma, TimeEntryStatus, LeaveType, LeaveStatus, SalaryType } from '@pr
 import { generatePayslipPdf } from './payslip-pdf';
 import { JournalService } from '../accounting/journal.service';
 import { AccountsService } from '../accounting/accounts.service';
+import { AuditService } from '../audit/audit.service';
 import {
   computeBasicPay as computeBasicPayPh,
   computePayslip,
@@ -131,6 +132,9 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private readonly journal: JournalService,
     private readonly accounts: AccountsService,
+    // Optional — Sprint 3 tests construct without wiring AuditService.
+    // Real DI in PayrollModule (which imports AuditModule) always supplies it.
+    private readonly audit?: AuditService,
   ) {}
 
   // ─── Self-clock policy ───────────────────────────────────────────────────
@@ -887,6 +891,28 @@ export class PayrollService {
         throw new ConflictException('Pay run was modified concurrently — could not lock.');
       }
       const updated = await this.prisma.payRun.findFirstOrThrow({ where: { id: payRunId, tenantId } });
+
+      // Audit D3-07 — payslips become immutable + visible to employees at
+      // lock time. One AuditLog row per run (not per slip) — adequate for
+      // governance and keeps the table sane on large runs.
+      void this.audit?.log({
+        tenantId,
+        action:      'PAYSLIP_PUBLISHED',
+        entityType:  'PayRun',
+        entityId:    payRunId,
+        performedBy: lockedById,
+        description: `Payroll run ${updated.label} locked & payslips published (${slips.length} employees)`,
+        before:      { status: 'COMPLETED' },
+        after:       {
+          status:        'LOCKED',
+          payslipCount:  slips.length,
+          totalGross:    total(totalGross),
+          totalNet:      total(totalNet),
+          periodStart:   run.periodStart,
+          periodEnd:     run.periodEnd,
+        },
+      });
+
       return this.serializePayRun(updated);
     });
   }
@@ -1067,33 +1093,31 @@ export class PayrollService {
       },
     });
 
-    // Best-effort audit log; soft-fail if the table isn't available.
-    try {
-      await (this.prisma as any).auditLog?.create({
-        data: {
-          tenantId,
-          actorId:    actorUserId,
-          action:     'SETTING_CHANGED',
-          targetType: 'User',
-          targetId:   targetUserId,
-          before:     {
-            salaryRate: target.salaryRate ? Number(target.salaryRate) : null,
-            salaryType: target.salaryType,
-            hiredAt:    target.hiredAt,
-            shiftStart: target.shiftStart,
-            shiftEnd:   target.shiftEnd,
-          },
-          after: {
-            salaryRate: updated.salaryRate ? Number(updated.salaryRate) : null,
-            salaryType: updated.salaryType,
-            hiredAt:    updated.hiredAt,
-            shiftStart: updated.shiftStart,
-            shiftEnd:   updated.shiftEnd,
-          },
-          metadata: { reason: 'Payroll salary edit' },
+    // Audit D3-07 — SALARY_CHANGED. The description deliberately omits the
+    // actual amounts (privacy: only OWNER + PAYROLL_MASTER can see salary);
+    // the before/after JSON carries the full numeric trail for auditors who
+    // have list access to AuditLog.
+    const salaryChanged =
+      dto.salaryRate !== undefined &&
+      Number(target.salaryRate ?? 0) !== Number(updated.salaryRate ?? 0);
+    if (salaryChanged) {
+      void this.audit?.log({
+        tenantId,
+        action:      'SALARY_CHANGED',
+        entityType:  'User',
+        entityId:    targetUserId,
+        performedBy: actorUserId,
+        description: `Salary changed for ${target.name}`,
+        before:      {
+          salaryRate: target.salaryRate ? Number(target.salaryRate) : null,
+          salaryType: target.salaryType,
+        },
+        after: {
+          salaryRate: updated.salaryRate ? Number(updated.salaryRate) : null,
+          salaryType: updated.salaryType,
         },
       });
-    } catch { /* audit table optional */ }
+    }
 
     return updated;
   }

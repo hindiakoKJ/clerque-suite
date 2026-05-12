@@ -467,12 +467,11 @@ export class UsersService {
       });
       return revoked.count;
     });
-    // Use PERMISSIONS_UPDATED (existing AuditAction enum value); a future
-    // migration may add a dedicated USER_DEPROVISIONED value but this is
-    // semantically correct enough — deprovision IS a permissions change.
+    // Audit D3-07 — dedicated USER_DEPROVISIONED action (replaces the prior
+    // PERMISSIONS_UPDATED catch-all so governance reports filter directly).
     await this.audit.log({
       tenantId,
-      action:      'PERMISSIONS_UPDATED',
+      action:      'USER_DEPROVISIONED',
       entityType:  'User',
       entityId:    id,
       performedBy: actorId,

@@ -51,4 +51,20 @@ export class AuditController {
   ) {
     return this.audit.recentLogins(user.tenantId!, days ? Math.min(Number(days), 90) : 14);
   }
+
+  /**
+   * Audit D4-05 — Historical SOD violations. Returns users whose role
+   * history has crossed a conflict pair (e.g. AP_ACCOUNTANT then later
+   * PAYROLL_MASTER → same person could have created fake bills and then
+   * paid themselves). Owner / Super-admin / Auditor only.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'EXTERNAL_AUDITOR')
+  @Get('sod-violations')
+  sodViolations(
+    @CurrentUser() user: JwtPayload,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate')   toDate?:   string,
+  ) {
+    return this.audit.findSodViolations(user.tenantId!, { fromDate, toDate });
+  }
 }

@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart, FileSignature } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart, FileSignature, Wallet } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -140,11 +140,13 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     // the POS-collections lens but with a label that says what it IS.
     makeLedgerNavItem('/ledger/ar/billing',    'Invoices',           FileSpreadsheet, AR_ROLES,         role),
     makeLedgerNavItem('/ledger/ar/invoices',   'POS-derived AR',     TrendingUp,      AR_ROLES,         role),
+    makeLedgerNavItem('/ledger/ar/advances',   'Customer Advances',  Wallet,          AR_ROLES,         role),
 
     // ── Payables (sub-ledger) ───────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role,
       { sectionStart: 'Payables' }),
     makeLedgerNavItem('/ledger/ap/expenses',   'Expense Claims',     TrendingDown,    AP_ROLES,         role),
+    makeLedgerNavItem('/ledger/ap/advances',   'Vendor Advances',    Wallet,          AP_ROLES,         role),
     makeLedgerNavItem('/ledger/expense-approvals', 'Expense Approvals', ClipboardCheck, EXPENSE_APPROVAL_ROLES, role),
 
     // ── Cash & Bank ─────────────────────────────────────────────────────────

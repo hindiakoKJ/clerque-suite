@@ -6,6 +6,7 @@ import { CustomersService } from './customers.service';
 import { ArService } from './ar.service';
 import { ARInvoicesController } from './ar-invoices.controller';
 import { ARInvoicesService } from './ar-invoices.service';
+import { InvoicePdfService } from './invoice-pdf.service';
 import { ARPaymentsController } from './ar-payments.controller';
 import { ARPaymentsService } from './ar-payments.service';
 import { CustomerAdvancesController } from './customer-advances.controller';
@@ -33,6 +34,7 @@ import { AuditModule } from '../audit/audit.module';
     CustomersService, ArService, ARInvoicesService, ARPaymentsService,
     CustomerAdvancesService, QuotesService, CreditMemosService,
     RecurringInvoicesService,
+    InvoicePdfService,
     // Sprint 22 — @Cron materializer for recurring AR invoices. Provider only;
     // ScheduleModule is registered globally in app.module.
     RecurringInvoicesScheduler,
@@ -41,6 +43,7 @@ import { AuditModule } from '../audit/audit.module';
     CustomersService, ArService, ARInvoicesService, ARPaymentsService,
     CustomerAdvancesService, QuotesService, CreditMemosService,
     RecurringInvoicesService,
+    InvoicePdfService,
   ],
 })
 export class ArModule {}

@@ -287,6 +287,10 @@ export default function BackupDataPage() {
           <p className="text-[11px] text-muted-foreground border-t border-border pt-3">
             Recovery Point Objective (RPO) = up to 24 hours · last cron run was 02:00 UTC ·
             Recovery Time Objective (RTO) = 1 business hour for restoring from any snapshot listed above.
+            {' '}
+            <Link href="/legal/sla" className="text-[var(--accent)] hover:underline">
+              Read the full Data Recovery SLA →
+            </Link>
           </p>
         </div>
       </div>

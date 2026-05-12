@@ -7,7 +7,7 @@ import {
   ChevronDown, Shield, FileText, AlertTriangle, Info,
   KeyRound, Eye, EyeOff, ShieldCheck,
   LayoutGrid, CreditCard, ShieldAlert, ChevronRight, Sparkles,
-  Stamp, Tv, FileSpreadsheet, Database,
+  Stamp, Tv, FileSpreadsheet, Database, BookOpen,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -470,6 +470,15 @@ export default function SettingsPage() {
                 icon={Database}
                 title="Data Backups"
                 desc="Nightly off-box cloud snapshots — download for cold storage or share with your accountant"
+              />
+            )}
+            {/* D9-01 — Security Awareness handbook (owner-only) */}
+            {isOwner && (
+              <SettingsCard
+                href="/settings/awareness"
+                icon={BookOpen}
+                title="Security awareness training"
+                desc="One-page staff handbook on phishing, passwords, lost devices, public WiFi — hand to your team"
               />
             )}
             {/* Sprint 20 — 2FA / Security: any logged-in user can enrol */}

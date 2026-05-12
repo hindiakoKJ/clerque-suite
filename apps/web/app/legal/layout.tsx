@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ArrowLeft, FileText, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, FileText, ShieldCheck, LifeBuoy } from 'lucide-react';
 
 export default function LegalLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -35,6 +35,17 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
             >
               <FileText className="h-3.5 w-3.5" />
               Terms of Service
+            </Link>
+            <Link
+              href="/legal/sla"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
+                pathname === '/legal/sla'
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+              }`}
+            >
+              <LifeBuoy className="h-3.5 w-3.5" />
+              Recovery SLA
             </Link>
           </nav>
         </div>

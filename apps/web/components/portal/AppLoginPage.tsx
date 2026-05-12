@@ -504,10 +504,16 @@ export function AppLoginPage({
               )}
             </button>
 
+            {/* Sprint 21 — dual CTA: existing tenant staff contact their admin;
+                prospects looking for standalone accounting sign up directly. */}
             <p className="pt-2 text-center text-xs text-muted-foreground">
               Need access?{' '}
               <a href="#" className="font-medium text-foreground hover:underline">
                 Contact your admin
+              </a>
+              {' · '}
+              <a href="/welcome/ledger" className="font-medium hover:underline" style={{ color: accent }}>
+                Just need accounting?
               </a>
             </p>
 

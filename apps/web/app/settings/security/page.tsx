@@ -45,10 +45,23 @@ export default function SecuritySettingsPage() {
   const [disableCode, setDisableCode] = useState('');
   const [showDisable, setShowDisable] = useState(false);
 
+  // Sprint 22 — owner-feedback hardening. Previous version had no retry
+  // controls or stale-time, so a transient 500/401 caused the query to
+  // retry up to 3 times within a second, each retry triggering a render
+  // that could look like a loop to a non-technical user. Now:
+  //   - retry: 1 (single retry on transient failure)
+  //   - staleTime: 30s (don't re-fetch on tab focus while you're enrolling)
+  //   - refetchOnWindowFocus: false (kills the "page flashed when I tabbed
+  //     back" effect a coffee-shop owner reported as a "loop")
+  //   - The query stays enabled only after `user` is populated, so the
+  //     initial mount doesn't race against Zustand hydration.
   const { data: status, isLoading } = useQuery<StatusResp>({
-    queryKey: ['2fa-status'],
-    queryFn:  () => api.post('/auth/2fa/status').then((r) => r.data),
-    enabled:  !!user,
+    queryKey:           ['2fa-status'],
+    queryFn:            () => api.post('/auth/2fa/status').then((r) => r.data),
+    enabled:            !!user?.sub,
+    retry:              1,
+    staleTime:          30_000,
+    refetchOnWindowFocus: false,
   });
 
   const beginEnrol = useMutation({

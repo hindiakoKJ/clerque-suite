@@ -1197,14 +1197,52 @@ export default function ProductsPage() {
                             <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Qty</span>
                             <span />
                           </div>
+                          {/*
+                            Sprint 22 — coffee-shop owner feedback (demo #2):
+                            replaced plain <select> with a searchable input +
+                            <datalist>. Users can type a few letters of the
+                            ingredient name and the browser filters the list in
+                            real-time — same UX as Xero / Stripe item pickers,
+                            no extra JS library. The display value is the
+                            ingredient name; we resolve back to the id via
+                            rawMaterials.find on change.
+                          */}
+                          <datalist id="recipe-ingredient-options">
+                            {rawMaterials.map((m) => (
+                              <option key={m.id} value={`${m.name} (${m.unit})`} />
+                            ))}
+                          </datalist>
                           {recipe.map((row, idx) => {
                             const mat = rawMaterials.find((m) => m.id === row.rawMaterialId);
+                            const displayValue = mat ? `${mat.name} (${mat.unit})` : '';
                             return (
                               <div key={idx} className="grid grid-cols-[1fr_90px_28px] gap-2 items-center">
+                                <input
+                                  list="recipe-ingredient-options"
+                                  value={displayValue}
+                                  onChange={(e) => {
+                                    const typed = e.target.value;
+                                    // Resolve the typed display string back to an id.
+                                    // Strip the " (unit)" suffix so the user can type
+                                    // just the ingredient name and we still match.
+                                    const nameOnly = typed.replace(/\s*\([^)]*\)\s*$/, '').trim().toLowerCase();
+                                    const match = rawMaterials.find(
+                                      (m) => `${m.name} (${m.unit})` === typed
+                                        || m.name.toLowerCase() === nameOnly,
+                                    );
+                                    updateRecipeRow(idx, 'rawMaterialId', match ? match.id : '');
+                                  }}
+                                  placeholder="Type to search ingredients…"
+                                  className={INPUT_CLS + ' text-xs py-1.5'}
+                                  autoComplete="off"
+                                />
+                                {/* Hidden select kept for screen-reader / accessibility fallback */}
                                 <select
                                   value={row.rawMaterialId}
                                   onChange={(e) => updateRecipeRow(idx, 'rawMaterialId', e.target.value)}
-                                  className={INPUT_CLS + ' text-xs py-1.5'}
+                                  className="sr-only"
+                                  tabIndex={-1}
+                                  aria-hidden="true"
                                 >
                                   <option value="">— Select ingredient —</option>
                                   {rawMaterials.map((m) => (

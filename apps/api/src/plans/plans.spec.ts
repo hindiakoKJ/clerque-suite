@@ -22,7 +22,6 @@ import {
 describe('Plans constants', () => {
   const ALL_PLAN_CODES: PlanCode[] = [
     'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
-    'STD_BIZ',
     'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
     'SUITE_T1', 'SUITE_T2', 'SUITE_T3',
     'ENTERPRISE',
@@ -54,8 +53,8 @@ describe('Plans constants', () => {
       expect(PLAN_CAPS.SOLO_LITE.moduleCount).toBe(1);
     });
 
-    it('module-count tiers are correct (1=SOLO_*/STD_BIZ, 2=PAIR, 3=SUITE/ENTERPRISE)', () => {
-      ['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'STD_BIZ'].forEach((c) => {
+    it('module-count tiers are correct (1=SOLO_*, 2=PAIR, 3=SUITE/ENTERPRISE)', () => {
+      ['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO'].forEach((c) => {
         expect(PLAN_CAPS[c as PlanCode].moduleCount).toBe(1);
       });
       ['PAIR_T1', 'PAIR_T2', 'PAIR_T3'].forEach((c) => {
@@ -88,7 +87,7 @@ describe('Plans constants', () => {
       // Standalone ladder
       expect(PLAN_LIMITS.SOLO_LITE.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SOLO_STANDARD.maxAiPerMonth);
       expect(PLAN_LIMITS.SOLO_STANDARD.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SOLO_PRO.maxAiPerMonth);
-      expect(PLAN_LIMITS.SOLO_PRO.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.STD_BIZ.maxAiPerMonth);
+      // (STD_BIZ removed; SOLO_PRO is now the top single-module plan)
       // Suite ladder
       expect(PLAN_LIMITS.SUITE_T1.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SUITE_T2.maxAiPerMonth);
       expect(PLAN_LIMITS.SUITE_T2.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SUITE_T3.maxAiPerMonth);
@@ -165,14 +164,13 @@ describe('Plans constants', () => {
     });
 
     it('returns base + addons when within plan ceiling', () => {
-      // STD_BIZ: base 10, maxAddons 15 → buyer adds 5 → ceiling = 15
-      expect(effectiveSeatCeiling('STD_BIZ', 5)).toBe(15);
-      expect(effectiveSeatCeiling('SUITE_T3', 10)).toBe(30); // base 20 + 10 = 30
+      // SUITE_T3: base 20, maxAddons 30 → buyer adds 10 → ceiling = 30
+      expect(effectiveSeatCeiling('SUITE_T3', 10)).toBe(30);
+      // PAIR_T2: base 5, maxAddons 5 → buyer adds 3 → ceiling = 8
+      expect(effectiveSeatCeiling('PAIR_T2', 3)).toBe(8);
     });
 
     it('clamps to plan maxTotal regardless of addons paid', () => {
-      // STD_BIZ: base 10, maxAddons 15, maxTotal 25. Buying 100 addons caps at 25.
-      expect(effectiveSeatCeiling('STD_BIZ', 100)).toBe(25);
       expect(effectiveSeatCeiling('SUITE_T3', 999)).toBe(50);
       expect(effectiveSeatCeiling('SOLO_LITE', 5)).toBe(1); // Solo is hard 1 regardless
       expect(effectiveSeatCeiling('SOLO_PRO', 100)).toBe(5); // Solo Pro caps at 5 (no addons allowed)
@@ -205,36 +203,32 @@ describe('Plans constants', () => {
     });
   });
 
-  describe('validateSoloModuleCombo (now applies to ALL STD_* plans)', () => {
-    it('returns null for any STD plan + POS only (the only valid combo)', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE', true, false, false)).toBeNull();
-      expect(validateSoloModuleCombo('SOLO_STANDARD',  true, false, false)).toBeNull();
-      expect(validateSoloModuleCombo('SOLO_PRO', true, false, false)).toBeNull();
-      expect(validateSoloModuleCombo('STD_BIZ',  true, false, false)).toBeNull();
+  describe('validateSoloModuleCombo (Sprint 23 — applies to SOLO_* only)', () => {
+    it('returns null for any Solo plan + POS only (the only valid combo)', () => {
+      expect(validateSoloModuleCombo('SOLO_LITE',     true, false, false)).toBeNull();
+      expect(validateSoloModuleCombo('SOLO_STANDARD', true, false, false)).toBeNull();
+      expect(validateSoloModuleCombo('SOLO_PRO',      true, false, false)).toBeNull();
     });
 
-    it('rejects any STD plan without POS', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE', false, false, false)).toMatch(/POS/i);
-      expect(validateSoloModuleCombo('SOLO_STANDARD',  false, false, false)).toMatch(/POS/i);
-      expect(validateSoloModuleCombo('SOLO_PRO', false, false, false)).toMatch(/POS/i);
-      expect(validateSoloModuleCombo('STD_BIZ',  false, false, false)).toMatch(/POS/i);
+    it('rejects any Solo plan without POS', () => {
+      expect(validateSoloModuleCombo('SOLO_LITE',     false, false, false)).toMatch(/POS/i);
+      expect(validateSoloModuleCombo('SOLO_STANDARD', false, false, false)).toMatch(/POS/i);
+      expect(validateSoloModuleCombo('SOLO_PRO',      false, false, false)).toMatch(/POS/i);
     });
 
-    it('rejects ANY STD plan + Ledger combination (not just Solo)', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE', true, true, false)).toMatch(/Ledger/i);
-      expect(validateSoloModuleCombo('SOLO_STANDARD',  true, true, false)).toMatch(/Ledger/i);
-      expect(validateSoloModuleCombo('SOLO_PRO', true, true, false)).toMatch(/Ledger/i);
-      expect(validateSoloModuleCombo('STD_BIZ',  true, true, false)).toMatch(/Ledger/i);
+    it('rejects any Solo plan with Ledger enabled (Solo is POS-only)', () => {
+      expect(validateSoloModuleCombo('SOLO_LITE',     true, true, false)).toMatch(/Ledger/i);
+      expect(validateSoloModuleCombo('SOLO_STANDARD', true, true, false)).toMatch(/Ledger/i);
+      expect(validateSoloModuleCombo('SOLO_PRO',      true, true, false)).toMatch(/Ledger/i);
     });
 
-    it('rejects ANY STD plan + Payroll combination', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE', true, false, true)).toMatch(/Payroll/i);
-      expect(validateSoloModuleCombo('SOLO_STANDARD',  true, false, true)).toMatch(/Payroll/i);
-      expect(validateSoloModuleCombo('SOLO_PRO', true, false, true)).toMatch(/Payroll/i);
-      expect(validateSoloModuleCombo('STD_BIZ',  true, false, true)).toMatch(/Payroll/i);
+    it('rejects any Solo plan with Payroll enabled (Solo is POS-only)', () => {
+      expect(validateSoloModuleCombo('SOLO_LITE',     true, false, true)).toMatch(/Payroll/i);
+      expect(validateSoloModuleCombo('SOLO_STANDARD', true, false, true)).toMatch(/Payroll/i);
+      expect(validateSoloModuleCombo('SOLO_PRO',      true, false, true)).toMatch(/Payroll/i);
     });
 
-    it('returns null for PAIR / SUITE / ENTERPRISE plans (no STD-specific restriction)', () => {
+    it('returns null for PAIR / SUITE / ENTERPRISE plans (validation handled elsewhere)', () => {
       expect(validateSoloModuleCombo('PAIR_T1',    true, true, false)).toBeNull();
       expect(validateSoloModuleCombo('PAIR_T2',    false, true, true)).toBeNull();
       expect(validateSoloModuleCombo('SUITE_T2',   true, true, true)).toBeNull();
@@ -298,21 +292,22 @@ describe('Plans constants', () => {
     it('audit:view follows PLAN_FEATURES.auditLog', () => {
       // SOLO_LITE does NOT include auditLog
       expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'SOLO_LITE',  ...POS_ONLY })).toBe(false);
-      // STD_BIZ DOES include auditLog
-      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'STD_BIZ',   ...POS_ONLY })).toBe(true);
+      // SOLO_PRO DOES include auditLog (it's the new "top single-module" plan)
+      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'SOLO_PRO',  ...POS_ONLY })).toBe(true);
+      // PAIR_T3 includes auditLog too
+      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'PAIR_T3',  ...POS_LED  })).toBe(true);
       // SUITE plans always include it
       expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'SUITE_T2',  ...SUITE })).toBe(true);
     });
 
     it('bir:view follows PLAN_FEATURES.birForms', () => {
       // Sprint 23 — BIR parked as a Solo-tier differentiator. No Solo plan has
-      // BIR forms unlocked. Customers needing BIR exports upgrade to STD_BIZ
-      // or PAIR/SUITE.
+      // BIR forms unlocked. No Solo plan has BIR forms (parked per Sprint 23 decision).
+      // Customers needing BIR exports must upgrade to PAIR/SUITE (parked but still live).
       expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'SOLO_LITE',     ...POS_ONLY })).toBe(false);
       expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'SOLO_STANDARD', ...POS_ONLY })).toBe(false);
       expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'SOLO_PRO',      ...POS_ONLY })).toBe(false);
-      // STD_BIZ + PAIR_* + SUITE_* all have BIR forms
-      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'STD_BIZ',  ...POS_ONLY })).toBe(true);
+      // PAIR_* + SUITE_* (parked) still have BIR forms enabled
       expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'PAIR_T1',  ...POS_LED  })).toBe(true);
     });
 

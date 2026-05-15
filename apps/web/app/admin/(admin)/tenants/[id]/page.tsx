@@ -1149,7 +1149,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 // PLAN_CAPS server-side; this UI only sends the user's intent.
 const PLAN_CODES = [
   'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
-  'STD_BIZ',
+  // PARKED — multi-module legacy
   'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
   'SUITE_T1', 'SUITE_T2', 'SUITE_T3', 'ENTERPRISE',
 ] as const;

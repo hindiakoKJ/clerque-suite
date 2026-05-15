@@ -19,12 +19,14 @@
 export type ClerqueModule = 'POS' | 'LEDGER' | 'PAYROLL';
 
 export type PlanCode =
-  // Sprint 23 — Solo lineup (POS-only, three tiers)
+  // Sprint 23 — Solo lineup (POS-only, three tiers). The only actively
+  // promoted plan family for new signups.
   | 'SOLO_LITE'  | 'SOLO_STANDARD' | 'SOLO_PRO'
-  // Single-module high-seat plan above Solo. The natural step up for
-  // POS-only customers needing 6+ users until the PAIR redesign lands.
-  | 'STD_BIZ'
-  // Multi-module plans
+  // ── PARKED — kept in code for grandfathered tenants, NOT actively
+  //    promoted to new signups. Redesign queued for a follow-up sprint:
+  //    repositioning around "Counter + Sync" naming, smoothing the seat-
+  //    count cliff above SOLO_PRO, and consolidating the 7 SKUs below
+  //    into a smaller, clearer ladder.
   | 'PAIR_T1'  | 'PAIR_T2' | 'PAIR_T3'
   | 'SUITE_T1' | 'SUITE_T2' | 'SUITE_T3'
   | 'ENTERPRISE';
@@ -64,14 +66,7 @@ export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
     annualMonthEquivalent: 10,
   },
 
-  // ── Single-module high-seat plan above Solo ──────────────────────────────
-  STD_BIZ: {
-    moduleCount: 1, baseSeats: 10, maxAddons: 15, maxTotal: 25,
-    pricePhpMonthlyCents: 189_900, addonSeatPhpMonthlyCents: 2_900,
-    annualMonthEquivalent: 10,
-  },
-
-  // ── Pair (any two modules) ──────────────────────────────────────────────
+  // ── PARKED — Pair (any two modules) ─────────────────────────────────────
   PAIR_T1: {
     moduleCount: 2, baseSeats: 3, maxAddons: 0, maxTotal: 3,
     pricePhpMonthlyCents: 79_900, addonSeatPhpMonthlyCents: 9_900,
@@ -130,7 +125,7 @@ export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
   SOLO_LITE:     { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_STANDARD: { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_PRO:      { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
-  STD_BIZ:    { maxBranches:  3, maxAiPerMonth:  100, apiRatePerHour:   100 },
+  // PARKED — multi-module legacy
   PAIR_T1:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
   PAIR_T2:    { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
   PAIR_T3:    { maxBranches:  3, maxAiPerMonth:  100, apiRatePerHour:   100 },
@@ -220,8 +215,7 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
     loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true,
   },
 
-  // ── Single-module high-seat plan above Solo ─────────────────────────────
-  STD_BIZ:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: false, aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  // ── PARKED — multi-module legacy ────────────────────────────────────────
   PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1, customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
   PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
   PAIR_T3:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
@@ -248,7 +242,7 @@ export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
   SOLO_LITE:       0,
   SOLO_STANDARD:   0,
   SOLO_PRO:        0,
-  STD_BIZ:   199_900,
+  // PARKED — multi-module legacy
   PAIR_T1:    99_900,
   PAIR_T2:   199_900,
   PAIR_T3:   349_900,
@@ -278,33 +272,24 @@ export function validateSoloModuleCombo(
   moduleLedger: boolean,
   modulePayroll: boolean,
 ): string | null {
-  // Only single-module plans are subject to the "exactly 1" rule.
-  // After Sprint 23 cleanup: SOLO_* (POS-only by design) + STD_BIZ (operator picks module).
+  // After Sprint 23 cleanup, only SOLO_* plans are single-module-restricted.
+  // PAIR_* / SUITE_* / ENTERPRISE handle module-count enforcement via their
+  // own logic in tenant.service. (Previously STD_BIZ also fell here; it was
+  // removed in commit 91ce574's successor.)
   const isSolo = planCode.startsWith('SOLO_');
-  const isStdBiz = planCode === 'STD_BIZ';
-  if (!isSolo && !isStdBiz) return null;
+  if (!isSolo) return null;
 
-  const planLabel = isSolo
-    ? planCode.replace('SOLO_', 'Solo ').replace(/_/g, ' ').toLowerCase().replace(/\b./g, (c) => c.toUpperCase())
-    : 'Business';
+  const planLabel = planCode
+    .replace('SOLO_', 'Solo ')
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b./g, (c) => c.toUpperCase());
 
-  // Solo lineup is POS-only.
-  if (isSolo) {
-    if (!modulePos) {
-      return `${planLabel} plan is POS-only — the POS module must be enabled.`;
-    }
-    if (moduleLedger || modulePayroll) {
-      return `${planLabel} plan is POS-only — Ledger and Payroll cannot be enabled. Upgrade to Pair for 2 modules.`;
-    }
-    return null;
+  if (!modulePos) {
+    return `${planLabel} plan is POS-only — the POS module must be enabled.`;
   }
-
-  const enabledCount = [modulePos, moduleLedger, modulePayroll].filter(Boolean).length;
-  if (enabledCount === 0) {
-    return `${planLabel} plan requires exactly one module to be enabled (POS, Ledger, or Payroll).`;
-  }
-  if (enabledCount > 1) {
-    return `${planLabel} plan is Single Module — only one of POS / Ledger / Payroll can be enabled. Choose a Pair plan for 2 modules.`;
+  if (moduleLedger || modulePayroll) {
+    return `${planLabel} plan is POS-only — Ledger and Payroll cannot be enabled. Upgrade to Pair for 2 modules.`;
   }
   return null;
 }
@@ -321,14 +306,14 @@ export function planLabel(code: PlanCode): string {
     SOLO_LITE:     'Solo Lite',
     SOLO_STANDARD: 'Solo Standard',
     SOLO_PRO:      'Solo Pro',
-    STD_BIZ:       'Business',
-    PAIR_T1:       'Pair T1',
-    PAIR_T2:       'Pair T2',
-    PAIR_T3:       'Pair T3',
-    SUITE_T1:      'Suite T1',
-    SUITE_T2:      'Suite T2',
-    SUITE_T3:      'Suite T3',
-    ENTERPRISE:    'Enterprise',
+    // PARKED — multi-module legacy (will be renamed/redesigned in a follow-up sprint)
+    PAIR_T1:       'Pair T1 (legacy)',
+    PAIR_T2:       'Pair T2 (legacy)',
+    PAIR_T3:       'Pair T3 (legacy)',
+    SUITE_T1:      'Suite T1 (legacy)',
+    SUITE_T2:      'Suite T2 (legacy)',
+    SUITE_T3:      'Suite T3 (legacy)',
+    ENTERPRISE:    'Enterprise (legacy)',
   } satisfies Record<PlanCode, string>)[code];
 }
 

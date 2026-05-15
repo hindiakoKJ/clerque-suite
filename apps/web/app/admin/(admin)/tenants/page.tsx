@@ -52,11 +52,10 @@ const BUSINESS_TYPES = [
 // Legacy TIER_1..TIER_6 still in DB but advisory — auto-derived from the
 // chosen plan code. STD_* are POS-only; PAIR_* require pick-2; SUITE_* all-3.
 const PLAN_CODES = [
-  // Solo lineup (POS-only)
+  // Solo lineup — actively offered
   'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
-  // Single-module high-seat
-  'STD_BIZ',
-  // Multi-module
+  // PARKED — multi-module legacy (kept here for grandfathered-tenant admin
+  // operations; not promoted to new signups until the PAIR redesign lands)
   'PAIR_T1',   'PAIR_T2',  'PAIR_T3',
   'SUITE_T1',  'SUITE_T2', 'SUITE_T3',
   'ENTERPRISE',
@@ -66,19 +65,18 @@ const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
   SOLO_LITE:      'Solo Lite (POS · 1 staff · ₱199/mo) — Loyverse-Free baseline + PH compliance',
   SOLO_STANDARD:  'Solo Standard (POS · 3 staff · ₱399/mo) — unlimited recipes + 10 FEFO items + customer lookup',
   SOLO_PRO:       'Solo Pro (POS · 5 staff · ₱499/mo) — all Solo features + audit log + advanced reports + auto-backup',
-  STD_BIZ:    'Business (1 module · 25 staff · ₱1,899/mo)',
-  PAIR_T1:    'Pair T1 (any 2 modules · 3 staff · ₱799/mo)',
-  PAIR_T2:    'Pair T2 (any 2 modules · 10 staff · ₱1,599/mo)',
-  PAIR_T3:    'Pair T3 (any 2 modules · 25 staff · ₱2,899/mo)',
-  SUITE_T1:   'Suite T1 (all 3 modules · 5 staff · ₱1,199/mo)',
-  SUITE_T2:   'Suite T2 (all 3 modules · 15 staff · ₱2,299/mo) ★',
-  SUITE_T3:   'Suite T3 (all 3 modules · 50 staff · ₱4,499/mo)',
-  ENTERPRISE: 'Enterprise (custom · 100 staff)',
+  // PARKED — multi-module legacy
+  PAIR_T1:    'Pair T1 legacy (any 2 modules · 3 staff · ₱799/mo)',
+  PAIR_T2:    'Pair T2 legacy (any 2 modules · 10 staff · ₱1,599/mo)',
+  PAIR_T3:    'Pair T3 legacy (any 2 modules · 25 staff · ₱2,899/mo)',
+  SUITE_T1:   'Suite T1 legacy (all 3 modules · 5 staff · ₱1,199/mo)',
+  SUITE_T2:   'Suite T2 legacy (all 3 modules · 15 staff · ₱2,299/mo)',
+  SUITE_T3:   'Suite T3 legacy (all 3 modules · 50 staff · ₱4,499/mo)',
+  ENTERPRISE: 'Enterprise legacy (custom · 100 staff)',
 };
 // Legacy tier kept on Tenant table for rollback; auto-mapped from planCode.
 const PLAN_TO_TIER: Record<typeof PLAN_CODES[number], string> = {
   SOLO_LITE: 'TIER_1', SOLO_STANDARD: 'TIER_2', SOLO_PRO: 'TIER_2',
-  STD_BIZ: 'TIER_4',
   PAIR_T1: 'TIER_2', PAIR_T2: 'TIER_3', PAIR_T3: 'TIER_4',
   SUITE_T1: 'TIER_3', SUITE_T2: 'TIER_5', SUITE_T3: 'TIER_6',
   ENTERPRISE: 'TIER_6',
@@ -230,25 +228,22 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
               <select required value={form.planCode}
                 onChange={(e) => set('planCode', e.target.value as typeof form.planCode)}
                 className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm">
-                <optgroup label="Solo — POS only (Sprint 23 lineup)">
+                <optgroup label="Solo — POS only (actively offered)">
                   <option value="SOLO_LITE">{PLAN_LABELS.SOLO_LITE}</option>
                   <option value="SOLO_STANDARD">{PLAN_LABELS.SOLO_STANDARD}</option>
                   <option value="SOLO_PRO">{PLAN_LABELS.SOLO_PRO}</option>
                 </optgroup>
-                <optgroup label="Single Module — high-seat">
-                  <option value="STD_BIZ">{PLAN_LABELS.STD_BIZ}</option>
-                </optgroup>
-                <optgroup label="Two Modules — pick any 2">
+                <optgroup label="Two Modules — PARKED (grandfathered tenants only)">
                   <option value="PAIR_T1">{PLAN_LABELS.PAIR_T1}</option>
                   <option value="PAIR_T2">{PLAN_LABELS.PAIR_T2}</option>
                   <option value="PAIR_T3">{PLAN_LABELS.PAIR_T3}</option>
                 </optgroup>
-                <optgroup label="Full Suite — all 3 modules">
+                <optgroup label="Full Suite — PARKED (grandfathered tenants only)">
                   <option value="SUITE_T1">{PLAN_LABELS.SUITE_T1}</option>
                   <option value="SUITE_T2">{PLAN_LABELS.SUITE_T2}</option>
                   <option value="SUITE_T3">{PLAN_LABELS.SUITE_T3}</option>
                 </optgroup>
-                <optgroup label="Enterprise (sales-led)">
+                <optgroup label="Enterprise — PARKED (sales-led, grandfathered)">
                   <option value="ENTERPRISE">{PLAN_LABELS.ENTERPRISE}</option>
                 </optgroup>
               </select>

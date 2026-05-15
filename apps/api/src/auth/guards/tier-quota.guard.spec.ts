@@ -84,8 +84,8 @@ describe('TierQuotaGuard', () => {
   });
 
   it('respects purchased addons when computing the ceiling', async () => {
-    // STD_BIZ base = 10, maxAddons = 15 → buyer has bought 2 seats → ceiling = 12
-    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_BIZ', staffSeatAddons: 2 });
+    // SUITE_T3 base = 20, maxAddons = 30 → buyer has bought 2 seats → ceiling = 22
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'SUITE_T3', staffSeatAddons: 2 });
     prisma.user.count.mockResolvedValue(11);
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
@@ -110,7 +110,7 @@ describe('TierQuotaGuard', () => {
   });
 
   it('does not count BUSINESS_OWNER toward the seat cap (filter in user.count where)', async () => {
-    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_BIZ', staffSeatAddons: 0 });
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'SUITE_T3', staffSeatAddons: 0 });
     prisma.user.count.mockResolvedValue(0);
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
     await guard.canActivate(ctx);

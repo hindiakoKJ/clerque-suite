@@ -160,7 +160,7 @@ describe('VerticalPack registry', () => {
     });
 
     it('excludes STD_SOLO (manufacturing on a single-cashier plan rarely real)', () => {
-      expect(serviceMfgPack.excludedPlans).toContain('STD_SOLO');
+      expect(serviceMfgPack.excludedPlans).toContain('SOLO_LITE');
     });
   });
 
@@ -191,7 +191,7 @@ describe('VerticalPack registry', () => {
       expect(getVerticalPack('PHARMACY')).toBe(pharmacyPack);
       expect(pharmacyPack.pos.cashierScreen).toBe('DISPENSE');
       expect(pharmacyPack.pos.receiptFormat).toBe('PHARMACY_RX');
-      expect(pharmacyPack.excludedPlans).toContain('STD_SOLO');
+      expect(pharmacyPack.excludedPlans).toContain('SOLO_LITE');
       expect(pharmacyPack.requiredFeatures).toContain('birForms');
       // Pharmacy needs lot+expiry, so allows recipe products (compounds).
       expect(pharmacyPack.pos.productModal.allowRecipeProducts).toBe(true);
@@ -203,7 +203,7 @@ describe('VerticalPack registry', () => {
       // Trip-ticket workflow + payroll needs PROJECT_HOURS for billable time.
       expect(truckingPack.payroll.compensationTypes).toContain('PROJECT_HOURS');
       expect(truckingPack.payroll.timesheetShape).toBe('PROJECT');
-      expect(truckingPack.excludedPlans).toContain('STD_SOLO');
+      expect(truckingPack.excludedPlans).toContain('SOLO_LITE');
     });
 
     it('CONSTRUCTION pack — Project-Engine', () => {
@@ -212,7 +212,7 @@ describe('VerticalPack registry', () => {
       // Project P&L + progress billing — recipes for kits + assemblies.
       expect(constructionPack.pos.productModal.allowRecipeProducts).toBe(true);
       expect(constructionPack.payroll.timesheetShape).toBe('PROJECT');
-      expect(constructionPack.excludedPlans).toContain('STD_SOLO');
+      expect(constructionPack.excludedPlans).toContain('SOLO_LITE');
     });
 
     it('all three new packs have a Compliance-style settings card or sidebar slot', () => {

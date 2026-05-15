@@ -99,7 +99,8 @@ type PlanFeatureFlag =
 
 /** Plan codes from plans.ts (subset — vertical may exclude specific plans). */
 type PlanCode =
-  | 'STD_SOLO' | 'STD_DUO' | 'STD_TEAM' | 'STD_BIZ'
+  | 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO'
+  | 'STD_BIZ'
   | 'PAIR_T1'  | 'PAIR_T2' | 'PAIR_T3'
   | 'SUITE_T1' | 'SUITE_T2' | 'SUITE_T3'
   | 'ENTERPRISE';
@@ -374,7 +375,7 @@ export const serviceMfgPack: VerticalPack = {
   settings: { extraCards: [] },
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
   // Manufacturing on a single-cashier plan is rarely a real business.
-  excludedPlans: ['STD_SOLO'],
+  excludedPlans: ['SOLO_LITE'],
 };
 
 /**
@@ -533,7 +534,7 @@ export const pharmacyPack: VerticalPack = {
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
   // Solo plan illegal for pharmacy — at minimum needs an active pharmacist on
   // duty (which a single owner cashier may not be) plus back-office reconciliation.
-  excludedPlans: ['STD_SOLO'],
+  excludedPlans: ['SOLO_LITE'],
   requiredFeatures: ['birForms'],
 };
 
@@ -605,7 +606,7 @@ export const truckingPack: VerticalPack = {
   },
 
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
-  excludedPlans: ['STD_SOLO'], // single-truck operators exist but typically need at least DUO for accounting
+  excludedPlans: ['SOLO_LITE'], // single-truck operators exist but typically need at least SOLO_STANDARD for accounting
 };
 
 /**
@@ -673,7 +674,7 @@ export const constructionPack: VerticalPack = {
 
   settings: { extraCards: [] },
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
-  excludedPlans: ['STD_SOLO'], // construction tenants need multi-staff seat counts
+  excludedPlans: ['SOLO_LITE'], // construction tenants need multi-staff seat counts
 };
 
 // ──────────────────────────────────────────────────────────────────────────

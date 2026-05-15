@@ -62,21 +62,21 @@ describe('TierQuotaGuard', () => {
   });
 
   it('allows when current staff < plan ceiling', async () => {
-    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_TEAM', staffSeatAddons: 0 });
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'SOLO_PRO', staffSeatAddons: 0 });
     prisma.user.count.mockResolvedValue(3); // ceiling is 5
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
   it('rejects with PLAN_CEILING_REACHED payload when at the cap', async () => {
-    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_SOLO', staffSeatAddons: 0 });
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'SOLO_LITE', staffSeatAddons: 0 });
     prisma.user.count.mockResolvedValue(1); // STD_SOLO ceiling = 1
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
 
     await expect(guard.canActivate(ctx)).rejects.toMatchObject({
       response: expect.objectContaining({
         code:         'PLAN_CEILING_REACHED',
-        planCode:     'STD_SOLO',
+        planCode:     'SOLO_LITE',
         currentCount: 1,
         ceiling:      1,
       }),
@@ -84,16 +84,16 @@ describe('TierQuotaGuard', () => {
   });
 
   it('respects purchased addons when computing the ceiling', async () => {
-    // STD_TEAM base = 5, maxAddons = 5 → buyer has bought 2 seats → ceiling = 7
-    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_TEAM', staffSeatAddons: 2 });
-    prisma.user.count.mockResolvedValue(6);
+    // STD_BIZ base = 10, maxAddons = 15 → buyer has bought 2 seats → ceiling = 12
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_BIZ', staffSeatAddons: 2 });
+    prisma.user.count.mockResolvedValue(11);
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
   it('caps at PLAN_CAPS.maxTotal even if addons exceed maxAddons', async () => {
     // STD_SOLO has maxAddons=0; tenant somehow has 99 addons → ceiling stays 1
-    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_SOLO', staffSeatAddons: 99 });
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'SOLO_LITE', staffSeatAddons: 99 });
     prisma.user.count.mockResolvedValue(1);
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
     await expect(guard.canActivate(ctx)).rejects.toMatchObject({
@@ -110,7 +110,7 @@ describe('TierQuotaGuard', () => {
   });
 
   it('does not count BUSINESS_OWNER toward the seat cap (filter in user.count where)', async () => {
-    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_TEAM', staffSeatAddons: 0 });
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: 'STD_BIZ', staffSeatAddons: 0 });
     prisma.user.count.mockResolvedValue(0);
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
     await guard.canActivate(ctx);

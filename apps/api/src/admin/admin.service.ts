@@ -2576,15 +2576,17 @@ export class AdminService {
             slug,
             businessType: 'LAUNDRY' as Prisma.TenantCreateInput['businessType'],
             tier:         'TIER_3' as Prisma.TenantCreateInput['tier'],
-            // Laundry demo on STD_TEAM — POS-only, 10-staff cap. Realistic
-            // single-module shape for a mid-size laundromat.
-            planCode:        'STD_TEAM',
+            // Sprint 23 — Laundry demo lands on SOLO_PRO (POS-only, 5-seat
+            // cap, ₱499/mo). Previously STD_TEAM; STD_TEAM was removed in
+            // the Solo tier cleanup. SOLO_PRO has more features (audit log,
+            // advanced reports, FIFO valuation) — better demo surface.
+            planCode:        'SOLO_PRO',
             modulePos:       true,
             moduleLedger:    false,
             modulePayroll:   false,
             staffSeatQuota:  5,
             staffSeatAddons: 0,
-            branchQuota:     2,   // matches PLAN_LIMITS.STD_TEAM.maxBranches
+            branchQuota:     1,   // matches PLAN_LIMITS.SOLO_PRO.maxBranches
             taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
             isDemoTenant: true,
             contactEmail: ownerEmail,

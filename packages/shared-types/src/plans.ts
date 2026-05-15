@@ -19,12 +19,12 @@
 export type ClerqueModule = 'POS' | 'LEDGER' | 'PAYROLL';
 
 export type PlanCode =
-  // Sprint 23 — new Solo lineup (POS-only, three tiers replacing STD_SOLO)
+  // Sprint 23 — Solo lineup (POS-only, three tiers)
   | 'SOLO_LITE'  | 'SOLO_STANDARD' | 'SOLO_PRO'
-  // Legacy single-module plans. STD_SOLO is auto-migrated to SOLO_LITE on the
-  // tier-redesign migration. STD_DUO + STD_TEAM are deprecated for new signups
-  // (kept here for grandfathered tenants — see docs/SOLO_TIER_REDESIGN.md).
-  | 'STD_SOLO' | 'STD_DUO' | 'STD_TEAM' | 'STD_BIZ'
+  // Single-module high-seat plan above Solo. The natural step up for
+  // POS-only customers needing 6+ users until the PAIR redesign lands.
+  | 'STD_BIZ'
+  // Multi-module plans
   | 'PAIR_T1'  | 'PAIR_T2' | 'PAIR_T3'
   | 'SUITE_T1' | 'SUITE_T2' | 'SUITE_T3'
   | 'ENTERPRISE';
@@ -64,24 +64,7 @@ export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
     annualMonthEquivalent: 10,
   },
 
-  // ── Legacy single-module plans ──────────────────────────────────────────
-  // STD_SOLO auto-migrates to SOLO_LITE (same price). STD_DUO + STD_TEAM
-  // deprecated for new signups; grandfathered tenants retain.
-  STD_SOLO: {
-    moduleCount: 1, baseSeats: 1, maxAddons: 0, maxTotal: 1,
-    pricePhpMonthlyCents: 19_900, addonSeatPhpMonthlyCents: 0,
-    annualMonthEquivalent: 10,
-  },
-  STD_DUO: {
-    moduleCount: 1, baseSeats: 3, maxAddons: 0, maxTotal: 3,
-    pricePhpMonthlyCents: 49_900, addonSeatPhpMonthlyCents: 7_900,
-    annualMonthEquivalent: 10,
-  },
-  STD_TEAM: {
-    moduleCount: 1, baseSeats: 5, maxAddons: 5, maxTotal: 10,
-    pricePhpMonthlyCents: 99_900, addonSeatPhpMonthlyCents: 4_900,
-    annualMonthEquivalent: 10,
-  },
+  // ── Single-module high-seat plan above Solo ──────────────────────────────
   STD_BIZ: {
     moduleCount: 1, baseSeats: 10, maxAddons: 15, maxTotal: 25,
     pricePhpMonthlyCents: 189_900, addonSeatPhpMonthlyCents: 2_900,
@@ -143,14 +126,10 @@ export interface PlanLimits {
 }
 
 export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
-  // Sprint 23 Solo lineup
+  // Solo lineup
   SOLO_LITE:     { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_STANDARD: { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_PRO:      { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
-  // Legacy
-  STD_SOLO:   { maxBranches:  1, maxAiPerMonth:    0, apiRatePerHour:     0 },
-  STD_DUO:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
-  STD_TEAM:   { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
   STD_BIZ:    { maxBranches:  3, maxAiPerMonth:  100, apiRatePerHour:   100 },
   PAIR_T1:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
   PAIR_T2:    { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
@@ -241,10 +220,7 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
     loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true,
   },
 
-  // ── Legacy plans (Solo-tier-specific fields default to 0/false) ─────────
-  STD_SOLO:   { birForms: false, customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: 5, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0, customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
-  STD_DUO:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0, customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
-  STD_TEAM:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0, customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
+  // ── Single-module high-seat plan above Solo ─────────────────────────────
   STD_BIZ:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: false, aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
   PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1, customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
   PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
@@ -268,14 +244,10 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
 
 /** Plan-level setup fee in PHP centavos. One-time, waived on annual prepay. */
 export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
-  // Sprint 23 Solo lineup — no setup fees on Solo (entry-friendly)
+  // Solo lineup — no setup fees (entry-friendly)
   SOLO_LITE:       0,
   SOLO_STANDARD:   0,
   SOLO_PRO:        0,
-  // Legacy
-  STD_SOLO:        0,
-  STD_DUO:    49_900,
-  STD_TEAM:   99_900,
   STD_BIZ:   199_900,
   PAIR_T1:    99_900,
   PAIR_T2:   199_900,
@@ -307,20 +279,17 @@ export function validateSoloModuleCombo(
   modulePayroll: boolean,
 ): string | null {
   // Only single-module plans are subject to the "exactly 1" rule.
-  // Includes legacy STD_* AND new SOLO_* lineup (Sprint 23).
-  const isSingleModule = planCode.startsWith('STD_') || planCode.startsWith('SOLO_');
-  if (!isSingleModule) return null;
+  // After Sprint 23 cleanup: SOLO_* (POS-only by design) + STD_BIZ (operator picks module).
+  const isSolo = planCode.startsWith('SOLO_');
+  const isStdBiz = planCode === 'STD_BIZ';
+  if (!isSolo && !isStdBiz) return null;
 
-  // Solo plans are POS-only by design (per Sprint 23 decision). Other
-  // single-module plans (STD_BIZ etc.) let the buyer pick which module.
-  const isSoloPosOnly = planCode.startsWith('SOLO_');
-
-  const planLabel = planCode.startsWith('SOLO_')
+  const planLabel = isSolo
     ? planCode.replace('SOLO_', 'Solo ').replace(/_/g, ' ').toLowerCase().replace(/\b./g, (c) => c.toUpperCase())
-    : planCode.replace('STD_', '').toLowerCase().replace(/^./, (c) => c.toUpperCase());
+    : 'Business';
 
   // Solo lineup is POS-only.
-  if (isSoloPosOnly) {
+  if (isSolo) {
     if (!modulePos) {
       return `${planLabel} plan is POS-only — the POS module must be enabled.`;
     }
@@ -352,9 +321,6 @@ export function planLabel(code: PlanCode): string {
     SOLO_LITE:     'Solo Lite',
     SOLO_STANDARD: 'Solo Standard',
     SOLO_PRO:      'Solo Pro',
-    STD_SOLO:      'Solo (legacy)',
-    STD_DUO:       'Duo (legacy)',
-    STD_TEAM:      'Team (legacy)',
     STD_BIZ:       'Business',
     PAIR_T1:       'Pair T1',
     PAIR_T2:       'Pair T2',

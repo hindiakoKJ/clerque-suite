@@ -90,11 +90,13 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
 
-    // STD_DUO chosen because it includes BIR forms (the headline value
-    // prop). Solo would block the BIR/Audit log feature gates.
-    // PLAN_CAPS resolves STD_DUO to baseSeats=3 — fine for a Ledger SME.
+    // Sprint 23 — default Ledger-only signup lands on SOLO_STANDARD (₱399,
+    // 3 seats). Previously STD_DUO; STD_DUO was deprecated in the Solo tier
+    // redesign. SOLO_STANDARD has same price + same seat count so Ledger-SME
+    // economics are identical, plus more features (unlimited recipes, 10
+    // FEFO inventory slots, customer phone-lookup).
     const { PLAN_CAPS } = await import('@repo/shared-types');
-    const planCode = 'STD_DUO' as const;
+    const planCode = 'SOLO_STANDARD' as const;
     const cap = PLAN_CAPS[planCode];
 
     const { DEFAULT_APP_ACCESS } = await import('@repo/shared-types');

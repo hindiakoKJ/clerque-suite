@@ -52,15 +52,24 @@ const BUSINESS_TYPES = [
 // Legacy TIER_1..TIER_6 still in DB but advisory — auto-derived from the
 // chosen plan code. STD_* are POS-only; PAIR_* require pick-2; SUITE_* all-3.
 const PLAN_CODES = [
+  // Sprint 23 Solo lineup (POS-only, replaces STD_SOLO)
+  'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
+  // Legacy single-module (STD_DUO + STD_TEAM hidden from default signups
+  // but kept in this admin dropdown for grandfathered tenant operations)
   'STD_SOLO',  'STD_DUO',  'STD_TEAM', 'STD_BIZ',
   'PAIR_T1',   'PAIR_T2',  'PAIR_T3',
   'SUITE_T1',  'SUITE_T2', 'SUITE_T3',
   'ENTERPRISE',
 ] as const;
 const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
-  STD_SOLO:   'Solo (1 module · 1 staff · ₱199/mo)',
-  STD_DUO:    'Duo (1 module · 3 staff · ₱499/mo)',
-  STD_TEAM:   'Team (1 module · 10 staff · ₱999/mo)',
+  // Sprint 23 Solo lineup
+  SOLO_LITE:      'Solo Lite (POS · 1 staff · ₱199/mo) — Loyverse-Free baseline + PH compliance',
+  SOLO_STANDARD:  'Solo Standard (POS · 3 staff · ₱399/mo) — unlimited recipes + 10 FEFO items + customer lookup',
+  SOLO_PRO:       'Solo Pro (POS · 5 staff · ₱499/mo) — all Solo features + audit log + advanced reports + auto-backup',
+  // Legacy
+  STD_SOLO:   'Solo legacy (1 module · 1 staff · ₱199/mo) — use SOLO_LITE for new tenants',
+  STD_DUO:    'Duo legacy (1 module · 3 staff · ₱499/mo) — deprecated, use SOLO_STANDARD',
+  STD_TEAM:   'Team legacy (1 module · 10 staff · ₱999/mo) — deprecated, use SOLO_PRO or STD_BIZ',
   STD_BIZ:    'Business (1 module · 25 staff · ₱1,899/mo)',
   PAIR_T1:    'Pair T1 (any 2 modules · 3 staff · ₱799/mo)',
   PAIR_T2:    'Pair T2 (any 2 modules · 10 staff · ₱1,599/mo)',
@@ -72,6 +81,7 @@ const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
 };
 // Legacy tier kept on Tenant table for rollback; auto-mapped from planCode.
 const PLAN_TO_TIER: Record<typeof PLAN_CODES[number], string> = {
+  SOLO_LITE: 'TIER_1', SOLO_STANDARD: 'TIER_2', SOLO_PRO: 'TIER_2',
   STD_SOLO: 'TIER_1', STD_DUO: 'TIER_2', STD_TEAM: 'TIER_3', STD_BIZ: 'TIER_4',
   PAIR_T1: 'TIER_2', PAIR_T2: 'TIER_3', PAIR_T3: 'TIER_4',
   SUITE_T1: 'TIER_3', SUITE_T2: 'TIER_5', SUITE_T3: 'TIER_6',
@@ -129,6 +139,10 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
       } else if (val.startsWith('STD_')) {
         // Default to POS-only for backwards compat; operator can flip.
         setModules({ pos: true, ledger: false, payroll: false });
+      } else if (val.startsWith('SOLO_')) {
+        // Sprint 23 Solo lineup is POS-only by design — no operator flexibility.
+        // Solo customers who need Ledger/Payroll upgrade to PAIR or SUITE.
+        setModules({ pos: true, ledger: false, payroll: false });
       }
     }
   }
@@ -139,11 +153,14 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
 
   const isSuite  = form.planCode.startsWith('SUITE_') || form.planCode === 'ENTERPRISE';
   const isStd    = form.planCode.startsWith('STD_');
+  const isSolo   = form.planCode.startsWith('SOLO_');
   const isPair   = form.planCode.startsWith('PAIR_');
   const onCount  = [modules.pos, modules.ledger, modules.payroll].filter(Boolean).length;
   // Validation messages mirror server-side validateSoloModuleCombo + PAIR rules.
   const moduleError =
-    isStd && onCount !== 1 ? 'Single Module plan requires exactly one of POS / Ledger / Payroll.'
+    isSolo && (!modules.pos || modules.ledger || modules.payroll)
+      ? 'Solo plans are POS-only. Upgrade to Pair for 2 modules or Suite for all 3.'
+    : isStd && onCount !== 1 ? 'Single Module plan requires exactly one of POS / Ledger / Payroll.'
     : isPair && onCount !== 2 ? 'Pair plan requires exactly two modules.'
     : null;
 

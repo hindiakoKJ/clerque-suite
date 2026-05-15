@@ -1,12 +1,21 @@
 /**
- * Clerque commercial pricing — single source of truth.
+ * Clerque LEGACY pricing — `TIER_*` system, predates `plans.ts`.
  *
- * Imported by:
- *   - Subscription settings page (display)
- *   - Marketing site (when wired)
- *   - Backend audit / billing reports
+ * ⚠️ DO NOT EXTEND with new TIER_* entries. New plan codes belong in
+ *    `plans.ts` (PLAN_CAPS / PLAN_FEATURES / PLAN_LIMITS). This file
+ *    survives because the AI-quota helpers (`getAiQuotaForTenant`,
+ *    `AI_ADDONS`) are still imported by auth.service + tenant.service.
+ *    Migration of the AI helpers onto the plans.ts model is queued for
+ *    the Business/Suite tier redesign sprint.
  *
- * Edit numbers here when pricing changes; nothing else needs to change.
+ * What lives here (still actively imported):
+ *   - AI_ADDONS, AiAddonType, AiAddonPackage  → tenant.service, auth.service
+ *   - getAiQuotaForTenant, AiQuotaResolution  → auth.service (JWT mint)
+ *   - canBuyAiAddon, AI_ADDON_ELIGIBLE_TIERS  → tenant.service
+ *   - TIER_PRICING, GROWTH_LEVERS             → tenant.service (display)
+ *
+ * What is canonical in plans.ts (don't shadow these here):
+ *   - PlanCode enum + per-plan caps, features, prices, setup fees
  *
  * All amounts are in PHP. The system is single-currency for now (FX is
  * stubbed in JournalLine but not engaged).

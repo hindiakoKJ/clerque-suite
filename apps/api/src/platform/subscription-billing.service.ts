@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { APBillsService } from '../ap/ap-bills.service';
 import { PlatformService } from './platform.service';
-import { PLAN_MONTHLY_PRICE_PHP_CENTS, type PlanCode } from '@repo/shared-types';
+import { PLAN_CAPS, type PlanCode } from '@repo/shared-types';
 
 /**
  * Sprint 15 — Cross-tenant subscription billing.
@@ -83,7 +83,11 @@ export class SubscriptionBillingService {
       throw new BadRequestException('ENTERPRISE plan is billed manually outside this flow.');
     }
 
-    const planPrice = (PLAN_MONTHLY_PRICE_PHP_CENTS[target.planCode as PlanCode] ?? 0) / 100;
+    // Sprint 23 — pricing source-of-truth fix. Previously read from a
+    // separate PLAN_MONTHLY_PRICE_PHP_CENTS map that disagreed with the
+    // PLAN_CAPS prices shown on the marketing + signup + settings UI. Now
+    // PLAN_CAPS is canonical; the duplicate map is deleted in plans.ts.
+    const planPrice = (PLAN_CAPS[target.planCode as PlanCode]?.pricePhpMonthlyCents ?? 0) / 100;
     if (planPrice <= 0) {
       throw new BadRequestException(`No monthly price configured for plan ${target.planCode}.`);
     }

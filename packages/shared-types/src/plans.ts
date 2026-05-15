@@ -19,6 +19,11 @@
 export type ClerqueModule = 'POS' | 'LEDGER' | 'PAYROLL';
 
 export type PlanCode =
+  // Sprint 23 — new Solo lineup (POS-only, three tiers replacing STD_SOLO)
+  | 'SOLO_LITE'  | 'SOLO_STANDARD' | 'SOLO_PRO'
+  // Legacy single-module plans. STD_SOLO is auto-migrated to SOLO_LITE on the
+  // tier-redesign migration. STD_DUO + STD_TEAM are deprecated for new signups
+  // (kept here for grandfathered tenants — see docs/SOLO_TIER_REDESIGN.md).
   | 'STD_SOLO' | 'STD_DUO' | 'STD_TEAM' | 'STD_BIZ'
   | 'PAIR_T1'  | 'PAIR_T2' | 'PAIR_T3'
   | 'SUITE_T1' | 'SUITE_T2' | 'SUITE_T3'
@@ -42,7 +47,26 @@ export interface PlanCap {
 }
 
 export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
-  // ── Standalone (one module) ─────────────────────────────────────────────
+  // ── Sprint 23 Solo lineup (POS-only, 3 tiers) ───────────────────────────
+  SOLO_LITE: {
+    moduleCount: 1, baseSeats: 1, maxAddons: 0, maxTotal: 1,
+    pricePhpMonthlyCents: 19_900, addonSeatPhpMonthlyCents: 0,
+    annualMonthEquivalent: 10,
+  },
+  SOLO_STANDARD: {
+    moduleCount: 1, baseSeats: 3, maxAddons: 0, maxTotal: 3,
+    pricePhpMonthlyCents: 39_900, addonSeatPhpMonthlyCents: 0,
+    annualMonthEquivalent: 10,
+  },
+  SOLO_PRO: {
+    moduleCount: 1, baseSeats: 5, maxAddons: 0, maxTotal: 5,
+    pricePhpMonthlyCents: 49_900, addonSeatPhpMonthlyCents: 0,
+    annualMonthEquivalent: 10,
+  },
+
+  // ── Legacy single-module plans ──────────────────────────────────────────
+  // STD_SOLO auto-migrates to SOLO_LITE (same price). STD_DUO + STD_TEAM
+  // deprecated for new signups; grandfathered tenants retain.
   STD_SOLO: {
     moduleCount: 1, baseSeats: 1, maxAddons: 0, maxTotal: 1,
     pricePhpMonthlyCents: 19_900, addonSeatPhpMonthlyCents: 0,
@@ -119,6 +143,11 @@ export interface PlanLimits {
 }
 
 export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
+  // Sprint 23 Solo lineup
+  SOLO_LITE:     { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
+  SOLO_STANDARD: { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
+  SOLO_PRO:      { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
+  // Legacy
   STD_SOLO:   { maxBranches:  1, maxAiPerMonth:    0, apiRatePerHour:     0 },
   STD_DUO:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
   STD_TEAM:   { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
@@ -157,42 +186,93 @@ export interface PlanFeatures {
   whitelabel:         boolean;
   /** tenant.com instead of clerque.com/tenant */
   customDomain:       boolean;
+
+  // ── Sprint 23 — Solo-tier-specific gating ──────────────────────────────
+  /** Recipe-based product cap. -1 = unlimited, 0 = recipe mode disabled. */
+  maxRecipes:                 number;
+  /** Number of inventory items that can have advanced tracking (batches +
+   *  expiry + FEFO consumption hint) enabled. -1 = unlimited, 0 = disabled. */
+  maxAdvancedInventoryItems:  number;
+  /** Number of Sales Lead delegations (separate supervisor PIN holders).
+   *  -1 = unlimited, 0 = owner is the only supervisor. */
+  salesLeadDelegation:        number;
+  /** Customer phone-lookup at the till (autocomplete in PaymentModal). */
+  customerPhoneLookup:        boolean;
+  /** Receipt customization level. */
+  receiptCustomization:       'none' | 'headerFooter' | 'full';
+  /** Advanced POS reports (hourly heatmaps, weekday patterns, attach rate). */
+  advancedReports:            boolean;
+  /** Loyalty Pro — digital stamp cards with QR redemption (beyond points). */
+  loyaltyPro:                 boolean;
+  /** Auto-backup to user's Google Drive on a daily schedule. */
+  autoBackup:                 boolean;
+  /** FIFO valuation as an alternative to default WAC (Pro-tier only).
+   *  WAC is universal; FIFO is the opt-in upgrade for accountants who want
+   *  historical-cost matching during inflationary periods. */
+  fifoValuation:              boolean;
+  /** Maker-checker authorization on voids/refunds above a tenant-set threshold. */
+  makerCheckerVoids:          boolean;
 }
 
 export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
-  STD_SOLO:   { birForms: false, customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false },
-  STD_DUO:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false },
-  STD_TEAM:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false },
-  STD_BIZ:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: false, aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false },
-  PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false },
-  PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false },
-  PAIR_T3:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false },
-  SUITE_T1:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false },
-  SUITE_T2:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false },
-  SUITE_T3:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: false, customDomain: false },
-  ENTERPRISE: { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: true,  customDomain: true  },
+  // ── Sprint 23 Solo lineup ────────────────────────────────────────────────
+  SOLO_LITE: {
+    // Loyverse-Free-equivalent baseline + PH compliance. No premium features.
+    birForms: false, customRoles: false, auditLog: false, crossModuleReports: false,
+    aiAddons: false, apiAccess: 'none', whitelabel: false, customDomain: false,
+    maxRecipes: 5, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0,
+    customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false,
+    loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
+  },
+  SOLO_STANDARD: {
+    // Adds unlimited recipes + 10 FEFO/batch/expiry items + Sales Lead + customer lookup + receipt header/footer.
+    birForms: false, customRoles: false, auditLog: false, crossModuleReports: false,
+    aiAddons: false, apiAccess: 'none', whitelabel: false, customDomain: false,
+    maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1,
+    customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false,
+    loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
+  },
+  SOLO_PRO: {
+    // All Solo-line features unlocked. Single module (POS) — multi-module is PAIR/SUITE.
+    birForms: false, customRoles: true, auditLog: true, crossModuleReports: false,
+    aiAddons: false, apiAccess: 'read', whitelabel: false, customDomain: false,
+    maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1,
+    customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true,
+    loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true,
+  },
+
+  // ── Legacy plans (Solo-tier-specific fields default to 0/false) ─────────
+  STD_SOLO:   { birForms: false, customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: 5, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0, customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
+  STD_DUO:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0, customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
+  STD_TEAM:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: false, aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0, customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
+  STD_BIZ:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: false, aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1, customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
+  PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  PAIR_T3:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  SUITE_T1:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  SUITE_T2:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  SUITE_T3:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  ENTERPRISE: { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: true,  customDomain: true,  maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
 };
 
-/** Plan-level monthly recurring fee in PHP centavos.
- *  Source of truth for SubscriptionInvoice generation. Updated per pricing
- *  decisions; ENTERPRISE is "contact sales" — billed manually outside this
- *  table (use 0 here; the auto-issue cron skips ENTERPRISE tenants). */
-export const PLAN_MONTHLY_PRICE_PHP_CENTS: Record<PlanCode, number> = {
-  STD_SOLO:    49_900,    // ₱499/mo
-  STD_DUO:     89_900,    // ₱899/mo
-  STD_TEAM:   149_900,    // ₱1,499/mo
-  STD_BIZ:    249_900,    // ₱2,499/mo
-  PAIR_T1:    149_900,    // ₱1,499/mo
-  PAIR_T2:    279_900,    // ₱2,799/mo
-  PAIR_T3:    449_900,    // ₱4,499/mo
-  SUITE_T1:   249_900,    // ₱2,499/mo
-  SUITE_T2:   449_900,    // ₱4,499/mo
-  SUITE_T3:   799_900,    // ₱7,999/mo
-  ENTERPRISE: 0,           // billed manually
-};
+// Sprint 23 — PLAN_MONTHLY_PRICE_PHP_CENTS deleted.
+//
+// Previously there was a separate map here that disagreed with
+// `PLAN_CAPS[plan].pricePhpMonthlyCents` (e.g., STD_SOLO was ₱199 in
+// PLAN_CAPS but ₱499 in this duplicate map). The billing service used
+// the duplicate while the marketing/settings UI used PLAN_CAPS — meaning
+// customers saw ₱199 on the website but got billed ₱499.
+//
+// Canonical source for ALL price reads is now `PLAN_CAPS[plan].pricePhpMonthlyCents`.
+// The plans.spec.ts invariant test asserts there is exactly one price per plan.
 
 /** Plan-level setup fee in PHP centavos. One-time, waived on annual prepay. */
 export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
+  // Sprint 23 Solo lineup — no setup fees on Solo (entry-friendly)
+  SOLO_LITE:       0,
+  SOLO_STANDARD:   0,
+  SOLO_PRO:        0,
+  // Legacy
   STD_SOLO:        0,
   STD_DUO:    49_900,
   STD_TEAM:   99_900,
@@ -226,10 +306,29 @@ export function validateSoloModuleCombo(
   moduleLedger: boolean,
   modulePayroll: boolean,
 ): string | null {
-  // Only standalone (single-module) plans are subject to the "exactly 1" rule.
-  if (!planCode.startsWith('STD_')) return null;
+  // Only single-module plans are subject to the "exactly 1" rule.
+  // Includes legacy STD_* AND new SOLO_* lineup (Sprint 23).
+  const isSingleModule = planCode.startsWith('STD_') || planCode.startsWith('SOLO_');
+  if (!isSingleModule) return null;
 
-  const planLabel = planCode.replace('STD_', '').toLowerCase().replace(/^./, (c) => c.toUpperCase());
+  // Solo plans are POS-only by design (per Sprint 23 decision). Other
+  // single-module plans (STD_BIZ etc.) let the buyer pick which module.
+  const isSoloPosOnly = planCode.startsWith('SOLO_');
+
+  const planLabel = planCode.startsWith('SOLO_')
+    ? planCode.replace('SOLO_', 'Solo ').replace(/_/g, ' ').toLowerCase().replace(/\b./g, (c) => c.toUpperCase())
+    : planCode.replace('STD_', '').toLowerCase().replace(/^./, (c) => c.toUpperCase());
+
+  // Solo lineup is POS-only.
+  if (isSoloPosOnly) {
+    if (!modulePos) {
+      return `${planLabel} plan is POS-only — the POS module must be enabled.`;
+    }
+    if (moduleLedger || modulePayroll) {
+      return `${planLabel} plan is POS-only — Ledger and Payroll cannot be enabled. Upgrade to Pair for 2 modules.`;
+    }
+    return null;
+  }
 
   const enabledCount = [modulePos, moduleLedger, modulePayroll].filter(Boolean).length;
   if (enabledCount === 0) {
@@ -250,17 +349,20 @@ export const validateStandaloneModuleCombo = validateSoloModuleCombo;
 /** Returns the user-facing display name for a plan code. */
 export function planLabel(code: PlanCode): string {
   return ({
-    STD_SOLO:   'Solo',
-    STD_DUO:    'Duo',
-    STD_TEAM:   'Team',
-    STD_BIZ:    'Business',
-    PAIR_T1:    'Pair T1',
-    PAIR_T2:    'Pair T2',
-    PAIR_T3:    'Pair T3',
-    SUITE_T1:   'Suite T1',
-    SUITE_T2:   'Suite T2',
-    SUITE_T3:   'Suite T3',
-    ENTERPRISE: 'Enterprise',
+    SOLO_LITE:     'Solo Lite',
+    SOLO_STANDARD: 'Solo Standard',
+    SOLO_PRO:      'Solo Pro',
+    STD_SOLO:      'Solo (legacy)',
+    STD_DUO:       'Duo (legacy)',
+    STD_TEAM:      'Team (legacy)',
+    STD_BIZ:       'Business',
+    PAIR_T1:       'Pair T1',
+    PAIR_T2:       'Pair T2',
+    PAIR_T3:       'Pair T3',
+    SUITE_T1:      'Suite T1',
+    SUITE_T2:      'Suite T2',
+    SUITE_T3:      'Suite T3',
+    ENTERPRISE:    'Enterprise',
   } satisfies Record<PlanCode, string>)[code];
 }
 

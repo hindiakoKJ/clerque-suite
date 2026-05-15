@@ -21,6 +21,9 @@ import {
 
 describe('Plans constants', () => {
   const ALL_PLAN_CODES: PlanCode[] = [
+    // Sprint 23 Solo lineup
+    'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
+    // Legacy
     'STD_SOLO', 'STD_DUO', 'STD_TEAM', 'STD_BIZ',
     'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
     'SUITE_T1', 'SUITE_T2', 'SUITE_T3',

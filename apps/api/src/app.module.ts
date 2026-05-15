@@ -53,9 +53,17 @@ import { PlatformModule } from './platform/platform.module';
 import { EmployeeRequestsModule } from './employee-requests/employee-requests.module';
 import { BackupModule } from './backup/backup.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
+import { LoyaltyProModule } from './loyalty-pro/loyalty-pro.module';
+import { AutoBackupModule } from './auto-backup/auto-backup.module';
 import { KioskModule } from './payroll/kiosk/kiosk.module';
 import { StorageModule } from './storage/storage.module';
 import { SubscriptionPaymentsModule } from './subscription-payments/subscription-payments.module';
+import { VoidApprovalsModule } from './void-approvals/void-approvals.module';
+import { ReportsAdvancedModule } from './reports-advanced/reports-advanced.module';
+import { ApiKeysModule } from './api-keys/api-keys.module';
+import { PublicApiModule } from './public-api/public-api.module';
+import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
+import { InventoryReportsModule } from './inventory-reports/inventory-reports.module';
 import { HealthController } from './health/health.controller';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { CleanupScheduler } from './common/cleanup.scheduler';
@@ -127,9 +135,17 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     EmployeeRequestsModule,
     BackupModule,
     LoyaltyModule,
+    LoyaltyProModule,
+    AutoBackupModule,
     KioskModule,
     StorageModule,
     SubscriptionPaymentsModule,
+    VoidApprovalsModule,
+    ReportsAdvancedModule,
+    ApiKeysModule,
+    PublicApiModule,
+    PurchaseOrdersModule,
+    InventoryReportsModule,
   ],
   providers: [
     // SECURITY D5-03 — apply ThrottlerGuard globally. Controllers can opt out

@@ -10,8 +10,9 @@ import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
+import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
-import { OfflineOrder } from '@repo/shared-types';
+import { OfflineOrder, PLAN_FEATURES, type PlanCode } from '@repo/shared-types';
 
 @Injectable()
 export class OrdersService {
@@ -22,6 +23,7 @@ export class OrdersService {
     private audit:     AuditService,
     private numbering: NumberingService,
     private loyalty:   LoyaltyService,
+    private voidApprovals: VoidApprovalsService,
   ) {}
 
   // ─── Create order (online or from offline sync) ─────────────────────────
@@ -743,6 +745,40 @@ export class OrdersService {
     // can void. Pharmacy owners explicitly asked for this — Rx-required +
     // controlled-drug returns need owner-level oversight on every event.
     await this.assertReturnsAllowedForRole(tenantId, callerRole);
+
+    // ── Sprint 25 — Maker-checker void approvals (Solo Pro) ───────────────────
+    // When the plan has `makerCheckerVoids` AND the tenant set a non-zero
+    // threshold AND this void's amount meets/exceeds the threshold, we require
+    // an APPROVED VoidApproval row to exist (whole-order: orderItemId IS NULL)
+    // before the void can proceed. The PIN-based supervisor co-auth still
+    // applies — this is an additional, audit-friendly gate.
+    const tenantForMakerChecker = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { planCode: true, voidApprovalThresholdCents: true },
+    });
+    if (tenantForMakerChecker) {
+      const pc = (tenantForMakerChecker.planCode ?? 'SUITE_T2') as PlanCode;
+      const features = PLAN_FEATURES[pc];
+      const threshold = tenantForMakerChecker.voidApprovalThresholdCents ?? 0;
+      if (features?.makerCheckerVoids === true && threshold > 0) {
+        const orderForAmount = await this.prisma.order.findFirst({
+          where:  { id: orderId, tenantId },
+          select: { totalAmount: true },
+        });
+        if (orderForAmount) {
+          const amountCents = Math.round(Number(orderForAmount.totalAmount) * 100);
+          if (amountCents >= threshold) {
+            const ok = await this.voidApprovals.hasApprovedFor(tenantId, orderId, null);
+            if (!ok) {
+              throw new ForbiddenException(
+                'This void requires maker-checker approval. Submit a void approval ' +
+                'request and have a Branch Manager or Business Owner approve before retrying.',
+              );
+            }
+          }
+        }
+      }
+    }
 
     // ── SOD: Dual-authorization for CASHIER voids ─────────────────────────────
     const VOID_DIRECT_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'];

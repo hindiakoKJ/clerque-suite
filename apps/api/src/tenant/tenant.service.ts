@@ -21,6 +21,8 @@ export interface UpdateTenantProfileDto {
   receiptLogoUrl?:    string;
   /** Sprint 19 — returns/refunds owner-only policy. */
   returnsOwnerOnly?:  boolean;
+  /** Sprint 25 — Maker-checker void threshold (peso-cents). 0 = disabled. */
+  voidApprovalThresholdCents?: number;
 }
 
 export interface UpdateTaxSettingsDto {
@@ -590,6 +592,8 @@ export class TenantService {
         receiptLogoUrl:    true,
         // Sprint 19 — returns/refunds owner-only policy.
         returnsOwnerOnly:  true,
+        // Sprint 25 — Maker-checker void threshold (peso-cents).
+        voidApprovalThresholdCents: true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found');
@@ -806,6 +810,101 @@ export class TenantService {
     }
 
     return updated;
+  }
+
+  // ─── Receipt customization (Sprint 25 Phase 2A) ──────────────────────────
+  /**
+   * Update the tenant's receipt template fields with plan-tier enforcement.
+   *
+   * PLAN_FEATURES[planCode].receiptCustomization:
+   *   'none'          → rejects any non-empty write
+   *   'headerFooter'  → only header + footer text are writable; logoUrl is dropped
+   *   'full'          → header, footer, AND logo writable
+   *
+   * Clearing fields (passing empty string / null) is always allowed regardless
+   * of tier so a downgraded tenant can scrub customizations even after losing
+   * write access.
+   */
+  async updateReceiptConfig(
+    tenantId: string,
+    dto: { headerNote?: string | null; footerNote?: string | null; logoUrl?: string | null },
+    actorId: string,
+  ) {
+    const { PLAN_FEATURES } = await import('@repo/shared-types');
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: {
+        planCode: true,
+        receiptHeaderNote: true,
+        receiptFooterNote: true,
+        receiptLogoUrl:    true,
+      },
+    });
+    if (!tenant) throw new NotFoundException('Tenant not found.');
+
+    const planCode = (tenant.planCode ?? 'SUITE_T2') as keyof typeof PLAN_FEATURES;
+    const tier     = PLAN_FEATURES[planCode]?.receiptCustomization ?? 'none';
+
+    const headerNote = dto.headerNote === undefined ? undefined : (dto.headerNote?.trim() || null);
+    const footerNote = dto.footerNote === undefined ? undefined : (dto.footerNote?.trim() || null);
+    const logoUrl    = dto.logoUrl    === undefined ? undefined : (dto.logoUrl?.trim()    || null);
+
+    const wantsAnyWrite =
+      (headerNote != null) || (footerNote != null) || (logoUrl != null);
+
+    if (tier === 'none' && wantsAnyWrite) {
+      throw new ForbiddenException({
+        code:    'PLAN_FEATURE_DISABLED',
+        feature: 'receiptCustomization',
+        planCode,
+        message: 'Your plan does not include receipt customization. Upgrade to Solo Standard for header + footer, or Solo Pro for full customization including logo.',
+      });
+    }
+    if (tier === 'headerFooter' && logoUrl != null) {
+      throw new ForbiddenException({
+        code:    'PLAN_FEATURE_TIER_INSUFFICIENT',
+        feature: 'receiptCustomization',
+        planCode,
+        currentTier: tier,
+        requiredTier: 'full',
+        message: 'Logo customization requires Solo Pro. Your current plan supports header + footer text only.',
+      });
+    }
+
+    const data: Record<string, unknown> = {};
+    if (headerNote !== undefined) data.receiptHeaderNote = headerNote;
+    if (footerNote !== undefined) data.receiptFooterNote = footerNote;
+    // Always allow clearing logoUrl; only allow setting it when tier === 'full'.
+    if (logoUrl !== undefined && (tier === 'full' || logoUrl == null)) {
+      data.receiptLogoUrl = logoUrl;
+    }
+
+    const updated = await this.prisma.tenant.update({
+      where: { id: tenantId },
+      data,
+      select: {
+        receiptHeaderNote: true,
+        receiptFooterNote: true,
+        receiptLogoUrl:    true,
+      },
+    });
+
+    await this.audit.log({
+      tenantId,
+      action:      'SETTING_CHANGED',
+      entityType:  'Tenant',
+      entityId:    tenantId,
+      before: {
+        receiptHeaderNote: tenant.receiptHeaderNote,
+        receiptFooterNote: tenant.receiptFooterNote,
+        receiptLogoUrl:    tenant.receiptLogoUrl,
+      },
+      after:       data,
+      description: 'Receipt template updated',
+      performedBy: actorId,
+    }).catch(() => undefined);
+
+    return { ...updated, tier };
   }
 
   async getAndValidate(tenantId: string) {

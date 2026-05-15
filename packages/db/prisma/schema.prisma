@@ -624,6 +624,9 @@ model Tenant {
   laundryWashCycles    LaundryWashCycle[]
   stampCardTemplates   StampCardTemplate[]
   stampCards           CustomerStampCard[]
+  // Sprint 25 Phase 2C — Loyalty Pro digital stamp programs (Pro-tier).
+  stampPrograms        StampProgram[]
+  customerStamps       CustomerStamp[]
   kioskTerminals       KioskTerminal[]
   deliveryReceipts     DeliveryReceipt[]
   laundryAddOns        LaundryServiceAddOn[]
@@ -921,6 +924,14 @@ model User {
   /// Time-limited token for self-service password reset (expires in 1 hour)
   passwordResetToken       String?        @unique
   passwordResetTokenExpiry DateTime?
+  /// Sprint 25 Phase 2A — Sales Lead delegation flag. When true, this user is
+  /// authorized as a supervisor PIN holder for discount + void approvals at
+  /// the till WITHOUT being elevated to BRANCH_MANAGER. Gated by
+  /// PLAN_FEATURES[planCode].salesLeadDelegation (0 = disabled, N = at most N
+  /// delegations per tenant, -1 = unlimited). Independent of UserRole.SALES_LEAD
+  /// (the legacy role); a delegated user keeps their original role and just
+  /// gains supervisor-PIN authority.
+  isSalesLead              Boolean        @default(false)
   /// Bcrypt-hashed 4-6 digit PIN for supervisor void overrides at the till.
   /// Only meaningful for users with VOID_DIRECT_ROLES (SALES_LEAD,
   /// BRANCH_MANAGER, BUSINESS_OWNER). Cashiers can have one set but it
@@ -2260,6 +2271,9 @@ model Customer {
   // Sprint 19 — Loyalty stamp cards (digital + printable)
   stampCards    CustomerStampCard[]
 
+  // Sprint 25 Phase 2C — Loyalty Pro stamp tracking (Pro-tier).
+  loyaltyProStamps CustomerStamp[]
+
   // Sprint 22 — AR standalone-accounting parity
   creditMemos        CreditMemo[]
   customerAdvances   CustomerAdvance[]
@@ -2375,6 +2389,45 @@ model StampCardEvent {
 
   @@index([cardId, createdAt])
   @@map("stamp_card_events")
+}
+
+// ─── Loyalty Pro — Digital Stamp Programs (Sprint 25 Phase 2C) ───────────────
+// Pro-tier (loyaltyPro feature flag). Simpler, QR-code-driven stamp scheme
+// that runs alongside the existing Sprint 19 stamp cards. Cashier scans the
+// customer's QR at the till and grants N stamps; redemption zeros earned
+// stamps and surfaces the configured reward product.
+model StampProgram {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  stampsRequired  Int
+  rewardProductId String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stamps   CustomerStamp[]
+
+  @@index([tenantId, isActive])
+  @@map("stamp_programs")
+}
+
+model CustomerStamp {
+  id           String    @id @default(cuid())
+  tenantId     String
+  customerId   String
+  programId    String
+  stampsEarned Int       @default(0)
+  lastEarnedAt DateTime?
+  redeemedAt   DateTime?
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  program  StampProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, programId])
+  @@index([tenantId, customerId])
+  @@map("customer_stamps")
 }
 
 // ─── Sync Kiosk Terminals (Sprint 19) ────────────────────────────────────────

@@ -6,9 +6,10 @@ import { TaxModule } from '../tax/tax.module';
 import { AuditModule } from '../audit/audit.module';
 import { NumberingModule } from '../numbering/numbering.module';
 import { LoyaltyModule } from '../loyalty/loyalty.module';
+import { VoidApprovalsModule } from '../void-approvals/void-approvals.module';
 
 @Module({
-  imports:     [AccountingPeriodsModule, TaxModule, AuditModule, NumberingModule, LoyaltyModule],
+  imports:     [AccountingPeriodsModule, TaxModule, AuditModule, NumberingModule, LoyaltyModule, VoidApprovalsModule],
   providers:   [OrdersService],
   controllers: [OrdersController],
   exports:     [OrdersService],

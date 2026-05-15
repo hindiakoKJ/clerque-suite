@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Users, KeyRound, ShieldCheck, Shield } from 'lucide-react';
+import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Users, KeyRound, ShieldCheck, Shield, Star } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -31,6 +31,9 @@ interface StaffMember {
   kioskPin?: string | null;
   /** Sprint 19 — clock-only employee, can never log in via password. */
   kioskOnly?: boolean;
+  /** Sprint 25 Phase 2A — Sales Lead delegation flag (supervisor PIN holder
+   *  for till discount + void approvals, independent of role). */
+  isSalesLead?: boolean;
 }
 
 /**
@@ -114,6 +117,33 @@ export default function StaffPage() {
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['staff'] });
+
+  // ── Sprint 25 Phase 2A — Sales Lead delegation cap (read from JWT) ────
+  // PLAN_FEATURES.salesLeadDelegation: 0 = disabled, N = at most N, -1 = unlimited.
+  const salesLeadCap: number = (user as { planFeatures?: { salesLeadDelegation?: number } } | null)
+    ?.planFeatures?.salesLeadDelegation ?? 0;
+  const salesLeadCount = staff.filter((s) => s.isSalesLead).length;
+  const salesLeadAtCap = salesLeadCap >= 0 && salesLeadCount >= salesLeadCap;
+  const salesLeadEnabledForPlan = salesLeadCap !== 0;
+
+  const toggleSalesLeadMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api.patch(`/users/${id}/sales-lead`, { enabled }).then((r) => r.data),
+    onSuccess: (_, vars) => {
+      toast.success(vars.enabled ? 'Sales Lead delegation granted.' : 'Sales Lead delegation revoked.');
+      invalidate();
+    },
+    onError: (err: unknown) => {
+      const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
+      if (data?.code === 'PLAN_FEATURE_DISABLED' || data?.code === 'PLAN_FEATURE_CAP_REACHED') {
+        toast.error(data.message ?? 'Sales Lead delegation blocked by your plan.', {
+          action: { label: 'Upgrade', onClick: () => { window.location.href = '/settings/subscription'; } },
+        });
+      } else {
+        toast.error(data?.message ?? 'Failed to update Sales Lead delegation.');
+      }
+    },
+  });
 
   const toggleMdmMut = useMutation({
     mutationFn: (targetId: string) =>
@@ -321,6 +351,18 @@ export default function StaffPage() {
                   <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Role</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Branch</th>
                   <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Status</th>
+                  {isOwner && salesLeadEnabledForPlan && (
+                    <th
+                      className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide"
+                      title={
+                        salesLeadCap === -1
+                          ? 'Sales Lead delegation: unlimited on this plan'
+                          : `Sales Lead delegation: ${salesLeadCount}/${salesLeadCap} used`
+                      }
+                    >
+                      Sales Lead
+                    </th>
+                  )}
                   {isOwner && (
                     <th className="text-center px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                       MDM
@@ -354,6 +396,38 @@ export default function StaffPage() {
                         {s.isActive ? 'ACTIVE' : 'INACTIVE'}
                       </span>
                     </td>
+
+                    {/* Sales Lead delegation toggle — OWNER only; only when plan allows. */}
+                    {isOwner && salesLeadEnabledForPlan && (
+                      <td className="px-4 py-3 text-center">
+                        {s.role !== 'BUSINESS_OWNER' ? (() => {
+                          const isOn = Boolean(s.isSalesLead);
+                          const disabled =
+                            toggleSalesLeadMut.isPending || (!isOn && salesLeadAtCap);
+                          const title = isOn
+                            ? 'Revoke Sales Lead delegation'
+                            : salesLeadAtCap
+                              ? `Plan limit reached (${salesLeadCount}/${salesLeadCap}). Revoke another delegation or upgrade.`
+                              : 'Grant Sales Lead delegation';
+                          return (
+                            <button
+                              onClick={() => toggleSalesLeadMut.mutate({ id: s.id, enabled: !isOn })}
+                              disabled={disabled}
+                              className={`transition-colors disabled:opacity-40 ${
+                                isOn
+                                  ? 'text-orange-500 hover:text-muted-foreground'
+                                  : 'text-muted-foreground hover:text-orange-500'
+                              }`}
+                              title={title}
+                            >
+                              <Star className={`h-4 w-4 mx-auto ${isOn ? 'fill-current' : ''}`} />
+                            </button>
+                          );
+                        })() : (
+                          <span className="text-muted-foreground/30 text-xs">—</span>
+                        )}
+                      </td>
+                    )}
 
                     {/* MDM toggle — OWNER only; not shown for OWNER/SUPER_ADMIN rows */}
                     {isOwner && (

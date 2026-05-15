@@ -257,6 +257,27 @@ export class TenantController {
     return this.tenantService.setOverheadRate(user.tenantId!, body.ratePerUnit);
   }
 
+  /**
+   * Sprint 25 Phase 2A — Receipt template customization.
+   *
+   * Plan-gated via PLAN_FEATURES.receiptCustomization:
+   *   'none'         → write rejected with PLAN_FEATURE_DISABLED
+   *   'headerFooter' → header + footer text only
+   *   'full'         → header + footer + logo (base64 data URL in logoUrl)
+   *
+   * Owner-only. The frontend renders a tier-aware editor (upsell card for
+   * 'none', text-only for 'headerFooter', text+upload for 'full').
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Patch('receipt-config')
+  @HttpCode(HttpStatus.OK)
+  updateReceiptConfig(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { headerNote?: string | null; footerNote?: string | null; logoUrl?: string | null },
+  ) {
+    return this.tenantService.updateReceiptConfig(user.tenantId!, body ?? {}, user.sub);
+  }
+
   /** Update Ledger ops + JE approval thresholds (Owner only). */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
   @Patch('ledger-thresholds')

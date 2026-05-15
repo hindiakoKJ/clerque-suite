@@ -2,9 +2,11 @@ import {
   IsBoolean,
   IsEmail,
   IsEnum,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Min,
   MaxLength,
   Matches,
 } from 'class-validator';
@@ -72,4 +74,12 @@ export class UpdateTenantProfileDto {
   @IsOptional()
   @IsBoolean()
   returnsOwnerOnly?: boolean;
+
+  /** Sprint 25 — Maker-checker void/refund threshold in peso-cents.
+   *  0 = disabled. Only meaningful when the tenant's plan has
+   *  PLAN_FEATURES[planCode].makerCheckerVoids === true. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  voidApprovalThresholdCents?: number;
 }

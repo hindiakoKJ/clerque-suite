@@ -53,6 +53,8 @@ interface TenantProfile {
   receiptLogoUrl?:      string | null;
   // Sprint 19 — returns/refunds owner-only policy.
   returnsOwnerOnly?:    boolean | null;
+  // Sprint 25 — maker-checker void threshold (peso-cents). 0 = disabled.
+  voidApprovalThresholdCents?: number | null;
 }
 
 interface StaffUser {
@@ -702,6 +704,11 @@ export default function SettingsPage() {
             {/* ── Returns/refunds owner-only policy (Sprint 19) ────────────── */}
             {isOwner && profile && (
               <ReturnsPolicyCard profile={profile} qc={qc} />
+            )}
+
+            {/* ── Maker-checker void threshold (Sprint 25, Solo Pro) ────────── */}
+            {isOwner && profile && (
+              <VoidApprovalThresholdCard profile={profile} qc={qc} />
             )}
 
             {/* Read-only system info — driven by modular pricing (planCode + module flags). */}
@@ -1598,6 +1605,88 @@ function ReturnsPolicyCard({
           }`} />
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── Sprint 25 — Maker-checker void approval threshold card ────────────────
+
+function VoidApprovalThresholdCard({
+  profile, qc,
+}: { profile: { voidApprovalThresholdCents?: number | null }; qc: ReturnType<typeof useQueryClient> }) {
+  const initialCents = profile.voidApprovalThresholdCents ?? 0;
+  const [pesos, setPesos] = useState<string>(initialCents > 0 ? String(initialCents / 100) : '');
+  const enabled = (parseFloat(pesos || '0') > 0);
+
+  const updateMut = useMutation({
+    mutationFn: (nextCents: number) =>
+      api.patch('/tenant/profile', { voidApprovalThresholdCents: nextCents }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      toast.success('Void approval threshold updated.');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Failed to update threshold.');
+    },
+  });
+
+  function save() {
+    const peso = parseFloat(pesos || '0');
+    if (!Number.isFinite(peso) || peso < 0) {
+      toast.error('Enter a non-negative number.');
+      return;
+    }
+    updateMut.mutate(Math.round(peso * 100));
+  }
+
+  function disable() {
+    setPesos('');
+    updateMut.mutate(0);
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Maker-checker Void Approvals</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          When set above ₱0, voids/refunds at or above this amount require a manager to approve before they
+          can be processed at the POS. Available on Solo Pro and Suite plans. Set to ₱0 to disable.
+        </p>
+      </div>
+      <div className="flex items-end gap-2 flex-wrap">
+        <div>
+          <label className="block text-xs font-semibold text-foreground mb-1">Threshold (₱)</label>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={pesos}
+            onChange={(e) => setPesos(e.target.value)}
+            placeholder="0.00"
+            className="h-9 w-40 px-3 rounded-md border border-border bg-background text-sm font-mono"
+          />
+        </div>
+        <button
+          onClick={save}
+          disabled={updateMut.isPending}
+          className="h-9 px-3 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+          style={{ background: 'var(--accent)' }}
+        >
+          {updateMut.isPending ? 'Saving…' : 'Save threshold'}
+        </button>
+        {enabled && (
+          <button
+            onClick={disable}
+            disabled={updateMut.isPending}
+            className="h-9 px-3 rounded-lg text-sm border border-border text-muted-foreground hover:bg-muted/40"
+          >
+            Disable
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Current: {initialCents > 0 ? `₱${(initialCents / 100).toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : 'Disabled'}
+      </p>
     </div>
   );
 }

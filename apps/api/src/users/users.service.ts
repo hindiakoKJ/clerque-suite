@@ -58,6 +58,9 @@ export class UsersService {
         // (computed below from the raw value).
         kioskPin:  canViewKioskPin,
         kioskOnly: true,
+        // Sprint 25 Phase 2A — Sales Lead delegation flag (drives the staff
+        // page toggle column).
+        isSalesLead: true,
         // Sprint 13 — pharmacist credentials. Drives the Settings → Pharmacy
         // roster + the receipt's "Dispensed by RPh ..." line. Returned to
         // every caller of /users; PRC numbers are not sensitive (they're on
@@ -571,6 +574,89 @@ export class UsersService {
         ? `${target.name} is now a Master Data Manager. Their session has been reset.`
         : `MDM access has been revoked from ${target.name}. Their session has been reset.`,
     };
+  }
+
+  // ─── Sales Lead delegation toggle (Sprint 25 Phase 2A) ──────────────────
+  /**
+   * Toggle the `isSalesLead` delegation flag on a user. Gated by
+   * PLAN_FEATURES[planCode].salesLeadDelegation:
+   *   0   → rejected outright (plan does not include delegation)
+   *   N>0 → rejected when N other users in the tenant are already flagged
+   *   -1  → unlimited
+   * Clearing the flag (`enabled: false`) is always allowed.
+   */
+  async setSalesLeadDelegation(
+    tenantId: string,
+    targetUserId: string,
+    enabled: boolean,
+    actorId: string,
+  ) {
+    const target = await this.prisma.user.findFirst({
+      where:  { id: targetUserId, tenantId },
+      select: { id: true, name: true, role: true, isSalesLead: true },
+    });
+    if (!target) throw new NotFoundException('User not found.');
+    if (target.role === 'SUPER_ADMIN') {
+      throw new ForbiddenException('SUPER_ADMIN cannot be flagged as Sales Lead.');
+    }
+
+    if (target.isSalesLead === enabled) {
+      return { id: target.id, isSalesLead: enabled, unchanged: true };
+    }
+
+    if (enabled) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { planCode: true },
+      });
+      const { PLAN_FEATURES } = await import('@repo/shared-types');
+      const planCode = (tenant?.planCode ?? 'SUITE_T2') as keyof typeof PLAN_FEATURES;
+      const cap = PLAN_FEATURES[planCode]?.salesLeadDelegation ?? 0;
+
+      if (cap === 0) {
+        throw new ForbiddenException({
+          code:    'PLAN_FEATURE_DISABLED',
+          feature: 'salesLeadDelegation',
+          planCode,
+          message: 'Your plan does not include Sales Lead delegation. Upgrade to Solo Standard or higher to delegate supervisor PIN authority.',
+        });
+      }
+      if (cap > 0) {
+        const already = await this.prisma.user.count({
+          where: { tenantId, isSalesLead: true, id: { not: targetUserId } },
+        });
+        if (already >= cap) {
+          throw new ForbiddenException({
+            code:    'PLAN_FEATURE_CAP_REACHED',
+            feature: 'salesLeadDelegation',
+            planCode,
+            cap,
+            current: already,
+            message: `Your plan allows up to ${cap} Sales Lead delegation${cap === 1 ? '' : 's'}. Revoke an existing delegation or upgrade to assign more.`,
+          });
+        }
+      }
+    }
+
+    await this.prisma.user.update({
+      where: { id: targetUserId },
+      data:  { isSalesLead: enabled },
+    });
+
+    await this.audit.log({
+      tenantId,
+      action:      'SETTING_CHANGED',
+      entityType:  'User',
+      entityId:    targetUserId,
+      before:      { isSalesLead: target.isSalesLead },
+      after:       { isSalesLead: enabled },
+      description: enabled
+        ? `Sales Lead delegation granted to "${target.name}"`
+        : `Sales Lead delegation revoked from "${target.name}"`,
+      performedBy: actorId,
+    }).catch(() => undefined);
+
+    return { id: target.id, isSalesLead: enabled };
   }
 
   // ─── List branches for tenant ─────────────────────────────────────────────

@@ -1,10 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { X, ChevronDown, ChevronUp, Building2 } from 'lucide-react';
+import { X, ChevronDown, ChevronUp, Building2, Search } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { formatPeso } from '@/lib/utils';
-import type { PaymentMethod, InvoiceType } from '@repo/shared-types';
+import { api } from '@/lib/api';
+import { useAuthStore } from '@/store/auth';
+import type { PaymentMethod, InvoiceType, JwtPayload } from '@repo/shared-types';
 
 export interface PaymentEntry {
   method: PaymentMethod;
@@ -53,6 +55,16 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
   const [customerTin, setCustomerTin] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
 
+  // ── Sprint 25 Phase 2A — phone-number autocomplete for customer field ──
+  // Gated by PLAN_FEATURES.customerPhoneLookup. The lookup query is sent only
+  // when the user types 3+ digits and the plan flag is true.
+  const planFeatures = useAuthStore((s) => (s.user as JwtPayload | null)?.planFeatures);
+  const phoneLookupEnabled = Boolean(planFeatures?.customerPhoneLookup);
+  const [customerPhone, setCustomerPhone] = useState('');
+  type PhoneMatch = { id: string; name: string; contactPhone: string | null };
+  const [phoneMatches, setPhoneMatches] = useState<PhoneMatch[]>([]);
+  const [phoneLookupOpen, setPhoneLookupOpen] = useState(false);
+
   const tendered = payments.reduce((s, p) => s + p.amount, 0);
   const remaining = total - tendered;
   const settled = remaining <= 0;
@@ -78,8 +90,41 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
       setCustomerName('');
       setCustomerTin('');
       setCustomerAddress('');
+      setCustomerPhone('');
+      setPhoneMatches([]);
+      setPhoneLookupOpen(false);
     }
   }, [open]);
+
+  // Debounced phone autocomplete — fires when the gate is enabled, the B2B
+  // panel is open, and the user has typed at least 3 digits. Keeps the table
+  // free of high-frequency lookups while typing.
+  useEffect(() => {
+    if (!phoneLookupEnabled || !showB2b) {
+      setPhoneMatches([]);
+      return;
+    }
+    const digits = customerPhone.replace(/\D/g, '');
+    if (digits.length < 3) {
+      setPhoneMatches([]);
+      return;
+    }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      api
+        .get('/customers/lookup', { params: { phone: digits } })
+        .then((r) => {
+          if (!cancelled) {
+            setPhoneMatches((r.data ?? []) as PhoneMatch[]);
+            setPhoneLookupOpen(true);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setPhoneMatches([]);
+        });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [customerPhone, phoneLookupEnabled, showB2b]);
 
   // If offline is forced, lock to CASH
   useEffect(() => {
@@ -301,6 +346,51 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
                   ))}
                 </div>
 
+                {/* Sprint 25 Phase 2A — phone lookup (plan-gated). When the
+                    plan enables customerPhoneLookup, render an autocomplete
+                    phone field above the name; otherwise the legacy name-only
+                    flow stays as-is. */}
+                {phoneLookupEnabled && (
+                  <div className="relative">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                      <input
+                        type="tel"
+                        inputMode="tel"
+                        value={customerPhone}
+                        onChange={(e) => {
+                          setCustomerPhone(e.target.value);
+                          setPhoneLookupOpen(true);
+                        }}
+                        onFocus={() => phoneMatches.length > 0 && setPhoneLookupOpen(true)}
+                        onBlur={() => setTimeout(() => setPhoneLookupOpen(false), 150)}
+                        placeholder="Phone number (autocomplete)"
+                        className="w-full h-9 rounded-lg border border-border bg-input text-foreground placeholder:text-muted-foreground pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                      />
+                    </div>
+                    {phoneLookupOpen && phoneMatches.length > 0 && (
+                      <ul className="absolute z-10 mt-1 w-full max-h-48 overflow-auto rounded-lg border border-border bg-background shadow-lg text-sm">
+                        {phoneMatches.map((m) => (
+                          <li key={m.id}>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                setCustomerName(m.name);
+                                if (m.contactPhone) setCustomerPhone(m.contactPhone);
+                                setPhoneLookupOpen(false);
+                              }}
+                              className="w-full text-left px-3 py-2 hover:bg-muted transition-colors"
+                            >
+                              <div className="font-medium text-foreground">{m.name}</div>
+                              <div className="text-xs text-muted-foreground">{m.contactPhone ?? '—'}</div>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
                 <input
                   type="text"
                   value={customerName}

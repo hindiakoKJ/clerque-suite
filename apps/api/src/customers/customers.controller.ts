@@ -65,6 +65,18 @@ export class CustomersController {
     return this.svc.list(user.tenantId!, { search });
   }
 
+  /**
+   * Sprint 25 Phase 2A — phone-number autocomplete for the till. The
+   * frontend gates the UI behind `planFeatures.customerPhoneLookup`; this
+   * endpoint stays open to all READ_ROLES so degraded plans don't 403 if a
+   * stale client calls in.
+   */
+  @Roles(...READ_ROLES)
+  @Get('lookup')
+  lookup(@CurrentUser() user: JwtPayload, @Query('phone') phone?: string) {
+    return this.svc.lookupByPhone(user.tenantId!, phone ?? '');
+  }
+
   @Roles(...READ_ROLES)
   @Get(':id')
   getOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

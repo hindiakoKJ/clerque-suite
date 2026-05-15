@@ -68,6 +68,27 @@ export class CustomersService {
     });
   }
 
+  /**
+   * Sprint 25 Phase 2A — Phone-prefix lookup for the till's Customer
+   * autocomplete. Strips non-digits from the query and matches against the
+   * stored `contactPhone`. Capped at 8 rows. Returns the minimum projection
+   * needed to render a dropdown.
+   */
+  async lookupByPhone(tenantId: string, phone: string) {
+    const digits = (phone ?? '').replace(/\D/g, '');
+    if (digits.length < 3) return [];
+    return this.prisma.customer.findMany({
+      where: {
+        tenantId,
+        isActive: true,
+        contactPhone: { contains: digits, mode: 'insensitive' },
+      },
+      select: { id: true, name: true, contactPhone: true },
+      orderBy: { name: 'asc' },
+      take: 8,
+    });
+  }
+
   async getOne(tenantId: string, id: string) {
     const c = await this.prisma.customer.findFirst({
       where:  { id, tenantId },

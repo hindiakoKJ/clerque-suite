@@ -112,6 +112,31 @@ export class UsersController {
    * to GENERAL_EMPLOYEE. Sessions are invalidated immediately on change.
    * All actions are recorded in the immutable AuditLog.
    */
+  /**
+   * Sprint 25 Phase 2A — Sales Lead delegation toggle.
+   *
+   * Promotes / demotes a user as a supervisor PIN holder for till discount +
+   * void approvals WITHOUT changing their role. Plan-gated:
+   * PLAN_FEATURES.salesLeadDelegation enforces the per-tenant cap.
+   * BUSINESS_OWNER only — delegating supervisor authority is an owner-level
+   * decision.
+   */
+  @Roles('BUSINESS_OWNER')
+  @Patch(':id/sales-lead')
+  @HttpCode(HttpStatus.OK)
+  setSalesLead(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { enabled: boolean },
+  ) {
+    return this.usersService.setSalesLeadDelegation(
+      user.tenantId!,
+      id,
+      Boolean(body?.enabled),
+      user.sub,
+    );
+  }
+
   @Roles('BUSINESS_OWNER')
   @Patch(':id/toggle-mdm')
   @HttpCode(HttpStatus.OK)

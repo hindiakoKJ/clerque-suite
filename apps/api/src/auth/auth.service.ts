@@ -223,6 +223,16 @@ export class AuthService {
       throw new BadRequestException('Plan must be SOLO_LITE, SOLO_STANDARD, or SOLO_PRO.');
     }
 
+    // Specialized verticals + service/manufacturing require Solo Standard or higher
+    // (per excludedPlans in verticals.ts — Solo Lite's single-cashier cap is unrealistic
+    // for these business types).
+    const SOLO_LITE_EXCLUDED_BUSINESS_TYPES = ['PHARMACY', 'TRUCKING', 'CONSTRUCTION', 'MANUFACTURING'];
+    if (dto.planCode === 'SOLO_LITE' && SOLO_LITE_EXCLUDED_BUSINESS_TYPES.includes(dto.businessType ?? '')) {
+      throw new BadRequestException(
+        `${dto.businessType?.toLowerCase().replace(/_/g, ' ')} businesses need at least Solo Standard. Please pick a higher tier or choose a different business type.`,
+      );
+    }
+
     // Enforce password policy (same as everywhere else)
     assertPasswordPolicy(dto.ownerPassword, { email: ownerEmail, name: ownerName });
 
@@ -252,7 +262,8 @@ export class AuthService {
         data: {
           name:         businessName,
           slug,
-          businessType: (dto.businessType as 'RETAIL') ?? 'RETAIL',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          businessType: (dto.businessType ?? 'RETAIL') as any,
           tier:         'TIER_2',
           taxStatus:    (dto.taxStatus ?? 'NON_VAT'),
           contactEmail: ownerEmail,

@@ -85,7 +85,10 @@ export default function PosSignupPage() {
   const [form, setForm] = useState({
     planCode:      'SOLO_STANDARD' as 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO',
     businessName:  '',
-    businessType:  'RETAIL' as 'RETAIL' | 'RESTAURANT' | 'SERVICE' | 'MANUFACTURING',
+    businessType:  'COFFEE_SHOP' as
+      | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
+      | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING'
+      | 'PHARMACY' | 'TRUCKING' | 'CONSTRUCTION',
     ownerName:     '',
     ownerEmail:    '',
     ownerPassword: '',
@@ -235,10 +238,25 @@ export default function PosSignupPage() {
                   onChange={(e) => set('businessType', e.target.value as typeof form.businessType)}
                   className="w-full h-10 px-3 rounded-lg border border-zinc-300 bg-white text-sm"
                 >
-                  <option value="RETAIL">Retail</option>
-                  <option value="RESTAURANT">F&amp;B / Restaurant</option>
-                  <option value="SERVICE">Service business</option>
-                  <option value="MANUFACTURING">Manufacturing</option>
+                  <optgroup label="Food &amp; Beverage">
+                    <option value="COFFEE_SHOP">Coffee shop / Milk tea</option>
+                    <option value="RESTAURANT">Restaurant (dine-in / takeout)</option>
+                    <option value="BAKERY">Bakery / Pastry shop</option>
+                    <option value="FOOD_STALL">Food stall / Carinderia / Turo-turo</option>
+                    <option value="BAR_LOUNGE">Bar / Lounge</option>
+                    <option value="CATERING">Catering / Events</option>
+                  </optgroup>
+                  <optgroup label="Retail &amp; Services">
+                    <option value="RETAIL">Retail / Convenience / Boutique</option>
+                    <option value="SERVICE">Service business (salon, clinic, repair)</option>
+                    <option value="LAUNDRY">Laundromat / Dry-cleaning</option>
+                    <option value="MANUFACTURING">Manufacturing / Fabrication</option>
+                  </optgroup>
+                  <optgroup label="Specialized verticals (Solo Standard or Pro)">
+                    <option value="PHARMACY">Pharmacy / Drugstore</option>
+                    <option value="TRUCKING">Trucking / Hauling / Courier</option>
+                    <option value="CONSTRUCTION">Construction / Civil works</option>
+                  </optgroup>
                 </select>
               </div>
 

@@ -599,6 +599,9 @@ model Tenant {
   vendorAdvances            VendorAdvance[]
   recurringInvoiceTemplates RecurringInvoiceTemplate[]
   recurringBillTemplates    RecurringBillTemplate[]
+  // Sprint 24 — subscription payment collection
+  pendingPayments           PendingPayment[]
+  officialReceipts          OfficialReceipt[]
   documentSequences    DocumentNumberSequence[]
   notifications        Notification[]
   bankReconciliations  BankReconciliation[]
@@ -5137,8 +5140,139 @@ model PlatformConfig {
   /// HNS tenant link — null until bootstrap-hns-corp runs the first time.
   /// Subscription billing creates Orders inside this tenant.
   hnsTenantId              String?
+  /// Sprint 24 — Payment methods JSON. Array of method objects shown to
+  /// customers on the payment-instructions page during signup + monthly
+  /// renewal. Shape:
+  /// [{ type: 'MAYA' | 'BDO' | 'MARIBANK' | 'GCASH', label: string,
+  ///    accountDisplay: string, instructions: string (markdown) }]
+  /// Owner edits this via /admin/payment-methods.
+  paymentMethodsJson       Json     @default("[]")
+  /// Sprint 24 — Sequential BIR Official Receipt number tracking. Holds the
+  /// LAST issued OR number from the owner's paper BIR-accredited booklet.
+  /// Used by /admin/payments-pending to auto-suggest the next OR number
+  /// when the owner confirms a payment. Format: numeric string e.g. "000123".
+  /// BIR requires gap-free sequencing — the UI enforces this at OR-entry time.
+  lastOrNumber             String?
+  /// Sprint 24 — OR numbering padding width (e.g., 6 means "000123"). From
+  /// the booklet's printed format. Defaults to 6 — typical BIR booklet.
+  orNumberPadding          Int      @default(6)
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
   @@map("platform_config")
+}
+
+// ─── Sprint 24 — Subscription payment collection ─────────────────────────────
+//
+// Pre-PayMongo flow: customers pay manually via owner's personal Maya /
+// BDO / Maribank account (or GCash when added). Owner verifies the deposit
+// in their banking app, then issues a paper BIR Official Receipt from the
+// accredited booklet and records the OR# here.
+//
+// Used by:
+// - /signup wizard: creates a PendingPayment row at tenant-create time,
+//   redirects customer to /pay/<referenceCode> instructions page
+// - /pay/<referenceCode>: customer submits proof (transaction ID + screenshot)
+// - /admin/payments-pending: owner verifies + issues OR
+// - Daily cron: creates renewal PendingPayment rows 5 days before due
+// - Daily cron: expires AWAITING_PROOF rows after 30 days
+
+enum PendingPaymentStatus {
+  AWAITING_PROOF      // Customer hasn't submitted proof yet
+  PROOF_SUBMITTED     // Customer uploaded receipt; owner needs to verify
+  CONFIRMED           // Owner confirmed payment; OR issued; tenant active
+  REJECTED            // Owner rejected (wrong amount, no matching deposit, etc.)
+  EXPIRED             // Customer never paid; auto-expired after 30 days
+}
+
+enum PendingPaymentReason {
+  NEW_SIGNUP          // First-month subscription, tenant in GRACE until confirmed
+  MONTHLY_RENEWAL     // Recurring renewal — tenant ACTIVE; goes GRACE if not paid by due date
+  PLAN_UPGRADE        // Customer upgraded mid-cycle (prorated charge)
+}
+
+model PendingPayment {
+  id                String   @id @default(cuid())
+  tenantId          String
+
+  // Plan + billing details
+  planCode          String   // SOLO_LITE / SOLO_STANDARD / SOLO_PRO
+  amountPhpCents    Int      // ₱199.00 = 19900
+  periodStart       DateTime
+  periodEnd         DateTime
+  reason            PendingPaymentReason
+
+  // Reference code shown to customer — owner uses this to match the deposit
+  // in their banking app. Format: SIGNUP-XXXXX or RENEW-XXXXX (6 chars).
+  referenceCode     String   @unique
+
+  // Customer-side: proof submission
+  status            PendingPaymentStatus @default(AWAITING_PROOF)
+  submittedAt       DateTime?
+  submittedProofUrl String?   // R2 URL of receipt screenshot
+  submittedRefId    String?   // Transaction ID / Maya ref / bank InstaPay ref
+  submittedNotes    String?   // Free-form notes from customer
+  submittedMethod   String?   // 'MAYA' | 'BDO' | 'MARIBANK' | 'GCASH'
+
+  // Owner-side: verification
+  confirmedAt       DateTime?
+  confirmedById     String?
+  rejectedAt        DateTime?
+  rejectedById      String?
+  rejectionReason   String?
+
+  // BIR OR — linked on confirmation
+  officialReceiptId String?  @unique
+
+  // Lifecycle
+  expiresAt         DateTime
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  officialReceipt   OfficialReceipt? @relation(fields: [officialReceiptId], references: [id])
+
+  @@index([status, expiresAt])
+  @@index([tenantId, status])
+  @@map("pending_payments")
+}
+
+// BIR Official Receipt — manual issuance from owner's paper booklet.
+// Owner enters OR number when confirming a PendingPayment; system stores
+// it for audit + customer download. Optional scanned-copy upload preserves
+// the legal proof.
+model OfficialReceipt {
+  id                String   @id @default(cuid())
+
+  // BIR-required fields
+  orNumber          String   @unique  // Gap-free per BIR rule. From owner's paper booklet.
+  issuedAt          DateTime
+  issuedById        String   // User who recorded the issuance
+
+  // Payer (customer) details
+  payerTenantId     String?
+  payerName         String   // Business legal name on the receipt
+  payerTin          String?  // Customer's BIR TIN if they have one
+  payerAddress      String?
+
+  // Amounts
+  amountPhpCents    Int      // Gross amount received
+  taxStatus         String   // 'NON_VAT' or 'VAT_12' — copied from PlatformConfig at issuance time
+  vatAmountPhpCents Int      @default(0)  // 0 if Non-VAT; computed if VAT-registered
+
+  // Description on the OR
+  description       String   // e.g., "Clerque Solo Standard subscription, Aug 2026"
+
+  // Optional scan
+  scannedCopyUrl    String?   // R2 URL of photo/scan of the paper OR
+
+  createdAt         DateTime  @default(now())
+
+  payerTenant       Tenant?   @relation(fields: [payerTenantId], references: [id])
+  pendingPayment    PendingPayment?
+
+  @@index([orNumber])
+  @@index([issuedAt])
+  @@index([payerTenantId])
+  @@map("official_receipts")
 }

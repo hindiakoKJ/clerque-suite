@@ -55,6 +55,7 @@ import { BackupModule } from './backup/backup.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { KioskModule } from './payroll/kiosk/kiosk.module';
 import { StorageModule } from './storage/storage.module';
+import { SubscriptionPaymentsModule } from './subscription-payments/subscription-payments.module';
 import { HealthController } from './health/health.controller';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { CleanupScheduler } from './common/cleanup.scheduler';
@@ -128,6 +129,7 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     LoyaltyModule,
     KioskModule,
     StorageModule,
+    SubscriptionPaymentsModule,
   ],
   providers: [
     // SECURITY D5-03 — apply ThrottlerGuard globally. Controllers can opt out

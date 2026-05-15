@@ -299,6 +299,240 @@ export class MailService {
     });
   }
 
+  // ── Sprint 24 — Subscription payment lifecycle emails ──────────────────────
+
+  /** Sent when a new signup or renewal payment is awaiting customer proof. */
+  async sendSubscriptionPaymentInstructions(opts: {
+    to:             string;
+    tenantName:     string;
+    planLabel:      string;
+    amountPhp:      string;       // pre-formatted "₱ 199.00"
+    referenceCode:  string;
+    paymentMethods: Array<{ label: string; accountDisplay: string; instructions?: string }>;
+    payUrl:         string;       // https://clerque.com/pay/<ref>
+    expiresAt:      string;       // formatted human date
+    reason:         'NEW_SIGNUP' | 'MONTHLY_RENEWAL' | 'PLAN_UPGRADE';
+  }): Promise<void> {
+    const reasonLabel = {
+      NEW_SIGNUP:      'subscription activation',
+      MONTHLY_RENEWAL: 'subscription renewal',
+      PLAN_UPGRADE:    'plan upgrade',
+    }[opts.reason];
+
+    const methodsList = opts.paymentMethods.map((m) => `
+      <div style="padding:14px 16px;background:#fafafa;border:1px solid #eee;border-radius:8px;margin-bottom:10px;">
+        <div style="font-weight:600;font-size:14px;color:#1a1a1a;margin-bottom:4px;">${this.escape(m.label)}</div>
+        <div style="font-family:monospace;font-size:15px;color:#2AA198;margin-bottom:6px;">${this.escape(m.accountDisplay)}</div>
+        ${m.instructions ? `<div style="font-size:12px;color:#888;line-height:1.5;">${this.escape(m.instructions)}</div>` : ''}
+      </div>
+    `).join('');
+
+    await this.send({
+      to:      opts.to,
+      subject: `Payment instructions — ${opts.planLabel} (${opts.amountPhp})`,
+      html:    this.layout(`
+        <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
+          Almost there, <strong>${this.escape(opts.tenantName)}</strong>
+        </h2>
+        <p style="margin:0 0 20px;color:#555;line-height:1.6;">
+          Send <strong>${this.escape(opts.amountPhp)}</strong> for your ${reasonLabel}
+          (${this.escape(opts.planLabel)}) using any of the methods below.
+        </p>
+
+        <table style="border-collapse:collapse;width:100%;margin-bottom:20px;">
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;width:140px;border-radius:4px 0 0 4px;">Amount</td>
+            <td style="padding:10px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#1a1a1a;">${this.escape(opts.amountPhp)}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;">Reference</td>
+            <td style="padding:10px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#2AA198;font-weight:700;">${this.escape(opts.referenceCode)}</td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 12px;font-weight:600;font-size:14px;color:#1a1a1a;">Pay via:</p>
+        ${methodsList}
+
+        <p style="margin:20px 0 16px;color:#555;line-height:1.6;">
+          <strong>Important:</strong> Include the reference code
+          <code style="background:#fff8dc;padding:2px 6px;border-radius:3px;font-family:monospace;">${this.escape(opts.referenceCode)}</code>
+          in your transfer remarks/notes so we can match your payment.
+        </p>
+
+        <a href="${opts.payUrl}"
+           style="display:inline-block;background:#2AA198;color:#fff;text-decoration:none;
+                  padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">
+          Submit Proof of Payment →
+        </a>
+
+        <p style="margin:20px 0 0;color:#888;font-size:13px;line-height:1.6;">
+          After paying, upload a screenshot of your transaction. We'll verify
+          within 4 business hours and issue your BIR Official Receipt.<br>
+          This payment link expires on <strong>${this.escape(opts.expiresAt)}</strong>.
+        </p>
+      `),
+    });
+  }
+
+  /** Sent when owner confirms the payment + issues an OR. */
+  async sendSubscriptionPaymentConfirmed(opts: {
+    to:           string;
+    tenantName:   string;
+    planLabel:    string;
+    amountPhp:    string;
+    orNumber:     string;
+    periodLabel:  string;        // "August 2026" or "Aug 12 – Sep 12, 2026"
+    receiptUrl?:  string;        // Optional — link to download the scanned OR PDF
+  }): Promise<void> {
+    await this.send({
+      to:      opts.to,
+      subject: `Payment confirmed — Clerque ${opts.planLabel}`,
+      html:    this.layout(`
+        <div style="background:#10b981;color:#fff;padding:18px 20px;border-radius:8px;margin-bottom:24px;">
+          <div style="font-size:24px;font-weight:700;margin-bottom:2px;">✓ Payment Confirmed</div>
+          <div style="font-size:14px;opacity:0.92;">Your subscription is now active.</div>
+        </div>
+
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Hi <strong>${this.escape(opts.tenantName)}</strong>, we've received your payment of
+          <strong>${this.escape(opts.amountPhp)}</strong> for your
+          <strong>${this.escape(opts.planLabel)}</strong> subscription.
+        </p>
+
+        <table style="border-collapse:collapse;width:100%;margin-bottom:20px;">
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;width:140px;border-radius:4px 0 0 4px;">Period</td>
+            <td style="padding:10px 12px;background:#fafafa;font-size:14px;color:#1a1a1a;">${this.escape(opts.periodLabel)}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;">Amount</td>
+            <td style="padding:10px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#1a1a1a;">${this.escape(opts.amountPhp)}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;">BIR OR Number</td>
+            <td style="padding:10px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#2AA198;font-weight:700;">${this.escape(opts.orNumber)}</td>
+          </tr>
+        </table>
+
+        ${opts.receiptUrl ? `
+          <a href="${opts.receiptUrl}"
+             style="display:inline-block;background:#2AA198;color:#fff;text-decoration:none;
+                    padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;margin-bottom:20px;">
+            Download Official Receipt
+          </a>
+        ` : ''}
+
+        <p style="margin:0 0 0;color:#888;font-size:13px;line-height:1.6;">
+          Keep this email and your BIR OR for your records. Questions? Reply to this email.
+        </p>
+      `),
+    });
+  }
+
+  /** Sent when owner rejects a payment with a reason. */
+  async sendSubscriptionPaymentRejected(opts: {
+    to:             string;
+    tenantName:     string;
+    planLabel:      string;
+    amountPhp:      string;
+    referenceCode:  string;
+    rejectionReason: string;
+    payUrl:         string;
+  }): Promise<void> {
+    await this.send({
+      to:      opts.to,
+      subject: `Payment verification issue — ${opts.planLabel}`,
+      html:    this.layout(`
+        <div style="background:#f59e0b;color:#fff;padding:18px 20px;border-radius:8px;margin-bottom:24px;">
+          <div style="font-size:20px;font-weight:700;margin-bottom:2px;">Payment couldn't be verified</div>
+          <div style="font-size:14px;opacity:0.92;">We need a bit more info to confirm your subscription.</div>
+        </div>
+
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Hi <strong>${this.escape(opts.tenantName)}</strong>, we couldn't match your payment for the
+          <strong>${this.escape(opts.planLabel)}</strong> subscription (${this.escape(opts.amountPhp)},
+          reference <code style="font-family:monospace;background:#fff8dc;padding:2px 4px;border-radius:3px;">${this.escape(opts.referenceCode)}</code>).
+        </p>
+
+        <table style="border-collapse:collapse;width:100%;margin-bottom:20px;">
+          <tr>
+            <td style="padding:10px 12px;background:#fff7ed;border-left:3px solid #f59e0b;font-size:14px;color:#92400e;line-height:1.5;">
+              <strong>Reason:</strong> ${this.escape(opts.rejectionReason)}
+            </td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Please review the issue, then re-submit your proof of payment with the correct details:
+        </p>
+
+        <a href="${opts.payUrl}"
+           style="display:inline-block;background:#2AA198;color:#fff;text-decoration:none;
+                  padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">
+          Re-submit Proof →
+        </a>
+
+        <p style="margin:20px 0 0;color:#888;font-size:13px;line-height:1.6;">
+          Or reply to this email if you have questions — we'll help sort it out.
+        </p>
+      `),
+    });
+  }
+
+  /** Sent 5 days before subscription renewal is due. */
+  async sendSubscriptionRenewalDue(opts: {
+    to:            string;
+    tenantName:    string;
+    planLabel:     string;
+    amountPhp:     string;
+    referenceCode: string;
+    dueDate:       string;        // formatted human date
+    payUrl:        string;
+  }): Promise<void> {
+    await this.send({
+      to:      opts.to,
+      subject: `Renewal due ${opts.dueDate} — ${opts.planLabel}`,
+      html:    this.layout(`
+        <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
+          Subscription renewal in 5 days
+        </h2>
+
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Hi <strong>${this.escape(opts.tenantName)}</strong>, your
+          <strong>${this.escape(opts.planLabel)}</strong> subscription renews on
+          <strong>${this.escape(opts.dueDate)}</strong>. Please send
+          <strong>${this.escape(opts.amountPhp)}</strong> using one of your usual payment methods
+          and submit proof so your service continues uninterrupted.
+        </p>
+
+        <table style="border-collapse:collapse;width:100%;margin-bottom:20px;">
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;width:140px;border-radius:4px 0 0 4px;">Amount</td>
+            <td style="padding:10px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#1a1a1a;">${this.escape(opts.amountPhp)}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;">Reference</td>
+            <td style="padding:10px 12px;background:#fafafa;font-family:monospace;font-size:14px;color:#2AA198;font-weight:700;">${this.escape(opts.referenceCode)}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 12px;background:#f5f5f5;font-weight:600;font-size:13px;color:#555;">Due</td>
+            <td style="padding:10px 12px;background:#fafafa;font-size:14px;color:#1a1a1a;">${this.escape(opts.dueDate)}</td>
+          </tr>
+        </table>
+
+        <a href="${opts.payUrl}"
+           style="display:inline-block;background:#2AA198;color:#fff;text-decoration:none;
+                  padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">
+          View Payment Instructions →
+        </a>
+
+        <p style="margin:20px 0 0;color:#888;font-size:13px;line-height:1.6;">
+          Don't include the reference code in your remarks and we may not be able to match your payment.
+        </p>
+      `),
+    });
+  }
+
   // ── Internal helpers ───────────────────────────────────────────────────────
 
   private async send(opts: {

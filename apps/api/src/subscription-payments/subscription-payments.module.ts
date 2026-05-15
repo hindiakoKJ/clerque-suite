@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { MailModule } from '../mail/mail.module';
 import { SubscriptionPaymentsService } from './subscription-payments.service';
 import { SubscriptionPaymentsController } from './subscription-payments.controller';
 
@@ -10,7 +11,7 @@ import { SubscriptionPaymentsController } from './subscription-payments.controll
  * verification endpoints, and a daily @Cron to expire stale pending payments.
  */
 @Module({
-  imports:     [PrismaModule],
+  imports:     [PrismaModule, MailModule],
   providers:   [SubscriptionPaymentsService],
   controllers: [SubscriptionPaymentsController],
   exports:     [SubscriptionPaymentsService],

@@ -9,6 +9,7 @@ import { LocalStrategy } from './strategies/local.strategy';
 import { TierQuotaGuard } from './guards/tier-quota.guard';
 import { TwoFactorService } from './two-factor.service';
 import { AccountingModule } from '../accounting/accounting.module';
+import { SubscriptionPaymentsModule } from '../subscription-payments/subscription-payments.module';
 
 @Module({
   imports: [
@@ -24,6 +25,9 @@ import { AccountingModule } from '../accounting/accounting.module';
     // Sprint 21 — public Ledger self-signup endpoint needs to seed CoA on
     // tenant create. AccountingModule exports AccountsService.
     AccountingModule,
+    // Sprint 24 — POS self-signup creates a PendingPayment for first-month
+    // billing. SubscriptionPaymentsModule exports SubscriptionPaymentsService.
+    SubscriptionPaymentsModule,
   ],
   providers: [AuthService, JwtStrategy, LocalStrategy, TierQuotaGuard, TwoFactorService],
   controllers: [AuthController],

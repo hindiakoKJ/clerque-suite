@@ -234,6 +234,26 @@ export class AuthController {
   }
 
   /**
+   * Sprint 24 — POS self-signup with plan picker.
+   * Creates tenant in GRACE status + PendingPayment for the chosen plan.
+   * Returns { tenantSlug, referenceCode } so the frontend can redirect to
+   * /pay/<referenceCode> for payment instructions.
+   */
+  @Post('signup-pos')
+  @HttpCode(HttpStatus.CREATED)
+  async signupPos(@Body() body: {
+    businessName:  string;
+    ownerName:     string;
+    ownerEmail:    string;
+    ownerPassword: string;
+    planCode:      'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO';
+    taxStatus?:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
+    businessType?: string;
+  }) {
+    return this.authService.signupPosTenant(body);
+  }
+
+  /**
    * POST /auth/pin-login
    * Cashier fast-login. tenantSlug + email + 4-8 digit PIN.
    * Returns the same JWT shape as /auth/login.

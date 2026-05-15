@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Optional,
   UnauthorizedException,
   ForbiddenException,
   BadRequestException,
@@ -11,6 +12,7 @@ import { randomBytes, createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { AccountsService } from '../accounting/accounts.service';
+import { SubscriptionPaymentsService } from '../subscription-payments/subscription-payments.service';
 import { assertPasswordPolicy } from './password-policy';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant, PLAN_FEATURES, PLAN_LIMITS } from '@repo/shared-types';
 import type { TaxStatus, TierId, AiAddonType, PlanCode } from '@repo/shared-types';
@@ -30,6 +32,11 @@ export class AuthService {
     private jwt:    JwtService,
     private mail:   MailService,
     private accounts: AccountsService,
+    // Sprint 24 — Optional so legacy bootstraps and tests don't have to wire
+    // SubscriptionPaymentsModule. When absent, signupPosTenant returns
+    // referenceCode=null and the frontend renders a "contact support" fallback.
+    @Optional()
+    private subscriptionPayments?: SubscriptionPaymentsService,
   ) {}
 
   /**
@@ -181,6 +188,136 @@ export class AuthService {
       tenantId:    result.tenant.id,
       tenantSlug:  result.tenant.slug,
       ownerUserId: result.user.id,
+    };
+  }
+
+  /**
+   * Sprint 24 — POS self-signup with plan picker + manual payment collection.
+   *
+   * Mirrors signupLedgerTenant but:
+   *   - Customer picks SOLO_LITE / SOLO_STANDARD / SOLO_PRO (not defaulted)
+   *   - Tenant created in GRACE status (limited access until payment confirmed)
+   *   - Creates a PendingPayment for first month (NEW_SIGNUP reason)
+   *   - Returns the reference code so the frontend can redirect to /pay/<ref>
+   *
+   * Owner verifies the deposit + issues OR via /admin/payments-pending,
+   * at which point the tenant flips to ACTIVE.
+   */
+  async signupPosTenant(dto: {
+    businessName:  string;
+    ownerName:     string;
+    ownerEmail:    string;
+    ownerPassword: string;
+    planCode:      'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO';
+    taxStatus?:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
+    businessType?: string;
+  }) {
+    const businessName = dto.businessName?.trim() ?? '';
+    const ownerName    = dto.ownerName?.trim() ?? '';
+    const ownerEmail   = dto.ownerEmail?.trim().toLowerCase() ?? '';
+    if (!businessName) throw new BadRequestException('Business name is required.');
+    if (!ownerName)    throw new BadRequestException('Owner name is required.');
+    if (!ownerEmail)   throw new BadRequestException('Owner email is required.');
+    if (!dto.planCode) throw new BadRequestException('Plan is required.');
+    if (!['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO'].includes(dto.planCode)) {
+      throw new BadRequestException('Plan must be SOLO_LITE, SOLO_STANDARD, or SOLO_PRO.');
+    }
+
+    // Enforce password policy (same as everywhere else)
+    assertPasswordPolicy(dto.ownerPassword, { email: ownerEmail, name: ownerName });
+
+    // Unique slug
+    const baseSlug = businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 40) || 'tenant';
+    let slug = baseSlug;
+    for (let i = 1; i < 50; i++) {
+      const exists = await this.prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+      if (!exists) break;
+      slug = `${baseSlug}-${i}`;
+    }
+    const emailTaken = await this.prisma.user.findFirst({ where: { email: ownerEmail }, select: { id: true } });
+    if (emailTaken) {
+      throw new BadRequestException(
+        'An account with this email already exists. Sign in instead, or use a different email.',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
+
+    const { PLAN_CAPS, DEFAULT_APP_ACCESS } = await import('@repo/shared-types');
+    const cap = PLAN_CAPS[dto.planCode];
+    const appAccess = DEFAULT_APP_ACCESS['BUSINESS_OWNER'] ?? [];
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.create({
+        data: {
+          name:         businessName,
+          slug,
+          businessType: (dto.businessType as 'RETAIL') ?? 'RETAIL',
+          tier:         'TIER_2',
+          taxStatus:    (dto.taxStatus ?? 'NON_VAT'),
+          contactEmail: ownerEmail,
+          // GRACE = limited access until payment confirmed.
+          status:       'GRACE',
+          planCode:     dto.planCode,
+          modulePos:        true,   // Solo plans are POS-only
+          moduleLedger:     false,
+          modulePayroll:    false,
+          staffSeatQuota:   cap.baseSeats,
+          staffSeatAddons:  0,
+        },
+      });
+
+      const branch = await tx.branch.create({
+        data: { tenantId: tenant.id, name: 'Main', isActive: true },
+      });
+
+      const user = await tx.user.create({
+        data: {
+          tenantId:     tenant.id,
+          branchId:     branch.id,
+          name:         ownerName,
+          email:        ownerEmail,
+          passwordHash,
+          role:         'BUSINESS_OWNER',
+          isActive:     true,
+          appAccess: {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            create: appAccess.map((a: { app: string; level: string }) => ({
+              appCode: a.app as 'POS' | 'LEDGER' | 'PAYROLL',
+              level:   a.level as any,
+            })),
+          },
+        },
+      });
+
+      return { tenant, branch, user };
+    });
+
+    // Eager-seed POS Chart of Accounts so the cashier UI works post-payment.
+    await this.accounts.seedDefaultAccounts(result.tenant.id);
+
+    // Create the PendingPayment so the customer has a reference code +
+    // gets the payment-instructions email immediately.
+    let referenceCode: string | null = null;
+    if (this.subscriptionPayments) {
+      const now = new Date();
+      const periodEnd = new Date(now);
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+      const pending = await this.subscriptionPayments.createPendingPayment({
+        tenantId:    result.tenant.id,
+        planCode:    dto.planCode,
+        reason:      'NEW_SIGNUP',
+        periodStart: now,
+        periodEnd,
+      });
+      referenceCode = pending.referenceCode;
+    }
+
+    return {
+      tenantId:      result.tenant.id,
+      tenantSlug:    result.tenant.slug,
+      ownerUserId:   result.user.id,
+      referenceCode,
     };
   }
 

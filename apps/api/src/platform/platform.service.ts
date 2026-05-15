@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { PlatformConfig, TaxStatus } from '@prisma/client';
 
@@ -49,6 +50,9 @@ export class PlatformService {
         subscriptionAutoPost:  dto.subscriptionAutoPost,
         subscriptionDueDays:   dto.subscriptionDueDays,
         hnsTenantId:           dto.hnsTenantId,
+        paymentMethodsJson:    dto.paymentMethodsJson as Prisma.InputJsonValue | undefined,
+        lastOrNumber:          dto.lastOrNumber,
+        orNumberPadding:       dto.orNumberPadding,
       }),
     });
   }
@@ -83,4 +87,28 @@ export interface UpdatePlatformConfigDto {
   subscriptionAutoPost?:  boolean;
   subscriptionDueDays?:   number;
   hnsTenantId?:           string | null;
+  // Sprint 24 — payment-collection config
+  paymentMethodsJson?:    PaymentMethodConfig[];
+  lastOrNumber?:          string | null;
+  orNumberPadding?:       number;
+}
+
+/**
+ * Sprint 24 — A configured payment-collection method.
+ *
+ * Owner edits these via /admin/platform/payment-methods. Each method is
+ * shown on the customer's payment-instructions page during signup +
+ * renewal. The customer picks one, transfers manually, and sends proof.
+ */
+export interface PaymentMethodConfig {
+  /** Stable identifier ('MAYA' | 'BDO' | 'MARIBANK' | 'GCASH' | other). */
+  type:           string;
+  /** User-visible label, e.g. "Maya — Personal". */
+  label:          string;
+  /** What to display: account number, mobile number, or "scan QR below". */
+  accountDisplay: string;
+  /** Optional notes for the customer (markdown OK). */
+  instructions?: string;
+  /** Optional QR code URL (R2). Shown alongside accountDisplay. */
+  qrImageUrl?:   string;
 }

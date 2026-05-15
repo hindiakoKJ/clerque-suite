@@ -24,7 +24,8 @@ import {
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
-import { PLAN_CAPS, type PlanCode } from '@repo/shared-types';
+import { MailService } from '../mail/mail.service';
+import { PLAN_CAPS, planLabel, type PlanCode } from '@repo/shared-types';
 
 const REFERENCE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No 0/O/1/I to avoid confusion
 const REFERENCE_CODE_LENGTH = 5;
@@ -65,7 +66,44 @@ export type ConfirmPaymentInput = {
 export class SubscriptionPaymentsService {
   private readonly logger = new Logger(SubscriptionPaymentsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mail:   MailService,
+  ) {}
+
+  private fmtPhp(cents: number): string {
+    const peso = cents / 100;
+    return `₱${peso.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  private fmtDate(d: Date): string {
+    return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+
+  private fmtMonthYear(d: Date): string {
+    return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'long' });
+  }
+
+  private buildPayUrl(referenceCode: string): string {
+    const base = process.env.WEB_PUBLIC_URL || 'https://clerque.hnscorpph.com';
+    return `${base}/pay/${referenceCode}`;
+  }
+
+  /** Public-facing version returning the payment methods (called by the controller). */
+  async getPublicPaymentMethods(): Promise<Array<{ label: string; accountDisplay: string; instructions?: string; qrImageUrl?: string }>> {
+    return this.getPaymentMethods();
+  }
+
+  /** Read the configured payment methods JSON from PlatformConfig. */
+  private async getPaymentMethods(): Promise<Array<{ label: string; accountDisplay: string; instructions?: string; qrImageUrl?: string }>> {
+    const platform = await this.prisma.platformConfig.findUnique({
+      where:  { id: 'platform' },
+      select: { paymentMethodsJson: true },
+    });
+    const raw = platform?.paymentMethodsJson;
+    if (!Array.isArray(raw)) return [];
+    return raw as Array<{ label: string; accountDisplay: string; instructions?: string }>;
+  }
 
   // ─── Customer-facing ────────────────────────────────────────────────────
 
@@ -101,7 +139,7 @@ export class SubscriptionPaymentsService {
     const referenceCode = await this.generateUniqueReferenceCode(input.reason);
     const expiresAt = new Date(Date.now() + PROOF_TTL_DAYS * 24 * 60 * 60 * 1000);
 
-    return this.prisma.pendingPayment.create({
+    const created = await this.prisma.pendingPayment.create({
       data: {
         tenantId:       input.tenantId,
         planCode:       input.planCode,
@@ -113,6 +151,44 @@ export class SubscriptionPaymentsService {
         status:         'AWAITING_PROOF',
         expiresAt,
       },
+    });
+
+    // Fire-and-forget the payment-instructions email (failed sends shouldn't
+    // block tenant creation — the customer can also find the link on screen).
+    void this.sendInstructionsEmail(created.id).catch((err) =>
+      this.logger.warn(`[subscription-payments] failed to send instructions email: ${(err as Error).message}`),
+    );
+
+    return created;
+  }
+
+  /** Re-send the payment-instructions email (e.g., owner triggers from admin). */
+  async sendInstructionsEmail(pendingPaymentId: string): Promise<void> {
+    const payment = await this.prisma.pendingPayment.findUnique({
+      where:   { id: pendingPaymentId },
+      include: { tenant: { select: { name: true, contactEmail: true } } },
+    });
+    if (!payment) return;
+    if (!payment.tenant.contactEmail) {
+      this.logger.warn(`[subscription-payments] tenant ${payment.tenantId} has no contactEmail — instructions not sent`);
+      return;
+    }
+
+    const methods = await this.getPaymentMethods();
+    if (methods.length === 0) {
+      this.logger.warn('[subscription-payments] No payment methods configured — email will list zero options.');
+    }
+
+    await this.mail.sendSubscriptionPaymentInstructions({
+      to:             payment.tenant.contactEmail,
+      tenantName:     payment.tenant.name,
+      planLabel:      planLabel(payment.planCode as PlanCode),
+      amountPhp:      this.fmtPhp(payment.amountPhpCents),
+      referenceCode:  payment.referenceCode,
+      paymentMethods: methods,
+      payUrl:         this.buildPayUrl(payment.referenceCode),
+      expiresAt:      this.fmtDate(payment.expiresAt),
+      reason:         payment.reason,
     });
   }
 
@@ -267,20 +343,40 @@ export class SubscriptionPaymentsService {
       }
 
       return { pendingPayment: updated, officialReceipt: or };
+    }).then(async (result) => {
+      // Fire-and-forget confirmation email
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: payment.tenantId },
+        select: { name: true, contactEmail: true },
+      });
+      if (tenant?.contactEmail) {
+        void this.mail.sendSubscriptionPaymentConfirmed({
+          to:          tenant.contactEmail,
+          tenantName:  tenant.name,
+          planLabel:   planLabel(payment.planCode as PlanCode),
+          amountPhp:   this.fmtPhp(payment.amountPhpCents),
+          orNumber:    result.officialReceipt.orNumber,
+          periodLabel: this.fmtMonthYear(payment.periodStart),
+        }).catch((err) =>
+          this.logger.warn(`[subscription-payments] confirmation email failed: ${(err as Error).message}`),
+        );
+      }
+      return result;
     });
   }
 
   /** Owner rejects a payment (wrong amount, can't find deposit, etc.). */
   async rejectPayment(pendingPaymentId: string, rejectedById: string, reason: string) {
     const payment = await this.prisma.pendingPayment.findUnique({
-      where: { id: pendingPaymentId },
+      where:   { id: pendingPaymentId },
+      include: { tenant: { select: { name: true, contactEmail: true } } },
     });
     if (!payment) throw new NotFoundException('Pending payment not found.');
     if (payment.status === 'CONFIRMED') {
       throw new ConflictException('Cannot reject an already-confirmed payment.');
     }
 
-    return this.prisma.pendingPayment.update({
+    const updated = await this.prisma.pendingPayment.update({
       where: { id: payment.id },
       data: {
         status:           'REJECTED',
@@ -289,6 +385,132 @@ export class SubscriptionPaymentsService {
         rejectionReason:  reason,
       },
     });
+
+    // Fire-and-forget rejection email so customer can re-submit
+    if (payment.tenant.contactEmail) {
+      void this.mail.sendSubscriptionPaymentRejected({
+        to:              payment.tenant.contactEmail,
+        tenantName:      payment.tenant.name,
+        planLabel:       planLabel(payment.planCode as PlanCode),
+        amountPhp:       this.fmtPhp(payment.amountPhpCents),
+        referenceCode:   payment.referenceCode,
+        rejectionReason: reason,
+        payUrl:          this.buildPayUrl(payment.referenceCode),
+      }).catch((err) =>
+        this.logger.warn(`[subscription-payments] rejection email failed: ${(err as Error).message}`),
+      );
+    }
+
+    return updated;
+  }
+
+  // ─── Background — renewal generation + expiration ──────────────────────
+
+  /**
+   * Daily — for every ACTIVE tenant on a Solo plan, check if a renewal
+   * PendingPayment needs to be created for the next billing cycle.
+   *
+   * Trigger window: tenant's last CONFIRMED payment's periodEnd is between
+   * NOW and NOW+5 days, AND no AWAITING/SUBMITTED renewal already exists
+   * for the upcoming period.
+   *
+   * Sends the renewal-due email when the new PendingPayment is created.
+   */
+  @Cron('0 4 * * *')
+  async generateMonthlyRenewals(): Promise<{ created: number; skipped: number }> {
+    const now = new Date();
+    const horizon = new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000);
+    let created = 0;
+    let skipped = 0;
+
+    // Find ACTIVE tenants on a Solo plan whose most-recent CONFIRMED
+    // payment's periodEnd is within 5 days. These need renewals queued.
+    const tenants = await this.prisma.tenant.findMany({
+      where: {
+        status:   'ACTIVE',
+        planCode: { startsWith: 'SOLO_' },
+      },
+      select: {
+        id: true,
+        name: true,
+        contactEmail: true,
+        planCode: true,
+        pendingPayments: {
+          where:   { status: 'CONFIRMED' },
+          orderBy: { periodEnd: 'desc' },
+          take:    1,
+          select:  { periodEnd: true, planCode: true },
+        },
+      },
+    });
+
+    for (const t of tenants) {
+      const lastConfirmed = t.pendingPayments[0];
+      if (!lastConfirmed) {
+        skipped++;
+        continue;
+      }
+      if (lastConfirmed.periodEnd > horizon) {
+        skipped++;
+        continue;
+      }
+
+      // Check there's no in-flight renewal already
+      const periodStart = lastConfirmed.periodEnd;
+      const periodEnd = new Date(periodStart);
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+
+      const existingRenewal = await this.prisma.pendingPayment.findFirst({
+        where: {
+          tenantId:    t.id,
+          periodStart,
+          reason:      'MONTHLY_RENEWAL',
+          status:      { in: ['AWAITING_PROOF', 'PROOF_SUBMITTED'] },
+        },
+      });
+      if (existingRenewal) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const newPending = await this.createPendingPayment({
+          tenantId:    t.id,
+          planCode:    t.planCode as PlanCode,
+          reason:      'MONTHLY_RENEWAL',
+          periodStart,
+          periodEnd,
+        });
+
+        // Send dedicated "renewal due in 5 days" reminder (different copy
+        // than the generic instructions email auto-sent by createPendingPayment).
+        if (t.contactEmail) {
+          void this.mail.sendSubscriptionRenewalDue({
+            to:            t.contactEmail,
+            tenantName:    t.name,
+            planLabel:     planLabel(t.planCode as PlanCode),
+            amountPhp:     this.fmtPhp(newPending.amountPhpCents),
+            referenceCode: newPending.referenceCode,
+            dueDate:       this.fmtDate(lastConfirmed.periodEnd),
+            payUrl:        this.buildPayUrl(newPending.referenceCode),
+          }).catch((err) =>
+            this.logger.warn(`[subscription-payments] renewal email failed for ${t.id}: ${(err as Error).message}`),
+          );
+        }
+
+        created++;
+      } catch (err) {
+        this.logger.warn(
+          `[subscription-payments] failed to create renewal for tenant ${t.id}: ${(err as Error).message}`,
+        );
+        skipped++;
+      }
+    }
+
+    if (created > 0) {
+      this.logger.log(`[subscription-payments] daily renewal pass: created=${created} skipped=${skipped}`);
+    }
+    return { created, skipped };
   }
 
   // ─── Background ─────────────────────────────────────────────────────────

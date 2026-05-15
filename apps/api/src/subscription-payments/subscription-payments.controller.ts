@@ -36,6 +36,17 @@ export class SubscriptionPaymentsController {
   // ─── Public (no auth) ──────────────────────────────────────────────────
 
   /**
+   * Public read of the platform's configured payment methods. Shown on the
+   * /pay/<refCode> page so the customer can see Maya/BDO/Maribank options.
+   * Returns the JSON array configured by the owner via /admin/platform/config.
+   */
+  @Get('public/payment-methods')
+  async getPublicPaymentMethods() {
+    const methods = await this.svc.getPublicPaymentMethods();
+    return { methods };
+  }
+
+  /**
    * Customer looks up their pending payment by reference code.
    * Used by the /pay/<refCode> page during signup + renewal.
    */

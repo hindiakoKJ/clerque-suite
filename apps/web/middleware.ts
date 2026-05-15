@@ -42,6 +42,11 @@ const PUBLIC_PATHS = ['/', '/login', '/select'];
 const PUBLIC_PREFIXES = [
   '/legal', '/forgot-password', '/reset-password',
   '/stub', '/stamps', '/payroll/kiosk',
+  // Sprint 24 — subscription payment instructions (customer-facing, public).
+  // Access controlled by the 5-char reference code in the URL.
+  '/pay',
+  // Sprint 24 — marketing/welcome + signup pages
+  '/welcome', '/signup',
 ];
 
 function getToken(req: NextRequest): string | null {

@@ -725,6 +725,48 @@ export class InventoryService {
     return { ...item, costPrice: item.costPrice != null ? Number(item.costPrice) : null };
   }
 
+  /**
+   * Sprint 25 — Toggle FEFO/batch tracking on a raw material. Enforces the
+   * Solo-tier `maxAdvancedInventoryItems` cap (Lite: 0, Standard: 10, Pro: -1).
+   * When enabling, counts existing tracked items to ensure cap headroom.
+   */
+  async setRawMaterialLotTracking(tenantId: string, id: string, enabled: boolean) {
+    const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
+    if (!item) throw new NotFoundException('Raw material not found');
+
+    if (enabled) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { planCode: true },
+      });
+      const { PLAN_FEATURES } = await import('@repo/shared-types');
+      const cap = (PLAN_FEATURES as any)[tenant?.planCode ?? '']?.maxAdvancedInventoryItems ?? -1;
+      if (cap === 0) {
+        throw new BadRequestException(
+          'Your plan does not include batch / expiry tracking. Upgrade to Solo Standard to enable on up to 10 items.',
+        );
+      }
+      if (cap > 0) {
+        const used = await this.prisma.rawMaterial.count({
+          where: { tenantId, lotsTracked: true, isActive: true },
+        });
+        const usedInv = await this.prisma.inventoryItem.count({
+          where: { tenantId, lotsTracked: true },
+        });
+        if (used + usedInv >= cap) {
+          throw new BadRequestException(
+            `Your plan caps batch / expiry tracking at ${cap} items. Upgrade to Solo Pro for unlimited tracking.`,
+          );
+        }
+      }
+    }
+
+    return this.prisma.rawMaterial.update({
+      where: { id },
+      data:  { lotsTracked: enabled },
+    });
+  }
+
   async updateRawMaterial(tenantId: string, id: string, dto: Partial<CreateRawMaterialDto> & { isActive?: boolean; lowStockAlert?: number | null }) {
     const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Raw material not found');
@@ -915,6 +957,8 @@ export class InventoryService {
             receivedAt,
             referenceNumber: dto.referenceNumber ?? null,
             paymentMethod:   paymentMethod,
+            expirationDate:      dto.expirationDate ? new Date(dto.expirationDate) : null,
+            purchaseOrderItemId: dto.purchaseOrderItemId ?? null,
           },
         });
       }

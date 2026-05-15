@@ -602,6 +602,18 @@ model Tenant {
   // Sprint 24 — subscription payment collection
   pendingPayments           PendingPayment[]
   officialReceipts          OfficialReceipt[]
+  // Sprint 25 — Solo tier feature delivery
+  purchaseOrders            PurchaseOrder[]
+  apiKeys                   ApiKey[]
+  voidApprovals             VoidApproval[]
+  /// Sprint 25 — when > 0, voids/refunds at/above this peso-cent amount
+  /// require maker-checker approval (Solo Pro feature `makerCheckerVoids`).
+  /// 0 = no threshold (cashier + supervisor PIN flow only, as today).
+  voidApprovalThresholdCents Int      @default(0)
+  /// Sprint 25 — Google Drive auto-backup config (Solo Pro feature).
+  /// Shape: { refreshToken: string, folderId: string, lastSyncAt: ISO, frequency: 'DAILY' }
+  /// Null until owner enables auto-backup from Settings.
+  autoBackupConfigJson      Json     @default("{}")
   documentSequences    DocumentNumberSequence[]
   notifications        Notification[]
   bankReconciliations  BankReconciliation[]
@@ -831,6 +843,8 @@ model Branch {
   vendorAdvances            VendorAdvance[]
   recurringInvoiceTemplates RecurringInvoiceTemplate[]
   recurringBillTemplates    RecurringBillTemplate[]
+  // Sprint 25 — Solo Pro purchase orders
+  purchaseOrders            PurchaseOrder[]
   laundryOrders   LaundryOrder[]
   laundryMachines LaundryMachine[]
   transfersOut    StockTransfer[]    @relation("TransferFromBranch")
@@ -1150,6 +1164,10 @@ model RawMaterial {
   /// Minimum stock level — system flags the ingredient as low when any branch
   /// falls below this quantity (same unit as the ingredient itself).
   lowStockAlert Decimal? @db.Decimal(12, 4)
+  /// Sprint 25 — when true, this raw material uses lot tracking (FEFO/FIFO).
+  /// When false, falls back to simple `RawMaterialInventory.quantity` count.
+  /// Counts against PLAN_FEATURES.maxAdvancedInventoryItems for the tenant.
+  lotsTracked   Boolean  @default(false)
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -1211,14 +1229,43 @@ model InventoryItem {
   /// costed receipt — sales fall back to product.costPrice in that case.
   avgCost       Decimal? @db.Decimal(12, 4)
   lowStockAlert Int?
+  /// Sprint 25 — when true, this finished-good item uses lot tracking
+  /// (FEFO with expiration alerts). When false, simple WAC + count.
+  /// Counts against PLAN_FEATURES.maxAdvancedInventoryItems for the tenant.
+  lotsTracked   Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  lots    InventoryLot[]
 
   @@unique([branchId, productId])
   @@map("inventory_items")
+}
+
+/// Sprint 25 — finished-goods inventory lot. Parallel to RawMaterialLot.
+/// Enables FEFO consumption + expiry tracking for SKUs with `lotsTracked=true`.
+model InventoryLot {
+  id              String   @id @default(cuid())
+  tenantId        String
+  inventoryItemId String
+  qtyReceived     Decimal  @db.Decimal(12, 4)
+  qtyRemaining    Decimal  @db.Decimal(12, 4)
+  unitCost        Decimal  @db.Decimal(12, 4)
+  receivedAt      DateTime
+  expirationDate  DateTime?
+  referenceNumber String?
+  /// Optional link to PO line when received against a purchase order.
+  purchaseOrderItemId String?
+  createdAt       DateTime @default(now())
+
+  inventoryItem     InventoryItem      @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id])
+
+  @@index([inventoryItemId, expirationDate, receivedAt])
+  @@index([tenantId, expirationDate])
+  @@map("inventory_lots")
 }
 
 model RawMaterialInventory {
@@ -2100,6 +2147,8 @@ model Vendor {
   creditNotes      VendorCreditNote[]
   vendorAdvances   VendorAdvance[]
   recurringBills   RecurringBillTemplate[]
+  // Sprint 25 — Solo Pro purchase orders
+  purchaseOrders   PurchaseOrder[]
 
   @@index([tenantId, tin])
   @@index([tenantId, isActive])
@@ -3906,23 +3955,31 @@ model RawMaterialLot {
   rawMaterialId   String
   /// Original delivery quantity in the ingredient's unit (g, ml, pc, ...)
   qtyReceived     Decimal  @db.Decimal(12, 4)
-  /// Remaining quantity — drained by FIFO consumption.
+  /// Remaining quantity — drained by FEFO/FIFO consumption.
   qtyRemaining    Decimal  @db.Decimal(12, 4)
-  /// Unit cost AT THE TIME of this delivery — frozen per lot for FIFO.
+  /// Unit cost AT THE TIME of this delivery — frozen per lot.
   unitCost        Decimal  @db.Decimal(12, 4)
   /// Business-date of receipt (cashier-provided; respects period lock).
   receivedAt      DateTime
+  /// Sprint 25 — expiration date for perishables. When set, consumption
+  /// follows FEFO (oldest expiry first); when null, FIFO (oldest receivedAt
+  /// first). Drives 7/3/0-day expiry alerts.
+  expirationDate  DateTime?
   /// Supplier reference (PO/DR/invoice no.) — purely audit metadata.
   referenceNumber String?
   /// CASH / CREDIT / OWNER_FUNDED — mirrored from the receipt for reporting.
   paymentMethod   String?
+  /// Sprint 25 — link to PurchaseOrder when received against one.
+  purchaseOrderItemId String?
   createdAt       DateTime @default(now())
 
   rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id])
 
-  // FIFO consumes by oldest receivedAt; this composite index covers it.
+  // FEFO consumption sort: expirationDate ASC NULLS LAST, then receivedAt ASC
+  @@index([rawMaterialId, branchId, expirationDate, receivedAt])
   @@index([rawMaterialId, branchId, receivedAt])
-  @@index([tenantId])
+  @@index([tenantId, expirationDate])
   @@map("raw_material_lots")
 }
 
@@ -5275,4 +5332,122 @@ model OfficialReceipt {
   @@index([issuedAt])
   @@index([payerTenantId])
   @@map("official_receipts")
+}
+
+// ─── Sprint 25 — Solo tier delivery (batch inventory, PO, maker-checker, API) ─
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED       // Sent to vendor
+  PARTIAL       // Some items received
+  RECEIVED      // All items received
+  CANCELLED
+}
+
+/// Sprint 25 — Purchase order workflow (Solo Pro feature).
+/// Owner drafts a PO → marks ordered → records receipts (which create lots).
+model PurchaseOrder {
+  id          String   @id @default(cuid())
+  tenantId    String
+  branchId    String?
+  vendorId    String?
+  /// Tenant-scoped human-readable number, e.g. PO-2026-000123.
+  poNumber    String
+  orderDate   DateTime
+  expectedAt  DateTime?
+  status      PurchaseOrderStatus @default(DRAFT)
+  subtotalCents Int     @default(0)
+  taxCents      Int     @default(0)
+  totalCents    Int     @default(0)
+  notes       String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch? @relation(fields: [branchId], references: [id])
+  vendor Vendor? @relation(fields: [vendorId], references: [id])
+  items  PurchaseOrderItem[]
+
+  @@unique([tenantId, poNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, orderDate])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String   @id @default(cuid())
+  purchaseOrderId String
+  /// One of rawMaterialId or productId is set (XOR).
+  rawMaterialId   String?
+  productId       String?
+  description     String
+  qtyOrdered      Decimal  @db.Decimal(12, 4)
+  qtyReceived     Decimal  @db.Decimal(12, 4) @default(0)
+  unitCost        Decimal  @db.Decimal(12, 4)
+  lineTotalCents  Int
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  rawMaterialLots RawMaterialLot[]
+  inventoryLots   InventoryLot[]
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+/// Sprint 25 — Read-only API key for Solo Pro tier (PLAN_FEATURES.apiAccess).
+/// Owner generates from /admin/api-keys; key prefix stored for display, rest
+/// hashed. Used by accountants integrating with Xero/QB/etc.
+model ApiKey {
+  id          String   @id @default(cuid())
+  tenantId    String
+  /// User-given label, e.g. "Maria's bookkeeper".
+  label       String
+  /// First 8 chars of the key, shown in the UI (e.g. "ck_live_abcd1234...").
+  keyPrefix   String
+  /// SHA-256 hash of the full key; full key shown to user once at creation.
+  keyHash     String   @unique
+  /// 'read' for Solo Pro. 'readwrite' for SUITE_T3/ENTERPRISE.
+  accessLevel String
+  isActive    Boolean  @default(true)
+  lastUsedAt  DateTime?
+  createdById String
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isActive])
+  @@map("api_keys")
+}
+
+enum VoidApprovalStatus {
+  PENDING       // Cashier requested; awaiting Sales Lead / Owner
+  APPROVED
+  REJECTED
+}
+
+/// Sprint 25 — Maker-checker void/refund audit (Solo Pro: makerCheckerVoids).
+/// When tenant.voidApprovalThresholdCents > 0 AND void amount >= threshold,
+/// the cashier-initiated void creates a VoidApproval row. Only Sales Lead /
+/// Owner can approve; void doesn't go through until approved.
+model VoidApproval {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  orderId             String
+  orderItemId         String?       // Null for whole-order void
+  amountCents         Int
+  reason              String
+  initiatedById       String        // Cashier
+  initiatedAt         DateTime @default(now())
+  status              VoidApprovalStatus @default(PENDING)
+  approvedById        String?
+  approvedAt          DateTime?
+  rejectionReason     String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, initiatedAt])
+  @@index([orderId])
+  @@map("void_approvals")
 }

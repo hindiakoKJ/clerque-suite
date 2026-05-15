@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, DrugClass } from '@prisma/client';
-import { hasPermission } from '@repo/shared-types';
+import { hasPermission, PLAN_FEATURES, type PlanCode } from '@repo/shared-types';
 
 /**
  * Sprint 19 — Single source of truth for the Product.isRxRequired and
@@ -215,6 +215,28 @@ export class ProductsService {
 
   async create(tenantId: string, dto: CreateProductDto) {
     const { variants, bomItems, ...rest } = dto;
+
+    // Sprint 25 — Recipe cap enforcement for Solo tiers. SOLO_LITE caps at 5
+    // recipe products; SOLO_STANDARD / PRO are unlimited. Only enforced when
+    // this create supplies a BOM (i.e., adds a new recipe product).
+    if (bomItems && bomItems.length > 0) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { planCode: true },
+      });
+      const maxRecipes = PLAN_FEATURES[tenant?.planCode as PlanCode]?.maxRecipes ?? -1;
+      if (maxRecipes >= 0) {
+        const existingRecipes = await this.prisma.product.count({
+          where: { tenantId, inventoryMode: 'RECIPE_BASED', isActive: true },
+        });
+        if (existingRecipes >= maxRecipes) {
+          throw new BadRequestException(
+            `Your plan allows up to ${maxRecipes} recipe products. ` +
+            `Upgrade to Solo Standard for unlimited recipes.`,
+          );
+        }
+      }
+    }
 
     // Sprint 8: when a recipe is supplied at create time, derive costPrice
     // from the BOM × ingredient WAC. This overrides any costPrice the form

@@ -60,4 +60,22 @@ export class ReceiveRawMaterialDto {
   @IsOptional()
   @IsNumber()
   termsDays?: number;
+
+  /**
+   * Sprint 25 — Expiration date for this lot (FEFO support). When set on a
+   * `lotsTracked` ingredient, the BOM walk drains this lot before others with
+   * later expiry. Required in practice for perishables (milk, syrups, beans).
+   */
+  @IsOptional()
+  @IsDateString()
+  expirationDate?: string;
+
+  /**
+   * Sprint 25 — When this receipt is from a Purchase Order, the receiver UI
+   * passes the PO line id so the lot is back-linked for variance reports.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  purchaseOrderItemId?: string;
 }

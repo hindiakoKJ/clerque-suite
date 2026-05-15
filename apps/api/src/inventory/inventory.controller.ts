@@ -193,6 +193,21 @@ export class InventoryController {
     return this.inventoryService.updateRawMaterial(user.tenantId!, id, dto);
   }
 
+  /**
+   * Sprint 25 — Toggle FEFO batch/expiry tracking on a raw material.
+   * Enforces Solo tier cap (Lite: 0, Standard: 10, Pro: unlimited).
+   */
+  @Roles('BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Patch('raw-materials/:id/lot-tracking')
+  @HttpCode(HttpStatus.OK)
+  setRawMaterialLotTracking(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { enabled: boolean },
+  ) {
+    return this.inventoryService.setRawMaterialLotTracking(user.tenantId!, id, !!body.enabled);
+  }
+
   /** Receive a delivery of a raw material — adds stock + updates WAC cost */
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
   @Post('raw-materials/:id/receive')

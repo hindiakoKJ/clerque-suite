@@ -497,7 +497,7 @@ export class OrdersService {
           select: {
             rawMaterialId: true,
             quantity:      true,
-            rawMaterial:   { select: { costPrice: true } },
+            rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
           },
         });
 
@@ -523,11 +523,14 @@ export class OrdersService {
             data:  { quantity: new Prisma.Decimal(after) },
           });
 
-          if (useFifo) {
-            // FIFO: drain oldest lots first AND accumulate the actual lot
-            // unit-costs into the recipe cost. Each lot's unitCost was frozen
-            // at the receipt moment, so this gives the genuine historical
-            // cost of the ingredients in this specific drink.
+          // Sprint 25 — FEFO when the ingredient is `lotsTracked` on Solo
+          // Standard / Pro (perishables: milk, syrups, beans, pastries). The
+          // FIFO path also runs when the tenant's valuationMethod is FIFO.
+          // FEFO orders by expirationDate ASC NULLS LAST then receivedAt ASC,
+          // so the soonest-to-expire batch drains first; lots with no expiry
+          // sort to the end and behave like classic FIFO.
+          const lotsTracked = bom.rawMaterial?.lotsTracked === true;
+          if (useFifo || lotsTracked) {
             let remaining = consumeQty;
             let drainedCost = 0;        // total ₱ drained from lots for this BOM line
             let drainedQty  = 0;        // total qty actually drained (may be < consumeQty if under-stocked)
@@ -537,7 +540,12 @@ export class OrdersService {
                 rawMaterialId: bom.rawMaterialId,
                 qtyRemaining:  { gt: 0 },
               },
-              orderBy: { receivedAt: 'asc' },
+              orderBy: lotsTracked
+                ? [
+                    { expirationDate: { sort: 'asc', nulls: 'last' } as const },
+                    { receivedAt:     'asc' as const },
+                  ]
+                : [{ receivedAt: 'asc' as const }],
             });
             for (const lot of lots) {
               if (remaining <= 0) break;

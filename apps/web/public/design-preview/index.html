@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clerque Counter — Design Preview</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="screens-styles-v2.css">
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100%; background: #f0eee9; font-family: "Inter", system-ui, sans-serif; color: #1F1B16; }
+  header { padding: 24px 32px; border-bottom: 1px solid #DDD4C2; background: #fff; }
+  header h1 { font-family: "Plus Jakarta Sans", system-ui, sans-serif; font-size: 24px; margin: 0; }
+  header p { color: #5F564B; margin: 4px 0 16px; font-size: 14px; }
+  nav { display: flex; gap: 8px; flex-wrap: wrap; }
+  nav button { padding: 10px 16px; border-radius: 999px; border: 1px solid #DDD4C2; background: #fff; cursor: pointer; font-weight: 600; color: #1F1B16; font-family: inherit; }
+  nav button.active { background: #3B82F6; border-color: #3B82F6; color: #fff; }
+  .stage { padding: 24px; display: flex; justify-content: center; }
+  .stage-inner { transform-origin: top center; }
+  #app { display: inline-block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Clerque Counter — Per-vertical POS preview</h1>
+  <p>Same Counter app, four business types. Tenant's business type is set at signup on the web; the tablet boots straight into the right surface.</p>
+  <nav id="picker"></nav>
+</header>
+<div class="stage"><div class="stage-inner" id="stage"><div id="app"></div></div></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="screens-verticals.jsx"></script>
+
+<script type="text/babel">
+const VERTICALS = [
+  { id: "coffee",   label: "Coffee / F&B",   comp: () => window.POSCoffee },
+  { id: "laundry",  label: "Laundry",         comp: () => window.POSLaundry },
+  { id: "pharmacy", label: "Pharmacy",        comp: () => window.POSPharmacy },
+  { id: "retail",   label: "Retail / Sari-sari", comp: () => window.POSRetail },
+];
+
+function App() {
+  const [active, setActive] = React.useState("coffee");
+  const [scale, setScale] = React.useState(1);
+
+  React.useEffect(() => {
+    const fit = () => {
+      const available = window.innerWidth - 80;
+      setScale(Math.min(1, available / 1920));
+      const stage = document.getElementById("stage");
+      if (stage) stage.style.transform = `scale(${Math.min(1, available / 1920)})`;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
+
+  const current = VERTICALS.find((v) => v.id === active);
+  const Comp = current?.comp();
+
+  return (
+    <>
+      {ReactDOM.createPortal(
+        VERTICALS.map((v) => (
+          <button key={v.id} className={v.id === active ? "active" : ""} onClick={() => setActive(v.id)}>
+            {v.label}
+          </button>
+        )),
+        document.getElementById("picker")
+      )}
+      <div style={{ width: 1920, height: 1200, background: "#fff", boxShadow: "0 24px 56px rgba(15,23,42,.18)" }}>
+        {Comp ? <Comp /> : <div style={{ padding: 80 }}>Loading…</div>}
+      </div>
+    </>
+  );
+}
+
+const tryRender = () => {
+  if (window.POSCoffee && window.POSLaundry && window.POSPharmacy && window.POSRetail) {
+    ReactDOM.createRoot(document.getElementById("app")).render(<App />);
+  } else {
+    setTimeout(tryRender, 50);
+  }
+};
+tryRender();
+</script>
+</body>
+</html>

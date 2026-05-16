@@ -299,10 +299,12 @@ export function AppShell({
               The SHA + build date are baked at deploy time via
               NEXT_PUBLIC_BUILD_SHA + NEXT_PUBLIC_BUILD_DATE; Vercel
               auto-populates these from VERCEL_GIT_COMMIT_SHA. */}
-          {!collapsed && (
+          {/* Only render when env vars are populated at build time
+              (Vercel deploys). In local dev both are undefined → hide. */}
+          {!collapsed && process.env.NEXT_PUBLIC_BUILD_SHA && process.env.NEXT_PUBLIC_BUILD_DATE && (
             <div className="text-[10px] text-muted-foreground/60 text-center font-mono leading-tight pt-1">
-              <div title="Build commit">{(process.env.NEXT_PUBLIC_BUILD_SHA ?? 'dev').slice(0, 7)}</div>
-              <div title="Build date">{process.env.NEXT_PUBLIC_BUILD_DATE ?? 'local'}</div>
+              <div title="Build commit">{process.env.NEXT_PUBLIC_BUILD_SHA.slice(0, 7)}</div>
+              <div title="Build date">{process.env.NEXT_PUBLIC_BUILD_DATE}</div>
             </div>
           )}
         </div>

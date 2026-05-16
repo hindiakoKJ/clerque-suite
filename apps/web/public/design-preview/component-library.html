@@ -1,0 +1,1771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clerque Counter — Component Library</title>
+<meta name="viewport" content="width=1920">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ====================================================================
+   CLERQUE COUNTER — COMPONENT LIBRARY
+   Deliverable 2 · for review · Clerque Counter Android POS
+   ==================================================================== */
+
+:root {
+  --c-primary:           #8B5E3C;
+  --c-primary-press:     #714A2D;
+  --c-primary-container: #E7D5C2;
+  --c-on-primary:        #FFFFFF;
+  --c-cream:             #EEE9DF;
+  --c-cream-soft:        #F5F1E8;
+  --c-cream-deep:        #DDD4C2;
+  --c-bg:                #FAFAF7;
+  --c-surface:           #FFFFFF;
+  --c-ink:               #1F1B16;
+  --c-muted:             #5C5650;
+  --c-faint:             #8A847C;
+  --c-rule:              #D4CFC4;
+  --c-rule-strong:       #BAB3A6;
+  --c-success:           #10B981;
+  --c-success-soft:      #D7F4E7;
+  --c-success-deep:      #065F46;
+  --c-warning:           #F59E0B;
+  --c-warning-soft:      #FCEBC9;
+  --c-warning-deep:      #92400E;
+  --c-error:             #DC2626;
+  --c-error-soft:        #FBD9D9;
+  --c-error-deep:        #991B1B;
+  --c-info:              #2563EB;
+  --c-info-soft:         #DBE8FE;
+  --c-info-deep:         #1E40AF;
+  --c-gcash:             #007BFC;
+  --c-paymaya:           #00B14F;
+
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+  --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+  --r-xs: 4px; --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 24px; --r-pill: 999px;
+
+  --e-1: 0 1px 2px rgba(31,27,22,.06), 0 1px 1px rgba(31,27,22,.04);
+  --e-2: 0 2px 6px rgba(31,27,22,.08), 0 1px 2px rgba(31,27,22,.05);
+  --e-3: 0 6px 16px rgba(31,27,22,.10), 0 2px 4px rgba(31,27,22,.05);
+  --e-4: 0 12px 32px rgba(31,27,22,.14), 0 4px 8px rgba(31,27,22,.06);
+  --e-5: 0 24px 56px rgba(31,27,22,.18), 0 8px 16px rgba(31,27,22,.06);
+
+  --doc-bg: #F2EFE8;
+  --doc-rule: #D4CFC4;
+  --doc-card: #FFFFFF;
+
+  /* Type pairing: Plus Jakarta display, Inter body & numerics */
+  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--doc-bg);
+  color: var(--c-ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.page {
+  width: 1920px;
+  margin: 0 auto;
+  padding: 56px 64px 96px;
+}
+
+/* ============================ HEADER ============================ */
+.hdr {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 32px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--doc-rule);
+  margin-bottom: 40px;
+}
+.hdr-eyebrow {
+  font-size: 12px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hdr-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--c-primary);
+}
+.hdr-title {
+  font-family: var(--font-display);
+  font-size: 56px;
+  line-height: 1.05;
+  letter-spacing: -.02em;
+  font-weight: 700;
+  margin: 0;
+}
+.hdr-sub {
+  font-size: 18px;
+  color: var(--c-muted);
+  margin: 14px 0 0;
+  max-width: 760px;
+}
+.hdr-meta {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; color: var(--c-muted); text-align: right;
+}
+.hdr-meta b { color: var(--c-ink); font-weight: 600; }
+.hdr-meta a { color: var(--c-primary); text-decoration: none; border-bottom: 1px dotted currentColor; }
+
+/* TOC */
+.toc {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 48px;
+  padding: 18px;
+  background: var(--c-cream-soft);
+  border: 1px solid var(--c-cream-deep);
+  border-radius: 12px;
+}
+.toc a {
+  text-decoration: none;
+  color: var(--c-ink);
+  font-size: 13px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.toc a:hover { border-color: var(--c-primary); }
+.toc-num { font-family: var(--font-mono); font-size: 11px; color: var(--c-primary); font-weight: 600; }
+.toc-name { font-weight: 500; }
+
+/* ============================ SECTION ============================ */
+.sec { margin-bottom: 64px; scroll-margin-top: 40px; }
+.sec-head {
+  display: flex; align-items: baseline; gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--doc-rule);
+}
+.sec-num { font-family: var(--font-mono); font-size: 12px; color: var(--c-muted); letter-spacing: .04em; }
+.sec-title { font-family: var(--font-display); font-size: 28px; font-weight: 700; letter-spacing: -.01em; margin: 0; }
+.sec-note { margin-left: auto; font-size: 13px; color: var(--c-muted); max-width: 600px; text-align: right; }
+
+.sub-h {
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--c-muted);
+  margin: 0 0 12px;
+}
+
+.card {
+  background: var(--doc-card);
+  border: 1px solid var(--doc-rule);
+  border-radius: 12px;
+  padding: 28px;
+}
+.card + .card { margin-top: 16px; }
+
+.grid-rows { display: flex; flex-direction: column; gap: 20px; }
+.grid {
+  display: grid;
+  gap: 24px;
+}
+
+.spec-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--c-cream);
+  color: var(--c-ink);
+  padding: 3px 7px;
+  border-radius: 4px;
+  margin-left: 8px;
+  letter-spacing: .04em;
+  vertical-align: middle;
+}
+
+.state-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--c-muted);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.legend {
+  font-size: 12px;
+  color: var(--c-muted);
+  line-height: 1.55;
+}
+.legend b { color: var(--c-ink); }
+
+.anatomy {
+  position: relative;
+  background: var(--c-cream-soft);
+  border: 1px dashed var(--c-cream-deep);
+  border-radius: 12px;
+  padding: 40px;
+  margin-bottom: 24px;
+}
+.callout {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-primary);
+  background: #fff;
+  border: 1px solid var(--c-primary);
+  border-radius: 4px;
+  padding: 3px 7px;
+  white-space: nowrap;
+  z-index: 2;
+}
+.callout::before {
+  content: "";
+  position: absolute;
+  background: var(--c-primary);
+  z-index: 1;
+}
+
+/* ===================== APP COMPONENTS (the actual library) ===================== */
+
+/* ----- Button ----- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-body);
+  font-weight: 600;
+  border: 0;
+  cursor: default;
+  white-space: nowrap;
+  gap: 10px;
+  transition: transform .1s, background .1s;
+  position: relative;
+}
+.btn[disabled], .btn.is-disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary { background: var(--c-primary); color: var(--c-on-primary); }
+.btn-primary.is-pressed { background: var(--c-primary-press); transform: scale(.98); }
+.btn-secondary { background: transparent; color: var(--c-primary); border: 1.5px solid var(--c-primary); }
+.btn-secondary.is-pressed { background: var(--c-primary-container); }
+.btn-destructive { background: var(--c-error); color: #fff; }
+.btn-destructive.is-pressed { background: var(--c-error-deep); transform: scale(.98); }
+.btn-ghost { background: transparent; color: var(--c-primary); }
+.btn-ghost.is-pressed { background: var(--c-primary-container); }
+.btn-cashier { height: 64px; min-width: 220px; font-size: 20px; border-radius: 12px; padding: 0 28px; box-shadow: var(--e-2); }
+.btn-default  { height: 48px; min-width: 120px; font-size: 16px; border-radius: 10px; padding: 0 20px; }
+.btn-compact  { height: 36px; min-width: 80px; font-size: 14px; border-radius: 8px; padding: 0 14px; }
+.btn-icon-only { padding: 0; }
+.btn-cashier.btn-icon-only { width: 64px; min-width: 64px; }
+.btn-default.btn-icon-only  { width: 48px; min-width: 48px; }
+.btn-compact.btn-icon-only  { width: 36px; min-width: 36px; }
+.btn-full { width: 100%; }
+
+.btn .spinner {
+  width: 18px; height: 18px;
+  border: 2.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.icon-svg { display: inline-flex; }
+
+/* ----- Input ----- */
+.field {
+  display: flex; flex-direction: column; gap: 6px;
+  width: 100%;
+}
+.field-label {
+  font-size: 12px; font-weight: 600; color: var(--c-muted);
+  letter-spacing: .02em;
+}
+.field-label .req { color: var(--c-error); margin-left: 4px; }
+.field-input {
+  height: 52px;
+  border: 1.5px solid var(--c-rule);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0 16px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 16px;
+  color: var(--c-ink);
+  font-family: var(--font-body);
+}
+.field-input .ph { color: var(--c-faint); }
+.field-input.is-filled { border-color: var(--c-rule-strong); }
+.field-input.is-focus { border-color: var(--c-primary); box-shadow: 0 0 0 4px rgba(139,94,60,.12); }
+.field-input.is-error { border-color: var(--c-error); }
+.field-input.is-disabled { background: #F5F4F0; color: var(--c-faint); border-style: dashed; }
+.field-input-prefix { color: var(--c-muted); font-size: 16px; font-weight: 600; }
+.field-input-icon { color: var(--c-muted); font-size: 18px; flex-shrink: 0; }
+.field-input-action { margin-left: auto; color: var(--c-primary); font-size: 13px; font-weight: 600; cursor: pointer; }
+.field-help { font-size: 11px; color: var(--c-muted); }
+.field-help.is-error { color: var(--c-error); font-weight: 500; }
+.field-help.is-success { color: var(--c-success-deep); font-weight: 500; }
+
+.field-area {
+  min-height: 96px;
+  padding: 14px 16px;
+  align-items: flex-start;
+}
+
+/* ----- Numeric keypad ----- */
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 76px);
+  gap: 10px;
+  padding: 14px;
+  background: var(--c-cream-soft);
+  border-radius: 16px;
+  width: fit-content;
+}
+.key {
+  height: 64px;
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--c-ink);
+  font-feature-settings: "tnum";
+  box-shadow: var(--e-1);
+  cursor: default;
+}
+.key.is-pressed {
+  background: var(--c-primary-container);
+  color: var(--c-primary-press);
+  box-shadow: none;
+  transform: scale(.97);
+}
+.key.is-action { background: var(--c-cream); border-color: var(--c-cream-deep); color: var(--c-primary); font-size: 16px; font-weight: 600; }
+.key.is-zero { grid-column: span 1; }
+.key.is-tendering { background: var(--c-primary); color: #fff; font-size: 14px; font-weight: 600; border: 0; }
+
+.keypad-tender {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  align-items: start;
+}
+.tender-quick {
+  display: grid;
+  grid-template-columns: repeat(2, 100px);
+  gap: 10px;
+  padding: 14px;
+  background: var(--c-cream-soft);
+  border-radius: 16px;
+}
+.tender-quick .key {
+  height: 60px;
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  color: var(--c-primary);
+  font-size: 16px;
+  font-weight: 600;
+  font-feature-settings: "tnum";
+}
+.tender-quick .key.is-exact {
+  background: var(--c-primary);
+  color: #fff;
+  border-color: var(--c-primary);
+  font-size: 13px;
+  grid-column: span 2;
+  height: 64px;
+}
+
+/* ----- PIN dots ----- */
+.pin-dots { display: flex; gap: 16px; }
+.pin-dots.is-tight { gap: 12px; }
+.pin-dot {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--c-rule-strong);
+  background: transparent;
+  transition: background .15s, border-color .15s;
+}
+.pin-dot.is-filled { background: var(--c-primary); border-color: var(--c-primary); }
+.pin-dot.is-error { background: var(--c-error); border-color: var(--c-error); animation: shake .35s; }
+.pin-dot.is-success { background: var(--c-success); border-color: var(--c-success); }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-3px); }
+  40%, 80% { transform: translateX(3px); }
+}
+
+/* ----- Chip ----- */
+.chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 18px;
+  border-radius: var(--r-pill);
+  font-size: 15px;
+  font-weight: 500;
+  background: #fff;
+  border: 1.5px solid var(--c-rule);
+  color: var(--c-ink);
+  min-height: 44px;
+  font-family: var(--font-body);
+  cursor: default;
+}
+.chip-price { color: var(--c-muted); font-size: 13px; font-feature-settings: "tnum"; margin-left: 2px; }
+.chip.is-pressed { background: var(--c-cream); }
+.chip.is-selected { background: var(--c-primary-container); border-color: var(--c-primary); color: var(--c-primary-press); }
+.chip.is-selected .chip-price { color: var(--c-primary-press); }
+.chip.is-disabled { background: #F5F4F0; border-color: var(--c-rule); color: var(--c-faint); }
+.chip.is-disabled .chip-price { color: var(--c-faint); }
+.chip-check {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--c-rule-strong);
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+}
+.chip.is-selected .chip-check { border-color: var(--c-primary); background: var(--c-primary); }
+.chip.is-selected .chip-check::after {
+  content: "✓"; position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 11px; font-weight: 700;
+}
+.chip-radio {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--c-rule-strong);
+  flex-shrink: 0;
+  position: relative;
+}
+.chip.is-selected .chip-radio { border-color: var(--c-primary); }
+.chip.is-selected .chip-radio::after {
+  content: ""; position: absolute; inset: 4px;
+  background: var(--c-primary); border-radius: 50%;
+}
+
+.chip-group {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  padding: 14px;
+  background: var(--c-cream-soft);
+  border-radius: 12px;
+}
+.chip-group-label {
+  font-size: 12px; font-weight: 600; color: var(--c-muted);
+  letter-spacing: .04em; text-transform: uppercase;
+  margin-bottom: 8px;
+  display: flex; justify-content: space-between;
+}
+.chip-group-label-req { color: var(--c-error); font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+/* ----- Badge ----- */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+.badge.is-lg { padding: 6px 14px; font-size: 13px; }
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.badge-success { background: var(--c-success-soft); color: var(--c-success-deep); }
+.badge-success .badge-dot { background: var(--c-success); }
+.badge-warning { background: var(--c-warning-soft); color: var(--c-warning-deep); }
+.badge-warning .badge-dot { background: var(--c-warning); }
+.badge-error { background: var(--c-error-soft); color: var(--c-error-deep); }
+.badge-error .badge-dot { background: var(--c-error); }
+.badge-info { background: var(--c-info-soft); color: var(--c-info-deep); }
+.badge-info .badge-dot { background: var(--c-info); }
+.badge-neutral { background: var(--c-cream); color: var(--c-ink); }
+.badge-neutral .badge-dot { background: var(--c-muted); }
+.badge-gcash { background: #E1EEFE; color: #0048A1; }
+.badge-gcash .badge-dot { background: var(--c-gcash); }
+.badge-paymaya { background: #D9F4E1; color: #006B2F; }
+.badge-paymaya .badge-dot { background: var(--c-paymaya); }
+.badge-cash { background: var(--c-cream); color: var(--c-ink); }
+.badge-cash .badge-dot { background: var(--c-primary); }
+.badge-senior { background: #F3E8FF; color: #6B21A8; }
+.badge-senior .badge-dot { background: #9333EA; }
+
+/* ----- Cart line ----- */
+.cart-line-wrap {
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  max-width: 520px;
+}
+.cart-line-wrap.is-swiped .cart-line { transform: translateX(-92px); }
+.cart-line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 16px;
+  padding: 16px 18px;
+  background: #fff;
+  transition: transform .2s;
+  position: relative;
+  z-index: 2;
+}
+.cart-line-name { font-size: 16px; font-weight: 600; color: var(--c-ink); display: flex; align-items: center; gap: 8px; }
+.cart-line-mods { font-size: 13px; color: var(--c-muted); line-height: 1.5; margin-top: 2px; }
+.cart-line-disc-row {
+  font-size: 12px;
+  color: var(--c-success-deep);
+  margin-top: 2px;
+  font-weight: 500;
+}
+.cart-line-price-col {
+  text-align: right;
+  font-feature-settings: "tnum";
+}
+.cart-line-price { font-size: 16px; font-weight: 600; color: var(--c-ink); }
+.cart-line-price-was { font-size: 12px; color: var(--c-faint); text-decoration: line-through; }
+.cart-line-controls {
+  display: flex; align-items: center; gap: 10px;
+  grid-column: 1 / 2;
+  margin-top: 10px;
+}
+.qty-stepper {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  border: 1px solid var(--c-rule);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.qty-stepper button {
+  width: 36px; height: 100%;
+  border: 0; background: transparent;
+  font-size: 18px; color: var(--c-primary);
+  font-weight: 600; cursor: default;
+}
+.qty-stepper button:disabled { color: var(--c-faint); }
+.qty-stepper-val {
+  min-width: 36px; text-align: center;
+  font-size: 15px; font-weight: 600;
+  font-feature-settings: "tnum";
+}
+.cart-line-swipe-action {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  width: 92px;
+  background: var(--c-error);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 1;
+}
+.cart-line-swipe-action-icon { font-size: 20px; }
+
+/* ----- Sync indicator ----- */
+.sync-pill {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 8px 14px;
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: var(--r-pill);
+  font-size: 13px;
+  color: var(--c-ink);
+  font-weight: 500;
+}
+.sync-pill-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--c-success);
+  box-shadow: 0 0 0 3px rgba(16,185,129,.18);
+}
+.sync-pill-dot.is-offline { background: var(--c-warning); box-shadow: 0 0 0 3px rgba(245,158,11,.18); }
+.sync-pill-dot.is-syncing { background: var(--c-info); box-shadow: 0 0 0 3px rgba(37,99,235,.18); animation: pulse 1.4s ease-in-out infinite; }
+.sync-pill-dot.is-error { background: var(--c-error); box-shadow: 0 0 0 3px rgba(220,38,38,.18); }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+.sync-pill-queue {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--c-muted);
+  font-feature-settings: "tnum";
+}
+
+.banner {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  max-width: 580px;
+}
+.banner-icon { font-size: 18px; flex-shrink: 0; line-height: 1.2; }
+.banner-content { flex: 1; line-height: 1.5; }
+.banner-content b { font-weight: 700; display: block; margin-bottom: 2px; }
+.banner-action { color: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.banner-offline { background: var(--c-warning-soft); color: var(--c-warning-deep); border: 1px solid #F8D6A1; }
+.banner-info { background: var(--c-info-soft); color: var(--c-info-deep); border: 1px solid #BFD8FB; }
+.banner-error { background: var(--c-error-soft); color: var(--c-error-deep); border: 1px solid #F4B6B6; }
+
+/* ----- Bottom sheet ----- */
+.sheet {
+  background: #fff;
+  border-radius: 16px 16px 8px 8px;
+  overflow: hidden;
+  box-shadow: var(--e-3);
+  max-width: 520px;
+}
+.sheet-scrim {
+  background: var(--c-cream-deep);
+  padding: 36px 24px 0;
+  border-radius: 12px 12px 0 0;
+  position: relative;
+}
+.sheet-scrim::after {
+  content: "";
+  position: absolute; bottom: -1px; left: 0; right: 0;
+  height: 12px;
+  background: linear-gradient(to bottom, transparent, rgba(0,0,0,.03));
+}
+.sheet-handle {
+  display: flex; justify-content: center;
+  padding: 12px 0 6px;
+}
+.sheet-handle::after {
+  content: "";
+  width: 48px; height: 4px;
+  background: var(--c-rule-strong);
+  border-radius: 2px;
+}
+.sheet-head {
+  padding: 4px 24px 16px;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px;
+}
+.sheet-head h3 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+.sheet-head-sub { font-size: 13px; color: var(--c-muted); }
+.sheet-head-close {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--c-cream);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  color: var(--c-muted);
+  flex-shrink: 0;
+}
+.sheet-body {
+  padding: 0 24px 16px;
+  max-height: 360px;
+  overflow: auto;
+}
+.sheet-body.has-scroll {
+  position: relative;
+}
+.sheet-body.has-scroll::after {
+  content: "";
+  position: absolute; left: 24px; right: 24px; bottom: 0; height: 24px;
+  background: linear-gradient(to top, #fff, rgba(255,255,255,0));
+  pointer-events: none;
+}
+.sheet-foot {
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--c-rule);
+  display: flex; gap: 12px;
+}
+.sheet-foot .btn { flex: 1; }
+
+.sheet-section + .sheet-section { margin-top: 18px; }
+
+/* ----- Snackbar / Toast ----- */
+.snackbar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 18px;
+  background: #2B2620;
+  color: #FAFAF7;
+  border-radius: 12px;
+  font-size: 14px;
+  box-shadow: var(--e-3);
+  font-family: var(--font-body);
+  max-width: 560px;
+}
+.snackbar.is-multiline {
+  align-items: flex-start;
+  padding: 16px 18px;
+}
+.snackbar-icon {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--c-success);
+  display: flex; align-items: center; justify-content: center;
+  color: white; font-size: 15px; font-weight: 700;
+  flex-shrink: 0;
+}
+.snackbar-icon.is-error { background: var(--c-error); }
+.snackbar-icon.is-info { background: var(--c-info); }
+.snackbar-icon.is-neutral { background: #5C5650; }
+.snackbar-msg { flex: 1; line-height: 1.5; }
+.snackbar-msg b { font-weight: 700; display: block; margin-bottom: 2px; }
+.snackbar-action {
+  margin-left: auto;
+  font-weight: 600;
+  color: #D8A87A;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  cursor: pointer;
+}
+.snackbar-action.is-destructive { color: #F87171; }
+
+/* ============================ DEVICE FRAME (for sheet preview) ============================ */
+.device-tablet {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #2A2520;
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: var(--e-3);
+  position: relative;
+}
+.device-tablet-screen {
+  width: 100%; height: 100%;
+  background: var(--c-bg);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+.device-tablet-screen::before {
+  content: "";
+  position: absolute; left: 0; right: 0; top: 0;
+  height: 28px;
+  background: var(--c-cream-soft);
+  border-bottom: 1px solid var(--c-rule);
+}
+.device-tablet-content {
+  position: absolute;
+  inset: 28px 0 0 0;
+  padding: 16px;
+  overflow: hidden;
+}
+
+/* ============================ FOOTER ============================ */
+.foot {
+  margin-top: 72px;
+  padding-top: 24px;
+  border-top: 1px solid var(--doc-rule);
+  display: flex; justify-content: space-between;
+  font-size: 12px;
+  color: var(--c-muted);
+  font-family: var(--font-mono);
+}
+
+/* ============================ TWEAKS ============================ */
+.tweaks { display: none; position: fixed; right: 20px; bottom: 20px; width: 280px; background: #fff; border: 1px solid var(--c-rule); border-radius: 14px; box-shadow: var(--e-4); z-index: 100; font-family: var(--font-body); overflow: hidden; }
+.tweaks.is-open { display: block; }
+.tweaks-h { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--c-rule); background: var(--c-cream-soft); }
+.tweaks-h-t { font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.tweaks-h-x { background: transparent; border: 0; cursor: pointer; font-size: 18px; color: var(--c-muted); padding: 0; width: 24px; height: 24px; }
+.tweaks-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.tweak-group-l { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; color: var(--c-muted); margin-bottom: 8px; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--c-cream); border-radius: 10px; padding: 4px; gap: 2px; }
+.seg-opt { border: 0; background: transparent; padding: 8px 4px; font-size: 13px; font-weight: 500; color: var(--c-muted); cursor: pointer; border-radius: 8px; font-family: var(--font-body); }
+.seg-opt.is-on { background: #fff; color: var(--c-ink); font-weight: 600; box-shadow: var(--e-1); }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ============================ HEADER ============================ -->
+  <header class="hdr">
+    <div>
+      <div class="hdr-eyebrow"><span class="hdr-dot"></span> CLERQUE COUNTER · Android tablet POS</div>
+      <h1 class="hdr-title">Component Library</h1>
+      <p class="hdr-sub">Deliverable&nbsp;2 — the building blocks the POS is assembled from. Every state of every component the cashier touches, sized for tablet landscape. Typography is the locked pairing: <b>Plus Jakarta</b> for display, <b>Inter</b> for body &amp; numerics.</p>
+    </div>
+    <div class="hdr-meta">
+      <div><b>v0.1</b> · for review</div>
+      <div>10 components · all states · MD3-informed</div>
+      <div><a href="design-tokens.html">← Deliverable 1 · Tokens</a></div>
+    </div>
+  </header>
+
+  <!-- ============================ TOC ============================ -->
+  <nav class="toc">
+    <a href="#c01"><span class="toc-num">01</span><span class="toc-name">Button</span></a>
+    <a href="#c02"><span class="toc-num">02</span><span class="toc-name">Input field</span></a>
+    <a href="#c03"><span class="toc-num">03</span><span class="toc-name">Numeric keypad</span></a>
+    <a href="#c04"><span class="toc-num">04</span><span class="toc-name">PIN dot indicator</span></a>
+    <a href="#c05"><span class="toc-num">05</span><span class="toc-name">Modifier chip</span></a>
+    <a href="#c06"><span class="toc-num">06</span><span class="toc-name">Status badge</span></a>
+    <a href="#c07"><span class="toc-num">07</span><span class="toc-name">Cart line item</span></a>
+    <a href="#c08"><span class="toc-num">08</span><span class="toc-name">Sync indicator</span></a>
+    <a href="#c09"><span class="toc-num">09</span><span class="toc-name">Bottom sheet</span></a>
+    <a href="#c10"><span class="toc-num">10</span><span class="toc-name">Toast / snackbar</span></a>
+  </nav>
+
+  <!-- ============================ 01. BUTTON ============================ -->
+  <section class="sec" id="c01">
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2 class="sec-title">Button</h2>
+      <div class="sec-note">Three sizes — cashier (64dp · primary actions in the sales flow), default (48dp · most everything), compact (36dp · in-row actions). Four variants × four states.</div>
+    </div>
+
+    <!-- Sizes -->
+    <div class="card">
+      <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; align-items: end;">
+        <div>
+          <span class="state-label">Cashier · 64dp · 20px · e-2</span>
+          <button class="btn btn-primary btn-cashier">Confirm payment</button>
+          <p class="legend" style="margin-top:10px">Used only in the sales flow: <b>Confirm payment</b>, <b>Next sale</b>, <b>Add to cart</b> on the modifier sheet. Lifted with e-2 so it reads as the primary action under café glare.</p>
+        </div>
+        <div>
+          <span class="state-label">Default · 48dp · 16px · flat</span>
+          <button class="btn btn-primary btn-default">Save changes</button>
+          <p class="legend" style="margin-top:10px">All other primary actions outside the sales flow — saving settings, closing a shift, confirming a void. Lives in modals, dialogs, headers.</p>
+        </div>
+        <div>
+          <span class="state-label">Compact · 36dp · 14px</span>
+          <button class="btn btn-primary btn-compact">Re-print</button>
+          <p class="legend" style="margin-top:10px">In-row actions: re-print receipt, retry sync, dismiss a chip. Below 36dp is too small for a thumb on a 10.5" tablet.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Variants × States matrix -->
+    <div class="card">
+      <h3 class="sub-h">Variant × state matrix · default size</h3>
+      <div class="grid" style="grid-template-columns: 160px repeat(4, 1fr); align-items: center; gap: 18px 24px;">
+        <div></div>
+        <div class="state-label" style="text-align:center;margin-bottom:0">default</div>
+        <div class="state-label" style="text-align:center;margin-bottom:0">pressed</div>
+        <div class="state-label" style="text-align:center;margin-bottom:0">disabled</div>
+        <div class="state-label" style="text-align:center;margin-bottom:0">loading</div>
+
+        <div style="font-weight:600;font-size:13px">Primary <span class="spec-tag">brand</span></div>
+        <div><button class="btn btn-primary btn-default">Add to cart</button></div>
+        <div><button class="btn btn-primary btn-default is-pressed">Add to cart</button></div>
+        <div><button class="btn btn-primary btn-default is-disabled">Add to cart</button></div>
+        <div><button class="btn btn-primary btn-default"><span class="spinner"></span> Processing</button></div>
+
+        <div style="font-weight:600;font-size:13px">Secondary <span class="spec-tag">outline</span></div>
+        <div><button class="btn btn-secondary btn-default">Discount</button></div>
+        <div><button class="btn btn-secondary btn-default is-pressed">Discount</button></div>
+        <div><button class="btn btn-secondary btn-default is-disabled">Discount</button></div>
+        <div><button class="btn btn-secondary btn-default"><span class="spinner"></span> Loading</button></div>
+
+        <div style="font-weight:600;font-size:13px">Destructive <span class="spec-tag">error</span></div>
+        <div><button class="btn btn-destructive btn-default">Void line</button></div>
+        <div><button class="btn btn-destructive btn-default is-pressed">Void line</button></div>
+        <div><button class="btn btn-destructive btn-default is-disabled">Void line</button></div>
+        <div><button class="btn btn-destructive btn-default"><span class="spinner"></span> Voiding</button></div>
+
+        <div style="font-weight:600;font-size:13px">Ghost <span class="spec-tag">text-only</span></div>
+        <div><button class="btn btn-ghost btn-default">Cancel</button></div>
+        <div><button class="btn btn-ghost btn-default is-pressed">Cancel</button></div>
+        <div><button class="btn btn-ghost btn-default is-disabled">Cancel</button></div>
+        <div><button class="btn btn-ghost btn-default"><span class="spinner"></span> Loading</button></div>
+      </div>
+    </div>
+
+    <!-- With icons + full width -->
+    <div class="card">
+      <h3 class="sub-h">With icons · icon-only · full-width</h3>
+      <div class="grid" style="grid-template-columns: 1.4fr 1fr 1fr 1.2fr; gap: 32px; align-items: end;">
+        <div>
+          <span class="state-label">Leading + trailing icon</span>
+          <div style="display:flex; gap: 12px; flex-wrap: wrap;">
+            <button class="btn btn-primary btn-default">
+              <svg class="icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              Add line
+            </button>
+            <button class="btn btn-secondary btn-default">
+              Next sale
+              <svg class="icon-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </button>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Icon-only</span>
+          <div style="display:flex; gap: 12px;">
+            <button class="btn btn-secondary btn-default btn-icon-only" aria-label="Print">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+            </button>
+            <button class="btn btn-ghost btn-default btn-icon-only" aria-label="Search">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </button>
+            <button class="btn btn-destructive btn-default btn-icon-only" aria-label="Delete">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>
+            </button>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Cashier · icon-only</span>
+          <div style="display:flex; gap: 12px;">
+            <button class="btn btn-primary btn-cashier btn-icon-only" aria-label="Confirm">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </button>
+            <button class="btn btn-secondary btn-cashier btn-icon-only" aria-label="Back">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            </button>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Full-width · stacked CTAs</span>
+          <div style="display:flex; flex-direction:column; gap: 10px; max-width: 280px;">
+            <button class="btn btn-primary btn-default btn-full">Confirm void</button>
+            <button class="btn btn-ghost btn-default btn-full">Keep line</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 02. INPUT ============================ -->
+  <section class="sec" id="c02">
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2 class="sec-title">Input field</h2>
+      <div class="sec-note">52dp tall, label above (never floating — easier under glare). Cashier should always see what they typed; placeholder text gives the format, not the only signal of what the field is.</div>
+    </div>
+
+    <!-- Anatomy -->
+    <div class="card">
+      <h3 class="sub-h">Anatomy</h3>
+      <div class="anatomy" style="padding: 60px 90px 80px 60px;">
+        <div class="field" style="max-width: 380px;">
+          <span class="field-label">Email <span class="req">*</span></span>
+          <div class="field-input is-focus">
+            <svg class="field-input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+            <span>juan@kape.ph</span>
+          </div>
+          <span class="field-help">We'll only use this for sign-in.</span>
+        </div>
+
+        <div class="callout" style="left: 60px; top: 40px;">label · 12 / 600 · muted</div>
+        <div class="callout" style="left: 460px; top: 75px;">field · 52dp · r-sm · focus ring</div>
+        <div class="callout" style="left: 60px; bottom: 30px;">helper · 11 / muted</div>
+        <div class="callout" style="left: 460px; top: 35px;"><span style="color:var(--c-error)">*</span> required marker · error color</div>
+      </div>
+    </div>
+
+    <!-- States -->
+    <div class="card">
+      <h3 class="sub-h">States</h3>
+      <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 32px;">
+        <div class="field">
+          <span class="field-label">Default</span>
+          <div class="field-input"><span class="ph">tindahan@clerque.com</span></div>
+          <span class="field-help">Empty · placeholder gives the format</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Filled</span>
+          <div class="field-input is-filled">tindahan@clerque.com</div>
+          <span class="field-help">Subtle stronger border</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Focused</span>
+          <div class="field-input is-focus">tindahan@clerque.com</div>
+          <span class="field-help">Brown ring · 4px halo</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Error</span>
+          <div class="field-input is-error">tindahan</div>
+          <span class="field-help is-error">Please enter a valid email address.</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Disabled</span>
+          <div class="field-input is-disabled"><span>auto-filled@clerque.com</span></div>
+          <span class="field-help">Locked · synced from Cloud</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Success</span>
+          <div class="field-input is-filled" style="border-color: var(--c-success);">SR-2026-0042</div>
+          <span class="field-help is-success">Senior ID validated</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Variants -->
+    <div class="card">
+      <h3 class="sub-h">Variants</h3>
+      <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 32px;">
+        <div class="field">
+          <span class="field-label">Password · with reveal action</span>
+          <div class="field-input is-focus">
+            <span>••••••••</span>
+            <span class="field-input-action">Show</span>
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">Currency · ₱ prefix</span>
+          <div class="field-input">
+            <span class="field-input-prefix">₱</span>
+            <span style="font-feature-settings:'tnum'">500.00</span>
+          </div>
+          <span class="field-help">Opens native numeric keypad</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Search · with icon</span>
+          <div class="field-input">
+            <svg class="field-input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <span class="ph">Search products…</span>
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">Phone · for customer lookup</span>
+          <div class="field-input">
+            <span class="field-input-prefix" style="font-weight:500">+63</span>
+            <span class="ph">9XX XXX XXXX</span>
+          </div>
+          <span class="field-help">Available on Solo Standard +</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Reference no. · GCash / PayMaya</span>
+          <div class="field-input is-filled">
+            <span>1234567890</span>
+          </div>
+          <span class="field-help">From the customer's confirmation SMS</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Notes · multi-line</span>
+          <div class="field-input field-area">
+            <span class="ph">Shift notes (optional)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 03. KEYPAD ============================ -->
+  <section class="sec" id="c03">
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2 class="sec-title">Numeric keypad</h2>
+      <div class="sec-note">Two layouts — PIN (digits + backspace) and Tendering (digits + ₱ quick-amount column on the right). Keys are 64dp with 10dp gutters — comfortable for thumb &amp; index.</div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">PIN keypad · cashier sign-in</h3>
+      <div class="grid" style="grid-template-columns: auto 1fr; gap: 48px; align-items: start;">
+        <div>
+          <div class="keypad">
+            <div class="key">1</div>
+            <div class="key">2</div>
+            <div class="key">3</div>
+            <div class="key">4</div>
+            <div class="key is-pressed">5</div>
+            <div class="key">6</div>
+            <div class="key">7</div>
+            <div class="key">8</div>
+            <div class="key">9</div>
+            <div class="key is-action">·</div>
+            <div class="key">0</div>
+            <div class="key is-action">⌫</div>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Notes</span>
+          <p class="legend" style="max-width: 460px;">
+            <b>3 × 4 layout</b> — digits in numpad order (1-3 on top). Action keys (decimal, backspace) styled with cream fill so they don't look like digits.
+            <br><br>
+            <b>Key states</b> — default has a hairline border + e-1 shadow; pressed state inverts to <span style="font-family:var(--font-mono);color:var(--c-primary)">primary/container</span> fill with a 3% scale-down. No hover state — touch doesn't hover.
+            <br><br>
+            <b>Decimal "·"</b> is hidden in PIN mode (replaced with a no-op spacer) — typed below as a discrete dot character. The actual native render swaps it for an empty cell.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Tendering keypad · cash amount entry</h3>
+      <div class="grid" style="grid-template-columns: auto auto 1fr; gap: 32px; align-items: start;">
+        <div>
+          <span class="state-label">Numeric pad</span>
+          <div class="keypad">
+            <div class="key">1</div>
+            <div class="key">2</div>
+            <div class="key">3</div>
+            <div class="key">4</div>
+            <div class="key">5</div>
+            <div class="key">6</div>
+            <div class="key">7</div>
+            <div class="key">8</div>
+            <div class="key">9</div>
+            <div class="key is-action">·</div>
+            <div class="key">0</div>
+            <div class="key is-action">⌫</div>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Quick amounts (₱)</span>
+          <div class="tender-quick">
+            <div class="key">₱20</div>
+            <div class="key">₱50</div>
+            <div class="key">₱100</div>
+            <div class="key">₱200</div>
+            <div class="key">₱500</div>
+            <div class="key">₱1,000</div>
+            <div class="key is-exact">Exact · ₱288</div>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">How it composes</span>
+          <p class="legend" style="max-width: 360px;">
+            Two pads side-by-side on the tendering screen. <b>Quick amounts</b> are PH banknote denominations — one tap fills the bayad field. <b>Exact</b> auto-fills the remaining due. The pads sit below a 96dp due display (covered in screens).
+            <br><br>
+            On phone portrait, the quick-amounts column collapses to a horizontal scroll strip above the keypad.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 04. PIN DOTS ============================ -->
+  <section class="sec" id="c04">
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2 class="sec-title">Cashier PIN dot indicator</h2>
+      <div class="sec-note">Shows entry progress without revealing PIN length to bystanders. Supports 4- and 6-digit PINs (tier setting). Animates on error with a horizontal shake.</div>
+    </div>
+
+    <div class="card">
+      <div class="grid" style="grid-template-columns: repeat(5, 1fr); gap: 32px; align-items: center; justify-items: center; padding: 16px 0;">
+        <div style="text-align:center">
+          <span class="state-label">empty</span>
+          <div class="pin-dots">
+            <div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+          </div>
+        </div>
+        <div style="text-align:center">
+          <span class="state-label">2 of 4</span>
+          <div class="pin-dots">
+            <div class="pin-dot is-filled"></div><div class="pin-dot is-filled"></div><div class="pin-dot"></div><div class="pin-dot"></div>
+          </div>
+        </div>
+        <div style="text-align:center">
+          <span class="state-label">4 of 4 · validating</span>
+          <div class="pin-dots">
+            <div class="pin-dot is-filled"></div><div class="pin-dot is-filled"></div><div class="pin-dot is-filled"></div><div class="pin-dot is-filled"></div>
+          </div>
+        </div>
+        <div style="text-align:center">
+          <span class="state-label">error · shake</span>
+          <div class="pin-dots">
+            <div class="pin-dot is-error"></div><div class="pin-dot is-error"></div><div class="pin-dot is-error"></div><div class="pin-dot is-error"></div>
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:var(--c-error);font-weight:500">Wrong PIN — 2 tries left</div>
+        </div>
+        <div style="text-align:center">
+          <span class="state-label">success · flash</span>
+          <div class="pin-dots">
+            <div class="pin-dot is-success"></div><div class="pin-dot is-success"></div><div class="pin-dot is-success"></div><div class="pin-dot is-success"></div>
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:var(--c-success-deep);font-weight:500">Welcome, Maricar ↗</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">6-digit variant · supervisor / refund authorization</h3>
+      <div class="grid" style="grid-template-columns: auto 1fr; gap: 48px; align-items: center;">
+        <div class="pin-dots">
+          <div class="pin-dot is-filled"></div>
+          <div class="pin-dot is-filled"></div>
+          <div class="pin-dot is-filled"></div>
+          <div class="pin-dot is-filled"></div>
+          <div class="pin-dot"></div>
+          <div class="pin-dot"></div>
+        </div>
+        <p class="legend" style="max-width: 600px;">
+          Solo Standard + tier exposes a supervisor PIN for void / refund authorization. The 6-digit variant uses tighter dot spacing (12dp vs 16dp) so a single hand can cover the row when entering. <b>Never use 8 digits</b> — anything longer than 6 trains users to look away from the screen to remember the digits, which is the opposite of safe.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 05. MODIFIER CHIP ============================ -->
+  <section class="sec" id="c05">
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2 class="sec-title">Modifier chip</h2>
+      <div class="sec-note">44dp tap-friendly chips with price impact shown inline. Supports single-select (radio behavior) and multi-select (checkbox) — distinguished by a leading indicator dot, not by color.</div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">States · plain chips (no indicator)</h3>
+      <div class="grid" style="grid-template-columns: repeat(5, 1fr); gap: 18px; align-items: end; justify-items: center;">
+        <div style="text-align:center"><span class="state-label">default</span><span class="chip">Grande</span></div>
+        <div style="text-align:center"><span class="state-label">pressed</span><span class="chip is-pressed">Grande</span></div>
+        <div style="text-align:center"><span class="state-label">selected</span><span class="chip is-selected">Grande</span></div>
+        <div style="text-align:center"><span class="state-label">disabled · out of stock</span><span class="chip is-disabled">Venti <span class="chip-price">+₱40</span></span></div>
+        <div style="text-align:center"><span class="state-label">with price impact</span><span class="chip is-selected">Oat <span class="chip-price">+₱20</span></span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Single-select group (radio behavior) · "Size · pick one"</h3>
+      <div class="chip-group">
+        <div style="width:100%">
+          <div class="chip-group-label">Size <span class="chip-group-label-req">Required · pick one</span></div>
+          <div style="display:flex; flex-wrap:wrap; gap: 10px;">
+            <span class="chip"><span class="chip-radio"></span> Tall <span class="chip-price">+₱0</span></span>
+            <span class="chip is-selected"><span class="chip-radio"></span> Grande <span class="chip-price">+₱20</span></span>
+            <span class="chip"><span class="chip-radio"></span> Venti <span class="chip-price">+₱40</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Multi-select group (checkbox behavior) · "Add-ons · pick any"</h3>
+      <div class="chip-group">
+        <div style="width:100%">
+          <div class="chip-group-label">Add-ons <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--c-muted)">Optional · pick any</span></div>
+          <div style="display:flex; flex-wrap:wrap; gap: 10px;">
+            <span class="chip is-selected"><span class="chip-check"></span> Extra shot <span class="chip-price">+₱30</span></span>
+            <span class="chip"><span class="chip-check"></span> Whipped cream <span class="chip-price">+₱15</span></span>
+            <span class="chip is-selected"><span class="chip-check"></span> Caramel drizzle <span class="chip-price">+₱10</span></span>
+            <span class="chip is-disabled"><span class="chip-check"></span> Honey <span class="chip-price">+₱10</span></span>
+            <span class="chip"><span class="chip-check"></span> Cinnamon <span class="chip-price">+₱5</span></span>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:var(--c-muted)">
+        <b style="color:var(--c-ink)">Why a leading dot/check?</b> Color alone can't carry the "I can pick multiple" affordance — a cashier under glare won't catch a 6% saturation difference. The dot is unmistakable: empty circle = radio, square w/ check = multi.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 06. STATUS BADGE ============================ -->
+  <section class="sec" id="c06">
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2 class="sec-title">Status badge</h2>
+      <div class="sec-note">Pill-shaped, soft-fill, leading dot. Used to communicate order state, tender type, sync state, and discount type. Never used to call action — that's a button.</div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Order state</h3>
+      <div style="display:flex; gap: 14px; flex-wrap: wrap;">
+        <span class="badge badge-success is-lg"><span class="badge-dot"></span> Paid</span>
+        <span class="badge badge-warning is-lg"><span class="badge-dot"></span> Pending sync</span>
+        <span class="badge badge-info is-lg"><span class="badge-dot"></span> Refunded</span>
+        <span class="badge badge-error is-lg"><span class="badge-dot"></span> Voided</span>
+        <span class="badge badge-neutral is-lg"><span class="badge-dot"></span> Draft · open cart</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Tender type · PH-native</h3>
+      <div style="display:flex; gap: 14px; flex-wrap: wrap;">
+        <span class="badge badge-cash is-lg"><span class="badge-dot"></span> Cash · Bayad</span>
+        <span class="badge badge-gcash is-lg"><span class="badge-dot"></span> GCash</span>
+        <span class="badge badge-paymaya is-lg"><span class="badge-dot"></span> PayMaya</span>
+        <span class="badge badge-neutral is-lg"><span class="badge-dot"></span> Card</span>
+        <span class="badge badge-info is-lg"><span class="badge-dot"></span> Split (Cash + GCash)</span>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--c-muted)">Brand-adjacent fills hint at GCash blue / PayMaya green without using their exact logo colors (we can't redistribute those in-app).</div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Discount & customer</h3>
+      <div style="display:flex; gap: 14px; flex-wrap: wrap;">
+        <span class="badge badge-senior is-lg"><span class="badge-dot"></span> Senior · 20% off</span>
+        <span class="badge badge-senior is-lg"><span class="badge-dot"></span> PWD · 20% off</span>
+        <span class="badge badge-info is-lg"><span class="badge-dot"></span> Loyalty member</span>
+        <span class="badge badge-warning is-lg"><span class="badge-dot"></span> Low stock · 2 left</span>
+        <span class="badge badge-warning is-lg"><span class="badge-dot"></span> Near expiry · 3 days</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Size variants</h3>
+      <div style="display:flex; gap: 14px; flex-wrap: wrap; align-items: center;">
+        <span class="badge badge-success"><span class="badge-dot"></span> Paid</span>
+        <span class="state-label" style="margin: 0">small · 12 · in-row</span>
+        <span style="margin: 0 12px; color: var(--c-rule)">|</span>
+        <span class="badge badge-success is-lg"><span class="badge-dot"></span> Paid</span>
+        <span class="state-label" style="margin: 0">large · 13 · standalone</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 07. CART LINE ============================ -->
+  <section class="sec" id="c07">
+    <div class="sec-head">
+      <span class="sec-num">07</span>
+      <h2 class="sec-title">Cart line item</h2>
+      <div class="sec-note">The atomic unit of the cart panel. Tap anywhere on the line to open the discount/modifier editor. Swipe left to reveal a destructive delete action — never a delete icon in the row, which invites mis-taps.</div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">States</h3>
+      <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 32px;">
+        <div>
+          <span class="state-label">Default · 1 line · no modifiers</span>
+          <div class="cart-line-wrap">
+            <div class="cart-line">
+              <div>
+                <div class="cart-line-name">Pandesal · pack of 6</div>
+                <div class="cart-line-controls">
+                  <div class="qty-stepper">
+                    <button disabled>−</button>
+                    <span class="qty-stepper-val">1</span>
+                    <button>+</button>
+                  </div>
+                </div>
+              </div>
+              <div class="cart-line-price-col">
+                <div class="cart-line-price">₱48.00</div>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--c-muted)">"−" disabled at qty 1 — to remove, swipe-left or drop to 0</div>
+        </div>
+
+        <div>
+          <span class="state-label">With modifiers · qty 2</span>
+          <div class="cart-line-wrap">
+            <div class="cart-line">
+              <div>
+                <div class="cart-line-name">Iced Spanish Latte · Grande</div>
+                <div class="cart-line-mods">Oat milk +₱20 · No sugar · Extra shot +₱30</div>
+                <div class="cart-line-controls">
+                  <div class="qty-stepper">
+                    <button>−</button>
+                    <span class="qty-stepper-val">2</span>
+                    <button>+</button>
+                  </div>
+                </div>
+              </div>
+              <div class="cart-line-price-col">
+                <div class="cart-line-price">₱360.00</div>
+                <div style="font-size:11px;color:var(--c-muted)">₱180.00 each</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <span class="state-label">With line discount (Senior/PWD)</span>
+          <div class="cart-line-wrap">
+            <div class="cart-line">
+              <div>
+                <div class="cart-line-name">Iced Spanish Latte · Grande</div>
+                <div class="cart-line-mods">Oat milk +₱20 · No sugar</div>
+                <div class="cart-line-disc-row">− Senior discount · 20%</div>
+                <div class="cart-line-controls">
+                  <div class="qty-stepper">
+                    <button>−</button>
+                    <span class="qty-stepper-val">1</span>
+                    <button>+</button>
+                  </div>
+                  <span class="badge badge-senior" style="font-size:11px"><span class="badge-dot"></span> Senior</span>
+                </div>
+              </div>
+              <div class="cart-line-price-col">
+                <div class="cart-line-price">₱144.00</div>
+                <div class="cart-line-price-was">₱180.00</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <span class="state-label">Swipe-left revealed · delete action</span>
+          <div class="cart-line-wrap is-swiped">
+            <div class="cart-line">
+              <div>
+                <div class="cart-line-name">Pandesal · pack of 6</div>
+                <div class="cart-line-controls">
+                  <div class="qty-stepper">
+                    <button disabled>−</button>
+                    <span class="qty-stepper-val">1</span>
+                    <button>+</button>
+                  </div>
+                </div>
+              </div>
+              <div class="cart-line-price-col">
+                <div class="cart-line-price">₱48.00</div>
+              </div>
+            </div>
+            <div class="cart-line-swipe-action">
+              <span class="cart-line-swipe-action-icon">🗑</span>
+              Remove
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--c-muted)">Native gesture · momentum bounce on release if not committed</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 08. SYNC INDICATOR ============================ -->
+  <section class="sec" id="c08">
+    <div class="sec-head">
+      <span class="sec-num">08</span>
+      <h2 class="sec-title">Sync indicator</h2>
+      <div class="sec-note">Persistent pill in the app's top bar. Communicates online/offline state and queue depth without alarming the cashier — "Offline · 3 queued" is reassuring, not red.</div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">States</h3>
+      <div class="grid" style="grid-template-columns: repeat(4, 1fr); gap: 16px;">
+        <div>
+          <span class="state-label">Online · in sync</span>
+          <span class="sync-pill"><span class="sync-pill-dot"></span> Online · in sync</span>
+        </div>
+        <div>
+          <span class="state-label">Syncing · queue draining</span>
+          <span class="sync-pill"><span class="sync-pill-dot is-syncing"></span> Syncing <span class="sync-pill-queue">3 / 5</span></span>
+        </div>
+        <div>
+          <span class="state-label">Offline · queue building</span>
+          <span class="sync-pill"><span class="sync-pill-dot is-offline"></span> Offline <span class="sync-pill-queue">3 queued</span></span>
+        </div>
+        <div>
+          <span class="state-label">Error · attention</span>
+          <span class="sync-pill" style="border-color: var(--c-error);"><span class="sync-pill-dot is-error"></span> Sync error · tap to retry</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Tap-down → opens info popover</h3>
+      <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 32px; align-items: start;">
+        <div>
+          <span class="state-label">Offline state · expanded</span>
+          <div class="banner banner-offline" style="max-width: 100%;">
+            <span class="banner-icon">⚲</span>
+            <div class="banner-content">
+              <b>Working offline</b>
+              <div>3 sales are queued and will sync when you're back online. Your sales are safe — keep ringing.</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Banners · sibling component, top-bar slot</span>
+          <div style="display:flex; flex-direction: column; gap: 12px;">
+            <div class="banner banner-info">
+              <span class="banner-icon">↻</span>
+              <div class="banner-content">
+                Catalog updated from Cloud — 4 new products available.
+              </div>
+            </div>
+            <div class="banner banner-error">
+              <span class="banner-icon">!</span>
+              <div class="banner-content">
+                <b>Subscription expired</b>
+                Renew at <span class="banner-action">clerque.com</span> — 7-day grace period remaining.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 09. BOTTOM SHEET ============================ -->
+  <section class="sec" id="c09">
+    <div class="sec-head">
+      <span class="sec-num">09</span>
+      <h2 class="sec-title">Bottom sheet</h2>
+      <div class="sec-note">Native Android bottom sheet — drag handle, dismissable by swipe-down, with a sticky footer for the primary CTA. Used for product modifiers, discount entry, tender method switching, Senior/PWD entry.</div>
+    </div>
+
+    <!-- Anatomy -->
+    <div class="card">
+      <h3 class="sub-h">Anatomy · medium height (~55% of viewport)</h3>
+      <div class="grid" style="grid-template-columns: 540px 1fr; gap: 60px; align-items: start;">
+        <div class="anatomy" style="padding: 32px;">
+          <div class="sheet">
+            <div class="sheet-handle"></div>
+            <div class="sheet-head">
+              <div>
+                <h3>Customize · Iced Spanish Latte</h3>
+                <div class="sheet-head-sub">₱180.00 base · adjust below</div>
+              </div>
+              <div class="sheet-head-close">×</div>
+            </div>
+            <div class="sheet-body">
+              <div class="sheet-section">
+                <div class="chip-group-label">Size <span class="chip-group-label-req">Required</span></div>
+                <div style="display:flex; gap: 10px;">
+                  <span class="chip"><span class="chip-radio"></span> Tall</span>
+                  <span class="chip is-selected"><span class="chip-radio"></span> Grande <span class="chip-price">+₱20</span></span>
+                  <span class="chip"><span class="chip-radio"></span> Venti <span class="chip-price">+₱40</span></span>
+                </div>
+              </div>
+              <div class="sheet-section">
+                <div class="chip-group-label">Milk <span class="chip-group-label-req">Required</span></div>
+                <div style="display:flex; gap: 10px; flex-wrap: wrap;">
+                  <span class="chip"><span class="chip-radio"></span> Whole</span>
+                  <span class="chip is-selected"><span class="chip-radio"></span> Oat <span class="chip-price">+₱20</span></span>
+                  <span class="chip"><span class="chip-radio"></span> Soy <span class="chip-price">+₱20</span></span>
+                </div>
+              </div>
+            </div>
+            <div class="sheet-foot">
+              <button class="btn btn-ghost btn-default">Cancel</button>
+              <button class="btn btn-primary btn-default btn-full">Add · ₱220.00</button>
+            </div>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Anatomy</span>
+          <ul style="padding-left: 18px; color: var(--c-ink); font-size: 14px; line-height: 1.8;">
+            <li><b>Scrim</b> — outside the sheet · 40% black · tap-to-dismiss · the rest of the POS shows underneath, so the cashier can still see the cart</li>
+            <li><b>Handle</b> — 48 × 4 px · top center · indicates draggability</li>
+            <li><b>Head</b> — display title + sub line + close (×); close is a fail-safe, the gesture is dismissal</li>
+            <li><b>Body</b> — scrollable; a soft white fade indicates more content below</li>
+            <li><b>Footer</b> — sticky · houses the primary CTA · always uses default (48dp) button — cashier height isn't needed inside a sheet</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Heights -->
+    <div class="card">
+      <h3 class="sub-h">Heights</h3>
+      <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: end;">
+        <div>
+          <span class="state-label">Small · ~35% · simple confirms</span>
+          <div class="device-tablet">
+            <div class="device-tablet-screen">
+              <div class="device-tablet-content">
+                <div style="background: rgba(0,0,0,.35); position: absolute; inset: 0;"></div>
+                <div style="position:absolute;left:30%;right:30%;bottom:0;background:#fff;border-radius:16px 16px 0 0;padding: 18px;">
+                  <div style="width:48px;height:4px;background:var(--c-rule-strong);border-radius:2px;margin:0 auto 16px;"></div>
+                  <div style="font-family:var(--font-display);font-size:16px;font-weight:700;margin-bottom:6px;">Apply Senior discount?</div>
+                  <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;">20% off · VAT-exempt</div>
+                  <div style="display:flex;gap:8px;">
+                    <div class="btn btn-ghost btn-compact" style="flex:1;">Cancel</div>
+                    <div class="btn btn-primary btn-compact" style="flex:1;">Apply</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Medium · ~55% · modifier picker</span>
+          <div class="device-tablet">
+            <div class="device-tablet-screen">
+              <div class="device-tablet-content">
+                <div style="background: rgba(0,0,0,.35); position: absolute; inset: 0;"></div>
+                <div style="position:absolute;left:25%;right:25%;bottom:0;background:#fff;border-radius:16px 16px 0 0;height: 60%;padding: 14px;">
+                  <div style="width:48px;height:4px;background:var(--c-rule-strong);border-radius:2px;margin:0 auto 14px;"></div>
+                  <div style="font-family:var(--font-display);font-size:14px;font-weight:700;margin-bottom:10px;">Customize · Iced Latte</div>
+                  <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">
+                    <span style="font-size:10px;padding:4px 8px;background:var(--c-cream);border-radius:999px;">Tall</span>
+                    <span style="font-size:10px;padding:4px 8px;background:var(--c-primary-container);color:var(--c-primary-press);border-radius:999px;">Grande</span>
+                    <span style="font-size:10px;padding:4px 8px;background:var(--c-cream);border-radius:999px;">Venti</span>
+                  </div>
+                  <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px;">
+                    <span style="font-size:10px;padding:4px 8px;background:var(--c-cream);border-radius:999px;">Whole</span>
+                    <span style="font-size:10px;padding:4px 8px;background:var(--c-primary-container);color:var(--c-primary-press);border-radius:999px;">Oat</span>
+                    <span style="font-size:10px;padding:4px 8px;background:var(--c-cream);border-radius:999px;">Soy</span>
+                  </div>
+                  <div class="btn btn-primary" style="width: 100%; height: 28px; border-radius: 8px; font-size: 11px;">Add · ₱220</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Large · ~85% · order detail / refund</span>
+          <div class="device-tablet">
+            <div class="device-tablet-screen">
+              <div class="device-tablet-content">
+                <div style="background: rgba(0,0,0,.35); position: absolute; inset: 0;"></div>
+                <div style="position:absolute;left:18%;right:18%;bottom:0;background:#fff;border-radius:16px 16px 0 0;height: 88%;padding: 14px;">
+                  <div style="width:48px;height:4px;background:var(--c-rule-strong);border-radius:2px;margin:0 auto 12px;"></div>
+                  <div style="font-family:var(--font-display);font-size:13px;font-weight:700;margin-bottom:2px;">Refund · Order #000123</div>
+                  <div style="font-size:9px;color:var(--c-muted);margin-bottom:10px;">Select items to refund</div>
+                  <div style="font-size:10px;border-bottom:1px solid var(--c-rule);padding:8px 0;display:flex;justify-content:space-between;"><span>☑ Iced Spanish Latte</span><span>₱180</span></div>
+                  <div style="font-size:10px;border-bottom:1px solid var(--c-rule);padding:8px 0;display:flex;justify-content:space-between;"><span>☐ Pandesal</span><span>₱48</span></div>
+                  <div style="font-size:10px;padding:8px 0;display:flex;justify-content:space-between;"><span>☐ Spanish Bread</span><span>₱25</span></div>
+                  <div class="btn btn-destructive" style="width: 100%; height: 28px; border-radius: 8px; font-size: 11px; margin-top: 16px;">Refund ₱180.00</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 10. SNACKBAR ============================ -->
+  <section class="sec" id="c10">
+    <div class="sec-head">
+      <span class="sec-num">10</span>
+      <h2 class="sec-title">Toast · snackbar</h2>
+      <div class="sec-note">Bottom-anchored on tablet (above the cart panel), bottom-center on phone. Auto-dismiss at 4s for info, 6s when an action is offered, sticky for errors that require acknowledgement.</div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Variants</h3>
+      <div class="grid-rows">
+        <div>
+          <span class="state-label">Success · with undo action</span>
+          <div class="snackbar">
+            <span class="snackbar-icon">✓</span>
+            <span class="snackbar-msg">Sale #000124 saved — receipt sent to printer.</span>
+            <span class="snackbar-action">Undo</span>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Info · system update</span>
+          <div class="snackbar">
+            <span class="snackbar-icon is-info">↻</span>
+            <span class="snackbar-msg">3 offline sales synced to Clerque Cloud.</span>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Error · destructive action, retry offered</span>
+          <div class="snackbar" style="background:#3A1F1F;">
+            <span class="snackbar-icon is-error">!</span>
+            <span class="snackbar-msg">Couldn't reach printer. Check Bluetooth and try again.</span>
+            <span class="snackbar-action is-destructive">Retry</span>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Multi-line · context-heavy</span>
+          <div class="snackbar is-multiline" style="background:#1F3A2D;">
+            <span class="snackbar-icon">✓</span>
+            <span class="snackbar-msg"><b>Payment confirmed</b>Ref 0xA12B · ₱288.00 received via GCash · Sukli ₱0.00</span>
+            <span class="snackbar-action">View</span>
+          </div>
+        </div>
+        <div>
+          <span class="state-label">Neutral · low-emphasis ack</span>
+          <div class="snackbar" style="background: var(--c-ink);">
+            <span class="snackbar-icon is-neutral">i</span>
+            <span class="snackbar-msg">Tier limit reached — recipes locked at 5. Manage at clerque.com.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="sub-h">Behavior</h3>
+      <p class="legend" style="max-width: 920px;">
+        <b>Position</b> — tablet landscape: bottom-left of the product grid (clear of the cart panel); phone portrait: bottom-center, above the system nav bar.
+        <br>
+        <b>Stacking</b> — only one snackbar at a time. A new snack replaces the old with a slide-up transition.
+        <br>
+        <b>Duration</b> — info 4s, with-action 6s, error sticky (must be dismissed via action or swipe).
+        <br>
+        <b>Dismissal</b> — swipe down or tap action. No "×" button — the snack is meant to feel ambient, not modal.
+        <br>
+        <b>Not used for</b> — confirming a payment (that's the receipt screen), prompting an action (that's a button), errors requiring re-entry (that's an inline field error).
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================ FOOTER ============================ -->
+  <footer class="foot">
+    <div>clerque-counter / components · v0.1 · 15.05.2026</div>
+    <div>next → Deliverable 3 · Key screens</div>
+  </footer>
+
+</div>
+
+<!-- ============================ TWEAKS ============================ -->
+<aside class="tweaks" id="tweaks">
+  <div class="tweaks-h">
+    <span class="tweaks-h-t">Tweaks</span>
+    <button class="tweaks-h-x" id="tw-close" aria-label="Close">×</button>
+  </div>
+  <div class="tweaks-body">
+    <div>
+      <div class="tweak-group-l">Density</div>
+      <div class="seg" id="seg-density">
+        <button class="seg-opt is-on" data-v="comfortable">Comfortable</button>
+        <button class="seg-opt" data-v="compact">Compact</button>
+      </div>
+      <div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.4">Compact shrinks default button height to 44dp and field height to 48dp — for cashier-heavy screens.</div>
+    </div>
+    <div>
+      <div class="tweak-group-l">Highlight states</div>
+      <div class="seg" id="seg-highlight">
+        <button class="seg-opt is-on" data-v="off">Off</button>
+        <button class="seg-opt" data-v="on">On</button>
+      </div>
+      <div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.4">Adds an outline around <i>focus/pressed/selected</i> states so they're easy to spot in this review.</div>
+    </div>
+  </div>
+</aside>
+
+<script>
+(function () {
+  var panel = document.getElementById('tweaks');
+  var closeBtn = document.getElementById('tw-close');
+
+  window.addEventListener('message', function (e) {
+    var d = e && e.data;
+    if (!d || typeof d !== 'object') return;
+    if (d.type === '__activate_edit_mode') panel.classList.add('is-open');
+    if (d.type === '__deactivate_edit_mode') panel.classList.remove('is-open');
+  });
+  try { window.parent.postMessage({ type: '__edit_mode_available' }, '*'); } catch (e) {}
+
+  closeBtn.addEventListener('click', function () {
+    panel.classList.remove('is-open');
+    try { window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*'); } catch (e) {}
+  });
+
+  // Density toggle
+  var segDensity = document.getElementById('seg-density');
+  segDensity.addEventListener('click', function (e) {
+    var t = e.target.closest('.seg-opt'); if (!t) return;
+    [].forEach.call(segDensity.children, function (c) { c.classList.remove('is-on'); });
+    t.classList.add('is-on');
+    var compact = t.getAttribute('data-v') === 'compact';
+    var st = document.getElementById('density-style') || (function(){ var s = document.createElement('style'); s.id = 'density-style'; document.head.appendChild(s); return s; })();
+    st.textContent = compact
+      ? '.btn-default{height:44px}.field-input{height:48px}.chip{min-height:40px;padding:10px 14px}'
+      : '';
+  });
+
+  // Highlight states toggle
+  var segHl = document.getElementById('seg-highlight');
+  segHl.addEventListener('click', function (e) {
+    var t = e.target.closest('.seg-opt'); if (!t) return;
+    [].forEach.call(segHl.children, function (c) { c.classList.remove('is-on'); });
+    t.classList.add('is-on');
+    var on = t.getAttribute('data-v') === 'on';
+    var st = document.getElementById('hl-style') || (function(){ var s = document.createElement('style'); s.id = 'hl-style'; document.head.appendChild(s); return s; })();
+    st.textContent = on
+      ? '.is-pressed,.is-focus,.is-selected{outline:2px dashed var(--c-info)!important;outline-offset:4px}'
+      : '';
+  });
+})();
+</script>
+
+</body>
+</html>

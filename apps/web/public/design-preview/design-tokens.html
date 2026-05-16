@@ -1,0 +1,1746 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clerque Counter — Design Tokens</title>
+<meta name="viewport" content="width=1920">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ====================================================================
+   CLERQUE COUNTER — DESIGN TOKENS
+   Deliverable 1 · for review · Clerque Counter Android POS
+   Page is itself NOT the product UI — this is a system reference doc.
+   ==================================================================== */
+
+:root {
+  /* Brand */
+  --c-primary:           #8B5E3C;
+  --c-primary-press:     #714A2D;
+  --c-primary-container: #E7D5C2;
+  --c-on-primary:        #FFFFFF;
+
+  /* Cream surfaces */
+  --c-cream:             #EEE9DF;
+  --c-cream-soft:        #F5F1E8;
+  --c-cream-deep:        #DDD4C2;
+
+  /* Neutral surfaces */
+  --c-bg:                #FAFAF7;
+  --c-surface:           #FFFFFF;
+
+  /* Text */
+  --c-ink:               #1F1B16;
+  --c-muted:             #5C5650;
+  --c-faint:             #8A847C;
+
+  /* Lines */
+  --c-rule:              #D4CFC4;
+  --c-rule-strong:       #BAB3A6;
+
+  /* Semantic */
+  --c-success:           #10B981;
+  --c-success-soft:      #D7F4E7;
+  --c-warning:           #F59E0B;
+  --c-warning-soft:      #FCEBC9;
+  --c-error:             #DC2626;
+  --c-error-soft:        #FBD9D9;
+  --c-info:              #2563EB;
+  --c-info-soft:         #DBE8FE;
+
+  /* Spacing scale (dp) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  /* Radii */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+
+  /* Elevation (light) — Material-derived, warmed */
+  --e-0: none;
+  --e-1: 0 1px 2px rgba(31,27,22,.06), 0 1px 1px rgba(31,27,22,.04);
+  --e-2: 0 2px 6px rgba(31,27,22,.08), 0 1px 2px rgba(31,27,22,.05);
+  --e-3: 0 6px 16px rgba(31,27,22,.10), 0 2px 4px rgba(31,27,22,.05);
+  --e-4: 0 12px 32px rgba(31,27,22,.14), 0 4px 8px rgba(31,27,22,.06);
+  --e-5: 0 24px 56px rgba(31,27,22,.18), 0 8px 16px rgba(31,27,22,.06);
+
+  /* Doc */
+  --doc-bg: #F2EFE8;
+  --doc-fg: var(--c-ink);
+  --doc-card: #FFFFFF;
+  --doc-rule: #D4CFC4;
+  --doc-muted: var(--c-muted);
+  --doc-accent: var(--c-primary);
+
+  --font-primary: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* doc-level dark preview toggled by [data-theme="dark"] on a wrapper */
+[data-theme="dark"] {
+  --c-primary:           #D8A87A;
+  --c-primary-press:     #C99875;
+  --c-primary-container: #4D3520;
+  --c-on-primary:        #2A1A0E;
+
+  --c-cream:             #2E2820;
+  --c-cream-soft:        #25201A;
+  --c-cream-deep:        #3A3328;
+
+  --c-bg:                #181410;
+  --c-surface:           #221D17;
+
+  --c-ink:               #F5F1E8;
+  --c-muted:             #B5ACA0;
+  --c-faint:             #847C71;
+
+  --c-rule:              #3A332B;
+  --c-rule-strong:       #524A41;
+
+  --c-success:           #34D399;
+  --c-success-soft:      #1F3A2D;
+  --c-warning:           #FBBF24;
+  --c-warning-soft:      #3A2C16;
+  --c-error:             #F87171;
+  --c-error-soft:        #3A1F1F;
+  --c-info:              #60A5FA;
+  --c-info-soft:         #1F2A3A;
+
+  --e-1: 0 1px 2px rgba(0,0,0,.4);
+  --e-2: 0 2px 6px rgba(0,0,0,.45);
+  --e-3: 0 6px 16px rgba(0,0,0,.5);
+  --e-4: 0 12px 32px rgba(0,0,0,.55);
+  --e-5: 0 24px 56px rgba(0,0,0,.6);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--doc-bg);
+  color: var(--doc-fg);
+  font-family: var(--font-primary);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.page {
+  width: 1920px;
+  margin: 0 auto;
+  padding: 56px 64px 96px;
+}
+
+/* ------------------------------- HEADER ------------------------------- */
+.hdr {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 32px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--doc-rule);
+  margin-bottom: 40px;
+}
+.hdr-eyebrow {
+  font-size: 12px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--doc-muted);
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hdr-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--doc-accent);
+  display: inline-block;
+}
+.hdr-title {
+  font-size: 56px;
+  line-height: 1.05;
+  letter-spacing: -.02em;
+  font-weight: 700;
+  margin: 0;
+  color: var(--c-ink);
+}
+.hdr-sub {
+  font-size: 18px;
+  color: var(--doc-muted);
+  margin: 14px 0 0;
+  max-width: 720px;
+}
+.hdr-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--doc-muted);
+  text-align: right;
+}
+.hdr-meta b { color: var(--c-ink); font-weight: 600; }
+
+/* ------------------------------- SECTIONS ----------------------------- */
+.sec { margin-bottom: 56px; }
+.sec-head {
+  display: flex; align-items: baseline; gap: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--doc-rule);
+}
+.sec-num {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--doc-muted);
+  letter-spacing: .04em;
+}
+.sec-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  margin: 0;
+}
+.sec-note {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--doc-muted);
+  max-width: 460px;
+  text-align: right;
+}
+
+/* ------------------------------- 1. COLOR ----------------------------- */
+.col-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.col-panel {
+  background: var(--doc-card);
+  border: 1px solid var(--doc-rule);
+  border-radius: 12px;
+  padding: 24px;
+}
+.col-panel[data-theme="dark"] {
+  background: #1A1612;
+  border-color: #2C2620;
+  color: #F5F1E8;
+}
+.col-panel-h {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 18px;
+}
+.col-panel-h-t {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.col-panel-h-m {
+  font-size: 11px;
+  color: var(--c-muted);
+  font-family: var(--font-mono);
+}
+[data-theme="dark"] .col-panel-h-m { color: #B5ACA0; }
+
+.swatch-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.swatch-row + .swatch-row { margin-top: 16px; }
+.swatch {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,.06);
+}
+[data-theme="dark"] .swatch { border-color: rgba(255,255,255,.06); }
+.swatch-chip {
+  height: 64px;
+  display: flex; align-items: flex-end; justify-content: flex-start;
+  padding: 8px 10px;
+  position: relative;
+}
+.swatch-chip-onmark {
+  position: absolute;
+  top: 8px; right: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(255,255,255,.92);
+  color: #1F1B16;
+  border-radius: 3px;
+  padding: 2px 5px;
+  letter-spacing: .02em;
+}
+.swatch-meta {
+  background: var(--doc-card);
+  padding: 8px 10px;
+  border-top: 1px solid var(--doc-rule);
+}
+[data-theme="dark"] .swatch-meta {
+  background: #221D17;
+  border-color: #2C2620;
+}
+.swatch-name {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.swatch-hex {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-muted);
+}
+[data-theme="dark"] .swatch-hex { color: #B5ACA0; }
+.swatch-use {
+  font-size: 11px;
+  color: var(--c-muted);
+  margin-top: 4px;
+  line-height: 1.35;
+}
+[data-theme="dark"] .swatch-use { color: #B5ACA0; }
+
+/* ------------------------------- 2. TYPE ------------------------------ */
+.type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.type-panel {
+  background: var(--doc-card);
+  border: 1px solid var(--doc-rule);
+  border-radius: 12px;
+  padding: 28px 32px 32px;
+}
+.type-panel-h {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 22px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--doc-rule);
+}
+.type-panel-h-t {
+  font-size: 16px;
+  font-weight: 600;
+}
+.type-panel-h-spec {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-muted);
+}
+.type-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 20px;
+  align-items: baseline;
+  padding: 14px 0;
+  border-bottom: 1px solid #EFEAE0;
+}
+.type-row:last-child { border-bottom: 0; }
+.type-label {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--c-muted);
+  letter-spacing: .02em;
+}
+.type-label b { display: block; color: var(--c-ink); font-weight: 600; font-family: var(--font-primary); font-size: 12px; margin-bottom: 2px; letter-spacing: 0; }
+.type-spec { color: var(--c-faint); }
+.type-sample { color: var(--c-ink); line-height: 1.2; }
+
+.font-inter { font-family: "Inter", sans-serif; }
+.font-jakarta { font-family: "Plus Jakarta Sans", sans-serif; }
+
+.t-display  { font-size: 40px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.t-h1       { font-size: 28px; font-weight: 600; letter-spacing: -.01em; line-height: 1.2; }
+.t-h2       { font-size: 22px; font-weight: 600; line-height: 1.25; }
+.t-body-lg  { font-size: 18px; font-weight: 400; line-height: 1.5; }
+.t-body     { font-size: 16px; font-weight: 400; line-height: 1.5; }
+.t-body-sm  { font-size: 14px; font-weight: 400; line-height: 1.5; }
+.t-caption  { font-size: 12px; font-weight: 500; line-height: 1.4; letter-spacing: .01em; }
+.t-button   { font-size: 18px; font-weight: 600; letter-spacing: .005em; }
+.t-key      { font-size: 22px; font-weight: 500; font-feature-settings: "tnum"; }
+.t-price    { font-size: 20px; font-weight: 600; font-feature-settings: "tnum"; letter-spacing: -.01em; }
+
+/* phone scale aside */
+.type-scale-aside {
+  margin-top: 24px;
+  padding: 18px 20px;
+  background: #FAF7F0;
+  border: 1px solid #E8E2D4;
+  border-radius: 8px;
+}
+.type-scale-aside-h {
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--c-muted);
+  margin-bottom: 12px;
+}
+.type-scale-table {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-ink);
+  border-collapse: collapse;
+}
+.type-scale-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--c-muted);
+  padding-bottom: 6px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.type-scale-table td { padding: 4px 0; }
+.type-scale-table tr td:first-child {
+  font-family: var(--font-primary);
+  font-weight: 500;
+  color: var(--c-ink);
+  font-size: 12px;
+}
+
+/* ------------------------------- 3. SPACING --------------------------- */
+.spc-panel {
+  background: var(--doc-card);
+  border: 1px solid var(--doc-rule);
+  border-radius: 12px;
+  padding: 32px;
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 48px;
+  align-items: start;
+}
+.spc-rows { display: flex; flex-direction: column; gap: 14px; }
+.spc-row {
+  display: grid;
+  grid-template-columns: 60px 70px 1fr;
+  align-items: center;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.spc-token { font-weight: 600; color: var(--c-ink); }
+.spc-px { color: var(--c-muted); }
+.spc-bar {
+  background: var(--c-primary);
+  height: 16px;
+  border-radius: 2px;
+}
+.spc-uses {
+  padding: 24px;
+  background: var(--c-cream-soft);
+  border-radius: 12px;
+}
+.spc-uses-h {
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--c-muted);
+  margin-bottom: 12px;
+}
+.spc-uses ul {
+  margin: 0; padding: 0; list-style: none;
+  font-size: 13px; color: var(--c-ink);
+}
+.spc-uses li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--c-cream-deep);
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 12px;
+}
+.spc-uses li:last-child { border-bottom: 0; }
+.spc-uses li b {
+  font-family: var(--font-mono);
+  color: var(--c-primary);
+  font-weight: 600;
+}
+
+/* ------------------------------- 4. RADII ----------------------------- */
+.rad-row {
+  background: var(--doc-card);
+  border: 1px solid var(--doc-rule);
+  border-radius: 12px;
+  padding: 28px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 20px;
+}
+.rad-cell { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.rad-tile {
+  width: 100%;
+  height: 92px;
+  background: var(--c-cream);
+  border: 1px solid var(--c-cream-deep);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--c-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.rad-meta {
+  text-align: center;
+}
+.rad-token { font-weight: 600; font-size: 13px; }
+.rad-spec { font-family: var(--font-mono); font-size: 11px; color: var(--c-muted); margin-top: 2px; }
+.rad-use { font-size: 11px; color: var(--c-muted); margin-top: 4px; line-height: 1.4; }
+
+/* ------------------------------- 5. ELEVATION ------------------------- */
+.elev-row {
+  background: var(--c-cream-soft);
+  border: 1px solid var(--c-cream-deep);
+  border-radius: 12px;
+  padding: 40px 28px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 24px;
+}
+.elev-cell { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.elev-tile {
+  width: 100%; height: 96px;
+  background: #fff;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--c-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.elev-meta { text-align: center; }
+.elev-token { font-weight: 600; font-size: 13px; }
+.elev-use { font-size: 11px; color: var(--c-muted); margin-top: 4px; line-height: 1.4; max-width: 200px; }
+
+/* ------------------------------- 6. STICKER SHEET --------------------- */
+.sticker-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1.1fr;
+  gap: 24px;
+}
+.sticker {
+  background: var(--doc-card);
+  border: 1px solid var(--doc-rule);
+  border-radius: 12px;
+  padding: 22px 22px 24px;
+}
+.sticker-h {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--doc-rule);
+}
+.sticker-h-t {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.sticker-h-m {
+  font-size: 11px;
+  color: var(--c-muted);
+  font-family: var(--font-mono);
+}
+.sticker-body { display: flex; flex-direction: column; gap: 14px; }
+.sticker-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sticker-label {
+  font-size: 11px;
+  color: var(--c-muted);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+/* App primitives styled with tokens (for the sticker sheet previews) */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-primary);
+  font-weight: 600;
+  border: 0;
+  cursor: default;
+  transition: transform .15s;
+  white-space: nowrap;
+  gap: 8px;
+}
+.btn-primary { background: var(--c-primary); color: var(--c-on-primary); }
+.btn-secondary { background: transparent; color: var(--c-primary); border: 1.5px solid var(--c-primary); }
+.btn-destructive { background: var(--c-error); color: #fff; }
+.btn-ghost { background: transparent; color: var(--c-primary); }
+.btn-cashier { height: 64px; min-width: 200px; font-size: 20px; border-radius: 12px; padding: 0 28px; box-shadow: var(--e-2); }
+.btn-default  { height: 48px; min-width: 120px; font-size: 16px; border-radius: 10px; padding: 0 20px; }
+.btn-compact  { height: 36px; min-width: 80px; font-size: 14px; border-radius: 8px; padding: 0 14px; }
+
+.input {
+  display: flex; flex-direction: column; gap: 6px;
+  width: 100%;
+}
+.input-label { font-size: 12px; font-weight: 600; color: var(--c-muted); letter-spacing: .02em; }
+.input-field {
+  height: 52px;
+  border: 1.5px solid var(--c-rule);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0 16px;
+  display: flex; align-items: center;
+  font-size: 16px;
+  color: var(--c-ink);
+}
+.input-field.is-focus { border-color: var(--c-primary); box-shadow: 0 0 0 4px rgba(139,94,60,.12); }
+.input-field.is-error { border-color: var(--c-error); }
+.input-help { font-size: 11px; color: var(--c-muted); }
+.input-help.is-error { color: var(--c-error); }
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 64px);
+  gap: 8px;
+  padding: 12px;
+  background: var(--c-cream-soft);
+  border-radius: 12px;
+  width: fit-content;
+}
+.keypad-key {
+  height: 56px;
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--c-ink);
+  font-feature-settings: "tnum";
+  box-shadow: var(--e-1);
+}
+.keypad-key.is-action {
+  background: var(--c-cream);
+  border-color: var(--c-cream-deep);
+  color: var(--c-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pin-dots { display: flex; gap: 14px; }
+.pin-dot {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--c-rule-strong);
+  background: transparent;
+}
+.pin-dot.is-filled {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+}
+
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+.badge-success { background: var(--c-success-soft); color: #065F46; }
+.badge-success .badge-dot { background: var(--c-success); }
+.badge-warning { background: var(--c-warning-soft); color: #92400E; }
+.badge-warning .badge-dot { background: var(--c-warning); }
+.badge-error { background: var(--c-error-soft); color: #991B1B; }
+.badge-error .badge-dot { background: var(--c-error); }
+.badge-info { background: var(--c-info-soft); color: #1E40AF; }
+.badge-info .badge-dot { background: var(--c-info); }
+.badge-neutral { background: var(--c-cream); color: var(--c-ink); }
+.badge-neutral .badge-dot { background: var(--c-muted); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 16px;
+  border-radius: var(--r-pill);
+  font-size: 14px;
+  font-weight: 500;
+  background: #fff;
+  border: 1.5px solid var(--c-rule);
+  color: var(--c-ink);
+}
+.chip-price { color: var(--c-muted); font-size: 12px; font-feature-settings: "tnum"; }
+.chip.is-selected {
+  background: var(--c-primary-container);
+  border-color: var(--c-primary);
+  color: var(--c-primary-press);
+}
+.chip.is-selected .chip-price { color: var(--c-primary-press); }
+
+.cart-line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--c-rule);
+}
+.cart-line:last-child { border-bottom: 0; }
+.cart-line-name { font-size: 15px; font-weight: 600; color: var(--c-ink); }
+.cart-line-mods { font-size: 12px; color: var(--c-muted); line-height: 1.5; margin-top: 2px; }
+.cart-line-price { font-size: 15px; font-weight: 600; color: var(--c-ink); font-feature-settings: "tnum"; }
+.cart-line-controls {
+  display: flex; align-items: center; gap: 8px;
+  grid-column: 1 / 2;
+  margin-top: 6px;
+}
+.qty-stepper {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  border: 1px solid var(--c-rule);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.qty-stepper button {
+  width: 36px; height: 100%;
+  border: 0; background: transparent;
+  font-size: 18px; color: var(--c-primary);
+  font-weight: 600;
+}
+.qty-stepper-val {
+  min-width: 36px; text-align: center;
+  font-size: 15px; font-weight: 600;
+  font-feature-settings: "tnum";
+}
+
+.snackbar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px;
+  background: #2B2620;
+  color: #FAFAF7;
+  border-radius: 10px;
+  font-size: 14px;
+  box-shadow: var(--e-3);
+}
+.snackbar-icon {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--c-success);
+  display: flex; align-items: center; justify-content: center;
+  color: white; font-size: 14px; font-weight: 700;
+  flex-shrink: 0;
+}
+.snackbar-action {
+  margin-left: auto;
+  font-weight: 600;
+  color: #D8A87A;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.sheet-mini {
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: 16px 16px 8px 8px;
+  overflow: hidden;
+  box-shadow: var(--e-3);
+}
+.sheet-handle {
+  display: flex; justify-content: center;
+  padding: 10px 0 4px;
+}
+.sheet-handle::after {
+  content: "";
+  width: 44px; height: 4px;
+  background: var(--c-rule-strong);
+  border-radius: 2px;
+}
+.sheet-body { padding: 4px 18px 18px; }
+.sheet-title { font-size: 16px; font-weight: 700; margin: 6px 0 2px; }
+.sheet-sub { font-size: 12px; color: var(--c-muted); margin-bottom: 14px; }
+
+.banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.banner-offline {
+  background: var(--c-warning-soft);
+  color: #78350F;
+  border: 1px solid #F8D6A1;
+}
+.banner-icon { font-size: 16px; }
+
+.sync-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  color: var(--c-ink);
+  font-weight: 500;
+}
+.sync-pill-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--c-success);
+  box-shadow: 0 0 0 2px rgba(16,185,129,.15);
+}
+.sync-pill-dot.is-offline { background: var(--c-warning); box-shadow: 0 0 0 2px rgba(245,158,11,.15); }
+.sync-pill-dot.is-syncing { background: var(--c-info); box-shadow: 0 0 0 2px rgba(37,99,235,.15); }
+
+/* ------------------------------- 7. FOOTER ---------------------------- */
+.foot {
+  margin-top: 72px;
+  padding-top: 24px;
+  border-top: 1px solid var(--doc-rule);
+  display: flex; justify-content: space-between;
+  font-size: 12px;
+  color: var(--doc-muted);
+  font-family: var(--font-mono);
+}
+
+/* ------------------------------- TWEAKS PANEL ------------------------- */
+.tweaks-trigger { display: none; }
+.tweaks {
+  display: none;
+  position: fixed;
+  right: 20px; bottom: 20px;
+  width: 280px;
+  background: #fff;
+  border: 1px solid var(--c-rule);
+  border-radius: 14px;
+  box-shadow: var(--e-4);
+  z-index: 100;
+  font-family: var(--font-primary);
+  overflow: hidden;
+}
+.tweaks.is-open { display: block; }
+.tweaks-h {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--c-rule);
+  background: var(--c-cream-soft);
+}
+.tweaks-h-t { font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.tweaks-h-x {
+  background: transparent; border: 0; cursor: pointer;
+  font-size: 18px; color: var(--c-muted); line-height: 1;
+  padding: 0; width: 24px; height: 24px;
+}
+.tweaks-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.tweak-group-l { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; color: var(--c-muted); margin-bottom: 8px; }
+.seg {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  background: var(--c-cream);
+  border-radius: 10px;
+  padding: 4px;
+  gap: 2px;
+}
+.seg-opt {
+  border: 0; background: transparent; padding: 8px 4px;
+  font-size: 13px; font-weight: 500; color: var(--c-muted);
+  cursor: pointer;
+  border-radius: 8px;
+  font-family: var(--font-primary);
+}
+.seg-opt.is-on {
+  background: #fff;
+  color: var(--c-ink);
+  font-weight: 600;
+  box-shadow: var(--e-1);
+}
+
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ============================ HEADER ============================ -->
+  <header class="hdr">
+    <div>
+      <div class="hdr-eyebrow"><span class="hdr-dot"></span> CLERQUE COUNTER · Android tablet POS</div>
+      <h1 class="hdr-title">Design Tokens</h1>
+      <p class="hdr-sub">Deliverable&nbsp;1 — the visual primitives the Counter app is built from. Colors, type, spacing, radii, and elevation, plus an applied sticker sheet so you can see the tokens in their natural habitat.</p>
+    </div>
+    <div class="hdr-meta">
+      <div><b>v0.1</b> · for review</div>
+      <div>Target · Samsung Galaxy Tab A8 10.5″ · 1920×1200</div>
+      <div>Stack · React Native / Expo · MD3-informed</div>
+    </div>
+  </header>
+
+  <!-- ============================ 1. COLOR ============================ -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2 class="sec-title">Color</h2>
+      <div class="sec-note">Warm brown owns identity. Cream is the default soft surface. Semantic colors lean MD3 but warmer; both themes share token names.</div>
+    </div>
+
+    <div class="col-grid">
+      <!-- LIGHT -->
+      <div class="col-panel">
+        <div class="col-panel-h">
+          <div class="col-panel-h-t">Light · default</div>
+          <div class="col-panel-h-m">--theme: light</div>
+        </div>
+
+        <div class="sticker-label">Brand</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#8B5E3C"><span class="swatch-chip-onmark">on #fff</span></div>
+            <div class="swatch-meta"><div class="swatch-name">primary</div><div class="swatch-hex">#8B5E3C</div><div class="swatch-use">Buttons, primary actions, focus rings</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#714A2D"><span class="swatch-chip-onmark">on #fff</span></div>
+            <div class="swatch-meta"><div class="swatch-name">primary/press</div><div class="swatch-hex">#714A2D</div><div class="swatch-use">Pressed/active state</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#E7D5C2"></div>
+            <div class="swatch-meta"><div class="swatch-name">primary/container</div><div class="swatch-hex">#E7D5C2</div><div class="swatch-use">Tonal selection fills</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#FFFFFF;border:1px solid #EEE9DF"></div>
+            <div class="swatch-meta"><div class="swatch-name">on-primary</div><div class="swatch-hex">#FFFFFF</div><div class="swatch-use">Text over primary fills</div></div>
+          </div>
+        </div>
+
+        <div class="sticker-label" style="margin-top:18px">Surfaces</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#FAFAF7"></div>
+            <div class="swatch-meta"><div class="swatch-name">bg</div><div class="swatch-hex">#FAFAF7</div><div class="swatch-use">App background</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#FFFFFF;border:1px solid #EEE9DF"></div>
+            <div class="swatch-meta"><div class="swatch-name">surface</div><div class="swatch-hex">#FFFFFF</div><div class="swatch-use">Cards, sheets</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#F5F1E8"></div>
+            <div class="swatch-meta"><div class="swatch-name">cream/soft</div><div class="swatch-hex">#F5F1E8</div><div class="swatch-use">Side panels, keypad bed</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#EEE9DF"></div>
+            <div class="swatch-meta"><div class="swatch-name">cream</div><div class="swatch-hex">#EEE9DF</div><div class="swatch-use">Badge fills, tonal cards</div></div>
+          </div>
+        </div>
+
+        <div class="sticker-label" style="margin-top:18px">Text &amp; lines</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#1F1B16"><span class="swatch-chip-onmark">on cream</span></div>
+            <div class="swatch-meta"><div class="swatch-name">ink</div><div class="swatch-hex">#1F1B16</div><div class="swatch-use">Primary text · 17.8:1 on bg</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#5C5650"></div>
+            <div class="swatch-meta"><div class="swatch-name">muted</div><div class="swatch-hex">#5C5650</div><div class="swatch-use">Labels, captions · 7.3:1</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#D4CFC4"></div>
+            <div class="swatch-meta"><div class="swatch-name">rule</div><div class="swatch-hex">#D4CFC4</div><div class="swatch-use">Borders, dividers</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#BAB3A6"></div>
+            <div class="swatch-meta"><div class="swatch-name">rule/strong</div><div class="swatch-hex">#BAB3A6</div><div class="swatch-use">Sheet handles, input borders</div></div>
+          </div>
+        </div>
+
+        <div class="sticker-label" style="margin-top:18px">Semantic</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#10B981"></div>
+            <div class="swatch-meta"><div class="swatch-name">success</div><div class="swatch-hex">#10B981</div><div class="swatch-use">Payments confirmed</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#F59E0B"></div>
+            <div class="swatch-meta"><div class="swatch-name">warning</div><div class="swatch-hex">#F59E0B</div><div class="swatch-use">Near-expiry, offline</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#DC2626"></div>
+            <div class="swatch-meta"><div class="swatch-name">error</div><div class="swatch-hex">#DC2626</div><div class="swatch-use">Void, refund, reject</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#2563EB"></div>
+            <div class="swatch-meta"><div class="swatch-name">info</div><div class="swatch-hex">#2563EB</div><div class="swatch-use">Sync activity, GCash brand-adj.</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DARK -->
+      <div class="col-panel" data-theme="dark">
+        <div class="col-panel-h">
+          <div class="col-panel-h-t">Dark · evening shift</div>
+          <div class="col-panel-h-m">--theme: dark</div>
+        </div>
+
+        <div class="sticker-label" style="color:#B5ACA0">Brand</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#D8A87A"><span class="swatch-chip-onmark">on #181410</span></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">primary</div><div class="swatch-hex" style="color:#B5ACA0">#D8A87A</div><div class="swatch-use" style="color:#B5ACA0">Lifted brown · WCAG-safe on dark</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#C99875"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">primary/press</div><div class="swatch-hex" style="color:#B5ACA0">#C99875</div><div class="swatch-use" style="color:#B5ACA0">Pressed state</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#4D3520"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">primary/container</div><div class="swatch-hex" style="color:#B5ACA0">#4D3520</div><div class="swatch-use" style="color:#B5ACA0">Tonal fills</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#2A1A0E"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">on-primary</div><div class="swatch-hex" style="color:#B5ACA0">#2A1A0E</div><div class="swatch-use" style="color:#B5ACA0">Text on brown</div></div>
+          </div>
+        </div>
+
+        <div class="sticker-label" style="margin-top:18px;color:#B5ACA0">Surfaces</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#181410"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">bg</div><div class="swatch-hex" style="color:#B5ACA0">#181410</div><div class="swatch-use" style="color:#B5ACA0">App background</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#221D17"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">surface</div><div class="swatch-hex" style="color:#B5ACA0">#221D17</div><div class="swatch-use" style="color:#B5ACA0">Cards, sheets</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#25201A"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">cream/soft</div><div class="swatch-hex" style="color:#B5ACA0">#25201A</div><div class="swatch-use" style="color:#B5ACA0">Side panels</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#2E2820"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">cream</div><div class="swatch-hex" style="color:#B5ACA0">#2E2820</div><div class="swatch-use" style="color:#B5ACA0">Tonal cards</div></div>
+          </div>
+        </div>
+
+        <div class="sticker-label" style="margin-top:18px;color:#B5ACA0">Text &amp; lines</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#F5F1E8"><span class="swatch-chip-onmark">on bg</span></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">ink</div><div class="swatch-hex" style="color:#B5ACA0">#F5F1E8</div><div class="swatch-use" style="color:#B5ACA0">Primary text · 15.9:1</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#B5ACA0"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">muted</div><div class="swatch-hex" style="color:#B5ACA0">#B5ACA0</div><div class="swatch-use" style="color:#B5ACA0">Captions · 6.4:1</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#3A332B"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">rule</div><div class="swatch-hex" style="color:#B5ACA0">#3A332B</div><div class="swatch-use" style="color:#B5ACA0">Subtle dividers</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#524A41"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">rule/strong</div><div class="swatch-hex" style="color:#B5ACA0">#524A41</div><div class="swatch-use" style="color:#B5ACA0">Input borders</div></div>
+          </div>
+        </div>
+
+        <div class="sticker-label" style="margin-top:18px;color:#B5ACA0">Semantic</div>
+        <div class="swatch-row">
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#34D399"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">success</div><div class="swatch-hex" style="color:#B5ACA0">#34D399</div><div class="swatch-use" style="color:#B5ACA0">Payments confirmed</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#FBBF24"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">warning</div><div class="swatch-hex" style="color:#B5ACA0">#FBBF24</div><div class="swatch-use" style="color:#B5ACA0">Offline, expiry</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#F87171"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">error</div><div class="swatch-hex" style="color:#B5ACA0">#F87171</div><div class="swatch-use" style="color:#B5ACA0">Void, refund</div></div>
+          </div>
+          <div class="swatch">
+            <div class="swatch-chip" style="background:#60A5FA"></div>
+            <div class="swatch-meta" style="background:#221D17;border-color:#2C2620"><div class="swatch-name" style="color:#F5F1E8">info</div><div class="swatch-hex" style="color:#B5ACA0">#60A5FA</div><div class="swatch-use" style="color:#B5ACA0">Sync activity</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 2. TYPE ============================ -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2 class="sec-title">Typography</h2>
+      <div class="sec-note">Two candidates side-by-side at tablet scale. Inter ships denser and more screen-tested; Plus Jakarta is warmer with a touch more personality at headline sizes.</div>
+    </div>
+
+    <div class="type-grid">
+      <!-- INTER -->
+      <div class="type-panel">
+        <div class="type-panel-h">
+          <div class="type-panel-h-t">Inter</div>
+          <div class="type-panel-h-spec">family · Inter · 400/500/600/700</div>
+        </div>
+
+        <div class="type-row">
+          <div class="type-label"><b>display</b><span class="type-spec">40 / 44 · 700</span></div>
+          <div class="type-sample font-inter t-display">₱1,248.00</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>h1</b><span class="type-spec">28 / 34 · 600</span></div>
+          <div class="type-sample font-inter t-h1">Tendering · Bayad</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>h2</b><span class="type-spec">22 / 28 · 600</span></div>
+          <div class="type-sample font-inter t-h2">Iced Spanish Latte</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>body-lg</b><span class="type-spec">18 / 27 · 400</span></div>
+          <div class="type-sample font-inter t-body-lg">Tap a product to add it to the running cart.</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>body</b><span class="type-spec">16 / 24 · 400</span></div>
+          <div class="type-sample font-inter t-body">Oat milk · No sugar · Extra shot</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>body-sm</b><span class="type-spec">14 / 20 · 400</span></div>
+          <div class="type-sample font-inter t-body-sm">Sale synced to Cloud · 2 mins ago</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>caption</b><span class="type-spec">12 / 16 · 500</span></div>
+          <div class="type-sample font-inter t-caption" style="text-transform:uppercase;letter-spacing:.08em;color:var(--c-muted)">OR# 000123 · Non-VAT</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>button</b><span class="type-spec">18 / 20 · 600</span></div>
+          <div class="type-sample font-inter t-button" style="color:var(--c-primary)">Confirm payment →</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>cashier-key</b><span class="type-spec">22 / 22 · 500 · tnum</span></div>
+          <div class="type-sample font-inter t-key">7 &nbsp; 8 &nbsp; 9</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>price</b><span class="type-spec">20 / 24 · 600 · tnum</span></div>
+          <div class="type-sample font-inter t-price">₱160.00</div>
+        </div>
+
+        <div class="type-scale-aside">
+          <div class="type-scale-aside-h">Phone scale · auto-shrink</div>
+          <table class="type-scale-table">
+            <thead><tr><th>token</th><th>tablet</th><th>phone</th></tr></thead>
+            <tbody>
+              <tr><td>display</td><td>40 / 44</td><td>28 / 34</td></tr>
+              <tr><td>h1</td><td>28 / 34</td><td>22 / 28</td></tr>
+              <tr><td>h2</td><td>22 / 28</td><td>18 / 24</td></tr>
+              <tr><td>body-lg</td><td>18 / 27</td><td>17 / 25</td></tr>
+              <tr><td>body</td><td>16 / 24</td><td>15 / 22</td></tr>
+              <tr><td>body-sm</td><td>14 / 20</td><td>13 / 18</td></tr>
+              <tr><td>caption</td><td>12 / 16</td><td>11 / 14</td></tr>
+              <tr><td>button</td><td>18 / 20</td><td>16 / 20</td></tr>
+              <tr><td>cashier-key</td><td>22 / 22</td><td>20 / 20</td></tr>
+              <tr><td>price</td><td>20 / 24</td><td>18 / 22</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PLUS JAKARTA -->
+      <div class="type-panel">
+        <div class="type-panel-h">
+          <div class="type-panel-h-t">Plus Jakarta Sans</div>
+          <div class="type-panel-h-spec">family · PJS · 400/500/600/700</div>
+        </div>
+
+        <div class="type-row">
+          <div class="type-label"><b>display</b><span class="type-spec">40 / 44 · 700</span></div>
+          <div class="type-sample font-jakarta t-display">₱1,248.00</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>h1</b><span class="type-spec">28 / 34 · 600</span></div>
+          <div class="type-sample font-jakarta t-h1">Tendering · Bayad</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>h2</b><span class="type-spec">22 / 28 · 600</span></div>
+          <div class="type-sample font-jakarta t-h2">Iced Spanish Latte</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>body-lg</b><span class="type-spec">18 / 27 · 400</span></div>
+          <div class="type-sample font-jakarta t-body-lg">Tap a product to add it to the running cart.</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>body</b><span class="type-spec">16 / 24 · 400</span></div>
+          <div class="type-sample font-jakarta t-body">Oat milk · No sugar · Extra shot</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>body-sm</b><span class="type-spec">14 / 20 · 400</span></div>
+          <div class="type-sample font-jakarta t-body-sm">Sale synced to Cloud · 2 mins ago</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>caption</b><span class="type-spec">12 / 16 · 500</span></div>
+          <div class="type-sample font-jakarta t-caption" style="text-transform:uppercase;letter-spacing:.08em;color:var(--c-muted)">OR# 000123 · Non-VAT</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>button</b><span class="type-spec">18 / 20 · 600</span></div>
+          <div class="type-sample font-jakarta t-button" style="color:var(--c-primary)">Confirm payment →</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>cashier-key</b><span class="type-spec">22 / 22 · 500 · tnum</span></div>
+          <div class="type-sample font-jakarta t-key">7 &nbsp; 8 &nbsp; 9</div>
+        </div>
+        <div class="type-row">
+          <div class="type-label"><b>price</b><span class="type-spec">20 / 24 · 600 · tnum</span></div>
+          <div class="type-sample font-jakarta t-price">₱160.00</div>
+        </div>
+
+        <div class="type-scale-aside">
+          <div class="type-scale-aside-h">Vote: which feels more "Counter"?</div>
+          <div style="font-size:13px;color:var(--c-ink);line-height:1.55">
+            <p style="margin:0 0 8px"><b>Inter</b> — neutral, dense at price ladders, used by Shopify POS &amp; Toast. Safe.</p>
+            <p style="margin:0"><b>Plus Jakarta</b> — slightly warmer headline shapes, pairs well with the cream surfaces, a touch more "café".</p>
+            <p style="margin:10px 0 0;color:var(--c-muted);font-size:11px">My pick: <b style="color:var(--c-primary)">Plus Jakarta for display/h1, Inter for body &amp; numerics</b>. Tabular figures and tight pricing read sharper in Inter.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 3. SPACING ============================ -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2 class="sec-title">Spacing</h2>
+      <div class="sec-note">4dp base. Densest at 4/8 for input internals; 16/24 dominates layout; 32+ separates panels in the POS split view.</div>
+    </div>
+
+    <div class="spc-panel">
+      <div class="spc-rows">
+        <div class="spc-row"><span class="spc-token">s-1</span><span class="spc-px">4 px</span><div class="spc-bar" style="width:4px"></div></div>
+        <div class="spc-row"><span class="spc-token">s-2</span><span class="spc-px">8 px</span><div class="spc-bar" style="width:8px"></div></div>
+        <div class="spc-row"><span class="spc-token">s-3</span><span class="spc-px">12 px</span><div class="spc-bar" style="width:12px"></div></div>
+        <div class="spc-row"><span class="spc-token">s-4</span><span class="spc-px">16 px</span><div class="spc-bar" style="width:16px"></div></div>
+        <div class="spc-row"><span class="spc-token">s-5</span><span class="spc-px">24 px</span><div class="spc-bar" style="width:24px"></div></div>
+        <div class="spc-row"><span class="spc-token">s-6</span><span class="spc-px">32 px</span><div class="spc-bar" style="width:32px"></div></div>
+        <div class="spc-row"><span class="spc-token">s-7</span><span class="spc-px">48 px</span><div class="spc-bar" style="width:48px"></div></div>
+        <div class="spc-row"><span class="spc-token">s-8</span><span class="spc-px">64 px</span><div class="spc-bar" style="width:64px"></div></div>
+      </div>
+      <div class="spc-uses">
+        <div class="spc-uses-h">Typical usage</div>
+        <ul>
+          <li><b>s-1</b><span>Icon-to-label gap inside chips, dot-to-text in badges</span></li>
+          <li><b>s-2</b><span>Keypad gutters, badge internal padding, cart-line tight stack</span></li>
+          <li><b>s-3</b><span>Quantity stepper, chip padding, modifier list spacing</span></li>
+          <li><b>s-4</b><span>Card internal padding (compact), gap between cart lines</span></li>
+          <li><b>s-5</b><span>Section padding, gap between major panels</span></li>
+          <li><b>s-6</b><span>Top-level panel padding, tendering screen margin</span></li>
+          <li><b>s-7</b><span>Page gutters on tablet landscape, hero spacing</span></li>
+          <li><b>s-8</b><span>Splash logo offset, large empty-state hero gap</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 4. RADII ============================ -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2 class="sec-title">Radii</h2>
+      <div class="sec-note">Mixed: tight for utility, generous for sheets. Cashier-facing buttons stay at 10–12px — too round and they look like web pills; too square and they feel cold.</div>
+    </div>
+
+    <div class="rad-row">
+      <div class="rad-cell">
+        <div class="rad-tile" style="border-radius:4px">r-xs</div>
+        <div class="rad-meta">
+          <div class="rad-token">xs · 4dp</div>
+          <div class="rad-spec">--r-xs</div>
+          <div class="rad-use">Inline tags, OR# stamp boxes</div>
+        </div>
+      </div>
+      <div class="rad-cell">
+        <div class="rad-tile" style="border-radius:8px">r-sm</div>
+        <div class="rad-meta">
+          <div class="rad-token">sm · 8dp</div>
+          <div class="rad-spec">--r-sm</div>
+          <div class="rad-use">Inputs, qty stepper, small buttons</div>
+        </div>
+      </div>
+      <div class="rad-cell">
+        <div class="rad-tile" style="border-radius:12px">r-md</div>
+        <div class="rad-meta">
+          <div class="rad-token">md · 12dp</div>
+          <div class="rad-spec">--r-md</div>
+          <div class="rad-use">Cards, primary buttons</div>
+        </div>
+      </div>
+      <div class="rad-cell">
+        <div class="rad-tile" style="border-radius:16px">r-lg</div>
+        <div class="rad-meta">
+          <div class="rad-token">lg · 16dp</div>
+          <div class="rad-spec">--r-lg</div>
+          <div class="rad-use">Bottom sheet top corners, dialogs</div>
+        </div>
+      </div>
+      <div class="rad-cell">
+        <div class="rad-tile" style="border-radius:24px">r-xl</div>
+        <div class="rad-meta">
+          <div class="rad-token">xl · 24dp</div>
+          <div class="rad-spec">--r-xl</div>
+          <div class="rad-use">Hero cards, splash treatments</div>
+        </div>
+      </div>
+      <div class="rad-cell">
+        <div class="rad-tile" style="border-radius:999px">r-pill</div>
+        <div class="rad-meta">
+          <div class="rad-token">pill</div>
+          <div class="rad-spec">--r-pill</div>
+          <div class="rad-use">Status badges, modifier chips</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 5. ELEVATION ============================ -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2 class="sec-title">Elevation</h2>
+      <div class="sec-note">Soft &amp; warm — shadows are tinted with ink, not gray. POS surfaces rarely use anything above e-3 in steady state; e-4/e-5 are reserved for tendering and lock takeovers.</div>
+    </div>
+
+    <div class="elev-row">
+      <div class="elev-cell">
+        <div class="elev-tile" style="box-shadow:none;border:1px solid var(--c-rule)">e-0</div>
+        <div class="elev-meta">
+          <div class="elev-token">flat · e-0</div>
+          <div class="elev-use">Inputs, list rows, cart lines</div>
+        </div>
+      </div>
+      <div class="elev-cell">
+        <div class="elev-tile" style="box-shadow:var(--e-1)">e-1</div>
+        <div class="elev-meta">
+          <div class="elev-token">resting · e-1</div>
+          <div class="elev-use">Product cards, chips, keypad keys</div>
+        </div>
+      </div>
+      <div class="elev-cell">
+        <div class="elev-tile" style="box-shadow:var(--e-2)">e-2</div>
+        <div class="elev-meta">
+          <div class="elev-token">raised · e-2</div>
+          <div class="elev-use">Primary buttons, FAB, sync pill</div>
+        </div>
+      </div>
+      <div class="elev-cell">
+        <div class="elev-tile" style="box-shadow:var(--e-3)">e-3</div>
+        <div class="elev-meta">
+          <div class="elev-token">sheet · e-3</div>
+          <div class="elev-use">Bottom sheet, snackbar, toast</div>
+        </div>
+      </div>
+      <div class="elev-cell">
+        <div class="elev-tile" style="box-shadow:var(--e-4)">e-4</div>
+        <div class="elev-meta">
+          <div class="elev-token">modal · e-4</div>
+          <div class="elev-use">Tendering, refund confirm, Z-read</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 6. STICKER SHEET ============================ -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2 class="sec-title">Sticker sheet · tokens in use</h2>
+      <div class="sec-note">A preview of the primitives we'll detail in Deliverable 2. Sized at tablet scale.</div>
+    </div>
+
+    <div class="sticker-grid">
+      <!-- BUTTONS -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Buttons</div>
+          <div class="sticker-h-m">cashier 64 · default 48 · compact 36</div>
+        </div>
+        <div class="sticker-body">
+          <div>
+            <div class="sticker-label">Cashier (64dp · primary actions)</div>
+            <div class="sticker-row">
+              <button class="btn btn-primary btn-cashier">Confirm payment →</button>
+            </div>
+          </div>
+          <div>
+            <div class="sticker-label">Default (48dp)</div>
+            <div class="sticker-row">
+              <button class="btn btn-primary btn-default">Add to cart</button>
+              <button class="btn btn-secondary btn-default">Discount</button>
+              <button class="btn btn-destructive btn-default">Void line</button>
+            </div>
+          </div>
+          <div>
+            <div class="sticker-label">Compact (36dp · in-row actions)</div>
+            <div class="sticker-row">
+              <button class="btn btn-primary btn-compact">Re-print</button>
+              <button class="btn btn-secondary btn-compact">Email</button>
+              <button class="btn btn-ghost btn-compact">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- INPUTS -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Input field</div>
+          <div class="sticker-h-m">52dp · floating label</div>
+        </div>
+        <div class="sticker-body">
+          <div class="input">
+            <span class="input-label">Email</span>
+            <div class="input-field">tindahan@clerque.com</div>
+          </div>
+          <div class="input">
+            <span class="input-label">Password</span>
+            <div class="input-field is-focus">••••••••</div>
+            <span class="input-help">Focused state</span>
+          </div>
+          <div class="input">
+            <span class="input-label">GCash reference</span>
+            <div class="input-field is-error">7Q3</div>
+            <span class="input-help is-error">Reference must be at least 6 characters.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- KEYPAD + PIN DOTS -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Numeric keypad · PIN dots</div>
+          <div class="sticker-h-m">cashier-key · 22 · tnum</div>
+        </div>
+        <div class="sticker-body">
+          <div class="keypad">
+            <div class="keypad-key">1</div>
+            <div class="keypad-key">2</div>
+            <div class="keypad-key">3</div>
+            <div class="keypad-key">4</div>
+            <div class="keypad-key">5</div>
+            <div class="keypad-key">6</div>
+            <div class="keypad-key">7</div>
+            <div class="keypad-key">8</div>
+            <div class="keypad-key">9</div>
+            <div class="keypad-key is-action">.</div>
+            <div class="keypad-key">0</div>
+            <div class="keypad-key is-action">⌫</div>
+          </div>
+          <div>
+            <div class="sticker-label">Cashier PIN — entering 4 of 6</div>
+            <div class="pin-dots">
+              <div class="pin-dot is-filled"></div>
+              <div class="pin-dot is-filled"></div>
+              <div class="pin-dot is-filled"></div>
+              <div class="pin-dot is-filled"></div>
+              <div class="pin-dot"></div>
+              <div class="pin-dot"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CART LINE + STEPPER -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Cart line item</div>
+          <div class="sticker-h-m">swipe-left to delete · tap for discount</div>
+        </div>
+        <div class="sticker-body" style="padding:0">
+          <div style="padding: 0 4px">
+            <div class="cart-line">
+              <div>
+                <div class="cart-line-name">Iced Spanish Latte · Grande</div>
+                <div class="cart-line-mods">Oat milk +₱20 · No sugar · Extra shot +₱30</div>
+                <div class="cart-line-controls">
+                  <div class="qty-stepper">
+                    <button>−</button>
+                    <span class="qty-stepper-val">2</span>
+                    <button>+</button>
+                  </div>
+                  <span class="badge badge-neutral" style="font-size:11px">Senior · 20% off</span>
+                </div>
+              </div>
+              <div class="cart-line-price">₱360.00</div>
+            </div>
+            <div class="cart-line">
+              <div>
+                <div class="cart-line-name">Pandesal · pack of 6</div>
+                <div class="cart-line-mods">No modifiers</div>
+                <div class="cart-line-controls">
+                  <div class="qty-stepper">
+                    <button>−</button>
+                    <span class="qty-stepper-val">1</span>
+                    <button>+</button>
+                  </div>
+                </div>
+              </div>
+              <div class="cart-line-price">₱48.00</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODIFIER CHIPS -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Modifier chips</div>
+          <div class="sticker-h-m">tap-toggle · 44dp tap area</div>
+        </div>
+        <div class="sticker-body">
+          <div>
+            <div class="sticker-label">Size</div>
+            <div class="sticker-row">
+              <span class="chip">Tall <span class="chip-price">+₱0</span></span>
+              <span class="chip is-selected">Grande <span class="chip-price">+₱20</span></span>
+              <span class="chip">Venti <span class="chip-price">+₱40</span></span>
+            </div>
+          </div>
+          <div>
+            <div class="sticker-label">Milk</div>
+            <div class="sticker-row">
+              <span class="chip">Whole</span>
+              <span class="chip">Skim</span>
+              <span class="chip is-selected">Oat <span class="chip-price">+₱20</span></span>
+              <span class="chip">Soy <span class="chip-price">+₱20</span></span>
+            </div>
+          </div>
+          <div>
+            <div class="sticker-label">Sugar</div>
+            <div class="sticker-row">
+              <span class="chip is-selected">0%</span>
+              <span class="chip">25%</span>
+              <span class="chip">50%</span>
+              <span class="chip">75%</span>
+              <span class="chip">100%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BADGES + SYNC + BANNER -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Status · sync · banners</div>
+          <div class="sticker-h-m">pill · 12px · 24dp</div>
+        </div>
+        <div class="sticker-body">
+          <div>
+            <div class="sticker-label">Status badges</div>
+            <div class="sticker-row">
+              <span class="badge badge-success"><span class="badge-dot"></span> Paid</span>
+              <span class="badge badge-warning"><span class="badge-dot"></span> Pending sync</span>
+              <span class="badge badge-error"><span class="badge-dot"></span> Voided</span>
+              <span class="badge badge-info"><span class="badge-dot"></span> GCash</span>
+              <span class="badge badge-neutral"><span class="badge-dot"></span> Cash</span>
+            </div>
+          </div>
+          <div>
+            <div class="sticker-label">Sync indicator (persistent header pill)</div>
+            <div class="sticker-row">
+              <span class="sync-pill"><span class="sync-pill-dot"></span> Online · in sync</span>
+              <span class="sync-pill"><span class="sync-pill-dot is-syncing"></span> Syncing 3</span>
+              <span class="sync-pill"><span class="sync-pill-dot is-offline"></span> Offline · 3 queued</span>
+            </div>
+          </div>
+          <div>
+            <div class="sticker-label">Gentle offline banner</div>
+            <div class="banner banner-offline">
+              <span class="banner-icon">⚲</span>
+              Working offline — sales will sync when you reconnect.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BOTTOM SHEET PREVIEW -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Bottom sheet</div>
+          <div class="sticker-h-m">16dp top radius · drag handle</div>
+        </div>
+        <div class="sticker-body">
+          <div class="sheet-mini">
+            <div class="sheet-handle"></div>
+            <div class="sheet-body">
+              <div class="sheet-title">Customize · Iced Spanish Latte</div>
+              <div class="sheet-sub">Grande · Oat milk · No sugar</div>
+              <div class="sticker-row">
+                <span class="chip">Tall</span>
+                <span class="chip is-selected">Grande <span class="chip-price">+₱20</span></span>
+                <span class="chip">Venti <span class="chip-price">+₱40</span></span>
+              </div>
+              <button class="btn btn-primary btn-default" style="width:100%;margin-top:14px">Add · ₱180.00</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TOAST / SNACKBAR -->
+      <div class="sticker">
+        <div class="sticker-h">
+          <div class="sticker-h-t">Toast · snackbar</div>
+          <div class="sticker-h-m">e-3 · auto-dismiss 4s</div>
+        </div>
+        <div class="sticker-body">
+          <div class="snackbar">
+            <span class="snackbar-icon">✓</span>
+            <span>Sale #000124 saved — receipt sent to printer.</span>
+            <span class="snackbar-action">Undo</span>
+          </div>
+          <div class="snackbar" style="background:#5A1B1B">
+            <span class="snackbar-icon" style="background:#F87171">!</span>
+            <span>Couldn't reach printer. Connect at <i>Settings → Printer</i>.</span>
+            <span class="snackbar-action">Retry</span>
+          </div>
+          <div class="snackbar" style="background:#1F3A2D">
+            <span class="snackbar-icon">↑</span>
+            <span>3 offline sales synced to Clerque Cloud.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- BIR / PH-NATIVE -->
+      <div class="sticker" style="grid-column: span 2; background: var(--c-cream-soft); border-color: var(--c-cream-deep)">
+        <div class="sticker-h" style="border-color: var(--c-cream-deep)">
+          <div class="sticker-h-t">PH · BIR-aware affordances</div>
+          <div class="sticker-h-m">subtle Tagalog · ₱ everywhere · OR sequencing</div>
+        </div>
+        <div class="sticker-body" style="flex-direction:row;gap:24px;align-items:flex-start">
+          <div style="flex:1">
+            <div class="sticker-label">OR# stamp (mini-receipt header)</div>
+            <div style="background:#fff;border:1px solid var(--c-rule);border-radius:8px;padding:14px;font-family:var(--font-mono);font-size:13px">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">
+                <span>Pang-opisyal na Resibo</span><span>Non-VAT registered</span>
+              </div>
+              <div style="font-size:20px;font-weight:600;color:var(--c-ink);font-family:var(--font-primary);font-feature-settings:'tnum'">OR# 000125</div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:4px">Tindahan Coffee · TIN 123-456-789-000 · 15 May 2026 · 14:32</div>
+            </div>
+          </div>
+          <div style="flex:1">
+            <div class="sticker-label">Tendering totals (BIR split)</div>
+            <div style="background:#fff;border:1px solid var(--c-rule);border-radius:8px;padding:14px;font-size:13px;line-height:1.8">
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--c-muted)">Subtotal</span><span style="font-feature-settings:'tnum'">₱360.00</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--c-muted)">Senior/PWD discount (20%)</span><span style="font-feature-settings:'tnum';color:var(--c-success)">−₱72.00</span></div>
+              <div style="display:flex;justify-content:space-between"><span style="color:var(--c-muted)">VAT-exempt sales</span><span style="font-feature-settings:'tnum'">₱288.00</span></div>
+              <div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:6px;border-top:1px solid var(--c-rule);font-weight:700;font-size:16px"><span>Total · Bayaran</span><span style="font-feature-settings:'tnum'">₱288.00</span></div>
+            </div>
+          </div>
+          <div style="flex:1">
+            <div class="sticker-label">Payment methods · PH-native order</div>
+            <div class="sticker-row" style="gap:8px">
+              <span class="chip is-selected">💵 Cash</span>
+              <span class="chip" style="background:#DBE8FE;border-color:#2563EB;color:#1E40AF">GCash</span>
+              <span class="chip" style="background:#D1FAE5;border-color:#059669;color:#065F46">PayMaya</span>
+              <span class="chip">Card</span>
+              <span class="chip">Split</span>
+            </div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:10px;line-height:1.5">
+              GCash &amp; PayMaya get equal billing with Cash — never hidden under "Other". Their brand-adjacent fills (blue / green) are tonal hints, not exact logo colors (we can't redistribute those).
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================ FOOTER ============================ -->
+  <footer class="foot">
+    <div>clerque-counter / design-tokens · v0.1 · 15.05.2026</div>
+    <div>next → Deliverable 2 · Component library</div>
+  </footer>
+
+</div>
+
+<!-- ============================ TWEAKS ============================ -->
+<aside class="tweaks" id="tweaks">
+  <div class="tweaks-h">
+    <span class="tweaks-h-t">Tweaks</span>
+    <button class="tweaks-h-x" id="tw-close" aria-label="Close">×</button>
+  </div>
+  <div class="tweaks-body">
+    <div>
+      <div class="tweak-group-l">Doc theme preview</div>
+      <div class="seg" id="seg-theme">
+        <button class="seg-opt is-on" data-v="light">Light</button>
+        <button class="seg-opt" data-v="dark">Dark preview</button>
+      </div>
+      <div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.4">Affects sticker sheet &amp; type panels only — the color section always shows both side by side.</div>
+    </div>
+    <div>
+      <div class="tweak-group-l">Body typeface</div>
+      <div class="seg" id="seg-font">
+        <button class="seg-opt is-on" data-v="inter">Inter</button>
+        <button class="seg-opt" data-v="jakarta">Plus Jakarta</button>
+      </div>
+      <div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.4">Switches the body font used in the sticker sheet so you can A/B the feel.</div>
+    </div>
+  </div>
+</aside>
+
+<script>
+(function () {
+  // ---- Tweaks panel host integration ----
+  var panel = document.getElementById('tweaks');
+  var closeBtn = document.getElementById('tw-close');
+
+  window.addEventListener('message', function (e) {
+    var d = e && e.data;
+    if (!d || typeof d !== 'object') return;
+    if (d.type === '__activate_edit_mode') panel.classList.add('is-open');
+    if (d.type === '__deactivate_edit_mode') panel.classList.remove('is-open');
+  });
+  try { window.parent.postMessage({ type: '__edit_mode_available' }, '*'); } catch (e) {}
+
+  closeBtn.addEventListener('click', function () {
+    panel.classList.remove('is-open');
+    try { window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*'); } catch (e) {}
+  });
+
+  // ---- Theme segmented control ----
+  var segTheme = document.getElementById('seg-theme');
+  segTheme.addEventListener('click', function (e) {
+    var t = e.target.closest('.seg-opt'); if (!t) return;
+    [].forEach.call(segTheme.children, function (c) { c.classList.remove('is-on'); });
+    t.classList.add('is-on');
+    var v = t.getAttribute('data-v');
+    // Apply to sticker section + type panels by toggling [data-theme] on .sticker / .type-panel ancestors
+    var targets = document.querySelectorAll('.sticker, .type-panel, .spc-panel, .rad-row, .elev-row');
+    targets.forEach(function (el) {
+      if (v === 'dark') {
+        el.setAttribute('data-theme', 'dark');
+        el.style.background = '#221D17';
+        el.style.borderColor = '#2C2620';
+        el.style.color = '#F5F1E8';
+      } else {
+        el.removeAttribute('data-theme');
+        el.style.background = '';
+        el.style.borderColor = '';
+        el.style.color = '';
+      }
+    });
+  });
+
+  // ---- Font segmented control ----
+  var segFont = document.getElementById('seg-font');
+  segFont.addEventListener('click', function (e) {
+    var t = e.target.closest('.seg-opt'); if (!t) return;
+    [].forEach.call(segFont.children, function (c) { c.classList.remove('is-on'); });
+    t.classList.add('is-on');
+    var v = t.getAttribute('data-v');
+    document.body.style.fontFamily = (v === 'jakarta')
+      ? '"Plus Jakarta Sans", system-ui, sans-serif'
+      : '"Inter", system-ui, sans-serif';
+  });
+})();
+</script>
+
+</body>
+</html>

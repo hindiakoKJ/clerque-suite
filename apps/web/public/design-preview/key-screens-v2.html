@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clerque Counter — Key Screens v2</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="screens-styles-v2.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #f0eee9; }
+  #app { width: 100vw; height: 100vh; }
+  body, button, input { font-family: "Inter", system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="screens-tablet-v2.jsx"></script>
+<script type="text/babel" src="screens-phone-v2.jsx"></script>
+<script type="text/babel" src="screens-verticals.jsx"></script>
+
+<script type="text/babel">
+const { DesignCanvas, DCSection, DCArtboard } = window;
+
+function App() {
+  return (
+    <DesignCanvas title="Clerque Counter · Key Screens" subtitle="Deliverable 3 · v2 · aligned with web Counter app">
+      <DCSection
+        id="verticals"
+        title="POS · per business type"
+        subtitle="Clerque is multi-vertical. Each tenant's business type is set at signup on the web; the tablet boots straight into the right layout — no type-picker UI."
+      >
+        <DCArtboard id="v-coffee" label="A · Coffee / F&B · dine-in + table" width={1920} height={1200}>
+          <window.POSCoffee />
+        </DCArtboard>
+        <DCArtboard id="v-laundry" label="B · Laundry · per-load + dry cleaning + claim ticket" width={1920} height={1200}>
+          <window.POSLaundry />
+        </DCArtboard>
+        <DCArtboard id="v-pharmacy" label="C · Pharmacy · batch + Rx + controlled" width={1920} height={1200}>
+          <window.POSPharmacy />
+        </DCArtboard>
+        <DCArtboard id="v-retail" label="D · Retail / sari-sari · scan-first + dense list" width={1920} height={1200}>
+          <window.POSRetail />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="tablet"
+        title="Tablet landscape · 1920×1200"
+        subtitle="Samsung Galaxy Tab A8 · canonical surface · Counter surface active"
+      >
+        <DCArtboard id="t-signin" label="01 · Sign in · Tenant + email + password" width={1920} height={1200}>
+          <window.SignInTablet />
+        </DCArtboard>
+        <DCArtboard id="t-pin" label="02 · Cashier PIN" width={1920} height={1200}>
+          <window.PinTablet />
+        </DCArtboard>
+        <DCArtboard id="t-pos" label="03 · Terminal · main" width={1920} height={1200}>
+          <window.POSMainTablet />
+        </DCArtboard>
+        <DCArtboard id="t-drawer" label="04 · Terminal + nav drawer" width={1920} height={1200}>
+          <window.POSDrawer />
+        </DCArtboard>
+        <DCArtboard id="t-mod" label="05 · Terminal + modifier sheet" width={1920} height={1200}>
+          <window.POSModifierSheet />
+        </DCArtboard>
+        <DCArtboard id="t-tcash" label="06 · Tendering · Cash" width={1920} height={1200}>
+          <window.TenderingCash />
+        </DCArtboard>
+        <DCArtboard id="t-tgcash" label="07 · Tendering · GCash" width={1920} height={1200}>
+          <window.TenderingGCash />
+        </DCArtboard>
+        <DCArtboard id="t-receipt" label="08 · Receipt + print" width={1920} height={1200}>
+          <window.ReceiptTablet />
+        </DCArtboard>
+        <DCArtboard id="t-zread" label="09 · Shift close · Z-read" width={1920} height={1200}>
+          <window.ZReadTablet />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="phone"
+        title="Phone portrait · 414×900"
+        subtitle="Owner spot-check surface · secondary device"
+      >
+        <DCArtboard id="p-signin" label="10 · Sign in" width={414} height={900}>
+          <window.SignInPhone />
+        </DCArtboard>
+        <DCArtboard id="p-pos" label="11 · Terminal" width={414} height={900}>
+          <window.POSMainPhone />
+        </DCArtboard>
+        <DCArtboard id="p-tender" label="12 · Tendering · Cash" width={414} height={900}>
+          <window.TenderingPhone />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('app')).render(<App />);
+</script>
+</body>
+</html>

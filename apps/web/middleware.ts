@@ -47,6 +47,8 @@ const PUBLIC_PREFIXES = [
   '/pay',
   // Sprint 24 — marketing/welcome + signup pages
   '/welcome', '/signup',
+  // Sprint 25 — Counter design preview (static HTML mockup under /public)
+  '/design-preview',
 ];
 
 function getToken(req: NextRequest): string | null {

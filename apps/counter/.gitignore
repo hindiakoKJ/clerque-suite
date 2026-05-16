@@ -1,0 +1,20 @@
+# Build artifacts
+.expo/
+.expo-shared/
+dist/
+web-build/
+node_modules/
+
+# Native projects (eject artifacts)
+ios/
+android/
+
+# Local config
+.env*
+*.log
+*.tsbuildinfo
+
+# Design source bundle — vendored from Claude Design for agent reference.
+# 1 MB of HTML/JSX mockups; not part of the production app. The committed
+# code is the source of truth. Re-fetch from the design URL if needed.
+design-source/

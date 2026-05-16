@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "Clerque Counter",
+    "slug": "clerque-counter",
+    "version": "0.1.0",
+    "orientation": "landscape",
+    "icon": "./assets/icon.png",
+    "scheme": "clerque-counter",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#F8F5EE",
+      "image": "./assets/splash.png",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.clerque.counter"
+    },
+    "android": {
+      "package": "com.clerque.counter",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#3B82F6"
+      },
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.CAMERA"
+      ]
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store",
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Clerque Counter uses the camera to scan product barcodes."
+        }
+      ]
+    ],
+    "extra": {
+      "apiBaseUrl": "https://api.clerque.com"
+    }
+  }
+}

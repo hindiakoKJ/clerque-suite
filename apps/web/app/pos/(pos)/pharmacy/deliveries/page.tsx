@@ -83,8 +83,8 @@ export default function DeliveryReceiptsPage() {
 
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Truck className="h-6 w-6 text-[var(--accent)]" />
+          <h1 className="font-display text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Truck className="h-6 w-6 text-[var(--counter-primary)]" />
             Supplier Deliveries
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
@@ -113,14 +113,14 @@ export default function DeliveryReceiptsPage() {
       ) : (
         <div className="rounded-xl border border-border overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
+            <thead className="bg-muted/50 text-[11px] uppercase tracking-wider text-muted-foreground border-b-2 border-border">
               <tr>
-                <th className="text-left px-4 py-2">Received</th>
-                <th className="text-left px-4 py-2">Vendor</th>
-                <th className="text-left px-4 py-2">DR #</th>
-                <th className="text-left px-4 py-2">Branch</th>
-                <th className="text-right px-4 py-2">Lines</th>
-                <th className="px-4 py-2"></th>
+                <th className="text-left px-4 py-3 font-bold">Received</th>
+                <th className="text-left px-4 py-3 font-bold">Vendor</th>
+                <th className="text-left px-4 py-3 font-bold">DR #</th>
+                <th className="text-left px-4 py-3 font-bold">Branch</th>
+                <th className="text-right px-4 py-3 font-bold">Lines</th>
+                <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
@@ -130,13 +130,13 @@ export default function DeliveryReceiptsPage() {
                   className="border-t border-border hover:bg-muted/40 cursor-pointer"
                   onClick={() => setOpenReceipt(r)}
                 >
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className="px-4 py-3 text-muted-foreground tnum">
                     {new Date(r.receivedAt).toLocaleDateString()}
                   </td>
-                  <td className="px-4 py-3 font-medium">{r.vendor.name}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{r.drNumber}</td>
+                  <td className="px-4 py-3 font-semibold">{r.vendor.name}</td>
+                  <td className="px-4 py-3 font-mono-counter text-xs font-bold">{r.drNumber}</td>
                   <td className="px-4 py-3 text-muted-foreground">{r.branch.name}</td>
-                  <td className="px-4 py-3 text-right">{r.items.length}</td>
+                  <td className="px-4 py-3 text-right tnum">{r.items.length}</td>
                   <td className="px-4 py-3 text-right text-xs text-muted-foreground">View →</td>
                 </tr>
               ))}

@@ -45,13 +45,16 @@ export default function PrescriptionsPage() {
 
   return (
     <div className="flex flex-col h-full overflow-auto">
-      <header className="bg-background border-b border-border px-4 sm:px-6 py-5 shrink-0 flex items-center justify-between gap-3 flex-wrap">
+      <header className="bg-card border-b border-border px-4 sm:px-6 py-5 shrink-0 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <button onClick={() => router.back()} className="text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <FileBadge className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-xl font-semibold">Prescriptions</h1>
+          <FileBadge className="h-5 w-5 text-[var(--counter-primary)]" />
+          <h1 className="font-display text-xl font-bold tracking-tight">Prescriptions</h1>
+          <span className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase font-mono-counter bg-[var(--counter-cream)] text-[var(--counter-ink)]">
+            RA 6675 · 9165
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -94,40 +97,40 @@ export default function PrescriptionsPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/30">
-                    <th className="px-4 py-2.5 font-medium">Rx #</th>
-                    <th className="px-4 py-2.5 font-medium">Patient</th>
-                    <th className="px-4 py-2.5 font-medium">Doctor</th>
-                    <th className="px-4 py-2.5 font-medium">PRC</th>
-                    <th className="px-4 py-2.5 font-medium">S2 License</th>
-                    <th className="px-4 py-2.5 font-medium">Issued</th>
-                    <th className="px-4 py-2.5 font-medium text-right">Refills left</th>
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b-2 border-border bg-muted/50">
+                    <th className="px-4 py-3 font-bold">Rx #</th>
+                    <th className="px-4 py-3 font-bold">Patient</th>
+                    <th className="px-4 py-3 font-bold">Doctor</th>
+                    <th className="px-4 py-3 font-bold">PRC</th>
+                    <th className="px-4 py-3 font-bold">S2 License</th>
+                    <th className="px-4 py-3 font-bold">Issued</th>
+                    <th className="px-4 py-3 font-bold text-right">Refills left</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rxs.map((rx) => (
                     <tr key={rx.id} className="border-b border-border/60 last:border-b-0 hover:bg-muted/20">
-                      <td className="px-4 py-2.5 font-mono text-xs">{rx.rxNumber}</td>
+                      <td className="px-4 py-2.5 font-mono-counter text-xs font-bold text-[var(--counter-primary-press)]">{rx.rxNumber}</td>
                       <td className="px-4 py-2.5">
-                        <div className="font-medium">{rx.patientName}</div>
+                        <div className="font-semibold">{rx.patientName}</div>
                         {rx.patientIdType && (
-                          <div className="text-[10px] text-muted-foreground">{rx.patientIdType}: {rx.patientIdNumber}</div>
+                          <div className="text-[10px] text-muted-foreground font-mono-counter">{rx.patientIdType}: {rx.patientIdNumber}</div>
                         )}
                       </td>
                       <td className="px-4 py-2.5">
                         <div>{rx.prescribingDoctor}</div>
                         {rx.doctorClinic && <div className="text-[10px] text-muted-foreground">{rx.doctorClinic}</div>}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs">{rx.doctorPrcLicense}</td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{rx.doctorS2License ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-xs whitespace-nowrap">
+                      <td className="px-4 py-2.5 font-mono-counter text-xs">{rx.doctorPrcLicense}</td>
+                      <td className="px-4 py-2.5 font-mono-counter text-xs text-muted-foreground">{rx.doctorS2License ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-xs whitespace-nowrap tnum">
                         {new Date(rx.issuedAt).toLocaleDateString('en-PH', { dateStyle: 'medium' })}
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         <span className={
-                          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ' +
+                          'inline-flex items-center px-2 py-0.5 rounded text-xs font-bold tnum ' +
                           (rx.refillsRemaining > 0
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                            ? 'bg-[var(--counter-success-soft)] text-[var(--counter-success-deep)]'
                             : 'bg-muted text-muted-foreground')
                         }>
                           {rx.refillsRemaining}

@@ -28,6 +28,8 @@ export interface CartProduct {
     | 'OTC' | 'OTC_BTC' | 'RX_ONLY'
     | 'DDB_S2' | 'DDB_S3' | 'DDB_S4' | 'DDB_S5'
     | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
+  /** Retail · RA 9211 — tobacco/alcohol require age verification at handoff. */
+  isAgeRestricted?: boolean;
 }
 
 export interface CartLine {

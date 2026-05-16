@@ -159,10 +159,10 @@ export function AppShell({
                 href={href}
                 onClick={onItemClick}
                 className={cn(
-                  'relative flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors w-full text-left',
+                  'relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full text-left',
                   active
-                    ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                    ? 'bg-[var(--accent)] text-white shadow-sm'
+                    : 'text-muted-foreground hover:bg-card hover:text-foreground',
                   collapsed && 'justify-center px-2',
                 )}
                 title={tooltip}
@@ -191,23 +191,24 @@ export function AppShell({
       {/* Desktop sidebar */}
       <aside
         className={cn(
-          'hidden md:flex flex-col border-r border-border bg-card shrink-0 transition-[width] duration-200',
+          'hidden md:flex flex-col border-r border-border shrink-0 transition-[width] duration-200',
+          'bg-secondary',
           collapsed ? 'w-16' : 'w-56',
         )}
       >
         <div className={cn(
           'border-b border-border shrink-0',
-          collapsed ? 'h-14 flex items-center justify-center px-2' : 'px-3 py-2 flex flex-col gap-1.5',
+          collapsed ? 'h-16 flex items-center justify-center px-2' : 'h-16 px-3 py-2 flex flex-col justify-center gap-1',
         )}>
           <div className={cn('flex items-center gap-2.5', collapsed ? '' : 'min-w-0')}>
             <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
               <LogoIcon className="h-4 w-4 text-white" />
             </div>
             {!collapsed && (
-              <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
-                <span className="font-semibold text-sm tracking-tight text-foreground whitespace-nowrap">{brandName}</span>
+              <div className="flex items-baseline gap-1.5 min-w-0 flex-1 font-display">
+                <span className="font-bold text-sm tracking-tight text-foreground whitespace-nowrap">{brandName}</span>
                 <span className="text-muted-foreground text-sm">·</span>
-                <span className="font-semibold text-sm tracking-tight whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
+                <span className="font-bold text-sm tracking-tight whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
               </div>
             )}
           </div>
@@ -302,7 +303,7 @@ export function AppShell({
           {/* Only render when env vars are populated at build time
               (Vercel deploys). In local dev both are undefined → hide. */}
           {!collapsed && process.env.NEXT_PUBLIC_BUILD_SHA && process.env.NEXT_PUBLIC_BUILD_DATE && (
-            <div className="text-[10px] text-muted-foreground/60 text-center font-mono leading-tight pt-1">
+            <div className="text-[10px] text-muted-foreground/60 text-center font-mono-counter leading-tight pt-1">
               <div title="Build commit">{process.env.NEXT_PUBLIC_BUILD_SHA.slice(0, 7)}</div>
               <div title="Build date">{process.env.NEXT_PUBLIC_BUILD_DATE}</div>
             </div>
@@ -312,7 +313,7 @@ export function AppShell({
 
       {/* Main column */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        <header className="h-14 bg-card/60 backdrop-blur-sm border-b border-border flex items-center justify-between px-4 shrink-0">
+        <header className="h-16 bg-card/80 backdrop-blur-sm border-b border-border flex items-center justify-between px-4 shrink-0">
           <div className="flex items-center gap-2 md:hidden min-w-0">
             <button onClick={() => setMobileOpen(true)} className="p-1.5 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0">
               <Menu className="h-5 w-5" />

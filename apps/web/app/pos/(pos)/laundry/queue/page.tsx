@@ -52,14 +52,16 @@ const COLUMN_LABEL: Record<LaundryStatus, string> = {
   CANCELLED:        'Cancelled',
 };
 
+// Counter palette: every column reads from one of the four semantic tone
+// tokens (info/warning/success/error) layered over cream.
 const COLUMN_TINT: Record<LaundryStatus, string> = {
-  RECEIVED:         'border-blue-200 bg-blue-50/50 dark:bg-blue-950/20',
-  WASHING:          'border-cyan-200 bg-cyan-50/50 dark:bg-cyan-950/20',
-  DRYING:           'border-amber-200 bg-amber-50/50 dark:bg-amber-950/20',
-  FOLDING:          'border-violet-200 bg-violet-50/50 dark:bg-violet-950/20',
-  READY_FOR_PICKUP: 'border-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/30',
-  CLAIMED:          'border-muted bg-muted/30',
-  CANCELLED:        'border-red-200 bg-red-50/40 dark:bg-red-950/20',
+  RECEIVED:         'border-[var(--counter-info-soft)] bg-[var(--counter-info-soft)]/40',
+  WASHING:          'border-[var(--counter-info-soft)] bg-[var(--counter-info-soft)]/60',
+  DRYING:           'border-[var(--counter-warning)]/30 bg-[var(--counter-warning-soft)]/60',
+  FOLDING:          'border-[var(--counter-cream-deep)] bg-[var(--counter-cream-soft)]',
+  READY_FOR_PICKUP: 'border-[var(--counter-success)]/40 bg-[var(--counter-success-soft)]/80',
+  CLAIMED:          'border-border bg-muted/30',
+  CANCELLED:        'border-[var(--counter-error)]/30 bg-[var(--counter-error-soft)]/40',
 };
 
 function fmtPrice(s: string | null) {
@@ -128,15 +130,15 @@ export default function LaundryQueuePage() {
     <div className="p-4 sm:p-6 space-y-4">
       <header className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Shirt className="h-6 w-6 text-[var(--accent)]" />
+          <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Shirt className="h-6 w-6 text-[var(--counter-primary)]" />
             Laundry Queue
           </h1>
           <p className="text-sm text-muted-foreground">Tap a card to advance through the workflow.</p>
         </div>
         <Link
           href="/pos/laundry/intake"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90"
+          className="inline-flex items-center gap-2 px-5 h-12 rounded-xl bg-[var(--counter-primary)] hover:bg-[var(--counter-primary-press)] text-white text-sm font-bold shadow-sm transition-colors"
         >
           <Plus className="h-4 w-4" />
           New Intake
@@ -174,10 +176,10 @@ export default function LaundryQueuePage() {
                       className="rounded-lg bg-background border border-border p-3 shadow-sm hover:shadow-md transition-shadow"
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <Link href={`/pos/laundry/${o.id}`} className="font-mono text-xs font-semibold text-[var(--accent)] hover:underline">
+                        <Link href={`/pos/laundry/${o.id}`} className="font-mono-counter text-xs font-bold text-[var(--counter-primary-press)] hover:underline">
                           {o.claimNumber}
                         </Link>
-                        <span className="text-xs font-semibold">{fmtPrice(o.totalAmount)}</span>
+                        <span className="text-xs font-bold tnum text-[var(--counter-primary)]">{fmtPrice(o.totalAmount)}</span>
                       </div>
                       <div className="mt-1 text-sm font-medium leading-tight">
                         {o.customer?.name ?? <span className="text-muted-foreground italic">Walk-in</span>}
@@ -205,13 +207,13 @@ export default function LaundryQueuePage() {
                           <div className="mt-1.5 flex flex-wrap gap-1">
                             {machines.map((m, i) => {
                               const tint =
-                                m.status === 'RUNNING' ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40' :
-                                m.status === 'DONE'    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30' :
-                                                          'bg-muted text-muted-foreground border-border';
+                                m.status === 'RUNNING' ? 'bg-[var(--counter-info-soft)] text-[var(--counter-info-deep)] border-[var(--counter-info-deep)]/30' :
+                                m.status === 'DONE'    ? 'bg-[var(--counter-success-soft)] text-[var(--counter-success-deep)] border-[var(--counter-success)]/30' :
+                                                          'bg-[var(--counter-cream)] text-[var(--counter-muted)] border-border';
                               return (
                                 <span
                                   key={i}
-                                  className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-mono font-bold ${tint}`}
+                                  className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10px] font-mono-counter font-bold ${tint}`}
                                   title={`${m.code} · ${m.kind.toLowerCase()} · ${m.status.toLowerCase()}`}
                                 >
                                   {m.code}
@@ -380,9 +382,9 @@ function MachineGrid() {
         {machines.map((m) => {
           const Icon = m.kind === 'WASHER' ? WashingMachine : Wind;
           const tint =
-            m.status === 'IDLE'         ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400' :
-            m.status === 'RUNNING'      ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400'   :
-                                          'border-red-500/40 bg-red-500/10 text-red-600';
+            m.status === 'IDLE'         ? 'border-[var(--counter-cream-deep)] bg-[var(--counter-cream-soft)] text-[var(--counter-muted)]' :
+            m.status === 'RUNNING'      ? 'border-[var(--counter-info-deep)]/30 bg-[var(--counter-info-soft)] text-[var(--counter-info-deep)]'   :
+                                          'border-[var(--counter-error)]/40 bg-[var(--counter-error-soft)] text-[var(--counter-error-deep)]';
           const runningLine = m.lines[0];
           const customerName = runningLine?.order.customer?.name;
           return (
@@ -394,7 +396,7 @@ function MachineGrid() {
               <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-1.5">
                   <Icon className="h-4 w-4 shrink-0" />
-                  <span className="text-base font-bold font-mono leading-none">{m.code}</span>
+                  <span className="text-base font-bold font-mono-counter leading-none">{m.code}</span>
                 </div>
                 <span className="text-[9px] uppercase tracking-wide font-semibold opacity-80">
                   {m.status === 'OUT_OF_ORDER' ? 'OUT' : m.status.toLowerCase()}

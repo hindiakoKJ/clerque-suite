@@ -61,13 +61,16 @@ export default function ProductLotsPage() {
 
   return (
     <div className="flex flex-col h-full overflow-auto">
-      <header className="bg-background border-b border-border px-4 sm:px-6 py-5 shrink-0 flex items-center justify-between gap-3 flex-wrap">
+      <header className="bg-card border-b border-border px-4 sm:px-6 py-5 shrink-0 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <button onClick={() => router.back()} className="text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <Pill className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-xl font-semibold">Product Lots</h1>
+          <Pill className="h-5 w-5 text-[var(--counter-primary)]" />
+          <h1 className="font-display text-xl font-bold tracking-tight">Product Lots</h1>
+          <span className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase font-mono-counter bg-[var(--counter-cream)] text-[var(--counter-ink)]">
+            FEFO
+          </span>
         </div>
         <button
           onClick={() => setShowNew(true)}
@@ -127,40 +130,44 @@ export default function ProductLotsPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/30">
-                    <th className="px-4 py-2.5 font-medium">Lot #</th>
-                    <th className="px-4 py-2.5 font-medium">Expires</th>
-                    <th className="px-4 py-2.5 font-medium text-right">Qty on hand</th>
-                    <th className="px-4 py-2.5 font-medium text-right">Cost / unit</th>
-                    <th className="px-4 py-2.5 font-medium">Received</th>
-                    <th className="px-4 py-2.5 font-medium">Supplier ref</th>
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b-2 border-border bg-muted/50">
+                    <th className="px-4 py-3 font-bold">Lot #</th>
+                    <th className="px-4 py-3 font-bold">Expires</th>
+                    <th className="px-4 py-3 font-bold text-right">Qty on hand</th>
+                    <th className="px-4 py-3 font-bold text-right">Cost / unit</th>
+                    <th className="px-4 py-3 font-bold">Received</th>
+                    <th className="px-4 py-3 font-bold">Supplier ref</th>
                   </tr>
                 </thead>
                 <tbody>
                   {lots.map((l) => {
                     const days = daysUntil(l.expiresAt);
-                    const tone =
-                      days < 0  ? 'text-red-600' :
-                      days < 30 ? 'text-amber-600' :
-                      days < 90 ? 'text-yellow-700' : '';
+                    // Counter expiry-tier chip palette: red <30d, amber 30-90d, green >90d.
+                    const chipClass =
+                      days < 0
+                        ? 'bg-[var(--counter-error-soft)] text-[var(--counter-error-deep)]'
+                        : days < 30
+                          ? 'bg-[var(--counter-error-soft)] text-[var(--counter-error-deep)]'
+                          : days < 90
+                            ? 'bg-[var(--counter-warning-soft)] text-[var(--counter-warning-deep)]'
+                            : 'bg-[var(--counter-success-soft)] text-[var(--counter-success-deep)]';
                     return (
                       <tr key={l.id} className="border-b border-border/60 last:border-b-0 hover:bg-muted/20">
-                        <td className="px-4 py-2.5 font-mono text-xs">{l.lotNumber}</td>
-                        <td className={'px-4 py-2.5 text-xs whitespace-nowrap ' + tone}>
-                          {new Date(l.expiresAt).toLocaleDateString('en-PH', { dateStyle: 'medium' })}
-                          {days < 90 && (
-                            <span className="ml-2 inline-flex items-center gap-1 text-[10px]">
-                              {days < 0 ? <AlertTriangle className="h-3 w-3" /> : null}
-                              {days < 0 ? `expired ${-days}d ago` : `${days}d left`}
-                            </span>
-                          )}
+                        <td className="px-4 py-2.5 font-mono-counter text-xs font-bold">{l.lotNumber}</td>
+                        <td className="px-4 py-2.5 text-xs whitespace-nowrap">
+                          <span className={'inline-flex items-center gap-1 px-2 py-0.5 rounded font-bold tnum ' + chipClass}>
+                            {days < 30 ? <AlertTriangle className="h-3 w-3" /> : null}
+                            {new Date(l.expiresAt).toLocaleDateString('en-PH', { dateStyle: 'medium' })}
+                            <span className="opacity-80">·</span>
+                            {days < 0 ? `expired ${-days}d` : `${days}d`}
+                          </span>
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono">{Number(l.quantity).toFixed(2)}</td>
-                        <td className="px-4 py-2.5 text-right font-mono text-muted-foreground">₱{Number(l.costPrice).toFixed(2)}</td>
-                        <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+                        <td className="px-4 py-2.5 text-right font-mono-counter tnum font-semibold">{Number(l.quantity).toFixed(2)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono-counter tnum text-muted-foreground">₱{Number(l.costPrice).toFixed(2)}</td>
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap tnum">
                           {new Date(l.receivedAt).toLocaleDateString('en-PH', { dateStyle: 'medium' })}
                         </td>
-                        <td className="px-4 py-2.5 text-xs font-mono text-muted-foreground">{l.supplierRef ?? '—'}</td>
+                        <td className="px-4 py-2.5 text-xs font-mono-counter text-muted-foreground">{l.supplierRef ?? '—'}</td>
                       </tr>
                     );
                   })}

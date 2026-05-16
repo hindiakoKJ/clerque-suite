@@ -667,6 +667,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div
+      className="theme-counter"
       style={{
         '--accent':      POS_ACCENT,
         '--accent-soft': POS_ACCENT_SOFT,

@@ -164,10 +164,10 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
           <button
             onClick={() => setActiveCat(null)}
             className={cn(
-              'shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-colors',
+              'shrink-0 px-4 sm:px-5 min-h-[36px] sm:min-h-[40px] rounded-full text-sm font-semibold border transition-colors',
               !activeCat
-                ? 'text-white'
-                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
+                ? 'text-white border-transparent shadow-sm'
+                : 'bg-secondary text-secondary-foreground border-border hover:bg-secondary/80',
             )}
             style={!activeCat ? { background: 'var(--accent)' } : undefined}
           >
@@ -178,10 +178,10 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
               key={cat.id}
               onClick={() => setActiveCat(cat.id)}
               className={cn(
-                'shrink-0 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium transition-colors',
+                'shrink-0 px-4 sm:px-5 min-h-[36px] sm:min-h-[40px] rounded-full text-sm font-semibold border transition-colors',
                 activeCat === cat.id
-                  ? 'text-white'
-                  : 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
+                  ? 'text-white border-transparent shadow-sm'
+                  : 'bg-secondary text-secondary-foreground border-border hover:bg-secondary/80',
               )}
               style={activeCat === cat.id ? { background: 'var(--accent)' } : undefined}
             >
@@ -223,12 +223,12 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                   onClick={() => handleAdd(p)}
                   disabled={isOut}
                   className={cn(
-                    'group relative flex flex-col items-start p-2.5 sm:p-3 rounded-xl border hover:shadow-md active:scale-95 transition-all text-left min-h-[160px] sm:min-h-[180px]',
+                    'group relative flex flex-col items-start p-3 rounded-xl border hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all text-left min-h-[200px] sm:min-h-[220px]',
                     isOut
                       ? 'bg-muted border-border opacity-60 cursor-not-allowed'
                       : isLow
-                      ? 'bg-card border-amber-400 dark:border-amber-500 hover:border-amber-500 dark:hover:border-amber-400'
-                      : 'bg-card border-border hover:border-[var(--accent)]/40',
+                      ? 'bg-card border-amber-400 dark:border-amber-500 hover:border-amber-500 dark:hover:border-amber-400 hover:ring-2 hover:ring-amber-400/30'
+                      : 'bg-card border-[var(--counter-rule,theme(colors.border))] hover:border-[var(--accent)] hover:ring-2 hover:ring-[var(--accent)]/20',
                   )}
                 >
                   {/* Image tile — prominent for tablet/touch, falls back to category emoji */}
@@ -256,7 +256,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                     )}
                   </div>
 
-                  <p className="text-xs sm:text-sm font-medium text-foreground leading-tight line-clamp-2">{p.name}</p>
+                  <p className="text-sm sm:text-base font-semibold text-foreground leading-tight line-clamp-2 font-display">{p.name}</p>
 
                   {/* Pharmacy badges — Rx and DDB controlled. Sit just above
                       the price so the cashier sees them before tapping. */}
@@ -275,7 +275,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                     </div>
                   )}
 
-                  <p className="text-sm sm:text-base font-bold mt-auto pt-1" style={{ color: 'var(--accent)' }}>{formatPeso(Number(p.price))}</p>
+                  <p className="text-base sm:text-lg font-extrabold mt-auto pt-1 tnum font-display tracking-tight" style={{ color: 'var(--accent)' }}>{formatPeso(Number(p.price))}</p>
 
                   {/* Stock badge — shows "X left" so cashier knows max sellable units.
                       For recipe-based products, this is computed from ingredients

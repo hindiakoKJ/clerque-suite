@@ -1,7 +1,7 @@
 'use client';
 import { useRef } from 'react';
 import { Printer, Zap, LogOut } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { printer } from '@/lib/pos/printer';
 import { usePrinterStore } from '@/store/pos/printer';
@@ -123,27 +123,263 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
   // Falls back to the legacy "POS-XXXX" shift-id label for older shifts.
   const terminalLabel = shift.terminal?.name ?? `POS-${shift.id.slice(-4).toUpperCase()}`;
 
+  // ── Hero numbers for Counter Z-read design ─────────────────────────────
+  const grossSales = data.totalRevenue;
+  const netSales = grossSales; // best-available proxy when no discount field present
+  const expectedDrawer = shift.closingCashExpected
+    ?? (shift.openingCash + data.cashRevenue - (data.paidOutTotal ?? 0) - (data.cashDropTotal ?? 0));
+  const declared = shift.closingCashDeclared;
+  const absVar = Math.abs(variance);
+  const varTone =
+    declared == null ? 'neutral' :
+    absVar < 0.01 ? 'success' :
+    absVar <= 100 ? 'warning' : 'error';
+
+  // Tender breakdown with brand colour mapping
+  const BRAND_MAP: Record<string, string> = {
+    CASH: 'var(--counter-primary)',
+    GCASH_PERSONAL: 'var(--counter-gcash)',
+    GCASH_BUSINESS: 'var(--counter-gcash)',
+    MAYA_PERSONAL: 'var(--counter-paymaya)',
+    MAYA_BUSINESS: 'var(--counter-paymaya)',
+    QR_PH: 'var(--muted-foreground, #6b6760)',
+  };
+  const tenderTotal = data.byPaymentMethod.reduce((s, p) => s + p.totalAmount, 0) || 1;
+
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <span>End-of-Shift Report</span>
-            <div className="flex items-center gap-2 mr-6">
+      <DialogContent
+        className="max-w-[1100px] w-[95vw] p-0 gap-0 border-0 bg-transparent shadow-none"
+        style={{ background: 'transparent' }}
+      >
+        <div
+          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh]"
+          style={{ background: 'var(--counter-bg, var(--background))' }}
+        >
+          {/* Counter-styled header */}
+          <div className="flex items-center px-8 py-5 bg-white border-b border-border">
+            <div>
+              <div className="font-display text-[22px] font-bold leading-tight">
+                Close shift · Z-read
+              </div>
+              <div className="text-[13px] text-muted-foreground mt-0.5">
+                {terminalLabel}{userName ? ` · ${userName}` : ''} · {fmt(shift.openedAt)} → {fmt(shift.closedAt)}
+              </div>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
               {printerConnected && (
-                <button onClick={handleThermalPrint} title="Thermal print" className="text-green-500 hover:text-green-700">
+                <button onClick={handleThermalPrint} title="Thermal print" className="text-green-500 hover:text-green-700 p-2">
                   <Zap className="h-4 w-4" />
                 </button>
               )}
-              <button onClick={handleBrowserPrint} className="text-gray-400 hover:text-gray-600">
+              <button onClick={handleBrowserPrint} className="text-muted-foreground hover:text-foreground p-2">
                 <Printer className="h-4 w-4" />
               </button>
             </div>
-          </DialogTitle>
-        </DialogHeader>
+          </div>
 
-        <div className="px-6 pb-6">
-          <div ref={printRef} className="font-mono text-xs space-y-0.5">
+          {/* Counter-styled body */}
+          <div className="flex-1 overflow-y-auto p-8 grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-6">
+            <div className="space-y-4">
+              {/* Hero: Gross / Net sales */}
+              {!isCashierView && (
+                <div className="rounded-2xl border border-border bg-white p-7">
+                  <div className="flex items-baseline justify-between">
+                    <div>
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Gross sales</div>
+                      <div className="font-display tnum font-extrabold leading-none mt-1" style={{ fontSize: 48, letterSpacing: '-0.02em', color: 'var(--counter-primary)' }}>
+                        {formatPeso(grossSales)}
+                      </div>
+                      <div className="text-[13px] text-muted-foreground mt-1.5">
+                        {data.totalOrders} transactions · avg <span className="tnum">{formatPeso(data.avgOrderValue)}</span>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Net sales</div>
+                      <div className="font-display tnum font-bold mt-1" style={{ fontSize: 32, color: '#065F46' }}>
+                        {formatPeso(netSales)}
+                      </div>
+                      <div className="text-[13px] text-muted-foreground mt-0.5">after discounts</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Tender breakdown with brand-tinted bars */}
+              {!isCashierView && data.byPaymentMethod.length > 0 && (
+                <div className="rounded-2xl border border-border bg-white p-6">
+                  <div className="font-display text-sm font-bold mb-3">By tender</div>
+                  {data.byPaymentMethod.map((p) => {
+                    const pct = (p.totalAmount / tenderTotal) * 100;
+                    const color = BRAND_MAP[p.method] ?? 'var(--counter-primary)';
+                    return (
+                      <div key={p.method} className="py-2.5 border-b border-border last:border-0">
+                        <div className="flex items-baseline justify-between">
+                          <span className="font-display text-sm font-semibold">{METHOD_LABELS[p.method] ?? p.method}</span>
+                          <span className="font-display tnum text-base font-bold">{formatPeso(p.totalAmount)}</span>
+                        </div>
+                        <div className="flex items-center gap-2.5 mt-1.5">
+                          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--counter-cream)' }}>
+                            <div className="h-full" style={{ background: color, width: `${pct}%` }} />
+                          </div>
+                          <span className="font-mono-counter tnum text-[11px] text-muted-foreground" style={{ minWidth: 90, textAlign: 'right' }}>
+                            {p.orderCount} txn · {pct.toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Voids + cash-out summary */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-border bg-white p-5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Voids · refunds</div>
+                  <div className="text-sm space-y-1.5">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Voided</span>
+                      <span className="font-mono-counter tnum">{data.voidCount}</span>
+                    </div>
+                    {data.paidOutTotal != null && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Paid-outs</span>
+                        <span className="font-mono-counter tnum">{formatPeso(data.paidOutTotal)}</span>
+                      </div>
+                    )}
+                    {data.cashDropTotal != null && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Cash drops</span>
+                        <span className="font-mono-counter tnum">{formatPeso(data.cashDropTotal)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-border bg-white p-5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Shift activity</div>
+                  <div className="text-sm space-y-1.5">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Total orders</span>
+                      <span className="font-mono-counter tnum">{data.totalOrders}</span>
+                    </div>
+                    {!isCashierView && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Avg ticket</span>
+                        <span className="font-mono-counter tnum">{formatPeso(data.avgOrderValue)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right column: cash reconciliation + variance */}
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-border bg-white p-6">
+                <div className="font-display text-sm font-bold">Cash drawer · reconciliation</div>
+                <div className="text-[13px] text-muted-foreground mb-3">Count physical cash, enter below.</div>
+                <div className="text-sm space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Opening float</span>
+                    <span className="font-mono-counter tnum">{formatPeso(shift.openingCash)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">+ Cash sales</span>
+                    <span className="font-mono-counter tnum">{formatPeso(data.cashRevenue)}</span>
+                  </div>
+                  {data.paidOutTotal != null && data.paidOutTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">− Paid-outs</span>
+                      <span className="font-mono-counter tnum">{formatPeso(data.paidOutTotal)}</span>
+                    </div>
+                  )}
+                  {data.cashDropTotal != null && data.cashDropTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">− Cash drops</span>
+                      <span className="font-mono-counter tnum">{formatPeso(data.cashDropTotal)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-display font-bold text-base pt-2 mt-1 border-t border-border">
+                    <span>Expected in drawer</span>
+                    <span className="tnum">{formatPeso(expectedDrawer)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Declared</span>
+                    <span className="font-mono-counter tnum">{declared != null ? formatPeso(declared) : '—'}</span>
+                  </div>
+                </div>
+                {declared != null && (
+                  <div
+                    className="mt-4 px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-between"
+                    style={
+                      varTone === 'success' ? { background: '#E8F8F0', color: '#065F46' } :
+                      varTone === 'warning' ? { background: '#FEF3C7', color: '#92400E' } :
+                                              { background: '#FEE2E2', color: '#991B1B' }
+                    }
+                  >
+                    <span>Variance</span>
+                    <span className="font-mono-counter tnum">
+                      {absVar < 0.01 ? 'Balanced'
+                        : variance > 0 ? `+${formatPeso(variance)} overage`
+                        : `−${formatPeso(absVar)} shortage`}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {shift.notes && (
+                <div className="rounded-2xl border border-border bg-white p-5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Notes</div>
+                  <p className="text-sm text-foreground">{shift.notes}</p>
+                </div>
+              )}
+
+              {signOutOnClose && (
+                <div className="rounded-xl px-4 py-3 text-[12px] leading-relaxed flex items-start gap-2" style={{ background: '#FEF3C7', color: '#92400E' }}>
+                  <LogOut className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Your shift is closed. Tap <strong>Done &amp; Sign Out</strong> so the next cashier
+                    can log in and start their own shift on this terminal.
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Counter footer CTAs */}
+          <div className="flex gap-3 px-6 py-4 bg-white border-t border-border">
+            <Button onClick={onClose} variant="ghost" className="font-display" style={{ minHeight: 48 }}>
+              Save &amp; continue
+            </Button>
+            <button
+              onClick={printerConnected ? handleThermalPrint : handleBrowserPrint}
+              className="font-display ml-auto rounded-xl px-6 text-sm font-semibold border-2 flex items-center gap-2 transition-colors hover:bg-[var(--counter-primary-container)]"
+              style={{
+                minHeight: 64,
+                borderColor: 'var(--counter-primary)',
+                color: 'var(--counter-primary-press)',
+              }}
+            >
+              <Printer className="h-4 w-4" />
+              Print Z-read
+            </button>
+            <button
+              onClick={onClose}
+              className="font-display rounded-xl text-white text-base font-bold flex items-center justify-center gap-3 transition-opacity hover:opacity-95"
+              style={{
+                minHeight: 64,
+                flex: '0 0 320px',
+                background: 'var(--counter-primary)',
+                boxShadow: '0 4px 12px rgba(59,130,246,.30)',
+              }}
+            >
+              {signOutOnClose ? (<><LogOut className="h-4 w-4" /> Close shift &amp; sign out</>) : 'Done'}
+            </button>
+          </div>
+
+          {/* Hidden print body (kept for browser print) */}
+          <div className="hidden">
+            <div ref={printRef} className="font-mono text-xs space-y-0.5">
             <h1 className="text-sm font-bold text-center">END-OF-SHIFT REPORT</h1>
             <p className="text-center text-gray-500 text-[10px]">{terminalLabel}{userName ? ` · ${userName}` : ''}</p>
             <p className="text-center text-gray-500 text-[10px] mb-3">
@@ -301,36 +537,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
                 <p className="text-[10px] text-gray-400">Notes: {shift.notes}</p>
               </>
             )}
-          </div>
-
-          {/* Shift handover notice — shown only for terminal operators */}
-          {signOutOnClose && (
-            <div className="mt-4 flex items-start gap-2 rounded-xl bg-amber-500/10 border border-amber-200/50 dark:border-amber-800/40 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-300">
-              <LogOut className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              <span>
-                Your shift is closed. Tap <strong>Done &amp; Sign Out</strong> so the next cashier
-                can log in and start their own shift on this terminal.
-              </span>
             </div>
-          )}
-
-          <div className="flex gap-2 mt-4">
-            {printerConnected ? (
-              <Button onClick={handleThermalPrint} variant="outline" className="flex-1 gap-2">
-                <Zap className="h-4 w-4 text-green-500" /> Thermal Print
-              </Button>
-            ) : (
-              <Button onClick={handleBrowserPrint} variant="outline" className="flex-1 gap-2">
-                <Printer className="h-4 w-4" /> Print
-              </Button>
-            )}
-            <Button onClick={onClose} className="flex-1 gap-2">
-              {signOutOnClose ? (
-                <><LogOut className="h-4 w-4" /> Done &amp; Sign Out</>
-              ) : (
-                'Done'
-              )}
-            </Button>
           </div>
         </div>
       </DialogContent>

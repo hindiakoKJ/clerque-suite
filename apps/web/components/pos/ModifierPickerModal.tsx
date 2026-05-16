@@ -117,15 +117,17 @@ export function ModifierPickerModal({
 
   return (
     <div className="fixed inset-0 bg-foreground/40 z-50 flex items-end sm:items-center justify-center p-4">
-      <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] flex flex-col">
-
+      <div
+        className="border border-border rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden"
+        style={{ background: 'var(--counter-bg, var(--background))' }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0 bg-white">
           <div>
-            <h2 className="font-semibold text-foreground text-sm">{productName}</h2>
+            <h2 className="font-display text-lg font-bold">{productName}</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Customize your order</p>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-2">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -151,14 +153,17 @@ export function ModifierPickerModal({
                       onClick={() => toggle(g, opt.id)}
                       className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all text-left ${
                         isSelected
-                          ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-                          : 'border-border hover:border-muted-foreground/30'
+                          ? 'border-[var(--counter-primary)] bg-[var(--counter-primary-container)]'
+                          : 'border-border bg-white hover:border-[var(--counter-primary)]/40'
                       }`}
+                      style={{ minHeight: 56 }}
                     >
-                      <span className="text-sm font-medium text-foreground">{opt.name}</span>
-                      <div className="flex items-center gap-2">
+                      <span className="font-display text-sm font-semibold">{opt.name}</span>
+                      <div className="flex items-center gap-2.5">
                         {adj > 0 && (
-                          <span className="text-xs text-muted-foreground">+{formatPeso(adj)}</span>
+                          <span className="font-mono-counter tnum text-xs font-semibold" style={{ color: 'var(--counter-primary-press)' }}>
+                            +{formatPeso(adj)}
+                          </span>
                         )}
                         {adj === 0 && (
                           <span className="text-xs text-muted-foreground">Included</span>
@@ -166,7 +171,7 @@ export function ModifierPickerModal({
                         <div
                           className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
                             isSelected
-                              ? 'border-[var(--accent)] bg-[var(--accent)]'
+                              ? 'border-[var(--counter-primary)] bg-[var(--counter-primary)]'
                               : 'border-border'
                           }`}
                         >
@@ -182,20 +187,18 @@ export function ModifierPickerModal({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-4 border-t border-border shrink-0">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm text-muted-foreground">Total price</span>
-            <span className="text-base font-bold" style={{ color: 'var(--accent)' }}>
-              {formatPeso(finalPrice)}
-            </span>
-          </div>
+        <div className="px-6 py-4 border-t border-border shrink-0 bg-white">
           <button
             onClick={() => canConfirm() && onConfirm(buildModifiers())}
             disabled={!canConfirm()}
-            className="w-full py-3 rounded-xl text-sm font-semibold text-white transition-all disabled:opacity-40 hover:opacity-90 active:scale-98"
-            style={{ background: 'var(--accent)' }}
+            className="font-display w-full rounded-xl text-white text-base font-bold flex items-center justify-center gap-2 transition-opacity hover:opacity-95 disabled:opacity-40"
+            style={{
+              minHeight: 64,
+              background: 'var(--counter-primary)',
+              boxShadow: '0 4px 12px rgba(59,130,246,.30)',
+            }}
           >
-            Add to Order
+            Add to cart · {formatPeso(finalPrice)}
           </button>
         </div>
       </div>

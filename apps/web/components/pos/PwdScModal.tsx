@@ -144,13 +144,16 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>
+      <DialogContent className="max-w-md p-0 gap-0" style={{ background: 'var(--counter-bg, var(--background))' }}>
+        <DialogHeader className="px-6 pt-6 pb-3">
+          <DialogTitle className="font-display text-xl font-bold">
             {isAdditional
               ? `Add PWD / Senior #${totalExisting + 1}`
-              : 'PWD / Senior Citizen Discount'}
+              : 'Senior / PWD discount'}
           </DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Apply 20% off + VAT exempt on the selected items.
+          </p>
         </DialogHeader>
 
         <div className="px-6 py-4 space-y-4">
@@ -183,7 +186,7 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
                       ? 'text-white border-transparent'
                       : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
                   }`}
-                  style={type === t ? { background: 'var(--accent)' } : undefined}
+                  style={type === t ? { background: 'var(--counter-primary)' } : undefined}
                 >
                   {t === 'SENIOR_CITIZEN' ? '👴 Senior Citizen' : '♿ PWD'}
                 </button>
@@ -347,17 +350,29 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
           </div>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={handleClose}>Cancel</Button>
-          <Button
+        <DialogFooter className="px-6 pb-6 pt-2 gap-2">
+          <Button variant="outline" onClick={handleClose} className="font-display" style={{ minHeight: 48 }}>
+            Cancel
+          </Button>
+          <button
             onClick={handleApply}
-            className="text-white"
-            style={{ background: 'var(--accent)' }}
             disabled={selectedSubtotal <= 0}
+            className="font-display rounded-xl text-white text-sm font-bold px-6 disabled:opacity-40 transition-opacity hover:opacity-95"
+            style={{
+              minHeight: 64,
+              minWidth: 180,
+              background: 'var(--counter-primary)',
+              boxShadow: '0 4px 12px rgba(59,130,246,.30)',
+            }}
           >
             Apply Discount
-          </Button>
+          </button>
         </DialogFooter>
+        <div className="px-6 pb-4">
+          <p className="text-[10px] text-muted-foreground text-center">
+            PH RA 9994 / RA 7277 — applies to one ID per order
+          </p>
+        </div>
       </DialogContent>
     </Dialog>
   );

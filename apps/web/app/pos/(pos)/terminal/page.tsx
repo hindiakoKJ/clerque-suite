@@ -18,10 +18,12 @@ import { useActivePromotions } from '@/hooks/pos/useActivePromotions';
 import { useSound } from '@/hooks/pos/useSound';
 import { useBarcodeScanner } from '@/hooks/pos/useBarcodeScanner';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { db } from '@/lib/pos/db';
 import { computeVat } from '@/lib/pos/utils';
 import { dispatchOrderToStations, toastDispatchSummary } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { RetailTerminal } from './RetailTerminal';
 import { useCustomerDisplaySync } from '@/hooks/pos/useCustomerDisplaySync';
 import { publishCustomerDisplay, resetCustomerDisplay } from '@/lib/pos/customer-display-channel';
 import type { CachedProduct, CachedCategory } from '@/lib/pos/db';
@@ -50,7 +52,16 @@ export default function PosTerminal() {
   // Floor layout — used to split orders to station printers (kitchen / bar tickets).
   // Only F&B-tier coffee shops have non-empty stations; for everyone else this
   // is a no-op (dispatch sees zero stations with hasPrinter, prints nothing extra).
-  const { stations: floorStations, printers: floorPrinters } = useFloorLayout();
+  const { stations: floorStations, printers: floorPrinters, layout } = useFloorLayout();
+  const businessType = layout?.tenant.businessType;
+  const isRetail = businessType === 'RETAIL';
+
+  // ── F&B dining-mode header (visual; local UI state only) ────────────────
+  // The cart store doesn't yet persist diningMode / tableNumber — these are
+  // local affordances matching the POSCoffee mock until the schema/store
+  // are wired up. Cashiers can still toggle, but no order field is set.
+  const [diningMode, setDiningMode] = useState<'DINE_IN' | 'TAKEOUT' | 'DELIVERY'>('DINE_IN');
+  const [tableNumber, setTableNumber] = useState('');
 
   // Customer-facing display sync — publishes cart updates to /pos/customer-display
   // (open in another window/tablet). No-op when the tenant doesn't have a
@@ -425,20 +436,90 @@ export default function PosTerminal() {
     }
   }
 
-  return (
-    <div className="flex h-full overflow-hidden relative">
-      {/* ── Product Grid (full width on mobile, flex-1 on desktop) ── */}
-      <div className={`flex-1 min-w-0 ${mobileCartOpen ? 'hidden lg:flex' : 'flex'} flex-col`}>
-        <ProductGrid products={products} categories={categories} loading={loadingProducts} />
-      </div>
-
-      {/* ── Cart Panel — Desktop: fixed right column ── */}
-      <div className="hidden lg:flex w-80 shrink-0 flex-col">
-        <CartPanel
+  // ── Retail branch — scan-first, dense SKU table ─────────────────────────
+  if (isRetail) {
+    return (
+      <>
+        <RetailTerminal
+          products={products}
+          categories={categories}
+          loading={loadingProducts}
           onCheckout={() => setShowPayment(true)}
           onApplyPwdSc={() => setShowPwdSc(true)}
           onOpenParkedSales={() => setShowParked(true)}
         />
+        <PaymentModal
+          open={showPayment}
+          total={grandTotal()}
+          isOffline={!isOnline}
+          onConfirm={handleCheckout}
+          onClose={() => setShowPayment(false)}
+        />
+        <PwdScModal open={showPwdSc} onClose={() => setShowPwdSc(false)} />
+        <ParkedSalesModal open={showParked} onClose={() => setShowParked(false)} />
+        <ReceiptModal open={!!receiptData} data={receiptData} onClose={() => setReceiptData(null)} />
+      </>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden relative">
+      {/* ── F&B Dining-mode header strip (POSCoffee parity) ── */}
+      <div className="hidden lg:flex items-center gap-3 px-6 py-3 bg-secondary border-b border-border shrink-0">
+        <div className="inline-flex p-1 bg-card border border-border rounded-xl gap-0.5">
+          {(['DINE_IN', 'TAKEOUT', 'DELIVERY'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setDiningMode(m)}
+              className={cn(
+                'px-4 py-2 rounded-lg text-[13px] font-semibold transition-colors min-h-[36px]',
+                diningMode === m ? 'text-white shadow-sm' : 'text-muted-foreground hover:text-foreground',
+              )}
+              style={diningMode === m ? { background: 'var(--accent)' } : undefined}
+            >
+              {m === 'DINE_IN' ? 'Dine in' : m === 'TAKEOUT' ? 'Takeout' : 'Delivery'}
+            </button>
+          ))}
+        </div>
+        <span className="h-7 w-px bg-border" />
+        {diningMode === 'DINE_IN' && (
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-card border border-border rounded-xl min-h-[36px]">
+            <span className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground">Table</span>
+            <input
+              value={tableNumber}
+              onChange={(e) => setTableNumber(e.target.value)}
+              placeholder="T-04"
+              maxLength={6}
+              className="font-display font-bold tnum bg-transparent border-0 outline-none w-16 text-base"
+              style={{ color: 'var(--accent)' }}
+            />
+          </div>
+        )}
+        <div className="ml-auto flex items-center gap-3">
+          <button
+            onClick={() => toast.info('Sent to kitchen (mock)')}
+            disabled={cartCount === 0}
+            className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-lg text-sm font-semibold border border-border bg-card hover:bg-secondary transition-colors disabled:opacity-50"
+          >
+            Send to kitchen
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* ── Product Grid (full width on mobile, flex-1 on desktop) ── */}
+        <div className={`flex-1 min-w-0 ${mobileCartOpen ? 'hidden lg:flex' : 'flex'} flex-col`}>
+          <ProductGrid products={products} categories={categories} loading={loadingProducts} />
+        </div>
+
+        {/* ── Cart Panel — Desktop: fixed right column (Counter 440px rail) ── */}
+        <div className="hidden lg:flex w-[440px] shrink-0 flex-col">
+          <CartPanel
+            onCheckout={() => setShowPayment(true)}
+            onApplyPwdSc={() => setShowPwdSc(true)}
+            onOpenParkedSales={() => setShowParked(true)}
+          />
+        </div>
       </div>
 
       {/* Mobile: full-screen cart overlay */}

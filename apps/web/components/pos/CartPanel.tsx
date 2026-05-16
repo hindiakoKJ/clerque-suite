@@ -70,8 +70,8 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
   return (
     <div className="flex flex-col h-full bg-card border-l border-border">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-        <h2 className="font-semibold text-foreground">Order</h2>
+      <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-2">
+        <h2 className="font-display font-bold text-foreground text-lg tracking-tight">Order</h2>
         <div className="flex items-center gap-1.5">
           {parkedCount > 0 && (
             <button
@@ -173,7 +173,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                       <Plus className="h-4 w-4" />
                     </button>
                   </div>
-                  <span className="text-sm font-bold text-foreground">
+                  <span className="text-sm font-bold text-foreground tnum">
                     {formatPeso((line.unitPrice - line.itemDiscount) * line.quantity)}
                   </span>
                 </div>
@@ -320,7 +320,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
           <div className="space-y-1 pt-1">
             <div className="flex justify-between text-sm text-muted-foreground">
               <span>Subtotal</span>
-              <span>{formatPeso(sub)}</span>
+              <span className="tnum">{formatPeso(sub)}</span>
             </div>
             {(() => {
               const promoTotal = lines.reduce(
@@ -336,24 +336,29 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
             {disc > 0 && (
               <div className="flex justify-between text-sm text-red-500">
                 <span>Discount</span>
-                <span>-{formatPeso(disc)}</span>
+                <span className="tnum">-{formatPeso(disc)}</span>
               </div>
             )}
             {isVatRegistered && orderDiscount && (
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>VAT relief</span>
-                <span>-{formatPeso(orderDiscount.totalSavings - orderDiscount.discountOnBase)}</span>
+                <span className="tnum">-{formatPeso(orderDiscount.totalSavings - orderDiscount.discountOnBase)}</span>
               </div>
             )}
             {isVatRegistered && (
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>VAT (12%)</span>
-                <span>{formatPeso(vat)}</span>
+                <span className="tnum">{formatPeso(vat)}</span>
               </div>
             )}
-            <div className="flex justify-between text-base font-bold text-foreground pt-1 border-t border-border">
-              <span>Total</span>
-              <span style={{ color: 'var(--accent)' }}>{formatPeso(total)}</span>
+            <div className="flex justify-between items-baseline pt-2 mt-1 border-t border-border">
+              <span className="font-display font-bold text-foreground text-base">Total</span>
+              <span
+                className="font-display font-extrabold tnum tracking-tight"
+                style={{ color: 'var(--accent)', fontSize: '32px', lineHeight: 1 }}
+              >
+                {formatPeso(total)}
+              </span>
             </div>
           </div>
 
@@ -407,7 +412,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
               onCheckout();
             }}
             size="lg"
-            className="w-full"
+            className="w-full min-h-[64px] font-display text-lg font-bold tracking-tight tnum rounded-xl shadow-sm"
             style={{ background: hasUnattestedRx ? 'hsl(var(--muted))' : 'var(--accent)' }}
             disabled={isEmpty}
           >

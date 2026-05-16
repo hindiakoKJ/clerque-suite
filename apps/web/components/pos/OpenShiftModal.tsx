@@ -2,11 +2,10 @@
 import { useState } from 'react';
 import { DollarSign } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
 import { formatPeso } from '@/lib/utils';
 
 const BILL_DENOMINATIONS = [1000, 500, 200, 100, 50, 20];
-const COIN_DENOMINATIONS = [10, 5, 1];
+const COIN_DENOMINATIONS = [10, 5, 1, 0.25];
 
 const INPUT_CLS =
   'w-full border border-border bg-background text-foreground placeholder:text-muted-foreground rounded-lg px-3 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-shadow';
@@ -66,10 +65,14 @@ export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShif
   return (
     // non-dismissable: always open until shift is started
     <Dialog open modal>
-      <DialogContent className="max-w-sm" onInteractOutside={(e) => e.preventDefault()}>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <DollarSign className="h-5 w-5" style={{ color: 'var(--accent)' }} />
+      <DialogContent
+        className="max-w-md p-0 gap-0"
+        style={{ background: 'var(--counter-bg, var(--background))' }}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <DialogHeader className="px-6 pt-6 pb-3">
+          <DialogTitle className="font-display text-xl font-bold flex items-center gap-2">
+            <DollarSign className="h-5 w-5" style={{ color: 'var(--counter-primary)' }} />
             Open Shift
           </DialogTitle>
         </DialogHeader>
@@ -116,7 +119,7 @@ export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShif
                     ? 'text-white'
                     : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                 }`}
-                style={mode === m ? { background: 'var(--accent)' } : undefined}
+                style={mode === m ? { background: 'var(--counter-primary)' } : undefined}
               >
                 {m === 'simple' ? 'Enter total' : 'Count by denomination'}
               </button>
@@ -175,23 +178,27 @@ export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShif
           </div>
 
           {/* Summary */}
-          <div className="rounded-xl p-3 text-center bg-[var(--accent-soft)]">
-            <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--accent)' }}>Opening Cash</p>
-            <p className="text-3xl font-bold mt-0.5" style={{ color: 'var(--accent)' }}>{formatPeso(openingCash)}</p>
+          <div className="rounded-2xl p-5 text-center border" style={{ background: 'var(--counter-primary-container)', borderColor: 'var(--counter-primary)' }}>
+            <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--counter-primary-press)' }}>Opening Cash</p>
+            <p className="font-display tnum font-extrabold mt-1" style={{ fontSize: 40, letterSpacing: '-0.02em', color: 'var(--counter-primary-press)' }}>{formatPeso(openingCash)}</p>
           </div>
 
           {error && <p className="text-sm text-red-500 text-center">{error}</p>}
         </div>
 
         <div className="px-6 pb-6">
-          <Button
+          <button
             onClick={handleSubmit}
             disabled={loading}
-            className="w-full text-white"
-            style={{ background: 'var(--accent)' }}
+            className="font-display w-full rounded-xl text-white text-base font-bold disabled:opacity-40 transition-opacity hover:opacity-95"
+            style={{
+              minHeight: 64,
+              background: 'var(--counter-primary)',
+              boxShadow: '0 4px 12px rgba(59,130,246,.30)',
+            }}
           >
             {loading ? 'Opening shift…' : 'Start Shift'}
-          </Button>
+          </button>
         </div>
       </DialogContent>
     </Dialog>

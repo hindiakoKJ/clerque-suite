@@ -47,6 +47,68 @@
   --input-placeholder: #94a3b8;
 }
 
+/* ─── Counter design tokens (POS surface) ────────────────────────────────── */
+/* Applied via `.theme-counter` wrapper on POS routes. Matches the Counter   */
+/* Android tablet app (see apps/counter/src/theme/tokens.ts).                 */
+.theme-counter {
+  color-scheme: light;
+  /* Primary · electric blue */
+  --counter-primary:           #3B82F6;
+  --counter-primary-press:     #1D4ED8;
+  --counter-primary-container: #DBE8FE;
+  --counter-on-primary:        #FFFFFF;
+  --counter-primary-ink:       #0C2A66;
+  /* Cream surfaces */
+  --counter-cream:             #E8E1D1;
+  --counter-cream-soft:        #F2EDE2;
+  --counter-cream-deep:        #D8CFBC;
+  --counter-bg:                #F8F5EE;
+  --counter-surface:           #FFFFFF;
+  /* Ink */
+  --counter-ink:               #1F1B16;
+  --counter-muted:             #5F564B;
+  --counter-faint:             #8A8073;
+  --counter-rule:              #DDD4C2;
+  --counter-rule-strong:       #BDB39E;
+  /* Semantic */
+  --counter-success:           #10B981;
+  --counter-success-soft:      #D7F4E7;
+  --counter-success-deep:      #065F46;
+  --counter-warning:           #F59E0B;
+  --counter-warning-soft:      #FCEBC9;
+  --counter-warning-deep:      #92400E;
+  --counter-error:             #DC2626;
+  --counter-error-soft:        #FBD9D9;
+  --counter-error-deep:        #991B1B;
+  --counter-info-soft:         #DBE8FE;
+  --counter-info-deep:         #1E40AF;
+  /* Local payment brands */
+  --counter-gcash:             #007BFC;
+  --counter-paymaya:           #00B14F;
+  /* Override the standard tokens so unprefixed Tailwind utilities */
+  /* (bg-background, text-foreground, border-border) inherit the Counter */
+  /* look without any markup change. */
+  --bg:           var(--counter-bg);
+  --card:         var(--counter-surface);
+  --muted:        var(--counter-cream-soft);
+  --fg:           var(--counter-ink);
+  --fg-muted:     var(--counter-muted);
+  --secondary:    var(--counter-cream);
+  --secondary-fg: var(--counter-ink);
+  --border-col:   var(--counter-rule);
+  --input-bg:     var(--counter-surface);
+  --accent:       var(--counter-primary);
+  --accent-soft:  var(--counter-primary-container);
+}
+
+/* Tabular-nums helper for currency runs. Apply to every ₱ amount in the POS. */
+.tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* Display font for titles in the POS surface. */
+.font-display { font-family: var(--font-display, "Plus Jakarta Sans"), system-ui, sans-serif; }
+.font-body    { font-family: var(--font-body,    "Inter"),               system-ui, sans-serif; }
+.font-mono-counter { font-family: var(--font-mono, "JetBrains Mono"), ui-monospace, monospace; }
+
 /* ─── Dark mode tokens ───────────────────────────────────────────────────── */
 .dark {
   color-scheme: dark;

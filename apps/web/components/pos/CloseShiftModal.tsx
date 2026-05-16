@@ -53,29 +53,29 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
 
   return (
     <Dialog open={open} onOpenChange={loading ? undefined : onClose}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Close Shift</DialogTitle>
+      <DialogContent className="max-w-md p-0 gap-0" style={{ background: 'var(--counter-bg, var(--background))' }}>
+        <DialogHeader className="px-6 pt-6 pb-3">
+          <DialogTitle className="font-display text-xl font-bold">Close Shift</DialogTitle>
         </DialogHeader>
 
         <div className="px-6 py-2 space-y-4">
           {/* Shift summary */}
           <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="bg-muted rounded-lg p-2.5">
+            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Orders</p>
-              <p className="text-lg font-bold text-foreground mt-0.5">{shift.orderCount}</p>
+              <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{shift.orderCount}</p>
             </div>
-            <div className="bg-muted rounded-lg p-2.5">
+            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Total Sales</p>
-              <p className="text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.totalSales)}</p>
+              <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.totalSales)}</p>
             </div>
-            <div className="bg-muted rounded-lg p-2.5">
+            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Cash Sales</p>
-              <p className="text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.cashSales)}</p>
+              <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.cashSales)}</p>
             </div>
-            <div className="bg-muted rounded-lg p-2.5">
+            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Digital</p>
-              <p className="text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.nonCashSales)}</p>
+              <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.nonCashSales)}</p>
             </div>
           </div>
 
@@ -153,16 +153,23 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
           {error && <p className="text-sm text-red-500 text-center">{error}</p>}
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={loading}>Cancel</Button>
-          <Button
+        <DialogFooter className="px-6 pb-6 pt-2 gap-2">
+          <Button variant="outline" onClick={onClose} disabled={loading} className="font-display" style={{ minHeight: 48 }}>
+            Cancel
+          </Button>
+          <button
             onClick={handleConfirm}
             disabled={!declaredStr || loading}
-            variant="destructive"
-            className="min-w-32"
+            className="font-display rounded-xl text-white text-sm font-bold px-6 disabled:opacity-40 transition-opacity hover:opacity-95"
+            style={{
+              minHeight: 64,
+              minWidth: 160,
+              background: 'var(--counter-primary)',
+              boxShadow: '0 4px 12px rgba(59,130,246,.30)',
+            }}
           >
             {loading ? 'Closing…' : 'Close Shift'}
-          </Button>
+          </button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

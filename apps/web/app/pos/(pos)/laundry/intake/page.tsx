@@ -438,12 +438,34 @@ export default function LaundryIntakePage() {
         <ArrowLeft className="h-4 w-4" /> Back to Queue
       </Link>
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <Sparkles className="h-6 w-6 text-[var(--accent)]" />
+        <h1 className="font-display text-2xl font-bold tracking-tight flex items-center gap-2">
+          <Sparkles className="h-6 w-6 text-[var(--counter-primary)]" />
           New Intake
         </h1>
         <p className="text-sm text-muted-foreground">Add service lines and retail items, then print the claim ticket.</p>
       </header>
+
+      {/* Customer-required banner — laundry policy: every claim ticket needs
+          an owner. Walk-in is permitted but a name + phone is strongly
+          recommended so the customer can be reached when the load is ready. */}
+      {!customerId && (
+        <div className="rounded-xl border border-[var(--counter-warning)]/40 bg-[var(--counter-warning-soft)] px-4 py-3 flex items-center gap-3">
+          <UserPlus className="h-5 w-5 text-[var(--counter-warning-deep)] shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-[var(--counter-warning-deep)]">Customer recommended</p>
+            <p className="text-xs text-[var(--counter-warning-deep)]/80">
+              Walk-in claim tickets are allowed, but adding a name + phone makes pickup notifications possible.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowNewCustomer(true)}
+            className="inline-flex items-center gap-1 h-10 px-4 rounded-lg bg-[var(--counter-primary)] hover:bg-[var(--counter-primary-press)] text-white text-xs font-bold shadow-sm"
+          >
+            <UserPlus className="w-3.5 h-3.5" /> Add customer
+          </button>
+        </div>
+      )}
 
       {/* Customer + branch */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -891,15 +913,15 @@ export default function LaundryIntakePage() {
       <div className="rounded-xl border border-border bg-card p-4 space-y-2">
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Services subtotal</span>
-          <span className="font-semibold tabular-nums">{fmtPeso(servicesSubtotal)}</span>
+          <span className="font-semibold tnum">{fmtPeso(servicesSubtotal)}</span>
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Retail subtotal</span>
-          <span className="font-semibold tabular-nums">{fmtPeso(productsSubtotal)}</span>
+          <span className="font-semibold tnum">{fmtPeso(productsSubtotal)}</span>
         </div>
         <div className="flex items-center justify-between text-base pt-2 border-t border-border">
-          <span className="font-semibold">Total (before promos)</span>
-          <span className="text-xl font-bold tabular-nums">{fmtPeso(total)}</span>
+          <span className="font-display font-bold">Total (before promos)</span>
+          <span className="font-display text-2xl font-bold tnum text-[var(--counter-primary)]">{fmtPeso(total)}</span>
         </div>
         <p className="text-[11px] text-muted-foreground italic">
           Promos are evaluated automatically on save based on the line set + current time.
@@ -909,7 +931,7 @@ export default function LaundryIntakePage() {
           <button
             onClick={() => create.mutate()}
             disabled={create.isPending || createForPay.isPending || !branchId || (lines.length === 0 && productLines.length === 0) || total <= 0}
-            className="inline-flex items-center gap-2 px-5 py-2 rounded-lg border border-border text-sm font-semibold hover:bg-muted disabled:opacity-50"
+            className="inline-flex items-center gap-2 h-12 px-5 rounded-xl border border-border text-sm font-bold hover:bg-muted disabled:opacity-50"
             title="Record the intake; payment collected later at claim"
           >
             <Receipt className="h-4 w-4" />
@@ -918,7 +940,7 @@ export default function LaundryIntakePage() {
           <button
             onClick={() => createForPay.mutate()}
             disabled={create.isPending || createForPay.isPending || !branchId || (lines.length === 0 && productLines.length === 0) || total <= 0}
-            className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+            className="inline-flex items-center gap-2 h-16 px-7 rounded-xl bg-[var(--counter-primary)] hover:bg-[var(--counter-primary-press)] text-white text-base font-bold shadow-md disabled:opacity-50"
             title="Record the intake AND collect payment now"
           >
             <Receipt className="h-4 w-4" />

@@ -367,25 +367,44 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   return (
     <>
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <span>{docTitle}</span>
-            <div className="flex items-center gap-2 mr-6">
+      <DialogContent
+        className="max-w-[980px] w-[95vw] p-0 gap-0 border-0 bg-transparent shadow-none"
+        style={{ background: 'transparent' }}
+      >
+        <div
+          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh]"
+          style={{ background: 'var(--counter-bg, var(--background))' }}
+        >
+          {/* ── Counter-styled header ─────────────────────────── */}
+          <div className="flex items-center px-8 py-5 bg-white border-b border-border">
+            <div>
+              <div className="font-display text-[22px] font-bold leading-tight">
+                Sale complete · #{data.orderNumber}
+              </div>
+              <div className="flex items-center gap-2.5 mt-1.5">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  Paid
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  OR # <span className="font-mono-counter tnum">{data.orderNumber}</span> · {date.toLocaleDateString('en-PH')} · {date.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
               {printerConnected && (
-                <button onClick={handleThermalPrint} title="Send to thermal printer" className="text-green-500 hover:text-green-700 transition-colors">
+                <button onClick={handleThermalPrint} title="Send to thermal printer" className="text-green-500 hover:text-green-700 transition-colors p-2">
                   <Zap className="h-4 w-4" />
                 </button>
               )}
-              <button onClick={handleBrowserPrint} title="Browser print" className="text-gray-400 hover:text-gray-600 transition-colors">
+              <button onClick={handleBrowserPrint} title="Browser print" className="text-muted-foreground hover:text-foreground transition-colors p-2">
                 <Printer className="h-4 w-4" />
               </button>
             </div>
-          </DialogTitle>
-        </DialogHeader>
+          </div>
 
-        <div className="px-6 pb-6">
-          <div ref={printRef} className="font-mono text-xs space-y-1">
+          <div className="flex-1 overflow-y-auto p-8 md:p-10 flex flex-col md:flex-row gap-8 md:gap-12 items-start justify-center">
+          <div ref={printRef} className="bg-white rounded-2xl border border-border shadow-sm p-8 w-full max-w-[480px] font-mono-counter text-xs space-y-1">
 
             {/* Demo watermark — printed AND on-screen, can't be removed */}
             {isDemoMode() && (
@@ -405,8 +424,6 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
 
             {/* ── Header: business info + BIR classification ── */}
             <div className="text-center space-y-0.5 mb-3">
-              {/* Sprint 19 — Optional logo (owner-uploaded). Thermal printers
-                  don't render full color but the on-screen receipt does. */}
               {receiptLogoUrl && (
                 /* eslint-disable-next-line @next/next/no-img-element */
                 <img
@@ -416,7 +433,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                   onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                 />
               )}
-              <p className="font-bold text-sm">{businessName ?? data.branchName ?? 'Demo Store'}</p>
+              <p className="font-display font-extrabold text-lg tracking-tight">{(businessName ?? data.branchName ?? 'Demo Store').toUpperCase()}</p>
               {data.branchName && businessName && (
                 <p className="text-gray-500 text-[10px]">{data.branchName}</p>
               )}
@@ -432,12 +449,15 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 <p className="text-gray-500 text-[10px]">{registeredAddress}</p>
               )}
               {/* Document title */}
-              <p className="font-semibold text-gray-700 text-[11px] uppercase tracking-wide">{docTitle}</p>
-              <p className="text-gray-500">
+              <p className="font-display font-semibold text-gray-700 text-[10px] uppercase tracking-[0.08em] mt-1">{docTitle}</p>
+              {/* OR # — huge mono */}
+              <p className="font-mono-counter tnum font-extrabold mt-2" style={{ fontSize: 28, letterSpacing: '0.02em' }}>
+                OR # {data.orderNumber}
+              </p>
+              <p className="text-gray-500 mt-1">
                 {date.toLocaleDateString('en-PH')}{' '}
                 {date.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
               </p>
-              <p className="font-medium">#{data.orderNumber}</p>
             </div>
 
             {/* ── B2B Customer block (RR No. 1-2026 — required for CHARGE/B2B invoices) ── */}
@@ -541,7 +561,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
               </div>
             )}
 
-            <div className="flex justify-between font-bold text-base mt-1">
+            <div className="flex justify-between font-display font-extrabold text-base mt-1 tnum">
               <span>TOTAL</span>
               <span>{formatPeso(data.totalAmount)}</span>
             </div>
@@ -575,41 +595,72 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             />
 
             <hr className="border-dashed border-gray-300 my-2" />
-            <p className="text-center text-gray-400 text-[10px] whitespace-pre-line">
+            <p className="text-center text-gray-500 text-[10px] whitespace-pre-line leading-relaxed">
               {data.isOffline
                 ? 'Order queued — will sync when connection is restored.'
-                : (receiptFooterNote ?? 'Thank you for your purchase!')}
+                : (receiptFooterNote ?? 'Salamat po · Thank you!')}
+            </p>
+            <p className="text-center text-gray-400 text-[9px] mt-1 uppercase tracking-[0.08em] font-display">
+              Pang-opisyal na Resibo · This serves as your official receipt
             </p>
           </div>
 
-          {isVoided && (
-            <div className="mt-4 px-3 py-2 rounded-lg bg-red-100 border border-red-200 text-red-700 text-center text-sm font-semibold">
-              VOIDED — keep this receipt for the audit trail.
-            </div>
-          )}
-
-          <div className="flex gap-2 mt-4">
-            {printerConnected ? (
-              <Button onClick={handleThermalPrint} variant="outline" className="flex-1 gap-2">
-                <Zap className="h-4 w-4 text-green-500" /> Thermal Print
-              </Button>
-            ) : (
-              <Button onClick={handleBrowserPrint} variant="outline" className="flex-1 gap-2">
-                <Printer className="h-4 w-4" /> Print
-              </Button>
+          {/* ── Right-side action panel (Counter design) ────────────────────── */}
+          <div className="w-full max-w-[420px] flex flex-col gap-3">
+            {isVoided && (
+              <div className="px-3 py-2 rounded-xl bg-red-100 border border-red-200 text-red-700 text-center text-sm font-semibold">
+                VOIDED — keep this receipt for the audit trail.
+              </div>
             )}
-            <Button onClick={onClose} className="flex-1">New Order</Button>
-          </div>
-
-          {canVoid && !isVoided && (
+            <div className="rounded-2xl border border-border bg-white p-5">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
+                Receipt for customer
+              </div>
+              <div className="flex flex-col gap-2.5">
+                {printerConnected ? (
+                  <button
+                    onClick={handleThermalPrint}
+                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-muted transition-colors"
+                    style={{ minHeight: 48 }}
+                  >
+                    <Zap className="h-4 w-4 text-emerald-500" /> Thermal print
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleBrowserPrint}
+                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-muted transition-colors"
+                    style={{ minHeight: 48 }}
+                  >
+                    <Printer className="h-4 w-4" /> Re-print receipt
+                  </button>
+                )}
+              </div>
+            </div>
             <button
-              onClick={() => setVoidOpen(true)}
-              className="mt-2 w-full text-center text-xs text-muted-foreground hover:text-red-600 transition-colors py-2 inline-flex items-center justify-center gap-1.5"
+              onClick={onClose}
+              className="font-display rounded-xl text-white text-base font-bold flex items-center justify-center transition-opacity hover:opacity-95"
+              style={{
+                minHeight: 64,
+                background: 'var(--counter-primary)',
+                boxShadow: '0 4px 12px rgba(59,130,246,.30)',
+              }}
             >
-              <Ban className="h-3.5 w-3.5" />
-              Void this order
+              Start next sale →
             </button>
-          )}
+            <div className="rounded-xl px-4 py-3 text-[12px] text-muted-foreground leading-relaxed" style={{ background: 'var(--counter-cream)' }}>
+              <b className="text-foreground">BIR ·</b> This sale is appended to your OR sequence (gap-free). Daily Z-read closes at 23:59 or when shift ends.
+            </div>
+            {canVoid && !isVoided && (
+              <button
+                onClick={() => setVoidOpen(true)}
+                className="text-center text-xs text-muted-foreground hover:text-red-600 transition-colors py-2 inline-flex items-center justify-center gap-1.5"
+              >
+                <Ban className="h-3.5 w-3.5" />
+                Void this order
+              </button>
+            )}
+          </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

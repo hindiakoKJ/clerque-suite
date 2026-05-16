@@ -122,15 +122,15 @@ export default function LaundryFleetPage() {
   return (
     <div className="flex flex-col h-full overflow-auto bg-muted/20">
       {/* Header */}
-      <header className="bg-background border-b border-border px-4 sm:px-6 py-4 shrink-0 flex items-center justify-between gap-3 flex-wrap">
+      <header className="bg-card border-b border-border px-4 sm:px-6 py-4 shrink-0 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <Activity className="h-5 w-5 text-[var(--accent)]" />
-          <h1 className="text-xl font-semibold">Fleet</h1>
-          <span className="text-xs text-muted-foreground ml-2">
+          <Activity className="h-5 w-5 text-[var(--counter-primary)]" />
+          <h1 className="font-display text-xl font-bold tracking-tight">Fleet</h1>
+          <span className="text-xs text-muted-foreground ml-2 tnum">
             {machines.length} machine{machines.length === 1 ? '' : 's'} ·{' '}
-            <span className="text-emerald-600">{idleCount} idle</span> ·{' '}
-            <span className="text-amber-600">{runningCount} running</span>
-            {oooCount > 0 && <> · <span className="text-red-600">{oooCount} out</span></>}
+            <span className="text-[var(--counter-success-deep)] font-semibold">{idleCount} idle</span> ·{' '}
+            <span className="text-[var(--counter-info-deep)] font-semibold">{runningCount} running</span>
+            {oooCount > 0 && <> · <span className="text-[var(--counter-error-deep)] font-semibold">{oooCount} out</span></>}
           </span>
         </div>
         <Link
@@ -255,12 +255,11 @@ function MachineTile({ machine, onClick }: { machine: Machine; onClick: () => vo
                                 Combine;
   const runningLine = machine.lines[0] ?? null;
 
-  // Color tints — we deliberately go bold here; this tile is meant to read
-  // from across the room.
+  // Counter palette: cream=idle, info-soft=running, error-soft=out.
   const tint =
-    machine.status === 'OUT_OF_ORDER' ? 'border-red-500/50    bg-red-50    dark:bg-red-950/30 text-red-700  dark:text-red-400'  :
-    machine.status === 'IDLE'         ? 'border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300' :
-                                        'border-amber-500/50  bg-amber-50  dark:bg-amber-950/30 text-amber-800 dark:text-amber-300';
+    machine.status === 'OUT_OF_ORDER' ? 'border-[var(--counter-error)]/50    bg-[var(--counter-error-soft)] text-[var(--counter-error-deep)]'  :
+    machine.status === 'IDLE'         ? 'border-[var(--counter-cream-deep)] bg-[var(--counter-cream-soft)] text-[var(--counter-ink)]' :
+                                        'border-[var(--counter-info-deep)]/40  bg-[var(--counter-info-soft)]  text-[var(--counter-info-deep)]';
 
   // Countdown / progress when a cycle was picked at start.
   const cd = formatCountdown(
@@ -269,9 +268,9 @@ function MachineTile({ machine, onClick }: { machine: Machine; onClick: () => vo
   );
   const overTime = cd.over;
 
-  // Outline flips to red when over time — the eye-catcher.
+  // Outline flips to error when over time — the eye-catcher.
   const ringClass = machine.status === 'RUNNING' && overTime
-    ? 'ring-2 ring-red-500/60 animate-pulse'
+    ? 'ring-2 ring-[var(--counter-error)]/60 animate-pulse'
     : '';
 
   return (
@@ -283,7 +282,7 @@ function MachineTile({ machine, onClick }: { machine: Machine; onClick: () => vo
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <Icon className="h-5 w-5 shrink-0 opacity-90" />
-          <span className="text-3xl font-bold font-mono tracking-tight leading-none">
+          <span className="text-3xl font-bold font-mono-counter tracking-tight leading-none">
             {machine.code}
           </span>
         </div>
@@ -300,13 +299,13 @@ function MachineTile({ machine, onClick }: { machine: Machine; onClick: () => vo
         <>
           {runningLine.cycleEndsAt ? (
             <div className="flex flex-col items-center gap-1.5 mt-1">
-              <div className={`text-4xl font-mono font-bold tabular-nums ${overTime ? 'text-red-700 dark:text-red-400' : ''}`}>
+              <div className={`text-4xl font-mono-counter font-bold tabular-nums ${overTime ? 'text-[var(--counter-error-deep)]' : ''}`}>
                 {cd.mmss}
               </div>
               {/* Progress bar */}
               <div className="w-full h-1.5 rounded-full bg-foreground/10 overflow-hidden">
                 <div
-                  className={`h-full transition-all ${overTime ? 'bg-red-500' : 'bg-amber-500'}`}
+                  className={`h-full transition-all ${overTime ? 'bg-[var(--counter-error)]' : 'bg-[var(--counter-primary)]'}`}
                   style={{ width: `${cd.fillPct}%` }}
                 />
               </div>
@@ -322,7 +321,7 @@ function MachineTile({ machine, onClick }: { machine: Machine; onClick: () => vo
             {runningLine.cycle && (
               <div className="text-xs font-semibold truncate">{runningLine.cycle.name}</div>
             )}
-            <div className="text-[10px] font-mono opacity-80 truncate">
+            <div className="text-[10px] font-mono-counter opacity-80 truncate font-bold">
               {runningLine.order.claimNumber}
             </div>
             <div className="text-[11px] truncate">
@@ -366,7 +365,7 @@ function QuickActionSheet({
       <div className="w-full sm:max-w-md bg-background border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl">
         <header className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2">
-            <span className="text-xl font-bold font-mono">{machine.code}</span>
+            <span className="text-xl font-bold font-mono-counter">{machine.code}</span>
             <span className="text-xs text-muted-foreground">
               {machine.kind.toLowerCase()} · {Number(machine.capacityKg).toFixed(0)}kg
             </span>

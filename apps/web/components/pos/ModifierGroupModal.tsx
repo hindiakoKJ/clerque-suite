@@ -135,7 +135,7 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
           <div>
-            <h2 className="font-semibold text-foreground">Modifier Groups</h2>
+            <h2 className="font-display text-lg font-bold">Modifier Groups</h2>
             <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-xs">{productName}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
@@ -233,7 +233,7 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
                             }
                             disabled={!newOptionName.trim() || addingOption}
                             className="h-8 px-3 text-xs font-medium text-white rounded-lg disabled:opacity-40 hover:opacity-90 transition-opacity"
-                            style={{ background: 'var(--accent)' }}
+                            style={{ background: 'var(--counter-primary)' }}
                           >
                             Add
                           </button>
@@ -275,7 +275,7 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
               <button
                 onClick={() => setCreatingGroup(true)}
                 className="flex items-center gap-1.5 text-xs font-medium transition-colors hover:opacity-80"
-                style={{ color: 'var(--accent)' }}
+                style={{ color: 'var(--counter-primary)' }}
               >
                 <Plus className="h-3.5 w-3.5" />
                 New modifier group
@@ -320,7 +320,7 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
                     onClick={() => newGroupName.trim() && createGroup()}
                     disabled={!newGroupName.trim() || creatingGroupPending}
                     className="flex-1 text-sm text-white rounded-lg py-2 font-medium disabled:opacity-40 hover:opacity-90 transition-opacity"
-                    style={{ background: 'var(--accent)' }}
+                    style={{ background: 'var(--counter-primary)' }}
                   >
                     {creatingGroupPending ? 'Creating…' : 'Create & Attach'}
                   </button>

@@ -59,16 +59,19 @@ export default function ControlledRegisterPage() {
 
   return (
     <div className="flex flex-col h-full overflow-auto">
-      <header className="bg-background border-b border-border px-4 sm:px-6 py-5 shrink-0 flex items-center gap-3 flex-wrap">
+      <header className="bg-card border-b border-border px-4 sm:px-6 py-5 shrink-0 flex items-center gap-3 flex-wrap">
         <button onClick={() => router.back()} className="text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <ShieldAlert className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-xl font-semibold">DDB Controlled-Substance Register</h1>
+        <ShieldAlert className="h-5 w-5 text-[var(--counter-error)]" />
+        <h1 className="font-display text-xl font-bold tracking-tight">DDB Controlled-Substance Register</h1>
+        <span className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase font-mono-counter bg-[var(--counter-error-soft)] text-[var(--counter-error-deep)]">
+          RA 9165
+        </span>
       </header>
 
       <div className="px-4 sm:px-6 py-5 space-y-4 flex-1 overflow-auto">
-        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+        <div className="rounded-lg bg-[var(--counter-warning-soft)] border border-[var(--counter-warning)]/40 px-4 py-3 text-xs text-[var(--counter-warning-deep)] flex items-start gap-2">
           <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
           <div>
             <strong>RA 9165 Dangerous Drugs Act register.</strong> This log is required by the Philippine
@@ -111,42 +114,42 @@ export default function ControlledRegisterPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-muted-foreground border-b border-border bg-muted/30">
-                    <th className="px-3 py-2.5 font-medium whitespace-nowrap">Dispensed</th>
-                    <th className="px-3 py-2.5 font-medium">Drug</th>
-                    <th className="px-3 py-2.5 font-medium text-right">Qty</th>
-                    <th className="px-3 py-2.5 font-medium">Patient</th>
-                    <th className="px-3 py-2.5 font-medium">Patient ID</th>
-                    <th className="px-3 py-2.5 font-medium">Doctor</th>
-                    <th className="px-3 py-2.5 font-medium">PRC / S2</th>
-                    <th className="px-3 py-2.5 font-medium">Pharmacist PRC</th>
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-muted-foreground border-b-2 border-border bg-muted/50">
+                    <th className="px-3 py-3 font-bold whitespace-nowrap">Dispensed</th>
+                    <th className="px-3 py-3 font-bold">Drug</th>
+                    <th className="px-3 py-3 font-bold text-right">Qty</th>
+                    <th className="px-3 py-3 font-bold">Patient</th>
+                    <th className="px-3 py-3 font-bold">Patient ID</th>
+                    <th className="px-3 py-3 font-bold">Doctor</th>
+                    <th className="px-3 py-3 font-bold">PRC / S2</th>
+                    <th className="px-3 py-3 font-bold">Pharmacist PRC</th>
                   </tr>
                 </thead>
                 <tbody>
                   {entries.map((e) => (
                     <tr key={e.id} className="border-b border-border/60 last:border-b-0">
-                      <td className="px-3 py-2.5 text-xs whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-xs whitespace-nowrap tnum">
                         <Calendar className="h-3 w-3 inline mr-1 text-muted-foreground" />
                         {new Date(e.dispensedAt).toLocaleString('en-PH', {
                           dateStyle: 'medium', timeStyle: 'short',
                         })}
                       </td>
                       <td className="px-3 py-2.5">
-                        <div className="font-medium">{e.drugName}</div>
+                        <div className="font-semibold">{e.drugName}</div>
                         {e.drugStrength && <div className="text-[10px] text-muted-foreground">{e.drugStrength}</div>}
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono">{Number(e.quantityDispensed).toFixed(2)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono-counter tnum">{Number(e.quantityDispensed).toFixed(2)}</td>
                       <td className="px-3 py-2.5">{e.patientName}</td>
                       <td className="px-3 py-2.5 text-xs">
                         <div>{e.patientIdType}</div>
-                        <div className="text-[10px] font-mono text-muted-foreground">{e.patientIdNumber}</div>
+                        <div className="text-[10px] font-mono-counter text-muted-foreground">{e.patientIdNumber}</div>
                       </td>
                       <td className="px-3 py-2.5">{e.doctorName}</td>
-                      <td className="px-3 py-2.5 font-mono text-[10px]">
+                      <td className="px-3 py-2.5 font-mono-counter text-[10px]">
                         <div>PRC: {e.doctorPrcLicense}</div>
                         <div className="text-muted-foreground">S2: {e.doctorS2License}</div>
                       </td>
-                      <td className="px-3 py-2.5 font-mono text-xs">{e.pharmacistPrc}</td>
+                      <td className="px-3 py-2.5 font-mono-counter text-xs">{e.pharmacistPrc}</td>
                     </tr>
                   ))}
                 </tbody>

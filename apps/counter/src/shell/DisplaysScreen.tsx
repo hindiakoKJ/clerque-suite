@@ -17,6 +17,7 @@ import { Button, Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { api, ApiHttpError } from '@/api/client';
+import { getWebOrigin } from '@/api/webOrigin';
 import { useAuth } from '@/auth/AuthProvider';
 import TopBar from '@/shell/TopBar';
 import QrCode from '@/device-mode/QrCode';
@@ -169,7 +170,7 @@ export default function DisplaysScreen({ onMenuPress }: Props): React.ReactEleme
               {modalCode?.code ? (
                 <QrCode
                   size={220}
-                  value={`https://clerque.com/pair?code=${encodeURIComponent(modalCode.code)}&tenant=${encodeURIComponent(tenantSlug)}`}
+                  value={`${getWebOrigin()}/pair?code=${encodeURIComponent(modalCode.code)}&tenant=${encodeURIComponent(tenantSlug)}`}
                 />
               ) : null}
             </View>

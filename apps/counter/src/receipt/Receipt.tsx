@@ -34,6 +34,7 @@ import type {
   TenantConfig,
 } from '@/types';
 import { formatPeso } from '@/components/Money';
+import { getWebHost } from '@/api/webOrigin';
 
 export interface ReceiptVatBreakdown {
   /** ₱ cents — vatable net base (excludes VAT). */
@@ -267,7 +268,7 @@ export default function Receipt({
         {tenant.planFeatures.receiptCustomization !== 'none' && tenant.receiptFooterNote ? (
           <Text style={s.metaSmall}>{tenant.receiptFooterNote}</Text>
         ) : null}
-        <Text style={s.metaSmall}>Powered by Clerque · clerque.com</Text>
+        <Text style={s.metaSmall}>Powered by Clerque · {getWebHost()}</Text>
         <Text style={s.closingLine}>
           This serves as an official receipt — Pang-opisyal na Resibo
         </Text>

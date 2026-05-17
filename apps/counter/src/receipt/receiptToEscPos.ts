@@ -11,6 +11,7 @@
  */
 
 import { EscPosBuilder } from './EscPosBuilder';
+import { getWebHost } from '@/api/webOrigin';
 import type {
   CartLine,
   CartPayment,
@@ -234,7 +235,7 @@ export function receiptToEscPos(
     b.line(r.tenant.receiptFooterNote);
   }
   b.line('Powered by Clerque');
-  b.line('clerque.com');
+  b.line(getWebHost());
   b.line('Official Receipt · Pang-opisyal na Resibo');
 
   b.align('L').feed(3);

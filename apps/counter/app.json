@@ -43,6 +43,7 @@
     ],
     "extra": {
       "apiBaseUrl": "https://clerque-suite-production-93b1.up.railway.app",
+      "webOrigin":  "https://clerque.hnscorpph.com",
       "tenantSlugDefault": "demo"
     }
   }

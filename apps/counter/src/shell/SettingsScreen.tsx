@@ -17,6 +17,7 @@ import type { DrawerNavigationProp } from '@react-navigation/drawer';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { useBranchContext } from '@/api/BranchContext';
+import { getWebOrigin, getWebHost } from '@/api/webOrigin';
 import TopBar from '@/shell/TopBar';
 import { clearDeviceMode } from '@/device-mode/storage';
 import { colors, radii, spacing, text as textTokens } from '@/theme';
@@ -69,8 +70,8 @@ export default function SettingsScreen({ onMenuPress }: Props): React.ReactEleme
   };
 
   const openReceiptCustomization = () => {
-    Linking.openURL('https://clerque.com/app/settings/receipt').catch(() => {
-      Alert.alert('Receipt customization', 'Open clerque.com to customize your receipt.');
+    Linking.openURL(`${getWebOrigin()}/app/settings/receipt`).catch(() => {
+      Alert.alert('Receipt customization', `Open ${getWebHost()} to customize your receipt.`);
     });
   };
 

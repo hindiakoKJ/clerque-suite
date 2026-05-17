@@ -327,7 +327,13 @@ function PairingCodeModal({
 
   if (!code) return null;
 
-  const pairUrl = `https://clerque.com/pair?code=${code.code}&tenant=${tenantSlug}`;
+  // Use the actual site's origin so the QR works on any deployed
+  // domain — clerque.hnscorpph.com (current prod), clerque.com (future),
+  // staging, localhost, whatever. Falls back to clerque.com only on
+  // server render where window doesn't exist (and this dialog is
+  // client-only anyway, so the fallback never paints).
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://clerque.com';
+  const pairUrl = `${origin}/pair?code=${code.code}&tenant=${tenantSlug}`;
   const qrSrc   = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(pairUrl)}`;
 
   const mm = String(Math.floor(remaining / 60)).padStart(2, '0');

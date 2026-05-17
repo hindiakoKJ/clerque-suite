@@ -7,8 +7,9 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PinKeypad, { PinDots } from '@/auth/PinKeypad';
 import { useAuth, ApiHttpError } from '@/auth/AuthProvider';
@@ -52,31 +53,37 @@ export default function CashierPinScreen(): React.ReactElement {
   }, [pin, length, submitting, verifyCashierPin]);
 
   return (
-    <View style={styles.root}>
+    <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <View style={styles.topBar}>
         <Pressable onPress={signOut} hitSlop={12}>
           <Text style={styles.topLink}>Switch cashier</Text>
         </Pressable>
       </View>
 
-      <View style={styles.body}>
-        <Text style={styles.tenant}>{tenant?.name ?? 'Clerque'}</Text>
-        <Text style={styles.title}>Enter your {length}-digit PIN</Text>
-        <Text style={styles.subtitle}>
-          Signed in as {session?.user.name ?? session?.user.email}
-        </Text>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.body}>
+          <Text style={styles.tenant}>{tenant?.name ?? 'Clerque'}</Text>
+          <Text style={styles.title}>Enter your {length}-digit PIN</Text>
+          <Text style={styles.subtitle}>
+            Signed in as {session?.user?.name ?? session?.user?.email ?? ''}
+          </Text>
 
-        <View style={styles.dotsWrap}>
-          <PinDots value={pin} length={length} />
+          <View style={styles.dotsWrap}>
+            <PinDots value={pin} length={length} />
+          </View>
+
+          {errorMsg ? <Text style={styles.error}>{errorMsg}</Text> : null}
+
+          <View style={styles.keypadWrap}>
+            <PinKeypad value={pin} length={length} onChange={setPin} disabled={submitting} />
+          </View>
         </View>
-
-        {errorMsg ? <Text style={styles.error}>{errorMsg}</Text> : null}
-
-        <View style={styles.keypadWrap}>
-          <PinKeypad value={pin} length={length} onChange={setPin} disabled={submitting} />
-        </View>
-      </View>
-    </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -90,7 +97,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.s5,
   },
   topLink: { ...text.bodySm, color: colors.primary, fontWeight: '600' },
-  body: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.s5 },
+  scroll: { flexGrow: 1, justifyContent: 'center' },
+  body: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.s4, paddingVertical: spacing.s5, gap: spacing.s1 },
   tenant: { ...text.caption, color: colors.muted, textTransform: 'uppercase', letterSpacing: 1.2 },
   title: { ...text.displayMd, color: colors.ink, marginTop: spacing.s2 },
   subtitle: { ...text.bodySm, color: colors.muted, marginTop: spacing.s1 },

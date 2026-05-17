@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import * as Haptics from 'expo-haptics';
 
@@ -51,6 +51,18 @@ export function PinDots({ value, length }: { value: string; length: 4 | 6 }): Re
 }
 
 export default function PinKeypad({ value, length, onChange, disabled }: Props): React.ReactElement {
+  // Responsive sizing — scale keys to fit phones (<= 480dp wide) while
+  // staying generous on tablets. The keypad takes up at most 90% of the
+  // shorter dimension so it fits in landscape phones too.
+  const { width, height } = useWindowDimensions();
+  const shorter = Math.min(width, height);
+  // Three-key columns with two inter-key gaps → key = (available - 2*gap) / 3
+  // Available width capped at 360dp (tablet design width) to avoid
+  // ridiculously huge keys on a 12" tablet.
+  const available = Math.min(shorter * 0.9, 360);
+  const keySize = Math.floor((available - 2 * spacing.s3) / 3);
+  const gridWidth = keySize * 3 + spacing.s3 * 2;
+
   const handlePress = (key: string) => {
     if (disabled) return;
     Haptics.selectionAsync().catch(() => {});
@@ -62,9 +74,11 @@ export default function PinKeypad({ value, length, onChange, disabled }: Props):
   };
 
   return (
-    <View style={styles.grid}>
+    <View style={[styles.grid, { width: gridWidth }]}>
       {KEYS.map((k, idx) => {
-        if (!k) return <View key={`spacer-${idx}`} style={styles.keySpacer} />;
+        if (!k) {
+          return <View key={`spacer-${idx}`} style={{ width: keySize, height: keySize }} />;
+        }
         return (
           <Pressable
             key={k.value}
@@ -72,6 +86,7 @@ export default function PinKeypad({ value, length, onChange, disabled }: Props):
             disabled={disabled}
             style={({ pressed }: { pressed: boolean }) => [
               styles.key,
+              { width: keySize, height: keySize },
               pressed && styles.keyPressed,
               disabled && styles.keyDisabled,
             ]}
@@ -88,12 +103,9 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    width: 320,
     gap: spacing.s3,
   },
   key: {
-    width: 96,
-    height: Math.max(tap.cashierPrimary + 16, 80),
     borderRadius: radii.md,
     backgroundColor: colors.surface,
     alignItems: 'center',
@@ -103,7 +115,6 @@ const styles = StyleSheet.create({
   },
   keyPressed: { backgroundColor: colors.creamSoft },
   keyDisabled: { opacity: 0.5 },
-  keySpacer: { width: 96, height: Math.max(tap.cashierPrimary + 16, 80) },
   keyLabel: { ...text.cashierLg, color: colors.ink },
 });
 

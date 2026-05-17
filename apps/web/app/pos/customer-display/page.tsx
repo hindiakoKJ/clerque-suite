@@ -66,7 +66,7 @@ export default function CustomerDisplayPage() {
   const businessName = state.businessName ?? tenantBusinessName ?? 'Welcome';
 
   // Welcome screen — no active cart
-  if (state.type === 'WELCOME' || state.lines.length === 0) {
+  if (state.type === 'WELCOME' || (state.lines.length === 0 && state.type !== 'PAYMENT_PENDING')) {
     return (
       <div
         className="min-h-screen flex flex-col items-center justify-center p-12 text-center"
@@ -77,6 +77,55 @@ export default function CustomerDisplayPage() {
           {businessName}
         </h1>
         <p className="text-amber-100 text-xl">Welcome — please order at the counter</p>
+      </div>
+    );
+  }
+
+  // Sprint 25 — Tendering screen on the customer side. When the cashier
+  // picks Cash / GCash / PayMaya / Card / Split, this mirrors the brand
+  // QR + amount so the customer can scan from the kiosk display.
+  if (state.type === 'PAYMENT_PENDING') {
+    const method = state.paymentMethod ?? 'CASH';
+    const isEWallet = method === 'GCASH' || method === 'PAYMAYA';
+    const brand =
+      method === 'GCASH'   ? { name: 'GCash',   color: '#007BFC', bg: 'linear-gradient(135deg, #003F8C 0%, #007BFC 100%)' } :
+      method === 'PAYMAYA' ? { name: 'PayMaya', color: '#00B14F', bg: 'linear-gradient(135deg, #00582A 0%, #00B14F 100%)' } :
+      method === 'CARD'    ? { name: 'Card',    color: '#475569', bg: 'linear-gradient(135deg, #1e293b 0%, #475569 100%)' } :
+      method === 'SPLIT'   ? { name: 'Split payment', color: '#6b3f1d', bg: 'linear-gradient(135deg, #6b3f1d 0%, #8b5e3c 100%)' } :
+                             { name: 'Cash',    color: '#1F1B16', bg: 'linear-gradient(135deg, #1F1B16 0%, #5F564B 100%)' };
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center p-12 text-center text-white"
+        style={{ background: brand.bg }}
+      >
+        <p className="text-white/70 text-xl uppercase tracking-widest mb-3">Amount due</p>
+        <h1 className="text-7xl sm:text-8xl font-bold tracking-tight tabular-nums mb-10">
+          {formatPeso(state.total)}
+        </h1>
+        {isEWallet ? (
+          <div className="bg-white rounded-2xl p-6 mb-8 shadow-2xl">
+            {state.qrImageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={state.qrImageUrl} alt={`${brand.name} QR`} className="w-72 h-72 object-contain" />
+            ) : (
+              <div
+                className="w-72 h-72 flex flex-col items-center justify-center font-bold"
+                style={{ color: brand.color }}
+              >
+                <div className="text-3xl">{brand.name}</div>
+                <div className="text-sm text-stone-400 mt-2 tracking-widest">QR CODE</div>
+                <p className="text-xs text-stone-400 mt-6 px-6 leading-snug">
+                  Ask your cashier to upload your business QR in Settings
+                </p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-white/80 text-2xl mb-8">
+            Please pay <span className="font-semibold">{brand.name}</span> at the counter
+          </p>
+        )}
+        <p className="text-white/60 text-base">{businessName}</p>
       </div>
     );
   }
@@ -205,12 +254,9 @@ export default function CustomerDisplayPage() {
           </span>
         </div>
 
-        {state.type === 'PAYMENT_PENDING' && (
-          <div className="mt-6 px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/40 flex items-center gap-3">
-            <Receipt className="h-5 w-5 text-amber-400" />
-            <span className="text-amber-100 text-lg">Please confirm payment with your cashier</span>
-          </div>
-        )}
+        {/* PAYMENT_PENDING now gets its own dedicated branded screen earlier
+            in this component (Sprint 25), so the legacy in-cart pill below
+            is no longer reachable here. */}
       </div>
 
       {/* Subtle attribution footer */}

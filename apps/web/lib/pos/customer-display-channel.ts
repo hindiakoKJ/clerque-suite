@@ -63,6 +63,13 @@ export interface CustomerDisplayState {
   branchName?:     string;
   /** Tenant business name — large branding header. */
   businessName?:   string;
+  /** When type === 'PAYMENT_PENDING', tells the customer display which
+   *  payment method the cashier picked so the screen can show the right
+   *  brand color + QR-code prompt ("Scan with GCash"). */
+  paymentMethod?: 'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'SPLIT';
+  /** Optional pre-uploaded QR image for the tenant's GCash/PayMaya account.
+   *  Falls back to a generic placeholder when not set. */
+  qrImageUrl?:    string;
   /** Sequence number — receivers ignore older messages on a race. */
   seq:          number;
   ts:           number;

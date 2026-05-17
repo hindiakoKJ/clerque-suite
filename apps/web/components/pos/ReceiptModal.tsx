@@ -620,7 +620,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 {printerConnected ? (
                   <button
                     onClick={handleThermalPrint}
-                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-muted transition-colors"
+                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-secondary text-secondary-foreground px-4 text-sm font-semibold hover:bg-secondary/80 transition-colors"
                     style={{ minHeight: 48 }}
                   >
                     <Zap className="h-4 w-4 text-emerald-500" /> Thermal print
@@ -628,7 +628,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 ) : (
                   <button
                     onClick={handleBrowserPrint}
-                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-muted transition-colors"
+                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-secondary text-secondary-foreground px-4 text-sm font-semibold hover:bg-secondary/80 transition-colors"
                     style={{ minHeight: 48 }}
                   >
                     <Printer className="h-4 w-4" /> Re-print receipt

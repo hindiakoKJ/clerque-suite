@@ -5,6 +5,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { formatPeso } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { publishCustomerDisplay } from '@/lib/pos/customer-display-channel';
 import type { PaymentMethod, InvoiceType, JwtPayload } from '@repo/shared-types';
 
 export interface PaymentEntry {
@@ -159,6 +160,20 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
     setError('');
     setAmountStr('');
     setReference('');
+    // Sprint 25 — mirror the picked method to the customer-display kiosk
+    // so the customer sees the right brand QR + amount on the second
+    // screen. The customer-display page handles WELCOME / CART_UPDATE /
+    // PAYMENT_PENDING / PAYMENT_COMPLETE; PAYMENT_PENDING is the right
+    // state while the cashier is on the tendering screen.
+    publishCustomerDisplay({
+      type: 'PAYMENT_PENDING',
+      lines: [],
+      subtotal: total,
+      discount: 0,
+      vatAmount: 0,
+      total,
+      paymentMethod: next,
+    });
   }
 
   function addPayment(overrideMethod?: PaymentMethod, overrideAmount?: number) {
@@ -579,7 +594,7 @@ function CashTab({
   onKeypad: (ch: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
       {/* LEFT: Bayad + Sukli cards */}
       <div className="space-y-4">
         <div className="rounded-2xl border border-border bg-card p-7 shadow-md">
@@ -630,7 +645,7 @@ function CashTab({
       </div>
 
       {/* RIGHT: keypad + quick amounts */}
-      <div className="grid grid-cols-[auto_1fr] gap-4 self-start">
+      <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4 self-start">
         <div className="grid grid-cols-3 gap-2.5">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
             <Key key={n} onClick={() => onKeypad(String(n))}>{n}</Key>
@@ -700,7 +715,7 @@ function BrandTab({
   setReference: (v: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-[1.1fr_1fr] gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-8">
       <div className="space-y-5">
         <div className="rounded-2xl border border-border bg-card shadow-md p-7">
           <div className="flex gap-4 mb-4 items-start">
@@ -792,7 +807,7 @@ function CardTab({ amount, reference, setReference }: {
 }) {
   const [last4, setLast4] = useState('');
   return (
-    <div className="grid grid-cols-[1.1fr_1fr] gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-8">
       <div className="space-y-5">
         <div className="rounded-2xl border border-border bg-card shadow-md p-7">
           <div className="font-display text-lg font-bold mb-4">Card payment</div>
@@ -869,7 +884,7 @@ function SplitTab({
 }) {
   const activeMethod = activeMethods.find((m) => m.value === method) ?? activeMethods[0]!;
   return (
-    <div className="grid grid-cols-[1.2fr_1fr] gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-8">
       <div className="space-y-4">
         {/* Existing payment lines */}
         <div className="rounded-2xl border border-border bg-card shadow-md p-5">

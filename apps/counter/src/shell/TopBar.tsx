@@ -106,7 +106,7 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
           <View style={styles.roleChip}>
             <Text style={styles.roleChipText}>{cashier.name}</Text>
           </View>
-        ) : session ? (
+        ) : session?.user?.role ? (
           <View style={styles.roleChip}>
             <Text style={styles.roleChipText}>{session.user.role}</Text>
           </View>

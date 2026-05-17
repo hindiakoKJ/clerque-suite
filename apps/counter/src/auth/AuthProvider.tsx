@@ -36,11 +36,11 @@ interface SignInArgs {
   password: string;
 }
 
+/** The Cloud API's /auth/login returns just the tokens. The user +
+ *  tenant are fetched in a follow-up /auth/me call. */
 interface LoginResponse {
-  jwt: string;
+  accessToken: string;
   refreshToken: string;
-  user: AuthSession['user'];
-  tenant: TenantConfig;
 }
 
 interface MeResponse {
@@ -131,19 +131,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   }, []);
 
   const signIn = useCallback(async ({ tenantSlug, email, password }: SignInArgs) => {
-    const res = await api.post<LoginResponse>('/auth/login', {
+    // Step 1 — exchange credentials for tokens. The Cloud API's /auth/login
+    // returns ONLY { accessToken, refreshToken } (it doesn't ship user +
+    // tenant in the same response).
+    const tokens = await api.post<LoginResponse>('/auth/login', {
       tenantSlug,
       email,
       password,
     });
-    api.setAuthToken(res.jwt);
-    setSession({ jwt: res.jwt, refreshToken: res.refreshToken, user: res.user });
-    setTenant(res.tenant);
+    api.setAuthToken(tokens.accessToken);
+
+    // Step 2 — fetch the authenticated user + tenant in one shot.
+    const me = await api.get<MeResponse>('/auth/me');
+
+    setSession({ jwt: tokens.accessToken, refreshToken: tokens.refreshToken, user: me.user });
+    setTenant(me.tenant);
     setCashier(null);
     await Promise.all([
-      SecureStore.setItemAsync(SS_JWT_KEY, res.jwt),
-      SecureStore.setItemAsync(SS_REFRESH_KEY, res.refreshToken),
-      persistTenant(res.tenant, res.user),
+      SecureStore.setItemAsync(SS_JWT_KEY, tokens.accessToken),
+      SecureStore.setItemAsync(SS_REFRESH_KEY, tokens.refreshToken),
+      persistTenant(me.tenant, me.user),
     ]);
   }, []);
 

@@ -331,7 +331,7 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
                   className="font-display flex items-center gap-2.5 px-5 rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   style={{
                     background: isOn ? brandColor : 'transparent',
-                    color: isOn ? '#fff' : 'var(--muted-foreground)',
+                    color: isOn ? '#fff' : 'hsl(var(--foreground))',
                     fontWeight: isOn ? 700 : 600,
                     minHeight: 48,
                     boxShadow: isOn ? '0 4px 12px rgba(0,0,0,0.12)' : 'none',
@@ -340,11 +340,13 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
                   <span
                     className="inline-flex items-center justify-center w-6 h-6 rounded-full text-[12px] font-bold"
                     style={{
+                      // Active: white at 22% over the brand fill.
+                      // Inactive: brand color at low alpha — works on both
+                      // light and dark surfaces (hardcoded #E1EEFE / #D9F4E1
+                      // washed out in dark mode).
                       background: isOn
                         ? 'rgba(255,255,255,0.22)'
-                        : (t.brand
-                          ? (t.key === 'GCASH' ? '#E1EEFE' : '#D9F4E1')
-                          : 'var(--counter-primary-container)'),
+                        : `color-mix(in oklab, ${brandColor} 15%, transparent)`,
                       color: isOn ? '#fff' : brandColor,
                     }}
                   >
@@ -755,8 +757,8 @@ function BrandTab({
 
       <div className="space-y-4">
         <div
-          className="rounded-2xl border p-7"
-          style={{ background: brandSoft, borderColor: brand }}
+          className="rounded-2xl border-2 p-7 bg-card"
+          style={{ borderColor: brand }}
         >
           <div
             className="text-[11px] font-bold uppercase tracking-wider mb-2"
@@ -765,12 +767,12 @@ function BrandTab({
             Receive · {brandName}
           </div>
           <div
-            className="font-display tnum font-extrabold leading-none"
-            style={{ fontSize: 60, letterSpacing: '-0.02em', color: brand }}
+            className="font-display tnum font-extrabold leading-none text-foreground"
+            style={{ fontSize: 60, letterSpacing: '-0.02em' }}
           >
             {formatPeso(amount)}
           </div>
-          <div className="mt-3 text-[13px] font-medium" style={{ color: brand }}>
+          <div className="mt-3 text-[13px] font-medium text-muted-foreground">
             Exact amount only · no sukli
           </div>
         </div>

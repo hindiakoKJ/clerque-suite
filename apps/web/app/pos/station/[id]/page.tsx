@@ -103,16 +103,23 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
     }
   }
 
-  // Group by orderNumber so a multi-item order shows together
+  // Group by orderNumber so a multi-item order shows together.
   const grouped = items.reduce<Record<string, QueueItem[]>>((acc, it) => {
     (acc[it.orderNumber] ??= []).push(it);
     return acc;
   }, {});
-  const orderNumbers = Object.keys(grouped).sort((a, b) => {
-    const aTs = grouped[a][0].orderedAt ? new Date(grouped[a][0].orderedAt).getTime() : 0;
-    const bTs = grouped[b][0].orderedAt ? new Date(grouped[b][0].orderedAt).getTime() : 0;
-    return aTs - bTs;
-  });
+  // Hide fully-ready orders so the screen clears as soon as the last item
+  // in an order is bumped. Previously these orders stayed on-screen at
+  // opacity-60 forever — looked busy + cashiers couldn't tell what was
+  // actually still cooking. If a cashier needs to undo a bump, they have
+  // the /pos/orders page for that.
+  const orderNumbers = Object.keys(grouped)
+    .filter((on) => grouped[on].some((i) => i.prepStatus !== 'READY'))
+    .sort((a, b) => {
+      const aTs = grouped[a][0].orderedAt ? new Date(grouped[a][0].orderedAt).getTime() : 0;
+      const bTs = grouped[b][0].orderedAt ? new Date(grouped[b][0].orderedAt).getTime() : 0;
+      return aTs - bTs;
+    });
 
   const Icon = station ? STATION_ICON[station.kind] ?? ChefHat : ChefHat;
   const stationName = station?.name ?? 'Station';

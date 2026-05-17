@@ -48,17 +48,21 @@
 }
 
 /* ─── Counter design tokens (POS surface) ────────────────────────────────── */
-/* Applied via `.theme-counter` wrapper on POS routes. Matches the Counter   */
-/* Android tablet app (see apps/counter/src/theme/tokens.ts).                 */
+/* Applied via `.theme-counter` wrapper on POS routes.                        */
+/* Reverted 2026-05-17: we keep the brand accent + payment-brand colors +     */
+/* the Counter primary/semantic palette as opt-in CSS vars (so any component  */
+/* that explicitly references `var(--counter-*)` still works), but we no      */
+/* longer hijack the standard tokens (--bg / --card / --muted / --fg /        */
+/* --border-col). Surface colors fall back to the app's normal light/dark     */
+/* mode — no more cream-on-dark mismatch.                                     */
 .theme-counter {
-  color-scheme: light;
   /* Primary · electric blue */
   --counter-primary:           #3B82F6;
   --counter-primary-press:     #1D4ED8;
   --counter-primary-container: #DBE8FE;
   --counter-on-primary:        #FFFFFF;
   --counter-primary-ink:       #0C2A66;
-  /* Cream surfaces */
+  /* Cream surfaces — available as opt-in if a component wants warm tone */
   --counter-cream:             #E8E1D1;
   --counter-cream-soft:        #F2EDE2;
   --counter-cream-deep:        #D8CFBC;
@@ -82,21 +86,10 @@
   --counter-error-deep:        #991B1B;
   --counter-info-soft:         #DBE8FE;
   --counter-info-deep:         #1E40AF;
-  /* Local payment brands */
+  /* Local payment brands — keep these, they're functional not stylistic */
   --counter-gcash:             #007BFC;
   --counter-paymaya:           #00B14F;
-  /* Override the standard tokens so unprefixed Tailwind utilities */
-  /* (bg-background, text-foreground, border-border) inherit the Counter */
-  /* look without any markup change. */
-  --bg:           var(--counter-bg);
-  --card:         var(--counter-surface);
-  --muted:        var(--counter-cream-soft);
-  --fg:           var(--counter-ink);
-  --fg-muted:     var(--counter-muted);
-  --secondary:    var(--counter-cream);
-  --secondary-fg: var(--counter-ink);
-  --border-col:   var(--counter-rule);
-  --input-bg:     var(--counter-surface);
+  /* Accent stays electric blue across POS (overrides parent app's accent) */
   --accent:       var(--counter-primary);
   --accent-soft:  var(--counter-primary-container);
 }
@@ -123,6 +116,18 @@
   --input-bg:     #1e293b;
   --input-fg:     #f1f5f9;
   --input-placeholder: #4b5563;
+}
+
+/* ─── Counter tokens · dark mode lift ───────────────────────────────────── */
+/* Only lift the brand accent in dark mode so it stays readable; everything   */
+/* else inherits the app's normal dark tokens (no cream surfaces in dark).    */
+.dark .theme-counter {
+  --counter-primary:           #60A5FA;
+  --counter-primary-press:     #3B82F6;
+  --counter-primary-container: #1E3A8A;
+  --counter-primary-ink:       #DBE8FE;
+  --accent:       var(--counter-primary);
+  --accent-soft:  var(--counter-primary-container);
 }
 
 /* ─── Base ───────────────────────────────────────────────────────────────── */

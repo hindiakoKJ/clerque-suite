@@ -58,7 +58,7 @@ const COLUMN_TINT: Record<LaundryStatus, string> = {
   RECEIVED:         'border-[var(--counter-info-soft)] bg-[var(--counter-info-soft)]/40',
   WASHING:          'border-[var(--counter-info-soft)] bg-[var(--counter-info-soft)]/60',
   DRYING:           'border-[var(--counter-warning)]/30 bg-[var(--counter-warning-soft)]/60',
-  FOLDING:          'border-[var(--counter-cream-deep)] bg-[var(--counter-cream-soft)]',
+  FOLDING:          'border-border bg-muted',
   READY_FOR_PICKUP: 'border-[var(--counter-success)]/40 bg-[var(--counter-success-soft)]/80',
   CLAIMED:          'border-border bg-muted/30',
   CANCELLED:        'border-[var(--counter-error)]/30 bg-[var(--counter-error-soft)]/40',
@@ -209,7 +209,7 @@ export default function LaundryQueuePage() {
                               const tint =
                                 m.status === 'RUNNING' ? 'bg-[var(--counter-info-soft)] text-[var(--counter-info-deep)] border-[var(--counter-info-deep)]/30' :
                                 m.status === 'DONE'    ? 'bg-[var(--counter-success-soft)] text-[var(--counter-success-deep)] border-[var(--counter-success)]/30' :
-                                                          'bg-[var(--counter-cream)] text-[var(--counter-muted)] border-border';
+                                                          'bg-secondary text-muted-foreground border-border';
                               return (
                                 <span
                                   key={i}
@@ -382,7 +382,7 @@ function MachineGrid() {
         {machines.map((m) => {
           const Icon = m.kind === 'WASHER' ? WashingMachine : Wind;
           const tint =
-            m.status === 'IDLE'         ? 'border-[var(--counter-cream-deep)] bg-[var(--counter-cream-soft)] text-[var(--counter-muted)]' :
+            m.status === 'IDLE'         ? 'border-border bg-muted text-muted-foreground' :
             m.status === 'RUNNING'      ? 'border-[var(--counter-info-deep)]/30 bg-[var(--counter-info-soft)] text-[var(--counter-info-deep)]'   :
                                           'border-[var(--counter-error)]/40 bg-[var(--counter-error-soft)] text-[var(--counter-error-deep)]';
           const runningLine = m.lines[0];

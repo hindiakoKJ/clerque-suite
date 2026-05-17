@@ -258,7 +258,7 @@ function MachineTile({ machine, onClick }: { machine: Machine; onClick: () => vo
   // Counter palette: cream=idle, info-soft=running, error-soft=out.
   const tint =
     machine.status === 'OUT_OF_ORDER' ? 'border-[var(--counter-error)]/50    bg-[var(--counter-error-soft)] text-[var(--counter-error-deep)]'  :
-    machine.status === 'IDLE'         ? 'border-[var(--counter-cream-deep)] bg-[var(--counter-cream-soft)] text-[var(--counter-ink)]' :
+    machine.status === 'IDLE'         ? 'border-border bg-muted text-foreground' :
                                         'border-[var(--counter-info-deep)]/40  bg-[var(--counter-info-soft)]  text-[var(--counter-info-deep)]';
 
   // Countdown / progress when a cycle was picked at start.

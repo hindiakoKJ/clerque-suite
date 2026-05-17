@@ -118,11 +118,10 @@ export function ModifierPickerModal({
   return (
     <div className="fixed inset-0 bg-foreground/40 z-50 flex items-end sm:items-center justify-center p-4">
       <div
-        className="border border-border rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden"
-        style={{ background: 'var(--counter-bg, var(--background))' }}
+        className="border border-border rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden bg-muted"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0 bg-white">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0 bg-card">
           <div>
             <h2 className="font-display text-lg font-bold">{productName}</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Customize your order</p>
@@ -154,7 +153,7 @@ export function ModifierPickerModal({
                       className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all text-left ${
                         isSelected
                           ? 'border-[var(--counter-primary)] bg-[var(--counter-primary-container)]'
-                          : 'border-border bg-white hover:border-[var(--counter-primary)]/40'
+                          : 'border-border bg-card shadow-sm hover:border-[var(--counter-primary)]/40'
                       }`}
                       style={{ minHeight: 56 }}
                     >
@@ -187,7 +186,7 @@ export function ModifierPickerModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-border shrink-0 bg-white">
+        <div className="px-6 py-4 border-t border-border shrink-0 bg-card">
           <button
             onClick={() => canConfirm() && onConfirm(buildModifiers())}
             disabled={!canConfirm()}

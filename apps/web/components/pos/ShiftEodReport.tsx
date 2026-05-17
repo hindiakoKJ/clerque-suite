@@ -153,11 +153,11 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
         style={{ background: 'transparent' }}
       >
         <div
-          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh]"
-          style={{ background: 'var(--counter-bg, var(--background))' }}
+          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh] shadow-2xl"
+          style={{ background: 'hsl(var(--muted))' }}
         >
           {/* Counter-styled header */}
-          <div className="flex items-center px-8 py-5 bg-white border-b border-border">
+          <div className="flex items-center px-8 py-5 bg-card border-b border-border">
             <div>
               <div className="font-display text-[22px] font-bold leading-tight">
                 Close shift · Z-read
@@ -183,7 +183,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
             <div className="space-y-4">
               {/* Hero: Gross / Net sales */}
               {!isCashierView && (
-                <div className="rounded-2xl border border-border bg-white p-7">
+                <div className="rounded-2xl border border-border bg-card shadow-md p-7">
                   <div className="flex items-baseline justify-between">
                     <div>
                       <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Gross sales</div>
@@ -207,7 +207,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
 
               {/* Tender breakdown with brand-tinted bars */}
               {!isCashierView && data.byPaymentMethod.length > 0 && (
-                <div className="rounded-2xl border border-border bg-white p-6">
+                <div className="rounded-2xl border border-border bg-card shadow-md p-6">
                   <div className="font-display text-sm font-bold mb-3">By tender</div>
                   {data.byPaymentMethod.map((p) => {
                     const pct = (p.totalAmount / tenderTotal) * 100;
@@ -219,7 +219,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
                           <span className="font-display tnum text-base font-bold">{formatPeso(p.totalAmount)}</span>
                         </div>
                         <div className="flex items-center gap-2.5 mt-1.5">
-                          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--counter-cream)' }}>
+                          <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-secondary">
                             <div className="h-full" style={{ background: color, width: `${pct}%` }} />
                           </div>
                           <span className="font-mono-counter tnum text-[11px] text-muted-foreground" style={{ minWidth: 90, textAlign: 'right' }}>
@@ -234,7 +234,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
 
               {/* Voids + cash-out summary */}
               <div className="grid grid-cols-2 gap-4">
-                <div className="rounded-2xl border border-border bg-white p-5">
+                <div className="rounded-2xl border border-border bg-card shadow-md p-5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Voids · refunds</div>
                   <div className="text-sm space-y-1.5">
                     <div className="flex justify-between">
@@ -255,7 +255,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
                     )}
                   </div>
                 </div>
-                <div className="rounded-2xl border border-border bg-white p-5">
+                <div className="rounded-2xl border border-border bg-card shadow-md p-5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Shift activity</div>
                   <div className="text-sm space-y-1.5">
                     <div className="flex justify-between">
@@ -275,7 +275,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
 
             {/* Right column: cash reconciliation + variance */}
             <div className="space-y-4">
-              <div className="rounded-2xl border border-border bg-white p-6">
+              <div className="rounded-2xl border border-border bg-card shadow-md p-6">
                 <div className="font-display text-sm font-bold">Cash drawer · reconciliation</div>
                 <div className="text-[13px] text-muted-foreground mb-3">Count physical cash, enter below.</div>
                 <div className="text-sm space-y-1.5">
@@ -328,7 +328,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
               </div>
 
               {shift.notes && (
-                <div className="rounded-2xl border border-border bg-white p-5">
+                <div className="rounded-2xl border border-border bg-card shadow-md p-5">
                   <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Notes</div>
                   <p className="text-sm text-foreground">{shift.notes}</p>
                 </div>
@@ -347,7 +347,7 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
           </div>
 
           {/* Counter footer CTAs */}
-          <div className="flex gap-3 px-6 py-4 bg-white border-t border-border">
+          <div className="flex gap-3 px-6 py-4 bg-card border-t border-border">
             <Button onClick={onClose} variant="ghost" className="font-display" style={{ minHeight: 48 }}>
               Save &amp; continue
             </Button>

@@ -286,11 +286,10 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
       >
         {/* Full-screen Counter-style sheet */}
         <div
-          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh]"
-          style={{ background: 'var(--counter-bg, var(--background))' }}
+          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh] shadow-2xl"
         >
           {/* ── Header: back, title, total ─────────────────────────── */}
-          <div className="flex items-center px-8 py-5 bg-white border-b border-border">
+          <div className="flex items-center px-8 py-5 bg-card border-b border-border">
             <button
               onClick={handleClose}
               className="font-display text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -319,31 +318,34 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
           </div>
 
           {/* ── Segmented tabs ─────────────────────────────────────── */}
-          <div className="flex gap-2 px-8 pt-3 bg-white border-b border-border">
+          <div className="flex gap-1.5 px-6 pt-3 pb-3 bg-card border-b border-border">
             {TABS.map((t) => {
               const isOn = tab === t.key;
               const disabled = isOffline && t.key !== 'CASH' && t.key !== 'SPLIT';
-              const indicator = isOn ? (t.brand ?? 'var(--counter-primary)') : 'transparent';
+              const brandColor = t.brand ?? 'var(--counter-primary)';
               return (
                 <button
                   key={t.key}
                   onClick={() => chooseTab(t.key)}
                   disabled={disabled}
-                  className="font-display flex items-center gap-2.5 px-4 pb-3 pt-3 -mb-px text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="font-display flex items-center gap-2.5 px-5 rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   style={{
-                    borderBottom: `3px solid ${indicator}`,
-                    color: isOn ? (t.brand ?? 'var(--counter-primary)') : 'var(--muted-foreground, #6b6760)',
-                    fontWeight: isOn ? 700 : 500,
-                    minHeight: 56,
+                    background: isOn ? brandColor : 'transparent',
+                    color: isOn ? '#fff' : 'var(--muted-foreground)',
+                    fontWeight: isOn ? 700 : 600,
+                    minHeight: 48,
+                    boxShadow: isOn ? '0 4px 12px rgba(0,0,0,0.12)' : 'none',
                   }}
                 >
                   <span
                     className="inline-flex items-center justify-center w-6 h-6 rounded-full text-[12px] font-bold"
                     style={{
-                      background: t.brand
-                        ? (t.key === 'GCASH' ? '#E1EEFE' : '#D9F4E1')
-                        : 'var(--counter-primary-container)',
-                      color: t.brand ?? 'var(--counter-primary-press)',
+                      background: isOn
+                        ? 'rgba(255,255,255,0.22)'
+                        : (t.brand
+                          ? (t.key === 'GCASH' ? '#E1EEFE' : '#D9F4E1')
+                          : 'var(--counter-primary-container)'),
+                      color: isOn ? '#fff' : brandColor,
                     }}
                   >
                     {t.letter}
@@ -421,11 +423,11 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
             )}
 
             {/* ── B2B / Corporate invoice (collapsible) ── */}
-            <div className="mt-6 border border-border rounded-xl overflow-hidden bg-white">
+            <div className="mt-6 border border-border rounded-xl overflow-hidden bg-card shadow-md">
               <button
                 type="button"
                 onClick={() => { setShowB2b((v) => !v); setInvoiceType(!showB2b ? 'CHARGE' : 'CASH_SALE'); }}
-                className="w-full flex items-center justify-between px-4 py-3 bg-[var(--counter-cream-soft)] hover:bg-[var(--counter-cream)] transition-colors"
+                className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-secondary transition-colors"
               >
                 <span className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
                   <Building2 className="h-3.5 w-3.5" />
@@ -525,7 +527,7 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
           </div>
 
           {/* ── Footer CTA (64dp) ───────────────────────────────────── */}
-          <div className="flex gap-3 px-6 py-4 bg-white border-t border-border">
+          <div className="flex gap-3 px-6 py-4 bg-card border-t border-border">
             <button
               onClick={handleClose}
               disabled={loading}
@@ -578,7 +580,7 @@ function CashTab({
     <div className="grid grid-cols-2 gap-8">
       {/* LEFT: Bayad + Sukli cards */}
       <div className="space-y-4">
-        <div className="rounded-2xl border border-border bg-white p-7">
+        <div className="rounded-2xl border border-border bg-card p-7 shadow-md">
           <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
             Bayad · cash received
           </div>
@@ -590,12 +592,12 @@ function CashTab({
           </div>
         </div>
         <div
-          className="rounded-2xl border p-7"
+          className="rounded-2xl border p-7 shadow-md"
           style={{
             background: cashShort ? '#FEF2F2' :
-                        bayadNum >= total && total > 0 ? '#E8F8F0' : 'var(--counter-cream-soft)',
+                        bayadNum >= total && total > 0 ? '#E8F8F0' : 'hsl(var(--card))',
             borderColor: cashShort ? '#FCA5A5' :
-                         bayadNum >= total && total > 0 ? '#B5E6D2' : 'var(--counter-cream-deep)',
+                         bayadNum >= total && total > 0 ? '#B5E6D2' : 'hsl(var(--border))',
           }}
         >
           <div
@@ -636,8 +638,8 @@ function CashTab({
           <Key onClick={() => onKeypad('back')}><Delete className="h-5 w-5" /></Key>
         </div>
         <div
-          className="flex flex-col gap-2.5 p-3.5 rounded-2xl border"
-          style={{ background: 'var(--counter-cream-soft)', borderColor: 'var(--counter-cream-deep)' }}
+          className="flex flex-col gap-2.5 p-3.5 rounded-2xl border bg-card shadow-md"
+          style={{ borderColor: 'hsl(var(--border))' }}
         >
           <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground px-1">
             Quick amounts
@@ -647,7 +649,7 @@ function CashTab({
               <button
                 key={b}
                 onClick={() => onQuick(b)}
-                className="font-display rounded-xl bg-white border border-border text-base font-semibold hover:border-[var(--counter-primary)] hover:text-[var(--counter-primary)] transition-colors"
+                className="font-display rounded-xl bg-muted border border-border text-base font-semibold hover:bg-white dark:hover:bg-secondary hover:border-[var(--counter-primary)] hover:text-[var(--counter-primary)] shadow-sm transition-all"
                 style={{ height: 60 }}
               >
                 ₱{b.toLocaleString()}
@@ -675,7 +677,7 @@ function Key({ onClick, children }: { onClick: () => void; children: React.React
   return (
     <button
       onClick={onClick}
-      className="font-display rounded-xl bg-white border border-border flex items-center justify-center text-2xl font-semibold hover:bg-[var(--counter-cream-soft)] active:scale-95 transition-all"
+      className="font-display rounded-xl bg-card border border-border flex items-center justify-center text-2xl font-semibold hover:border-[var(--counter-primary)] hover:text-[var(--counter-primary)] active:scale-95 shadow-sm transition-all"
       style={{ width: 84, height: 76 }}
     >
       {children}
@@ -698,7 +700,7 @@ function BrandTab({
   return (
     <div className="grid grid-cols-[1.1fr_1fr] gap-8">
       <div className="space-y-5">
-        <div className="rounded-2xl border border-border bg-white p-7">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-7">
           <div className="flex gap-4 mb-4 items-start">
             <span
               className="inline-flex items-center justify-center w-8 h-8 rounded-full text-white font-display font-extrabold text-base"
@@ -717,7 +719,7 @@ function BrandTab({
             {/* QR placeholder */}
             <div
               className="rounded-xl border-2 flex items-center justify-center text-muted-foreground bg-white"
-              style={{ width: 220, height: 220, borderColor: 'var(--counter-cream-deep)' }}
+              style={{ width: 220, height: 220, borderColor: 'hsl(var(--border))' }}
             >
               <div className="text-center">
                 <div className="font-display text-2xl font-bold" style={{ color: brand }}>{brandName}</div>
@@ -732,7 +734,7 @@ function BrandTab({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-white p-5">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-5">
           <label className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground block mb-2">
             {brandName} reference no. <span className="text-red-500">*</span>
           </label>
@@ -772,7 +774,7 @@ function BrandTab({
             Exact amount only · no sukli
           </div>
         </div>
-        <div className="rounded-xl p-4 text-[13px] text-muted-foreground leading-relaxed" style={{ background: 'var(--counter-cream)' }}>
+        <div className="rounded-xl p-4 text-[13px] text-muted-foreground leading-relaxed bg-secondary">
           <b className="text-foreground">Tip:</b> Wait for the customer's "Sent successfully" SMS before tapping Confirm.
         </div>
       </div>
@@ -790,7 +792,7 @@ function CardTab({ amount, reference, setReference }: {
   return (
     <div className="grid grid-cols-[1.1fr_1fr] gap-8">
       <div className="space-y-5">
-        <div className="rounded-2xl border border-border bg-white p-7">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-7">
           <div className="font-display text-lg font-bold mb-4">Card payment</div>
           <div className="space-y-3">
             <div>
@@ -868,14 +870,14 @@ function SplitTab({
     <div className="grid grid-cols-[1.2fr_1fr] gap-8">
       <div className="space-y-4">
         {/* Existing payment lines */}
-        <div className="rounded-2xl border border-border bg-white p-5">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-5">
           <div className="font-display text-base font-bold mb-3">Tendered so far</div>
           {payments.length === 0 ? (
             <div className="text-sm text-muted-foreground italic py-2">No payments added yet.</div>
           ) : (
             <div className="space-y-2">
               {payments.map((p, i) => (
-                <div key={i} className="flex items-center justify-between bg-[var(--counter-cream-soft)] rounded-lg px-3 py-2.5">
+                <div key={i} className="flex items-center justify-between bg-muted rounded-lg px-3 py-2.5">
                   <div>
                     <span className="font-display text-sm font-semibold">{methodLabel(p.method)}</span>
                     {p.reference && <span className="text-xs text-muted-foreground ml-2 font-mono-counter tnum">#{p.reference}</span>}
@@ -894,7 +896,7 @@ function SplitTab({
 
         {/* Add payment composer */}
         {!settled && (
-          <div className="rounded-2xl border border-border bg-white p-5 space-y-3">
+          <div className="rounded-2xl border border-border bg-card shadow-md p-5 space-y-3">
             <div className="font-display text-base font-bold">Add payment</div>
             <div className="flex flex-wrap gap-1.5">
               {activeMethods.map((m) => (
@@ -904,7 +906,7 @@ function SplitTab({
                   className="px-3 py-1.5 rounded-full text-xs font-medium transition-colors"
                   style={method === m.value
                     ? { background: 'var(--counter-primary)', color: '#fff' }
-                    : { background: 'var(--counter-cream-soft)', color: 'var(--foreground)' }}
+                    : { background: 'hsl(var(--muted))', color: 'hsl(var(--foreground))' }}
                 >
                   {m.label}
                 </button>
@@ -946,15 +948,15 @@ function SplitTab({
 
       {/* Running totals */}
       <div className="space-y-4">
-        <div className="rounded-2xl border border-border bg-white p-7">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-7">
           <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Total · Bayaran</div>
           <div className="font-display tnum text-4xl font-extrabold">{formatPeso(total)}</div>
         </div>
         <div
           className="rounded-2xl border p-7"
           style={{
-            background: settled ? '#E8F8F0' : 'var(--counter-cream-soft)',
-            borderColor: settled ? '#B5E6D2' : 'var(--counter-cream-deep)',
+            background: settled ? '#E8F8F0' : 'hsl(var(--muted))',
+            borderColor: settled ? '#B5E6D2' : 'hsl(var(--border))',
           }}
         >
           <div

@@ -217,19 +217,33 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                     : null;
               const isLow = p.isLowStock ?? false;
               const isOut = p.isOutOfStock ?? stock === 0;
+              // Subtle per-category gradient so cards don't all look flat-cream.
+              // No external images required — purely CSS tint by category name.
+              const catName = p.category?.name?.toLowerCase() ?? '';
+              const gradient =
+                catName.includes('beverage') || catName.includes('coffee') || catName.includes('drink')
+                  ? 'linear-gradient(135deg, #FFF8EF 0%, #FFFFFF 100%)' // warm coffee tint
+                  : catName.includes('food') || catName.includes('breakfast') || catName.includes('meal')
+                  ? 'linear-gradient(135deg, #FFF4E0 0%, #FFFFFF 100%)' // amber food tint
+                  : catName.includes('pastry') || catName.includes('dessert') || catName.includes('bread')
+                  ? 'linear-gradient(135deg, #FBF1FF 0%, #FFFFFF 100%)' // pink dessert tint
+                  : catName.includes('snack')
+                  ? 'linear-gradient(135deg, #F3FBE9 0%, #FFFFFF 100%)' // soft green snack
+                  : 'linear-gradient(135deg, hsl(var(--muted)) 0%, hsl(var(--card)) 100%)';
               return (
                 <button
                   key={p.id}
                   onClick={() => handleAdd(p)}
                   disabled={isOut}
                   className={cn(
-                    'group relative flex flex-col items-start p-3 rounded-xl border hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all text-left min-h-[200px] sm:min-h-[220px]',
+                    'group relative flex flex-col items-start p-3 rounded-xl border hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all text-left min-h-[200px] sm:min-h-[220px] shadow-sm',
                     isOut
                       ? 'bg-muted border-border opacity-60 cursor-not-allowed'
                       : isLow
-                      ? 'bg-card border-amber-400 dark:border-amber-500 hover:border-amber-500 dark:hover:border-amber-400 hover:ring-2 hover:ring-amber-400/30'
-                      : 'bg-card border-[var(--counter-rule,theme(colors.border))] hover:border-[var(--accent)] hover:ring-2 hover:ring-[var(--accent)]/20',
+                      ? 'border-amber-400 dark:border-amber-500 hover:border-amber-500 dark:hover:border-amber-400 hover:ring-2 hover:ring-amber-400/30'
+                      : 'border-border hover:border-[var(--accent)] hover:ring-2 hover:ring-[var(--accent)]/20',
                   )}
+                  style={!isOut ? { background: gradient } : undefined}
                 >
                   {/* Image tile — prominent for tablet/touch, falls back to category emoji */}
                   <div className={cn(

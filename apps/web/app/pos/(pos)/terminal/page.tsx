@@ -465,7 +465,7 @@ export default function PosTerminal() {
   return (
     <div className="flex flex-col h-full overflow-hidden relative">
       {/* ── F&B Dining-mode header strip (POSCoffee parity) ── */}
-      <div className="hidden lg:flex items-center gap-3 px-6 py-3 bg-secondary border-b border-border shrink-0">
+      <div className="hidden lg:flex items-center gap-3 px-6 py-3 bg-card border-b border-border shrink-0">
         <div className="inline-flex p-1 bg-card border border-border rounded-xl gap-0.5">
           {(['DINE_IN', 'TAKEOUT', 'DELIVERY'] as const).map((m) => (
             <button
@@ -499,7 +499,7 @@ export default function PosTerminal() {
           <button
             onClick={() => toast.info('Sent to kitchen (mock)')}
             disabled={cartCount === 0}
-            className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-lg text-sm font-semibold border border-border bg-card hover:bg-secondary transition-colors disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-lg text-sm font-semibold border-2 border-[var(--counter-primary)] text-[var(--counter-primary)] bg-card hover:bg-[var(--counter-primary-container)] transition-colors disabled:opacity-50 disabled:border-border disabled:text-muted-foreground"
           >
             Send to kitchen
           </button>

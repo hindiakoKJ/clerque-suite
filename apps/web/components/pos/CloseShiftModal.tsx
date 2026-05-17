@@ -53,7 +53,7 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
 
   return (
     <Dialog open={open} onOpenChange={loading ? undefined : onClose}>
-      <DialogContent className="max-w-md p-0 gap-0" style={{ background: 'var(--counter-bg, var(--background))' }}>
+      <DialogContent className="max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted">
         <DialogHeader className="px-6 pt-6 pb-3">
           <DialogTitle className="font-display text-xl font-bold">Close Shift</DialogTitle>
         </DialogHeader>
@@ -61,19 +61,19 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
         <div className="px-6 py-2 space-y-4">
           {/* Shift summary */}
           <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
+            <div className="rounded-xl p-3 border border-border shadow-sm bg-card">
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Orders</p>
               <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{shift.orderCount}</p>
             </div>
-            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
+            <div className="rounded-xl p-3 border border-border shadow-sm bg-card">
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Total Sales</p>
               <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.totalSales)}</p>
             </div>
-            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
+            <div className="rounded-xl p-3 border border-border shadow-sm bg-card">
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Cash Sales</p>
               <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.cashSales)}</p>
             </div>
-            <div className="rounded-xl p-3" style={{ background: 'var(--counter-cream-soft)' }}>
+            <div className="rounded-xl p-3 border border-border shadow-sm bg-card">
               <p className="text-muted-foreground uppercase tracking-wide font-semibold">Digital</p>
               <p className="font-display tnum text-lg font-bold text-foreground mt-0.5">{formatPeso(shift.nonCashSales)}</p>
             </div>

@@ -66,8 +66,7 @@ export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShif
     // non-dismissable: always open until shift is started
     <Dialog open modal>
       <DialogContent
-        className="max-w-md p-0 gap-0"
-        style={{ background: 'var(--counter-bg, var(--background))' }}
+        className="max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted"
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader className="px-6 pt-6 pb-3">

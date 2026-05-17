@@ -372,11 +372,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
         style={{ background: 'transparent' }}
       >
         <div
-          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh]"
-          style={{ background: 'var(--counter-bg, var(--background))' }}
+          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh] shadow-2xl"
+          style={{ background: 'hsl(var(--muted))' }}
         >
           {/* ── Counter-styled header ─────────────────────────── */}
-          <div className="flex items-center px-8 py-5 bg-white border-b border-border">
+          <div className="flex items-center px-8 py-5 bg-card border-b border-border">
             <div>
               <div className="font-display text-[22px] font-bold leading-tight">
                 Sale complete · #{data.orderNumber}
@@ -404,7 +404,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
           </div>
 
           <div className="flex-1 overflow-y-auto p-8 md:p-10 flex flex-col md:flex-row gap-8 md:gap-12 items-start justify-center">
-          <div ref={printRef} className="bg-white rounded-2xl border border-border shadow-sm p-8 w-full max-w-[480px] font-mono-counter text-xs space-y-1">
+          <div ref={printRef} className="bg-white rounded-2xl border border-border shadow-lg p-8 w-full max-w-[480px] font-mono-counter text-xs space-y-1 text-gray-900">
 
             {/* Demo watermark — printed AND on-screen, can't be removed */}
             {isDemoMode() && (
@@ -612,7 +612,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 VOIDED — keep this receipt for the audit trail.
               </div>
             )}
-            <div className="rounded-2xl border border-border bg-white p-5">
+            <div className="rounded-2xl border border-border bg-card shadow-md p-5">
               <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
                 Receipt for customer
               </div>
@@ -647,7 +647,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             >
               Start next sale →
             </button>
-            <div className="rounded-xl px-4 py-3 text-[12px] text-muted-foreground leading-relaxed" style={{ background: 'var(--counter-cream)' }}>
+            <div className="rounded-xl px-4 py-3 text-[12px] text-muted-foreground leading-relaxed bg-secondary">
               <b className="text-foreground">BIR ·</b> This sale is appended to your OR sequence (gap-free). Daily Z-read closes at 23:59 or when shift ends.
             </div>
             {canVoid && !isVoided && (

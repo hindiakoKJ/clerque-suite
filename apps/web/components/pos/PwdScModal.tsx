@@ -144,7 +144,7 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-md p-0 gap-0" style={{ background: 'var(--counter-bg, var(--background))' }}>
+      <DialogContent className="max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted">
         <DialogHeader className="px-6 pt-6 pb-3">
           <DialogTitle className="font-display text-xl font-bold">
             {isAdditional

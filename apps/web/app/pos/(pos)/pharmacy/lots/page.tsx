@@ -68,7 +68,7 @@ export default function ProductLotsPage() {
           </button>
           <Pill className="h-5 w-5 text-[var(--counter-primary)]" />
           <h1 className="font-display text-xl font-bold tracking-tight">Product Lots</h1>
-          <span className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase font-mono-counter bg-[var(--counter-cream)] text-[var(--counter-ink)]">
+          <span className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider uppercase font-mono-counter bg-secondary text-foreground">
             FEFO
           </span>
         </div>

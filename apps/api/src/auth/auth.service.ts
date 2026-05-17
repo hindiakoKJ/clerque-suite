@@ -637,13 +637,13 @@ export class AuthService {
       modulePos:         tenant?.modulePos ?? true,
       moduleLedger:      tenant?.moduleLedger ?? true,
       modulePayroll:     tenant?.modulePayroll ?? true,
-      planCode:          (tenant?.planCode ?? 'SUITE_T2') as JwtPayload['planCode'],
+      planCode:          (tenant?.planCode ?? 'SOLO_LITE') as JwtPayload['planCode'],
     };
 
     // Bake plan-derived feature flags + limits into the JWT for fast guards.
     // Imports are top-of-file so this runs synchronously without dynamic require()
     // (which fails silently in production NestJS bundles).
-    const pc = (payload.planCode ?? 'SUITE_T2') as PlanCode;
+    const pc = (payload.planCode ?? 'SOLO_LITE') as PlanCode;
     payload.planFeatures = PLAN_FEATURES[pc];
     payload.planLimits   = PLAN_LIMITS[pc];
 

@@ -2,7 +2,8 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import type { ApiAccessLevel } from '@repo/shared-types';
+import type { ApiAccessLevel, PlanCode } from '@repo/shared-types';
+import { PLAN_FEATURES } from '@repo/shared-types';
 
 export interface IssuedApiKey {
   /** The plaintext key, only returned ONCE at creation time. */
@@ -129,13 +130,36 @@ export class ApiKeysService {
           { expiresAt: { gt: new Date() } },
         ],
       },
-      select: { id: true, tenantId: true, keyHash: true, accessLevel: true },
+      select: {
+        id: true,
+        tenantId: true,
+        keyHash: true,
+        accessLevel: true,
+        // Sprint 25 — pull the tenant's CURRENT planCode so we can re-check
+        // apiAccess on every request. Otherwise a key issued while the
+        // tenant was Solo Pro (apiAccess: 'read') keeps working forever
+        // after they downgrade to Solo Lite/Standard (apiAccess: 'none').
+        tenant: { select: { planCode: true } },
+      },
     });
     if (!candidates.length) return null;
 
     for (const row of candidates) {
       const match = await bcrypt.compare(plaintext, row.keyHash);
       if (match) {
+        // Live tier gate: if the tenant downgraded out of API-eligible
+        // plans, treat the key as revoked. The on-disk key.isActive flag
+        // is the manual revoke; this is the automatic-on-downgrade revoke.
+        const currentPlan = (row.tenant?.planCode ?? 'SOLO_LITE') as PlanCode;
+        const planApi = PLAN_FEATURES[currentPlan]?.apiAccess ?? 'none';
+        if (planApi === 'none') return null;
+        // If the stored accessLevel exceeds the current plan's grant
+        // (e.g. key was issued at 'readwrite' but plan now only offers
+        // 'read'), clamp to the lower of the two.
+        const storedLevel = (row.accessLevel as ApiAccessLevel);
+        const effective: ApiAccessLevel =
+          storedLevel === 'readwrite' && planApi === 'read' ? 'read' : storedLevel;
+
         // Fire-and-forget lastUsedAt update.
         void this.prisma.apiKey.update({
           where: { id: row.id },
@@ -144,7 +168,7 @@ export class ApiKeysService {
         return {
           tenantId:    row.tenantId,
           keyId:       row.id,
-          accessLevel: row.accessLevel as ApiAccessLevel,
+          accessLevel: effective,
         };
       }
     }

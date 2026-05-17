@@ -70,7 +70,7 @@ export class TenantService {
     });
     if (!tenant) throw new NotFoundException('Tenant not found.');
 
-    const planCode = (tenant.planCode ?? 'SUITE_T2') as keyof typeof PLAN_LIMITS;
+    const planCode = (tenant.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_LIMITS;
     const cap      = PLAN_LIMITS[planCode]?.maxBranches ?? 1;
 
     const activeCount = await this.prisma.branch.count({
@@ -123,7 +123,7 @@ export class TenantService {
         where:  { id: tenantId },
         select: { planCode: true },
       });
-      const planCode = (tenant?.planCode ?? 'SUITE_T2') as keyof typeof PLAN_LIMITS;
+      const planCode = (tenant?.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_LIMITS;
       const cap      = PLAN_LIMITS[planCode]?.maxBranches ?? 1;
 
       // Count active branches EXCLUDING the one we're about to flip back on.
@@ -193,7 +193,7 @@ export class TenantService {
 
     // Plan-based authority. The legacy `tier` field is included in the
     // response only for legacy display; all gating decisions read from planCode.
-    const planCode = (tenant.planCode ?? 'SUITE_T2') as keyof typeof PLAN_CAPS;
+    const planCode = (tenant.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_CAPS;
     const cap      = PLAN_CAPS[planCode];
     const limits   = PLAN_LIMITS[planCode];
     const features = PLAN_FEATURES[planCode];
@@ -602,9 +602,27 @@ export class TenantService {
 
   async updateProfile(tenantId: string, dto: UpdateTenantProfileDto) {
     await this.getProfile(tenantId);
+    // Sprint 25 — strip plan-gated fields from the generic profile-update
+    // path. Receipt customization + void-approval threshold must go through
+    // their dedicated tier-checked endpoints (`updateReceiptConfig`,
+    // tenant settings page guard). Without this strip, a SOLO_LITE owner
+    // could PATCH /tenant/profile with `receiptLogoUrl` and bypass the
+    // `receiptCustomization === 'full'` gate.
+    const {
+      receiptHeaderNote: _h,
+      receiptFooterNote: _f,
+      receiptLogoUrl:    _l,
+      voidApprovalThresholdCents: _v,
+      ...safeDto
+    } = dto as UpdateTenantProfileDto & {
+      receiptHeaderNote?: unknown;
+      receiptFooterNote?: unknown;
+      receiptLogoUrl?:    unknown;
+      voidApprovalThresholdCents?: unknown;
+    };
     return this.prisma.tenant.update({
       where: { id: tenantId },
-      data: dto,
+      data: safeDto,
       select: {
         id: true,
         name: true,
@@ -842,7 +860,7 @@ export class TenantService {
     });
     if (!tenant) throw new NotFoundException('Tenant not found.');
 
-    const planCode = (tenant.planCode ?? 'SUITE_T2') as keyof typeof PLAN_FEATURES;
+    const planCode = (tenant.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_FEATURES;
     const tier     = PLAN_FEATURES[planCode]?.receiptCustomization ?? 'none';
 
     const headerNote = dto.headerNote === undefined ? undefined : (dto.headerNote?.trim() || null);

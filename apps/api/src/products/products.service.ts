@@ -356,7 +356,31 @@ export class ProductsService {
     productId: string,
     items: CreateBomItemDto[],
   ) {
-    await this.findOne(tenantId, productId); // ownership check
+    const product = await this.findOne(tenantId, productId); // ownership check
+
+    // Sprint 25 — Recipe cap re-check. `create()` enforces maxRecipes when
+    // a new product ships with a BOM, but saveBom lets callers convert an
+    // existing UNIT_BASED product into a RECIPE_BASED one — bypassing the
+    // cap. Re-run the same check here when this call would create a NEW
+    // recipe (product is not already recipe-mode AND items are being added).
+    if (items.length > 0 && product.inventoryMode !== 'RECIPE_BASED') {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { planCode: true },
+      });
+      const maxRecipes = PLAN_FEATURES[tenant?.planCode as PlanCode]?.maxRecipes ?? -1;
+      if (maxRecipes >= 0) {
+        const existingRecipes = await this.prisma.product.count({
+          where: { tenantId, inventoryMode: 'RECIPE_BASED', isActive: true },
+        });
+        if (existingRecipes >= maxRecipes) {
+          throw new BadRequestException(
+            `Your plan allows up to ${maxRecipes} recipe products. ` +
+            `Upgrade to Solo Standard for unlimited recipes.`,
+          );
+        }
+      }
+    }
 
     return this.prisma.$transaction(async (tx) => {
       // Wipe existing BOM

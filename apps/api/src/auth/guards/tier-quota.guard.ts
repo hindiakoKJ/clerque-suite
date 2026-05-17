@@ -47,7 +47,7 @@ export class TierQuotaGuard implements CanActivate {
       throw new ForbiddenException('Tenant not found.');
     }
 
-    const planCode = (tenant.planCode ?? 'SUITE_T2') as PlanCode;
+    const planCode = (tenant.planCode ?? 'SOLO_LITE') as PlanCode;
     const ceiling  = effectiveSeatCeiling(planCode, tenant.staffSeatAddons ?? 0);
 
     // Count active non-owner / non-machine staff.

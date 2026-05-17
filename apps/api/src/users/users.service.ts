@@ -610,7 +610,7 @@ export class UsersService {
         select: { planCode: true },
       });
       const { PLAN_FEATURES } = await import('@repo/shared-types');
-      const planCode = (tenant?.planCode ?? 'SUITE_T2') as keyof typeof PLAN_FEATURES;
+      const planCode = (tenant?.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_FEATURES;
       const cap = PLAN_FEATURES[planCode]?.salesLeadDelegation ?? 0;
 
       if (cap === 0) {

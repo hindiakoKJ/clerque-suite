@@ -757,7 +757,7 @@ export class OrdersService {
       select: { planCode: true, voidApprovalThresholdCents: true },
     });
     if (tenantForMakerChecker) {
-      const pc = (tenantForMakerChecker.planCode ?? 'SUITE_T2') as PlanCode;
+      const pc = (tenantForMakerChecker.planCode ?? 'SOLO_LITE') as PlanCode;
       const features = PLAN_FEATURES[pc];
       const threshold = tenantForMakerChecker.voidApprovalThresholdCents ?? 0;
       if (features?.makerCheckerVoids === true && threshold > 0) {

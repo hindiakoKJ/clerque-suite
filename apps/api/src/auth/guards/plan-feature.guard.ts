@@ -48,8 +48,12 @@ export class PlanFeatureGuard implements CanActivate {
         where:  { id: user.tenantId },
         select: { planCode: true },
       });
-      const pc = (tenant?.planCode ?? 'SUITE_T2') as PlanCode;
-      features = PLAN_FEATURES[pc];
+      // Fail closed: a tenant row with a missing/unknown planCode is treated
+      // as the LOWEST tier (SOLO_LITE). Previous default of 'SUITE_T2' was
+      // a tier-bypass — any legacy / partially-signed-up tenant got every
+      // Pro flag turned on server-side.
+      const pc = (tenant?.planCode ?? 'SOLO_LITE') as PlanCode;
+      features = PLAN_FEATURES[pc] ?? PLAN_FEATURES.SOLO_LITE;
     }
     if (!features) {
       // No tenant context (e.g. registration flow) — deny by default.

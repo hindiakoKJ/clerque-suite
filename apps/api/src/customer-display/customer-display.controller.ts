@@ -9,6 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { JwtOrDeviceTokenAuthGuard } from '../auth/guards/jwt-or-device-token.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '@repo/shared-types';
 import { CustomerDisplayService, type CartSnapshot } from './customer-display.service';
@@ -61,12 +62,13 @@ class PublishSnapshotDto {
  * (no network round-trip, instant sync). Cross-device falls back to
  * polling here.
  */
-@UseGuards(JwtAuthGuard)
 @Controller('customer-display')
 export class CustomerDisplayController {
   constructor(private svc: CustomerDisplayService) {}
 
-  /** Cashier publishes a fresh cart snapshot. */
+  /** Cashier publishes a fresh cart snapshot. JWT only — device-paired
+   *  surfaces are read-only mirrors and never publish state. */
+  @UseGuards(JwtAuthGuard)
   @Post('state')
   @HttpCode(HttpStatus.OK)
   publish(@CurrentUser() user: JwtPayload, @Body() dto: PublishSnapshotDto) {
@@ -75,7 +77,10 @@ export class CustomerDisplayController {
     return this.svc.publish(user.tenantId!, cashierId, snapshot as CartSnapshot);
   }
 
-  /** Customer-display screen polls for the current cart snapshot. */
+  /** Customer-display screen polls for the current cart snapshot. Accepts
+   *  either a JWT (browser logged-in fallback) or a device token (paired
+   *  TV / second tablet via /display-pairing/redeem). */
+  @UseGuards(JwtOrDeviceTokenAuthGuard)
   @Get('state')
   read(
     @CurrentUser() user: JwtPayload,

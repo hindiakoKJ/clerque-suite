@@ -59,6 +59,7 @@ import { KioskModule } from './payroll/kiosk/kiosk.module';
 import { StorageModule } from './storage/storage.module';
 import { SubscriptionPaymentsModule } from './subscription-payments/subscription-payments.module';
 import { VoidApprovalsModule } from './void-approvals/void-approvals.module';
+import { DisplayPairingModule } from './display-pairing/display-pairing.module';
 import { ReportsAdvancedModule } from './reports-advanced/reports-advanced.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { PublicApiModule } from './public-api/public-api.module';
@@ -141,6 +142,7 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     StorageModule,
     SubscriptionPaymentsModule,
     VoidApprovalsModule,
+    DisplayPairingModule,
     ReportsAdvancedModule,
     ApiKeysModule,
     PublicApiModule,

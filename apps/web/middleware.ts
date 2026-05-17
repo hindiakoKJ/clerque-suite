@@ -49,6 +49,13 @@ const PUBLIC_PREFIXES = [
   '/welcome', '/signup',
   // Sprint 25 — Counter design preview (static HTML mockup under /public)
   '/design-preview',
+  // Sprint 25 — Paired display surfaces. Access controlled by device token
+  // in localStorage (verified against the API on every poll), not JWT.
+  // Lets a TV / second tablet show the customer screen or KDS without
+  // ever logging into a tenant account.
+  '/pair',
+  '/pos/customer-display',
+  '/pos/station',
 ];
 
 function getToken(req: NextRequest): string | null {

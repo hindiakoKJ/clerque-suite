@@ -285,13 +285,24 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // Promotions only relevant for sell-through verticals (F&B, Retail, Laundry).
   // Service/Manufacturing don't run consumer-facing promos.
   const showPromotions = isFnb || isRetail || isLaundry;
-  const COMMON_TAIL: NavItem[] = withSection('Manage', [
-    makeNavItem('/pos/staff',        'Staff',        Users,   STAFF_ROLES,        role),
-    ...(showPromotions
-      ? [makeNavItem('/pos/promotions', 'Promotions', Tag,    PROMOTIONS_ROLES,   role)]
-      : []),
-    makeNavItem('/pos/pending',      'Pending Sync', Clock,   PENDING_SYNC_ROLES, role, pendingCount || undefined),
-  ]);
+  const COMMON_TAIL: NavItem[] = [
+    ...withSection('Manage', [
+      makeNavItem('/pos/staff',        'Staff',        Users,   STAFF_ROLES,        role),
+      ...(showPromotions
+        ? [makeNavItem('/pos/promotions', 'Promotions', Tag,    PROMOTIONS_ROLES,   role)]
+        : []),
+      makeNavItem('/pos/pending',      'Pending Sync', Clock,   PENDING_SYNC_ROLES, role, pendingCount || undefined),
+    ]),
+    // Sprint 25 — Settings group. Per-tenant configuration that lives under
+    // /pos/settings/*. Displays (secondary-screen pairing) is the first
+    // entry; future settings pages (printers, station mapping, etc.) live
+    // here too. Owner/Admin/Manager gate matches the revoke permission on
+    // the backend — cashiers can generate codes via their tablet directly
+    // but shouldn't manage paired devices.
+    ...withSection('Settings', [
+      makeNavItem('/pos/settings/displays', 'Displays', Monitor, MGMT_POS, role),
+    ]),
+  ];
 
   // Warehouse group is shared across F&B / Service / Mfg / Retail. Empty for
   // single-branch tenants and laundry tenants (Cycle Counts hidden) — withSection

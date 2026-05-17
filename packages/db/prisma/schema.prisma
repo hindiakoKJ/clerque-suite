@@ -606,6 +606,7 @@ model Tenant {
   purchaseOrders            PurchaseOrder[]
   apiKeys                   ApiKey[]
   voidApprovals             VoidApproval[]
+  displayPairings           DisplayPairing[]
   /// Sprint 25 — when > 0, voids/refunds at/above this peso-cent amount
   /// require maker-checker approval (Solo Pro feature `makerCheckerVoids`).
   /// 0 = no threshold (cashier + supervisor PIN flow only, as today).
@@ -5503,4 +5504,58 @@ model VoidApproval {
   @@index([tenantId, status, initiatedAt])
   @@index([orderId])
   @@map("void_approvals")
+}
+
+/// Sprint 25 — Device pairing for customer-display + KDS screens.
+/// A cashier-side device generates a short-lived 4-digit code, the secondary
+/// device (TV / second tablet / Chromecast'd phone) redeems the code, and we
+/// hand back a long-lived device token. The token lets the secondary device
+/// subscribe to the cashier's display stream without ever logging in.
+///
+/// One device token per (tenantId, role, label). Owners can revoke from
+/// Settings → Displays.
+enum DisplayDeviceRole {
+  CUSTOMER_DISPLAY    // Customer-facing screen (cart mirror, branded QR)
+  KDS_KITCHEN         // Kitchen display
+  KDS_BAR             // Bar display
+  KDS_COLD_BAR
+  KDS_HOT_BAR
+  KDS_PASTRY_PASS
+  KDS_GENERIC
+}
+
+model DisplayPairing {
+  id            String   @id @default(cuid())
+  tenantId      String
+  /// 4-digit numeric code. Single-use, expires after 15 min.
+  code          String
+  /// Which cashier user generated the code — the redeemed token follows
+  /// this user's display stream.
+  createdById   String
+  /// Optional: pin to a specific KDS station. Only relevant when
+  /// role is KDS_*.
+  stationId     String?
+  role          DisplayDeviceRole
+  /// Friendly label shown in the cashier's Settings → Displays list
+  /// once the device redeems the code.
+  label         String?
+  expiresAt     DateTime
+  /// Set when a device successfully redeems the code. After redemption,
+  /// the code is dead and the device uses `deviceToken` for every
+  /// subsequent request.
+  redeemedAt    DateTime?
+  deviceToken   String?   @unique
+  /// Updated on each poll from the paired device — lets the owner see
+  /// "last seen 3 min ago" in Settings → Displays.
+  lastSeenAt    DateTime?
+  /// Soft-revoke. The token stays in the DB for audit but stops working.
+  revokedAt     DateTime?
+  createdAt     DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, code])
+  @@index([tenantId, role, redeemedAt])
+  @@index([deviceToken])
+  @@map("display_pairings")
 }

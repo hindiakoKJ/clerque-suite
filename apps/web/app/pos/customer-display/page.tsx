@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Coffee, Sparkles, Receipt, ShoppingCart, ChefHat } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
@@ -8,6 +8,11 @@ import {
   subscribeCustomerDisplay,
   type CustomerDisplayState,
 } from '@/lib/pos/customer-display-channel';
+import {
+  readDeviceToken,
+  verifyDeviceToken,
+  clearDeviceToken,
+} from '@/lib/pos/device-token';
 
 const EMPTY: CustomerDisplayState = {
   type: 'WELCOME',
@@ -48,20 +53,77 @@ export default function CustomerDisplayPage() {
     }
   }, [state.type, state.seq]);
 
-  // Cross-device sync: poll the server relay using the cashier's user id.
-  // The cashier (publisher) and customer (subscriber) typically share the
-  // same login, so user.sub is the same on both sides — perfect key.
-  // Override via ?cashier=<id> for wall-mounted screens watching a specific
-  // POS terminal.
-  const cashierId = searchParams.get('cashier') ?? userId;
+  // ── Cashier-id resolution (Sprint 25: paired-device aware) ──────────────
+  // Priority chain:
+  //   1. ?cashier=<id> URL override (wall-mounted screens pointing at one POS)
+  //   2. Stored deviceToken in localStorage → /whoami → cashierId
+  //   3. useAuthStore().user.sub  (logged-in single-tablet fallback)
+  //   4. None → redirect to /pair so the operator can pair this device
+  //
+  // On a paired display the JWT may not exist at all (PUBLIC_PREFIXES allows
+  // this route without auth), so #2/#3 are the real sources of truth. The
+  // `useAuthStore()` call still works — it just returns null.
+  const router = useRouter();
+  const urlOverride = searchParams.get('cashier');
+  const [pairedCashierId, setPairedCashierId] = useState<string | null>(null);
+  const [tokenChecked,    setTokenChecked]    = useState(false);
+
+  // Keep the stored token reactive — heartbeat below also depends on it.
+  const storedTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const stored = readDeviceToken();
+      if (!stored) {
+        if (!cancelled) setTokenChecked(true);
+        return;
+      }
+      storedTokenRef.current = stored.deviceToken;
+      const who = await verifyDeviceToken(stored.deviceToken);
+      if (cancelled) return;
+      if (who) {
+        setPairedCashierId(who.cashierId);
+      } else {
+        // Token revoked — drop it so the redirect path can run.
+        clearDeviceToken();
+        storedTokenRef.current = null;
+      }
+      setTokenChecked(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const cashierId = urlOverride ?? pairedCashierId ?? userId;
+
+  // If we've checked the token and STILL have no source, bounce to /pair.
+  // Wait for tokenChecked so we don't redirect during the brief whoami round-trip.
+  useEffect(() => {
+    if (!tokenChecked) return;
+    if (!cashierId) {
+      router.replace('/pair');
+    }
+  }, [tokenChecked, cashierId, router]);
+
+  useEffect(() => {
+    if (!cashierId) return;
     const unsubscribe = subscribeCustomerDisplay(setState, {
       cashierId,
       pollIntervalMs: 1000,
     });
     return unsubscribe;
   }, [cashierId]);
+
+  // ── Heartbeat: ping /whoami every 30 s so lastSeenAt stays fresh in the
+  // cashier's Settings → Displays table. Skipped when not in paired mode.
+  useEffect(() => {
+    if (!storedTokenRef.current) return;
+    const id = setInterval(() => {
+      const token = storedTokenRef.current;
+      if (token) void verifyDeviceToken(token);
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [pairedCashierId]);
 
   const businessName = state.businessName ?? tenantBusinessName ?? 'Welcome';
 

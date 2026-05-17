@@ -1,9 +1,16 @@
 'use client';
-import { use, useEffect, useRef } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store } from 'lucide-react';
+import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { useAuthStore } from '@/store/auth';
+import {
+  readDeviceToken,
+  verifyDeviceToken,
+  clearDeviceToken,
+} from '@/lib/pos/device-token';
 
 interface QueueItem {
   id:           string;
@@ -38,9 +45,76 @@ function fmtElapsed(seconds: number): string {
 
 export default function StationKdsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: stationId } = use(params);
+  const router = useRouter();
   const qc = useQueryClient();
   const { layout } = useFloorLayout();
   const station = layout?.stations.find((s) => s.id === stationId);
+  const loggedInUserId = useAuthStore((s) => s.user?.sub ?? null);
+
+  // ── Sprint 25 — Paired-device gate ──────────────────────────────────────
+  // This page accepts EITHER a logged-in cashier OR a paired-device token.
+  // Paired flow:
+  //   1. Read localStorage['clerque.deviceToken']
+  //   2. Call /whoami — confirms token is still valid + tells us the bound
+  //      stationId.
+  //   3. If the bound stationId mismatches the URL param, refuse to load
+  //      the queue and show a "Re-pair" message — the cashier paired this
+  //      tablet to a DIFFERENT station, and we don't want to silently start
+  //      bumping someone else's tickets.
+  //   4. If no token AND no logged-in session → bounce to /pair.
+  // The /kds/* endpoints still require a JWT today — when running in pure
+  // paired mode the polling query below will 401. That's accepted scope; the
+  // backend KDS guard pickup is a parallel agent's task. This component is
+  // wired to flip on as soon as the backend supports device-token auth.
+  type PairCheck = 'checking' | 'ok' | 'mismatch' | 'no-auth';
+  const [pairState,      setPairState]      = useState<PairCheck>('checking');
+  const [pairedStationId, setPairedStationId] = useState<string | null>(null);
+  const heartbeatTokenRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const stored = readDeviceToken();
+      if (stored) {
+        const who = await verifyDeviceToken(stored.deviceToken);
+        if (cancelled) return;
+        if (who) {
+          heartbeatTokenRef.current = stored.deviceToken;
+          setPairedStationId(who.stationId);
+          if (who.stationId && who.stationId !== stationId) {
+            setPairState('mismatch');
+          } else {
+            setPairState('ok');
+          }
+          return;
+        }
+        // Token revoked / invalid → drop it and fall through.
+        clearDeviceToken();
+      }
+      if (loggedInUserId) {
+        setPairState('ok');
+      } else {
+        setPairState('no-auth');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [stationId, loggedInUserId]);
+
+  // Bounce to /pair when there's no auth source at all.
+  useEffect(() => {
+    if (pairState === 'no-auth') router.replace('/pair');
+  }, [pairState, router]);
+
+  // Heartbeat (paired mode only) keeps the cashier's Settings → Displays
+  // table showing this tablet as Active.
+  useEffect(() => {
+    if (!heartbeatTokenRef.current) return;
+    const id = setInterval(() => {
+      const token = heartbeatTokenRef.current;
+      if (token) void verifyDeviceToken(token);
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [pairState]);
 
   // Audio chime on new order — accumulated count drives the playback decision.
   const lastCountRef = useRef(0);
@@ -71,7 +145,10 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   const { data: items = [], isFetching } = useQuery<QueueItem[]>({
     queryKey: ['kds-queue', stationId],
     queryFn:  () => api.get(`/kds/stations/${stationId}/queue`).then((r) => r.data),
-    enabled:  !!stationId,
+    // Hold off until we've confirmed the device is authorised for this station;
+    // firing the query during pair-check would 401 in paired mode and spin
+    // the global axios refresh interceptor for no reason.
+    enabled:  !!stationId && pairState === 'ok',
     refetchInterval: 3_000,
     refetchIntervalInBackground: true,
   });
@@ -123,6 +200,42 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
 
   const Icon = station ? STATION_ICON[station.kind] ?? ChefHat : ChefHat;
   const stationName = station?.name ?? 'Station';
+
+  // ── Mismatch guard — paired to a different station than the URL ──────────
+  if (pairState === 'mismatch') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-stone-950 text-white p-8">
+        <div className="max-w-md w-full text-center">
+          <AlertTriangle className="h-14 w-14 mx-auto text-amber-400 mb-4" />
+          <h1 className="text-2xl font-bold mb-2">Wrong station</h1>
+          <p className="text-stone-400 text-sm mb-6">
+            This display is paired to a different station
+            {pairedStationId ? <> (id <span className="font-mono text-xs">{pairedStationId.slice(0, 8)}…</span>)</> : null}.
+            Re-pair it to use this screen.
+          </p>
+          <button
+            onClick={() => {
+              clearDeviceToken();
+              router.replace('/pair');
+            }}
+            className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-semibold transition-colors"
+          >
+            Re-pair this device
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Initial pair-check splash — short. Avoids a flash of an empty queue while
+  // we wait for /whoami.
+  if (pairState === 'checking' || pairState === 'no-auth') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-950 text-stone-400 text-sm">
+        Checking pairing…
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-stone-950 text-white">

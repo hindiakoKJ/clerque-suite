@@ -18,7 +18,7 @@
 import React from 'react';
 import { View, Text, Modal, Pressable, StyleSheet } from 'react-native';
 import { colors, spacing, radii, text, tap, elevation } from '@/theme/tokens';
-import { openSupervisorPin } from '@/auth/SupervisorPinModal';
+import { openSupervisorPin } from '@/auth/openSupervisorPin';
 
 export interface ControlledAuthResult {
   supervisorId: string;

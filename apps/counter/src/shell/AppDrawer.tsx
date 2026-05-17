@@ -19,8 +19,10 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
 import Placeholder from '@/shell/Placeholder';
+import DisplaysScreen from '@/shell/DisplaysScreen';
 import FleetScreen from '@/terminal/laundry/FleetScreen';
 import TerminalRouter from '@/terminal/TerminalRouter';
+import { clearDeviceMode } from '@/device-mode/storage';
 import { colors, radii, spacing, text } from '@/theme';
 
 export type AppDrawerParamList = {
@@ -31,6 +33,7 @@ export type AppDrawerParamList = {
   ZRead: undefined;
   Fleet: undefined;
   Settings: undefined;
+  Displays: undefined;
   PendingSync: undefined;
 };
 
@@ -47,6 +50,8 @@ interface NavItem {
 interface NavItemDef extends NavItem {
   /** When set, the item only renders for tenants of these business types. */
   showFor?: ReadonlyArray<string>;
+  /** When set, the item only renders for users with these roles. */
+  showForRoles?: ReadonlyArray<string>;
 }
 
 const ITEMS: NavItemDef[] = [
@@ -57,6 +62,8 @@ const ITEMS: NavItemDef[] = [
   { key: 'Shift',       label: 'Shift',             icon: 'clock-outline' },
   { key: 'ZRead',       label: "Today's Z-read",    icon: 'file-chart-outline' },
   { key: 'Settings',    label: 'Settings',          icon: 'cog-outline' },
+  { key: 'Displays',    label: 'Displays',          icon: 'television',
+    showForRoles: ['BUSINESS_OWNER', 'BRANCH_MANAGER'] },
   { key: 'PendingSync', label: 'Pending sync',      icon: 'cloud-sync-outline' },
 ];
 
@@ -96,6 +103,9 @@ export default function AppDrawer(): React.ReactElement {
       <Drawer.Screen name="Settings">
         {(p) => <Placeholder title="Settings" onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
+      <Drawer.Screen name="Displays">
+        {(p) => <DisplaysScreen onMenuPress={() => p.navigation.openDrawer()} />}
+      </Drawer.Screen>
       <Drawer.Screen name="PendingSync">
         {(p) => <Placeholder title="Pending sync" caption="Outbox queue lives here" onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
@@ -120,7 +130,11 @@ function DrawerBody(props: DrawerContentComponentProps): React.ReactElement {
       </View>
 
       <View style={styles.nav}>
-        {ITEMS.filter((it) => !it.showFor || (tenant && it.showFor.includes(tenant.businessType))).map((it) => {
+        {ITEMS.filter((it) => {
+          if (it.showFor && !(tenant && it.showFor.includes(tenant.businessType))) return false;
+          if (it.showForRoles && !(session?.user.role && it.showForRoles.includes(session.user.role))) return false;
+          return true;
+        }).map((it) => {
           const active = activeRoute === it.key;
           const badge = it.key === 'PendingSync' && queuedCount > 0 ? queuedCount : null;
           return (
@@ -151,6 +165,12 @@ function DrawerBody(props: DrawerContentComponentProps): React.ReactElement {
         <Text style={styles.footUser}>{cashier?.name ?? session?.user.name ?? ''}</Text>
         <Pressable onPress={lockToPin} style={styles.footBtn}>
           <Text style={styles.footBtnLabel}>Switch cashier</Text>
+        </Pressable>
+        <Pressable
+          onPress={async () => { await clearDeviceMode(); await signOut(); }}
+          style={styles.footBtn}
+        >
+          <Text style={styles.footBtnLabel}>Change device mode</Text>
         </Pressable>
         <Pressable onPress={signOut} style={[styles.footBtn, styles.footBtnDanger]}>
           <Text style={[styles.footBtnLabel, styles.footBtnDangerLabel]}>Sign out</Text>

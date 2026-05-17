@@ -7,7 +7,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { JwtOrDeviceTokenAuthGuard } from '../auth/guards/jwt-or-device-token.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -21,7 +21,7 @@ import { KdsService } from './kds.service';
  * are typically GENERAL_EMPLOYEE who clock in via /payroll/clock; they don't
  * need POS app-access). Tenant ownership is enforced inside the service.
  */
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtOrDeviceTokenAuthGuard, RolesGuard)
 @Controller('kds')
 export class KdsController {
   constructor(private kds: KdsService) {}

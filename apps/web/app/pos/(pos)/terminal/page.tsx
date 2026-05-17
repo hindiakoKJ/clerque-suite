@@ -436,6 +436,21 @@ export default function PosTerminal() {
     }
   }
 
+  // Wait for the floor layout before deciding which vertical to render.
+  // Without this guard, /pos/terminal renders the default F&B branch
+  // (RetailTerminal / FBTerminal fall-through) for the ~1 second the
+  // layout fetch takes, then the smart-landing redirect in /pos layout
+  // bounces laundry tenants away. The flash of the wrong vertical is
+  // ugly. Keep the page-shell visible so the sidebar stays mounted, but
+  // render a neutral loading body until businessType is known.
+  if (!layout) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-sm text-muted-foreground animate-pulse">Loading workspace…</div>
+      </div>
+    );
+  }
+
   // ── Retail branch — scan-first, dense SKU table ─────────────────────────
   if (isRetail) {
     return (

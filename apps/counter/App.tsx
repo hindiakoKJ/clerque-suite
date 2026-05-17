@@ -39,12 +39,22 @@ export default function App() {
   // Lock to landscape — app.json's `orientation: 'landscape'` only takes
   // effect in dev / production builds, NOT in Expo Go. Calling the
   // runtime API here keeps the tablet locked even while iterating in
-  // Expo Go. Phone-portrait owner-spotcheck mode would override per
-  // screen if/when we add it.
+  // Expo Go. Re-asserts the lock whenever the OS dimensions change
+  // (some Android skins fight a single lockAsync after rotation).
   useEffect(() => {
-    ScreenOrientation
-      .lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
-      .catch(() => {/* iOS simulator without orientation support — ignore */});
+    const enforce = () =>
+      ScreenOrientation
+        .lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+        .catch(() => {/* unsupported or iOS sim — ignore */});
+
+    enforce();
+
+    // expo-screen-orientation fires an event every time the OS-reported
+    // orientation flips. We re-lock on every flip — by the time the user
+    // sees the rotation animation we've already issued the re-lock so
+    // it snaps back to landscape immediately.
+    const sub = ScreenOrientation.addOrientationChangeListener(enforce);
+    return () => ScreenOrientation.removeOrientationChangeListener(sub);
   }, []);
 
   if (!fontsLoaded) return null;

@@ -6,10 +6,10 @@
  */
 
 import React, { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { Button, HelperText, Text, TextInput } from 'react-native-paper';
 
-import { colors, radii, spacing, text } from '@/theme';
+import { colors, fonts, radii, spacing, text } from '@/theme';
 import { useAuth, ApiHttpError } from '@/auth/AuthProvider';
 
 export default function SignInScreen(): React.ReactElement {
@@ -64,11 +64,12 @@ export default function SignInScreen(): React.ReactElement {
       >
         <View style={styles.card}>
           <View style={styles.logoWrap}>
-            <Image
-              source={require('../../assets/icon.png')}
-              style={styles.logo}
-              resizeMode="contain"
-            />
+            {/* Brand mark — rendered inline (no PNG asset required until
+                the Play Store build, where the SVG → PNG conversion runs
+                per apps/counter/README.md). Matches assets/icon.svg. */}
+            <View style={styles.logo}>
+              <Text style={styles.logoLetter}>C</Text>
+            </View>
           </View>
 
           <Text style={styles.title}>Clerque · Counter</Text>
@@ -156,7 +157,20 @@ const styles = StyleSheet.create({
     borderColor: colors.rule,
   },
   logoWrap: { alignItems: 'center', marginBottom: spacing.s4 },
-  logo: { width: 64, height: 64 },
+  logo: {
+    width: 64, height: 64,
+    borderRadius: radii.lg,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoLetter: {
+    color: colors.onPrimary,
+    fontFamily: fonts.displayBold,
+    fontSize: 36,
+    fontWeight: '800',
+    lineHeight: 40,
+  },
   title: { ...text.displayMd, color: colors.ink, textAlign: 'center' },
   subtitle: {
     ...text.bodySm,

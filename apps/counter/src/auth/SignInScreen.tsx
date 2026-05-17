@@ -11,6 +11,7 @@ import { Button, HelperText, Text, TextInput } from 'react-native-paper';
 
 import { colors, fonts, radii, spacing, text } from '@/theme';
 import { useAuth, ApiHttpError } from '@/auth/AuthProvider';
+import ClerqueLogo from '@/components/ClerqueLogo';
 
 export default function SignInScreen(): React.ReactElement {
   const { signIn } = useAuth();
@@ -72,14 +73,12 @@ export default function SignInScreen(): React.ReactElement {
       >
         <View style={styles.card}>
           <View style={styles.logoWrap}>
-            {/* Clerque wordmark + Counter sub-label, rendered inline so
-                the bundle has no PNG asset dependency. The Play Store
-                build converts assets/icon.svg → PNG for the launcher
-                icon separately. */}
+            {/* Real Clerque brand mark — purple gradient with three
+                inset cards (Counter, Ledger, Sync). Matches the web
+                favicon + the master PNG. Vector — renders crisp at
+                any density without bundling a PNG. */}
             <View style={styles.logoRow}>
-              <View style={styles.logoBadge}>
-                <Text style={styles.logoLetter}>C</Text>
-              </View>
+              <ClerqueLogo size={56} />
               <View>
                 <Text style={styles.logoBrand}>Clerque</Text>
                 <Text style={styles.logoProduct}>Counter</Text>
@@ -173,20 +172,6 @@ const styles = StyleSheet.create({
   },
   logoWrap: { alignItems: 'center', marginBottom: spacing.s5 },
   logoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.s3 },
-  logoBadge: {
-    width: 56, height: 56,
-    borderRadius: radii.lg,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoLetter: {
-    color: colors.onPrimary,
-    fontFamily: fonts.displayBold,
-    fontSize: 32,
-    fontWeight: '800',
-    lineHeight: 36,
-  },
   logoBrand: {
     color: colors.ink,
     fontFamily: fonts.displayBold,

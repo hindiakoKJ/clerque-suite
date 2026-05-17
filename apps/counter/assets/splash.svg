@@ -1,12 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg width="2048" height="2048" viewBox="0 0 2048 2048" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <!-- Cream backdrop — splash bg stays warm cream like the app surface. -->
   <rect width="2048" height="2048" fill="#F8F5EE"/>
-  <g transform="translate(1024 1024)">
-    <rect x="-180" y="-180" width="360" height="360" rx="80" fill="#3B82F6"/>
-    <text x="0" y="120" font-family="Plus Jakarta Sans, Inter, system-ui, sans-serif"
-          font-size="280" font-weight="800" text-anchor="middle" fill="#FFFFFF"
-          letter-spacing="-10">C</text>
+
+  <!-- Brand mark, centered, 360×360 (room to breathe). -->
+  <g transform="translate(844 814)">
+    <rect width="360" height="360" rx="72" fill="url(#bg)"/>
+    <rect x="65" y="89" width="57" height="122" rx="14" fill="#F4ECFB"/>
+    <text x="93.5" y="170" font-family="Georgia, serif" font-size="72" font-weight="700"
+          fill="#5B21B6" text-anchor="middle">c</text>
+    <rect x="135" y="89" width="57" height="122" rx="14" fill="#E9DCF7"/>
+    <circle cx="163.5" cy="123" r="9" fill="#7C3AED"/>
+    <circle cx="163.5" cy="150" r="9" fill="#7C3AED"/>
+    <circle cx="163.5" cy="177" r="9" fill="#7C3AED"/>
+    <rect x="205" y="89" width="57" height="122" rx="14" fill="#DCC8F2"/>
+    <rect x="219" y="131" width="28" height="6" rx="3" fill="#A78BFA"/>
+    <rect x="219" y="147" width="28" height="6" rx="3" fill="#A78BFA"/>
+    <rect x="219" y="163" width="28" height="6" rx="3" fill="#A78BFA"/>
   </g>
+
   <text x="1024" y="1320" font-family="Plus Jakarta Sans, Inter, system-ui, sans-serif"
         font-size="80" font-weight="800" text-anchor="middle" fill="#1F1B16"
         letter-spacing="-2">Clerque Counter</text>

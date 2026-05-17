@@ -5,6 +5,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Dimensions } from 'react-native';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useFonts as useInter,   Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import { useFonts as useJakarta, PlusJakartaSans_700Bold, PlusJakartaSans_800ExtraBold } from '@expo-google-fonts/plus-jakarta-sans';
@@ -36,25 +37,50 @@ export default function App() {
   const [monoLoaded]    = useMono({    JetBrainsMono_500Medium, JetBrainsMono_600SemiBold });
   const fontsLoaded = interLoaded && jakartaLoaded && monoLoaded;
 
-  // Lock to landscape — app.json's `orientation: 'landscape'` only takes
-  // effect in dev / production builds, NOT in Expo Go. Calling the
-  // runtime API here keeps the tablet locked even while iterating in
-  // Expo Go. Re-asserts the lock whenever the OS dimensions change
-  // (some Android skins fight a single lockAsync after rotation).
+  // Lock to landscape.
+  //
+  // Caveat — Expo Go's HOST Android activity declares orientation as
+  // "unspecified" so even after lockAsync the OS may let the wrapper
+  // re-rotate. The native lock only takes effect in a development /
+  // production build (where app.json's `orientation: 'landscape'`
+  // injects android:screenOrientation="landscape" on the activity).
+  //
+  // We try three increasingly aggressive paths so Expo Go gets as
+  // close as possible:
+  //   1. lockPlatformAsync with the Android constant 0 (= SCREEN_ORIENTATION_LANDSCAPE)
+  //      and the iOS landscape array — most direct lock available to JS.
+  //   2. Fall back to lockAsync(LANDSCAPE_LEFT) — more specific than the
+  //      generic LANDSCAPE which Expo Go sometimes ignores.
+  //   3. Re-fire on every Dimensions / orientation change so any rotation
+  //      that does sneak through gets snapped back within one frame.
   useEffect(() => {
-    const enforce = () =>
-      ScreenOrientation
-        .lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
-        .catch(() => {/* unsupported or iOS sim — ignore */});
+    const enforce = async () => {
+      try {
+        // Android: SCREEN_ORIENTATION_LANDSCAPE = 0 (Android system constant)
+        // iOS: list of allowed Orientation values
+        await ScreenOrientation.lockPlatformAsync({
+          screenOrientationConstantAndroid: 0,
+          screenOrientationArrayIOS: [
+            ScreenOrientation.Orientation.LANDSCAPE_LEFT,
+            ScreenOrientation.Orientation.LANDSCAPE_RIGHT,
+          ],
+        });
+      } catch {
+        try {
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE_LEFT);
+        } catch { /* Expo Go on this device / iOS sim — give up gracefully */ }
+      }
+    };
 
-    enforce();
+    void enforce();
 
-    // expo-screen-orientation fires an event every time the OS-reported
-    // orientation flips. We re-lock on every flip — by the time the user
-    // sees the rotation animation we've already issued the re-lock so
-    // it snaps back to landscape immediately.
-    const sub = ScreenOrientation.addOrientationChangeListener(enforce);
-    return () => ScreenOrientation.removeOrientationChangeListener(sub);
+    const orientationSub = ScreenOrientation.addOrientationChangeListener(() => { void enforce(); });
+    const dimensionsSub  = Dimensions.addEventListener('change', () => { void enforce(); });
+
+    return () => {
+      ScreenOrientation.removeOrientationChangeListener(orientationSub);
+      dimensionsSub.remove();
+    };
   }, []);
 
   if (!fontsLoaded) return null;

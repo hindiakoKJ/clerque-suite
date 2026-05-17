@@ -1,11 +1,16 @@
 /**
  * Clerque Counter — Receipt screen
+ *
  * Wraps <Receipt /> in a scrollable view with the right-rail actions panel
  * from `ReceiptTablet`. Auto-routes back to Terminal after a configurable
  * inactivity timeout (default 10s).
+ *
+ * On mount we fire-and-forget a print to the paired Bluetooth printer —
+ * no dialog. Failures surface in a Snackbar with Retry. Manual reprint
+ * stays available on the actions panel.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -13,6 +18,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Snackbar } from 'react-native-paper';
 
 import {
   colors,
@@ -23,7 +29,8 @@ import {
 } from '@/theme/tokens';
 import Pill from '@/components/Pill';
 import Receipt, { ReceiptProps } from './Receipt';
-import { getPrinterService } from './printerService';
+import { usePrinter } from './usePrinter';
+import type { ReceiptForPrinter } from './receiptToEscPos';
 
 export interface ReceiptScreenProps extends ReceiptProps {
   /** Called when the cashier hits "Start next sale" or the auto-timeout fires. */
@@ -43,8 +50,11 @@ export default function ReceiptScreen({
   autoDismissMs = 10_000,
   ...receipt
 }: ReceiptScreenProps): React.ReactElement {
+  const printer = usePrinter();
   const [printing, setPrinting] = useState(false);
   const [printedAt, setPrintedAt] = useState<number | null>(null);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const autoFiredRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-dismiss timer; resets on activity.
@@ -63,18 +73,51 @@ export default function ReceiptScreen({
     }
   };
 
+  const receiptPayload: ReceiptForPrinter = {
+    tenant: receipt.tenant,
+    cart: receipt.cart,
+    orNumber: receipt.orNumber,
+    issuedAt: receipt.issuedAt,
+    cashierName: receipt.cashierName,
+    subtotalCents: receipt.subtotalCents,
+    discountCents: receipt.discountCents,
+    totalCents: receipt.totalCents,
+    payments: receipt.payments,
+    changeCents: receipt.changeCents,
+    vat: receipt.vat,
+    isRefund: receipt.isRefund,
+    originalOrNumber: receipt.originalOrNumber,
+  };
+
+  const fire = useCallback(
+    async (manual: boolean) => {
+      setPrinting(true);
+      setPrintError(null);
+      try {
+        await printer.print(receiptPayload);
+        setPrintedAt(Date.now());
+        if (manual) onReprint?.();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Print failed.';
+        setPrintError(msg);
+      } finally {
+        setPrinting(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [printer, receipt.orNumber],
+  );
+
+  // Auto-fire once on mount — no dialog.
+  useEffect(() => {
+    if (autoFiredRef.current) return;
+    autoFiredRef.current = true;
+    void fire(false);
+  }, [fire]);
+
   const handlePrint = async () => {
     bumpActivity();
-    setPrinting(true);
-    try {
-      await getPrinterService().print(
-        `<html><body><pre>OR # ${receipt.orNumber}</pre></body></html>`,
-      );
-      setPrintedAt(Date.now());
-      onReprint?.();
-    } finally {
-      setPrinting(false);
-    }
+    await fire(true);
   };
 
   return (
@@ -138,6 +181,18 @@ export default function ReceiptScreen({
           </View>
         </View>
       </ScrollView>
+
+      <Snackbar
+        visible={printError !== null}
+        onDismiss={() => setPrintError(null)}
+        duration={6000}
+        action={{
+          label: 'Retry',
+          onPress: () => { void fire(true); },
+        }}
+      >
+        {printError ?? ''}
+      </Snackbar>
     </View>
   );
 }

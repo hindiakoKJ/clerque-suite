@@ -11,8 +11,10 @@ import { paperTheme } from '@/theme';
 import RootNavigator from '@/shell/RootNavigator';
 import { AuthProvider, useAuth } from '@/auth/AuthProvider';
 import SupervisorPinHost from '@/auth/SupervisorPinHost';
+import BarcodeScannerHost from '@/components/BarcodeScannerSheet';
 import { OfflineBanner } from '@/offline/OfflineBanner';
 import { SyncProvider } from '@/offline/SyncProvider';
+import { BranchProvider } from '@/api/BranchContext';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,11 +45,14 @@ export default function App() {
           <PaperProvider theme={paperTheme}>
             <AuthProvider>
               <SyncProvider>
-                <NavigationContainer>
-                  <RootNavigator />
-                  <OfflineBanner />
-                  <SupervisorPinHost />
-                </NavigationContainer>
+                <BranchProvider>
+                  <NavigationContainer>
+                    <RootNavigator />
+                    <OfflineBanner />
+                    <SupervisorPinHost />
+                    <BarcodeScannerHost />
+                  </NavigationContainer>
+                </BranchProvider>
               </SyncProvider>
             </AuthProvider>
             <StatusBar style="dark" />

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, FlatList, Pressable, StyleSheet, TextInput, ScrollView,
 } from 'react-native';
@@ -6,9 +6,34 @@ import { colors, spacing, radii, text as textTokens, tap, elevation, tnum } from
 import { formatPeso } from '@/components/Money';
 import LineItem from '@/components/LineItem';
 import Pill from '@/components/Pill';
+import { openBarcodeScanner } from '@/components/BarcodeScannerSheet';
 import { RETAIL_PRODUCTS, RETAIL_CATEGORIES, RetailProduct } from '../mockCatalog';
 import { useCartStore } from '../cartStore';
 import type { CartLine } from '@/types';
+import { usePosCatalog, useCustomerLookup, type ApiProduct } from '@/api/queries';
+import { useActiveBranchId } from '@/api/BranchContext';
+
+/** Adapt the Cloud `ApiProduct` to the local table row shape. */
+function toRetailProduct(p: ApiProduct): RetailProduct {
+  const priceNum = typeof p.price === 'string' ? Number(p.price) : p.price;
+  const initials = (p.name || '?')
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+  return {
+    id: p.id,
+    sku: p.sku ?? p.barcode ?? p.id.slice(0, 6),
+    name: p.name,
+    initials,
+    price: Math.round(priceNum * 100),
+    stock: p.maxProducible ?? 0,
+    lowStock: p.isLowStock,
+    ageRestricted: false,
+    category: p.category?.name ?? 'All',
+  };
+}
 
 type SupervisorPinAPI = {
   openSupervisorPin: (args: { reason: string }) => Promise<{ supervisorId: string; role: string }>;
@@ -32,24 +57,58 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
   const [tingiMode, setTingiMode] = useState(false);
   const [category, setCategory] = useState<string>('All');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [debouncedPhone, setDebouncedPhone] = useState('');
+  const [showCustomerResults, setShowCustomerResults] = useState(false);
   const scanInputRef = useRef<TextInput>(null);
 
   const lines = useCartStore((s) => s.lines);
   const addLine = useCartStore((s) => s.addLine);
   const removeLine = useCartStore((s) => s.removeLine);
   const voidLine = useCartStore((s) => s.voidLine);
+  const setCustomer = useCartStore((s) => s.setCustomer);
   const subtotal = useCartStore((s) => s.subtotal());
   const total = useCartStore((s) => s.total());
   const lineCount = useCartStore((s) => s.lineCount());
 
+  // Live catalog with cached/mock fallback.
+  const branchId = useActiveBranchId();
+  const catalogQuery = usePosCatalog(branchId);
+  const liveProducts = useMemo(
+    () => (catalogQuery.data ?? []).map(toRetailProduct),
+    [catalogQuery.data],
+  );
+  const useLive = liveProducts.length > 0;
+  const sourceProducts: RetailProduct[] = useLive
+    ? liveProducts
+    : (__DEV__ ? RETAIL_PRODUCTS : []);
+
+  // Categories: dedupe whatever the catalog exposes; fall back to mock list.
+  const categoryList: readonly string[] = useLive
+    ? ['All', ...Array.from(new Set(liveProducts.map((p) => p.category)))]
+    : RETAIL_CATEGORIES;
+
+  // Debounce phone input for the lookup (250ms).
+  useEffect(() => {
+    if (!customerPhoneLookupEnabled) return;
+    const t = setTimeout(() => setDebouncedPhone(customerPhone), 250);
+    return () => clearTimeout(t);
+  }, [customerPhone, customerPhoneLookupEnabled]);
+
+  const customerLookup = useCustomerLookup(
+    debouncedPhone,
+    !!customerPhoneLookupEnabled && showCustomerResults,
+  );
+
   const filteredProducts = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return RETAIL_PRODUCTS.filter((p) => {
+    return sourceProducts.filter((p) => {
       if (category !== 'All' && p.category !== category) return false;
       if (!q) return true;
       return p.sku.includes(q) || p.name.toLowerCase().includes(q);
     });
-  }, [query, category]);
+  }, [query, category, sourceProducts]);
+
+  const showShimmer = catalogQuery.isLoading && sourceProducts.length === 0;
 
   const handleAdd = (p: RetailProduct) => {
     // tingi splits parent SKU pricing into per-piece. For demo: 1/10 of price.
@@ -67,10 +126,29 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
   const handleScanSubmit = () => {
     const q = query.trim();
     if (!q) return;
-    const hit = RETAIL_PRODUCTS.find((p) => p.sku === q);
+    const hit = sourceProducts.find((p) => p.sku === q);
     if (hit) {
       handleAdd(hit);
       setQuery('');
+    }
+  };
+
+  const handleOpenScanner = async () => {
+    try {
+      const code = await openBarcodeScanner();
+      if (!code) return;
+      setQuery(code);
+      // Let the SKU lookup fire on the next tick (state is async).
+      const hit = sourceProducts.find((p) => p.sku === code);
+      if (hit) {
+        handleAdd(hit);
+        setQuery('');
+      } else {
+        scanInputRef.current?.focus();
+      }
+    } catch {
+      /* host not mounted yet — fallback to manual focus */
+      scanInputRef.current?.focus();
     }
   };
 
@@ -87,7 +165,7 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
   };
 
   const hasAgeRestricted = useMemo(
-    () => lines.some((l) => !l.removed && !l.voidedAt && /18\+/.test(l.productName) === false && RETAIL_PRODUCTS.find((p) => l.productId.startsWith(p.id))?.ageRestricted),
+    () => lines.some((l) => !l.removed && !l.voidedAt && /18\+/.test(l.productName) === false && sourceProducts.find((p) => l.productId.startsWith(p.id))?.ageRestricted),
     [lines],
   );
 
@@ -123,14 +201,39 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
       {customerPhoneLookupEnabled && (
         <View style={styles.customerStrip}>
           <Text style={styles.customerLabel}>Customer phone</Text>
-          <TextInput
-            value={customerPhone}
-            onChangeText={setCustomerPhone}
-            placeholder="09xx xxx xxxx"
-            placeholderTextColor={colors.faint}
-            style={styles.customerInput}
-            keyboardType="phone-pad"
-          />
+          <View style={{ flex: 1 }}>
+            <TextInput
+              value={customerPhone}
+              onChangeText={(v) => {
+                setCustomerPhone(v);
+                setShowCustomerResults(true);
+              }}
+              onBlur={() => setTimeout(() => setShowCustomerResults(false), 150)}
+              onFocus={() => setShowCustomerResults(true)}
+              placeholder="09xx xxx xxxx"
+              placeholderTextColor={colors.faint}
+              style={styles.customerInput}
+              keyboardType="phone-pad"
+            />
+            {showCustomerResults && (customerLookup.data?.length ?? 0) > 0 && (
+              <View style={styles.lookupDropdown}>
+                {(customerLookup.data ?? []).slice(0, 6).map((c) => (
+                  <Pressable
+                    key={c.id}
+                    onPress={() => {
+                      setCustomer({ id: c.id, name: c.name, phone: c.phone ?? undefined, tin: c.tin ?? undefined });
+                      setCustomerPhone(c.phone ?? '');
+                      setShowCustomerResults(false);
+                    }}
+                    style={({ pressed }) => [styles.lookupItem, pressed && { backgroundColor: colors.creamSoft }]}
+                  >
+                    <Text style={styles.lookupName}>{c.name}</Text>
+                    <Text style={styles.lookupPhone}>{c.phone ?? '—'}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
         </View>
       )}
 
@@ -155,7 +258,7 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
           </View>
         </View>
         <Pressable
-          onPress={() => scanInputRef.current?.focus()}
+          onPress={handleOpenScanner}
           style={({ pressed }) => [styles.scanCta, pressed && { opacity: 0.85 }]}
         >
           <Text style={styles.scanCtaText}>Scan</Text>
@@ -183,7 +286,7 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
             style={styles.catBar}
             contentContainerStyle={styles.catBarContent}
           >
-            {RETAIL_CATEGORIES.map((c) => {
+            {categoryList.map((c) => {
               const active = category === c;
               return (
                 <Pressable
@@ -205,12 +308,20 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
             <Text style={[styles.headerCell, { width: 60 }]}></Text>
           </View>
 
-          <FlatList
-            data={filteredProducts}
-            keyExtractor={(p) => p.id}
-            renderItem={renderRow}
-            style={{ flex: 1 }}
-          />
+          {showShimmer ? (
+            <View>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <View key={`sh-${i}`} style={[styles.tableRow, styles.shimmerRow]} />
+              ))}
+            </View>
+          ) : (
+            <FlatList
+              data={filteredProducts}
+              keyExtractor={(p) => p.id}
+              renderItem={renderRow}
+              style={{ flex: 1 }}
+            />
+          )}
         </View>
 
         {/* Cart panel */}
@@ -243,7 +354,7 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
               keyExtractor={(l) => l.id}
               style={{ flex: 1 }}
               renderItem={({ item }) => {
-                const catalogItem = RETAIL_PRODUCTS.find((p) => item.productId.startsWith(p.id));
+                const catalogItem = sourceProducts.find((p) => item.productId.startsWith(p.id));
                 return (
                   <LineItem
                     line={item}
@@ -444,4 +555,26 @@ const styles = StyleSheet.create({
     ...elevation.e2,
   },
   chargeBtnText: { ...textTokens.cashierLg, color: colors.onPrimary },
+
+  lookupDropdown: {
+    position: 'absolute',
+    top: 32,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.rule,
+    borderRadius: radii.sm,
+    ...elevation.e2,
+    zIndex: 10,
+  },
+  lookupItem: {
+    paddingHorizontal: spacing.s3,
+    paddingVertical: spacing.s3,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.rule,
+  },
+  lookupName: { ...textTokens.body, color: colors.ink, fontWeight: '600' },
+  lookupPhone: { ...textTokens.caption, color: colors.muted, marginTop: 2 },
+  shimmerRow: { backgroundColor: colors.creamSoft, opacity: 0.6 },
 });

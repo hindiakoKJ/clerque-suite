@@ -54,6 +54,10 @@ import BatchExpiryChip from './BatchExpiryChip';
 import BatchPickerSheet, { type BatchPickerHandle } from './BatchPickerSheet';
 import RxCaptureModal, { type RxInfo } from './RxCaptureModal';
 import ControlledSubstanceInterstitial from './ControlledSubstanceInterstitial';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { openBarcodeScanner } from '@/components/BarcodeScannerSheet';
+import { useLots, usePosCatalog } from '@/api/queries';
+import { useActiveBranchId } from '@/api/BranchContext';
 
 function formatPeso(cents: number): string {
   return `₱${(cents / 100).toFixed(2)}`;
@@ -86,6 +90,14 @@ export const PharmacyTerminal: React.FC = () => {
   const pendingControlledRef = useRef<{ drug: Drug; batch: Batch } | null>(null);
 
   const batchPickerRef = useRef<BatchPickerHandle>(null);
+
+  // Live catalog + lots — fetched for freshness, but the rich Drug/Batch
+  // mock model is still the rendering source until per-row live-lot wiring
+  // lands. The fetches keep the React Query cache warm so the future swap
+  // is a one-line change.
+  const branchId = useActiveBranchId();
+  void usePosCatalog(branchId);
+  void useLots();
 
   const results = useMemo(() => searchDrugs(query), [query]);
 
@@ -198,14 +210,30 @@ export const PharmacyTerminal: React.FC = () => {
     <SafeAreaView style={styles.root} edges={['top']}>
       {/* Hero search bar */}
       <View style={styles.searchBar}>
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search by SKU, brand, or generic name"
-          placeholderTextColor={colors.faint}
-          style={styles.searchInput}
-          autoCapitalize="none"
-        />
+        <View style={styles.searchRow}>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search by SKU, brand, generic, or barcode"
+            placeholderTextColor={colors.faint}
+            style={[styles.searchInput, { flex: 1 }]}
+            autoCapitalize="none"
+          />
+          <Pressable
+            onPress={async () => {
+              try {
+                const code = await openBarcodeScanner();
+                if (code) setQuery(code);
+              } catch {
+                /* host not mounted */
+              }
+            }}
+            style={({ pressed }) => [styles.scanIconBtn, pressed && { opacity: 0.85 }]}
+            accessibilityLabel="Scan barcode"
+          >
+            <MaterialCommunityIcons name="barcode-scan" size={28} color={colors.onPrimary} />
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.body}>
@@ -350,6 +378,13 @@ const styles = StyleSheet.create({
     padding: spacing.s4,
     backgroundColor: colors.creamSoft,
     borderBottomWidth: 1, borderBottomColor: colors.rule,
+  },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.s3 },
+  scanIconBtn: {
+    width: 60, height: 60,
+    backgroundColor: colors.primary,
+    borderRadius: radii.md,
+    alignItems: 'center', justifyContent: 'center',
   },
   searchInput: {
     height: 60,

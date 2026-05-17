@@ -35,7 +35,6 @@ import {
 import { formatPeso } from '@/components/Money';
 import Pill from '@/components/Pill';
 import { enqueueOutbox } from '@/offline/db';
-import { getPrinterService } from '@/receipt/printerService';
 import { keypadToCents } from '@/payment/NumericKeypad';
 
 export interface TenderBreakdown {
@@ -134,9 +133,15 @@ export default function ZReadScreen({
   ];
 
   const handlePrint = async () => {
-    await getPrinterService().print(
-      `<html><body><pre>Z-READ · ${summary.shiftId}\nNet ${formatPeso(netSalesCents)}</pre></body></html>`,
-    );
+    // Z-Read print path is its own ESC/POS document (different shape from
+    // a sales receipt) — not yet wired through the new structured
+    // PrinterService. Stub keeps the button live without throwing.
+    // TODO(printer): build `zReadToEscPos` and call printer directly.
+    // eslint-disable-next-line no-console
+    console.log('[ZRead] print stub', {
+      shiftId: summary.shiftId,
+      net: formatPeso(netSalesCents),
+    });
   };
 
   const handleClose = async () => {

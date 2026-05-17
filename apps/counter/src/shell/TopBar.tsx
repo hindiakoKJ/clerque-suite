@@ -5,13 +5,14 @@
  * .appbar styles in screens-styles-v2.css.
  */
 
-import React from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import React, { useState } from 'react';
+import { Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
+import { useBranchContext } from '@/api/BranchContext';
 import { colors, radii, spacing, text } from '@/theme';
 
 interface Props {
@@ -21,8 +22,11 @@ interface Props {
 export default function TopBar({ onMenuPress }: Props): React.ReactElement {
   const { tenant, session, cashier } = useAuth();
   const { state, queuedCount } = useSync();
+  const { branches, activeBranch, setActiveBranch } = useBranchContext();
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
 
   const pill = pillForState(state, queuedCount);
+  const showBranchPicker = branches.length > 1;
 
   return (
     <View style={styles.appbar}>
@@ -48,6 +52,47 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
       </View>
 
       <View style={styles.right}>
+        {showBranchPicker && activeBranch && (
+          <Pressable
+            onPress={() => setBranchPickerOpen(true)}
+            style={styles.branchChip}
+            hitSlop={8}
+          >
+            <MaterialCommunityIcons name="store-outline" size={14} color={colors.primaryInk} />
+            <Text style={styles.branchChipText} numberOfLines={1}>{activeBranch.name}</Text>
+            <MaterialCommunityIcons name="chevron-down" size={14} color={colors.primaryInk} />
+          </Pressable>
+        )}
+        <Modal
+          visible={branchPickerOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setBranchPickerOpen(false)}
+        >
+          <Pressable style={styles.modalScrim} onPress={() => setBranchPickerOpen(false)}>
+            <View style={styles.branchSheet}>
+              <Text style={styles.branchSheetTitle}>Switch branch</Text>
+              {branches.map((b) => {
+                const isActive = b.id === activeBranch?.id;
+                return (
+                  <Pressable
+                    key={b.id}
+                    onPress={() => {
+                      setActiveBranch(b);
+                      setBranchPickerOpen(false);
+                    }}
+                    style={[styles.branchOption, isActive && styles.branchOptionActive]}
+                  >
+                    <Text style={[styles.branchOptionText, isActive && styles.branchOptionTextActive]}>
+                      {b.name}
+                    </Text>
+                    {b.address ? <Text style={styles.branchAddr}>{b.address}</Text> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Modal>
         <View style={[styles.pill, { backgroundColor: pill.bg }]}>
           <View style={[styles.pillDot, { backgroundColor: pill.fg }]} />
           <Text style={[styles.pillLabel, { color: pill.fg }]}>{pill.label}</Text>
@@ -134,4 +179,45 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   roleChipText: { ...text.caption, color: colors.primaryInk, fontWeight: '700' },
+
+  branchChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.s2,
+    paddingVertical: spacing.s1,
+    borderRadius: radii.pill,
+    backgroundColor: colors.creamSoft,
+    borderWidth: 1,
+    borderColor: colors.rule,
+    height: 28,
+    maxWidth: 180,
+  },
+  branchChipText: { ...text.caption, color: colors.primaryInk, fontWeight: '700' },
+
+  modalScrim: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.35)',
+    alignItems: 'flex-end',
+    paddingTop: 68,
+    paddingRight: spacing.s4,
+  },
+  branchSheet: {
+    minWidth: 260,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    padding: spacing.s3,
+    borderWidth: 1,
+    borderColor: colors.rule,
+  },
+  branchSheetTitle: { ...text.caption, color: colors.muted, marginBottom: spacing.s2, textTransform: 'uppercase', fontWeight: '700' },
+  branchOption: {
+    paddingHorizontal: spacing.s3,
+    paddingVertical: spacing.s3,
+    borderRadius: radii.sm,
+  },
+  branchOptionActive: { backgroundColor: colors.primaryContainer },
+  branchOptionText: { ...text.body, color: colors.ink, fontWeight: '600' },
+  branchOptionTextActive: { color: colors.primaryInk, fontWeight: '700' },
+  branchAddr: { ...text.caption, color: colors.muted, marginTop: 2 },
 });

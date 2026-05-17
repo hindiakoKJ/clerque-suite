@@ -11,6 +11,48 @@ import { FB_CATEGORIES, FB_PRODUCTS, FBProduct } from '../mockCatalog';
 import { useCartStore } from '../cartStore';
 import type { DiningMode, CartLine } from '@/types';
 import ModifierSheet, { ModifierSheetHandle } from './ModifierSheet';
+import { usePosCatalog, useCategories, type ApiProduct } from '@/api/queries';
+import { useActiveBranchId } from '@/api/BranchContext';
+
+/** Map a Cloud `ApiProduct` to the local `FBProduct` shape the grid renders. */
+function toFbProduct(p: ApiProduct): FBProduct {
+  const priceNum = typeof p.price === 'string' ? Number(p.price) : p.price;
+  const initials = (p.name || '?')
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+  return {
+    id: p.id,
+    name: p.name,
+    initials,
+    category: p.category?.name ?? 'All',
+    price: Math.round(priceNum * 100),
+    stock: p.maxProducible ?? 0,
+    lowStock: p.isLowStock,
+    modifierGroups: (p.modifierGroups ?? [])
+      .filter((g) => g.modifierGroup.options.some((o) => o.isActive !== false))
+      .map((g) => ({
+        id: g.modifierGroup.id,
+        name: g.modifierGroup.name,
+        required: g.modifierGroup.required,
+        min: g.modifierGroup.minSelect ?? (g.modifierGroup.required ? 1 : 0),
+        max: g.modifierGroup.maxSelect ?? (g.modifierGroup.multiSelect ? 99 : 1),
+        options: g.modifierGroup.options
+          .filter((o) => o.isActive !== false)
+          .map((o) => ({
+            id: o.id,
+            name: o.name,
+            priceAdjustment: Math.round(
+              (typeof o.priceAdjustment === 'string'
+                ? Number(o.priceAdjustment)
+                : o.priceAdjustment) * 100,
+            ),
+          })),
+      })),
+  };
+}
 
 // We import lazily because SupervisorPinModal may not exist yet (another agent
 // is building it). The try/catch keeps the bundle valid.
@@ -39,6 +81,28 @@ export default function FBTerminal() {
 
   const [activeCategory, setActiveCategory] = useState<string>('All');
 
+  // Live catalog. Falls back to the mock when no live data is available yet
+  // (cold-launch, dev builds, or the call is still in flight).
+  const branchId = useActiveBranchId();
+  const catalogQuery = usePosCatalog(branchId);
+  const categoriesQuery = useCategories();
+  const liveProducts: FBProduct[] = useMemo(
+    () => (catalogQuery.data ?? []).map(toFbProduct),
+    [catalogQuery.data],
+  );
+  const useLive = liveProducts.length > 0;
+  const allProducts: FBProduct[] = useLive
+    ? liveProducts
+    : (__DEV__ ? FB_PRODUCTS : []);
+
+  const categories: readonly string[] = useLive && categoriesQuery.data?.length
+    ? ['All', ...categoriesQuery.data.map((c) => c.name)]
+    : FB_CATEGORIES;
+
+  // Subtle loading hint — only render shimmer rows when we genuinely have
+  // nothing to show; once cache is hydrated we stay on the previous data.
+  const showShimmer = catalogQuery.isLoading && allProducts.length === 0;
+
   const lines = useCartStore((s) => s.lines);
   const diningMode = useCartStore((s) => s.diningMode);
   const tableNumber = useCartStore((s) => s.tableNumber);
@@ -59,9 +123,9 @@ export default function FBTerminal() {
   }, [diningMode, setDiningMode]);
 
   const filteredProducts = useMemo(() => {
-    if (activeCategory === 'All') return FB_PRODUCTS;
-    return FB_PRODUCTS.filter((p) => p.category === activeCategory);
-  }, [activeCategory]);
+    if (activeCategory === 'All') return allProducts;
+    return allProducts.filter((p) => p.category === activeCategory);
+  }, [activeCategory, allProducts]);
 
   const sheetRef = useRef<ModifierSheetHandle>(null);
 
@@ -183,7 +247,7 @@ export default function FBTerminal() {
         style={styles.catBar}
         contentContainerStyle={styles.catBarContent}
       >
-        {FB_CATEGORIES.map((c) => {
+        {categories.map((c) => {
           const active = activeCategory === c;
           return (
             <Pressable
@@ -206,15 +270,23 @@ export default function FBTerminal() {
               <Text style={styles.sendKitchenText}>Send to kitchen</Text>
             </Pressable>
           </View>
-          <FlatList
-            key={productGridKey}
-            data={filteredProducts}
-            keyExtractor={(p) => p.id}
-            numColumns={numColumns}
-            columnWrapperStyle={numColumns > 1 ? styles.gridRow : undefined}
-            contentContainerStyle={styles.gridContent}
-            renderItem={renderProduct}
-          />
+          {showShimmer ? (
+            <View style={styles.gridContent}>
+              {Array.from({ length: numColumns * 2 }).map((_, i) => (
+                <View key={`sh-${i}`} style={[styles.card, styles.shimmer]} />
+              ))}
+            </View>
+          ) : (
+            <FlatList
+              key={productGridKey}
+              data={filteredProducts}
+              keyExtractor={(p) => p.id}
+              numColumns={numColumns}
+              columnWrapperStyle={numColumns > 1 ? styles.gridRow : undefined}
+              contentContainerStyle={styles.gridContent}
+              renderItem={renderProduct}
+            />
+          )}
         </View>
 
         {/* Cart panel */}
@@ -451,4 +523,11 @@ const styles = StyleSheet.create({
     ...elevation.e2,
   },
   chargeBtnText: { ...textTokens.cashierLg, color: colors.onPrimary },
+
+  shimmer: {
+    height: 200,
+    margin: spacing.s2,
+    backgroundColor: colors.creamSoft,
+    opacity: 0.6,
+  },
 });

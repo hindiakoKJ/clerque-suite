@@ -40,9 +40,20 @@ function getBaseUrl(): string {
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
-async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+export interface RequestOptions {
+  /** Extra request headers (e.g. `Idempotency-Key`). */
+  headers?: Record<string, string>;
+}
+
+async function request<T>(
+  method: Method,
+  path: string,
+  body?: unknown,
+  options: RequestOptions = {},
+): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
+    ...(options.headers ?? {}),
   };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
@@ -83,9 +94,12 @@ function safeJson(text: string): unknown {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
-  patch: <T>(path: string, body?: unknown) => request<T>('PATCH', path, body),
-  del: <T>(path: string) => request<T>('DELETE', path),
+  get: <T>(path: string, options?: RequestOptions) => request<T>('GET', path, undefined, options),
+  post: <T>(path: string, body?: unknown, options?: RequestOptions) =>
+    request<T>('POST', path, body, options),
+  patch: <T>(path: string, body?: unknown, options?: RequestOptions) =>
+    request<T>('PATCH', path, body, options),
+  del: <T>(path: string, options?: RequestOptions) =>
+    request<T>('DELETE', path, undefined, options),
   setAuthToken,
 };

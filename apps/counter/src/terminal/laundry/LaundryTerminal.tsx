@@ -34,6 +34,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radii, text, tap, elevation, tnum } from '@/theme/tokens';
 import { useCart } from '@/terminal/cartStore';
 import type { CartLine } from '@/types';
+import { usePosCatalog } from '@/api/queries';
+import { useActiveBranchId } from '@/api/BranchContext';
 
 type Category = 'WASH_FOLD' | 'DRY_CLEAN' | 'HAND_WASH' | 'SPECIAL';
 
@@ -91,6 +93,14 @@ export const LaundryTerminal: React.FC = () => {
   const addLine = useCart((s) => s.addLine);
   const voidLine = useCart((s) => s.voidLine);
   const setCustomer = useCart((s) => s.setCustomer);
+
+  // Keep the live catalog warm so the laundry terminal can switch to it
+  // once per-service mapping lands. Today the SERVICES list is hard-coded
+  // because PH laundry chains price services in ways the generic product
+  // grid doesn't model (per-kg + same-day surcharge), so we render the
+  // mock array but pre-fetch the live data for cache freshness.
+  const branchIdLive = useActiveBranchId();
+  void usePosCatalog(branchIdLive);
 
   const [category, setCategory] = useState<Category>('WASH_FOLD');
   const [readyBy, setReadyBy] = useState<Date>(tomorrowAt10());

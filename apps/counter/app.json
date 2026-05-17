@@ -4,13 +4,11 @@
     "slug": "clerque-counter",
     "version": "0.1.0",
     "orientation": "landscape",
-    "icon": "./assets/icon.png",
     "scheme": "clerque-counter",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "backgroundColor": "#F8F5EE",
-      "image": "./assets/splash.png",
       "resizeMode": "contain"
     },
     "ios": {
@@ -20,7 +18,6 @@
     "android": {
       "package": "com.clerque.counter",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#3B82F6"
       },
       "permissions": [
@@ -28,7 +25,9 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
       ]
     },
     "plugins": [
@@ -43,7 +42,8 @@
       ]
     ],
     "extra": {
-      "apiBaseUrl": "https://api.clerque.com"
+      "apiBaseUrl": "https://clerque-suite-production-93b1.up.railway.app",
+      "tenantSlugDefault": "demo"
     }
   }
 }

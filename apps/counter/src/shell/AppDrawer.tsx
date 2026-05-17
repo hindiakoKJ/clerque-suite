@@ -20,6 +20,11 @@ import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
 import Placeholder from '@/shell/Placeholder';
 import DisplaysScreen from '@/shell/DisplaysScreen';
+import PrinterSettingsScreen from '@/shell/PrinterSettingsScreen';
+import DashboardScreen from '@/shell/DashboardScreen';
+import OrdersScreen from '@/shell/OrdersScreen';
+import PendingSyncScreen from '@/shell/PendingSyncScreen';
+import SettingsScreen from '@/shell/SettingsScreen';
 import FleetScreen from '@/terminal/laundry/FleetScreen';
 import TerminalRouter from '@/terminal/TerminalRouter';
 import { clearDeviceMode } from '@/device-mode/storage';
@@ -33,6 +38,7 @@ export type AppDrawerParamList = {
   ZRead: undefined;
   Fleet: undefined;
   Settings: undefined;
+  Printer: undefined;
   Displays: undefined;
   PendingSync: undefined;
 };
@@ -62,6 +68,7 @@ const ITEMS: NavItemDef[] = [
   { key: 'Shift',       label: 'Shift',             icon: 'clock-outline' },
   { key: 'ZRead',       label: "Today's Z-read",    icon: 'file-chart-outline' },
   { key: 'Settings',    label: 'Settings',          icon: 'cog-outline' },
+  { key: 'Printer',     label: 'Printer',           icon: 'printer-outline' },
   { key: 'Displays',    label: 'Displays',          icon: 'television',
     showForRoles: ['BUSINESS_OWNER', 'BRANCH_MANAGER'] },
   { key: 'PendingSync', label: 'Pending sync',      icon: 'cloud-sync-outline' },
@@ -83,13 +90,13 @@ export default function AppDrawer(): React.ReactElement {
       }}
     >
       <Drawer.Screen name="Dashboard">
-        {(p) => <Placeholder title="Dashboard" caption="KPIs land here" onMenuPress={() => p.navigation.openDrawer()} />}
+        {(p) => <DashboardScreen onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
       <Drawer.Screen name="Terminal">
         {() => <TerminalRouter />}
       </Drawer.Screen>
       <Drawer.Screen name="Orders">
-        {(p) => <Placeholder title="Orders" onMenuPress={() => p.navigation.openDrawer()} />}
+        {(p) => <OrdersScreen onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
       <Drawer.Screen name="Shift">
         {(p) => <Placeholder title="Shift" caption="Owned by shift team" onMenuPress={() => p.navigation.openDrawer()} />}
@@ -101,13 +108,16 @@ export default function AppDrawer(): React.ReactElement {
         {() => <FleetScreen />}
       </Drawer.Screen>
       <Drawer.Screen name="Settings">
-        {(p) => <Placeholder title="Settings" onMenuPress={() => p.navigation.openDrawer()} />}
+        {(p) => <SettingsScreen onMenuPress={() => p.navigation.openDrawer()} />}
+      </Drawer.Screen>
+      <Drawer.Screen name="Printer">
+        {(p) => <PrinterSettingsScreen onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
       <Drawer.Screen name="Displays">
         {(p) => <DisplaysScreen onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
       <Drawer.Screen name="PendingSync">
-        {(p) => <Placeholder title="Pending sync" caption="Outbox queue lives here" onMenuPress={() => p.navigation.openDrawer()} />}
+        {(p) => <PendingSyncScreen onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
     </Drawer.Navigator>
   );

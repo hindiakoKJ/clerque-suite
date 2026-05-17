@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Adaptive icon foreground — safe area is the inner 66% circle.
+     Background color comes from app.json (#3B82F6). -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <text x="512" y="660" font-family="Plus Jakarta Sans, Inter, system-ui, sans-serif"
+        font-size="520" font-weight="800" text-anchor="middle" fill="#FFFFFF"
+        letter-spacing="-20">C</text>
+</svg>

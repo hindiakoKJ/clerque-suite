@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="2048" height="2048" viewBox="0 0 2048 2048" xmlns="http://www.w3.org/2000/svg">
+  <rect width="2048" height="2048" fill="#F8F5EE"/>
+  <g transform="translate(1024 1024)">
+    <rect x="-180" y="-180" width="360" height="360" rx="80" fill="#3B82F6"/>
+    <text x="0" y="120" font-family="Plus Jakarta Sans, Inter, system-ui, sans-serif"
+          font-size="280" font-weight="800" text-anchor="middle" fill="#FFFFFF"
+          letter-spacing="-10">C</text>
+  </g>
+  <text x="1024" y="1320" font-family="Plus Jakarta Sans, Inter, system-ui, sans-serif"
+        font-size="80" font-weight="800" text-anchor="middle" fill="#1F1B16"
+        letter-spacing="-2">Clerque Counter</text>
+  <text x="1024" y="1400" font-family="Inter, system-ui, sans-serif"
+        font-size="36" font-weight="500" text-anchor="middle" fill="#5F564B">
+    Sell faster. Close the till.
+  </text>
+</svg>

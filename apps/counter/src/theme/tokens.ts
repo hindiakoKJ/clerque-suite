@@ -83,11 +83,18 @@ export const elevation = {
   e5: { shadowColor: '#0F172A', shadowOpacity: 0.18, shadowRadius: 56, shadowOffset: { width: 0, height: 24 }, elevation: 12 },
 } as const;
 
-/** Font family aliases — loaded once at app boot via expo-font. */
+/** Font family aliases — names match the @expo-google-fonts/* bundled
+ *  font keys, which are loaded once at app boot in App.tsx. RN's text
+ *  engine matches on the exact key string. */
 export const fonts = {
-  display: 'PlusJakartaSans',
-  body:    'Inter',
-  mono:    'JetBrainsMono',
+  display:        'PlusJakartaSans_700Bold',
+  displayBold:    'PlusJakartaSans_800ExtraBold',
+  body:           'Inter_400Regular',
+  bodyMedium:     'Inter_500Medium',
+  bodySemibold:   'Inter_600SemiBold',
+  bodyBold:       'Inter_700Bold',
+  mono:           'JetBrainsMono_500Medium',
+  monoSemibold:   'JetBrainsMono_600SemiBold',
 } as const;
 
 /** Touch target heights (Material 3 + cashier ergonomics). */

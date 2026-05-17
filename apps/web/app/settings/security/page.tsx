@@ -195,8 +195,42 @@ export default function SecuritySettingsPage() {
           </div>
         )}
 
+        {/* Stale pending-enrollment exit. If the user started enrolment
+            on a previous session and never finished (browser closed,
+            QR scanned but never verified), the server still treats them
+            as pending. Without this exit row they'd see only "Begin
+            enrolment" again — clicking it creates a NEW pending state
+            without resolving the old one. This row lets them cancel
+            the stale pending row cleanly. */}
+        {!status?.enabled && status?.pendingEnrollment && !enrolling && (
+          <div className="rounded-xl border-2 border-amber-500 bg-amber-500/10 p-5 space-y-3">
+            <h2 className="font-semibold text-foreground">You have a pending 2FA setup</h2>
+            <p className="text-sm text-muted-foreground">
+              Looks like you started setting up 2FA but didn't finish. Resume the setup
+              to scan a fresh QR, or cancel to start over later.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => beginEnrol.mutate()}
+                disabled={beginEnrol.isPending}
+                className="px-4 py-2 rounded-lg text-white font-semibold disabled:opacity-60"
+                style={{ background: 'var(--accent)' }}
+              >
+                {beginEnrol.isPending ? 'Loading…' : 'Resume setup'}
+              </button>
+              <button
+                onClick={() => cancelEnrol.mutate()}
+                disabled={cancelEnrol.isPending}
+                className="px-4 py-2 rounded-lg border border-border text-foreground hover:bg-muted disabled:opacity-60"
+              >
+                {cancelEnrol.isPending ? 'Cancelling…' : 'Cancel pending setup'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Enrolment flow */}
-        {!status?.enabled && !enrolling && (
+        {!status?.enabled && !status?.pendingEnrollment && !enrolling && (
           <div className="rounded-xl border border-border bg-card p-5 space-y-3">
             <h2 className="font-semibold text-foreground">Enable two-factor authentication</h2>
             <ol className="text-sm text-muted-foreground space-y-1 ml-4 list-decimal">

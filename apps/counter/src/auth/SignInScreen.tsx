@@ -25,10 +25,18 @@ export default function SignInScreen(): React.ReactElement {
   const onSubmit = async () => {
     if (submitting) return;
     setErrorMsg(null);
+    if (!tenantSlug.trim()) {
+      setErrorMsg('Tenant ID is required.');
+      return;
+    }
+    if (!email.trim() || !password) {
+      setErrorMsg('Email and password are required.');
+      return;
+    }
     setSubmitting(true);
     try {
       await signIn({
-        tenantSlug: tenantSlug.trim() || undefined,
+        tenantSlug: tenantSlug.trim(),
         email: email.trim(),
         password,
       });
@@ -64,19 +72,26 @@ export default function SignInScreen(): React.ReactElement {
       >
         <View style={styles.card}>
           <View style={styles.logoWrap}>
-            {/* Brand mark — rendered inline (no PNG asset required until
-                the Play Store build, where the SVG → PNG conversion runs
-                per apps/counter/README.md). Matches assets/icon.svg. */}
-            <View style={styles.logo}>
-              <Text style={styles.logoLetter}>C</Text>
+            {/* Clerque wordmark + Counter sub-label, rendered inline so
+                the bundle has no PNG asset dependency. The Play Store
+                build converts assets/icon.svg → PNG for the launcher
+                icon separately. */}
+            <View style={styles.logoRow}>
+              <View style={styles.logoBadge}>
+                <Text style={styles.logoLetter}>C</Text>
+              </View>
+              <View>
+                <Text style={styles.logoBrand}>Clerque</Text>
+                <Text style={styles.logoProduct}>Counter</Text>
+              </View>
             </View>
           </View>
 
-          <Text style={styles.title}>Clerque · Counter</Text>
+          <Text style={styles.title}>Sign in</Text>
           <Text style={styles.subtitle}>Sign in to your tenant to start a shift.</Text>
 
           <TextInput
-            label="Tenant slug (optional)"
+            label="Tenant ID"
             value={tenantSlug}
             onChangeText={setTenantSlug}
             autoCapitalize="none"
@@ -156,9 +171,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.rule,
   },
-  logoWrap: { alignItems: 'center', marginBottom: spacing.s4 },
-  logo: {
-    width: 64, height: 64,
+  logoWrap: { alignItems: 'center', marginBottom: spacing.s5 },
+  logoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.s3 },
+  logoBadge: {
+    width: 56, height: 56,
     borderRadius: radii.lg,
     backgroundColor: colors.primary,
     alignItems: 'center',
@@ -167,9 +183,27 @@ const styles = StyleSheet.create({
   logoLetter: {
     color: colors.onPrimary,
     fontFamily: fonts.displayBold,
-    fontSize: 36,
+    fontSize: 32,
     fontWeight: '800',
-    lineHeight: 40,
+    lineHeight: 36,
+  },
+  logoBrand: {
+    color: colors.ink,
+    fontFamily: fonts.displayBold,
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    lineHeight: 30,
+  },
+  logoProduct: {
+    color: colors.primary,
+    fontFamily: fonts.bodySemibold,
+    fontSize: 14,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    lineHeight: 16,
+    marginTop: 2,
   },
   title: { ...text.displayMd, color: colors.ink, textAlign: 'center' },
   subtitle: {

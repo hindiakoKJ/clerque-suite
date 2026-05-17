@@ -35,7 +35,12 @@ function getBaseUrl(): string {
   const extra = (Constants.expoConfig?.extra ?? {}) as { apiBaseUrl?: string };
   const url = extra.apiBaseUrl;
   if (!url) throw new ApiHttpError(0, 'CONFIG', 'apiBaseUrl missing from expo config');
-  return url.replace(/\/+$/, '');
+  // The Cloud API uses `setGlobalPrefix('api/v1')` — every route lives
+  // under /api/v1/*. Strip a trailing slash from the configured base
+  // and append the prefix once. Endpoint paths passed to request()
+  // should NOT include /api/v1 themselves.
+  const trimmed = url.replace(/\/+$/, '');
+  return trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
 }
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';

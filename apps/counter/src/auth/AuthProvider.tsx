@@ -12,9 +12,52 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { jwtDecode } from 'jwt-decode';
 
 import { api, ApiHttpError } from '@/api/client';
 import type { AuthSession, TenantConfig } from '@/types';
+
+/**
+ * Sprint 25 — derive AuthSession.user + TenantConfig from the JWT payload.
+ * The Cloud API bakes both into every token (see JwtPayload in
+ * packages/shared-types/src/auth.ts) so we don't need a /auth/me round-trip.
+ */
+function sessionFromJwt(accessToken: string): { user: AuthSession['user']; tenant: TenantConfig } {
+  // Loose payload type — the API may evolve fields; we read defensively.
+  const p = jwtDecode<Record<string, unknown>>(accessToken);
+  const role = (p.role as AuthSession['user']['role']) ?? 'CASHIER';
+  const planCode = (p.planCode as TenantConfig['planCode']) ?? 'SOLO_LITE';
+  const features = (p.planFeatures as TenantConfig['planFeatures']) ?? {
+    maxRecipes: 5, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0,
+    customerPhoneLookup: false, receiptCustomization: 'none',
+    advancedReports: false, loyaltyPro: false, autoBackup: false,
+    fifoValuation: false, makerCheckerVoids: false, auditLog: false,
+    customRoles: false, apiAccess: 'none',
+  };
+  const tax = ((p.taxStatus as TenantConfig['taxStatus']) ?? 'UNREGISTERED');
+  const user: AuthSession['user'] = {
+    id:    String(p.sub ?? ''),
+    name:  String(p.name ?? ''),
+    email: '',                   // not in JWT; refreshed when needed
+    role,
+    isSalesLead: Boolean(p.isSalesLead ?? false),
+  };
+  const tenant: TenantConfig = {
+    id:               String(p.tenantId ?? ''),
+    name:             String(p.businessName ?? p.tenantName ?? 'Tenant'),
+    businessType:     (p.businessType as TenantConfig['businessType']) ?? 'OTHER',
+    planCode,
+    isVatRegistered:  Boolean(p.isVatRegistered ?? tax === 'VAT'),
+    tin:              String(p.tinNumber ?? ''),
+    taxStatus:        tax,
+    nextOrNumber:     1,         // server-derived; refreshed by orders module
+    receiptHeaderNote: typeof p.receiptHeaderNote === 'string' ? p.receiptHeaderNote : undefined,
+    receiptFooterNote: typeof p.receiptFooterNote === 'string' ? p.receiptFooterNote : undefined,
+    receiptLogoUrl:    typeof p.receiptLogoUrl    === 'string' ? p.receiptLogoUrl    : undefined,
+    planFeatures: features,
+  };
+  return { user, tenant };
+}
 
 const SS_JWT_KEY = 'clerque.jwt';
 const SS_REFRESH_KEY = 'clerque.refresh';
@@ -104,16 +147,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         setSession({ jwt, refreshToken, user: cachedUser });
         setTenant(cachedTenant);
 
-        // Try to refresh tenant config; tolerate offline.
+        // Refresh tenant config from the (possibly newer) JWT payload.
+        // The API has no /auth/me — the token itself is the source of truth.
         try {
-          const me = await api.get<MeResponse>('/auth/me');
-          setSession((s) => (s ? { ...s, user: me.user } : s));
-          setTenant(me.tenant);
-          await persistTenant(me.tenant, me.user);
+          const { user: freshUser, tenant: freshTenant } = sessionFromJwt(jwt);
+          // Preserve the cached email — JWT doesn't carry it.
+          freshUser.email = cachedUser.email ?? freshUser.email;
+          setSession((s) => (s ? { ...s, user: freshUser } : s));
+          setTenant(freshTenant);
+          await persistTenant(freshTenant, freshUser);
         } catch (err) {
           const age = Date.now() - tenantTs;
           if (age > TENANT_TTL_MS) {
-            // Cache too stale & we couldn't reach the network → force re-auth.
+            // Cache too stale & we couldn't decode the JWT → force re-auth.
             await clearAllPersisted();
             api.setAuthToken(null);
             setSession(null);
@@ -131,9 +177,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   }, []);
 
   const signIn = useCallback(async ({ tenantSlug, email, password }: SignInArgs) => {
-    // Step 1 — exchange credentials for tokens. The Cloud API's /auth/login
-    // returns ONLY { accessToken, refreshToken } (it doesn't ship user +
-    // tenant in the same response).
+    // The Cloud API returns ONLY { accessToken, refreshToken } — no /auth/me
+    // endpoint exists. Both user + tenant are baked into the JWT payload
+    // (see JwtPayload in packages/shared-types/src/auth.ts) so we decode
+    // the access token directly to populate the session.
     const tokens = await api.post<LoginResponse>('/auth/login', {
       tenantSlug,
       email,
@@ -141,16 +188,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     });
     api.setAuthToken(tokens.accessToken);
 
-    // Step 2 — fetch the authenticated user + tenant in one shot.
-    const me = await api.get<MeResponse>('/auth/me');
+    const { user, tenant: tenantFromJwt } = sessionFromJwt(tokens.accessToken);
+    // Email isn't in the JWT — keep the one the user typed so the UI can
+    // show it in chip / settings without a separate fetch.
+    user.email = email;
 
-    setSession({ jwt: tokens.accessToken, refreshToken: tokens.refreshToken, user: me.user });
-    setTenant(me.tenant);
+    setSession({ jwt: tokens.accessToken, refreshToken: tokens.refreshToken, user });
+    setTenant(tenantFromJwt);
     setCashier(null);
     await Promise.all([
       SecureStore.setItemAsync(SS_JWT_KEY, tokens.accessToken),
       SecureStore.setItemAsync(SS_REFRESH_KEY, tokens.refreshToken),
-      persistTenant(me.tenant, me.user),
+      persistTenant(tenantFromJwt, user),
     ]);
   }, []);
 

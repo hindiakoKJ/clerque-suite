@@ -58,6 +58,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { openBarcodeScanner } from '@/components/BarcodeScannerSheet';
 import { useLots, usePosCatalog } from '@/api/queries';
 import { useActiveBranchId } from '@/api/BranchContext';
+import { Snackbar } from 'react-native-paper';
+import { openTendering } from '@/payment/TenderingHost';
+import { useCartStore } from '@/terminal/cartStore';
 
 function formatPeso(cents: number): string {
   return `₱${(cents / 100).toFixed(2)}`;
@@ -73,6 +76,10 @@ export const PharmacyTerminal: React.FC = () => {
   const addLine = useCart((s) => s.addLine);
   const voidLine = useCart((s) => s.voidLine);
   const removeLineAction = useCart((s) => s.removeLine);
+  const clearCart = useCart((s) => s.clear);
+
+  const [snack, setSnack] = useState<string | null>(null);
+  const [charging, setCharging] = useState(false);
   // `cart.rx` doesn't exist on the shared CartState yet — we hold Rx info
   // here as terminal-local state. When the cart agent exposes a `stampRx`
   // action this can move into the store.
@@ -336,10 +343,47 @@ export const PharmacyTerminal: React.FC = () => {
 
           <View style={styles.ctaWrap}>
             <Pressable
-              disabled={subtotalCents === 0}
-              style={[styles.primaryCta, subtotalCents === 0 && styles.primaryCtaDisabled]}
+              disabled={subtotalCents === 0 || charging}
+              onPress={async () => {
+                if (subtotalCents === 0 || charging) return;
+                setCharging(true);
+                try {
+                  const snapshot = useCartStore.getState();
+                  const result = await openTendering({
+                    cart: {
+                      lines: snapshot.lines,
+                      payments: snapshot.payments,
+                      customer: snapshot.customer,
+                      pwdScId: snapshot.pwdScId,
+                      diningMode: snapshot.diningMode,
+                      tableNumber: snapshot.tableNumber,
+                    },
+                    totalCents: subtotalCents,
+                    subtotalCents,
+                  });
+                  if (result) {
+                    clearCart();
+                    setRxInfo(null);
+                    setSnack(
+                      result.offline
+                        ? `Saved offline · ${result.orderNumber}`
+                        : `Sale complete · #${result.orderNumber}`,
+                    );
+                  }
+                } catch (e) {
+                  setSnack(e instanceof Error ? e.message : 'Charge failed.');
+                } finally {
+                  setCharging(false);
+                }
+              }}
+              style={[
+                styles.primaryCta,
+                (subtotalCents === 0 || charging) && styles.primaryCtaDisabled,
+              ]}
             >
-              <Text style={styles.primaryCtaText}>Charge {formatPeso(subtotalCents)}</Text>
+              <Text style={styles.primaryCtaText}>
+                {charging ? 'Charging…' : `Charge ${formatPeso(subtotalCents)}`}
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -356,6 +400,14 @@ export const PharmacyTerminal: React.FC = () => {
         }}
         onSave={pendingRxAddRef.current && (pendingRxAddRef.current as { dispensedById?: string }).dispensedById ? onRxSavedWithPending : onRxSaved}
       />
+
+      <Snackbar
+        visible={snack !== null}
+        onDismiss={() => setSnack(null)}
+        duration={3000}
+      >
+        {snack ?? ''}
+      </Snackbar>
 
       <ControlledSubstanceInterstitial
         visible={controlledOpen}

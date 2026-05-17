@@ -18,7 +18,6 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
-import Placeholder from '@/shell/Placeholder';
 import DisplaysScreen from '@/shell/DisplaysScreen';
 import PrinterSettingsScreen from '@/shell/PrinterSettingsScreen';
 import DashboardScreen from '@/shell/DashboardScreen';
@@ -27,6 +26,7 @@ import PendingSyncScreen from '@/shell/PendingSyncScreen';
 import SettingsScreen from '@/shell/SettingsScreen';
 import FleetScreen from '@/terminal/laundry/FleetScreen';
 import TerminalRouter from '@/terminal/TerminalRouter';
+import ShiftCoordinator from '@/shift/ShiftCoordinator';
 import { clearDeviceMode } from '@/device-mode/storage';
 import { colors, radii, spacing, text } from '@/theme';
 
@@ -99,10 +99,10 @@ export default function AppDrawer(): React.ReactElement {
         {(p) => <OrdersScreen onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
       <Drawer.Screen name="Shift">
-        {(p) => <Placeholder title="Shift" caption="Owned by shift team" onMenuPress={() => p.navigation.openDrawer()} />}
+        {(p) => <ShiftCoordinator onMenuPress={() => p.navigation.openDrawer()} />}
       </Drawer.Screen>
       <Drawer.Screen name="ZRead">
-        {(p) => <Placeholder title="Today's Z-read" onMenuPress={() => p.navigation.openDrawer()} />}
+        {(p) => <ShiftCoordinator onMenuPress={() => p.navigation.openDrawer()} startInZRead />}
       </Drawer.Screen>
       <Drawer.Screen name="Fleet">
         {() => <FleetScreen />}

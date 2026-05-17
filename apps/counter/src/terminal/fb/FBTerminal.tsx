@@ -3,6 +3,8 @@ import {
   View, Text, FlatList, ScrollView, Pressable, StyleSheet,
   useWindowDimensions, TextInput,
 } from 'react-native';
+import { Snackbar } from 'react-native-paper';
+import { openTendering } from '@/payment/TenderingHost';
 import { colors, spacing, radii, text as textTokens, tap, elevation, tnum } from '@/theme/tokens';
 import Pill from '@/components/Pill';
 import LineItem from '@/components/LineItem';
@@ -116,6 +118,43 @@ export default function FBTerminal() {
   const vatExempt = useCartStore((s) => s.vatExempt());
   const total = useCartStore((s) => s.total());
   const lineCount = useCartStore((s) => s.lineCount());
+  const clearCart = useCartStore((s) => s.clear);
+
+  // Snackbar for non-critical inline feedback ("Coming soon", "Saved", etc.).
+  const [snack, setSnack] = useState<string | null>(null);
+  const [charging, setCharging] = useState(false);
+
+  const handleCharge = async () => {
+    if (charging || total === 0) return;
+    setCharging(true);
+    try {
+      const snapshot = useCartStore.getState();
+      const result = await openTendering({
+        cart: {
+          lines: snapshot.lines,
+          payments: snapshot.payments,
+          diningMode: snapshot.diningMode,
+          tableNumber: snapshot.tableNumber,
+          customer: snapshot.customer,
+          pwdScId: snapshot.pwdScId,
+        },
+        totalCents: total,
+        subtotalCents: subtotal,
+      });
+      if (result) {
+        clearCart();
+        setSnack(
+          result.offline
+            ? `Saved offline · ${result.orderNumber}`
+            : `Sale complete · #${result.orderNumber}`,
+        );
+      }
+    } catch (e) {
+      setSnack(e instanceof Error ? e.message : 'Charge failed.');
+    } finally {
+      setCharging(false);
+    }
+  };
 
   // initial defaults
   React.useEffect(() => {
@@ -266,7 +305,10 @@ export default function FBTerminal() {
         <View style={styles.gridWrap}>
           <View style={styles.gridHeader}>
             <Text style={[textTokens.displaySm, { color: colors.ink }]}>Menu</Text>
-            <Pressable style={styles.sendKitchenBtn}>
+            <Pressable
+              style={styles.sendKitchenBtn}
+              onPress={() => setSnack('Send to kitchen — coming soon')}
+            >
               <Text style={styles.sendKitchenText}>Send to kitchen</Text>
             </Pressable>
           </View>
@@ -333,16 +375,27 @@ export default function FBTerminal() {
           </View>
 
           <Pressable
-            disabled={total === 0}
+            disabled={total === 0 || charging}
+            onPress={handleCharge}
             style={({ pressed }) => [
               styles.chargeBtn,
-              { opacity: total === 0 ? 0.4 : pressed ? 0.85 : 1 },
+              { opacity: total === 0 || charging ? 0.4 : pressed ? 0.85 : 1 },
             ]}
           >
-            <Text style={styles.chargeBtnText}>Charge {formatPeso(total)} →</Text>
+            <Text style={styles.chargeBtnText}>
+              {charging ? 'Charging…' : `Charge ${formatPeso(total)} →`}
+            </Text>
           </Pressable>
         </View>
       </View>
+
+      <Snackbar
+        visible={snack !== null}
+        onDismiss={() => setSnack(null)}
+        duration={3000}
+      >
+        {snack ?? ''}
+      </Snackbar>
 
       <ModifierSheet
         ref={sheetRef}

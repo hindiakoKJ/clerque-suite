@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, FlatList, Pressable, StyleSheet, TextInput, ScrollView,
 } from 'react-native';
+import { Snackbar } from 'react-native-paper';
+import { openTendering } from '@/payment/TenderingHost';
 import { colors, spacing, radii, text as textTokens, tap, elevation, tnum } from '@/theme/tokens';
 import { formatPeso } from '@/components/Money';
 import LineItem from '@/components/LineItem';
@@ -69,6 +71,42 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
   const subtotal = useCartStore((s) => s.subtotal());
   const total = useCartStore((s) => s.total());
   const lineCount = useCartStore((s) => s.lineCount());
+  const clearCart = useCartStore((s) => s.clear);
+
+  const [snack, setSnack] = useState<string | null>(null);
+  const [charging, setCharging] = useState(false);
+
+  const handleCharge = async () => {
+    if (charging || total === 0) return;
+    setCharging(true);
+    try {
+      const snapshot = useCartStore.getState();
+      const result = await openTendering({
+        cart: {
+          lines: snapshot.lines,
+          payments: snapshot.payments,
+          customer: snapshot.customer,
+          pwdScId: snapshot.pwdScId,
+          diningMode: snapshot.diningMode,
+          tableNumber: snapshot.tableNumber,
+        },
+        totalCents: total,
+        subtotalCents: subtotal,
+      });
+      if (result) {
+        clearCart();
+        setSnack(
+          result.offline
+            ? `Saved offline · ${result.orderNumber}`
+            : `Sale complete · #${result.orderNumber}`,
+        );
+      }
+    } catch (e) {
+      setSnack(e instanceof Error ? e.message : 'Charge failed.');
+    } finally {
+      setCharging(false);
+    }
+  };
 
   // Live catalog with cached/mock fallback.
   const branchId = useActiveBranchId();
@@ -380,16 +418,27 @@ export default function RetailTerminal({ customerPhoneLookupEnabled }: RetailTer
           </View>
 
           <Pressable
-            disabled={total === 0}
+            disabled={total === 0 || charging}
+            onPress={handleCharge}
             style={({ pressed }) => [
               styles.chargeBtn,
-              { opacity: total === 0 ? 0.4 : pressed ? 0.85 : 1 },
+              { opacity: total === 0 || charging ? 0.4 : pressed ? 0.85 : 1 },
             ]}
           >
-            <Text style={styles.chargeBtnText}>Charge {formatPeso(total)} →</Text>
+            <Text style={styles.chargeBtnText}>
+              {charging ? 'Charging…' : `Charge ${formatPeso(total)} →`}
+            </Text>
           </Pressable>
         </View>
       </View>
+
+      <Snackbar
+        visible={snack !== null}
+        onDismiss={() => setSnack(null)}
+        duration={3000}
+      >
+        {snack ?? ''}
+      </Snackbar>
     </View>
   );
 }

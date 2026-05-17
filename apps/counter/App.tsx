@@ -15,6 +15,7 @@ import RootNavigator from '@/shell/RootNavigator';
 import { AuthProvider, useAuth } from '@/auth/AuthProvider';
 import SupervisorPinHost from '@/auth/SupervisorPinHost';
 import BarcodeScannerHost from '@/components/BarcodeScannerSheet';
+import TenderingHost from '@/payment/TenderingHost';
 import { OfflineBanner } from '@/offline/OfflineBanner';
 import { SyncProvider } from '@/offline/SyncProvider';
 import { BranchProvider } from '@/api/BranchContext';
@@ -61,6 +62,7 @@ export default function App() {
                     <OfflineBanner />
                     <SupervisorPinHost />
                     <BarcodeScannerHost />
+                    <TenderingHost />
                   </NavigationContainer>
                 </BranchProvider>
               </SyncProvider>

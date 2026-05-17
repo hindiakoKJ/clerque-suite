@@ -2,6 +2,7 @@ import React, { lazy, Suspense } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { colors, spacing, text as textTokens } from '@/theme/tokens';
 import type { BusinessType, TenantConfig } from '@/types';
+import { useAuth } from '@/auth/AuthProvider';
 import FBTerminal from './fb/FBTerminal';
 import RetailTerminal from './retail/RetailTerminal';
 
@@ -50,7 +51,12 @@ function SuspenseLoader() {
   );
 }
 
-export default function TerminalRouter({ tenant }: TerminalRouterProps) {
+export default function TerminalRouter({ tenant: tenantProp }: TerminalRouterProps) {
+  // Fall back to the live AuthProvider tenant when no prop is passed (the
+  // drawer mounts <TerminalRouter /> with no props — earlier scaffolds threaded
+  // tenant in via context, which we now read directly to avoid prop-drilling).
+  const { tenant: authTenant } = useAuth();
+  const tenant = tenantProp ?? authTenant;
   const businessType: BusinessType = tenant?.businessType ?? 'COFFEE_FB';
 
   switch (businessType) {

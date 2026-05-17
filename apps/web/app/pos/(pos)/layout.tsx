@@ -293,13 +293,12 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         : []),
       makeNavItem('/pos/pending',      'Pending Sync', Clock,   PENDING_SYNC_ROLES, role, pendingCount || undefined),
     ]),
-    // Sprint 25 — Settings group. Per-tenant configuration that lives under
-    // /pos/settings/*. Displays (secondary-screen pairing) is the first
-    // entry; future settings pages (printers, station mapping, etc.) live
-    // here too. Owner/Admin/Manager gate matches the revoke permission on
-    // the backend — cashiers can generate codes via their tablet directly
-    // but shouldn't manage paired devices.
-    ...withSection('Settings', [
+    // Sprint 25 — Devices group. Per-tenant hardware + secondary-screen
+    // pairing pages. Section is named "Devices" (not "Settings") to avoid
+    // colliding with the footer Settings link that goes to the general
+    // tenant-settings page (/settings). Future entries: printers, station
+    // mapping, hardware diagnostics.
+    ...withSection('Devices', [
       makeNavItem('/pos/settings/displays', 'Displays', Monitor, MGMT_POS, role),
     ]),
   ];

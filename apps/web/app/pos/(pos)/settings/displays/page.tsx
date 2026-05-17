@@ -35,6 +35,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import { isFnbType } from '@repo/shared-types';
 import type { PairedDeviceRole } from '@/lib/pos/device-token';
 
 interface PairingRow {
@@ -87,13 +88,12 @@ const ROLE_ICON: Record<PairedDeviceRole, React.ElementType> = {
   KDS_GENERIC:      Store,
 };
 
-// The three cards we always show. Other KDS sub-roles are still issuable via
-// the station-bound flow (Bar = HOT_BAR, etc.) but we keep the headline simple.
-const PRIMARY_ROLES: PairedDeviceRole[] = [
-  'CUSTOMER_DISPLAY',
-  'KDS_KITCHEN',
-  'KDS_BAR',
-];
+// The cards we show by default. F&B tenants get Kitchen + Bar KDS; every
+// other vertical sees only the customer-facing display (laundry shops,
+// pharmacies, retail, etc. don't have kitchen stations). Other KDS
+// sub-roles are still issuable via the station-bound flow.
+const FB_ROLES: PairedDeviceRole[] = ['CUSTOMER_DISPLAY', 'KDS_KITCHEN', 'KDS_BAR'];
+const NON_FB_ROLES: PairedDeviceRole[] = ['CUSTOMER_DISPLAY'];
 
 export default function DisplaysSettingsPage() {
   const user = useAuthStore((s) => s.user);
@@ -174,8 +174,16 @@ export default function DisplaysSettingsPage() {
       </header>
 
       {/* ── Generate code cards ─────────────────────────────────────────── */}
-      <section className="grid gap-4 md:grid-cols-3 mb-10">
-        {PRIMARY_ROLES.map((role) => {
+      {/*  Vertical-aware: F&B sees Customer + Kitchen + Bar; laundry,
+           pharmacy, retail, services see only Customer-facing. Kitchen /
+           Bar are F&B-only concepts. */}
+      {(() => {
+        const isFnb = isFnbType(layout?.tenant?.businessType);
+        const primaryRoles = isFnb ? FB_ROLES : NON_FB_ROLES;
+        const gridClass = isFnb ? 'grid gap-4 md:grid-cols-3 mb-10' : 'grid gap-4 md:grid-cols-1 max-w-2xl mb-10';
+        return (
+      <section className={gridClass}>
+        {primaryRoles.map((role) => {
           const Icon = ROLE_ICON[role];
           // For KDS_BAR / KDS_KITCHEN we let the cashier pick a specific
           // station if any are configured — otherwise a generic role-only
@@ -201,6 +209,8 @@ export default function DisplaysSettingsPage() {
           );
         })}
       </section>
+        );
+      })()}
 
       {/* ── Paired device list ─────────────────────────────────────────── */}
       <section className="rounded-2xl border border-border bg-card overflow-hidden">

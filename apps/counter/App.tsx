@@ -37,37 +37,49 @@ export default function App() {
   const [monoLoaded]    = useMono({    JetBrainsMono_500Medium, JetBrainsMono_600SemiBold });
   const fontsLoaded = interLoaded && jakartaLoaded && monoLoaded;
 
-  // Lock to landscape.
+  // Boot-time orientation: pick LANDSCAPE on tablet-class devices,
+  // PORTRAIT on phone-class. We CAN'T use useDeviceSize() here directly
+  // because it's a hook designed for the shells; we replicate its
+  // breakpoint (600dp shorter edge = tablet) locally to keep this side
+  // effect-free of context.
+  //
+  // The shells (PhoneTabNavigator + AppDrawer) re-assert their own
+  // lock on mount, so this boot lock is just to avoid the cosmetic
+  // flash of the wrong orientation during the auth flow.
   //
   // Caveat — Expo Go's HOST Android activity declares orientation as
   // "unspecified" so even after lockAsync the OS may let the wrapper
   // re-rotate. The native lock only takes effect in a development /
-  // production build (where app.json's `orientation: 'landscape'`
-  // injects android:screenOrientation="landscape" on the activity).
-  //
-  // We try three increasingly aggressive paths so Expo Go gets as
-  // close as possible:
-  //   1. lockPlatformAsync with the Android constant 0 (= SCREEN_ORIENTATION_LANDSCAPE)
-  //      and the iOS landscape array — most direct lock available to JS.
-  //   2. Fall back to lockAsync(LANDSCAPE_LEFT) — more specific than the
-  //      generic LANDSCAPE which Expo Go sometimes ignores.
-  //   3. Re-fire on every Dimensions / orientation change so any rotation
-  //      that does sneak through gets snapped back within one frame.
+  // production build.
   useEffect(() => {
+    const { width: w, height: h } = require('react-native').Dimensions.get('window');
+    const isTablet = Math.min(w, h) >= 600;
+
     const enforce = async () => {
       try {
-        // Android: SCREEN_ORIENTATION_LANDSCAPE = 0 (Android system constant)
-        // iOS: list of allowed Orientation values
-        await ScreenOrientation.lockPlatformAsync({
-          screenOrientationConstantAndroid: 0,
-          screenOrientationArrayIOS: [
-            ScreenOrientation.Orientation.LANDSCAPE_LEFT,
-            ScreenOrientation.Orientation.LANDSCAPE_RIGHT,
-          ],
-        });
+        if (isTablet) {
+          await ScreenOrientation.lockPlatformAsync({
+            screenOrientationConstantAndroid: 0, // SCREEN_ORIENTATION_LANDSCAPE
+            screenOrientationArrayIOS: [
+              ScreenOrientation.Orientation.LANDSCAPE_LEFT,
+              ScreenOrientation.Orientation.LANDSCAPE_RIGHT,
+            ],
+          });
+        } else {
+          await ScreenOrientation.lockPlatformAsync({
+            screenOrientationConstantAndroid: 1, // SCREEN_ORIENTATION_PORTRAIT
+            screenOrientationArrayIOS: [
+              ScreenOrientation.Orientation.PORTRAIT_UP,
+            ],
+          });
+        }
       } catch {
         try {
-          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE_LEFT);
+          await ScreenOrientation.lockAsync(
+            isTablet
+              ? ScreenOrientation.OrientationLock.LANDSCAPE_LEFT
+              : ScreenOrientation.OrientationLock.PORTRAIT_UP,
+          );
         } catch { /* Expo Go on this device / iOS sim — give up gracefully */ }
       }
     };

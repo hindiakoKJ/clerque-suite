@@ -20,7 +20,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 
-import TopBar from '@/shell/TopBar';
+import ShellHeader from '@/shell/ShellHeader';
 import ShiftOpenScreen from '@/shift/ShiftOpenScreen';
 import ZReadScreen, { type ZReadSummary } from '@/shift/ZReadScreen';
 import { useAuth } from '@/auth/AuthProvider';
@@ -50,7 +50,7 @@ export default function ShiftCoordinator({ onMenuPress, startInZRead }: Props): 
   if (!cashier && !session) {
     return (
       <View style={s.root}>
-        <TopBar onMenuPress={onMenuPress} />
+        <ShellHeader title="Shift" onMenuPress={onMenuPress} />
         <View style={s.empty}>
           <Text style={s.emptyTitle}>Sign in to manage shifts</Text>
         </View>
@@ -67,7 +67,7 @@ export default function ShiftCoordinator({ onMenuPress, startInZRead }: Props): 
     if (!openShift) {
       return (
         <View style={s.root}>
-          <TopBar onMenuPress={onMenuPress} />
+          <ShellHeader title="Shift" onMenuPress={onMenuPress} />
           <View style={s.empty}>
             <Text style={s.emptyTitle}>No open shift to close</Text>
             <Text style={s.emptySub}>
@@ -79,7 +79,7 @@ export default function ShiftCoordinator({ onMenuPress, startInZRead }: Props): 
     }
     return (
       <View style={s.root}>
-        <TopBar onMenuPress={onMenuPress} />
+        <ShellHeader title="Shift" onMenuPress={onMenuPress} />
         <ZReadScreen
           summary={buildEmptySummary(openShift, cashierName, tenant?.isVatRegistered ?? false)}
           onClose={async (result) => {
@@ -103,7 +103,7 @@ export default function ShiftCoordinator({ onMenuPress, startInZRead }: Props): 
   if (closing && openShift) {
     return (
       <View style={s.root}>
-        <TopBar onMenuPress={onMenuPress} />
+        <ShellHeader title="Shift" onMenuPress={onMenuPress} />
         <ZReadScreen
           summary={buildEmptySummary(openShift, cashierName, tenant?.isVatRegistered ?? false)}
           onCancel={() => setClosing(false)}
@@ -129,7 +129,7 @@ export default function ShiftCoordinator({ onMenuPress, startInZRead }: Props): 
     const elapsedMin = Math.max(0, Math.round((Date.now() - openShift.openedAtMs) / 60_000));
     return (
       <View style={s.root}>
-        <TopBar onMenuPress={onMenuPress} />
+        <ShellHeader title="Shift" onMenuPress={onMenuPress} />
         <View style={s.statusCard}>
           <Text style={s.statusTitle}>Shift is open</Text>
           <Text style={s.statusSub}>{cashierName} · {elapsedMin}m elapsed</Text>
@@ -151,7 +151,7 @@ export default function ShiftCoordinator({ onMenuPress, startInZRead }: Props): 
   // Default: open shift.
   return (
     <View style={s.root}>
-      <TopBar onMenuPress={onMenuPress} />
+      <ShellHeader title="Shift" onMenuPress={onMenuPress} />
       <ShiftOpenScreen
         cashierId={cashierId}
         cashierName={cashierName}

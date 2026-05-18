@@ -42,7 +42,7 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
       <View style={styles.tenant}>
         <Text style={styles.tenantName}>{tenant?.name ?? 'Clerque · Counter'}</Text>
         <Text style={styles.tenantSub}>
-          {tenant ? `Tenant · ${tenant.id.slice(0, 8)}` : 'Not signed in'}
+          {tenant ? (tenant.planCode ? `${tenant.planCode.replace('_', ' ')} plan` : 'Tenant') : 'Not signed in'}
         </Text>
       </View>
 

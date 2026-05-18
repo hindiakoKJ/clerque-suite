@@ -26,7 +26,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { api, ApiHttpError } from '@/api/client';
 import { useBranchContext } from '@/api/BranchContext';
-import TopBar from '@/shell/TopBar';
+import ShellHeader from '@/shell/ShellHeader';
 import { formatPeso } from '@/components/Money';
 import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
 import type { CartLine, CartPayment, PaymentMethod } from '@/types';
@@ -234,7 +234,7 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
 
   return (
     <View style={styles.root}>
-      <TopBar onMenuPress={onMenuPress} />
+      <ShellHeader title="Orders" subtitle="Today" onMenuPress={onMenuPress} />
       <FlatList
         data={data ?? []}
         keyExtractor={(o) => o.id}

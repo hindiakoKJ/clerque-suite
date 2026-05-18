@@ -18,7 +18,7 @@ import type { DrawerNavigationProp } from '@react-navigation/drawer';
 import { useAuth } from '@/auth/AuthProvider';
 import { useBranchContext } from '@/api/BranchContext';
 import { getWebOrigin, getWebHost } from '@/api/webOrigin';
-import TopBar from '@/shell/TopBar';
+import ShellHeader from '@/shell/ShellHeader';
 import { clearDeviceMode } from '@/device-mode/storage';
 import { colors, radii, spacing, text as textTokens } from '@/theme';
 import type { AppDrawerParamList } from '@/shell/AppDrawer';
@@ -77,7 +77,7 @@ export default function SettingsScreen({ onMenuPress }: Props): React.ReactEleme
 
   return (
     <View style={styles.root}>
-      <TopBar onMenuPress={onMenuPress} />
+      <ShellHeader title="Settings" onMenuPress={onMenuPress} />
       <ScrollView contentContainerStyle={{ paddingBottom: spacing.s6 }}>
         <SectionHeader label="Cashier" />
         <List.Item

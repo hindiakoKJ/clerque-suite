@@ -25,6 +25,7 @@ import {
 import { Button, HelperText, Text, TextInput as PaperInput } from 'react-native-paper';
 
 import { api, ApiHttpError } from '@/api/client';
+import { getWebHost } from '@/api/webOrigin';
 import { colors, radii, spacing, tap, text, tnum } from '@/theme';
 import type { PairedDevice } from '@/device-mode/storage';
 
@@ -165,7 +166,7 @@ export default function PairingScreen({
 
           <PaperInput
             label="Tenant ID"
-            placeholder="same as you use on clerque.com"
+            placeholder={`same as you use on ${getWebHost()}`}
             value={tenantSlug}
             onChangeText={setTenantSlug}
             autoCapitalize="none"

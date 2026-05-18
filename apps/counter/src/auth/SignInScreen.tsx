@@ -11,6 +11,7 @@ import { Button, HelperText, Text, TextInput } from 'react-native-paper';
 
 import { colors, fonts, radii, spacing, text } from '@/theme';
 import { useAuth, ApiHttpError } from '@/auth/AuthProvider';
+import { getWebHost } from '@/api/webOrigin';
 import ClerqueLogo from '@/components/ClerqueLogo';
 
 export default function SignInScreen(): React.ReactElement {
@@ -45,7 +46,7 @@ export default function SignInScreen(): React.ReactElement {
       if (err instanceof ApiHttpError) {
         if (err.status === 401 && err.code === 'SUBSCRIPTION_INACTIVE') {
           setErrorMsg(
-            'Your Clerque subscription is paused — renew at clerque.com to keep using Counter.',
+            `Your Clerque subscription is paused — renew at ${getWebHost()} to keep using Counter.`,
           );
         } else if (err.status === 401) {
           setErrorMsg('Incorrect email or password.');
@@ -146,7 +147,7 @@ export default function SignInScreen(): React.ReactElement {
             Sign in
           </Button>
 
-          <Text style={styles.footer}>Subscription sold separately at clerque.com</Text>
+          <Text style={styles.footer}>Subscription sold separately at {getWebHost()}</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

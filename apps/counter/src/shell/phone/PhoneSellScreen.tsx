@@ -1,16 +1,20 @@
 /**
  * Clerque Counter — Phone Sell (P-05)
  *
- * Single-column compact list. Search at top, 72dp tap rows, floating
- * "View order (N)" sticky CTA bottom-right. Tap a row that has modifier
- * groups → push <PhoneModifierScreen />. Tap a plain row → add to cart.
+ * Matches design-source-v3/phone-414x900.html P-05:
+ *  • Header (PhoneHeader) with brand + Order # subtitle
+ *  • Search field with scan/magnify icon (sticky, white surface)
+ *  • Horizontal category chips strip just below search
+ *  • Single-column 72dp rows: thumbnail · name · price · add-circle
+ *  • Low-stock badge inline on row subtitle (warning tone, bold)
+ *  • Floating "View order (N) · ₱X" pill at bottom-right with blue glow
  *
- * Reuses the shared `useCartStore` (Zustand) so tablet + phone share state.
- * Reuses `usePosCatalog(branchId)` for the catalog.
+ * Tap product with modifier groups → push <PhoneModifierScreen />.
+ * Tap product without modifiers → addLine() instantly.
  */
 import React, { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
-import { Text } from 'react-native-paper';
+import { Text, ActivityIndicator } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -24,9 +28,10 @@ import type { PhoneSellStackParamList } from '@/shell/phone/types';
 
 type Props = NativeStackScreenProps<PhoneSellStackParamList, 'SellList'>;
 
+const ALL_CATEGORY = '__all__';
+
 function priceToCents(p: number | string): number {
   if (typeof p === 'string') return Math.round(parseFloat(p) * 100);
-  // API may return pesos as number — assume pesos unless > 10000 (heuristic).
   return Math.round(p * 100);
 }
 
@@ -43,17 +48,30 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
   const total = useCartStore((s) => s.total());
 
   const [q, setQ] = useState('');
+  const [activeCat, setActiveCat] = useState<string>(ALL_CATEGORY);
+
+  // Categories list from the catalog (unique by id, ordered by first-seen).
+  const categories = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const p of catalog.data ?? []) {
+      if (p.category && !seen.has(p.category.id)) {
+        seen.set(p.category.id, p.category.name);
+      }
+    }
+    return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
+  }, [catalog.data]);
 
   const filtered = useMemo(() => {
     const all = catalog.data ?? [];
     const needle = q.trim().toLowerCase();
-    if (!needle) return all;
-    return all.filter((p) =>
-      p.name.toLowerCase().includes(needle) ||
-      (p.sku?.toLowerCase().includes(needle) ?? false) ||
-      (p.barcode?.toLowerCase().includes(needle) ?? false),
-    );
-  }, [catalog.data, q]);
+    return all.filter((p) => {
+      if (activeCat !== ALL_CATEGORY && p.categoryId !== activeCat) return false;
+      if (!needle) return true;
+      return p.name.toLowerCase().includes(needle)
+        || (p.sku?.toLowerCase().includes(needle) ?? false)
+        || (p.barcode?.toLowerCase().includes(needle) ?? false);
+    });
+  }, [catalog.data, q, activeCat]);
 
   const onPickProduct = (p: ApiProduct) => {
     if (hasModifiers(p)) {
@@ -71,62 +89,122 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
   return (
     <View style={styles.root}>
       <PhoneHeader title="Sell" subtitle={activeBranch?.name ?? undefined} />
+
+      {/* Search field */}
       <View style={styles.searchWrap}>
         <MaterialCommunityIcons name="magnify" size={20} color={colors.muted} />
         <TextInput
           value={q}
           onChangeText={setQ}
-          placeholder="Search products or scan barcode…"
+          placeholder="Search or scan barcode…"
           placeholderTextColor={colors.faint}
           style={styles.search}
+          autoCorrect={false}
+          autoCapitalize="none"
         />
+        <MaterialCommunityIcons name="barcode-scan" size={20} color={colors.muted} />
       </View>
+
+      {/* Category chips strip */}
+      {categories.length > 0 ? (
+        <View style={styles.chipsBar}>
+          <FlatList
+            horizontal
+            data={[{ id: ALL_CATEGORY, name: 'All' }, ...categories]}
+            keyExtractor={(c) => c.id}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsContent}
+            renderItem={({ item }) => {
+              const on = item.id === activeCat;
+              return (
+                <Pressable
+                  onPress={() => setActiveCat(item.id)}
+                  style={[styles.chip, on && styles.chipOn]}
+                >
+                  <Text style={[styles.chipLabel, on && styles.chipLabelOn]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                </Pressable>
+              );
+            }}
+          />
+        </View>
+      ) : null}
 
       <FlatList
         data={filtered}
         keyExtractor={(p) => p.id}
-        renderItem={({ item }) => (
-          <Pressable
-            onPress={() => onPickProduct(item)}
-            style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-          >
-            <View style={styles.thumb}>
-              <Text style={styles.thumbText}>{item.name.slice(0, 2).toUpperCase()}</Text>
-            </View>
-            <View style={styles.rowBody}>
-              <Text style={styles.rowTitle} numberOfLines={1}>{item.name}</Text>
-              {item.sku || item.isLowStock ? (
-                <Text style={styles.rowSub} numberOfLines={1}>
-                  {item.isLowStock ? 'Low stock · ' : ''}{item.sku ?? ''}
+        renderItem={({ item }) => {
+          const cents = priceToCents(item.price);
+          const isLow = !!item.isLowStock;
+          const oos = !!item.isOutOfStock;
+          return (
+            <Pressable
+              onPress={() => onPickProduct(item)}
+              disabled={oos}
+              style={({ pressed }) => [
+                styles.row,
+                pressed && styles.rowPressed,
+                oos && styles.rowDisabled,
+              ]}
+            >
+              <View style={styles.thumb}>
+                <Text style={styles.thumbText}>{item.name.slice(0, 2).toUpperCase()}</Text>
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.rowTitle} numberOfLines={1}>{item.name}</Text>
+                <Text
+                  style={[
+                    styles.rowSub,
+                    (isLow || oos) && styles.rowSubWarn,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {oos
+                    ? '✕ Out of stock'
+                    : isLow
+                      ? '⚠ Low stock'
+                      : hasModifiers(item)
+                        ? `${(item.modifierGroups ?? []).length} modifiers`
+                        : (item.sku ?? 'No modifiers')}
                 </Text>
-              ) : null}
-            </View>
-            <Text style={[styles.rowPrice, tnum]}>{formatPeso(priceToCents(item.price))}</Text>
-            <View style={styles.addBtn}>
-              <MaterialCommunityIcons
-                name={hasModifiers(item) ? 'chevron-right' : 'plus'}
-                size={20}
-                color={colors.primaryInk}
-              />
-            </View>
-          </Pressable>
-        )}
-        ItemSeparatorComponent={null}
+              </View>
+              <Text style={[styles.rowPrice, tnum]}>{formatPeso(cents)}</Text>
+              <View style={styles.addBtn}>
+                <MaterialCommunityIcons
+                  name={hasModifiers(item) ? 'chevron-right' : 'plus'}
+                  size={18}
+                  color={colors.primaryInk}
+                />
+              </View>
+            </Pressable>
+          );
+        }}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
-          <Text style={styles.empty}>
-            {catalog.isLoading ? 'Loading…' : 'No products match'}
-          </Text>
+          catalog.isLoading ? (
+            <View style={styles.center}><ActivityIndicator /></View>
+          ) : (
+            <Text style={styles.empty}>
+              {q ? 'No products match' : 'No products in catalog'}
+            </Text>
+          )
         }
       />
 
+      {/* Floating "View order" CTA */}
       {lineCount > 0 ? (
         <Pressable
           onPress={() => navigation.navigate('Cart')}
-          style={styles.cta}
+          style={({ pressed }) => [styles.cta, pressed && { opacity: 0.92 }]}
         >
-          <Text style={styles.ctaLabel}>View order ({lineCount})</Text>
-          <Text style={[styles.ctaPrice, tnum]}>{formatPeso(total)}</Text>
+          <View style={styles.ctaLeft}>
+            <View style={styles.ctaCountBubble}>
+              <Text style={styles.ctaCountText}>{lineCount}</Text>
+            </View>
+            <Text style={styles.ctaLabel}>View order</Text>
+          </View>
+          <Text style={[styles.ctaPrice, tnum]}>{formatPeso(total)} →</Text>
         </Pressable>
       ) : null}
     </View>
@@ -135,6 +213,7 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -146,6 +225,26 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.rule,
   },
   search: { flex: 1, ...textTokens.body, color: colors.ink, paddingVertical: spacing.s2 },
+
+  chipsBar: {
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.rule,
+  },
+  chipsContent: { paddingHorizontal: spacing.s4, paddingVertical: spacing.s2, gap: spacing.s2 },
+  chip: {
+    paddingHorizontal: spacing.s4,
+    paddingVertical: 6,
+    backgroundColor: colors.creamSoft,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.creamDeep,
+    marginRight: spacing.s1,
+  },
+  chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipLabel: { fontSize: 12, fontWeight: '700', color: colors.muted },
+  chipLabelOn: { color: colors.onPrimary },
+
   listContent: { paddingBottom: 120 },
   row: {
     minHeight: 72,
@@ -159,6 +258,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.rule,
   },
   rowPressed: { backgroundColor: colors.creamSoft },
+  rowDisabled: { opacity: 0.5 },
   thumb: {
     width: 48, height: 48, borderRadius: radii.md,
     backgroundColor: colors.creamDeep,
@@ -168,26 +268,38 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1, minWidth: 0 },
   rowTitle: { ...textTokens.body, color: colors.ink, fontWeight: '700', fontSize: 15 },
   rowSub: { ...textTokens.caption, color: colors.muted, marginTop: 2 },
+  rowSubWarn: { color: colors.warningDeep, fontWeight: '700' },
   rowPrice: { ...textTokens.body, color: colors.primary, fontWeight: '800', fontSize: 16 },
   addBtn: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: colors.primaryContainer,
     alignItems: 'center', justifyContent: 'center',
   },
-  empty: { ...textTokens.body, color: colors.muted, textAlign: 'center', padding: spacing.s6 },
+
+  center: { padding: spacing.s7, alignItems: 'center' },
+  empty: { ...textTokens.body, color: colors.muted, textAlign: 'center', padding: spacing.s7 },
+
   cta: {
     position: 'absolute',
     left: spacing.s3, right: spacing.s3, bottom: spacing.s3,
     backgroundColor: colors.primary,
     borderRadius: radii.lg,
-    paddingHorizontal: spacing.s5, paddingVertical: spacing.s4,
+    paddingHorizontal: spacing.s4,
+    paddingVertical: spacing.s4,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     shadowColor: colors.primary,
     shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
+    elevation: 6,
   },
-  ctaLabel: { color: colors.onPrimary, fontWeight: '800', fontSize: 16 },
-  ctaPrice: { color: colors.onPrimary, fontWeight: '800', fontSize: 16 },
+  ctaLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.s2 },
+  ctaCountBubble: {
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  ctaCountText: { color: colors.onPrimary, fontWeight: '800', fontSize: 13 },
+  ctaLabel: { color: colors.onPrimary, fontWeight: '800', fontSize: 15 },
+  ctaPrice: { color: colors.onPrimary, fontWeight: '800', fontSize: 17 },
 });

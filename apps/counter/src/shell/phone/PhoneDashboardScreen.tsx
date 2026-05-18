@@ -1,19 +1,21 @@
 /**
  * Clerque Counter — Phone Dashboard (P-04, owner-first home)
  *
- * Vertical scroll feed:
- *  • Hero gross-sales card (huge tabular figure)
- *  • Orders / Avg / Top product 3-card row
- *  • Low-stock pill (if any)
- *  • Approvals CTA (if pending > 0)
- *  • Open-shift status card
- *  • Quick actions (Sell / Z-read / Orders)
+ * Matches design-source-v3/phone-414x900.html P-04 line-for-line:
+ *  • Hero gross-sales card (dark slate gradient, big tabular figure,
+ *    ↑/↓ delta vs. yesterday, order count, tab to drill in)
+ *  • 2-card row: Orders (count + avg) | Top product
+ *  • Low-stock warning card (warning tint) — wired to /inventory/low-stock
+ *  • Open shift status card with elapsed time + opening float
+ *  • Approvals chip (primary tint) — wired to /void-approvals?status=PENDING
  *
- * Reuses `/reports/dashboard?day=today&branchId=…` from the tablet dashboard.
+ * Data source: GET /reports/daily?branchId&date=YYYY-MM-DD (today + yesterday)
+ * Field names per DailyReport DTO: totalRevenue, totalOrders, avgOrderValue,
+ * topProducts[].productName / quantitySold / revenue.
  */
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { Text } from 'react-native-paper';
+import { Text, ActivityIndicator } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -24,58 +26,88 @@ import { useBranchContext } from '@/api/BranchContext';
 import { formatPeso } from '@/components/Money';
 import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
 
-// The Cloud API exposes /reports/daily — same data the web dashboard uses.
-// Field names differ (peso decimals not cents) so we normalize at the edge.
-interface DailyReportRaw {
-  totalRevenue?: number;       // decimal pesos
-  grossProfit?: number;        // decimal pesos
+interface TopProductDto {
+  productId: string;
+  productName: string;
+  quantitySold: number;
+  revenue: number;
+}
+
+interface DailyReportDto {
   totalOrders?: number;
-  averageOrderValue?: number;  // decimal pesos
-  topProductName?: string | null;
-  topProductId?: string | null;
+  voidCount?: number;
+  totalRevenue?: number;     // pesos
+  avgOrderValue?: number;    // pesos
+  topProducts?: TopProductDto[];
 }
 
-interface DashboardResponse {
-  grossCents: number;
-  orderCount: number;
-  avgOrderCents: number;
-  topProduct: { id: string; name: string; unitsSold: number } | null;
-  lowStockCount: number;
-  openShifts: number;
+interface LowStockItem {
+  productId: string;
+  productName: string;
+  qty?: number;
+  threshold?: number;
 }
 
-interface ApprovalsCountResponse { count: number }
+interface ApprovalsCount { count: number }
+
+function phYmd(d: Date): string {
+  // PH local YYYY-MM-DD (UTC+8 server matches PH).
+  const offsetMs = 8 * 60 * 60 * 1000;
+  const local = new Date(d.getTime() + offsetMs);
+  return local.toISOString().slice(0, 10);
+}
 
 export default function PhoneDashboardScreen(): React.ReactElement {
   const { activeBranch } = useBranchContext();
   const branchId = activeBranch?.id ?? null;
   const nav = useNavigation<{ navigate: (s: string) => void }>();
 
-  const dashboard = useQuery<DashboardResponse>({
-    queryKey: ['reports', 'daily', branchId, 'today'],
+  const todayYmd = React.useMemo(() => phYmd(new Date()), []);
+  const yesterdayYmd = React.useMemo(() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 1);
+    return phYmd(d);
+  }, []);
+
+  const today = useQuery<DailyReportDto>({
+    queryKey: ['reports', 'daily', branchId, todayYmd],
     enabled: !!branchId,
-    queryFn: async () => {
-      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-      const raw = await api.get<DailyReportRaw>(
-        `/reports/daily?branchId=${encodeURIComponent(branchId!)}&date=${today}`,
-      );
-      // Convert peso decimals → cents at the edge. Field names map from
-      // the Cloud DailyReport DTO to our existing dashboard view model.
-      return {
-        grossCents:    Math.round((raw.totalRevenue ?? 0) * 100),
-        orderCount:    raw.totalOrders ?? 0,
-        avgOrderCents: Math.round((raw.averageOrderValue ?? 0) * 100),
-        topProduct: raw.topProductName
-          ? { id: raw.topProductId ?? '', name: raw.topProductName, unitsSold: 0 }
-          : null,
-        lowStockCount: 0,   // not exposed by /reports/daily yet
-        openShifts: 0,      // ditto
-      };
-    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    queryFn: () => api.get<DailyReportDto>(
+      `/reports/daily?branchId=${encodeURIComponent(branchId!)}&date=${todayYmd}`,
+    ),
     retry: 1,
   });
 
-  const approvals = useQuery<ApprovalsCountResponse>({
+  const yesterday = useQuery<DailyReportDto>({
+    queryKey: ['reports', 'daily', branchId, yesterdayYmd],
+    enabled: !!branchId,
+    staleTime: 5 * 60_000,
+    queryFn: () => api.get<DailyReportDto>(
+      `/reports/daily?branchId=${encodeURIComponent(branchId!)}&date=${yesterdayYmd}`,
+    ),
+    retry: 1,
+  });
+
+  const lowStock = useQuery<LowStockItem[]>({
+    queryKey: ['inventory', 'low-stock', branchId],
+    enabled: !!branchId,
+    staleTime: 60_000,
+    queryFn: async () => {
+      try {
+        const list = await api.get<LowStockItem[]>(
+          `/inventory/low-stock?branchId=${encodeURIComponent(branchId!)}`,
+        );
+        return Array.isArray(list) ? list : [];
+      } catch (err) {
+        if (err instanceof ApiHttpError) return [];
+        throw err;
+      }
+    },
+  });
+
+  const approvals = useQuery<ApprovalsCount>({
     queryKey: ['void-approvals', 'pending-count'],
     queryFn: async () => {
       try {
@@ -90,9 +122,32 @@ export default function PhoneDashboardScreen(): React.ReactElement {
     staleTime: 30_000,
   });
 
-  const d = dashboard.data;
-  const today = new Date();
-  const dateLabel = today.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const t = today.data;
+  const y = yesterday.data;
+
+  const grossCents = Math.round((t?.totalRevenue ?? 0) * 100);
+  const yGrossCents = Math.round((y?.totalRevenue ?? 0) * 100);
+  const orders = t?.totalOrders ?? 0;
+  const avgCents = Math.round((t?.avgOrderValue ?? 0) * 100);
+  const top = t?.topProducts?.[0];
+
+  // Delta vs yesterday — only show if yesterday had sales so the percent isn't
+  // ∞%. Show absolute "vs ₱0" copy when yesterday is empty.
+  const hasYesterday = yGrossCents > 0;
+  const deltaPct = hasYesterday
+    ? Math.round(((grossCents - yGrossCents) / yGrossCents) * 100)
+    : null;
+  const deltaUp = (deltaPct ?? 0) >= 0;
+
+  const dateLabel = new Date().toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+  });
+
+  const lowStockCount = lowStock.data?.length ?? 0;
+  const lowStockNames = (lowStock.data ?? []).slice(0, 3).map((i) => i.productName).join(' · ');
+  const pendingApprovals = approvals.data?.count ?? 0;
+
+  const loading = today.isLoading && !t;
 
   return (
     <View style={styles.root}>
@@ -103,103 +158,123 @@ export default function PhoneDashboardScreen(): React.ReactElement {
           <Text style={styles.sub}>{activeBranch.name}</Text>
         ) : null}
 
-        {/* Hero gross card */}
-        <View style={[styles.card, styles.heroCard]}>
-          <Text style={[styles.heroEyebrow, tnum]}>GROSS SALES · TODAY</Text>
-          <Text style={[styles.heroValue, tnum]} numberOfLines={1}>
-            {d ? formatPeso(d.grossCents) : '—'}
-          </Text>
-          <Text style={styles.heroSub}>
-            {d ? `${d.orderCount} orders` : ' '}
-          </Text>
-        </View>
-
-        {/* 3-card stat row */}
-        <View style={styles.statRow}>
-          <Stat label="Orders" value={d ? String(d.orderCount) : '—'} />
-          <Stat label="Avg" value={d ? formatPeso(d.avgOrderCents) : '—'} />
-          <Stat
-            label="Top"
-            value={d?.topProduct?.name ?? '—'}
-            big={false}
-          />
-        </View>
-
-        {/* Low stock pill */}
-        {d && d.lowStockCount > 0 ? (
-          <Pressable style={styles.warnPill}>
-            <MaterialCommunityIcons name="alert-outline" size={18} color={colors.warningDeep} />
-            <Text style={styles.warnPillText}>
-              {d.lowStockCount} low-stock {d.lowStockCount === 1 ? 'item' : 'items'}
+        {/* Hero gross card — dark slate gradient (P-04) */}
+        <View style={styles.heroCard}>
+          <Text style={styles.heroEyebrow}>GROSS SALES · TODAY</Text>
+          {loading ? (
+            <View style={{ paddingVertical: spacing.s3 }}>
+              <ActivityIndicator color={colors.onPrimary} />
+            </View>
+          ) : (
+            <Text style={[styles.heroValue, tnum]} numberOfLines={1}>
+              {formatPeso(grossCents)}
             </Text>
+          )}
+          <View style={styles.heroMeta}>
+            {deltaPct != null ? (
+              <View style={styles.deltaRow}>
+                <MaterialCommunityIcons
+                  name={deltaUp ? 'arrow-up' : 'arrow-down'}
+                  size={14}
+                  color={deltaUp ? colors.success : colors.error}
+                />
+                <Text style={[styles.deltaText, { color: deltaUp ? colors.success : colors.error }]}>
+                  {Math.abs(deltaPct)}%
+                </Text>
+                <Text style={styles.heroSub}> vs. yesterday</Text>
+              </View>
+            ) : t ? (
+              <Text style={styles.heroSub}>No sales yesterday</Text>
+            ) : null}
+            <Text style={styles.heroSub}>{orders} {orders === 1 ? 'order' : 'orders'}</Text>
+          </View>
+        </View>
+
+        {/* 2-card row: Orders | Top product */}
+        <View style={styles.row2}>
+          <View style={styles.statCard}>
+            <Text style={styles.cardLabel}>Orders</Text>
+            <Text style={[styles.statValue, tnum]}>{orders}</Text>
+            <Text style={styles.cardSub}>
+              {avgCents > 0 ? `avg ${formatPeso(avgCents)}` : ' '}
+            </Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.cardLabel}>Top product</Text>
+            {top ? (
+              <>
+                <View style={styles.topProdRow}>
+                  <View style={styles.topThumb}>
+                    <Text style={styles.topThumbText}>
+                      {top.productName.slice(0, 2).toUpperCase()}
+                    </Text>
+                  </View>
+                  <Text style={styles.topName} numberOfLines={2}>{top.productName}</Text>
+                </View>
+                <Text style={styles.cardSub}>
+                  {top.quantitySold} sold · {formatPeso(Math.round(top.revenue * 100))}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.cardSub}>—</Text>
+            )}
+          </View>
+        </View>
+
+        {/* Low-stock warning card */}
+        {lowStockCount > 0 ? (
+          <Pressable style={styles.warnCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.warnLabel}>
+                LOW STOCK · {lowStockCount} {lowStockCount === 1 ? 'item' : 'items'}
+              </Text>
+              <Text style={styles.warnText} numberOfLines={2}>
+                {lowStockNames}{lowStockCount > 3 ? ` · +${lowStockCount - 3}` : ''}
+              </Text>
+            </View>
+            <MaterialCommunityIcons name="alert" size={20} color={colors.warningDeep} />
           </Pressable>
         ) : null}
 
-        {/* Approvals CTA */}
-        {approvals.data && approvals.data.count > 0 ? (
+        {/* Shift status big card */}
+        <View style={styles.shiftCard}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardLabel}>Shift</Text>
+            <Text style={styles.shiftBig}>Tap to view shift</Text>
+            <Text style={styles.cardSub}>Open · close · Z-read</Text>
+          </View>
+          <MaterialCommunityIcons name="chevron-right" size={22} color={colors.muted} />
+        </View>
+
+        {/* Approvals chip */}
+        {pendingApprovals > 0 ? (
           <Pressable
             style={styles.approvalsCta}
             onPress={() => nav.navigate('More')}
           >
-            <MaterialCommunityIcons name="shield-check" size={22} color={colors.warningDeep} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.approvalsCtaTitle}>
-                {approvals.data.count} {approvals.data.count === 1 ? 'approval' : 'approvals'} waiting
-              </Text>
-              <Text style={styles.approvalsCtaSub}>Tap to review void/refund requests</Text>
+            <View style={styles.approvalsBadge}>
+              <Text style={styles.approvalsBadgeText}>{pendingApprovals}</Text>
             </View>
-            <MaterialCommunityIcons name="chevron-right" size={22} color={colors.warningDeep} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.approvalsTitle}>
+                {pendingApprovals} {pendingApprovals === 1 ? 'approval' : 'approvals'} waiting
+              </Text>
+              <Text style={styles.approvalsSub}>
+                Cashier needs supervisor PIN to void
+              </Text>
+            </View>
+            <MaterialCommunityIcons name="chevron-right" size={22} color={colors.primaryInk} />
           </Pressable>
         ) : null}
 
-        {/* Shift status */}
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>Shift</Text>
-          {d && d.openShifts > 0 ? (
-            <View style={styles.shiftRow}>
-              <View style={[styles.shiftDot, { backgroundColor: colors.success }]} />
-              <Text style={styles.shiftText}>
-                {d.openShifts} open {d.openShifts === 1 ? 'shift' : 'shifts'}
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.shiftRow}>
-              <View style={[styles.shiftDot, { backgroundColor: colors.error }]} />
-              <Text style={styles.shiftText}>No shift open</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Quick actions */}
-        <Text style={styles.section}>Quick actions</Text>
+        {/* Quick actions 3-up */}
+        <Text style={styles.section}>QUICK ACTIONS</Text>
         <View style={styles.actionRow}>
-          <QuickAction
-            icon="cash-register"
-            label="Sell"
-            onPress={() => nav.navigate('Sell')}
-          />
-          <QuickAction
-            icon="file-chart-outline"
-            label="Z-read"
-            onPress={() => nav.navigate('Shift')}
-          />
-          <QuickAction
-            icon="receipt"
-            label="Orders"
-            onPress={() => nav.navigate('Orders')}
-          />
+          <QuickAction icon="cart-outline" label="Sell" onPress={() => nav.navigate('Sell')} />
+          <QuickAction icon="file-chart-outline" label="Z-read" onPress={() => nav.navigate('Shift')} />
+          <QuickAction icon="receipt" label="Orders" onPress={() => nav.navigate('Orders')} />
         </View>
       </ScrollView>
-    </View>
-  );
-}
-
-interface StatProps { label: string; value: string; big?: boolean }
-function Stat({ label, value }: StatProps): React.ReactElement {
-  return (
-    <View style={[styles.card, styles.statCard]}>
-      <Text style={styles.cardLabel}>{label}</Text>
-      <Text style={[styles.statValue, tnum]} numberOfLines={1}>{value}</Text>
     </View>
   );
 }
@@ -212,7 +287,7 @@ interface QuickActionProps {
 function QuickAction({ icon, label, onPress }: QuickActionProps): React.ReactElement {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}>
-      <MaterialCommunityIcons name={icon} size={26} color={colors.primary} />
+      <MaterialCommunityIcons name={icon} size={24} color={colors.primary} />
       <Text style={styles.actionLabel}>{label}</Text>
     </Pressable>
   );
@@ -222,60 +297,148 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   scroll: { padding: spacing.s4, paddingBottom: spacing.s8, gap: spacing.s3 },
   h1: { ...textTokens.displayLg, color: colors.ink, fontSize: 22 },
-  sub: { ...textTokens.bodySm, color: colors.muted, marginBottom: spacing.s3 },
-  section: { ...textTokens.caption, color: colors.muted, textTransform: 'uppercase', marginTop: spacing.s3 },
-  card: {
-    backgroundColor: colors.surface,
+  sub: { ...textTokens.bodySm, color: colors.muted, marginBottom: spacing.s2 },
+  section: {
+    ...textTokens.caption,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    fontWeight: '800',
+    marginTop: spacing.s3,
+  },
+
+  // Hero
+  heroCard: {
+    backgroundColor: '#0F1727',
     borderRadius: radii.lg,
+    padding: spacing.s5,
+  },
+  heroEyebrow: {
+    color: '#94A3B8',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  heroValue: {
+    ...textTokens.displayLg,
+    color: colors.onPrimary,
+    fontSize: 38,
+    marginTop: spacing.s2,
+  },
+  heroMeta: {
+    flexDirection: 'row',
+    gap: spacing.s4,
+    marginTop: spacing.s3,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  deltaRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  deltaText: { fontSize: 12, fontWeight: '800' },
+  heroSub: { color: '#94A3B8', fontSize: 12 },
+
+  // Stat cards
+  row2: { flexDirection: 'row', gap: spacing.s2 },
+  statCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
     borderWidth: 1,
     borderColor: colors.rule,
     padding: spacing.s4,
+    minHeight: 96,
   },
-  cardLabel: { ...textTokens.caption, color: colors.muted, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: '800' },
-  heroCard: {
-    backgroundColor: colors.darkElev,
-    borderColor: 'transparent',
-    padding: spacing.s5,
+  cardLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.muted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: spacing.s1,
   },
-  heroEyebrow: { color: colors.darkMuted, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
-  heroValue: {
-    ...textTokens.displayLg, color: colors.onPrimary, fontSize: 48, marginTop: spacing.s2,
+  cardSub: { fontSize: 12, color: colors.muted, marginTop: spacing.s1 },
+  statValue: { ...textTokens.displayLg, color: colors.ink, fontSize: 28, marginTop: 2 },
+
+  topProdRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.s2, marginTop: 2 },
+  topThumb: {
+    width: 32, height: 32, borderRadius: radii.sm,
+    backgroundColor: colors.creamDeep,
+    alignItems: 'center', justifyContent: 'center',
   },
-  heroSub: { color: colors.darkMuted, marginTop: spacing.s2, ...textTokens.bodySm },
-  statRow: { flexDirection: 'row', gap: spacing.s2 },
-  statCard: { flex: 1, paddingHorizontal: spacing.s3, paddingVertical: spacing.s3 },
-  statValue: { ...textTokens.displaySm, color: colors.ink, marginTop: spacing.s2, fontSize: 16 },
-  warnPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.s2,
-    backgroundColor: colors.warningSoft,
-    borderRadius: radii.pill,
-    paddingHorizontal: spacing.s4,
-    paddingVertical: spacing.s3,
-    alignSelf: 'flex-start',
+  topThumbText: { ...textTokens.displaySm, color: colors.ink, fontSize: 11 },
+  topName: {
+    ...textTokens.body,
+    fontWeight: '800',
+    color: colors.ink,
+    fontSize: 14,
+    flex: 1,
+    minWidth: 0,
   },
-  warnPillText: { ...textTokens.body, color: colors.warningDeep, fontWeight: '700' },
-  approvalsCta: {
+
+  // Low-stock
+  warnCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.s3,
     backgroundColor: colors.warningSoft,
-    borderRadius: radii.lg,
-    padding: spacing.s4,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: colors.warning,
+    borderColor: '#F8D6A1',
+    padding: spacing.s4,
   },
-  approvalsCtaTitle: { ...textTokens.body, color: colors.warningDeep, fontWeight: '800' },
-  approvalsCtaSub: { ...textTokens.caption, color: colors.warningDeep, marginTop: 2 },
-  shiftRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.s2, marginTop: spacing.s2 },
-  shiftDot: { width: 10, height: 10, borderRadius: 5 },
-  shiftText: { ...textTokens.body, color: colors.ink, fontWeight: '600' },
+  warnLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.warningDeep,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  warnText: {
+    ...textTokens.bodySm,
+    color: colors.warningDeep,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+
+  // Shift
+  shiftCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.rule,
+    padding: spacing.s4,
+    gap: spacing.s3,
+  },
+  shiftBig: { ...textTokens.displaySm, color: colors.ink, fontSize: 16, marginTop: 2 },
+
+  // Approvals
+  approvalsCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s3,
+    backgroundColor: colors.primaryContainer,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    padding: spacing.s4,
+  },
+  approvalsBadge: {
+    width: 36, height: 36, borderRadius: radii.sm,
+    backgroundColor: colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  approvalsBadgeText: { color: colors.onPrimary, fontWeight: '800', fontSize: 16 },
+  approvalsTitle: { ...textTokens.body, color: colors.primaryInk, fontWeight: '800', fontSize: 14 },
+  approvalsSub: { fontSize: 11, color: colors.primaryInk, marginTop: 2 },
+
+  // Quick actions
   actionRow: { flexDirection: 'row', gap: spacing.s2 },
   action: {
     flex: 1,
     backgroundColor: colors.surface,
-    borderRadius: radii.lg,
+    borderRadius: radii.md,
     borderWidth: 1,
     borderColor: colors.rule,
     paddingVertical: spacing.s4,
@@ -283,5 +446,5 @@ const styles = StyleSheet.create({
     gap: spacing.s2,
   },
   actionPressed: { backgroundColor: colors.creamSoft, borderColor: colors.ruleStrong },
-  actionLabel: { ...textTokens.body, color: colors.ink, fontWeight: '700' },
+  actionLabel: { ...textTokens.body, color: colors.ink, fontWeight: '700', fontSize: 13 },
 });

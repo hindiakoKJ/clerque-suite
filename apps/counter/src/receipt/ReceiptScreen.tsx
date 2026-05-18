@@ -22,12 +22,15 @@ import { Snackbar } from 'react-native-paper';
 
 import {
   colors,
+  fonts,
   radii,
   spacing,
   tap,
   text as textTokens,
+  tnum,
 } from '@/theme/tokens';
 import Pill from '@/components/Pill';
+import { useDeviceSize } from '@/shell/useDeviceSize';
 import Receipt, { ReceiptProps } from './Receipt';
 import { usePrinter } from './usePrinter';
 import type { ReceiptForPrinter } from './receiptToEscPos';
@@ -120,12 +123,81 @@ export default function ReceiptScreen({
     await fire(true);
   };
 
+  const device = useDeviceSize();
+  if (device === 'phone') {
+    return (
+      <View style={ph.root} onTouchStart={bumpActivity}>
+        <View style={ph.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={ph.headerTitle}>Sale complete</Text>
+            <View style={ph.headerMetaRow}>
+              <Pill tone="success" dot>Paid</Pill>
+              {printedAt ? <Pill tone="info" dot>⎙ Sent</Pill> : null}
+            </View>
+          </View>
+        </View>
+
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={ph.body}
+          onScrollBeginDrag={bumpActivity}
+        >
+          <Text style={ph.orHuge}>
+            OR #{receipt.orNumber.toString().padStart(6, '0')}
+          </Text>
+
+          {/* Action chip row: re-print / SMS / Email */}
+          <View style={ph.iconRow}>
+            <Pressable
+              style={ph.iconBtn}
+              onPress={handlePrint}
+              disabled={printing}
+            >
+              <Text style={ph.iconBtnLabel}>
+                {printing ? 'Printing…' : '⎙  Re-print'}
+              </Text>
+            </Pressable>
+            <Pressable style={ph.iconBtn} onPress={() => { bumpActivity(); onSms?.(); }}>
+              <Text style={ph.iconBtnLabel}>SMS</Text>
+            </Pressable>
+            <Pressable style={ph.iconBtn} onPress={() => { bumpActivity(); onEmail?.(); }}>
+              <Text style={ph.iconBtnLabel}>Email</Text>
+            </Pressable>
+          </View>
+
+          {/* Receipt card centered */}
+          <View style={ph.receiptCard}>
+            <Receipt {...receipt} />
+          </View>
+        </ScrollView>
+
+        <View style={ph.ctaWrap}>
+          <Pressable
+            style={ph.cta}
+            onPress={() => { bumpActivity(); onDone(); }}
+          >
+            <Text style={ph.ctaLabel}>Start next sale →</Text>
+          </Pressable>
+        </View>
+
+        <Snackbar
+          visible={printError !== null}
+          onDismiss={() => setPrintError(null)}
+          duration={6000}
+          action={{ label: 'Retry', onPress: () => { void fire(true); } }}
+        >
+          {printError ?? ''}
+        </Snackbar>
+      </View>
+    );
+  }
+
   return (
     <View style={s.root} onTouchStart={bumpActivity}>
       <View style={s.header}>
         <View style={{ flex: 1 }}>
           <Text style={s.title}>
-            Sale complete · #{receipt.orNumber.toString().padStart(6, '0')}
+            Sale complete · <Text style={s.orNum}>#{receipt.orNumber.toString().padStart(6, '0')}</Text>
           </Text>
           <View style={{ flexDirection: 'row', gap: spacing.s3, marginTop: 4 }}>
             <Pill tone="success" dot>Paid</Pill>
@@ -215,6 +287,12 @@ const s = StyleSheet.create({
     ...textTokens.displaySm,
     color: colors.ink,
   },
+  orNum: {
+    fontFamily: fonts.mono,
+    fontWeight: '700',
+    color: colors.primary,
+    ...tnum,
+  },
   metaInline: {
     ...textTokens.caption,
     color: colors.muted,
@@ -280,4 +358,65 @@ const s = StyleSheet.create({
     color: colors.muted,
     lineHeight: 18,
   },
+});
+
+const ph = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.s4,
+    paddingVertical: spacing.s3,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.rule,
+    backgroundColor: colors.surface,
+  },
+  headerTitle: { ...textTokens.displaySm, color: colors.ink, fontSize: 15, fontWeight: '800' },
+  headerMetaRow: { flexDirection: 'row', gap: spacing.s2, marginTop: 4 },
+
+  body: {
+    paddingHorizontal: spacing.s4,
+    paddingTop: spacing.s4,
+    paddingBottom: 120,
+    alignItems: 'center',
+    gap: spacing.s4,
+  },
+  orHuge: {
+    fontFamily: fonts.mono,
+    fontSize: 32,
+    fontWeight: '800',
+    color: colors.ink,
+    letterSpacing: -0.5,
+    ...tnum,
+  },
+  iconRow: { flexDirection: 'row', gap: spacing.s2, alignSelf: 'stretch' },
+  iconBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.rule,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconBtnLabel: { ...textTokens.body, color: colors.ink, fontWeight: '700', fontSize: 13 },
+
+  receiptCard: { alignSelf: 'stretch', alignItems: 'center' },
+
+  ctaWrap: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1, borderTopColor: colors.rule,
+    padding: spacing.s3,
+    paddingBottom: spacing.s5,
+  },
+  cta: {
+    height: 64,
+    backgroundColor: colors.primary,
+    borderRadius: radii.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ctaLabel: { ...textTokens.cashierLg, color: colors.onPrimary, fontSize: 17 },
 });

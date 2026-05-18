@@ -474,20 +474,15 @@ export default function SettingsPage() {
                 desc="Nightly off-box cloud snapshots — download for cold storage or share with your accountant"
               />
             )}
-            {/* D9-01 — Security Awareness handbook (owner-only) */}
-            {isOwner && (
-              <SettingsCard
-                href="/settings/awareness"
-                icon={BookOpen}
-                title="Security awareness training"
-                desc="One-page staff handbook on phishing, passwords, lost devices, public WiFi — hand to your team"
-              />
-            )}
             {/* Sprint 20 — 2FA / Security: managed inline from the Security
                 tab below + the dedicated /settings/security page accessed
                 via the "Manage 2FA →" button there. The duplicate grid
                 card created a navigation loop (card → /settings/security
-                → back-link → /settings → card again), so removed. */}
+                → back-link → /settings → card again), so removed.
+                D9-01 — Security Awareness training: same loop pattern
+                (grid card → handbook → back → grid card). Moved into the
+                Security tab below as a "Staff handbook →" row, so the
+                handbook only has ONE entry point. */}
           </div>
         </section>
 
@@ -709,9 +704,21 @@ export default function SettingsPage() {
               <VoidApprovalThresholdCard profile={profile} qc={qc} />
             )}
 
-            {/* Read-only system info — driven by modular pricing (planCode + module flags). */}
+            {/* Read-only system info — driven by modular pricing (planCode + module flags).
+                Plan / modules are interactive on /settings/subscription; this is just a
+                read-only snapshot so the owner sees current state without leaving Profile. */}
             <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-              <h3 className="text-sm font-semibold text-foreground">System Info</h3>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-foreground">System Info</h3>
+                {isOwner && (
+                  <Link
+                    href="/settings/subscription"
+                    className="text-xs font-medium text-[var(--accent)] hover:underline whitespace-nowrap"
+                  >
+                    Manage plan →
+                  </Link>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <InfoRow label="Company Code" value={profile?.slug ?? '—'} />
                 <InfoRow label="Status" value={profile?.status ?? '—'} />
@@ -734,10 +741,20 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {/* Export everything (Owner only) */}
+            {/* Export everything (Owner only) — on-demand snapshot.
+                Different from /settings/data (nightly backups): this is a
+                live, right-now Excel; backups are historical JSON snapshots. */}
             {isOwner && (
               <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-                <h3 className="text-sm font-semibold text-foreground">Data Export</h3>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-foreground">Data Export (on-demand .xlsx)</h3>
+                  <Link
+                    href="/settings/data"
+                    className="text-xs font-medium text-[var(--accent)] hover:underline whitespace-nowrap"
+                  >
+                    Nightly backups →
+                  </Link>
+                </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   Download every record we hold for your business — products, customers, vendors, orders, journal entries,
                   invoices, bills, audit log, etc. — as a single Excel workbook with one sheet per table. Sensitive fields
@@ -965,6 +982,30 @@ export default function SettingsPage() {
                 Manage 2FA →
               </Link>
             </div>
+
+            {/* D9-01 — Security awareness handbook. Owner-only static
+                content; entry point lives here instead of the grid card
+                to avoid the card → page → back → card loop. */}
+            {isOwner && (
+              <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-sky-500/10 flex items-center justify-center shrink-0">
+                  <BookOpen className="w-5 h-5 text-sky-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-sm font-semibold text-foreground">Staff security handbook</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    One-page training on phishing, passwords, lost devices, public WiFi. Hand to every
+                    staff member who logs into Clerque on your behalf.
+                  </p>
+                </div>
+                <Link
+                  href="/settings/awareness"
+                  className="text-sm font-semibold px-4 py-2 rounded-lg border border-border hover:bg-muted whitespace-nowrap"
+                >
+                  Open handbook →
+                </Link>
+              </div>
+            )}
 
             {/* Change own password */}
             <div className="rounded-xl border border-border bg-card p-4 space-y-4">

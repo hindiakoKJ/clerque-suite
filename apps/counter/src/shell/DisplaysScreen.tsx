@@ -159,8 +159,9 @@ export default function DisplaysScreen({ onMenuPress }: Props): React.ReactEleme
       </ScrollView>
 
       <Modal visible={!!modalCode} transparent animationType="fade" onRequestClose={() => setModalCode(null)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setModalCode(null)}>
+          {/* Inner Pressable swallows the press so taps inside the card don't dismiss. */}
+          <Pressable style={styles.modalCard} onPress={() => {}}>
             <Text style={styles.modalTitle}>Pairing code</Text>
             <Text style={styles.modalSub}>
               Enter on the new device, or scan the QR with the camera.
@@ -174,9 +175,11 @@ export default function DisplaysScreen({ onMenuPress }: Props): React.ReactEleme
                 />
               ) : null}
             </View>
-            <Text style={styles.modalHint}>
-              Expires in 15 minutes. Single-use.
-            </Text>
+            {modalCode?.expiresAt ? (
+              <CountdownLine expiresAt={modalCode.expiresAt} />
+            ) : (
+              <Text style={styles.modalHint}>Expires in 15 minutes. Single-use.</Text>
+            )}
             <Button
               mode="contained"
               onPress={() => setModalCode(null)}
@@ -186,8 +189,8 @@ export default function DisplaysScreen({ onMenuPress }: Props): React.ReactEleme
             >
               Done
             </Button>
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
@@ -195,6 +198,25 @@ export default function DisplaysScreen({ onMenuPress }: Props): React.ReactEleme
 
 function prettyRole(role: string): string {
   return role.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Live mm:ss countdown to the pairing-code expiry. */
+function CountdownLine({ expiresAt }: { expiresAt: string }): React.ReactElement {
+  const target = React.useMemo(() => new Date(expiresAt).getTime(), [expiresAt]);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secLeft = Math.max(0, Math.round((target - now) / 1000));
+  const mm = Math.floor(secLeft / 60);
+  const ss = secLeft % 60;
+  const expired = secLeft === 0;
+  return (
+    <Text style={[styles.modalHint, expired && { color: colors.errorDeep, fontWeight: '700' }]}>
+      {expired ? 'Expired — generate a new code.' : `Expires in ${mm}:${String(ss).padStart(2, '0')} · single-use`}
+    </Text>
+  );
 }
 
 const styles = StyleSheet.create({

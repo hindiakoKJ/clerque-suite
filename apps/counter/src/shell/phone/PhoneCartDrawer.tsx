@@ -70,7 +70,14 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
           <View style={styles.empty}>
             <MaterialCommunityIcons name="cart-outline" size={48} color={colors.faint} />
             <Text style={styles.emptyTitle}>No items yet</Text>
-            <Text style={styles.emptySub}>Go back to Sell to add products.</Text>
+            <Text style={styles.emptySub}>Pick a product to start a new order.</Text>
+            <Pressable
+              onPress={() => navigation.goBack()}
+              style={({ pressed }) => [styles.emptyCta, pressed && { opacity: 0.9 }]}
+            >
+              <MaterialCommunityIcons name="plus" size={16} color={colors.onPrimary} />
+              <Text style={styles.emptyCtaLabel}>Pick a product</Text>
+            </Pressable>
           </View>
         }
         ListFooterComponent={
@@ -184,6 +191,17 @@ const styles = StyleSheet.create({
   empty: { paddingVertical: spacing.s8, alignItems: 'center', gap: spacing.s2 },
   emptyTitle: { ...textTokens.displaySm, color: colors.ink, fontSize: 16 },
   emptySub: { ...textTokens.bodySm, color: colors.muted },
+  emptyCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s2,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.s5,
+    paddingVertical: spacing.s3,
+    borderRadius: radii.pill,
+    marginTop: spacing.s3,
+  },
+  emptyCtaLabel: { ...textTokens.body, color: colors.onPrimary, fontWeight: '700' },
 
   line: {
     flexDirection: 'row',

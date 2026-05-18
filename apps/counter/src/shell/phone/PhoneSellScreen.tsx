@@ -187,14 +187,14 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
             <View style={styles.center}><ActivityIndicator /></View>
           ) : q ? (
             <View style={styles.emptyState}>
-              <MaterialCommunityIcons name="magnify-close" size={48} color="#5F564B" />
+              <MaterialCommunityIcons name="magnify-close" size={48} color={colors.muted} />
               <Text style={styles.emptyTitle}>No products match</Text>
               <Text style={styles.emptyHint}>Try a different name, SKU, or barcode.</Text>
             </View>
           ) : (
             <View style={styles.emptyState}>
               <View style={styles.emptyIconWrap}>
-                <MaterialCommunityIcons name="package-variant-closed" size={40} color="#3B82F6" />
+                <MaterialCommunityIcons name="package-variant-closed" size={40} color={colors.primary} />
               </View>
               <Text style={styles.emptyTitle}>No products yet</Text>
               <Text style={styles.emptyHint}>
@@ -205,7 +205,7 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
                 onPress={() => Linking.openURL(`${getWebOrigin()}/pos/products`).catch(() => {})}
                 style={({ pressed }) => [styles.emptyCta, pressed && { opacity: 0.9 }]}
               >
-                <MaterialCommunityIcons name="open-in-new" size={16} color="#fff" />
+                <MaterialCommunityIcons name="open-in-new" size={16} color={colors.onPrimary} />
                 <Text style={styles.emptyCtaText}>Open products page</Text>
               </Pressable>
             </View>

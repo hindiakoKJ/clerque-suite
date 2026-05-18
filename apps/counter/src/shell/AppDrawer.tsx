@@ -249,7 +249,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  badgeText: { ...text.caption, color: '#FFFFFF', fontWeight: '700' },
+  badgeText: { ...text.caption, color: colors.onPrimary, fontWeight: '700' },
   foot: {
     padding: spacing.s4,
     borderTopWidth: 1,

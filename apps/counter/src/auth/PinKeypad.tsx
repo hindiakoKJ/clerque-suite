@@ -19,7 +19,7 @@ interface Props {
   disabled?: boolean;
 }
 
-const KEYS: Array<{ label: string; value: string } | null> = [
+const KEYS: Array<{ label: string; value: string; action?: boolean } | null> = [
   { label: '1', value: '1' },
   { label: '2', value: '2' },
   { label: '3', value: '3' },
@@ -29,9 +29,10 @@ const KEYS: Array<{ label: string; value: string } | null> = [
   { label: '7', value: '7' },
   { label: '8', value: '8' },
   { label: '9', value: '9' },
-  null,
+  // T-03 mockup: Clear · 0 · ⌫ action row
+  { label: 'Clear', value: 'clear', action: true },
   { label: '0', value: '0' },
-  { label: '⌫', value: 'back' },
+  { label: '⌫', value: 'back', action: true },
 ];
 
 export function PinDots({ value, length }: { value: string; length: 4 | 6 }): React.ReactElement {
@@ -68,6 +69,8 @@ export default function PinKeypad({ value, length, onChange, disabled }: Props):
     Haptics.selectionAsync().catch(() => {});
     if (key === 'back') {
       onChange(value.slice(0, -1));
+    } else if (key === 'clear') {
+      onChange('');
     } else if (value.length < length) {
       onChange(value + key);
     }
@@ -87,11 +90,12 @@ export default function PinKeypad({ value, length, onChange, disabled }: Props):
             style={({ pressed }: { pressed: boolean }) => [
               styles.key,
               { width: keySize, height: keySize },
+              k.action && styles.keyAction,
               pressed && styles.keyPressed,
               disabled && styles.keyDisabled,
             ]}
           >
-            <Text style={styles.keyLabel}>{k.label}</Text>
+            <Text style={[styles.keyLabel, k.action && styles.keyLabelAction]}>{k.label}</Text>
           </Pressable>
         );
       })}
@@ -115,7 +119,9 @@ const styles = StyleSheet.create({
   },
   keyPressed: { backgroundColor: colors.creamSoft },
   keyDisabled: { opacity: 0.5 },
+  keyAction: { backgroundColor: colors.creamSoft },
   keyLabel: { ...text.cashierLg, color: colors.ink },
+  keyLabelAction: { ...text.body, color: colors.muted, fontWeight: '700' },
 });
 
 const dotStyles = StyleSheet.create({

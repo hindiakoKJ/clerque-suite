@@ -156,14 +156,41 @@ export function sortFEFO(batches: Batch[]): Batch[] {
   );
 }
 
+/**
+ * Live catalog registry — populated by PharmacyTerminal from the Cloud
+ * `/products/pos` payload. When live data is present, `findDrug` and
+ * `searchDrugs` consume it instead of the in-file mock array. The mock is
+ * preserved as a __DEV__ / cold-launch fallback (see PharmacyTerminal).
+ *
+ * NOTE: live `Drug` rows carry the same shape as the mock, but their
+ * `batches` array is populated lazily — per-product lot data comes from
+ * `GET /pharmacy/lots/available?productId&branchId`, which is too many
+ * round-trips to issue eagerly for a full search page. The BatchPickerSheet
+ * fetches lots on demand when the pharmacist opens the picker; the
+ * BatchExpiryChip row uses `batches` directly, so live rows render with a
+ * single synthetic "stock-summary" batch until the picker fetches real
+ * lots. (See PharmacyTerminal for the synthesizer.)
+ */
+let LIVE_CATALOG: Drug[] | null = null;
+
+/** Replace the live registry. Pass `null` (or an empty array) to disable. */
+export function setLiveCatalog(rows: Drug[] | null): void {
+  LIVE_CATALOG = rows && rows.length > 0 ? rows : null;
+}
+
+function activeCatalog(): Drug[] {
+  return LIVE_CATALOG ?? (__DEV__ ? MOCK_CATALOG : []);
+}
+
 export function findDrug(sku: string): Drug | undefined {
-  return MOCK_CATALOG.find((d) => d.sku === sku);
+  return activeCatalog().find((d) => d.sku === sku);
 }
 
 export function searchDrugs(query: string): Drug[] {
+  const cat = activeCatalog();
   const q = query.trim().toLowerCase();
-  if (!q) return MOCK_CATALOG;
-  return MOCK_CATALOG.filter(
+  if (!q) return cat;
+  return cat.filter(
     (d) =>
       d.sku.toLowerCase().includes(q) ||
       d.brandName.toLowerCase().includes(q) ||

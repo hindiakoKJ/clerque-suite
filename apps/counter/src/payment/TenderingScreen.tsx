@@ -109,7 +109,7 @@ export default function TenderingScreen({
         </View>
       </View>
 
-      {/* TABS */}
+      {/* TABS — pill style with brand-tinted active fill (T-08/T-09) */}
       <View style={s.tabs}>
         {TABS.map(t => {
           const active = tab === t.id;
@@ -119,14 +119,14 @@ export default function TenderingScreen({
               key={t.id}
               style={[
                 s.tab,
-                active && { borderBottomColor: tint },
+                active && { backgroundColor: tint, borderColor: tint },
               ]}
               onPress={() => setTab(t.id)}
             >
               <Text
                 style={[
                   s.tabText,
-                  active && { color: tint, fontWeight: '700' },
+                  active && { color: colors.onPrimary, fontWeight: '700' },
                 ]}
               >
                 {t.label}
@@ -198,16 +198,22 @@ const s = StyleSheet.create({
 
   tabs: {
     flexDirection: 'row',
+    gap: spacing.s2,
+    paddingHorizontal: spacing.s6,
+    paddingTop: spacing.s4,
+    paddingBottom: spacing.s3,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.rule,
   },
   tab: {
-    height: 64,
-    paddingHorizontal: spacing.s5,
+    height: 48,
+    paddingHorizontal: spacing.s4,
+    borderRadius: radii.pill,
     justifyContent: 'center',
-    borderBottomWidth: 3,
-    borderBottomColor: 'transparent',
+    backgroundColor: colors.creamSoft,
+    borderWidth: 1,
+    borderColor: colors.creamDeep,
   },
-  tabText: { ...textTokens.bodyLg, color: colors.muted, fontWeight: '500' },
+  tabText: { ...textTokens.bodySm, color: colors.muted, fontWeight: '700' },
 });

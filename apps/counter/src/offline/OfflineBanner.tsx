@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -64,15 +64,13 @@ export function OfflineBanner(): React.ReactElement | null {
         { top: insets.top + spacing.s2, transform: [{ translateY: slide }] },
       ]}
     >
-      <Pressable
-        // Tap target intentionally large; drawer navigation hookup happens
-        // via the global drawer ref pattern in a follow-up.
-        onPress={() => {}}
-        style={[styles.pill, { backgroundColor: bg }]}
-      >
+      {/* Informational banner — not interactive. Drawer-link hookup
+          deferred until we have a global drawer ref; rendering a
+          Pressable with a no-op onPress was a misleading affordance. */}
+      <View style={[styles.pill, { backgroundColor: bg }]}>
         <View style={[styles.dot, { backgroundColor: fg }]} />
         <Text style={[styles.label, { color: fg }]}>{label}</Text>
-      </Pressable>
+      </View>
     </Animated.View>
   );
 }

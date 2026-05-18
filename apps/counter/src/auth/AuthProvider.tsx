@@ -16,6 +16,8 @@ import { jwtDecode } from 'jwt-decode';
 
 import { api, ApiHttpError } from '@/api/client';
 import type { AuthSession, TenantConfig } from '@/types';
+import { useCartStore } from '@/terminal/cartStore';
+import { clearOutbox } from '@/offline/db';
 
 /**
  * Sprint 25 — derive AuthSession.user + TenantConfig from the JWT payload.
@@ -208,6 +210,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     setSession(null);
     setTenant(null);
     setCashier(null);
+    // Drop in-memory cart + on-disk outbox so the next sign-in starts clean.
+    try { useCartStore.getState().clear(); } catch { /* zustand store always exists */ }
+    try { await clearOutbox(); } catch { /* sqlite may be uninitialized in tests */ }
     await clearAllPersisted();
   }, []);
 

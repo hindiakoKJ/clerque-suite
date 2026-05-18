@@ -21,7 +21,7 @@ import { getWebOrigin } from '@/api/webOrigin';
 import { useAuth } from '@/auth/AuthProvider';
 import TopBar from '@/shell/TopBar';
 import QrCode from '@/device-mode/QrCode';
-import { colors, radii, spacing, tap, text, tnum } from '@/theme';
+import { colors, fonts, radii, spacing, tap, text, tnum } from '@/theme';
 
 interface PairingRow {
   id:         string;
@@ -256,7 +256,9 @@ const styles = StyleSheet.create({
   modalTitle:  { ...text.displaySm, color: colors.ink },
   modalSub:    { ...text.bodySm, color: colors.muted, textAlign: 'center', marginTop: spacing.s2, marginBottom: spacing.s4 },
   bigCode: {
-    fontFamily: 'PlusJakartaSans',
+    // T-14 mockup: huge 4-digit code in mono — pairing devices read it off
+    // the screen and type it in, so monospaced digits avoid 0/O confusion.
+    fontFamily: fonts.mono,
     fontSize: 80,
     fontWeight: '800',
     color: colors.primary,

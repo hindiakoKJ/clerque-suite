@@ -7,7 +7,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import {
   createDrawerNavigator,
@@ -15,6 +15,7 @@ import {
   DrawerContentScrollView,
 } from '@react-navigation/drawer';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as ScreenOrientation from 'expo-screen-orientation';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
@@ -78,6 +79,16 @@ export default function AppDrawer(): React.ReactElement {
   const { width } = useWindowDimensions();
   const landscape = width >= 768;
   const drawerWidth = landscape ? 320 : 280;
+
+  // Re-assert landscape lock on mount — tablet shell should never go portrait
+  // even if a child screen previously tried to unlock the orientation.
+  useEffect(() => {
+    if (Platform.OS === 'android' || Platform.OS === 'ios') {
+      void ScreenOrientation
+        .lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+        .catch(() => {});
+    }
+  }, []);
 
   return (
     <Drawer.Navigator

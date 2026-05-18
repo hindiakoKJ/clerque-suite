@@ -29,7 +29,7 @@
  * this file (and the laundry one) need to change — surface-level rename.
  */
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -46,7 +46,9 @@ import {
   searchDrugs,
   sortFEFO,
   findDrug,
+  setLiveCatalog,
   type Drug,
+  type DrugSchedule,
   type Batch,
 } from './mockCatalog';
 import ControlledBadge from './ControlledBadge';
@@ -56,7 +58,7 @@ import RxCaptureModal, { type RxInfo } from './RxCaptureModal';
 import ControlledSubstanceInterstitial from './ControlledSubstanceInterstitial';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { openBarcodeScanner } from '@/components/BarcodeScannerSheet';
-import { useLots, usePosCatalog } from '@/api/queries';
+import { usePosCatalog, type ApiProduct } from '@/api/queries';
 import { useActiveBranchId } from '@/api/BranchContext';
 import { Snackbar } from 'react-native-paper';
 import { openTendering } from '@/payment/TenderingHost';
@@ -69,6 +71,55 @@ function formatPeso(cents: number): string {
 function initialsFromName(name: string | undefined): string {
   if (!name) return '—';
   return name.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase();
+}
+
+/**
+ * Map a Cloud `ApiProduct` to the local `Drug` shape that pharmacy UI
+ * already renders against. Live products don't carry inline lot info — we
+ * synthesize a single placeholder batch so the row renders; real lots are
+ * fetched on demand by the BatchPickerSheet via `/pharmacy/lots/available`.
+ *
+ * TODO(backend): consider returning a `lots` summary on `/products/pos`
+ * for pharmacy tenants (FEFO-earliest lot + count) so the row can show
+ * accurate expiry without a per-product round-trip.
+ */
+function adaptApiProductToDrug(p: ApiProduct): Drug {
+  const priceNum = typeof p.price === 'string' ? Number(p.price) : p.price;
+  // Schedule: prefer the explicit fields when present. Controlled wins over
+  // Rx; Rx wins over OTC.
+  let schedule: DrugSchedule = 'OTC';
+  if (p.isControlledDrug) schedule = 'DDB_S2';
+  else if (p.isRxRequired) schedule = 'RX';
+
+  // Synthetic "stock" batch — placeholder lot/expiry so the BatchExpiryChip
+  // and FEFO sort don't crash. BatchPickerSheet will replace this with the
+  // live lots payload on demand.
+  const placeholderExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const batches: Batch[] = [
+    {
+      lotId: 'LIVE',
+      qtyRemaining: p.maxProducible ?? 0,
+      expiresAt: placeholderExpiry,
+      unitCostCents:
+        p.costPrice != null
+          ? Math.round(
+              (typeof p.costPrice === 'string' ? Number(p.costPrice) : p.costPrice) * 100,
+            )
+          : 0,
+    },
+  ];
+
+  return {
+    sku: p.id, // keep `sku` keyed on the product id so findDrug() lookups still work
+    brandName: p.name,
+    genericName: p.drugClass ?? p.sku ?? '',
+    dosageForm: '',
+    schedule,
+    priceCents: Math.round((Number.isFinite(priceNum) ? priceNum : 0) * 100),
+    batches,
+  };
 }
 
 export const PharmacyTerminal: React.FC = () => {
@@ -98,15 +149,40 @@ export const PharmacyTerminal: React.FC = () => {
 
   const batchPickerRef = useRef<BatchPickerHandle>(null);
 
-  // Live catalog + lots — fetched for freshness, but the rich Drug/Batch
-  // mock model is still the rendering source until per-row live-lot wiring
-  // lands. The fetches keep the React Query cache warm so the future swap
-  // is a one-line change.
+  // Live catalog drives search results. We map Cloud `ApiProduct` rows to
+  // the local `Drug` shape and register them on the mockCatalog module so
+  // `findDrug` / `searchDrugs` route through live data everywhere they are
+  // called (BatchPickerSheet, ControlledBadge wiring, line-item lookups).
+  // When the live response is empty (cold-launch, dev builds) we fall back
+  // to the in-file mock so the screen still demos.
   const branchId = useActiveBranchId();
-  void usePosCatalog(branchId);
-  void useLots();
+  const catalogQuery = usePosCatalog(branchId);
+  const liveDrugs: Drug[] = useMemo(
+    () => (catalogQuery.data ?? []).map(adaptApiProductToDrug),
+    [catalogQuery.data],
+  );
 
-  const results = useMemo(() => searchDrugs(query), [query]);
+  useEffect(() => {
+    setLiveCatalog(liveDrugs.length > 0 ? liveDrugs : null);
+    return () => {
+      // Don't tear down on unmount — other pharmacy screens / lookups may
+      // still want the registry. The next mount will refresh it.
+    };
+  }, [liveDrugs]);
+
+  const results = useMemo(() => {
+    // Re-run the search whenever live data lands so the UI doesn't stick
+    // on stale mock rows.
+    void liveDrugs.length;
+    return searchDrugs(query);
+  }, [query, liveDrugs]);
+
+  const showShimmer = catalogQuery.isLoading && results.length === 0;
+  const errIsOffline = catalogQuery.error && 'status' in (catalogQuery.error as object)
+    && (catalogQuery.error as { status?: number }).status === 0;
+  const errLabel = catalogQuery.error
+    ? errIsOffline ? 'Offline — showing last cached catalog.' : 'Couldn’t refresh catalog.'
+    : null;
 
   const cartHasDDB_S2 = useMemo(
     () =>
@@ -284,9 +360,23 @@ export const PharmacyTerminal: React.FC = () => {
               </View>
             );
           })}
-          {results.length === 0 && (
-            <Text style={styles.emptyHint}>No drugs match “{query}”.</Text>
-          )}
+          {showShimmer ? (
+            <Text style={styles.emptyHint}>Loading catalog…</Text>
+          ) : results.length === 0 ? (
+            <Text style={styles.emptyHint}>
+              {query
+                ? `No drugs match “${query}”.`
+                : (errLabel ?? 'No products available. Tap to retry.')}
+            </Text>
+          ) : null}
+          {errLabel && results.length > 0 ? (
+            <Text style={[styles.emptyHint, { color: colors.warningDeep }]}>{errLabel}</Text>
+          ) : null}
+          {errLabel && results.length === 0 ? (
+            <Pressable onPress={() => catalogQuery.refetch()} style={{ alignSelf: 'center', padding: spacing.s3 }}>
+              <Text style={[styles.emptyHint, { color: colors.primary, fontWeight: '700' }]}>Tap to retry</Text>
+            </Pressable>
+          ) : null}
         </ScrollView>
 
         {/* Cart panel */}

@@ -34,8 +34,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, spacing, radii, text, tap, elevation, tnum } from '@/theme/tokens';
 import { useCart } from '@/terminal/cartStore';
 import type { CartLine } from '@/types';
-import { usePosCatalog } from '@/api/queries';
+import { usePosCatalog, type ApiProduct } from '@/api/queries';
 import { useActiveBranchId } from '@/api/BranchContext';
+import { useQuery } from '@tanstack/react-query';
+import { api, ApiHttpError } from '@/api/client';
 
 type Category = 'WASH_FOLD' | 'DRY_CLEAN' | 'HAND_WASH' | 'SPECIAL';
 
@@ -70,12 +72,66 @@ const CATEGORIES: { id: Category; label: string }[] = [
   { id: 'SPECIAL', label: 'Special Care' },
 ];
 
-// Mock claim-ticket index for lookup.
+// Mock claim-ticket index used only as a __DEV__ fallback when the
+// `/laundry/orders` endpoint hasn't responded yet (or returns nothing on a
+// fresh tenant). Live data renders by default — see `ClaimTicketLookupModal`.
 const MOCK_TICKETS = [
   { ticketNo: 'L-2026-0421', customer: 'Ronaldo Cruz', phone: '09171234452', status: 'Running · W1' },
   { ticketNo: 'L-2026-0419', customer: 'Maria Santos', phone: '09221112233', status: 'Done · W3' },
   { ticketNo: 'L-2026-0428', customer: 'Pedro Lim', phone: '09175557788', status: 'Queued' },
 ];
+
+interface LaundryTicketRow {
+  ticketNo: string;
+  customer: string;
+  phone: string;
+  status: string;
+}
+
+interface ApiLaundryOrderRow {
+  id: string;
+  ticketNumber?: string | null;
+  status?: string | null;
+  customerName?: string | null;
+  customer?: { name?: string | null; phone?: string | null } | null;
+  customerPhone?: string | null;
+}
+interface ApiLaundryOrdersPage {
+  data: ApiLaundryOrderRow[];
+  total?: number;
+}
+
+/**
+ * Map a Cloud `ApiProduct` to the local `Service` shape. Returns null when
+ * the product's category doesn't look like a laundry service (so non-
+ * laundry rows on a mixed catalog are filtered out).
+ */
+function apiProductToService(p: ApiProduct): Service | null {
+  const cat = inferLaundryCategory(p.category?.name);
+  if (!cat) return null;
+  const priceNum = typeof p.price === 'string' ? Number(p.price) : p.price;
+  return {
+    id: p.id,
+    name: p.name,
+    desc: p.sku ?? '',
+    priceCents: Math.round((Number.isFinite(priceNum) ? priceNum : 0) * 100),
+    category: cat,
+    eta: '',
+    accent: colors.primary,
+  };
+}
+
+function inferLaundryCategory(name: string | null | undefined): Category | null {
+  if (!name) return null;
+  const n = name.toUpperCase();
+  if (n.includes('WASH') && n.includes('FOLD')) return 'WASH_FOLD';
+  if (n.includes('DRY') && n.includes('CLEAN')) return 'DRY_CLEAN';
+  if (n.includes('HAND')) return 'HAND_WASH';
+  if (n.includes('SPECIAL') || n.includes('CARE')) return 'SPECIAL';
+  // Generic "Laundry" / "Services" buckets default to wash & fold.
+  if (n.includes('LAUNDRY') || n.includes('SERVICE')) return 'WASH_FOLD';
+  return null;
+}
 
 function formatPeso(cents: number): string {
   return `₱${(cents / 100).toFixed(2)}`;
@@ -94,13 +150,30 @@ export const LaundryTerminal: React.FC = () => {
   const voidLine = useCart((s) => s.voidLine);
   const setCustomer = useCart((s) => s.setCustomer);
 
-  // Keep the live catalog warm so the laundry terminal can switch to it
-  // once per-service mapping lands. Today the SERVICES list is hard-coded
-  // because PH laundry chains price services in ways the generic product
-  // grid doesn't model (per-kg + same-day surcharge), so we render the
-  // mock array but pre-fetch the live data for cache freshness.
+  // Live catalog. Cloud products whose category name matches a laundry
+  // service category are mapped onto the local `Service` shape used by the
+  // grid. The mock SERVICES array remains the fallback for cold-launch /
+  // dev / tenants that haven't seeded their service catalog yet.
+  //
+  // TODO(backend): the API does not yet expose a first-class "service"
+  // product flag (the `inventoryMode` enum has UNIT_BASED / RECIPE_BASED;
+  // no SERVICE value yet). We trigger live-mode purely on category-name
+  // match. Replace once an explicit flag is added, plus per-kg pricing
+  // metadata (PH laundry chains commonly price by load weight).
   const branchIdLive = useActiveBranchId();
-  void usePosCatalog(branchIdLive);
+  const catalogQuery = usePosCatalog(branchIdLive);
+
+  const liveServices: Service[] = useMemo(
+    () =>
+      (catalogQuery.data ?? [])
+        .map(apiProductToService)
+        .filter((s): s is Service => s !== null),
+    [catalogQuery.data],
+  );
+  const useLive = liveServices.length > 0;
+  const sourceServices: Service[] = useLive
+    ? liveServices
+    : (__DEV__ ? SERVICES : []);
 
   const [category, setCategory] = useState<Category>('WASH_FOLD');
   const [readyBy, setReadyBy] = useState<Date>(tomorrowAt10());
@@ -109,8 +182,8 @@ export const LaundryTerminal: React.FC = () => {
   const hasCustomer = !!cart?.customer?.name;
 
   const filteredServices = useMemo(
-    () => SERVICES.filter((s) => s.category === category),
-    [category]
+    () => sourceServices.filter((s) => s.category === category),
+    [category, sourceServices]
   );
 
   if (!hasCustomer) {
@@ -342,14 +415,51 @@ const CustomerCaptureForm: React.FC<{
 
 const ClaimTicketLookupModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [q, setQ] = useState('');
+  const branchId = useActiveBranchId();
+
+  // Live tickets via `GET /laundry/orders?branchId=X`. The Cloud route
+  // already filters out CLAIMED (terminal) orders. Pull-to-refresh isn't
+  // wired in a modal; React Query's 60s staleTime is the freshness floor.
+  const ticketsQuery = useQuery<LaundryTicketRow[]>({
+    queryKey: ['laundry-orders', branchId ?? 'none'],
+    queryFn: async () => {
+      const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : '';
+      const res = await api.get<ApiLaundryOrdersPage | ApiLaundryOrderRow[]>(
+        `/laundry/orders${qs}`,
+      );
+      const rows: ApiLaundryOrderRow[] = Array.isArray(res) ? res : (res?.data ?? []);
+      return rows.map((r) => ({
+        ticketNo: r.ticketNumber ?? r.id,
+        customer: r.customer?.name ?? r.customerName ?? 'Walk-in',
+        phone:    r.customer?.phone ?? r.customerPhone ?? '',
+        status:   r.status ?? 'OPEN',
+      }));
+    },
+    retry: 1,
+    staleTime: 60_000,
+  });
+
+  const baseRows: LaundryTicketRow[] =
+    ticketsQuery.data && ticketsQuery.data.length > 0
+      ? ticketsQuery.data
+      : (ticketsQuery.error || ticketsQuery.isLoading
+          ? (__DEV__ ? MOCK_TICKETS : [])
+          : []);
+
   const results = useMemo(() => {
     const term = q.trim().toLowerCase();
-    if (!term) return MOCK_TICKETS;
-    return MOCK_TICKETS.filter(
-      (t: (typeof MOCK_TICKETS)[number]) =>
-        t.ticketNo.toLowerCase().includes(term) || t.phone.includes(term)
+    if (!term) return baseRows;
+    return baseRows.filter(
+      (t) =>
+        t.ticketNo.toLowerCase().includes(term) || (t.phone ?? '').includes(term),
     );
-  }, [q]);
+  }, [q, baseRows]);
+
+  const errLabel = ticketsQuery.error
+    ? ticketsQuery.error instanceof ApiHttpError && ticketsQuery.error.status === 0
+      ? 'Offline — showing last cached tickets.'
+      : "Couldn’t load tickets — tap to retry."
+    : null;
 
   return (
     <Modal visible animationType="fade" transparent onRequestClose={onClose}>
@@ -363,19 +473,32 @@ const ClaimTicketLookupModal: React.FC<{ onClose: () => void }> = ({ onClose }) 
             placeholderTextColor={colors.faint}
             style={styles.fieldInput}
           />
+          {errLabel ? (
+            <Pressable onPress={() => ticketsQuery.refetch()}>
+              <Text style={[styles.emptyHint, { color: colors.warningDeep }]}>
+                {errLabel}
+              </Text>
+            </Pressable>
+          ) : null}
           <FlatList
             data={results}
-            keyExtractor={(t: (typeof MOCK_TICKETS)[number]) => t.ticketNo}
-            renderItem={({ item }: { item: (typeof MOCK_TICKETS)[number] }) => (
+            keyExtractor={(t) => t.ticketNo}
+            renderItem={({ item }: { item: LaundryTicketRow }) => (
               <View style={styles.lookupRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.lineName}>{item.ticketNo}</Text>
-                  <Text style={styles.serviceDesc}>{item.customer} · {item.phone}</Text>
+                  <Text style={styles.serviceDesc}>
+                    {item.customer}{item.phone ? ` · ${item.phone}` : ''}
+                  </Text>
                 </View>
                 <Text style={styles.serviceEta}>{item.status}</Text>
               </View>
             )}
-            ListEmptyComponent={<Text style={styles.emptyHint}>No matching ticket.</Text>}
+            ListEmptyComponent={
+              <Text style={styles.emptyHint}>
+                {ticketsQuery.isLoading ? 'Loading tickets…' : 'No matching ticket.'}
+              </Text>
+            }
             style={{ marginTop: spacing.s3, maxHeight: 320 }}
           />
           <Pressable onPress={onClose} style={[styles.secondaryBtn, { alignSelf: 'flex-end', marginTop: spacing.s3 }]}>

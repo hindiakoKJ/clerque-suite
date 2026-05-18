@@ -84,3 +84,12 @@ export async function markOutboxFailure(id: number, error: string): Promise<void
     id,
   );
 }
+
+/**
+ * Drop every pending outbox row. Used on sign-out so a different operator
+ * doesn't inherit the previous session's unsent mutations.
+ */
+export async function clearOutbox(): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM sync_outbox');
+}

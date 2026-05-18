@@ -303,15 +303,6 @@ export default function FBTerminal() {
       {/* Body */}
       <View style={[styles.body, !isLandscape && { flexDirection: 'column' }]}>
         <View style={styles.gridWrap}>
-          <View style={styles.gridHeader}>
-            <Text style={[textTokens.displaySm, { color: colors.ink }]}>Menu</Text>
-            <Pressable
-              style={styles.sendKitchenBtn}
-              onPress={() => setSnack('Send to kitchen — coming soon')}
-            >
-              <Text style={styles.sendKitchenText}>Send to kitchen</Text>
-            </Pressable>
-          </View>
           {showShimmer ? (
             <View style={styles.gridContent}>
               {Array.from({ length: numColumns * 2 }).map((_, i) => (
@@ -334,14 +325,20 @@ export default function FBTerminal() {
         {/* Cart panel */}
         <View style={[styles.cartPanel, !isLandscape && styles.cartPanelPortrait]}>
           <View style={styles.cartHead}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={[textTokens.bodyLg, { fontWeight: '700', color: colors.ink }]}>
-                Order {tableNumber ? `· ${tableNumber}` : ''}
+                Order {tableNumber ? `· ${tableNumber}` : ''} · {diningMode === 'DINE_IN' ? 'Dine in' : diningMode === 'TAKEOUT' ? 'Takeout' : 'Delivery'}
               </Text>
               <Text style={[textTokens.bodySm, { color: colors.muted }]}>
-                {lineCount} {lineCount === 1 ? 'item' : 'items'} · {diningMode === 'DINE_IN' ? 'Dine in' : diningMode === 'TAKEOUT' ? 'Takeout' : 'Delivery'}
+                {lineCount} {lineCount === 1 ? 'item' : 'items'}
               </Text>
             </View>
+            <Pressable
+              style={styles.sendKitchenBtn}
+              onPress={() => setSnack('Send to kitchen — coming soon')}
+            >
+              <Text style={styles.sendKitchenText}>Send to kitchen</Text>
+            </Pressable>
           </View>
 
           {visibleLines.length === 0 ? (
@@ -386,6 +383,14 @@ export default function FBTerminal() {
               {charging ? 'Charging…' : `Charge ${formatPeso(total)} →`}
             </Text>
           </Pressable>
+
+          {/* Secondary action row (T-04 mockup) */}
+          <View style={styles.cartActions}>
+            <Pressable onPress={() => setSnack('Discount — coming soon')}><Text style={styles.cartActionText}>Discount</Text></Pressable>
+            <Pressable onPress={() => setSnack('Senior · PWD — coming soon')}><Text style={styles.cartActionText}>Senior · PWD</Text></Pressable>
+            <Pressable onPress={() => setSnack('Note — coming soon')}><Text style={styles.cartActionText}>Note</Text></Pressable>
+            <Pressable onPress={() => setSnack('Park — coming soon')}><Text style={styles.cartActionText}>Park</Text></Pressable>
+          </View>
         </View>
       </View>
 
@@ -550,7 +555,17 @@ const styles = StyleSheet.create({
     padding: spacing.s4,
     borderBottomWidth: 1,
     borderBottomColor: colors.rule,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s3,
   },
+  cartActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.s4,
+    paddingBottom: spacing.s4,
+  },
+  cartActionText: { ...textTokens.caption, color: colors.muted, fontWeight: '700' },
   cartEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.s5 },
 
   totalsBlock: {

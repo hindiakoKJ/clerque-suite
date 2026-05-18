@@ -2,13 +2,19 @@
  * Clerque Counter — Dashboard
  *
  * Tenant-level KPI dashboard for cashier mode. Renders a compact card grid
- * with today's gross / order count / avg / top product / low-stock count /
- * open-shifts count. Data is pulled from `/reports/dashboard` keyed on the
- * active branch (BranchContext is owned by the live-API agent — we import
- * the hook by name and gracefully degrade when not wired yet).
+ * with today's gross / order count / avg / top product / open-shifts count.
+ *
+ * Data source: `GET /reports/daily?branchId=X&date=YYYY-MM-DD` (PH today).
+ * The Cloud returns a `DailyReport` with peso-denominated numbers, which we
+ * convert to ₱-cents for the existing `formatPeso` helper. There is no
+ * `/reports/dashboard` endpoint — the daily report is the closest match and
+ * carries everything the cashier-side dashboard needs.
+ *
+ * `lowStockCount` and `openShifts` aren't part of the daily payload (see
+ * TODO(backend) below). We hide those tiles rather than render dashes.
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { ActivityIndicator, Card, Text } from 'react-native-paper';
 import { useQuery } from '@tanstack/react-query';
@@ -19,13 +25,38 @@ import TopBar from '@/shell/TopBar';
 import { formatPeso } from '@/components/Money';
 import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
 
-interface DashboardResponse {
+interface DailyReportResponse {
+  date: string;
+  branchId: string;
+  totalOrders: number;
+  voidCount: number;
+  /** Peso-denominated (NOT cents). */
+  totalRevenue: number;
+  /** Peso-denominated (NOT cents). */
+  avgOrderValue: number;
+  topProducts: Array<{
+    productId: string;
+    productName: string;
+    quantitySold: number;
+    revenue: number;
+  }>;
+  totalCogs: number;
+  grossProfit: number;
+  grossMargin: number;
+}
+
+interface DashboardVM {
   grossCents: number;
   orderCount: number;
   avgOrderCents: number;
   topProduct: { id: string; name: string; unitsSold: number } | null;
-  lowStockCount: number;
-  openShifts: number;
+}
+
+function phTodayIso(): string {
+  // PH = UTC+8, no DST.
+  const now = new Date();
+  const phMs = now.getTime() + 8 * 60 * 60 * 1000;
+  return new Date(phMs).toISOString().slice(0, 10);
 }
 
 interface Props {
@@ -35,15 +66,30 @@ interface Props {
 export default function DashboardScreen({ onMenuPress }: Props): React.ReactElement {
   const { activeBranch } = useBranchContext();
   const branchId = activeBranch?.id ?? null;
+  const date = useMemo(phTodayIso, []);
 
-  const { data, isLoading, error } = useQuery<DashboardResponse>({
-    queryKey: ['reports', 'dashboard', branchId, 'today'],
+  const { data, isLoading, error, refetch } = useQuery<DailyReportResponse>({
+    queryKey: ['reports', 'daily', branchId, date],
+    enabled: !!branchId,
     queryFn: () =>
-      api.get<DashboardResponse>(
-        `/reports/dashboard?day=today${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''}`,
+      api.get<DailyReportResponse>(
+        `/reports/daily?branchId=${encodeURIComponent(branchId!)}&date=${encodeURIComponent(date)}`,
       ),
     retry: 1,
   });
+
+  const vm: DashboardVM | undefined = useMemo(() => {
+    if (!data) return undefined;
+    const top = data.topProducts?.[0];
+    return {
+      grossCents:    Math.round(data.totalRevenue * 100),
+      orderCount:    data.totalOrders,
+      avgOrderCents: Math.round(data.avgOrderValue * 100),
+      topProduct: top
+        ? { id: top.productId, name: top.productName, unitsSold: top.quantitySold }
+        : null,
+    };
+  }, [data]);
 
   return (
     <View style={styles.root}>
@@ -59,43 +105,41 @@ export default function DashboardScreen({ onMenuPress }: Props): React.ReactElem
         <View style={styles.grid}>
           <Kpi
             label="Gross"
-            value={data ? formatPeso(data.grossCents) : '—'}
+            value={vm ? formatPeso(vm.grossCents) : '—'}
             big
             isLoading={isLoading}
             error={errorMsg(error)}
+            onRetry={refetch}
           />
           <Kpi
             label="Orders"
-            value={data ? String(data.orderCount) : '—'}
+            value={vm ? String(vm.orderCount) : '—'}
             isLoading={isLoading}
             error={errorMsg(error)}
+            onRetry={refetch}
           />
           <Kpi
             label="Avg / order"
-            value={data ? formatPeso(data.avgOrderCents) : '—'}
+            value={vm ? formatPeso(vm.avgOrderCents) : '—'}
             isLoading={isLoading}
             error={errorMsg(error)}
+            onRetry={refetch}
           />
           <Kpi
             label="Top product"
-            value={data?.topProduct?.name ?? '—'}
-            sub={data?.topProduct ? `${data.topProduct.unitsSold} sold` : undefined}
+            value={vm?.topProduct?.name ?? '—'}
+            sub={vm?.topProduct ? `${vm.topProduct.unitsSold} sold` : undefined}
             isLoading={isLoading}
             error={errorMsg(error)}
+            onRetry={refetch}
           />
-          <Kpi
-            label="Low-stock items"
-            value={data ? String(data.lowStockCount) : '—'}
-            pillTone={data && data.lowStockCount > 0 ? 'warning' : undefined}
-            isLoading={isLoading}
-            error={errorMsg(error)}
-          />
-          <Kpi
-            label="Open shifts"
-            value={data ? String(data.openShifts) : '—'}
-            isLoading={isLoading}
-            error={errorMsg(error)}
-          />
+          {/*
+            TODO(backend): /reports/daily does not currently include a
+            tenant-wide `lowStockCount` or `openShifts` count. Add either to
+            the daily payload or expose a small companion endpoint (e.g.
+            `/reports/dashboard-supplement?branchId=X`) so we can restore
+            these tiles without an extra round-trip per render.
+          */}
         </View>
       </ScrollView>
     </View>
@@ -116,9 +160,10 @@ interface KpiProps {
   isLoading?: boolean;
   error?: string | null;
   pillTone?: 'warning';
+  onRetry?: () => void;
 }
 
-function Kpi({ label, value, sub, big, isLoading, error, pillTone }: KpiProps): React.ReactElement {
+function Kpi({ label, value, sub, big, isLoading, error, pillTone, onRetry }: KpiProps): React.ReactElement {
   return (
     <Card style={[styles.card, big && styles.cardBig]} mode="elevated">
       <Card.Content style={styles.cardInner}>
@@ -126,7 +171,13 @@ function Kpi({ label, value, sub, big, isLoading, error, pillTone }: KpiProps): 
         {isLoading ? (
           <ActivityIndicator style={{ marginTop: spacing.s2 }} />
         ) : error ? (
-          <Text style={styles.cardSkel}>{error}</Text>
+          <Text
+            style={styles.cardSkel}
+            onPress={onRetry}
+            accessibilityRole={onRetry ? 'button' : undefined}
+          >
+            {error}{onRetry ? ' — tap to retry' : ''}
+          </Text>
         ) : (
           <>
             <Text style={[big ? styles.cardValueBig : styles.cardValue, tnum]} numberOfLines={1}>

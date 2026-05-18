@@ -5,6 +5,20 @@
  * via a 1s interval started by `startFleetTicker()` (call once on screen
  * mount, dispose on unmount). Times are tracked as `endsAt` epoch ms so
  * countdowns stay correct even if the JS task is throttled.
+ *
+ * TODO(backend): the Cloud API exposes a real fleet at
+ *   GET    /laundry/machines?branchId=X         → list with current state
+ *   POST   /laundry/machines                    → create (W1, D1, …)
+ *   PATCH  /laundry/machines/:id/status         → IDLE / RUNNING / OUT_OF_ORDER
+ *   PATCH  /laundry/machines/:id                → metadata edit
+ *   PATCH  /laundry/lines/:lineId/assign        → assign a line to a machine
+ * Wiring this store to the live endpoints involves: (a) seeding `machines`
+ * from a React Query call instead of the `initialMachines` literal, (b)
+ * routing `assignTicket` / `markDone` / `setOutOfService` through the Cloud
+ * mutations with optimistic updates, and (c) collapsing the 1s ticker to
+ * derive `remainingSec` from `endsAt` returned by the API. Until that
+ * lands, the screen still operates as a self-contained demo from this
+ * in-memory store. — Wire when the Laundry Pro tier work begins.
  */
 
 import { create } from 'zustand';

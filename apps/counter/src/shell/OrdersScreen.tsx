@@ -5,12 +5,17 @@
  * sheet with the line items, payments, and a "Re-print receipt" action
  * that calls the printer service (Console fallback under Expo Go).
  *
- * Fetched from `GET /orders?day=today&branchId=X`. Pull-to-refresh wired.
+ * Fetched from `GET /orders?branchId=X` (Cloud API returns a paginated
+ * `{ data, total, take, skip }` payload, sorted createdAt desc, with line
+ * items + payments preloaded). The endpoint does not accept a `day` filter,
+ * so we slice to "today (PH)" client-side. For a busy till, the default
+ * take=100 page comfortably covers a single day; if the till crosses 100
+ * orders / day we'll add a `?date=` filter on the Cloud side.
  */
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
-import { Card, Chip, Text } from 'react-native-paper';
+import { ActivityIndicator, Card, Chip, Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, {
   BottomSheetBackdrop,
@@ -37,6 +42,110 @@ interface OrderSummary {
   status: OrderStatus;
   payments: CartPayment[];
   lines?: CartLine[];
+}
+
+// ─── Cloud API row shape (loose — see apps/api/orders.service.ts findAll) ──
+interface ApiOrderItem {
+  id: string;
+  productName: string;
+  quantity: number | string;
+  unitPrice: number | string;
+  lineTotal?: number | string;
+  totalPrice?: number | string;
+  voidedAt?: string | null;
+  modifiers?: unknown[];
+}
+interface ApiOrderPayment {
+  method: string;
+  amount: number | string;
+}
+interface ApiOrderRow {
+  id: string;
+  orNumber?: number | null;
+  receiptNumber?: number | string | null;
+  createdAt: string;
+  completedAt?: string | null;
+  status?: string | null;
+  voidedAt?: string | null;
+  refundedAt?: string | null;
+  totalAmount: number | string;
+  items: ApiOrderItem[];
+  payments: ApiOrderPayment[];
+}
+interface ApiOrdersPage {
+  data: ApiOrderRow[];
+  total: number;
+  take: number;
+  skip: number;
+}
+
+function toCents(v: number | string | null | undefined): number {
+  if (v === null || v === undefined) return 0;
+  const n = typeof v === 'string' ? Number(v) : v;
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+
+function mapPaymentMethod(raw: string): PaymentMethod {
+  const m = raw.toUpperCase();
+  if (m === 'CASH' || m === 'GCASH' || m === 'PAYMAYA' || m === 'CARD') {
+    return m as PaymentMethod;
+  }
+  return 'CASH';
+}
+
+function mapStatus(row: ApiOrderRow): OrderStatus {
+  if (row.voidedAt) return 'VOIDED';
+  if (row.refundedAt) return 'REFUNDED';
+  const s = (row.status ?? '').toUpperCase();
+  if (s === 'VOIDED') return 'VOIDED';
+  if (s === 'REFUNDED') return 'REFUNDED';
+  return 'PAID';
+}
+
+function adaptOrder(row: ApiOrderRow): OrderSummary {
+  const lines: CartLine[] = (row.items ?? []).map((it) => {
+    const qty = typeof it.quantity === 'string' ? Number(it.quantity) : it.quantity;
+    const unit = toCents(it.unitPrice);
+    const totalRaw = it.lineTotal ?? it.totalPrice ?? null;
+    const lineTotal = totalRaw !== null ? toCents(totalRaw) : Math.round(qty * unit);
+    return {
+      id: it.id,
+      productId: it.id,
+      productName: it.productName,
+      qty,
+      unitPrice: unit,
+      modifiers: [],
+      lineTotal,
+      voidedAt: it.voidedAt ?? undefined,
+    };
+  });
+  const payments: CartPayment[] = (row.payments ?? []).map((p) => ({
+    method: mapPaymentMethod(p.method),
+    amount: toCents(p.amount),
+  }));
+  const orNumberRaw = row.orNumber ?? row.receiptNumber ?? 0;
+  const orNumber =
+    typeof orNumberRaw === 'string' ? Number(orNumberRaw) || 0 : (orNumberRaw ?? 0);
+  return {
+    id: row.id,
+    orNumber,
+    issuedAt: row.completedAt ?? row.createdAt,
+    itemCount: lines.reduce((s, l) => s + (l.qty || 0), 0),
+    totalCents: toCents(row.totalAmount),
+    status: mapStatus(row),
+    payments,
+    lines,
+  };
+}
+
+function isToday(iso: string): boolean {
+  // Match by PH calendar date (UTC+8).
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  const phMs = d.getTime() + 8 * 60 * 60 * 1000;
+  const ph = new Date(phMs).toISOString().slice(0, 10);
+  const todayPh = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return ph === todayPh;
 }
 
 // Printer service — optional import (the printer agent owns wiring usePrinter).
@@ -66,10 +175,12 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
 
   const { data, isLoading, isRefetching, refetch, error } = useQuery<OrderSummary[]>({
     queryKey: ['orders', 'today', branchId],
-    queryFn: () =>
-      api.get<OrderSummary[]>(
-        `/orders?day=today${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''}`,
-      ),
+    queryFn: async () => {
+      const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : '';
+      const res = await api.get<ApiOrdersPage | ApiOrderRow[]>(`/orders${qs}`);
+      const rows: ApiOrderRow[] = Array.isArray(res) ? res : (res?.data ?? []);
+      return rows.map(adaptOrder).filter((o) => isToday(o.issuedAt));
+    },
     retry: 1,
   });
 
@@ -106,13 +217,22 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>
-              {isLoading ? 'Loading…' : error ? errorLabel(error) : 'No orders yet today'}
-            </Text>
+            {isLoading ? (
+              <ActivityIndicator />
+            ) : (
+              <Text style={styles.emptyTitle}>
+                {error ? errorLabel(error) : 'No orders yet today'}
+              </Text>
+            )}
             {!isLoading && !error ? (
               <Text style={styles.emptySub}>
                 Completed sales will appear here, most recent first.
               </Text>
+            ) : null}
+            {!isLoading && error ? (
+              <Pressable onPress={() => refetch()} style={styles.retryBtn}>
+                <Text style={styles.retryBtnLabel}>Tap to retry</Text>
+              </Pressable>
             ) : null}
           </View>
         }
@@ -333,6 +453,16 @@ const styles = StyleSheet.create({
   empty: { padding: spacing.s7, alignItems: 'center' },
   emptyTitle: { ...textTokens.bodyLg, color: colors.ink, fontWeight: '700' },
   emptySub: { ...textTokens.bodySm, color: colors.muted, marginTop: spacing.s2, textAlign: 'center' },
+  retryBtn: {
+    marginTop: spacing.s3,
+    paddingHorizontal: spacing.s4,
+    paddingVertical: spacing.s2,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.rule,
+  },
+  retryBtnLabel: { ...textTokens.bodySm, color: colors.ink, fontWeight: '700' },
 
   row: { marginBottom: spacing.s2, backgroundColor: colors.surface, borderRadius: radii.lg },
   rowInner: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.s2 },

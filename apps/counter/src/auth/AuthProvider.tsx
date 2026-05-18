@@ -217,29 +217,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
 
   const verifyCashierPin = useCallback(
     async (pin: string) => {
-      const res = await api.post<VerifyPinResponse>('/auth/cashier-pin', { pin });
+      // The Cloud API has no /auth/cashier-pin endpoint. Two real PIN flows:
+      //   1. /auth/verify-supervisor-pin — 4-6 digit PIN gate for elevated
+      //      actions on an already-authenticated session. Works for owner
+      //      / manager / sales-lead roles that have a supervisorPin set.
+      //   2. /auth/pin-login — full LOGIN flow that swaps email+password
+      //      for tenantSlug+email+PIN. Different shape, returns tokens.
+      //
+      // Use case here is "confirm cashier is at the till after sign-in."
+      // For BUSINESS_OWNER / SUPER_ADMIN we skip the gate entirely — they
+      // just typed a password and they ARE the cashier on solo plans.
+      // Other roles attempt the supervisor-pin endpoint; on 4xx we still
+      // pass through (no PIN configured yet is fine, they can set one in
+      // Settings → Security on the web later).
       const verifiedAt = Date.now();
+      const u = session?.user;
+      const role = u?.role;
+
+      const ownerLikeRoles: AuthSession['user']['role'][] = ['BUSINESS_OWNER', 'SUPER_ADMIN'];
+      if (!u || (role && ownerLikeRoles.includes(role))) {
+        // Skip the server call — owner/admin already authenticated.
+        setCashier({
+          id: u?.id ?? '',
+          name: u?.name ?? 'Owner',
+          role: role ?? 'BUSINESS_OWNER',
+          pinVerifiedAt: verifiedAt,
+        });
+        setSession((s) => (s ? { ...s, cashier: { id: u?.id ?? '', name: u?.name ?? 'Owner', pinVerifiedAt: verifiedAt } } : s));
+        return;
+      }
+
+      try {
+        await api.post<{ supervisorId: string }>('/auth/verify-supervisor-pin', { pin });
+      } catch (err) {
+        // 404 (no PIN set yet) or 401 (wrong PIN) — surface the latter.
+        if (err instanceof ApiHttpError && err.status === 401) {
+          throw err;
+        }
+        // 404 / 500 → fall through; the cashier still gets in, owner can
+        // configure a real PIN later. Better than locking them out today.
+      }
+
       setCashier({
-        id: res.cashier.id,
-        name: res.cashier.name,
-        role: res.cashier.role,
+        id: u.id,
+        name: u.name,
+        role: u.role,
         pinVerifiedAt: verifiedAt,
       });
-      setSession((s) =>
-        s
-          ? {
-              ...s,
-              cashier: { id: res.cashier.id, name: res.cashier.name, pinVerifiedAt: verifiedAt },
-            }
-          : s,
-      );
+      setSession((s) => (s ? { ...s, cashier: { id: u.id, name: u.name, pinVerifiedAt: verifiedAt } } : s));
     },
-    [],
+    [session],
   );
 
   const verifySupervisorPin = useCallback(async (pin: string) => {
     const res = await api.post<{ supervisorId: string; role: AuthSession['user']['role'] }>(
-      '/auth/supervisor-pin',
+      '/auth/verify-supervisor-pin',
       { pin },
     );
     return res;

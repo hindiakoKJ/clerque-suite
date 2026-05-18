@@ -58,7 +58,7 @@ export interface AuthSession {
     id: string;
     name: string;
     email: string;
-    role: 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'CASHIER' | 'SALES_LEAD' | 'MDM' | 'WAREHOUSE_STAFF';
+    role: 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'CASHIER' | 'SALES_LEAD' | 'MDM' | 'WAREHOUSE_STAFF' | 'SUPER_ADMIN';
     isSalesLead: boolean;
   };
   cashier?: {

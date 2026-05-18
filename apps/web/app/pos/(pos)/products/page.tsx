@@ -1,7 +1,8 @@
 'use client';
 import { useState, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload, AlertTriangle } from 'lucide-react';
+import Link from 'next/link';
+import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload, AlertTriangle, FolderTree } from 'lucide-react';
 import { api, resolveAssetUrl } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
@@ -475,6 +476,14 @@ export default function ProductsPage() {
                   Setup Menu
                 </button>
               )}
+              <Link
+                href="/pos/products/categories"
+                className="flex items-center gap-1.5 text-xs border border-border bg-background text-foreground hover:bg-muted rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"
+                title="Manage categories and their modifier groups"
+              >
+                <FolderTree className="h-3.5 w-3.5" />
+                Categories
+              </Link>
               <button
                 onClick={() => setShowSetupPack(true)}
                 className="flex items-center gap-1.5 text-xs border border-border bg-background text-foreground hover:bg-muted rounded-lg px-3 py-1.5 font-medium transition-colors whitespace-nowrap"

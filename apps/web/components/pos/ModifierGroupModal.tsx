@@ -29,7 +29,11 @@ interface ModifierGroup {
 interface ProductModifierGroup {
   modifierGroupId: string;
   sortOrder: number;
-  modifierGroup: ModifierGroup & { options: ModifierOption[] };
+  /// 'product' = attached via ProductModifierGroup join row (detachable here).
+  /// 'category' = auto-applied because the group is bound to the product's
+  /// category — managed at Products → Categories, not removable per-product.
+  source?: 'product' | 'category';
+  modifierGroup: ModifierGroup & { options: ModifierOption[]; categoryId?: string | null };
 }
 
 interface Props {
@@ -65,8 +69,13 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
     staleTime: 15_000,
   });
 
-  const attachedIds = new Set(attached.map((a) => a.modifierGroupId));
-  const unattached = allGroups.filter((g) => !attachedIds.has(g.id));
+  // Category-managed groups can't be detached at the product level (they're
+  // bound via Category.modifierGroups). We surface them in a separate
+  // read-only block above the per-product list.
+  const fromCategory = attached.filter((a) => a.source === 'category');
+  const perProduct   = attached.filter((a) => a.source !== 'category');
+  const attachedIds  = new Set(attached.map((a) => a.modifierGroupId));
+  const unattached   = allGroups.filter((g) => !attachedIds.has(g.id));
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['modifier-groups'] });
@@ -145,16 +154,55 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
+          {/* Category-managed groups (read-only — managed at Products → Categories) */}
+          {fromCategory.length > 0 && (
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+                From category
+              </h3>
+              <div className="space-y-2">
+                {fromCategory.map(({ modifierGroup: g }) => (
+                  <div key={g.id} className="border border-border rounded-xl px-4 py-3 bg-muted/20 flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground">{g.name}</p>
+                      <div className="flex gap-2 mt-0.5">
+                        {g.required && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600">
+                            REQUIRED
+                          </span>
+                        )}
+                        {g.multiSelect && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--accent-soft)] text-[var(--accent)]">
+                            MULTI-SELECT
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <span
+                      className="text-[10px] font-semibold px-2 py-0.5 rounded-full border border-border text-muted-foreground"
+                      title="Edit at Products → Categories"
+                    >
+                      CATEGORY-MANAGED
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-2 italic">
+                These groups auto-apply because of this product&apos;s category. Edit at Products → Categories.
+              </p>
+            </div>
+          )}
+
           {/* Attached groups */}
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
               Attached to this product
             </h3>
-            {attached.length === 0 ? (
+            {perProduct.length === 0 ? (
               <p className="text-sm text-muted-foreground italic">No modifier groups yet.</p>
             ) : (
               <div className="space-y-2">
-                {attached.map(({ modifierGroup: g }) => (
+                {perProduct.map(({ modifierGroup: g }) => (
                   <div key={g.id} className="border border-border rounded-xl overflow-hidden">
                     <div className="flex items-center gap-2 px-4 py-3">
                       <GripVertical className="h-4 w-4 text-muted-foreground/40 shrink-0" />

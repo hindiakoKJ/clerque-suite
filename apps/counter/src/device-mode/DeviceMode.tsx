@@ -20,6 +20,7 @@ import {
   type PairedDevice,
 } from '@/device-mode/storage';
 import PairingScreen from '@/device-mode/PairingScreen';
+import { useDeviceSize } from '@/shell/useDeviceSize';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -85,6 +86,14 @@ interface Props {
 
 export default function DeviceModePicker({ onChosen }: Props): React.ReactElement {
   const [step, setStep] = useState<Step>({ phase: 'picker' });
+  const deviceSize = useDeviceSize();
+
+  // Phone devices can ONLY be Cashier till or Owner spot-check — KDS and
+  // customer-display modes require a stationary tablet/TV (and the phone
+  // shell has no kiosk render path).
+  const choices = deviceSize === 'phone'
+    ? CHOICES.filter((c) => c.kind === 'CASHIER' || c.kind === 'OWNER_SPOTCHECK')
+    : CHOICES;
 
   const choose = async (choice: Choice) => {
     if (choice.kind === 'CASHIER') {
@@ -159,7 +168,7 @@ export default function DeviceModePicker({ onChosen }: Props): React.ReactElemen
       </Text>
 
       <View style={styles.choices}>
-        {CHOICES.map((c) => (
+        {choices.map((c) => (
           <Pressable
             key={c.kind}
             onPress={() => choose(c)}

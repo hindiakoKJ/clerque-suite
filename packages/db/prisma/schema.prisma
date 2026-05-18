@@ -648,6 +648,7 @@ model Tenant {
   retentionReleases        RetentionRelease[]
   jobOrders                JobOrder[]
   idempotencyKeys          IdempotencyKey[]
+  productPhotos            ProductPhoto[]
   /// Per-tenant tunable severity thresholds for the Ledger ops dashboard.
   /// JSON shape (keys all numbers, optional):
   ///   { eventLagWarnMs, eventLagBadMs, pendingEventsWarn, failedEventsWarn,
@@ -1070,9 +1071,10 @@ model Category {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  products Product[]
-  station  Station?  @relation("CategoryStation", fields: [stationId], references: [id], onDelete: SetNull)
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products       Product[]
+  station        Station?        @relation("CategoryStation", fields: [stationId], references: [id], onDelete: SetNull)
+  modifierGroups ModifierGroup[]
 
   @@index([tenantId, sortOrder])
   @@index([stationId])
@@ -1141,10 +1143,38 @@ model Product {
   deliveryReceiptItems DeliveryReceiptItem[]
   // Sprint 13 — Service-Engine
   jobOrderLines       JobOrderLine[]         @relation("JobOrderLineProduct")
+  // Postgres BYTEA-backed product photos (DB storage driver).
+  photos              ProductPhoto[]
 
   @@index([tenantId, sku])
   @@index([tenantId, barcode])
   @@map("products")
+}
+
+/// Postgres BYTEA-backed product photo storage. Used by the DB storage
+/// driver when neither S3/R2 nor a writable local uploads dir is available
+/// (e.g. Railway prod with ephemeral / partially read-only container fs).
+/// The public URL exposed to clients is `/api/v1/products/photos/<id>`.
+model ProductPhoto {
+  id           String   @id @default(cuid())
+  tenantId     String
+  mimeType     String
+  byteSize     Int
+  data         Bytes
+  /// Original filename for the Content-Disposition header. Optional.
+  originalName String?
+  createdById  String?
+  createdAt    DateTime @default(now())
+  /// Optional FK back to the product that uses this photo. Null when the
+  /// photo was uploaded but not yet attached (e.g. cashier took a photo
+  /// then cancelled the form). Cleanup cron later.
+  productId    String?
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@map("product_photos")
 }
 
 model ProductVariant {
@@ -1866,6 +1896,10 @@ model JournalLine {
 model ModifierGroup {
   id          String   @id @default(cuid())
   tenantId    String
+  /// Optional category binding — when set, this modifier group auto-applies
+  /// to every product in the category, without needing per-product attachment.
+  /// Per-product ProductModifierGroup links still work for one-off overrides.
+  categoryId  String?
   name        String
   required    Boolean  @default(false)
   multiSelect Boolean  @default(false)
@@ -1877,10 +1911,12 @@ model ModifierGroup {
   updatedAt   DateTime @updatedAt
 
   tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   options  ModifierOption[]
   products ProductModifierGroup[]
 
   @@index([tenantId])
+  @@index([tenantId, categoryId])
   @@map("modifier_groups")
 }
 

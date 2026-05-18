@@ -18,3 +18,4 @@ android/
 # 1 MB of HTML/JSX mockups; not part of the production app. The committed
 # code is the source of truth. Re-fetch from the design URL if needed.
 design-source/
+design-source-v3/

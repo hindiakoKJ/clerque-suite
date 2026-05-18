@@ -33,8 +33,21 @@ export class ModifiersController {
 
   @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Get('groups')
-  listGroups(@CurrentUser() user: JwtPayload) {
-    return this.modifiersService.listGroups(user.tenantId!);
+  listGroups(
+    @CurrentUser() user: JwtPayload,
+    @Query('categoryId') categoryId?: string,
+  ) {
+    // Three modes via ?categoryId=:
+    //   omitted        → all tenant groups
+    //   ?categoryId=   → tenant-level groups only (categoryId IS NULL)
+    //   ?categoryId=ID → groups bound to that category
+    const opts =
+      categoryId === undefined
+        ? {}
+        : categoryId === ''
+          ? { categoryId: null as string | null }
+          : { categoryId };
+    return this.modifiersService.listGroups(user.tenantId!, opts);
   }
 
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER')

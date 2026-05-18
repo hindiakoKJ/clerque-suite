@@ -12,6 +12,9 @@ export interface CreateModifierGroupDto {
   minSelect?: number;
   maxSelect?: number | null;
   sortOrder?: number;
+  /// Optional — when provided, the group auto-applies to every product
+  /// in the given category (which must belong to the same tenant).
+  categoryId?: string | null;
 }
 
 export interface UpdateModifierGroupDto {
@@ -22,6 +25,9 @@ export interface UpdateModifierGroupDto {
   maxSelect?: number | null;
   sortOrder?: number;
   isActive?: boolean;
+  /// Pass a string to bind to a category, or null to unbind.
+  /// Tenant ownership is verified server-side.
+  categoryId?: string | null;
 }
 
 export interface CreateModifierOptionDto {
@@ -45,9 +51,18 @@ export class ModifiersService {
 
   // ─── Groups ──────────────────────────────────────────────────────────────────
 
-  async listGroups(tenantId: string) {
+  async listGroups(tenantId: string, opts: { categoryId?: string | null } = {}) {
+    // Filter semantics:
+    //   - undefined  → no filter (return all tenant groups)
+    //   - null       → only tenant-level groups (no category binding)
+    //   - "<id>"     → only groups bound to that category
+    const where: { tenantId: string; isActive: true; categoryId?: string | null } = {
+      tenantId,
+      isActive: true,
+    };
+    if (opts.categoryId !== undefined) where.categoryId = opts.categoryId;
     return this.prisma.modifierGroup.findMany({
-      where: { tenantId, isActive: true },
+      where,
       include: {
         options: {
           where: { isActive: true },
@@ -60,6 +75,9 @@ export class ModifiersService {
   }
 
   async createGroup(tenantId: string, dto: CreateModifierGroupDto) {
+    if (dto.categoryId) {
+      await this.assertCategoryBelongsToTenant(tenantId, dto.categoryId);
+    }
     return this.prisma.modifierGroup.create({
       data: {
         tenantId,
@@ -69,6 +87,7 @@ export class ModifiersService {
         minSelect: dto.minSelect ?? 0,
         maxSelect: dto.maxSelect ?? null,
         sortOrder: dto.sortOrder ?? 0,
+        categoryId: dto.categoryId ?? null,
       },
       include: { options: true },
     });
@@ -76,6 +95,11 @@ export class ModifiersService {
 
   async updateGroup(tenantId: string, groupId: string, dto: UpdateModifierGroupDto) {
     await this.findGroup(tenantId, groupId);
+    // Validate any category binding belongs to the same tenant before writing.
+    // `categoryId: null` (explicit unbind) is allowed and skips the lookup.
+    if (dto.categoryId) {
+      await this.assertCategoryBelongsToTenant(tenantId, dto.categoryId);
+    }
     // Atomic tenant-scoped update — closes TOCTOU between findGroup and update.
     const result = await this.prisma.modifierGroup.updateMany({
       where: { id: groupId, tenantId },
@@ -177,26 +201,87 @@ export class ModifiersService {
     });
   }
 
+  /**
+   * Returns the UNION of:
+   *   1. Per-product attached groups (ProductModifierGroup rows)
+   *   2. Category-level groups (ModifierGroup.categoryId === product.categoryId)
+   *
+   * Deduplicated by group id — per-product attachment wins when both exist
+   * (its sortOrder is preserved). Each returned row carries a `source` field
+   * so the till UI can distinguish category-managed groups (which can't be
+   * detached at the product level) from per-product ones.
+   *
+   * The shape of pre-existing rows (productModifierGroup join rows with
+   * `modifierGroup` nested) is preserved for backwards compatibility — the
+   * Web ModifierPickerModal already reads `r.modifierGroup` / `r.sortOrder`.
+   */
   async getProductGroups(tenantId: string, productId: string) {
     const product = await this.prisma.product.findFirst({
       where: { id: productId, tenantId },
+      select: { id: true, categoryId: true },
     });
     if (!product) throw new NotFoundException('Product not found');
 
-    return this.prisma.productModifierGroup.findMany({
-      where: { productId },
-      include: {
-        modifierGroup: {
-          include: {
-            options: {
-              where: { isActive: true },
-              orderBy: { sortOrder: 'asc' },
+    const [productLinks, categoryGroups] = await Promise.all([
+      this.prisma.productModifierGroup.findMany({
+        where: { productId, modifierGroup: { isActive: true } },
+        include: {
+          modifierGroup: {
+            include: {
+              options: {
+                where: { isActive: true },
+                orderBy: { sortOrder: 'asc' },
+              },
             },
           },
         },
-      },
-      orderBy: { sortOrder: 'asc' },
-    });
+        orderBy: { sortOrder: 'asc' },
+      }),
+      product.categoryId
+        ? this.prisma.modifierGroup.findMany({
+            where: { tenantId, categoryId: product.categoryId, isActive: true },
+            include: {
+              options: {
+                where: { isActive: true },
+                orderBy: { sortOrder: 'asc' },
+              },
+            },
+            orderBy: { sortOrder: 'asc' },
+          })
+        : Promise.resolve([] as Array<
+            Awaited<ReturnType<typeof this.prisma.modifierGroup.findFirst>> & { options: unknown[] }
+          >),
+    ]);
+
+    const seen = new Set<string>();
+    const out: Array<{
+      modifierGroupId: string;
+      sortOrder: number;
+      source: 'product' | 'category';
+      // Mirror the existing wire shape: { modifierGroup: { ...group, options } }.
+      // Keeping this stable means the web/native consumers don't need changes.
+      modifierGroup: typeof productLinks[number]['modifierGroup'];
+    }> = [];
+
+    for (const link of productLinks) {
+      seen.add(link.modifierGroup.id);
+      out.push({
+        modifierGroupId: link.modifierGroup.id,
+        sortOrder: link.sortOrder,
+        source: 'product',
+        modifierGroup: link.modifierGroup,
+      });
+    }
+    for (const g of categoryGroups) {
+      if (!g || seen.has(g.id)) continue;
+      out.push({
+        modifierGroupId: g.id,
+        sortOrder: g.sortOrder,
+        source: 'category',
+        modifierGroup: g as unknown as typeof productLinks[number]['modifierGroup'],
+      });
+    }
+    return out;
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -207,6 +292,19 @@ export class ModifiersService {
     });
     if (!group) throw new NotFoundException('Modifier group not found');
     return group;
+  }
+
+  /**
+   * Ensure a categoryId references a Category in the same tenant.
+   * Used by createGroup / updateGroup before binding a modifier group to
+   * a category, so we don't leak cross-tenant categories via the FK.
+   */
+  private async assertCategoryBelongsToTenant(tenantId: string, categoryId: string) {
+    const c = await this.prisma.category.findFirst({
+      where: { id: categoryId, tenantId },
+      select: { id: true },
+    });
+    if (!c) throw new NotFoundException('Category not found');
   }
 
   private async findOption(tenantId: string, groupId: string, optionId: string) {

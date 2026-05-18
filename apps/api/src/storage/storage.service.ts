@@ -5,15 +5,19 @@
  * care whether files land on disk (dev / single-instance Railway) or in
  * Cloudflare R2 / AWS S3 (production, ransomware-proof, ephemeral-disk-safe).
  *
- * The driver is selected at boot:
+ * The driver is selected at boot (priority order):
  *   - S3_BUCKET + S3_ACCESS_KEY_ID + S3_SECRET_ACCESS_KEY are all set →
  *     S3-compatible cloud storage (Cloudflare R2 if S3_ENDPOINT points at
  *     a `<account>.r2.cloudflarestorage.com` URL, AWS S3 otherwise).
- *   - Anything missing → local disk under ./uploads/ (current behavior).
+ *   - STORAGE_DRIVER=DB → Postgres BYTEA-backed storage (ProductPhoto table).
+ *   - ./uploads is writable → LOCAL disk driver.
+ *   - Otherwise → DB driver fallback (keeps Railway prod working without
+ *     any extra env vars; the container filesystem is ephemeral / partially
+ *     read-only there, so LOCAL would silently fail at first upload).
  *
  * Existing rows in the Document / Product table store `storagePath` as a
- * key relative to the storage root. The same key reads back from either
- * driver; switching to R2 requires migrating existing files (one-time
+ * key relative to the storage root. The same key reads back from any
+ * driver; switching drivers requires migrating existing files (one-time
  * upload) but does NOT require a database migration.
  */
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
@@ -25,8 +29,9 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
+import { PrismaService } from '../prisma/prisma.service';
 
-export type StorageDriver = 'S3' | 'LOCAL';
+export type StorageDriver = 'S3' | 'LOCAL' | 'DB';
 
 export interface PutOptions {
   /** Public URL prefix (set when using a Cloudflare R2 public bucket).
@@ -37,6 +42,23 @@ export interface PutOptions {
   /** When true, PUT with public-read ACL (S3 only; ignored on R2 which uses
    *  bucket-level public access). */
   publicRead?: boolean;
+  /** Tenant id for DB driver row scoping. Required when using DB driver
+   *  to persist a product photo. Ignored by S3 / LOCAL. */
+  tenantId?: string;
+  /** Original filename, surfaced in Content-Disposition when streaming back.
+   *  Used by DB driver only. */
+  originalName?: string;
+}
+
+/**
+ * DB driver expects a storage key of the form `<prefix>/<id>.<ext>` (e.g.
+ * `public/products/<tenantId>/<cuid>.jpg`). The last path segment minus
+ * extension becomes the ProductPhoto row id; the extension is dropped
+ * because the mimeType column is the source of truth for content-type.
+ */
+function dbIdFromKey(storageKey: string): string {
+  const last = storageKey.split('/').pop() ?? storageKey;
+  return last.replace(/\.[^.]+$/, '');
 }
 
 @Injectable()
@@ -48,12 +70,16 @@ export class StorageService {
   private readonly publicUrlBase: string | null = null;
   private readonly localRoot: string;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
     const bucket   = this.config.get<string>('S3_BUCKET');
     const accessId = this.config.get<string>('S3_ACCESS_KEY_ID');
     const secret   = this.config.get<string>('S3_SECRET_ACCESS_KEY');
     const endpoint = this.config.get<string>('S3_ENDPOINT');
     const region   = this.config.get<string>('S3_REGION') ?? 'auto';
+    const driverOverride = (this.config.get<string>('STORAGE_DRIVER') ?? '').toUpperCase();
     this.publicUrlBase = this.config.get<string>('S3_PUBLIC_URL') ?? null;
     this.localRoot = path.resolve('./uploads');
 
@@ -69,13 +95,39 @@ export class StorageService {
         forcePathStyle: !!endpoint, // R2 prefers path-style; AWS S3 uses virtual-host
       });
       this.logger.log(`Storage driver: S3 (bucket=${bucket}${endpoint ? `, endpoint=${endpoint}` : ''})`);
-    } else {
+    } else if (driverOverride === 'DB') {
+      this.driver = 'DB';
+      this.logger.log('Storage driver: DB (Postgres BYTEA, ProductPhoto table) — set via STORAGE_DRIVER=DB.');
+    } else if (this.isLocalWritable()) {
       this.driver = 'LOCAL';
-      fs.mkdirSync(this.localRoot, { recursive: true });
       this.logger.log(
         `Storage driver: LOCAL (./uploads/) — ⚠ files will NOT survive a Railway redeploy. ` +
-        `Set S3_BUCKET + S3_ACCESS_KEY_ID + S3_SECRET_ACCESS_KEY to use Cloudflare R2 / AWS S3.`,
+        `Set S3_BUCKET + S3_ACCESS_KEY_ID + S3_SECRET_ACCESS_KEY to use Cloudflare R2 / AWS S3, ` +
+        `or STORAGE_DRIVER=DB to keep photos in Postgres.`,
       );
+    } else {
+      // Final fallback — Railway prod container fs is ephemeral / partially
+      // read-only, so the LOCAL driver fails on first upload. Persist photos
+      // in Postgres instead. No env vars required.
+      this.driver = 'DB';
+      this.logger.log(
+        'Storage driver: DB (Postgres BYTEA) — ./uploads not writable, falling back to database storage.',
+      );
+    }
+  }
+
+  /** Probe ./uploads at boot. We can't `await` in a constructor cleanly, so
+   *  use sync fs APIs — boot is a one-time cost. */
+  private isLocalWritable(): boolean {
+    try {
+      fs.mkdirSync(this.localRoot, { recursive: true });
+      // Round-trip a sentinel file to confirm writes actually land.
+      const probe = path.join(this.localRoot, '.write-probe');
+      fs.writeFileSync(probe, 'ok');
+      fs.unlinkSync(probe);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -97,6 +149,13 @@ export class StorageService {
           ContentType: opts.contentType,
           ACL:         opts.publicRead ? 'public-read' : undefined,
         }));
+      } finally {
+        await fs.promises.unlink(tempPath).catch(() => undefined);
+      }
+    } else if (this.driver === 'DB') {
+      const body = await fs.promises.readFile(tempPath);
+      try {
+        await this.insertDbRow(body, storageKey, opts);
       } finally {
         await fs.promises.unlink(tempPath).catch(() => undefined);
       }
@@ -127,11 +186,45 @@ export class StorageService {
         ContentType: opts.contentType,
         ACL:         opts.publicRead ? 'public-read' : undefined,
       }));
+    } else if (this.driver === 'DB') {
+      await this.insertDbRow(buffer, storageKey, opts);
     } else {
       const destAbs = path.join(this.localRoot, storageKey);
       fs.mkdirSync(path.dirname(destAbs), { recursive: true });
       await fs.promises.writeFile(destAbs, buffer);
     }
+  }
+
+  /** Shared insert path for DB driver — derives the row id from the storage
+   *  key and persists the bytea + content metadata. */
+  private async insertDbRow(buffer: Buffer, storageKey: string, opts: PutOptions): Promise<void> {
+    if (!opts.tenantId) {
+      // DB driver is scoped to product photos right now; non-product callers
+      // (e.g. backup snapshots) should configure S3 instead. Surface loudly
+      // rather than silently dropping data.
+      throw new Error(
+        'StorageService(DB): tenantId is required to persist a blob in Postgres. ' +
+        'DB driver currently supports product photos only — configure S3 for other artefacts.',
+      );
+    }
+    const id = dbIdFromKey(storageKey);
+    await this.prisma.productPhoto.create({
+      data: {
+        id,
+        tenantId:     opts.tenantId,
+        mimeType:     opts.contentType ?? 'application/octet-stream',
+        byteSize:     buffer.byteLength,
+        // Prisma's `Bytes` field expects a Uint8Array<ArrayBuffer>; a Node
+        // Buffer (Uint8Array<ArrayBufferLike>) trips strict TS. Copy into
+        // a fresh ArrayBuffer-backed view so the type narrows correctly.
+        data:         (() => {
+          const ab = new ArrayBuffer(buffer.byteLength);
+          new Uint8Array(ab).set(buffer);
+          return new Uint8Array(ab);
+        })(),
+        originalName: opts.originalName ?? null,
+      },
+    });
   }
 
   /**
@@ -158,6 +251,15 @@ export class StorageService {
         }
         throw err;
       }
+    } else if (this.driver === 'DB') {
+      const id = dbIdFromKey(storageKey);
+      const row = await this.prisma.productPhoto.findUnique({ where: { id } });
+      if (!row) throw new NotFoundException('File not found in storage.');
+      return {
+        stream:        Readable.from(row.data),
+        contentType:   row.mimeType,
+        contentLength: row.byteSize,
+      };
     } else {
       const absPath = path.join(this.localRoot, storageKey);
       // Path-traversal guard — the resolved absolute path must remain inside
@@ -197,6 +299,11 @@ export class StorageService {
           size:         Number(c.Size ?? 0),
           lastModified: c.LastModified ?? null,
         }));
+    }
+    if (this.driver === 'DB') {
+      // DB driver doesn't store path-prefix metadata, so a generic `list()`
+      // by prefix isn't meaningful. Backup snapshots etc. should use S3.
+      return [];
     }
     // LOCAL fallback — walk the uploads tree under the prefix
     const baseAbs = path.resolve(this.localRoot, prefix);
@@ -246,6 +353,10 @@ export class StorageService {
         if (err?.$metadata?.httpStatusCode === 404 || err?.name === 'NotFound') return false;
         throw err;
       }
+    } else if (this.driver === 'DB') {
+      const id = dbIdFromKey(storageKey);
+      const res = await this.prisma.productPhoto.deleteMany({ where: { id } });
+      return res.count > 0;
     } else {
       const absPath = path.join(this.localRoot, storageKey);
       try {
@@ -261,13 +372,19 @@ export class StorageService {
   /**
    * For public assets (product images), returns the URL clients can use to
    * fetch the file directly. On S3 this is the configured public URL or
-   * presigned URL; on LOCAL this is the /uploads static-served path.
+   * presigned URL; on LOCAL this is the /uploads static-served path; on DB
+   * this is the API route that streams bytes back from Postgres.
    */
   getPublicUrl(storageKey: string): string {
     if (this.driver === 'S3' && this.publicUrlBase) {
       // e.g. https://<bucket>.<account>.r2.dev/<key>
       const base = this.publicUrlBase.replace(/\/$/, '');
       return `${base}/${storageKey}`;
+    }
+    if (this.driver === 'DB') {
+      // Served by ProductPhotosController (public, cuid-id-gated). Global
+      // prefix `api/v1` is applied by main.ts at boot.
+      return `/api/v1/products/photos/${dbIdFromKey(storageKey)}`;
     }
     // Fallback: serve via the API's static-asset middleware at /uploads/...
     return `/uploads/${storageKey}`;

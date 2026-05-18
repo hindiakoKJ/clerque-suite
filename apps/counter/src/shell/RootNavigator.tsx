@@ -22,6 +22,8 @@ import { useAuth } from '@/auth/AuthProvider';
 import SignInScreen from '@/auth/SignInScreen';
 import CashierPinScreen from '@/auth/CashierPinScreen';
 import AppDrawer from '@/shell/AppDrawer';
+import PhoneTabNavigator from '@/shell/PhoneTabNavigator';
+import { useDeviceSize } from '@/shell/useDeviceSize';
 import DeviceModePicker from '@/device-mode/DeviceMode';
 import CustomerDisplayScreen from '@/device-mode/CustomerDisplayScreen';
 import KdsScreen from '@/device-mode/KdsScreen';
@@ -104,12 +106,22 @@ export default function RootNavigator(): React.ReactElement {
   return (
     <Root.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
       {signedIn ? (
-        <Root.Screen name="App" component={AppDrawer} />
+        <Root.Screen name="App" component={AppShellSwitch} />
       ) : (
         <Root.Screen name="Auth" component={AuthFlow} />
       )}
     </Root.Navigator>
   );
+}
+
+/**
+ * Branches the post-auth shell on device size. Tablets get the existing
+ * drawer + 3-pane terminal; phones get an owner-first bottom-tab shell that
+ * intentionally is NOT a miniaturized till.
+ */
+function AppShellSwitch(): React.ReactElement {
+  const size = useDeviceSize();
+  return size === 'tablet' ? <AppDrawer /> : <PhoneTabNavigator />;
 }
 
 const styles = StyleSheet.create({

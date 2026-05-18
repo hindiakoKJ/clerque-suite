@@ -8,12 +8,15 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -24,6 +27,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { StorageService } from '../storage/storage.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { ProductsService, CreateProductDto, UpdateProductDto } from './products.service';
 
 const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -139,8 +143,10 @@ export class ProductsController {
     const storageKey = path.posix.join('public', 'products', user.tenantId!, `${id}${ext}`);
 
     await this.storage.putFromTempPath(file.path, storageKey, {
-      contentType: file.mimetype,
-      publicRead:  true, // for AWS S3; ignored on R2 (uses bucket-level public access)
+      contentType:  file.mimetype,
+      publicRead:   true, // for AWS S3; ignored on R2 (uses bucket-level public access)
+      tenantId:     user.tenantId!,
+      originalName: file.originalname,
     });
 
     return { url: this.storage.getPublicUrl(storageKey) };
@@ -174,5 +180,30 @@ export class ProductsController {
     @Body() body: { items: Array<{ rawMaterialId: string; quantity: number }> },
   ) {
     return this.productsService.saveVariantBom(user.tenantId!, productId, variantId, body.items ?? []);
+  }
+}
+
+/**
+ * Public product-photo byte-streaming endpoint. Lives on its own controller
+ * (NOT wrapped in JwtAuthGuard/RolesGuard) because product photos are
+ * embedded on receipts, customer-display screens, and the public POS grid —
+ * none of which carry a JWT. Enumeration is not a real risk: the id is a
+ * 24-hex-char cuid-style token, and the payload is just a product photo.
+ */
+@ApiTags('Products')
+@Controller('products/photos')
+export class ProductPhotosController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Get(':id')
+  async getPhoto(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    const row = await this.prisma.productPhoto.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException();
+    res.setHeader('Content-Type', row.mimeType);
+    res.setHeader('Content-Length', row.byteSize);
+    // Bytes are immutable per id (we never overwrite a photo row in place),
+    // so it's safe to cache for a year. New uploads get new ids.
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(row.data);
   }
 }

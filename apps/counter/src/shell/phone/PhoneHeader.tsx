@@ -9,6 +9,7 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { colors, radii, spacing, text as textTokens } from '@/theme';
@@ -24,6 +25,7 @@ interface Props {
 
 export default function PhoneHeader({ title, subtitle, onBack, hideRight, right }: Props): React.ReactElement {
   const { cashier, session } = useAuth();
+  const insets = useSafeAreaInsets();
   const initials = (cashier?.name ?? session?.user.name ?? '·')
     .split(/\s+/)
     .slice(0, 2)
@@ -31,7 +33,7 @@ export default function PhoneHeader({ title, subtitle, onBack, hideRight, right 
     .join('');
 
   return (
-    <View style={styles.bar}>
+    <View style={[styles.bar, { paddingTop: insets.top }]}>
       {onBack ? (
         <Pressable onPress={onBack} hitSlop={8} style={styles.iconBtn}>
           <MaterialCommunityIcons name="arrow-left" size={22} color={colors.ink} />
@@ -56,10 +58,11 @@ export default function PhoneHeader({ title, subtitle, onBack, hideRight, right 
 
 const styles = StyleSheet.create({
   bar: {
-    height: 56,
+    minHeight: 56,
     paddingHorizontal: spacing.s4,
+    paddingBottom: spacing.s2,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     gap: spacing.s3,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,

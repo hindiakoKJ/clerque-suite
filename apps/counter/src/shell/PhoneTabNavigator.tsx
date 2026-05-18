@@ -15,6 +15,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { Text } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import OrdersScreen from '@/shell/OrdersScreen';
 import SettingsScreen from '@/shell/SettingsScreen';
@@ -83,13 +84,18 @@ export default function PhoneTabNavigator(): React.ReactElement {
     }
   }, []);
 
+  // Bottom system-gesture inset — Android gesture nav reserves ~24dp at the
+  // very bottom that we must not paint into. Without this the tab labels
+  // and icons sit right on top of the gesture bar.
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.muted,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [styles.tabBar, { height: 56 + insets.bottom, paddingBottom: insets.bottom }],
         tabBarLabelStyle: styles.tabLabel,
         tabBarItemStyle: { paddingTop: 4 },
       }}

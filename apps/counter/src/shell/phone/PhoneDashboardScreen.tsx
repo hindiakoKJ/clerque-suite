@@ -24,6 +24,17 @@ import { useBranchContext } from '@/api/BranchContext';
 import { formatPeso } from '@/components/Money';
 import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
 
+// The Cloud API exposes /reports/daily — same data the web dashboard uses.
+// Field names differ (peso decimals not cents) so we normalize at the edge.
+interface DailyReportRaw {
+  totalRevenue?: number;       // decimal pesos
+  grossProfit?: number;        // decimal pesos
+  totalOrders?: number;
+  averageOrderValue?: number;  // decimal pesos
+  topProductName?: string | null;
+  topProductId?: string | null;
+}
+
 interface DashboardResponse {
   grossCents: number;
   orderCount: number;
@@ -41,10 +52,26 @@ export default function PhoneDashboardScreen(): React.ReactElement {
   const nav = useNavigation<{ navigate: (s: string) => void }>();
 
   const dashboard = useQuery<DashboardResponse>({
-    queryKey: ['reports', 'dashboard', branchId, 'today'],
-    queryFn: () => api.get<DashboardResponse>(
-      `/reports/dashboard?day=today${branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''}`,
-    ),
+    queryKey: ['reports', 'daily', branchId, 'today'],
+    enabled: !!branchId,
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const raw = await api.get<DailyReportRaw>(
+        `/reports/daily?branchId=${encodeURIComponent(branchId!)}&date=${today}`,
+      );
+      // Convert peso decimals → cents at the edge. Field names map from
+      // the Cloud DailyReport DTO to our existing dashboard view model.
+      return {
+        grossCents:    Math.round((raw.totalRevenue ?? 0) * 100),
+        orderCount:    raw.totalOrders ?? 0,
+        avgOrderCents: Math.round((raw.averageOrderValue ?? 0) * 100),
+        topProduct: raw.topProductName
+          ? { id: raw.topProductId ?? '', name: raw.topProductName, unitsSold: 0 }
+          : null,
+        lowStockCount: 0,   // not exposed by /reports/daily yet
+        openShifts: 0,      // ditto
+      };
+    },
     retry: 1,
   });
 

@@ -9,6 +9,7 @@ import React, { useState } from 'react';
 import { Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
@@ -27,9 +28,13 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
 
   const pill = pillForState(state, queuedCount);
   const showBranchPicker = branches.length > 1;
+  // Add OS status-bar inset on top — without this the bar draws under
+  // the clock / signal / battery icons on Android phones (the tablet
+  // drawer's `headerShown: false` doesn't reserve the space for us).
+  const insets = useSafeAreaInsets();
 
   return (
-    <View style={styles.appbar}>
+    <View style={[styles.appbar, { paddingTop: insets.top }]}>
       <Pressable onPress={onMenuPress} style={styles.iconBtn} hitSlop={12}>
         <MaterialCommunityIcons name="menu" size={24} color={colors.ink} />
       </Pressable>
@@ -128,7 +133,9 @@ function pillForState(state: 'online' | 'offline' | 'syncing', queued: number) {
 
 const styles = StyleSheet.create({
   appbar: {
-    height: 64,
+    // height removed — inset padding (added inline at render) drives total
+    // height now. minHeight keeps the 64dp content row intact.
+    minHeight: 64,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.rule,

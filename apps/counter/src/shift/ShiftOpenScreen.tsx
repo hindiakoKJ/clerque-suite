@@ -18,6 +18,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   colors,
@@ -58,6 +59,7 @@ export default function ShiftOpenScreen({
   onOpened,
   onCancel,
 }: ShiftOpenScreenProps): React.ReactElement {
+  const insets = useSafeAreaInsets();
   const [counts, setCounts] = useState<Record<string, number>>(
     Object.fromEntries(DENOMS.map(d => [d.label, 0])),
   );
@@ -143,7 +145,7 @@ export default function ShiftOpenScreen({
         </View>
       </ScrollView>
 
-      <View style={s.footer}>
+      <View style={[s.footer, { paddingBottom: Math.max(insets.bottom, spacing.s4) }]}>
         {onCancel ? (
           <Pressable style={[s.btn, s.btnGhost]} onPress={onCancel}>
             <Text style={[s.btnText, { color: colors.ink }]}>Cancel</Text>

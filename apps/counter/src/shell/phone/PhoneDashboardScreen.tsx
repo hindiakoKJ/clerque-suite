@@ -221,9 +221,9 @@ export default function PhoneDashboardScreen(): React.ReactElement {
           </View>
         </View>
 
-        {/* Low-stock warning card */}
+        {/* Low-stock warning card — non-interactive (no phone inventory screen yet) */}
         {lowStockCount > 0 ? (
-          <Pressable style={styles.warnCard}>
+          <View style={styles.warnCard}>
             <View style={{ flex: 1 }}>
               <Text style={styles.warnLabel}>
                 LOW STOCK · {lowStockCount} {lowStockCount === 1 ? 'item' : 'items'}
@@ -233,18 +233,21 @@ export default function PhoneDashboardScreen(): React.ReactElement {
               </Text>
             </View>
             <MaterialCommunityIcons name="alert" size={20} color={colors.warningDeep} />
-          </Pressable>
+          </View>
         ) : null}
 
         {/* Shift status big card */}
-        <View style={styles.shiftCard}>
+        <Pressable
+          style={({ pressed }) => [styles.shiftCard, pressed && { backgroundColor: colors.creamSoft }]}
+          onPress={() => nav.navigate('Shift')}
+        >
           <View style={{ flex: 1 }}>
             <Text style={styles.cardLabel}>Shift</Text>
             <Text style={styles.shiftBig}>Tap to view shift</Text>
             <Text style={styles.cardSub}>Open · close · Z-read</Text>
           </View>
           <MaterialCommunityIcons name="chevron-right" size={22} color={colors.muted} />
-        </View>
+        </Pressable>
 
         {/* Approvals chip */}
         {pendingApprovals > 0 ? (

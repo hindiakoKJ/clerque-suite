@@ -23,6 +23,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import PhoneHeader from '@/shell/phone/PhoneHeader';
 import { api, ApiHttpError } from '@/api/client';
 import { formatPeso } from '@/components/Money';
+import { openSupervisorPin } from '@/auth/openSupervisorPin';
 import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
 
 type ApprovalKind = 'VOID' | 'REFUND';
@@ -73,8 +74,9 @@ export default function PhoneApprovalsScreen({ onBack }: Props): React.ReactElem
   });
 
   const mutate = useMutation({
-    mutationFn: async (args: { id: string; action: 'approve' | 'reject' }) => {
-      return api.patch<VoidApproval>(`/void-approvals/${args.id}/${args.action}`, {});
+    mutationFn: async (args: { id: string; action: 'approve' | 'reject'; supervisorId?: string }) => {
+      const body = args.supervisorId ? { supervisorId: args.supervisorId } : {};
+      return api.patch<VoidApproval>(`/void-approvals/${args.id}/${args.action}`, body);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['void-approvals'] });
@@ -83,6 +85,19 @@ export default function PhoneApprovalsScreen({ onBack }: Props): React.ReactElem
       Alert.alert('Error', e instanceof Error ? e.message : 'Failed');
     },
   });
+
+  const handleApprove = React.useCallback(
+    async (id: string, kind: ApprovalKind) => {
+      try {
+        const result = await openSupervisorPin({ reason: `Approve ${kind}` });
+        if (!result) return; // cancelled
+        mutate.mutate({ id, action: 'approve', supervisorId: result.supervisorId });
+      } catch (err) {
+        Alert.alert('Error', err instanceof Error ? err.message : 'Failed to verify PIN');
+      }
+    },
+    [mutate],
+  );
 
   const items = list.data ?? [];
   const count = items.length;
@@ -141,7 +156,7 @@ export default function PhoneApprovalsScreen({ onBack }: Props): React.ReactElem
 
                 <View style={styles.actions}>
                   <Pressable
-                    onPress={() => mutate.mutate({ id: item.id, action: 'approve' })}
+                    onPress={() => { void handleApprove(item.id, kind); }}
                     disabled={mutate.isPending}
                     style={[
                       styles.approveBtn,

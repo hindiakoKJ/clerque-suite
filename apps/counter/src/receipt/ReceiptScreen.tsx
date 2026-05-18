@@ -19,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { Snackbar } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   colors,
@@ -124,9 +125,10 @@ export default function ReceiptScreen({
   };
 
   const device = useDeviceSize();
+  const insets = useSafeAreaInsets();
   if (device === 'phone') {
     return (
-      <View style={ph.root} onTouchStart={bumpActivity}>
+      <View style={[ph.root, { paddingTop: insets.top }]} onTouchStart={bumpActivity}>
         <View style={ph.header}>
           <View style={{ flex: 1 }}>
             <Text style={ph.headerTitle}>Sale complete</Text>
@@ -171,7 +173,7 @@ export default function ReceiptScreen({
           </View>
         </ScrollView>
 
-        <View style={ph.ctaWrap}>
+        <View style={[ph.ctaWrap, { paddingBottom: spacing.s5 + insets.bottom }]}>
           <Pressable
             style={ph.cta}
             onPress={() => { bumpActivity(); onDone(); }}

@@ -13,6 +13,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import PhoneHeader from '@/shell/phone/PhoneHeader';
@@ -35,6 +36,7 @@ export default function PhoneModifierScreen({ route, navigation }: Props): React
   const { activeBranch } = useBranchContext();
   const catalog = usePosCatalog(activeBranch?.id);
   const addLine = useCartStore((s) => s.addLine);
+  const insets = useSafeAreaInsets();
 
   const product: ApiProduct | undefined = catalog.data?.find((p) => p.id === route.params.productId);
   const groups = product?.modifierGroups ?? [];
@@ -170,7 +172,7 @@ export default function PhoneModifierScreen({ route, navigation }: Props): React
         })}
       </ScrollView>
 
-      <View style={styles.ctaWrap}>
+      <View style={[styles.ctaWrap, { paddingBottom: spacing.s5 + insets.bottom }]}>
         {missing.length > 0 ? (
           <Text style={styles.missing}>
             <MaterialCommunityIcons name="alert-circle-outline" size={12} color={colors.warningDeep} />

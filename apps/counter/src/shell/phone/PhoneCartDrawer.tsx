@@ -16,6 +16,7 @@ import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import PhoneHeader from '@/shell/phone/PhoneHeader';
@@ -41,6 +42,7 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
   const active = lines.filter((l) => !l.removed && !l.voidedAt);
   // Track open swipeables so opening one closes the others.
   const swipeRefs = useRef<Map<string, Swipeable>>(new Map());
+  const insets = useSafeAreaInsets();
 
   const onCharge = async () => {
     if (total <= 0) return;
@@ -159,7 +161,7 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
         )}
       />
 
-      <View style={styles.ctaWrap}>
+      <View style={[styles.ctaWrap, { paddingBottom: spacing.s5 + insets.bottom }]}>
         <Pressable
           onPress={onCharge}
           disabled={total <= 0}

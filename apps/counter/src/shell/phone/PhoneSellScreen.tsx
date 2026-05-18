@@ -16,6 +16,7 @@ import React, { useMemo, useState } from 'react';
 import { FlatList, Linking, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Text, ActivityIndicator } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import PhoneHeader from '@/shell/phone/PhoneHeader';
@@ -47,6 +48,7 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
   const addLine = useCartStore((s) => s.addLine);
   const lineCount = useCartStore((s) => s.lineCount());
   const total = useCartStore((s) => s.total());
+  const insets = useSafeAreaInsets();
 
   const [q, setQ] = useState('');
   const [activeCat, setActiveCat] = useState<string>(ALL_CATEGORY);
@@ -217,7 +219,11 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
       {lineCount > 0 ? (
         <Pressable
           onPress={() => navigation.navigate('Cart')}
-          style={({ pressed }) => [styles.cta, pressed && { opacity: 0.92 }]}
+          style={({ pressed }) => [
+            styles.cta,
+            { bottom: spacing.s3 + insets.bottom },
+            pressed && { opacity: 0.92 },
+          ]}
         >
           <View style={styles.ctaLeft}>
             <View style={styles.ctaCountBubble}>

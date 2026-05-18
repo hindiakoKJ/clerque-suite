@@ -13,7 +13,7 @@
  * Tap product without modifiers → addLine() instantly.
  */
 import React, { useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, Linking, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { Text, ActivityIndicator } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -23,6 +23,7 @@ import { useBranchContext } from '@/api/BranchContext';
 import { usePosCatalog, type ApiProduct } from '@/api/queries';
 import { useCartStore } from '@/terminal/cartStore';
 import { formatPeso } from '@/components/Money';
+import { getWebOrigin, getWebHost } from '@/api/webOrigin';
 import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
 import type { PhoneSellStackParamList } from '@/shell/phone/types';
 
@@ -184,10 +185,30 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
         ListEmptyComponent={
           catalog.isLoading ? (
             <View style={styles.center}><ActivityIndicator /></View>
+          ) : q ? (
+            <View style={styles.emptyState}>
+              <MaterialCommunityIcons name="magnify-close" size={48} color="#5F564B" />
+              <Text style={styles.emptyTitle}>No products match</Text>
+              <Text style={styles.emptyHint}>Try a different name, SKU, or barcode.</Text>
+            </View>
           ) : (
-            <Text style={styles.empty}>
-              {q ? 'No products match' : 'No products in catalog'}
-            </Text>
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIconWrap}>
+                <MaterialCommunityIcons name="package-variant-closed" size={40} color="#3B82F6" />
+              </View>
+              <Text style={styles.emptyTitle}>No products yet</Text>
+              <Text style={styles.emptyHint}>
+                Build your catalog on the web first — open{'\n'}
+                <Text style={styles.emptyHintBold}>{getWebHost()}</Text> on a laptop or browser.
+              </Text>
+              <Pressable
+                onPress={() => Linking.openURL(`${getWebOrigin()}/pos/products`).catch(() => {})}
+                style={({ pressed }) => [styles.emptyCta, pressed && { opacity: 0.9 }]}
+              >
+                <MaterialCommunityIcons name="open-in-new" size={16} color="#fff" />
+                <Text style={styles.emptyCtaText}>Open products page</Text>
+              </Pressable>
+            </View>
           )
         }
       />
@@ -278,6 +299,33 @@ const styles = StyleSheet.create({
 
   center: { padding: spacing.s7, alignItems: 'center' },
   empty: { ...textTokens.body, color: colors.muted, textAlign: 'center', padding: spacing.s7 },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: spacing.s8,
+    paddingHorizontal: spacing.s5,
+    gap: spacing.s3,
+  },
+  emptyIconWrap: {
+    width: 72, height: 72,
+    borderRadius: radii.xl,
+    backgroundColor: colors.primaryContainer,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: spacing.s2,
+  },
+  emptyTitle: { ...textTokens.displaySm, color: colors.ink, fontSize: 18, textAlign: 'center' },
+  emptyHint: { ...textTokens.bodySm, color: colors.muted, textAlign: 'center', lineHeight: 20 },
+  emptyHintBold: { color: colors.ink, fontWeight: '700' },
+  emptyCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s2,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.s5,
+    paddingVertical: spacing.s3,
+    borderRadius: radii.pill,
+    marginTop: spacing.s4,
+  },
+  emptyCtaText: { color: colors.onPrimary, fontWeight: '700', fontSize: 14 },
 
   cta: {
     position: 'absolute',

@@ -258,7 +258,14 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
 }
 
 function errorLabel(err: unknown): string {
-  if (err instanceof ApiHttpError && err.status === 0) return 'Offline';
+  if (err instanceof ApiHttpError && err.status === 0) return 'Offline · pull to retry';
+  if (err instanceof ApiHttpError && err.status === 401) return 'Session expired — sign in again';
+  if (err instanceof ApiHttpError && err.status === 403) return 'No access to orders on this account';
+  if (err instanceof ApiHttpError) {
+    // Surface the real server message so empty / mis-configured tenants
+    // see "No branch selected" instead of a generic "Could not load."
+    return err.message || `Could not load orders (HTTP ${err.status})`;
+  }
   return 'Could not load orders';
 }
 

@@ -183,7 +183,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     // endpoint exists. Both user + tenant are baked into the JWT payload
     // (see JwtPayload in packages/shared-types/src/auth.ts) so we decode
     // the access token directly to populate the session.
+    // The Cloud auth strategy reads `companyCode` from the request body
+    // (see apps/api/src/auth/strategies/local.strategy.ts line 14). Sending
+    // `tenantSlug` makes the API silently ignore the disambiguator, which
+    // is how `admin@demo.com` typed with Tenant ID "demo" was ending up
+    // on whichever other tenant the same email exists on. Send both names
+    // for forward-compat in case the strategy ever supports `tenantSlug`.
     const tokens = await api.post<LoginResponse>('/auth/login', {
+      companyCode: tenantSlug,
       tenantSlug,
       email,
       password,

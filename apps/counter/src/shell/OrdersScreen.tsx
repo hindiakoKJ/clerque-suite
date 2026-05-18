@@ -61,16 +61,20 @@ interface ApiOrderPayment {
 }
 interface ApiOrderRow {
   id: string;
-  orNumber?: number | null;
+  /** Cloud schema names this `orderNumber` (string). Keep all known
+   *  aliases since older / different endpoints have used the others. */
+  orderNumber?: string | number | null;
+  orNumber?: number | string | null;
   receiptNumber?: number | string | null;
   createdAt: string;
   completedAt?: string | null;
   status?: string | null;
   voidedAt?: string | null;
   refundedAt?: string | null;
-  totalAmount: number | string;
-  items: ApiOrderItem[];
-  payments: ApiOrderPayment[];
+  totalAmount?: number | string | null;
+  total?: number | string | null;
+  items?: ApiOrderItem[];
+  payments?: ApiOrderPayment[];
 }
 interface ApiOrdersPage {
   data: ApiOrderRow[];
@@ -102,40 +106,53 @@ function mapStatus(row: ApiOrderRow): OrderStatus {
   return 'PAID';
 }
 
-function adaptOrder(row: ApiOrderRow): OrderSummary {
-  const lines: CartLine[] = (row.items ?? []).map((it) => {
-    const qty = typeof it.quantity === 'string' ? Number(it.quantity) : it.quantity;
-    const unit = toCents(it.unitPrice);
-    const totalRaw = it.lineTotal ?? it.totalPrice ?? null;
-    const lineTotal = totalRaw !== null ? toCents(totalRaw) : Math.round(qty * unit);
+function adaptOrder(row: ApiOrderRow): OrderSummary | null {
+  // Defensive — if a single row is malformed, drop it instead of crashing
+  // the whole list. Caller filters out nulls.
+  try {
+    const lines: CartLine[] = (row.items ?? []).map((it) => {
+      const qty = typeof it.quantity === 'string' ? Number(it.quantity) : (it.quantity ?? 0);
+      const unit = toCents(it.unitPrice);
+      const totalRaw = it.lineTotal ?? it.totalPrice ?? null;
+      const lineTotal = totalRaw !== null ? toCents(totalRaw) : Math.round((qty || 0) * unit);
+      return {
+        id: it.id,
+        productId: it.id,
+        productName: it.productName ?? 'Item',
+        qty: qty || 0,
+        unitPrice: unit,
+        modifiers: [],
+        lineTotal,
+        voidedAt: it.voidedAt ?? undefined,
+      };
+    });
+    const payments: CartPayment[] = (row.payments ?? []).map((p) => ({
+      method: mapPaymentMethod(p.method),
+      amount: toCents(p.amount),
+    }));
+    // Cloud schema uses `orderNumber: string` ("ORD-2026-000019"). Older /
+    // alternate routes have returned numeric `orNumber` or `receiptNumber`.
+    // Accept all three.
+    const orNumberRaw = row.orderNumber ?? row.orNumber ?? row.receiptNumber ?? 0;
+    const orNumber =
+      typeof orNumberRaw === 'string'
+        ? (Number(orNumberRaw.replace(/\D/g, '')) || 0)
+        : (orNumberRaw ?? 0);
     return {
-      id: it.id,
-      productId: it.id,
-      productName: it.productName,
-      qty,
-      unitPrice: unit,
-      modifiers: [],
-      lineTotal,
-      voidedAt: it.voidedAt ?? undefined,
+      id: row.id,
+      orNumber,
+      issuedAt: row.completedAt ?? row.createdAt,
+      itemCount: lines.reduce((s, l) => s + (l.qty || 0), 0),
+      totalCents: toCents(row.totalAmount ?? row.total),
+      status: mapStatus(row),
+      payments,
+      lines,
     };
-  });
-  const payments: CartPayment[] = (row.payments ?? []).map((p) => ({
-    method: mapPaymentMethod(p.method),
-    amount: toCents(p.amount),
-  }));
-  const orNumberRaw = row.orNumber ?? row.receiptNumber ?? 0;
-  const orNumber =
-    typeof orNumberRaw === 'string' ? Number(orNumberRaw) || 0 : (orNumberRaw ?? 0);
-  return {
-    id: row.id,
-    orNumber,
-    issuedAt: row.completedAt ?? row.createdAt,
-    itemCount: lines.reduce((s, l) => s + (l.qty || 0), 0),
-    totalCents: toCents(row.totalAmount),
-    status: mapStatus(row),
-    payments,
-    lines,
-  };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[orders] adaptOrder failed for row, dropping:', { id: row?.id, err });
+    return null;
+  }
 }
 
 function isToday(iso: string): boolean {
@@ -177,9 +194,19 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
     queryKey: ['orders', 'today', branchId],
     queryFn: async () => {
       const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : '';
-      const res = await api.get<ApiOrdersPage | ApiOrderRow[]>(`/orders${qs}`);
-      const rows: ApiOrderRow[] = Array.isArray(res) ? res : (res?.data ?? []);
-      return rows.map(adaptOrder).filter((o) => isToday(o.issuedAt));
+      try {
+        const res = await api.get<ApiOrdersPage | ApiOrderRow[]>(`/orders${qs}`);
+        const rows: ApiOrderRow[] = Array.isArray(res) ? res : (res?.data ?? []);
+        return rows
+          .map(adaptOrder)
+          .filter((o): o is OrderSummary => o !== null && isToday(o.issuedAt));
+      } catch (err) {
+        // Surface the actual cause in Metro logs — the errorLabel UI only
+        // shows a short string but devs (and the founder) need the stack.
+        // eslint-disable-next-line no-console
+        console.warn('[orders] /orders fetch failed:', err);
+        throw err;
+      }
     },
     retry: 1,
   });

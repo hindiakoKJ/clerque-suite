@@ -483,13 +483,11 @@ export default function SettingsPage() {
                 desc="One-page staff handbook on phishing, passwords, lost devices, public WiFi — hand to your team"
               />
             )}
-            {/* Sprint 20 — 2FA / Security: any logged-in user can enrol */}
-            <SettingsCard
-              href="/settings/security"
-              icon={KeyRound}
-              title="Security &amp; 2FA"
-              desc="Enable two-factor authentication and manage backup codes for your account"
-            />
+            {/* Sprint 20 — 2FA / Security: managed inline from the Security
+                tab below + the dedicated /settings/security page accessed
+                via the "Manage 2FA →" button there. The duplicate grid
+                card created a navigation loop (card → /settings/security
+                → back-link → /settings → card again), so removed. */}
           </div>
         </section>
 
@@ -947,6 +945,27 @@ export default function SettingsPage() {
         {/* ── Security tab ─────────────────────────────────────────────────── */}
         {tab === 'security' && (
           <div className="space-y-5">
+            {/* 2FA shortcut — single canonical entry to /settings/security */}
+            <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0">
+                <KeyRound className="w-5 h-5 text-amber-500" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-foreground">Two-factor authentication</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Add a 6-digit authenticator code on top of your password. Recommended for
+                  Business Owner, Accountant, and Payroll roles.
+                </p>
+              </div>
+              <Link
+                href="/settings/security"
+                className="text-sm font-semibold px-4 py-2 rounded-lg text-white whitespace-nowrap"
+                style={{ background: 'var(--accent)' }}
+              >
+                Manage 2FA →
+              </Link>
+            </div>
+
             {/* Change own password */}
             <div className="rounded-xl border border-border bg-card p-4 space-y-4">
               <div className="flex items-center gap-2">

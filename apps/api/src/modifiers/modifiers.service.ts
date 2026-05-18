@@ -158,13 +158,16 @@ export class ModifiersService {
     });
     if (!product) throw new NotFoundException('Product not found');
 
-    try {
-      return await this.prisma.productModifierGroup.create({
-        data: { productId, modifierGroupId: groupId, sortOrder },
-      });
-    } catch {
-      throw new ConflictException('Modifier group already attached to this product');
-    }
+    // Idempotent: the caller's intent is "this group should be attached
+    // to this product." If it already is, that's the desired end state —
+    // returning a 409 made the web modal's auto-attach-after-create flow
+    // double-fire and surface a "Failed to attach" toast even though the
+    // data was correctly persisted.
+    return this.prisma.productModifierGroup.upsert({
+      where:  { productId_modifierGroupId: { productId, modifierGroupId: groupId } },
+      create: { productId, modifierGroupId: groupId, sortOrder },
+      update: {},
+    });
   }
 
   async detachGroupFromProduct(tenantId: string, productId: string, groupId: string) {

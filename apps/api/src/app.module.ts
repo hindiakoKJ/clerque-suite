@@ -15,6 +15,7 @@ import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { AccountingModule } from './accounting/accounting.module';
 import { ModifiersModule } from './modifiers/modifiers.module';
+import { PreOrdersModule } from './pre-orders/pre-orders.module';
 import { SettlementModule } from './settlement/settlement.module';
 import { AccountingPeriodsModule } from './accounting-periods/accounting-periods.module';
 import { ExportModule } from './export/export.module';
@@ -98,6 +99,7 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     UsersModule,
     AccountingModule,
     ModifiersModule,
+    PreOrdersModule,
     SettlementModule,
     AccountingPeriodsModule,
     ExportModule,

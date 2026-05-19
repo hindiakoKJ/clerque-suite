@@ -580,6 +580,7 @@ model Tenant {
   vendors              Vendor[]
   expenses             ExpenseEntry[]
   customers            Customer[]
+  preOrders            PreOrder[]
   rawMaterials         RawMaterial[]
   payRuns              PayRun[]
   payslips             Payslip[]
@@ -864,6 +865,7 @@ model Branch {
   jobOrders       JobOrder[]
   kioskTerminals  KioskTerminal[]
   deliveryReceipts DeliveryReceipt[]
+  preOrders       PreOrder[]
 
   @@map("branches")
 }
@@ -981,6 +983,7 @@ model User {
   tripsAsLiquidator          TripTicket[]   @relation("TripLiquidator")
   jobOrdersAsTechnician      JobOrder[]     @relation("JobOrderTechnician")
   jobOrderLinesAsTechnician  JobOrderLine[] @relation("JobOrderLineTechnician")
+  preOrdersCreated           PreOrder[]
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -1135,6 +1138,7 @@ model Product {
   inventoryLogs       InventoryLog[]
   bomItems            BomItem[]
   orderItems          OrderItem[]
+  preOrderItems       PreOrderItem[]
   promotionItems      PromotionProduct[]
   modifierGroups      ProductModifierGroup[]
   laundryProductLines LaundryProductLine[]
@@ -1504,6 +1508,9 @@ model Order {
   progressBillings   ProgressBilling[]   @relation("ProgressBillingOrder")
   retentionReleases  RetentionRelease[]  @relation("RetentionReleaseOrder")
   jobOrder           JobOrder?           @relation("JobOrderInvoice")
+  /// Back-pointers when this Order represents a pre-order deposit or balance.
+  preOrderAsDeposit  PreOrder?           @relation("PreOrderDeposit")
+  preOrderAsBalance  PreOrder?           @relation("PreOrderBalance")
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId, createdAt])
@@ -2342,6 +2349,7 @@ model Customer {
   prescriptions Prescription[]
   trips         TripTicket[]   @relation("TripCustomer")
   jobOrders     JobOrder[]     @relation("JobOrderCustomer")
+  preOrders     PreOrder[]
 
   // Sprint 19 — Loyalty stamp cards (digital + printable)
   stampCards    CustomerStampCard[]
@@ -5632,4 +5640,121 @@ model DisplayPairing {
   @@index([tenantId, role, redeemedAt])
   @@index([deviceToken])
   @@map("display_pairings")
+}
+
+// ─── Pre-orders (Bakery custom cakes + advance reservations) ──────────────────
+
+/// Lifecycle of a customer pre-order. Drives both the kitchen workflow and
+/// the accounting flow — deposits are recognised as a liability until pickup.
+///
+///   DRAFT         — captured but customer hasn't paid yet (rare; usually
+///                   we book the deposit straight away)
+///   DEPOSIT_PAID  — deposit recorded as an Order with kind=DEPOSIT; balance
+///                   still due on pickup
+///   READY         — kitchen has finished production; cashier can settle
+///   PICKED_UP     — customer received the goods; balance Order rung
+///   CANCELLED     — refund deposit if any; do not reuse the receipt #
+enum PreOrderStatus {
+  DRAFT
+  DEPOSIT_PAID
+  READY
+  PICKED_UP
+  CANCELLED
+}
+
+/// A reservation for a future-dated sale. Built for bakery custom cakes but
+/// reusable for any vertical that takes a deposit and settles later (e.g.
+/// catering, made-to-order furniture, special orders).
+model PreOrder {
+  id                String         @id @default(cuid())
+  tenantId          String
+  branchId          String
+  customerId        String?
+  /// Cashier or sales person who took the order. Stamps audit attribution.
+  createdById       String
+  /// Server-generated short code shown to the customer ("PO-000123"). The
+  /// receipt prints this so a walk-in cashier can find the order on pickup.
+  preOrderNumber    String
+  status            PreOrderStatus @default(DRAFT)
+  /// When the customer expects to pick up / take delivery. Counter dashboard
+  /// surfaces "today's pickups"; production-plan job uses this for tomorrow's
+  /// bake list.
+  pickupDate        DateTime
+  /// Optional time-of-day within the pickup date. NULL = anytime.
+  pickupTime        String?        @db.VarChar(8)  // "HH:MM" / "HH:MM:SS"
+  /// Free-text inscription (cake message). Printed on the production slip.
+  inscription       String?
+  /// Anything else the kitchen needs (allergies, colour, theme).
+  notes             String?
+  /// ₱ cents — totals are snapshotted at order time so price changes after
+  /// don't quietly affect the balance owed.
+  subtotalCents     Int            @default(0)
+  discountCents     Int            @default(0)
+  totalCents        Int            @default(0)
+  depositCents      Int            @default(0)
+  /// Computed as totalCents − depositCents at write time. Kept here so the
+  /// settle-balance flow can read it without recomputing the snapshot.
+  balanceCents      Int            @default(0)
+  /// Backlinks to the Order rows representing actual cash movement.
+  /// depositOrderId is set when DEPOSIT_PAID; balanceOrderId when PICKED_UP.
+  depositOrderId    String?        @unique
+  balanceOrderId    String?        @unique
+  cancelledAt       DateTime?
+  cancellationReason String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  tenant        Tenant     @relation(fields: [tenantId],   references: [id], onDelete: Cascade)
+  branch        Branch     @relation(fields: [branchId],   references: [id])
+  customer      Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdBy     User       @relation(fields: [createdById], references: [id])
+  depositOrder  Order?     @relation("PreOrderDeposit", fields: [depositOrderId], references: [id])
+  balanceOrder  Order?     @relation("PreOrderBalance", fields: [balanceOrderId], references: [id])
+
+  items PreOrderItem[]
+
+  @@unique([tenantId, preOrderNumber])
+  @@index([tenantId, branchId, pickupDate])
+  @@index([tenantId, status, pickupDate])
+  @@index([customerId])
+  @@map("pre_orders")
+}
+
+/// Line item on a pre-order. Mirrors OrderItem shape so the settle-balance
+/// flow can copy these straight onto the final Order with minimal mapping.
+model PreOrderItem {
+  id              String  @id @default(cuid())
+  preOrderId      String
+  productId       String
+  productName     String  /// Snapshot — survives product rename
+  quantity        Decimal @db.Decimal(12, 3)
+  unitPriceCents  Int
+  /// Sum of modifier priceAdjustment × qty. Pre-computed for fast totals.
+  modifierAddCents Int    @default(0)
+  lineTotalCents  Int
+  notes           String?
+
+  preOrder  PreOrder              @relation(fields: [preOrderId], references: [id], onDelete: Cascade)
+  product   Product               @relation(fields: [productId],  references: [id])
+  modifiers PreOrderItemModifier[]
+
+  @@index([preOrderId])
+  @@map("pre_order_items")
+}
+
+/// Snapshot of a modifier choice on a pre-order line. Same shape as
+/// OrderItemModifier so copy-on-settle is a 1:1 map.
+model PreOrderItemModifier {
+  id                String  @id @default(cuid())
+  preOrderItemId    String
+  modifierGroupId   String
+  modifierOptionId  String
+  groupName         String
+  optionName        String
+  priceAdjustment   Decimal @db.Decimal(12, 2)
+
+  preOrderItem PreOrderItem @relation(fields: [preOrderItemId], references: [id], onDelete: Cascade)
+
+  @@index([preOrderItemId])
+  @@map("pre_order_item_modifiers")
 }

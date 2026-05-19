@@ -428,6 +428,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/products',          'Products',          Package,         PRODUCTS_ROLES,  role),
         makeNavItem('/pos/inventory',         'Ingredients',       ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/modifier-recipes',  'Modifier recipes',  FlaskConical,    PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/price-lists',       'Price lists',       Tag,             PRODUCTS_ROLES,  role),
         makeNavItem('/pos/settings/uom',      'Units (UoM)',       Ruler,           UOM_ROLES,       role),
       ]),
       ...warehouseSection,

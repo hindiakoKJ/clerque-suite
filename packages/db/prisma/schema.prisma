@@ -581,6 +581,7 @@ model Tenant {
   expenses             ExpenseEntry[]
   customers            Customer[]
   preOrders            PreOrder[]
+  priceLists           PriceList[]
   rawMaterials         RawMaterial[]
   payRuns              PayRun[]
   payslips             Payslip[]
@@ -1139,6 +1140,7 @@ model Product {
   bomItems            BomItem[]
   orderItems          OrderItem[]
   preOrderItems       PreOrderItem[]
+  priceListItems      PriceListItem[]
   promotionItems      PromotionProduct[]
   modifierGroups      ProductModifierGroup[]
   laundryProductLines LaundryProductLine[]
@@ -2333,12 +2335,16 @@ model Customer {
   /// Drives the loyalty punch-card UI ("you're 7 of 10 visits in"). Reset to 0
   /// after a free-Nth promo redemption.
   loyaltyVisits  Int      @default(0)
+  /// Optional wholesale price list. When set, Counter cart pulls per-product
+  /// overrides from PriceListItem instead of the default Product.price.
+  priceListId    String?
   notes          String?
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  priceList     PriceList?     @relation(fields: [priceListId], references: [id], onDelete: SetNull)
   orders        Order[]
   invoices      ARInvoice[]
   payments      ARPayment[]
@@ -5757,4 +5763,51 @@ model PreOrderItemModifier {
 
   @@index([preOrderItemId])
   @@map("pre_order_item_modifiers")
+}
+
+// ─── Wholesale Price Lists ────────────────────────────────────────────────────
+
+/// A named price list — used to offer wholesale / corporate / event pricing
+/// per customer or per customer-group. Resolves at cart time: if the active
+/// customer has `priceListId` set, every line price is overridden via
+/// `PriceListItem`. Products without an override fall back to default price.
+///
+/// Bakery example: "Wholesale (cafes)" list with discounted unit prices for
+/// pandesal, ensaymada, monay that sell to nearby cafes by the dozen.
+model PriceList {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String   /// "Wholesale (cafes)", "Corporate Q4 Promo", etc.
+  notes       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items     PriceListItem[]
+  customers Customer[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+  @@map("price_lists")
+}
+
+/// Per-product price override on a PriceList. Missing rows = use default price.
+model PriceListItem {
+  id              String   @id @default(cuid())
+  priceListId     String
+  productId       String
+  /// ₱ pesos. Stored as Decimal for consistency with Product.price.
+  unitPrice       Decimal  @db.Decimal(12, 2)
+  /// Minimum order quantity to unlock this price (e.g. "dozen-or-more").
+  /// NULL = no minimum.
+  minQuantity     Decimal? @db.Decimal(12, 3)
+
+  priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId],   references: [id], onDelete: Cascade)
+
+  @@unique([priceListId, productId])
+  @@index([priceListId])
+  @@index([productId])
+  @@map("price_list_items")
 }

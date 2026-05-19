@@ -155,14 +155,13 @@ function adaptOrder(row: ApiOrderRow): OrderSummary | null {
   }
 }
 
-function isToday(iso: string): boolean {
-  // Match by PH calendar date (UTC+8).
+function isLast7Days(iso: string): boolean {
+  // Keep recent history visible. Older than 7 days drops out of the phone
+  // feed; the user can hit the web for deeper history.
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return false;
-  const phMs = d.getTime() + 8 * 60 * 60 * 1000;
-  const ph = new Date(phMs).toISOString().slice(0, 10);
-  const todayPh = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  return ph === todayPh;
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  return d.getTime() >= cutoff;
 }
 
 // Printer service — optional import (the printer agent owns wiring usePrinter).
@@ -199,7 +198,7 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
         const rows: ApiOrderRow[] = Array.isArray(res) ? res : (res?.data ?? []);
         return rows
           .map(adaptOrder)
-          .filter((o): o is OrderSummary => o !== null && isToday(o.issuedAt));
+          .filter((o): o is OrderSummary => o !== null && isLast7Days(o.issuedAt));
       } catch (err) {
         // Surface the actual cause in Metro logs — the errorLabel UI only
         // shows a short string but devs (and the founder) need the stack.
@@ -234,7 +233,7 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
 
   return (
     <View style={styles.root}>
-      <ShellHeader title="Orders" subtitle="Today" onMenuPress={onMenuPress} />
+      <ShellHeader title="Orders" subtitle="Last 7 days" onMenuPress={onMenuPress} />
       <FlatList
         data={data ?? []}
         keyExtractor={(o) => o.id}
@@ -248,7 +247,7 @@ export default function OrdersScreen({ onMenuPress }: Props): React.ReactElement
               <ActivityIndicator />
             ) : (
               <Text style={styles.emptyTitle}>
-                {error ? errorLabel(error) : 'No orders yet today'}
+                {error ? errorLabel(error) : 'No orders in the last 7 days'}
               </Text>
             )}
             {!isLoading && !error ? (

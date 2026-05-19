@@ -1,8 +1,10 @@
 /**
  * Clerque Counter — brand lockup (mark + wordmark)
  *
- * Reusable row of `<CounterMark />` + "Clerque · Counter" wordmark, pixel-
- * faithful to `.brand-mark.sz-sm` in design-source-v3.
+ * Uses the real Clerque ecosystem brand mark (purple gradient backdrop with
+ * three inset cards — Counter, Ledger, Sync) from `<ClerqueLogo />`. The
+ * wordmark to the right reads "Clerque · Counter" with the product name
+ * brand-tinted in primary brown.
  *
  *   "Clerque"   → ink colour, font-display, weight 800
  *   "·"         → faint colour, fixed inline margin
@@ -20,7 +22,7 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 
-import CounterMark from '@/components/CounterMark';
+import ClerqueLogo from '@/components/ClerqueLogo';
 import { colors, fonts, spacing } from '@/theme';
 
 export type BrandSize = 'sm' | 'md' | 'lg' | 'xl';
@@ -33,11 +35,11 @@ interface Props {
   onDark?: boolean;
 }
 
-const SIZE_MAP: Record<BrandSize, { mark: number; markRadius: number; word: number; gap: number }> = {
-  sm: { mark: 24,  markRadius: 7,  word: 14, gap: spacing.s2 },
-  md: { mark: 40,  markRadius: 10, word: 22, gap: spacing.s3 },
-  lg: { mark: 96,  markRadius: 24, word: 26, gap: spacing.s4 },
-  xl: { mark: 152, markRadius: 36, word: 56, gap: spacing.s5 },
+const SIZE_MAP: Record<BrandSize, { mark: number; word: number; gap: number }> = {
+  sm: { mark: 28,  word: 14, gap: spacing.s2 },
+  md: { mark: 44,  word: 22, gap: spacing.s3 },
+  lg: { mark: 96,  word: 26, gap: spacing.s4 },
+  xl: { mark: 152, word: 56, gap: spacing.s5 },
 };
 
 export default function BrandLockup({
@@ -51,8 +53,8 @@ export default function BrandLockup({
   const counterColour = onDark ? colors.primaryContainer : colors.primary;
 
   return (
-    <View style={[styles.row, { flexDirection: direction, gap: spec.gap, alignItems: direction === 'row' ? 'center' : 'center' }]}>
-      <CounterMark size={spec.mark} radius={spec.markRadius} />
+    <View style={[styles.row, { flexDirection: direction, gap: spec.gap, alignItems: 'center' }]}>
+      <ClerqueLogo size={spec.mark} />
       <View style={styles.word}>
         <Text style={{ fontFamily: fonts.displayBold, fontSize: spec.word, fontWeight: '800', color: inkColour, letterSpacing: -0.5 }}>
           Clerque

@@ -127,55 +127,58 @@ export default function ReceiptScreen({
   const device = useDeviceSize();
   const insets = useSafeAreaInsets();
   if (device === 'phone') {
+    const orPadded = receipt.orNumber.toString().padStart(6, '0');
     return (
       <View style={[ph.root, { paddingTop: insets.top }]} onTouchStart={bumpActivity}>
+        {/* App-bar: title + status pills + sent indicator */}
         <View style={ph.header}>
           <View style={{ flex: 1 }}>
             <Text style={ph.headerTitle}>Sale complete</Text>
             <View style={ph.headerMetaRow}>
               <Pill tone="success" dot>Paid</Pill>
-              {printedAt ? <Pill tone="info" dot>⎙ Sent</Pill> : null}
+              <Text style={ph.orInline}>OR # {orPadded}</Text>
             </View>
           </View>
+          {printedAt ? <Pill tone="info" dot>⎙ Sent</Pill> : null}
         </View>
 
+        {/* Receipt preview centered */}
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={ph.body}
           onScrollBeginDrag={bumpActivity}
         >
-          <Text style={ph.orHuge}>
-            OR #{receipt.orNumber.toString().padStart(6, '0')}
-          </Text>
-
-          {/* Action chip row: re-print / SMS / Email */}
-          <View style={ph.iconRow}>
-            <Pressable
-              style={ph.iconBtn}
-              onPress={handlePrint}
-              disabled={printing}
-            >
-              <Text style={ph.iconBtnLabel}>
-                {printing ? 'Printing…' : '⎙  Re-print'}
-              </Text>
-            </Pressable>
-            <Pressable style={ph.iconBtn} onPress={() => { bumpActivity(); onSms?.(); }}>
-              <Text style={ph.iconBtnLabel}>SMS</Text>
-            </Pressable>
-            <Pressable style={ph.iconBtn} onPress={() => { bumpActivity(); onEmail?.(); }}>
-              <Text style={ph.iconBtnLabel}>Email</Text>
-            </Pressable>
-          </View>
-
-          {/* Receipt card centered */}
           <View style={ph.receiptCard}>
             <Receipt {...receipt} />
           </View>
         </ScrollView>
 
-        <View style={[ph.ctaWrap, { paddingBottom: spacing.s5 + insets.bottom }]}>
+        {/* Bottom panel: 3-up action row + primary CTA */}
+        <View style={[ph.bottomPanel, { paddingBottom: spacing.s5 + insets.bottom }]}>
+          <View style={ph.actionRow3}>
+            <Pressable
+              style={({ pressed }) => [ph.action, pressed && ph.actionPressed]}
+              onPress={handlePrint}
+              disabled={printing}
+            >
+              <Text style={ph.actionLabel}>{printing ? 'Printing…' : '⎙ Re-print'}</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [ph.action, pressed && ph.actionPressed]}
+              onPress={() => { bumpActivity(); onSms?.(); }}
+            >
+              <Text style={ph.actionLabel}>SMS</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [ph.action, pressed && ph.actionPressed]}
+              onPress={() => { bumpActivity(); onEmail?.(); }}
+            >
+              <Text style={ph.actionLabel}>Email</Text>
+            </Pressable>
+          </View>
+
           <Pressable
-            style={ph.cta}
+            style={({ pressed }) => [ph.cta, pressed && ph.ctaPressed]}
             onPress={() => { bumpActivity(); onDone(); }}
           >
             <Text style={ph.ctaLabel}>Start next sale →</Text>
@@ -367,58 +370,52 @@ const ph = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.s4,
-    paddingVertical: spacing.s3,
+    paddingHorizontal: spacing.s3,
+    paddingVertical: spacing.s2,
+    minHeight: 56,
     borderBottomWidth: 1,
     borderBottomColor: colors.rule,
     backgroundColor: colors.surface,
   },
-  headerTitle: { ...textTokens.displaySm, color: colors.ink, fontSize: 15, fontWeight: '800' },
-  headerMetaRow: { flexDirection: 'row', gap: spacing.s2, marginTop: 4 },
+  headerTitle:   { fontFamily: fonts.displayBold, fontSize: 15, fontWeight: '800', color: colors.ink },
+  headerMetaRow: { flexDirection: 'row', gap: 6, marginTop: 4, alignItems: 'center' },
+  orInline:      { fontFamily: fonts.mono, fontSize: 10, fontWeight: '500', color: colors.muted, ...tnum },
 
   body: {
     paddingHorizontal: spacing.s4,
     paddingTop: spacing.s4,
-    paddingBottom: 120,
+    paddingBottom: spacing.s5,
     alignItems: 'center',
-    gap: spacing.s4,
   },
-  orHuge: {
-    fontFamily: fonts.mono,
-    fontSize: 32,
-    fontWeight: '800',
-    color: colors.ink,
-    letterSpacing: -0.5,
-    ...tnum,
-  },
-  iconRow: { flexDirection: 'row', gap: spacing.s2, alignSelf: 'stretch' },
-  iconBtn: {
-    flex: 1,
-    height: 44,
-    borderRadius: radii.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.rule,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconBtnLabel: { ...textTokens.body, color: colors.ink, fontWeight: '700', fontSize: 13 },
+  receiptCard: { alignSelf: 'center', maxWidth: 320 },
 
-  receiptCard: { alignSelf: 'stretch', alignItems: 'center' },
-
-  ctaWrap: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
+  bottomPanel: {
+    padding: spacing.s3,
     backgroundColor: colors.surface,
     borderTopWidth: 1, borderTopColor: colors.rule,
-    padding: spacing.s3,
-    paddingBottom: spacing.s5,
+    gap: spacing.s2,
   },
-  cta: {
-    height: 64,
-    backgroundColor: colors.primary,
-    borderRadius: radii.lg,
+  actionRow3: { flexDirection: 'row', gap: spacing.s2 },
+  action: {
+    flex: 1,
+    height: 44,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ctaLabel: { ...textTokens.cashierLg, color: colors.onPrimary, fontSize: 17 },
+  actionPressed: { backgroundColor: colors.primaryContainer },
+  actionLabel:   { fontFamily: fonts.bodyBold, fontSize: 13, fontWeight: '600', color: colors.primary },
+
+  cta: {
+    height: 56,
+    backgroundColor: colors.primary,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ctaPressed: { backgroundColor: colors.primaryPress },
+  ctaLabel:   { color: colors.onPrimary, fontFamily: fonts.bodyBold, fontWeight: '700', fontSize: 16 },
 });

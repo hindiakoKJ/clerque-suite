@@ -14,6 +14,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
 import { useBranchContext } from '@/api/BranchContext';
+import BrandLockup from '@/components/BrandLockup';
+import SyncPill from '@/components/SyncPill';
 import { colors, radii, spacing, text } from '@/theme';
 
 interface Props {
@@ -22,11 +24,9 @@ interface Props {
 
 export default function TopBar({ onMenuPress }: Props): React.ReactElement {
   const { tenant, session, cashier } = useAuth();
-  const { state, queuedCount } = useSync();
   const { branches, activeBranch, setActiveBranch } = useBranchContext();
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
 
-  const pill = pillForState(state, queuedCount);
   const showBranchPicker = branches.length > 1;
   // Add OS status-bar inset on top — without this the bar draws under
   // the clock / signal / battery icons on Android phones (the tablet
@@ -36,11 +36,13 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
   return (
     <View style={[styles.appbar, { paddingTop: insets.top }]}>
       <Pressable onPress={onMenuPress} style={styles.iconBtn} hitSlop={12}>
-        <MaterialCommunityIcons name="menu" size={24} color={colors.ink} />
+        <MaterialCommunityIcons name="menu" size={24} color={colors.muted} />
       </Pressable>
 
+      <BrandLockup size="md" />
+
       <View style={styles.tenant}>
-        <Text style={styles.tenantName}>{tenant?.name ?? 'Clerque · Counter'}</Text>
+        <Text style={styles.tenantName} numberOfLines={1}>{tenant?.name ?? '—'}</Text>
         <Text style={styles.tenantSub}>
           {tenant ? (tenant.planCode ? `${tenant.planCode.replace('_', ' ')} plan` : 'Tenant') : 'Not signed in'}
         </Text>
@@ -98,10 +100,7 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
             </View>
           </Pressable>
         </Modal>
-        <View style={[styles.pill, { backgroundColor: pill.bg }]}>
-          <View style={[styles.pillDot, { backgroundColor: pill.fg }]} />
-          <Text style={[styles.pillLabel, { color: pill.fg }]}>{pill.label}</Text>
-        </View>
+        <SyncPill />
 
         <Pressable style={styles.iconBtn} hitSlop={12}>
           <MaterialCommunityIcons name="bell-outline" size={22} color={colors.ink} />
@@ -119,16 +118,6 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
       </View>
     </View>
   );
-}
-
-function pillForState(state: 'online' | 'offline' | 'syncing', queued: number) {
-  if (state === 'offline') {
-    return { bg: colors.warningSoft, fg: colors.warningDeep, label: `Offline · ${queued} queued` };
-  }
-  if (state === 'syncing') {
-    return { bg: colors.infoSoft, fg: colors.infoDeep, label: `Syncing · ${queued} left` };
-  }
-  return { bg: colors.successSoft, fg: colors.successDeep, label: 'Online' };
 }
 
 const styles = StyleSheet.create({

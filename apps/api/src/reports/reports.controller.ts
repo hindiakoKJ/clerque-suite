@@ -58,6 +58,32 @@ export class ReportsController {
   }
 
   /**
+   * Bakery production-plan helper.
+   *
+   * GET /reports/bake-list?branchId=…&date=YYYY-MM-DD
+   *
+   * Returns one row per product with average-daily, pre-order baseline, and
+   * a recommendedQty = max(7-day average, pre-order qty). Powers the bakery
+   * dashboard "Bake list for tomorrow" widget.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'SALES_LEAD')
+  @Get('bake-list')
+  getBakeList(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId: string,
+    @Query('date') date?: string,
+  ) {
+    const effectiveBranch = branchId ?? user.branchId!;
+    const effectiveDate   = date ?? this.tomorrowPH();
+    return this.reportsService.getBakeList(user.tenantId!, effectiveBranch, effectiveDate);
+  }
+
+  private tomorrowPH(): string {
+    const off = 8 * 60 * 60 * 1000;
+    return new Date(Date.now() + off + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+
+  /**
    * Sprint 19 — Unified all-branch report (owner-only). Per-branch
    * breakdown of sales, COGS, AP, AR, inventory value rolled into one
    * payload. Used by /pos/reports/unified to give the owner a single

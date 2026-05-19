@@ -770,4 +770,109 @@ export class ReportsService {
       },
     };
   }
+
+  /**
+   * Bakery production-plan helper. Returns a recommended bake quantity per
+   * recipe-based product for a target date, based on:
+   *
+   *   • A 7-day moving average of items sold per day (the typical floor).
+   *   • Quantity already promised in PreOrders pickup-dated for the target
+   *     date (the firm commitment baseline).
+   *
+   * The recommendation = max(7-day average, pre-order baseline) — i.e. bake
+   * AT LEAST what's promised, and never less than the typical day's run.
+   *
+   * Returns empty array (not error) if no historical data + no pre-orders,
+   * so the dashboard can show "Nothing to bake — first day on Clerque?"
+   * empty state instead of a scary error.
+   */
+  async getBakeList(
+    tenantId: string,
+    branchId: string,
+    targetDate: string,   // YYYY-MM-DD in PH local
+  ): Promise<Array<{
+    productId:        string;
+    productName:      string;
+    averageDaily:     number;    // rounded
+    preOrderQuantity: number;
+    recommendedQty:   number;
+  }>> {
+    // Window: 7 days back from target date.
+    const toMs   = new Date(targetDate + 'T00:00:00+08:00').getTime();
+    const fromMs = toMs - 7 * 24 * 60 * 60 * 1000;
+
+    // Aggregate last-7-day sales by productId.
+    const rows = await this.prisma.orderItem.findMany({
+      where: {
+        order: {
+          tenantId,
+          branchId,
+          paidAt:   { gte: new Date(fromMs), lt: new Date(toMs) },
+          voidedAt: null,
+        },
+      },
+      select: {
+        productId: true,
+        productName: true,
+        quantity: true,
+      },
+    });
+    const sold = new Map<string, { name: string; totalQty: number }>();
+    for (const r of rows) {
+      const cur = sold.get(r.productId) ?? { name: r.productName, totalQty: 0 };
+      cur.totalQty += Number(r.quantity);
+      sold.set(r.productId, cur);
+    }
+
+    // Pre-orders pickup-dated on the target date.
+    const targetStart = new Date(targetDate + 'T00:00:00+08:00');
+    const targetEnd   = new Date(targetDate + 'T23:59:59.999+08:00');
+    const preOrderItems = await this.prisma.preOrderItem.findMany({
+      where: {
+        preOrder: {
+          tenantId,
+          branchId,
+          pickupDate: { gte: targetStart, lte: targetEnd },
+          status: { in: ['DRAFT', 'DEPOSIT_PAID', 'READY'] },
+        },
+      },
+      select: {
+        productId: true,
+        productName: true,
+        quantity: true,
+      },
+    });
+    const promised = new Map<string, { name: string; qty: number }>();
+    for (const r of preOrderItems) {
+      const cur = promised.get(r.productId) ?? { name: r.productName, qty: 0 };
+      cur.qty += Number(r.quantity);
+      promised.set(r.productId, cur);
+    }
+
+    // Merge keys + compute recommendation.
+    const allProductIds = new Set([...sold.keys(), ...promised.keys()]);
+    const out: Array<{
+      productId: string;
+      productName: string;
+      averageDaily: number;
+      preOrderQuantity: number;
+      recommendedQty: number;
+    }> = [];
+    for (const pid of allProductIds) {
+      const soldRow      = sold.get(pid);
+      const promisedRow  = promised.get(pid);
+      const average      = Math.ceil((soldRow?.totalQty ?? 0) / 7);
+      const preOrderQty  = Math.ceil(promisedRow?.qty ?? 0);
+      const recommended  = Math.max(average, preOrderQty);
+      out.push({
+        productId:        pid,
+        productName:      soldRow?.name ?? promisedRow?.name ?? 'Unknown',
+        averageDaily:     average,
+        preOrderQuantity: preOrderQty,
+        recommendedQty:   recommended,
+      });
+    }
+    out.sort((a, b) => b.recommendedQty - a.recommendedQty);
+    return out;
+  }
 }

@@ -418,6 +418,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     verticalNav = [
       ...withSection('Overview', [
         makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
+        makeNavItem('/pos/bake-list',    'Bake list',   ChefHat,         DASHBOARD_ROLES, role),
       ]),
       ...withSection('Sell', [
         makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),

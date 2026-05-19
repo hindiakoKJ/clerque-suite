@@ -49,23 +49,27 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
 
   const active = lines.filter((l) => !l.removed && !l.voidedAt);
 
-  /** Apply a tax-status-aware discount kind to every active line. */
-  const setBulkDiscount = (kind: 'SENIOR' | 'PWD' | null) => {
+  /** Apply a tax-status-aware discount kind to every active line.
+   *  SENIOR / PWD = 20% legally fixed.
+   *  MARKDOWN     = 50% default (bakery end-of-day) — NOT VAT-exempt. */
+  const setBulkDiscount = (kind: 'SENIOR' | 'PWD' | 'MARKDOWN' | null) => {
     setDiscountSheet(false);
     for (const l of active) {
       if (kind === null) {
         applyDiscount(l.id, undefined);
+      } else if (kind === 'MARKDOWN') {
+        applyDiscount(l.id, { kind, percent: 50 });
       } else {
         applyDiscount(l.id, { kind, percent: 20 });
       }
     }
   };
-  const currentDiscountKind: 'SENIOR' | 'PWD' | null = (() => {
+  const currentDiscountKind: 'SENIOR' | 'PWD' | 'MARKDOWN' | null = (() => {
     if (active.length === 0) return null;
     const first = active[0].discount?.kind;
-    if (!first) return null;
+    if (!first || first === 'MANUAL') return null;
     const everyMatches = active.every((l) => l.discount?.kind === first);
-    return everyMatches ? (first as 'SENIOR' | 'PWD') : null;
+    return everyMatches ? (first as 'SENIOR' | 'PWD' | 'MARKDOWN') : null;
   })();
   // Track open swipeables so opening one closes the others.
   const swipeRefs = useRef<Map<string, Swipeable>>(new Map());
@@ -131,6 +135,7 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
                   <Text style={styles.actionValue}>
                     {currentDiscountKind === 'SENIOR' ? 'Senior 20%' :
                      currentDiscountKind === 'PWD' ? 'PWD 20%' :
+                     currentDiscountKind === 'MARKDOWN' ? 'EOD 50%' :
                      'None'}
                   </Text>
                   <MaterialCommunityIcons name="chevron-right" size={18} color={colors.muted} />
@@ -269,6 +274,12 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
               hint="VAT-exempt under RA 10754."
               active={currentDiscountKind === 'PWD'}
               onPress={() => setBulkDiscount('PWD')}
+            />
+            <DiscountPick
+              label="End-of-day · 50%"
+              hint="Bakery markdown on near-expiry bread. VAT still applies."
+              active={currentDiscountKind === 'MARKDOWN'}
+              onPress={() => setBulkDiscount('MARKDOWN')}
             />
             <DiscountPick
               label="No discount"

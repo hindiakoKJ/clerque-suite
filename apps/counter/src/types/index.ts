@@ -87,8 +87,11 @@ export interface CartLine {
   dispensedById?: string;
   /** F&B: per-line kitchen status. */
   kitchenStatus?: 'NEW' | 'FIRED' | 'READY' | 'SERVED';
-  /** Discount applied to this line (Senior/PWD, manual %). */
-  discount?: { kind: 'SENIOR' | 'PWD' | 'MANUAL'; percent?: number; fixedCents?: number };
+  /** Discount applied to this line. MARKDOWN is the bakery end-of-day
+   *  bread-near-expiry % off — separated from SENIOR/PWD so Z-read can
+   *  break out markdown sales for margin analysis without conflating them
+   *  with VAT-exempt PWD discounts. */
+  discount?: { kind: 'SENIOR' | 'PWD' | 'MANUAL' | 'MARKDOWN'; percent?: number; fixedCents?: number };
   /** Void marker (struck-through line; sequence preserved for BIR audit). */
   voidedAt?: string;
   voidReason?: string;

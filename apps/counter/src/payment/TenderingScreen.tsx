@@ -13,7 +13,8 @@
  */
 
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   colors,
@@ -24,6 +25,7 @@ import {
 } from '@/theme/tokens';
 import { formatPeso } from '@/components/Money';
 import Pill from '@/components/Pill';
+import { useDeviceSize } from '@/shell/useDeviceSize';
 import type { CartPayment, CartState } from '@/types';
 
 import CashTab from './CashTab';
@@ -69,6 +71,8 @@ export default function TenderingScreen({
   onCancel,
 }: TenderingScreenProps): React.ReactElement {
   const [tab, setTab] = useState<TenderingTab>(initialTab);
+  const insets = useSafeAreaInsets();
+  const isPhone = useDeviceSize() === 'phone';
 
   const headerColor =
     tab === 'GCASH' ? colors.gcash :
@@ -77,40 +81,83 @@ export default function TenderingScreen({
 
   return (
     <View style={s.root}>
-      {/* HEADER */}
-      <View style={s.header}>
-        <Pressable onPress={onCancel} style={s.back}>
-          <Text style={s.backText}>← Back to Order</Text>
-        </Pressable>
-        <View style={{ marginLeft: spacing.s6, flex: 1 }}>
-          <Text style={s.title}>Tendering · Bayad</Text>
-          <View style={{ flexDirection: 'row', gap: spacing.s3, marginTop: 4, alignItems: 'center' }}>
-            <Text style={s.subtle}>
-              {orderRef ? `Order ${orderRef} · ` : ''}
-              {cart.lines.filter(l => !l.removed).length} items
-              {cashierInitials ? ` · ${cashierInitials}` : ''}
+      {/* HEADER — phone stacks; tablet keeps the wide 3-column layout */}
+      {isPhone ? (
+        <View style={[s.phoneHeader, { paddingTop: insets.top + spacing.s2 }]}>
+          <View style={s.phoneHeaderRow}>
+            <Pressable onPress={onCancel} style={s.back} hitSlop={8}>
+              <Text style={s.backText}>←</Text>
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={s.phoneTitle}>Tendering · Bayad</Text>
+              <Text style={s.subtle} numberOfLines={1}>
+                {orderRef ? `Order ${orderRef} · ` : ''}
+                {cart.lines.filter(l => !l.removed).length} items
+                {cashierInitials ? ` · ${cashierInitials}` : ''}
+              </Text>
+            </View>
+          </View>
+          <View style={s.phoneAmountBlock}>
+            <Text style={s.amountDueLabel}>Amount due</Text>
+            <Text style={[s.amountDuePhone, tnum, { color: headerColor }]}>
+              {formatPeso(totalCents)}
             </Text>
-            {cart.customer?.name ? <Pill tone="info" dot>{cart.customer.name}</Pill> : null}
-            {cart.diningMode ? (
-              <Pill tone="neutral">
-                {cart.diningMode === 'DINE_IN' ? 'Dine-in' : cart.diningMode === 'TAKEOUT' ? 'Takeout' : 'Delivery'}
-              </Pill>
-            ) : null}
-            {discountCents > 0 ? (
-              <Pill tone="success" dot>− {formatPeso(discountCents)}</Pill>
-            ) : null}
+          </View>
+          {(cart.customer?.name || cart.diningMode || discountCents > 0) ? (
+            <View style={s.phonePillRow}>
+              {cart.customer?.name ? <Pill tone="info" dot>{cart.customer.name}</Pill> : null}
+              {cart.diningMode ? (
+                <Pill tone="neutral">
+                  {cart.diningMode === 'DINE_IN' ? 'Dine-in' : cart.diningMode === 'TAKEOUT' ? 'Takeout' : 'Delivery'}
+                </Pill>
+              ) : null}
+              {discountCents > 0 ? (
+                <Pill tone="success" dot>− {formatPeso(discountCents)}</Pill>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+      ) : (
+        <View style={s.header}>
+          <Pressable onPress={onCancel} style={s.back}>
+            <Text style={s.backText}>← Back to Order</Text>
+          </Pressable>
+          <View style={{ marginLeft: spacing.s6, flex: 1 }}>
+            <Text style={s.title}>Tendering · Bayad</Text>
+            <View style={{ flexDirection: 'row', gap: spacing.s3, marginTop: 4, alignItems: 'center' }}>
+              <Text style={s.subtle}>
+                {orderRef ? `Order ${orderRef} · ` : ''}
+                {cart.lines.filter(l => !l.removed).length} items
+                {cashierInitials ? ` · ${cashierInitials}` : ''}
+              </Text>
+              {cart.customer?.name ? <Pill tone="info" dot>{cart.customer.name}</Pill> : null}
+              {cart.diningMode ? (
+                <Pill tone="neutral">
+                  {cart.diningMode === 'DINE_IN' ? 'Dine-in' : cart.diningMode === 'TAKEOUT' ? 'Takeout' : 'Delivery'}
+                </Pill>
+              ) : null}
+              {discountCents > 0 ? (
+                <Pill tone="success" dot>− {formatPeso(discountCents)}</Pill>
+              ) : null}
+            </View>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={s.amountDueLabel}>Amount due</Text>
+            <Text style={[s.amountDue, tnum, { color: headerColor }]}>
+              {formatPeso(totalCents)}
+            </Text>
           </View>
         </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={s.amountDueLabel}>Amount due</Text>
-          <Text style={[s.amountDue, tnum, { color: headerColor }]}>
-            {formatPeso(totalCents)}
-          </Text>
-        </View>
-      </View>
+      )}
 
-      {/* TABS — pill style with brand-tinted active fill (T-08/T-09) */}
-      <View style={s.tabs}>
+      {/* TABS — pill style with brand-tinted active fill (T-08/T-09).
+       *  Phone wraps them in a horizontal scroller so all five fit at 414dp. */}
+      <ScrollView
+        horizontal={isPhone}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={isPhone ? s.phoneTabs : s.tabs}
+        style={isPhone ? s.phoneTabsScroll : undefined}
+      >
         {TABS.map(t => {
           const active = tab === t.id;
           const tint = t.tint ?? colors.primary;
@@ -134,7 +181,7 @@ export default function TenderingScreen({
             </Pressable>
           );
         })}
-      </View>
+      </ScrollView>
 
       {/* TAB BODY */}
       <View style={{ flex: 1 }}>
@@ -216,4 +263,45 @@ const s = StyleSheet.create({
     borderColor: colors.creamDeep,
   },
   tabText: { ...textTokens.bodySm, color: colors.muted, fontWeight: '700' },
+
+  // Phone-specific overrides (414dp width)
+  phoneHeader: {
+    paddingHorizontal: spacing.s4,
+    paddingBottom: spacing.s3,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.rule,
+    backgroundColor: colors.surface,
+    gap: spacing.s3,
+  },
+  phoneHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s2,
+  },
+  phoneTitle: { ...textTokens.displaySm, color: colors.ink, fontSize: 18 },
+  phoneAmountBlock: {
+    alignItems: 'flex-start',
+    paddingTop: spacing.s2,
+    borderTopWidth: 1,
+    borderTopColor: colors.rule,
+  },
+  amountDuePhone: {
+    ...textTokens.displayLg,
+    fontSize: 34,
+    lineHeight: 38,
+    marginTop: 2,
+  },
+  phonePillRow: { flexDirection: 'row', gap: spacing.s2, flexWrap: 'wrap' },
+  phoneTabs: {
+    flexDirection: 'row',
+    gap: spacing.s2,
+    paddingHorizontal: spacing.s4,
+    paddingVertical: spacing.s3,
+  },
+  phoneTabsScroll: {
+    flexGrow: 0,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.rule,
+  },
 });

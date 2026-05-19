@@ -30,6 +30,7 @@ import {
 } from '@/theme/tokens';
 import { formatPeso } from '@/components/Money';
 import { enqueueOutbox } from '@/offline/db';
+import { useDeviceSize } from '@/shell/useDeviceSize';
 
 /** Each denomination in centavos. */
 const DENOMS: { label: string; cents: number }[] = [
@@ -60,6 +61,8 @@ export default function ShiftOpenScreen({
   onCancel,
 }: ShiftOpenScreenProps): React.ReactElement {
   const insets = useSafeAreaInsets();
+  const size = useDeviceSize();
+  const isPhone = size === 'phone';
   const [counts, setCounts] = useState<Record<string, number>>(
     Object.fromEntries(DENOMS.map(d => [d.label, 0])),
   );
@@ -96,26 +99,39 @@ export default function ShiftOpenScreen({
 
   return (
     <View style={s.root}>
-      <View style={s.header}>
-        <View>
-          <Text style={s.title}>Open shift · Count the drawer</Text>
+      {isPhone ? (
+        <View style={s.phoneHeader}>
+          <Text style={s.phoneTitle}>Count the drawer</Text>
           <Text style={s.subtle}>
-            Cashier {cashierName} · count each denomination before first sale.
+            {cashierName} · count each denomination before first sale.
           </Text>
+          <View style={s.phoneTotalRow}>
+            <Text style={s.label}>Opening float</Text>
+            <Text style={[s.phoneTotalValue, tnum]}>{formatPeso(totalCents)}</Text>
+          </View>
         </View>
-        <View style={{ marginLeft: 'auto', alignItems: 'flex-end' }}>
-          <Text style={s.label}>Opening float</Text>
-          <Text style={[s.totalValue, tnum]}>{formatPeso(totalCents)}</Text>
+      ) : (
+        <View style={s.header}>
+          <View>
+            <Text style={s.title}>Open shift · Count the drawer</Text>
+            <Text style={s.subtle}>
+              Cashier {cashierName} · count each denomination before first sale.
+            </Text>
+          </View>
+          <View style={{ marginLeft: 'auto', alignItems: 'flex-end' }}>
+            <Text style={s.label}>Opening float</Text>
+            <Text style={[s.totalValue, tnum]}>{formatPeso(totalCents)}</Text>
+          </View>
         </View>
-      </View>
+      )}
 
-      <ScrollView contentContainerStyle={s.body}>
-        <View style={s.grid}>
+      <ScrollView contentContainerStyle={isPhone ? s.phoneBody : s.body}>
+        <View style={isPhone ? s.phoneGrid : s.grid}>
           {DENOMS.map(d => {
             const n = counts[d.label] ?? 0;
             const subtotal = n * d.cents;
             return (
-              <View key={d.label} style={s.denomCard}>
+              <View key={d.label} style={[s.denomCard, isPhone && s.denomCardPhone]}>
                 <Text style={s.denomLabel}>{d.label}</Text>
                 <View style={s.denomRow}>
                   <Pressable
@@ -177,6 +193,29 @@ const s = StyleSheet.create({
   },
   title: { ...textTokens.displaySm, color: colors.ink },
   subtle: { ...textTokens.bodySm, color: colors.muted, marginTop: 2 },
+  phoneHeader: {
+    paddingHorizontal: spacing.s5,
+    paddingTop: spacing.s4,
+    paddingBottom: spacing.s4,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.rule,
+    backgroundColor: colors.surface,
+    gap: spacing.s2,
+  },
+  phoneTitle: { ...textTokens.displaySm, color: colors.ink, fontSize: 22 },
+  phoneTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginTop: spacing.s2,
+    paddingTop: spacing.s3,
+    borderTopWidth: 1,
+    borderTopColor: colors.rule,
+  },
+  phoneTotalValue: { ...textTokens.displayLg, color: colors.primary, fontSize: 28, lineHeight: 32 },
+  phoneBody: { padding: spacing.s4, paddingBottom: spacing.s6 },
+  phoneGrid: { gap: spacing.s3 },
+  denomCardPhone: { width: '100%' },
   label: {
     ...textTokens.caption,
     color: colors.muted,

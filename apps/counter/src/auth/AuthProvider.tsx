@@ -124,6 +124,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const [tenant, setTenant] = useState<TenantConfig | null>(null);
   const [cashier, setCashier] = useState<CashierState | null>(null);
 
+  // Register API-client callbacks so 401s can auto-refresh, and so a dead
+  // refresh token kicks us back to the sign-in screen.
+  useEffect(() => {
+    api.setAuthCallbacks({
+      onTokensRefreshed: (tokens) => {
+        // The new access token may carry an updated planCode / role / tenant
+        // payload — re-derive both. Email isn't in the JWT, keep the cached
+        // one if we have it.
+        try {
+          const { user: freshUser, tenant: freshTenant } = sessionFromJwt(tokens.accessToken);
+          setSession((s) => {
+            const email = s?.user.email ?? '';
+            const user = { ...freshUser, email };
+            void Promise.all([
+              SecureStore.setItemAsync(SS_JWT_KEY, tokens.accessToken),
+              SecureStore.setItemAsync(SS_REFRESH_KEY, tokens.refreshToken),
+              persistTenant(freshTenant, user),
+            ]).catch(() => { /* persistence best-effort */ });
+            return s ? { ...s, jwt: tokens.accessToken, refreshToken: tokens.refreshToken, user } : s;
+          });
+          setTenant(freshTenant);
+        } catch {
+          // JWT couldn't decode — just persist the raw tokens so the next
+          // boot can retry.
+          void Promise.all([
+            SecureStore.setItemAsync(SS_JWT_KEY, tokens.accessToken),
+            SecureStore.setItemAsync(SS_REFRESH_KEY, tokens.refreshToken),
+          ]);
+        }
+      },
+      onAuthExpired: () => {
+        // Refresh token is dead → drop the session so the gate flips back
+        // to SignInScreen. Cached cart/outbox stay (offline-safe).
+        setSession(null);
+        setTenant(null);
+        setCashier(null);
+        void clearAllPersisted();
+      },
+    });
+  }, []);
+
   // Boot: load cached session + (best-effort) refresh from /auth/me.
   useEffect(() => {
     (async () => {
@@ -146,6 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         const cachedUser = JSON.parse(userJson) as AuthSession['user'];
 
         api.setAuthToken(jwt);
+        api.setRefreshToken(refreshToken);
         setSession({ jwt, refreshToken, user: cachedUser });
         setTenant(cachedTenant);
 
@@ -196,6 +238,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       password,
     });
     api.setAuthToken(tokens.accessToken);
+    api.setRefreshToken(tokens.refreshToken);
 
     const { user, tenant: tenantFromJwt } = sessionFromJwt(tokens.accessToken);
     // Email isn't in the JWT — keep the one the user typed so the UI can
@@ -214,6 +257,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
 
   const signOut = useCallback(async () => {
     api.setAuthToken(null);
+    api.setRefreshToken(null);
     setSession(null);
     setTenant(null);
     setCashier(null);

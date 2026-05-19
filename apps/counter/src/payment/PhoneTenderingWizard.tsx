@@ -37,16 +37,12 @@
  * submitOrder and shows the receipt.
  */
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { formatPeso } from '@/components/Money';
-import GCashTab from '@/payment/GCashTab';
-import PayMayaTab from '@/payment/PayMayaTab';
-import CardTab from '@/payment/CardTab';
-import SplitTab from '@/payment/SplitTab';
 import { keypadToCents } from '@/payment/NumericKeypad';
 import { colors, fonts, radii, spacing, text as textTokens, tnum } from '@/theme';
 import type { CartPayment, CartState, PaymentMethod } from '@/types';
@@ -530,18 +526,31 @@ function Step3Confirm({
   const active = cart.lines.filter((l) => !l.removed && !l.voidedAt);
   const subtotal = active.reduce((acc, l) => acc + l.lineTotal, 0);
 
-  if (method !== 'CASH') {
-    // Other methods carry their entry flow inline — render the tab content
-    // here as the "amount entry" step is inseparable from the entry UX.
+  if (method === 'GCASH' || method === 'PAYMAYA') {
+    return (
+      <EWalletPanelPhone
+        method={method}
+        totalCents={totalCents}
+        onPaid={onPaid}
+      />
+    );
+  }
+  if (method === 'CARD') {
+    return <CardPanelPhone totalCents={totalCents} onPaid={onPaid} />;
+  }
+  if (method === 'SPLIT') {
+    // Split flow stays tablet-only for V1; phone callers cancel and re-pick
+    // a single method. This avoids embedding the broken 2-column SplitTab on
+    // a 414dp screen.
     return (
       <ScrollView contentContainerStyle={step3Styles.scroll}>
         <View style={step3Styles.card}>
-          <Text style={step3Styles.cardLabel}>Capture {labelFor(method as Method)} reference</Text>
+          <Text style={step3Styles.cardLabel}>Split tenders</Text>
+          <Text style={[textTokens.bodySm, { color: colors.muted, marginTop: 6 } as never]}>
+            Split payments aren&apos;t available on phone yet. Take a single
+            tender (Cash / GCash / PayMaya / Card) or use the tablet till.
+          </Text>
         </View>
-        {method === 'GCASH'   ? <GCashTab   totalCents={totalCents} onConfirm={(p) => onPaid([p], 0)} /> : null}
-        {method === 'PAYMAYA' ? <PayMayaTab totalCents={totalCents} onConfirm={(p) => onPaid([p], 0)} /> : null}
-        {method === 'CARD'    ? <CardTab    totalCents={totalCents} onConfirm={(p) => onPaid([p], 0)} /> : null}
-        {method === 'SPLIT'   ? <SplitTab   totalCents={totalCents} onConfirm={(payments, change) => onPaid(payments, change)} /> : null}
       </ScrollView>
     );
   }
@@ -652,6 +661,203 @@ const step3Styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#BFD8FB',
   },
   bannerText: { ...textTokens.caption, fontSize: 12, color: colors.infoDeep, lineHeight: 18 },
+});
+
+// ─── Phone-native non-cash panels ────────────────────────────────────
+
+function EWalletPanelPhone({
+  method, totalCents, onPaid,
+}: {
+  method: 'GCASH' | 'PAYMAYA';
+  totalCents: number;
+  onPaid: (payments: CartPayment[], change: number) => void;
+}): React.ReactElement {
+  const [reference, setReference] = useState('');
+  const isG = method === 'GCASH';
+  const brand        = isG ? 'GCash' : 'PayMaya';
+  const brandColor   = isG ? colors.gcash : colors.paymaya;
+  const brandSoft    = isG ? colors.gcashSoft : '#D8F0DE';
+  const brandDeep    = isG ? colors.gcashDeep : '#08754D';
+  const letter       = isG ? 'G' : 'P';
+  const refValid     = /^\d{10,13}$/.test(reference);
+
+  return (
+    <ScrollView contentContainerStyle={ewalletStyles.scroll} keyboardShouldPersistTaps="handled">
+      {/* Receive card */}
+      <View style={[ewalletStyles.amountCard, { backgroundColor: brandSoft, borderColor: brandColor }]}>
+        <Text style={[ewalletStyles.amountLabel, { color: brandDeep }]}>
+          Receive · {brand}
+        </Text>
+        <Text style={[ewalletStyles.amountValue, tnum, { color: brandColor }]} numberOfLines={1}>
+          {formatPeso(totalCents)}
+        </Text>
+        <Text style={[ewalletStyles.amountHint, { color: brandDeep }]}>
+          Exact amount only · no sukli
+        </Text>
+      </View>
+
+      {/* QR placeholder */}
+      <View style={ewalletStyles.qrCard}>
+        <View style={[ewalletStyles.qrBox, { backgroundColor: brandColor }]}>
+          <Text style={ewalletStyles.qrLetter}>{letter}</Text>
+        </View>
+        <Text style={ewalletStyles.qrTitle}>Customer pays via {brand}</Text>
+        <Text style={ewalletStyles.qrSub}>
+          Show this QR or send a request — they&apos;ll get a 6-digit confirmation.
+          Type the reference below to record the sale.
+        </Text>
+      </View>
+
+      {/* Reference number */}
+      <View style={ewalletStyles.fieldWrap}>
+        <Text style={ewalletStyles.fieldLabel}>{brand} reference number</Text>
+        <TextInput
+          value={reference}
+          onChangeText={setReference}
+          placeholder="10–13 digit reference"
+          placeholderTextColor={colors.faint}
+          keyboardType="number-pad"
+          maxLength={13}
+          style={[
+            ewalletStyles.field,
+            refValid && { borderColor: brandColor, borderWidth: 2 },
+          ]}
+        />
+        <Text style={ewalletStyles.fieldHelp}>
+          Required for BIR audit — print on both copies of the receipt.
+        </Text>
+      </View>
+
+      {/* Confirm CTA */}
+      <Pressable
+        disabled={!refValid}
+        onPress={() => onPaid([{ method, amount: totalCents, reference }], 0)}
+        style={({ pressed }) => [
+          ewalletStyles.confirm,
+          { backgroundColor: brandColor },
+          !refValid && ewalletStyles.confirmDisabled,
+          pressed && { opacity: 0.9 },
+        ]}
+      >
+        <Text style={ewalletStyles.confirmLabel}>
+          Confirm {brand} · {formatPeso(totalCents)} ✓
+        </Text>
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+function CardPanelPhone({
+  totalCents, onPaid,
+}: {
+  totalCents: number;
+  onPaid: (payments: CartPayment[], change: number) => void;
+}): React.ReactElement {
+  const [reference, setReference] = useState('');
+  const refValid = reference.trim().length >= 4;
+
+  return (
+    <ScrollView contentContainerStyle={ewalletStyles.scroll} keyboardShouldPersistTaps="handled">
+      <View style={ewalletStyles.amountCard}>
+        <Text style={ewalletStyles.amountLabel}>Receive · Card</Text>
+        <Text style={[ewalletStyles.amountValue, tnum]} numberOfLines={1}>
+          {formatPeso(totalCents)}
+        </Text>
+        <Text style={ewalletStyles.amountHint}>
+          Run the external card terminal, then enter the approval code.
+        </Text>
+      </View>
+
+      <View style={ewalletStyles.fieldWrap}>
+        <Text style={ewalletStyles.fieldLabel}>Approval / reference code</Text>
+        <TextInput
+          value={reference}
+          onChangeText={setReference}
+          placeholder="From the card terminal slip"
+          placeholderTextColor={colors.faint}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          maxLength={32}
+          style={ewalletStyles.field}
+        />
+        <Text style={ewalletStyles.fieldHelp}>
+          The terminal&apos;s reference; printed on its merchant copy.
+        </Text>
+      </View>
+
+      <Pressable
+        disabled={!refValid}
+        onPress={() => onPaid([{ method: 'CARD', amount: totalCents, reference }], 0)}
+        style={({ pressed }) => [
+          ewalletStyles.confirm,
+          { backgroundColor: colors.primary },
+          !refValid && ewalletStyles.confirmDisabled,
+          pressed && { backgroundColor: colors.primaryPress },
+        ]}
+      >
+        <Text style={ewalletStyles.confirmLabel}>
+          Confirm Card · {formatPeso(totalCents)} ✓
+        </Text>
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+const ewalletStyles = StyleSheet.create({
+  scroll: { padding: spacing.s4, gap: spacing.s3, paddingBottom: 140 },
+
+  amountCard: {
+    padding: spacing.s5,
+    backgroundColor: colors.surface,
+    borderRadius: radii.lg,
+    borderWidth: 1, borderColor: colors.rule,
+    gap: 4,
+    marginBottom: spacing.s3,
+    alignItems: 'flex-start',
+  },
+  amountLabel: { ...textTokens.caption, color: colors.muted, textTransform: 'uppercase', letterSpacing: 1, fontSize: 11, fontWeight: '800' },
+  amountValue: { fontFamily: fonts.displayBold, fontSize: 42, fontWeight: '800', letterSpacing: -0.6, color: colors.ink, lineHeight: 46 },
+  amountHint:  { ...textTokens.bodySm, color: colors.muted, marginTop: 4 },
+
+  qrCard: {
+    padding: spacing.s4,
+    backgroundColor: colors.surface,
+    borderRadius: radii.lg,
+    borderWidth: 1, borderColor: colors.rule,
+    alignItems: 'center',
+    gap: spacing.s2,
+    marginBottom: spacing.s3,
+  },
+  qrBox: {
+    width: 96, height: 96, borderRadius: radii.lg,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  qrLetter: { fontFamily: fonts.displayBold, fontSize: 48, fontWeight: '800', color: colors.onPrimary },
+  qrTitle:  { ...textTokens.body, fontSize: 15, fontWeight: '800', color: colors.ink, marginTop: spacing.s2, textAlign: 'center' },
+  qrSub:    { ...textTokens.caption, color: colors.muted, textAlign: 'center', lineHeight: 16 },
+
+  fieldWrap: { gap: 6, marginBottom: spacing.s3 },
+  fieldLabel: { ...textTokens.caption, fontSize: 12, fontWeight: '600', color: colors.muted },
+  field: {
+    height: 52,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1.5, borderColor: colors.rule,
+    backgroundColor: colors.surface,
+    fontFamily: fonts.mono,
+    fontSize: 16,
+    color: colors.ink,
+  },
+  fieldHelp: { ...textTokens.caption, fontSize: 11, color: colors.muted },
+
+  confirm: {
+    height: 56,
+    borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: spacing.s3,
+  },
+  confirmDisabled: { opacity: 0.5 },
+  confirmLabel: { color: colors.onPrimary, fontFamily: fonts.bodyBold, fontWeight: '700', fontSize: 16 },
 });
 
 // ─── Root styles ─────────────────────────────────────────────────────

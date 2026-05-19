@@ -36,6 +36,7 @@ import { formatPeso } from '@/components/Money';
 import Pill from '@/components/Pill';
 import { enqueueOutbox } from '@/offline/db';
 import { keypadToCents } from '@/payment/NumericKeypad';
+import { useDeviceSize } from '@/shell/useDeviceSize';
 
 export interface TenderBreakdown {
   cashCents: number;
@@ -100,6 +101,7 @@ export default function ZReadScreen({
   const [countedRaw, setCountedRaw] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const isPhone = useDeviceSize() === 'phone';
 
   const netSalesCents = summary.grossSalesCents - summary.discountsCents;
   const avgTxnCents =
@@ -170,13 +172,13 @@ export default function ZReadScreen({
 
   return (
     <View style={s.root}>
-      <View style={s.header}>
+      <View style={isPhone ? s.headerPhone : s.header}>
         <Pressable onPress={onCancel} style={s.back}>
           <Text style={s.backText}>← Cancel</Text>
         </Pressable>
-        <View style={{ marginLeft: spacing.s6, flex: 1 }}>
-          <Text style={s.title}>Close shift · Z-read</Text>
-          <Text style={s.subtle}>
+        <View style={{ marginLeft: isPhone ? spacing.s2 : spacing.s6, flex: 1, minWidth: 0 }}>
+          <Text style={isPhone ? s.titlePhone : s.title} numberOfLines={1}>Close shift · Z-read</Text>
+          <Text style={s.subtle} numberOfLines={2}>
             Shift {summary.shiftId} · opened{' '}
             {new Date(summary.openedAtMs).toLocaleTimeString('en-PH', {
               hour: '2-digit',
@@ -189,10 +191,10 @@ export default function ZReadScreen({
         <Pill tone="warning" dot>{elapsedString(summary.openedAtMs)}</Pill>
       </View>
 
-      <ScrollView contentContainerStyle={s.body}>
-        <View style={s.gridRow}>
+      <ScrollView contentContainerStyle={isPhone ? s.bodyPhone : s.body}>
+        <View style={isPhone ? s.gridRowPhone : s.gridRow}>
           {/* LEFT — sales + tender + BIR + voids */}
-          <View style={{ flex: 1.4, gap: spacing.s4 }}>
+          <View style={isPhone ? { width: '100%', gap: spacing.s3 } : { flex: 1.4, gap: spacing.s4 }}>
             <View style={s.card}>
               <View style={s.salesHero}>
                 <View>
@@ -234,7 +236,7 @@ export default function ZReadScreen({
               })}
             </View>
 
-            <View style={s.smallGrid}>
+            <View style={isPhone ? s.smallGridPhone : s.smallGrid}>
               <View style={[s.card, { flex: 1 }]}>
                 <Text style={s.cardLabel}>
                   BIR · {summary.isVatRegistered ? 'VAT' : 'Non-VAT'}
@@ -274,7 +276,7 @@ export default function ZReadScreen({
           </View>
 
           {/* RIGHT — drawer reconciliation + notes */}
-          <View style={{ flex: 1, gap: spacing.s4 }}>
+          <View style={isPhone ? { width: '100%', gap: spacing.s3 } : { flex: 1, gap: spacing.s4 }}>
             <View style={s.card}>
               <Text style={s.cardTitle}>Cash drawer · reconciliation</Text>
               <Text style={s.subtle}>
@@ -352,24 +354,26 @@ export default function ZReadScreen({
         </View>
       </ScrollView>
 
-      <View style={s.footer}>
-        {onCancel ? (
-          <Pressable style={[s.btn, s.btnGhost]} onPress={onCancel}>
-            <Text style={[s.btnText, { color: colors.ink }]}>
-              Save &amp; continue selling
-            </Text>
-          </Pressable>
-        ) : null}
-        <Pressable style={[s.btn, s.btnSecondary]} onPress={handlePrint}>
-          <Text style={[s.btnText, { color: colors.ink }]}>Print Z-read</Text>
-        </Pressable>
+      <View style={isPhone ? s.footerPhone : s.footer}>
         <Pressable
-          style={[s.btn, s.btnPrimary, busy && s.btnDisabled]}
+          style={[s.btn, s.btnPrimary, busy && s.btnDisabled, isPhone && s.btnFull]}
           onPress={handleClose}
           disabled={busy}
         >
           <Text style={s.btnText}>{busy ? 'Closing…' : 'Close shift'}</Text>
         </Pressable>
+        <View style={isPhone ? s.footerSecondaryRowPhone : { flexDirection: 'row', gap: spacing.s4 }}>
+          <Pressable style={[s.btn, s.btnSecondary, isPhone && s.btnHalf]} onPress={handlePrint}>
+            <Text style={[s.btnText, { color: colors.ink }]}>Print Z-read</Text>
+          </Pressable>
+          {onCancel ? (
+            <Pressable style={[s.btn, s.btnGhost, isPhone && s.btnHalf]} onPress={onCancel}>
+              <Text style={[s.btnText, { color: colors.ink }]} numberOfLines={1}>
+                Keep selling
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
     </View>
   );
@@ -413,7 +417,16 @@ const s = StyleSheet.create({
   },
   back: { paddingVertical: spacing.s2, paddingRight: spacing.s4 },
   backText: { ...textTokens.body, color: colors.ink, fontWeight: '600' },
-  title: { ...textTokens.displaySm, color: colors.ink },
+  title:      { ...textTokens.displaySm, color: colors.ink },
+  titlePhone: { ...textTokens.displaySm, color: colors.ink, fontSize: 16 },
+  headerPhone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.s3,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.rule,
+    backgroundColor: colors.surface,
+  },
   subtle: { ...textTokens.bodySm, color: colors.muted, marginTop: 2 },
 
   body: { padding: spacing.s6 },
@@ -476,7 +489,10 @@ const s = StyleSheet.create({
   barFill: { height: '100%', borderRadius: 3 },
   tenderPct: { ...textTokens.caption, color: colors.muted, textAlign: 'right', marginTop: 2 },
 
-  smallGrid: { flexDirection: 'row', gap: spacing.s4 },
+  smallGrid:      { flexDirection: 'row', gap: spacing.s4 },
+  smallGridPhone: { flexDirection: 'column', gap: spacing.s3 },
+  bodyPhone:      { padding: spacing.s4, paddingBottom: spacing.s7 },
+  gridRowPhone:   { flexDirection: 'column', gap: spacing.s3 },
 
   row: {
     flexDirection: 'row',
@@ -532,6 +548,16 @@ const s = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.rule,
   },
+  footerPhone: {
+    padding: spacing.s4,
+    gap: spacing.s2,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.rule,
+  },
+  footerSecondaryRowPhone: { flexDirection: 'row', gap: spacing.s2 },
+  btnHalf: { flex: 1 },
+  btnFull: { width: '100%' },
   btn: {
     height: tap.cashierPrimary,
     borderRadius: radii.md,

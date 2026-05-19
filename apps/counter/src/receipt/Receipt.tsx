@@ -148,6 +148,15 @@ export default function Receipt({
   originalOrNumber,
 }: ReceiptProps): React.ReactElement {
   const isVat = tenant.taxStatus === 'VAT' && tenant.isVatRegistered;
+  /** BIR-registered tenants (VAT or Non-VAT) issue Official Receipts.
+   *  UNREGISTERED tenants must label every slip "Acknowledgement Receipt"
+   *  per BIR rules — they cannot use the OR series number.  */
+  const isBirRegistered = tenant.taxStatus === 'VAT' || tenant.taxStatus === 'NON_VAT';
+  const receiptKind     = isBirRegistered ? 'Official Receipt' : 'Acknowledgement Receipt';
+  const receiptKindFil  = isBirRegistered ? 'Pang-opisyal na Resibo' : 'Resibo ng Pagtanggap';
+  /** Display label for the giant receipt number. ORs use the "OR #" prefix
+   *  per BIR conventions; ARs use "AR #" to avoid impersonating an OR. */
+  const numberPrefix    = isBirRegistered ? 'OR' : 'AR';
 
   return (
     <View style={s.paper}>
@@ -158,14 +167,14 @@ export default function Receipt({
           <Text style={s.meta}>{tenant.receiptHeaderNote}</Text>
         ) : null}
         <Text style={s.meta}>
-          TIN {tenant.tin}
-          {!isVat ? ' · Non-VAT registered' : ' · VAT-registered'}
+          {tenant.tin ? `TIN ${tenant.tin} · ` : ''}
+          {isBirRegistered ? (isVat ? 'VAT-registered' : 'Non-VAT registered') : 'Not BIR-registered'}
         </Text>
-        <Text style={s.metaSmall}>Pang-opisyal na Resibo</Text>
+        <Text style={s.metaSmall}>{receiptKindFil}</Text>
         {isRefund && (
-          <Text style={s.refundBanner}>REFUND · against OR # {originalOrNumber ? pad6(originalOrNumber) : '------'}</Text>
+          <Text style={s.refundBanner}>REFUND · against {numberPrefix} # {originalOrNumber ? pad6(originalOrNumber) : '------'}</Text>
         )}
-        <Text style={s.orHuge}>OR # {pad6(orNumber)}</Text>
+        <Text style={s.orHuge}>{numberPrefix} # {pad6(orNumber)}</Text>
         <Text style={s.meta}>
           {formatDateTime(issuedAt)} · Cashier {cashierName}
         </Text>
@@ -270,7 +279,7 @@ export default function Receipt({
         ) : null}
         <Text style={s.metaSmall}>Powered by Clerque · {getWebHost()}</Text>
         <Text style={s.closingLine}>
-          This serves as an official receipt — Pang-opisyal na Resibo
+          This serves as {isBirRegistered ? 'an' : 'a'} {receiptKind.toLowerCase()} — {receiptKindFil}
         </Text>
       </View>
     </View>

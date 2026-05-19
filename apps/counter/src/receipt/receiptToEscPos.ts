@@ -128,6 +128,12 @@ export function receiptToEscPos(
 ): Uint8Array {
   const b = new EscPosBuilder();
   const isVat = r.tenant.taxStatus === 'VAT' && r.tenant.isVatRegistered;
+  /** BIR-registered tenants (VAT or Non-VAT) issue Official Receipts.
+   *  UNREGISTERED tenants must print Acknowledgement Receipts and may NOT
+   *  use the "OR" prefix on the slip. */
+  const isBirRegistered = r.tenant.taxStatus === 'VAT' || r.tenant.taxStatus === 'NON_VAT';
+  const numberPrefix    = isBirRegistered ? 'OR' : 'AR';
+  const slipFilipino    = isBirRegistered ? 'Pang-opisyal na Resibo' : 'Resibo ng Pagtanggap';
 
   b.init();
 
@@ -139,19 +145,21 @@ export function receiptToEscPos(
   if (r.tenant.receiptHeaderNote) {
     b.line(r.tenant.receiptHeaderNote);
   }
-  b.line(`TIN ${r.tenant.tin}`);
-  b.line(isVat ? 'VAT-registered' : 'Non-VAT registered');
-  b.line('Pang-opisyal na Resibo');
+  if (r.tenant.tin) {
+    b.line(`TIN ${r.tenant.tin}`);
+  }
+  b.line(isBirRegistered ? (isVat ? 'VAT-registered' : 'Non-VAT registered') : 'Not BIR-registered');
+  b.line(slipFilipino);
 
   if (r.isRefund) {
     b.bold(true);
-    b.line(`REFUND vs OR #${r.originalOrNumber ? pad6(r.originalOrNumber) : '------'}`);
+    b.line(`REFUND vs ${numberPrefix} #${r.originalOrNumber ? pad6(r.originalOrNumber) : '------'}`);
     b.bold(false);
   }
 
-  // OR# huge — double width + double height.
+  // Slip# huge — double width + double height.
   b.bold(true).doubleHeight(true).doubleWidth(true);
-  b.line(`OR #${pad6(r.orNumber)}`);
+  b.line(`${numberPrefix} #${pad6(r.orNumber)}`);
   b.doubleHeight(false).doubleWidth(false).bold(false);
 
   b.line(formatDateTime(r.issuedAt));
@@ -236,7 +244,7 @@ export function receiptToEscPos(
   }
   b.line('Powered by Clerque');
   b.line(getWebHost());
-  b.line('Official Receipt · Pang-opisyal na Resibo');
+  b.line(isBirRegistered ? 'Official Receipt · Pang-opisyal na Resibo' : 'Acknowledgement Receipt · Resibo ng Pagtanggap');
 
   b.align('L').feed(3);
 

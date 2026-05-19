@@ -153,29 +153,18 @@ export default function ReceiptScreen({
           </View>
         </ScrollView>
 
-        {/* Bottom panel: 3-up action row + primary CTA */}
+        {/* Bottom panel: re-print + primary CTA. SMS / Email parked for V2 —
+         *  no server-side send infra yet (would need Twilio + SES + receipt
+         *  URL routing). Re-print covers the BIR copy obligation in the
+         *  meantime. */}
         <View style={[ph.bottomPanel, { paddingBottom: spacing.s5 + insets.bottom }]}>
-          <View style={ph.actionRow3}>
-            <Pressable
-              style={({ pressed }) => [ph.action, pressed && ph.actionPressed]}
-              onPress={handlePrint}
-              disabled={printing}
-            >
-              <Text style={ph.actionLabel}>{printing ? 'Printing…' : '⎙ Re-print'}</Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [ph.action, pressed && ph.actionPressed]}
-              onPress={() => { bumpActivity(); onSms?.(); }}
-            >
-              <Text style={ph.actionLabel}>SMS</Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [ph.action, pressed && ph.actionPressed]}
-              onPress={() => { bumpActivity(); onEmail?.(); }}
-            >
-              <Text style={ph.actionLabel}>Email</Text>
-            </Pressable>
-          </View>
+          <Pressable
+            style={({ pressed }) => [ph.action, pressed && ph.actionPressed]}
+            onPress={handlePrint}
+            disabled={printing}
+          >
+            <Text style={ph.actionLabel}>{printing ? 'Printing…' : '⎙ Re-print receipt'}</Text>
+          </Pressable>
 
           <Pressable
             style={({ pressed }) => [ph.cta, pressed && ph.ctaPressed]}
@@ -395,9 +384,7 @@ const ph = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: colors.rule,
     gap: spacing.s2,
   },
-  actionRow3: { flexDirection: 'row', gap: spacing.s2 },
   action: {
-    flex: 1,
     height: 44,
     borderRadius: radii.sm,
     backgroundColor: colors.surface,

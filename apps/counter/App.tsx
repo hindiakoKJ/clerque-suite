@@ -20,6 +20,8 @@ import TenderingHost from '@/payment/TenderingHost';
 import { OfflineBanner } from '@/offline/OfflineBanner';
 import { SyncProvider } from '@/offline/SyncProvider';
 import { BranchProvider } from '@/api/BranchContext';
+import { ShiftProvider } from '@/shift/ShiftProvider';
+import { navigationRef } from '@/shell/navigationRef';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -105,13 +107,15 @@ export default function App() {
             <AuthProvider>
               <SyncProvider>
                 <BranchProvider>
-                  <NavigationContainer>
-                    <RootNavigator />
-                    <OfflineBanner />
-                    <SupervisorPinHost />
-                    <BarcodeScannerHost />
-                    <TenderingHost />
-                  </NavigationContainer>
+                  <ShiftProvider>
+                    <NavigationContainer ref={navigationRef}>
+                      <RootNavigator />
+                      <OfflineBanner />
+                      <SupervisorPinHost />
+                      <BarcodeScannerHost />
+                      <TenderingHost />
+                    </NavigationContainer>
+                  </ShiftProvider>
                 </BranchProvider>
               </SyncProvider>
             </AuthProvider>

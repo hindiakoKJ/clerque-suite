@@ -23,6 +23,8 @@ import PhoneHeader from '@/shell/phone/PhoneHeader';
 import { useCartStore } from '@/terminal/cartStore';
 import { openTendering } from '@/payment/TenderingHost';
 import { formatPeso } from '@/components/Money';
+import { useIsShiftOpen } from '@/shift/ShiftProvider';
+import NoShiftSheet from '@/shift/NoShiftSheet';
 import { colors, fonts, radii, spacing, text as textTokens, tnum } from '@/theme';
 import type { PhoneSellStackParamList } from '@/shell/phone/types';
 import type { CartState, CartLine } from '@/types';
@@ -42,6 +44,8 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
   const customer = useCartStore((s) => s.customer);
 
   const [discountSheet, setDiscountSheet] = useState(false);
+  const [noShiftSheet, setNoShiftSheet]   = useState(false);
+  const shiftIsOpen = useIsShiftOpen();
 
   const active = lines.filter((l) => !l.removed && !l.voidedAt);
 
@@ -69,6 +73,12 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
 
   const onCharge = async () => {
     if (total <= 0) return;
+    // Hard-block until shift is open — Z-read needs the opening float to
+    // reconcile cash variance; without it BIR audit posture breaks.
+    if (!shiftIsOpen) {
+      setNoShiftSheet(true);
+      return;
+    }
     const snapshot: CartState = useCartStore.getState();
     const res = await openTendering({
       cart: snapshot,
@@ -219,6 +229,21 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
             </View>
           </Swipeable>
         )}
+      />
+
+      {/* No-shift gate */}
+      <NoShiftSheet
+        visible={noShiftSheet}
+        onCancel={() => setNoShiftSheet(false)}
+        onGoToShift={() => {
+          setNoShiftSheet(false);
+          // Nav up to the bottom-tab navigator and switch to Shift.
+          // getParent() walks past the Sell stack to the tab navigator.
+          const tabNav = navigation.getParent();
+          if (tabNav) {
+            (tabNav as unknown as { navigate: (s: string) => void }).navigate('Shift');
+          }
+        }}
       />
 
       {/* Discount picker sheet */}

@@ -32,6 +32,9 @@ import TenderingScreen from '@/payment/TenderingScreen';
 import ReceiptScreen from '@/receipt/ReceiptScreen';
 import { useAuth } from '@/auth/AuthProvider';
 import { useBranchContext } from '@/api/BranchContext';
+import { useIsShiftOpen } from '@/shift/ShiftProvider';
+import NoShiftSheet from '@/shift/NoShiftSheet';
+import { navigate } from '@/shell/navigationRef';
 import { submitOrder, type SubmitOrderResult } from '@/api/orderSubmit';
 import { colors, radii, spacing, text as textTokens } from '@/theme';
 import type { CartPayment, CartState } from '@/types';
@@ -101,6 +104,7 @@ interface Pending {
 export default function TenderingHost(): React.ReactElement | null {
   const { tenant, cashier, session } = useAuth();
   const { activeBranch } = useBranchContext();
+  const shiftIsOpen = useIsShiftOpen();
 
   const [pending, setPending] = useState<Pending | null>(null);
   const [stage, setStage] = useState<Stage>('tender');
@@ -173,6 +177,31 @@ export default function TenderingHost(): React.ReactElement | null {
   );
 
   if (!pending) return null;
+
+  // Hard shift gate — phone gates upstream in PhoneCartDrawer, this catches
+  // tablet terminals (FB/Retail/Pharmacy) which call openTendering directly.
+  // Cashier sees a friendly sheet instead of the Tendering UI and is sent
+  // to the Shift tab/drawer to count the opening float first.
+  if (!shiftIsOpen) {
+    return (
+      <Modal
+        visible
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeWithCancel}
+      >
+        <NoShiftSheet
+          visible
+          onCancel={closeWithCancel}
+          onGoToShift={() => {
+            closeWithCancel();
+            navigate('Shift');
+          }}
+        />
+      </Modal>
+    );
+  }
 
   // Build a synthetic OR number for the receipt screen. When offline we get
   // a `pending-…` placeholder; the receipt expects a numeric OR# for the

@@ -15,7 +15,6 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useAuth } from '@/auth/AuthProvider';
@@ -23,12 +22,12 @@ import SignInScreen from '@/auth/SignInScreen';
 import CashierPinScreen from '@/auth/CashierPinScreen';
 import AppDrawer from '@/shell/AppDrawer';
 import PhoneTabNavigator from '@/shell/PhoneTabNavigator';
+import SplashScreen from '@/shell/SplashScreen';
 import { useDeviceSize } from '@/shell/useDeviceSize';
 import DeviceModePicker from '@/device-mode/DeviceMode';
 import CustomerDisplayScreen from '@/device-mode/CustomerDisplayScreen';
 import KdsScreen from '@/device-mode/KdsScreen';
 import { readDeviceMode, type DeviceMode } from '@/device-mode/storage';
-import { colors } from '@/theme';
 
 type AuthStackParamList = {
   SignIn: undefined;
@@ -70,11 +69,7 @@ export default function RootNavigator(): React.ReactElement {
   useEffect(() => { void refreshMode(); }, [refreshMode]);
 
   if (!ready || !modeReady) {
-    return (
-      <View style={styles.splash}>
-        <ActivityIndicator color={colors.primary} />
-      </View>
-    );
+    return <SplashScreen />;
   }
 
   // First-launch picker — nothing chosen yet.
@@ -124,6 +119,3 @@ function AppShellSwitch(): React.ReactElement {
   return size === 'tablet' ? <AppDrawer /> : <PhoneTabNavigator />;
 }
 
-const styles = StyleSheet.create({
-  splash: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg },
-});

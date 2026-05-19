@@ -1,32 +1,38 @@
 /**
  * Clerque Counter — design tokens
- * Source of truth: design-source/design-tokens-v2.html + screens-styles-v2.css
- * DO NOT inline magic colors anywhere else. Always import from here.
+ * Source of truth: apps/counter/design-source/screens-styles.css
+ *   Every value here is a 1:1 mirror of a CSS custom property in that file.
+ *   When the CSS changes, this file changes — never invent values.
+ *
+ * Brand: Counter is BROWN-primary on cream surfaces. (Earlier blue values
+ * were a temporary experiment; the locked brand is the brown earth-tone
+ * palette below.)
  */
 
 export const colors = {
-  // Primary · electric blue (matches web Counter)
-  primary:          '#3B82F6',
-  primaryPress:     '#1D4ED8',
-  primaryContainer: '#DBE8FE',
+  // ── Brand · brown earth-tones ─────────────────────────────────────
+  primary:          '#8B5E3C',
+  primaryPress:     '#714A2D',
+  primaryContainer: '#E7D5C2',
   onPrimary:        '#FFFFFF',
-  primaryInk:       '#0C2A66',
+  /** Deep brown ink for text on primaryContainer. */
+  primaryInk:       '#714A2D',
 
-  // Warm cream surfaces · daylight friendly
-  cream:     '#E8E1D1',
-  creamSoft: '#F2EDE2',
-  creamDeep: '#D8CFBC',
-  bg:        '#F8F5EE',
+  // ── Surfaces · warm cream ─────────────────────────────────────────
+  cream:     '#EEE9DF',
+  creamSoft: '#F5F1E8',
+  creamDeep: '#DDD4C2',
+  bg:        '#FAFAF7',
   surface:   '#FFFFFF',
 
-  // Text · stays warm for contrast against cool primary
+  // ── Text ──────────────────────────────────────────────────────────
   ink:        '#1F1B16',
-  muted:      '#5F564B',
-  faint:      '#8A8073',
-  rule:       '#DDD4C2',
-  ruleStrong: '#BDB39E',
+  muted:      '#5C5650',
+  faint:      '#8A847C',
+  rule:       '#D4CFC4',
+  ruleStrong: '#BAB3A6',
 
-  // Semantic
+  // ── Semantic ──────────────────────────────────────────────────────
   success:     '#10B981',
   successSoft: '#D7F4E7',
   successDeep: '#065F46',
@@ -36,15 +42,17 @@ export const colors = {
   error:       '#DC2626',
   errorSoft:   '#FBD9D9',
   errorDeep:   '#991B1B',
-  info:        '#3B82F6',
+  info:        '#2563EB',
   infoSoft:    '#DBE8FE',
   infoDeep:    '#1E40AF',
 
-  // Local payment brands — never hidden under "Other"
+  // ── Local payment brands ──────────────────────────────────────────
   gcash:   '#007BFC',
+  gcashSoft: '#E1EEFE',
+  gcashDeep: '#0048A1',
   paymaya: '#00B14F',
 
-  // Dark mode (cool, matches web Counter night surface)
+  // ── Dark mode (kept for parity, not exercised yet) ────────────────
   darkBg:      '#0B1220',
   darkSurface: '#131B2E',
   darkElev:    '#1A2335',
@@ -53,7 +61,7 @@ export const colors = {
   darkRule:    '#28344A',
 } as const;
 
-/** 4-px grid spacing scale. */
+/** 4-px grid spacing scale — matches --s-1..--s-8 in screens-styles.css. */
 export const spacing = {
   s1: 4,
   s2: 8,
@@ -65,6 +73,7 @@ export const spacing = {
   s8: 64,
 } as const;
 
+/** Corner radii — matches --r-xs..--r-pill. */
 export const radii = {
   xs:   4,
   sm:   8,
@@ -74,13 +83,14 @@ export const radii = {
   pill: 999,
 } as const;
 
-/** Material 3-flavored elevation tiers. Drop-shadows tuned for cream surfaces. */
+/** Elevation tiers — matches --e-1..--e-5. RN approximation of the CSS
+ *  drop-shadows. iOS reads shadow*, Android reads `elevation`. */
 export const elevation = {
-  e1: { shadowColor: '#0F172A', shadowOpacity: 0.06, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  e2: { shadowColor: '#0F172A', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  e3: { shadowColor: '#0F172A', shadowOpacity: 0.10, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
-  e4: { shadowColor: '#0F172A', shadowOpacity: 0.14, shadowRadius: 32, shadowOffset: { width: 0, height: 12 }, elevation: 6 },
-  e5: { shadowColor: '#0F172A', shadowOpacity: 0.18, shadowRadius: 56, shadowOffset: { width: 0, height: 24 }, elevation: 12 },
+  e1: { shadowColor: '#1F1B16', shadowOpacity: 0.06, shadowRadius: 2, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  e2: { shadowColor: '#1F1B16', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  e3: { shadowColor: '#1F1B16', shadowOpacity: 0.10, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  e4: { shadowColor: '#1F1B16', shadowOpacity: 0.14, shadowRadius: 32, shadowOffset: { width: 0, height: 12 }, elevation: 6 },
+  e5: { shadowColor: '#1F1B16', shadowOpacity: 0.18, shadowRadius: 56, shadowOffset: { width: 0, height: 24 }, elevation: 12 },
 } as const;
 
 /** Font family aliases — names match the @expo-google-fonts/* bundled
@@ -97,33 +107,33 @@ export const fonts = {
   monoSemibold:   'JetBrainsMono_600SemiBold',
 } as const;
 
-/** Touch target heights (Material 3 + cashier ergonomics). */
+/** Touch target heights. */
 export const tap = {
   cashierPrimary: 64,
   default:        48,
   compact:        36,
 } as const;
 
-/** Text style presets. */
+/** Text style presets. Sizes calibrated against the design CSS. */
 export const text = {
-  // Display — Plus Jakarta Sans
-  displayLg: { fontFamily: fonts.display, fontSize: 32, fontWeight: '800' as const, letterSpacing: -0.5 },
-  displayMd: { fontFamily: fonts.display, fontSize: 24, fontWeight: '700' as const, letterSpacing: -0.3 },
-  displaySm: { fontFamily: fonts.display, fontSize: 20, fontWeight: '700' as const, letterSpacing: -0.2 },
+  // Display — Plus Jakarta Sans (matches --font-display)
+  displayLg: { fontFamily: fonts.displayBold, fontSize: 32, fontWeight: '800' as const, letterSpacing: -0.6 },
+  displayMd: { fontFamily: fonts.display,     fontSize: 24, fontWeight: '700' as const, letterSpacing: -0.3 },
+  displaySm: { fontFamily: fonts.display,     fontSize: 20, fontWeight: '700' as const, letterSpacing: -0.2 },
 
-  // Body — Inter
-  bodyLg: { fontFamily: fonts.body, fontSize: 18, fontWeight: '500' as const },
-  body:   { fontFamily: fonts.body, fontSize: 16, fontWeight: '400' as const },
-  bodySm: { fontFamily: fonts.body, fontSize: 14, fontWeight: '400' as const },
-  caption:{ fontFamily: fonts.body, fontSize: 12, fontWeight: '500' as const, letterSpacing: 0.1 },
+  // Body — Inter (matches --font-body)
+  bodyLg: { fontFamily: fonts.bodyMedium, fontSize: 18, fontWeight: '500' as const },
+  body:   { fontFamily: fonts.body,       fontSize: 16, fontWeight: '400' as const },
+  bodySm: { fontFamily: fonts.body,       fontSize: 14, fontWeight: '400' as const },
+  caption:{ fontFamily: fonts.bodyMedium, fontSize: 12, fontWeight: '500' as const, letterSpacing: 0.2 },
 
-  // Cashier buttons / numerics — Inter with tabular-nums via fontVariant
+  // Cashier buttons / numerics
   cashierKey: { fontFamily: fonts.body, fontSize: 22, fontWeight: '700' as const },
   cashierLg:  { fontFamily: fonts.body, fontSize: 28, fontWeight: '700' as const },
 
-  // Monospaced runs of currency / IDs
-  mono:    { fontFamily: fonts.mono, fontSize: 14, fontWeight: '500' as const },
-  monoLg:  { fontFamily: fonts.mono, fontSize: 20, fontWeight: '600' as const },
+  // Monospaced runs — currency, OR#, lot numbers (matches --font-mono)
+  mono:    { fontFamily: fonts.mono,         fontSize: 14, fontWeight: '500' as const },
+  monoLg:  { fontFamily: fonts.monoSemibold, fontSize: 20, fontWeight: '600' as const },
 } as const;
 
 /** Tabular-nums style helper for currency. Use on every ₱ amount. */

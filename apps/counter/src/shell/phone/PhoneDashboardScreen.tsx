@@ -151,7 +151,7 @@ export default function PhoneDashboardScreen(): React.ReactElement {
 
   return (
     <View style={styles.root}>
-      <PhoneHeader title="Clerque · Counter" />
+      <PhoneHeader variant="brand" />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={styles.h1}>Today · {dateLabel}</Text>
         {activeBranch?.name ? (
@@ -269,30 +269,8 @@ export default function PhoneDashboardScreen(): React.ReactElement {
             <MaterialCommunityIcons name="chevron-right" size={22} color={colors.primaryInk} />
           </Pressable>
         ) : null}
-
-        {/* Quick actions 3-up */}
-        <Text style={styles.section}>QUICK ACTIONS</Text>
-        <View style={styles.actionRow}>
-          <QuickAction icon="cart-outline" label="Sell" onPress={() => nav.navigate('Sell')} />
-          <QuickAction icon="file-chart-outline" label="Z-read" onPress={() => nav.navigate('Shift')} />
-          <QuickAction icon="receipt" label="Orders" onPress={() => nav.navigate('Orders')} />
-        </View>
       </ScrollView>
     </View>
-  );
-}
-
-interface QuickActionProps {
-  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-  label: string;
-  onPress: () => void;
-}
-function QuickAction({ icon, label, onPress }: QuickActionProps): React.ReactElement {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}>
-      <MaterialCommunityIcons name={icon} size={24} color={colors.primary} />
-      <Text style={styles.actionLabel}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -436,18 +414,4 @@ const styles = StyleSheet.create({
   approvalsTitle: { ...textTokens.body, color: colors.primaryInk, fontWeight: '800', fontSize: 14 },
   approvalsSub: { fontSize: 11, color: colors.primaryInk, marginTop: 2 },
 
-  // Quick actions
-  actionRow: { flexDirection: 'row', gap: spacing.s2 },
-  action: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.rule,
-    paddingVertical: spacing.s4,
-    alignItems: 'center',
-    gap: spacing.s2,
-  },
-  actionPressed: { backgroundColor: colors.creamSoft, borderColor: colors.ruleStrong },
-  actionLabel: { ...textTokens.body, color: colors.ink, fontWeight: '700', fontSize: 13 },
 });

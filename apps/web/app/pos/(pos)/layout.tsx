@@ -422,6 +422,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ...withSection('Sell', [
         makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
         makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
+        makeNavItem('/pos/pre-orders',   'Pre-orders',  Cake,            ORDERS_ROLES,    role),
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',          'Products',          Package,         PRODUCTS_ROLES,  role),

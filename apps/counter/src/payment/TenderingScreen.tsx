@@ -25,6 +25,7 @@ import {
 } from '@/theme/tokens';
 import { formatPeso } from '@/components/Money';
 import Pill from '@/components/Pill';
+import PhoneTenderingWizard from '@/payment/PhoneTenderingWizard';
 import { useDeviceSize } from '@/shell/useDeviceSize';
 import type { CartPayment, CartState } from '@/types';
 
@@ -73,6 +74,20 @@ export default function TenderingScreen({
   const [tab, setTab] = useState<TenderingTab>(initialTab);
   const insets = useSafeAreaInsets();
   const isPhone = useDeviceSize() === 'phone';
+
+  // On phone, the entire screen is the 3-step wizard — different IA than
+  // the tablet single-screen tab grid.
+  if (isPhone) {
+    return (
+      <PhoneTenderingWizard
+        cart={cart}
+        totalCents={totalCents}
+        discountCents={discountCents}
+        onPaid={onPaid}
+        onCancel={onCancel}
+      />
+    );
+  }
 
   const headerColor =
     tab === 'GCASH' ? colors.gcash :

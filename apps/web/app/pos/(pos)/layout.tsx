@@ -8,6 +8,7 @@ import {
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
   Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity, ChartBar,
   Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
+  FlaskConical,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType, isFnbType } from '@repo/shared-types';
@@ -423,9 +424,10 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
       ]),
       ...withSection('Catalog', [
-        makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',    'Ingredients', ClipboardList,   INVENTORY_ROLES, role),
-        makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
+        makeNavItem('/pos/products',          'Products',          Package,         PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/inventory',         'Ingredients',       ClipboardList,   INVENTORY_ROLES, role),
+        makeNavItem('/pos/modifier-recipes',  'Modifier recipes',  FlaskConical,    PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/settings/uom',      'Units (UoM)',       Ruler,           UOM_ROLES,       role),
       ]),
       ...warehouseSection,
     ];

@@ -35,6 +35,10 @@ export interface CreateModifierOptionDto {
   priceAdjustment?: number;
   isDefault?: boolean;
   sortOrder?: number;
+  /// Multiplier applied to the base product BOM when the option is chosen.
+  /// 1.0 = no scale, 1.25 = +25% (e.g. size upgrades). Defaults to 1.0 in
+  /// the DB so omitting this is fine for plain add-ons.
+  recipeMultiplier?: number;
 }
 
 export interface UpdateModifierOptionDto {
@@ -43,6 +47,17 @@ export interface UpdateModifierOptionDto {
   isDefault?: boolean;
   sortOrder?: number;
   isActive?: boolean;
+  recipeMultiplier?: number;
+}
+
+/// One ingredient line attached to a modifier option.
+export interface UpsertModifierIngredientDto {
+  rawMaterialId: string;
+  /// Quantity consumed PER FINISHED UNIT. The orders service multiplies by
+  /// soldQty when it runs the decrement.
+  quantity: number;
+  /// Display unit; must match the underlying RawMaterial.unit (validated).
+  unit: string;
 }
 
 @Injectable()
@@ -67,6 +82,15 @@ export class ModifiersService {
         options: {
           where: { isActive: true },
           orderBy: { sortOrder: 'asc' },
+          include: {
+            ingredients: {
+              include: {
+                rawMaterial: {
+                  select: { id: true, name: true, unit: true, costPrice: true },
+                },
+              },
+            },
+          },
         },
         _count: { select: { products: true } },
       },
@@ -142,9 +166,74 @@ export class ModifiersService {
         modifierGroupId: groupId,
         name: dto.name,
         priceAdjustment: dto.priceAdjustment ?? 0,
+        recipeMultiplier: dto.recipeMultiplier ?? 1,
         isDefault: dto.isDefault ?? false,
         sortOrder: dto.sortOrder ?? 0,
       },
+    });
+  }
+
+  // ─── Option ↔ Ingredient wiring (modifier recipes) ────────────────────────
+
+  /**
+   * Replace ALL ingredients on an option with the supplied list. Simpler than
+   * per-row CRUD for an editor that lets the owner add/remove rows freely.
+   * Validates every rawMaterialId belongs to the tenant + units match.
+   */
+  async setOptionIngredients(
+    tenantId: string,
+    groupId: string,
+    optionId: string,
+    items: UpsertModifierIngredientDto[],
+  ) {
+    await this.findOption(tenantId, groupId, optionId);
+
+    if (items.length > 0) {
+      const ids = items.map((i) => i.rawMaterialId);
+      const dupes = ids.length !== new Set(ids).size;
+      if (dupes) {
+        throw new ConflictException('A raw material can only appear once on an option.');
+      }
+      const rms = await this.prisma.rawMaterial.findMany({
+        where: { id: { in: ids }, tenantId },
+        select: { id: true, unit: true },
+      });
+      if (rms.length !== ids.length) {
+        throw new NotFoundException('One or more raw materials do not belong to this tenant.');
+      }
+      const unitByRm = new Map(rms.map((r) => [r.id, r.unit]));
+      for (const i of items) {
+        if (unitByRm.get(i.rawMaterialId) !== i.unit) {
+          throw new ConflictException(
+            `Unit mismatch on ${i.rawMaterialId}: raw material uses ${unitByRm.get(i.rawMaterialId)}, request sent ${i.unit}.`,
+          );
+        }
+        if (!Number.isFinite(i.quantity) || i.quantity <= 0) {
+          throw new ConflictException(`Quantity must be a positive number (got ${i.quantity}).`);
+        }
+      }
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.modifierOptionIngredient.deleteMany({ where: { modifierOptionId: optionId } });
+      if (items.length > 0) {
+        await tx.modifierOptionIngredient.createMany({
+          data: items.map((i) => ({
+            modifierOptionId: optionId,
+            rawMaterialId:    i.rawMaterialId,
+            quantity:         i.quantity,
+            unit:             i.unit,
+          })),
+        });
+      }
+      return tx.modifierOption.findUnique({
+        where: { id: optionId },
+        include: {
+          ingredients: {
+            include: { rawMaterial: { select: { id: true, name: true, unit: true, costPrice: true } } },
+          },
+        },
+      });
     });
   }
 

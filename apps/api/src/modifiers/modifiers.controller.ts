@@ -22,6 +22,7 @@ import {
   UpdateModifierGroupDto,
   CreateModifierOptionDto,
   UpdateModifierOptionDto,
+  UpsertModifierIngredientDto,
 } from './modifiers.service';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -105,6 +106,27 @@ export class ModifiersController {
     @Param('optionId') optionId: string,
   ) {
     return this.modifiersService.deleteOption(user.tenantId!, groupId, optionId);
+  }
+
+  // ─── Option ingredients (modifier recipes) ───────────────────────────────────
+
+  /// PUT /modifiers/groups/:groupId/options/:optionId/ingredients
+  /// Replaces ALL ingredients on the option. Sent by /pos/modifier-recipes.
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Post('groups/:groupId/options/:optionId/ingredients')
+  @HttpCode(HttpStatus.OK)
+  setOptionIngredients(
+    @CurrentUser() user: JwtPayload,
+    @Param('groupId') groupId: string,
+    @Param('optionId') optionId: string,
+    @Body() body: { items: UpsertModifierIngredientDto[] },
+  ) {
+    return this.modifiersService.setOptionIngredients(
+      user.tenantId!,
+      groupId,
+      optionId,
+      body.items ?? [],
+    );
   }
 
   // ─── Product ↔ Group ─────────────────────────────────────────────────────────

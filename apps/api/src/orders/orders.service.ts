@@ -490,6 +490,42 @@ export class OrdersService {
 
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
+
+        // Sprint-modifier-recipes: pull each selected modifier option's
+        // `recipeMultiplier` and ingredient list in one round trip. Two
+        // effects flow from this:
+        //   1. The HIGHEST multiplier among the chosen options scales the
+        //      base BOM consumption (a "Grande" at 1.25 means we drain
+        //      25% more milk than a Tall would). We take the max, not the
+        //      product, because two simultaneous size selections (which
+        //      shouldn't happen but might via API) shouldn't compound.
+        //   2. Every option's own ingredients are appended to the
+        //      consumption list as "virtual BOM lines".
+        const selectedOptionIds: string[] = (item.modifiers ?? [])
+          .map((m: { modifierOptionId: string }) => m.modifierOptionId)
+          .filter(Boolean);
+        const modifierOptions = selectedOptionIds.length > 0
+          ? await tx.modifierOption.findMany({
+              where: { id: { in: selectedOptionIds } },
+              select: {
+                id: true,
+                recipeMultiplier: true,
+                ingredients: {
+                  select: {
+                    rawMaterialId: true,
+                    quantity:      true,
+                    rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
+                  },
+                },
+              },
+            })
+          : [];
+
+        const recipeMultiplier = modifierOptions.reduce((max, o) => {
+          const m = Number(o.recipeMultiplier);
+          return Number.isFinite(m) && m > max ? m : max;
+        }, 1);
+
         // BOM walk: defense-in-depth tenant scope on the JOIN side too.
         // The productId guard above already rejects cross-tenant productIds,
         // but scoping the bomItem query by product.tenantId makes this
@@ -503,12 +539,29 @@ export class OrdersService {
           },
         });
 
-        if (bomItems.length === 0) continue; // not a recipe product — skip
+        // Build the unified consumption list: scaled base BOM + modifier
+        // add-ons. Both shapes match `{ rawMaterialId, quantity, rawMaterial }`
+        // so the downstream loop can stay one path.
+        const modifierBomLines = modifierOptions.flatMap((o) =>
+          o.ingredients.map((ing) => ({
+            rawMaterialId: ing.rawMaterialId,
+            quantity:      new Prisma.Decimal(Number(ing.quantity)),  // per finished unit
+            rawMaterial:   ing.rawMaterial,
+          })),
+        );
+        const baseScaled = bomItems.map((b) => ({
+          rawMaterialId: b.rawMaterialId,
+          quantity:      new Prisma.Decimal(Number(b.quantity) * recipeMultiplier),
+          rawMaterial:   b.rawMaterial,
+        }));
+        const consumptionLines = [...baseScaled, ...modifierBomLines];
+
+        if (consumptionLines.length === 0) continue; // not a recipe product, no add-ons
 
         // Per-unit cost accumulator for this product (₱ per single unit).
         let perUnitCost = 0;
 
-        for (const bom of bomItems) {
+        for (const bom of consumptionLines) {
           const perUnitQty = Number(bom.quantity);    // ingredient qty per 1 finished unit
           const consumeQty = perUnitQty * soldQty;     // total qty drained for this order line
 

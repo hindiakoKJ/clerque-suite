@@ -1214,14 +1214,15 @@ model RawMaterial {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  tenant          Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bomItems        BomItem[]
-  variantBomItems VariantBomItem[]
-  inventory       RawMaterialInventory[]
-  lots            RawMaterialLot[]
-  transferLines   StockTransferLine[]
-  cycleCountLines CycleCountLine[]
-  issuanceLines   MaterialIssuanceLine[]
+  tenant            Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bomItems          BomItem[]
+  variantBomItems   VariantBomItem[]
+  inventory         RawMaterialInventory[]
+  lots              RawMaterialLot[]
+  transferLines     StockTransferLine[]
+  cycleCountLines   CycleCountLine[]
+  issuanceLines     MaterialIssuanceLine[]
+  modifierIngredientLinks ModifierOptionIngredient[]
 
   @@index([tenantId, isActive])
   @@map("raw_materials")
@@ -1921,22 +1922,59 @@ model ModifierGroup {
 }
 
 /// A single choice within a modifier group (e.g. "Large +₱20")
+///
+/// Sprint-modifier-recipes: options now carry recipe-aware fields so the
+/// inventory consumption path on orders can deduct extra ingredients (an
+/// "+1 espresso shot" add-on) and scale the base BOM up or down (a "Grande"
+/// size at 1.25× the Tall recipe).
 model ModifierOption {
   id              String   @id @default(cuid())
   modifierGroupId String
   name            String
   priceAdjustment Decimal  @default(0) @db.Decimal(12, 2)
+  /// Multiplier applied to the product's base BOM when this option is
+  /// selected. 1.0 = no change (default). 1.25 = consume 25% more of every
+  /// base ingredient (used for size upgrades). Only one size-type option
+  /// per order item is honoured — if a cashier somehow selects two, the
+  /// service uses the highest multiplier.
+  recipeMultiplier Decimal @default(1.0) @db.Decimal(8, 4)
   isDefault       Boolean  @default(false)
   sortOrder       Int      @default(0)
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  group         ModifierGroup       @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  group         ModifierGroup              @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
   orderItemMods OrderItemModifier[]
+  ingredients   ModifierOptionIngredient[]
 
   @@index([modifierGroupId])
   @@map("modifier_options")
+}
+
+/// Junction: ingredients that get ADDED to a sale when this option is
+/// selected. The decrement runs against RawMaterialInventory just like a
+/// product BomItem does, so COGS posting + lot drain + WAC math all flow
+/// through the existing pipeline. Quantity is scaled by the order item's
+/// quantity (1 latte × 2 cups × 5g coffee = 10g consumed).
+///
+/// Unit is a denormalized snapshot so the consumption code doesn't need to
+/// join through RawMaterial for unit math. The web admin enforces that
+/// option.unit matches RawMaterial.unit at edit time.
+model ModifierOptionIngredient {
+  id               String  @id @default(cuid())
+  modifierOptionId String
+  rawMaterialId    String
+  quantity         Decimal @db.Decimal(14, 4)
+  unit             String
+
+  option       ModifierOption @relation(fields: [modifierOptionId], references: [id], onDelete: Cascade)
+  rawMaterial  RawMaterial    @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
+
+  @@unique([modifierOptionId, rawMaterialId])
+  @@index([modifierOptionId])
+  @@index([rawMaterialId])
+  @@map("modifier_option_ingredients")
 }
 
 /// Junction: which modifier groups apply to a product

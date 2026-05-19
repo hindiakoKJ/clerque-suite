@@ -91,7 +91,10 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
 
   return (
     <View style={styles.root}>
-      <PhoneHeader title="Sell" subtitle={activeBranch?.name ?? undefined} />
+      <PhoneHeader
+        title={`Sell · ${activeBranch?.name ?? 'Counter'}`}
+        subtitle={lineCount > 0 ? `${lineCount} item${lineCount === 1 ? '' : 's'} · ${formatPeso(total)}` : 'Tap a product to add'}
+      />
 
       {/* Search field */}
       <View style={styles.searchWrap}>
@@ -287,11 +290,11 @@ const styles = StyleSheet.create({
   rowPressed: { backgroundColor: colors.creamSoft },
   rowDisabled: { opacity: 0.5 },
   thumb: {
-    width: 48, height: 48, borderRadius: radii.md,
-    backgroundColor: colors.creamDeep,
+    width: 48, height: 48, borderRadius: 10,
+    backgroundColor: '#C8AC8E',  // coffee-tan flat (no LinearGradient dep)
     alignItems: 'center', justifyContent: 'center',
   },
-  thumbText: { ...textTokens.displaySm, color: colors.ink, fontSize: 14 },
+  thumbText: { ...textTokens.displaySm, color: '#5C3B1F', fontSize: 16, fontWeight: '800' },
   rowBody: { flex: 1, minWidth: 0 },
   rowTitle: { ...textTokens.body, color: colors.ink, fontWeight: '700', fontSize: 15 },
   rowSub: { ...textTokens.caption, color: colors.muted, marginTop: 2 },

@@ -11,8 +11,8 @@
  * CTA delegates to the shared `openTendering()` host so the payment +
  * receipt flow is identical to tablet.
  */
-import React, { useRef } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { FlatList, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -23,7 +23,7 @@ import PhoneHeader from '@/shell/phone/PhoneHeader';
 import { useCartStore } from '@/terminal/cartStore';
 import { openTendering } from '@/payment/TenderingHost';
 import { formatPeso } from '@/components/Money';
-import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
+import { colors, fonts, radii, spacing, text as textTokens, tnum } from '@/theme';
 import type { PhoneSellStackParamList } from '@/shell/phone/types';
 import type { CartState, CartLine } from '@/types';
 
@@ -37,9 +37,32 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
   const total = useCartStore((s) => s.total());
   const setQty = useCartStore((s) => s.setQty);
   const removeLine = useCartStore((s) => s.removeLine);
+  const applyDiscount = useCartStore((s) => s.applyDiscount);
   const clear = useCartStore((s) => s.clear);
+  const customer = useCartStore((s) => s.customer);
+
+  const [discountSheet, setDiscountSheet] = useState(false);
 
   const active = lines.filter((l) => !l.removed && !l.voidedAt);
+
+  /** Apply a tax-status-aware discount kind to every active line. */
+  const setBulkDiscount = (kind: 'SENIOR' | 'PWD' | null) => {
+    setDiscountSheet(false);
+    for (const l of active) {
+      if (kind === null) {
+        applyDiscount(l.id, undefined);
+      } else {
+        applyDiscount(l.id, { kind, percent: 20 });
+      }
+    }
+  };
+  const currentDiscountKind: 'SENIOR' | 'PWD' | null = (() => {
+    if (active.length === 0) return null;
+    const first = active[0].discount?.kind;
+    if (!first) return null;
+    const everyMatches = active.every((l) => l.discount?.kind === first);
+    return everyMatches ? (first as 'SENIOR' | 'PWD') : null;
+  })();
   // Track open swipeables so opening one closes the others.
   const swipeRefs = useRef<Map<string, Swipeable>>(new Map());
   const insets = useSafeAreaInsets();
@@ -84,15 +107,52 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
         }
         ListFooterComponent={
           active.length > 0 ? (
-            <View style={styles.totals}>
-              <Row label="Subtotal" value={formatPeso(subtotal)} muted />
-              {discount > 0 ? (
-                <Row label="Discount" value={`− ${formatPeso(discount)}`} muted />
-              ) : null}
-              <Row label="VAT (incl.)" value={formatPeso(vat)} muted />
-              <View style={styles.divider} />
-              <Row label="Total" value={formatPeso(total)} big />
-            </View>
+            <>
+              {/* Action rows — Discount, Customer */}
+              <View style={styles.actionList}>
+                <Pressable
+                  onPress={() => setDiscountSheet(true)}
+                  style={({ pressed }) => [styles.actionRow, pressed && styles.actionRowPressed]}
+                >
+                  <View style={styles.actionIconWrap}>
+                    <MaterialCommunityIcons name="tag-outline" size={18} color={colors.primary} />
+                  </View>
+                  <Text style={styles.actionLabel}>Apply discount</Text>
+                  <Text style={styles.actionValue}>
+                    {currentDiscountKind === 'SENIOR' ? 'Senior 20%' :
+                     currentDiscountKind === 'PWD' ? 'PWD 20%' :
+                     'None'}
+                  </Text>
+                  <MaterialCommunityIcons name="chevron-right" size={18} color={colors.muted} />
+                </Pressable>
+
+                <View style={styles.actionDivider} />
+
+                <Pressable
+                  onPress={() => { /* TODO: customer picker — backend search hook pending */ }}
+                  style={({ pressed }) => [styles.actionRow, pressed && styles.actionRowPressed]}
+                >
+                  <View style={styles.actionIconWrap}>
+                    <MaterialCommunityIcons name="account-outline" size={18} color={colors.primary} />
+                  </View>
+                  <Text style={styles.actionLabel}>Add customer</Text>
+                  <Text style={styles.actionValue} numberOfLines={1}>
+                    {customer?.name ?? 'None'}
+                  </Text>
+                  <MaterialCommunityIcons name="chevron-right" size={18} color={colors.muted} />
+                </Pressable>
+              </View>
+
+              <View style={styles.totals}>
+                <Row label="Subtotal" value={formatPeso(subtotal)} muted />
+                {discount > 0 ? (
+                  <Row label="Discount" value={`− ${formatPeso(discount)}`} muted />
+                ) : null}
+                <Row label="VAT (incl.)" value={formatPeso(vat)} muted />
+                <View style={styles.divider} />
+                <Row label="Total" value={formatPeso(total)} big />
+              </View>
+            </>
           ) : null
         }
         renderItem={({ item: l }) => (
@@ -161,6 +221,40 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
         )}
       />
 
+      {/* Discount picker sheet */}
+      <Modal
+        visible={discountSheet}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDiscountSheet(false)}
+      >
+        <Pressable style={styles.modalScrim} onPress={() => setDiscountSheet(false)}>
+          <Pressable style={styles.modalSheet} onPress={() => { /* swallow taps inside */ }}>
+            <Text style={styles.modalTitle}>Apply discount</Text>
+            <Text style={styles.modalSub}>Applies to every active item in this order.</Text>
+
+            <DiscountPick
+              label="Senior citizen · 20%"
+              hint="VAT-exempt under RA 9994."
+              active={currentDiscountKind === 'SENIOR'}
+              onPress={() => setBulkDiscount('SENIOR')}
+            />
+            <DiscountPick
+              label="PWD · 20%"
+              hint="VAT-exempt under RA 10754."
+              active={currentDiscountKind === 'PWD'}
+              onPress={() => setBulkDiscount('PWD')}
+            />
+            <DiscountPick
+              label="No discount"
+              hint="Clears every line."
+              active={currentDiscountKind === null}
+              onPress={() => setBulkDiscount(null)}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <View style={[styles.ctaWrap, { paddingBottom: spacing.s5 + insets.bottom }]}>
         <Pressable
           onPress={onCharge}
@@ -172,6 +266,25 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
         </Pressable>
       </View>
     </GestureHandlerRootView>
+  );
+}
+
+function DiscountPick({
+  label, hint, active, onPress,
+}: { label: string; hint: string; active: boolean; onPress: () => void }): React.ReactElement {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.pickRow, active && styles.pickRowOn, pressed && { opacity: 0.85 }]}
+    >
+      <View style={[styles.pickRadio, active && styles.pickRadioOn]}>
+        {active ? <View style={styles.pickRadioDot} /> : null}
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.pickLabel, active && styles.pickLabelOn]}>{label}</Text>
+        <Text style={styles.pickHint}>{hint}</Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -264,6 +377,70 @@ const styles = StyleSheet.create({
   rowMuted: { color: colors.muted },
   rowBig: { ...textTokens.displaySm, fontSize: 22, fontWeight: '800', color: colors.ink },
   divider: { height: 1, backgroundColor: colors.rule, marginVertical: spacing.s1 },
+
+  // Action rows (Apply discount / Add customer)
+  actionList: {
+    backgroundColor: colors.surface,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.rule,
+    marginTop: spacing.s3,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s3,
+    paddingHorizontal: spacing.s4,
+    paddingVertical: spacing.s3,
+  },
+  actionRowPressed: { backgroundColor: colors.creamSoft },
+  actionIconWrap: {
+    width: 32, height: 32, borderRadius: radii.sm,
+    backgroundColor: colors.primaryContainer,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  actionLabel: { ...textTokens.body, color: colors.ink, fontWeight: '600', fontSize: 14, flex: 1 },
+  actionValue: { ...textTokens.bodySm, color: colors.muted, fontSize: 13, maxWidth: 120, textAlign: 'right' },
+  actionDivider: { height: 1, backgroundColor: colors.rule, marginHorizontal: spacing.s4 },
+
+  // Discount picker modal
+  modalScrim: {
+    flex: 1,
+    backgroundColor: 'rgba(31,27,22,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: spacing.s5,
+    gap: spacing.s2,
+    paddingBottom: spacing.s7,
+  },
+  modalTitle: { fontFamily: fonts.displayBold, fontSize: 22, fontWeight: '700', color: colors.ink, marginBottom: 2 },
+  modalSub:   { ...textTokens.bodySm, color: colors.muted, marginBottom: spacing.s3 },
+  pickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s3,
+    paddingVertical: spacing.s3,
+    paddingHorizontal: spacing.s4,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.rule,
+    backgroundColor: colors.surface,
+  },
+  pickRowOn: { backgroundColor: colors.primaryContainer, borderColor: colors.primary },
+  pickRadio: {
+    width: 18, height: 18, borderRadius: 9,
+    borderWidth: 1.5, borderColor: colors.ruleStrong,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  pickRadioOn: { borderColor: colors.primary },
+  pickRadioDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
+  pickLabel:    { ...textTokens.body, color: colors.ink, fontWeight: '700' },
+  pickLabelOn:  { color: colors.primaryPress },
+  pickHint:     { ...textTokens.caption, color: colors.muted, marginTop: 2 },
 
   ctaWrap: {
     position: 'absolute', left: 0, right: 0, bottom: 0,

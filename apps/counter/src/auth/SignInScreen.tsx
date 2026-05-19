@@ -33,9 +33,11 @@ export default function SignInScreen(): React.ReactElement {
   const { signIn } = useAuth();
   const insets = useSafeAreaInsets();
 
+  const [mode, setMode]             = useState<'password' | 'pin'>('password');
   const [tenantSlug, setTenantSlug] = useState('');
   const [email, setEmail]           = useState('');
   const [password, setPassword]     = useState('');
+  const [pin, setPin]               = useState('');
   const [showPassword, setShowPass] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
@@ -44,10 +46,19 @@ export default function SignInScreen(): React.ReactElement {
     if (submitting) return;
     setErrorMsg(null);
     if (!tenantSlug.trim()) { setErrorMsg('Tenant ID is required.'); return; }
-    if (!email.trim() || !password) { setErrorMsg('Email and password are required.'); return; }
+    if (!email.trim()) { setErrorMsg('Email is required.'); return; }
+    if (mode === 'password' && !password) { setErrorMsg('Password is required.'); return; }
+    if (mode === 'pin' && !/^\d{4,8}$/.test(pin)) {
+      setErrorMsg('PIN must be 4–8 digits.');
+      return;
+    }
     setSubmitting(true);
     try {
-      await signIn({ tenantSlug: tenantSlug.trim(), email: email.trim(), password });
+      await signIn({
+        tenantSlug: tenantSlug.trim(),
+        email:      email.trim(),
+        ...(mode === 'pin' ? { pin } : { password }),
+      });
     } catch (err) {
       if (err instanceof ApiHttpError) {
         if (err.status === 401 && err.code === 'SUBSCRIPTION_INACTIVE') {
@@ -84,16 +95,35 @@ export default function SignInScreen(): React.ReactElement {
         <Text style={styles.heading}>Sign in to Counter</Text>
         <Text style={styles.helper}>Tenant ID, email, password.</Text>
 
-        {/* Password / PIN segmented (PIN is roadmap — non-interactive) */}
+        {/* Password / PIN segmented — both are real auth flows on the API.
+         *  Password hits /auth/login, PIN hits /auth/pin-login. */}
         <View style={styles.tabs}>
-          <View style={[styles.tab, styles.tabOn]}>
-            <MaterialCommunityIcons name="lock-outline" size={13} color={colors.ink} />
-            <Text style={[styles.tabLabel, styles.tabLabelOn]}>Password</Text>
-          </View>
-          <View style={styles.tab}>
-            <MaterialCommunityIcons name="dialpad" size={13} color={colors.muted} />
-            <Text style={styles.tabLabel}>PIN</Text>
-          </View>
+          <Pressable
+            onPress={() => { setMode('password'); setErrorMsg(null); }}
+            style={[styles.tab, mode === 'password' && styles.tabOn]}
+          >
+            <MaterialCommunityIcons
+              name="lock-outline"
+              size={13}
+              color={mode === 'password' ? colors.ink : colors.muted}
+            />
+            <Text style={[styles.tabLabel, mode === 'password' && styles.tabLabelOn]}>
+              Password
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => { setMode('pin'); setErrorMsg(null); }}
+            style={[styles.tab, mode === 'pin' && styles.tabOn]}
+          >
+            <MaterialCommunityIcons
+              name="dialpad"
+              size={13}
+              color={mode === 'pin' ? colors.ink : colors.muted}
+            />
+            <Text style={[styles.tabLabel, mode === 'pin' && styles.tabLabelOn]}>
+              PIN
+            </Text>
+          </Pressable>
         </View>
 
         <TextInput
@@ -125,29 +155,49 @@ export default function SignInScreen(): React.ReactElement {
           disabled={submitting}
           theme={INPUT_THEME}
         />
-        <TextInput
-          label="Password"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry={!showPassword}
-          autoCapitalize="none"
-          autoCorrect={false}
-          mode="outlined"
-          dense
-          style={styles.input}
-          outlineStyle={styles.inputOutline}
-          contentStyle={styles.inputContent}
-          right={
-            <TextInput.Icon
-              icon={showPassword ? 'eye-off' : 'eye'}
-              size={20}
-              color={colors.primary}
-              onPress={() => setShowPass((v) => !v)}
-            />
-          }
-          disabled={submitting}
-          theme={INPUT_THEME}
-        />
+        {mode === 'password' ? (
+          <TextInput
+            label="Password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+            mode="outlined"
+            dense
+            style={styles.input}
+            outlineStyle={styles.inputOutline}
+            contentStyle={styles.inputContent}
+            right={
+              <TextInput.Icon
+                icon={showPassword ? 'eye-off' : 'eye'}
+                size={20}
+                color={colors.primary}
+                onPress={() => setShowPass((v) => !v)}
+              />
+            }
+            disabled={submitting}
+            theme={INPUT_THEME}
+          />
+        ) : (
+          <TextInput
+            label="PIN (4–8 digits)"
+            value={pin}
+            onChangeText={(v) => setPin(v.replace(/\D/g, '').slice(0, 8))}
+            keyboardType="number-pad"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            mode="outlined"
+            dense
+            style={styles.input}
+            outlineStyle={styles.inputOutline}
+            contentStyle={[styles.inputContent, { fontFamily: fonts.mono, letterSpacing: 4 }]}
+            maxLength={8}
+            disabled={submitting}
+            theme={INPUT_THEME}
+          />
+        )}
 
         {errorMsg ? (
           <HelperText type="error" visible style={styles.error}>
@@ -160,10 +210,20 @@ export default function SignInScreen(): React.ReactElement {
           disabled={submitting}
           style={({ pressed }) => [styles.cta, (submitting || pressed) && styles.ctaPressed]}
         >
-          <Text style={styles.ctaLabel}>{submitting ? 'Signing in…' : 'Sign in →'}</Text>
+          <Text style={styles.ctaLabel}>
+            {submitting
+              ? 'Signing in…'
+              : mode === 'pin' ? 'Sign in with PIN →' : 'Sign in →'}
+          </Text>
         </Pressable>
 
-        <Text style={styles.forgot}>Forgot password?</Text>
+        {mode === 'password' ? (
+          <Text style={styles.forgot}>Forgot password?</Text>
+        ) : (
+          <Text style={styles.forgot}>
+            No PIN yet? Ask your owner to set one in Settings → Security.
+          </Text>
+        )}
 
         <View style={[styles.footerCard, { marginBottom: Math.max(insets.bottom, spacing.s4) }]}>
           <Text style={styles.footerText}>

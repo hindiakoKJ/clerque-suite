@@ -78,7 +78,10 @@ export interface CashierState {
 interface SignInArgs {
   tenantSlug?: string;
   email: string;
-  password: string;
+  /** Mutually exclusive with `pin`. */
+  password?: string;
+  /** 4–8 digit cashier/staff PIN. Mutually exclusive with `password`. */
+  pin?: string;
 }
 
 /** The Cloud API's /auth/login returns just the tokens. The user +
@@ -220,23 +223,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     })();
   }, []);
 
-  const signIn = useCallback(async ({ tenantSlug, email, password }: SignInArgs) => {
+  const signIn = useCallback(async ({ tenantSlug, email, password, pin }: SignInArgs) => {
     // The Cloud API returns ONLY { accessToken, refreshToken } — no /auth/me
     // endpoint exists. Both user + tenant are baked into the JWT payload
-    // (see JwtPayload in packages/shared-types/src/auth.ts) so we decode
-    // the access token directly to populate the session.
-    // The Cloud auth strategy reads `companyCode` from the request body
-    // (see apps/api/src/auth/strategies/local.strategy.ts line 14). Sending
-    // `tenantSlug` makes the API silently ignore the disambiguator, which
-    // is how `admin@demo.com` typed with Tenant ID "demo" was ending up
-    // on whichever other tenant the same email exists on. Send both names
-    // for forward-compat in case the strategy ever supports `tenantSlug`.
-    const tokens = await api.post<LoginResponse>('/auth/login', {
-      companyCode: tenantSlug,
-      tenantSlug,
+    // so we decode the access token directly to populate the session.
+    //
+    // Two flows:
+    //   • password → /auth/login   (companyCode + email + password)
+    //   • pin      → /auth/pin-login (companyCode + email + 4-8 digit pin)
+    // The Cloud auth strategies read `companyCode` from req.body — we send
+    // both `companyCode` and `tenantSlug` for forward-compat in case the
+    // strategy is renamed.
+    const route = pin ? '/auth/pin-login' : '/auth/login';
+    const body: Record<string, string> = {
+      companyCode: tenantSlug ?? '',
+      tenantSlug:  tenantSlug ?? '',
       email,
-      password,
-    });
+      ...(pin ? { pin } : { password: password ?? '' }),
+    };
+    const tokens = await api.post<LoginResponse>(route, body);
     api.setAuthToken(tokens.accessToken);
     api.setRefreshToken(tokens.refreshToken);
 

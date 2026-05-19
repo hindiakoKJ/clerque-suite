@@ -29,6 +29,7 @@ import PhoneShiftScreen from '@/shell/phone/PhoneShiftScreen';
 import PhoneMoreScreen from '@/shell/phone/PhoneMoreScreen';
 import PhoneApprovalsScreen from '@/shell/phone/PhoneApprovalsScreen';
 import PhoneDisplaysCodegen from '@/shell/phone/PhoneDisplaysCodegen';
+import PhonePickupsScreen from '@/shell/phone/PhonePickupsScreen';
 
 import type {
   PhoneSellStackParamList,
@@ -67,6 +68,7 @@ function MoreStackNavigator(): React.ReactElement {
       <MoreStack.Screen name="Settings">
         {(p) => <SettingsScreen onMenuPress={() => p.navigation.goBack()} />}
       </MoreStack.Screen>
+      <MoreStack.Screen name="Pickups" component={PhonePickupsScreen} />
     </MoreStack.Navigator>
   );
 }

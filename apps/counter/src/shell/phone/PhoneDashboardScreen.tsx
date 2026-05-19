@@ -50,6 +50,18 @@ interface LowStockItem {
 
 interface ApprovalsCount { count: number }
 
+interface PickupSummary {
+  id:             string;
+  preOrderNumber: string;
+  pickupTime:     string | null;
+  status:         'DRAFT' | 'DEPOSIT_PAID' | 'READY' | 'PICKED_UP' | 'CANCELLED';
+  customer:       { id: string; name: string; contactPhone: string | null } | null;
+  balanceCents:   number;
+  totalCents:     number;
+  inscription:    string | null;
+  items:          Array<{ productName: string; quantity: number | string }>;
+}
+
 function phYmd(d: Date): string {
   // PH local YYYY-MM-DD (UTC+8 server matches PH).
   const offsetMs = 8 * 60 * 60 * 1000;
@@ -60,7 +72,7 @@ function phYmd(d: Date): string {
 export default function PhoneDashboardScreen(): React.ReactElement {
   const { activeBranch } = useBranchContext();
   const branchId = activeBranch?.id ?? null;
-  const nav = useNavigation<{ navigate: (s: string) => void }>();
+  const nav = useNavigation<{ navigate: (s: string, p?: unknown) => void }>();
 
   const todayYmd = React.useMemo(() => phYmd(new Date()), []);
   const yesterdayYmd = React.useMemo(() => {
@@ -98,6 +110,26 @@ export default function PhoneDashboardScreen(): React.ReactElement {
       try {
         const list = await api.get<LowStockItem[]>(
           `/inventory/low-stock?branchId=${encodeURIComponent(branchId!)}`,
+        );
+        return Array.isArray(list) ? list : [];
+      } catch (err) {
+        if (err instanceof ApiHttpError) return [];
+        throw err;
+      }
+    },
+  });
+
+  // Bakery custom-cake pickups for TODAY. Reads /pre-orders with a from/to
+  // date window scoped to today (PH). Quietly empty for tenants that haven't
+  // taken a pre-order — the card just doesn't render in that case.
+  const pickups = useQuery<PickupSummary[]>({
+    queryKey: ['pre-orders', 'today', branchId, todayYmd],
+    enabled: !!branchId,
+    staleTime: 60_000,
+    queryFn: async () => {
+      try {
+        const list = await api.get<PickupSummary[]>(
+          `/pre-orders?branchId=${encodeURIComponent(branchId!)}&from=${todayYmd}&to=${todayYmd}&status=DEPOSIT_PAID,READY,DRAFT`,
         );
         return Array.isArray(list) ? list : [];
       } catch (err) {
@@ -249,6 +281,27 @@ export default function PhoneDashboardScreen(): React.ReactElement {
           <MaterialCommunityIcons name="chevron-right" size={22} color={colors.muted} />
         </Pressable>
 
+        {/* Bakery — today's custom-cake pickups */}
+        {(pickups.data?.length ?? 0) > 0 ? (
+          <Pressable
+            style={styles.pickupsCard}
+            onPress={() => nav.navigate('More', { screen: 'Pickups' })}
+          >
+            <View style={styles.pickupsHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.pickupsLabel}>TODAY&apos;S PICKUPS</Text>
+                <Text style={styles.pickupsBig}>
+                  {pickups.data!.length} {pickups.data!.length === 1 ? 'reservation' : 'reservations'}
+                </Text>
+                <Text style={styles.pickupsSub}>
+                  Balance due {formatPeso(pickups.data!.reduce((acc, p) => acc + p.balanceCents, 0))}
+                </Text>
+              </View>
+              <MaterialCommunityIcons name="cake-variant" size={28} color={colors.primary} />
+            </View>
+          </Pressable>
+        ) : null}
+
         {/* Approvals chip */}
         {pendingApprovals > 0 ? (
           <Pressable
@@ -395,6 +448,22 @@ const styles = StyleSheet.create({
   shiftBig: { ...textTokens.displaySm, color: colors.ink, fontSize: 16, marginTop: 2 },
 
   // Approvals
+  // Bakery pickups
+  pickupsCard: {
+    backgroundColor: colors.primaryContainer,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    padding: spacing.s4,
+  },
+  pickupsHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.s3 },
+  pickupsLabel: {
+    fontSize: 10, fontWeight: '800', color: colors.primaryInk,
+    textTransform: 'uppercase', letterSpacing: 1,
+  },
+  pickupsBig: { ...textTokens.displaySm, fontSize: 18, fontWeight: '800', color: colors.primaryInk, marginTop: 2 },
+  pickupsSub: { ...textTokens.bodySm, color: colors.primaryInk, marginTop: 2, fontSize: 12 },
+
   approvalsCta: {
     flexDirection: 'row',
     alignItems: 'center',

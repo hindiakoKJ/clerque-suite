@@ -85,6 +85,15 @@ export default function PhoneMoreScreen({ navigation }: Props): React.ReactEleme
           />
         </Section>
 
+        <Section title="Bakery">
+          <Item
+            icon="cake-variant"
+            label="Today's pickups"
+            sub="Custom cake reservations"
+            onPress={() => navigation.navigate('Pickups')}
+          />
+        </Section>
+
         <Section title="Devices">
           <Item
             icon="television"

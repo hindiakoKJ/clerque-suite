@@ -279,7 +279,7 @@ export default function Receipt({
         ) : null}
         <Text style={s.metaSmall}>Powered by Clerque · {getWebHost()}</Text>
         <Text style={s.closingLine}>
-          This serves as {isBirRegistered ? 'an' : 'a'} {receiptKind.toLowerCase()} — {receiptKindFil}
+          This serves as an {receiptKind.toLowerCase()} — {receiptKindFil}
         </Text>
       </View>
     </View>

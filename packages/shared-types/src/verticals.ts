@@ -754,6 +754,122 @@ export const barbershopPack: VerticalPack = {
 //   2. Add the BusinessType → pack mappings here.
 // ──────────────────────────────────────────────────────────────────────────
 
+/**
+ * Medical Equipment (DME) pack — extends Retail with a Rentals + Serialized
+ * Units workflow. Keeps the unit-WAC inventory + standard OR receipts.
+ */
+export const medicalEquipmentPack: VerticalPack = {
+  businessTypes: ['MEDICAL_EQUIPMENT'],
+  category:      'RETAIL',
+  id:            'medical-equipment',
+  displayName:   'Medical Equipment',
+  tagline:       'DME retailers — wheelchairs, CPAP, hospital beds. Serial tracking + rentals.',
+
+  pos: {
+    cashierScreen: 'TERMINAL',
+    sidebarGroups: [
+      { label: 'Overview', items: [{ label: 'Dashboard', href: '/pos/dashboard', iconName: 'LayoutDashboard' }] },
+      { label: 'Sell',     items: [
+        { label: 'Terminal', href: '/pos/terminal', iconName: 'ShoppingCart' },
+        { label: 'Orders',   href: '/pos/orders',   iconName: 'ShoppingBag' },
+        { label: 'Rentals',  href: '/pos/rentals',  iconName: 'Wrench' },
+      ]},
+      { label: 'Catalog',  items: [
+        { label: 'Products',          href: '/pos/products',          iconName: 'Package' },
+        { label: 'Inventory',         href: '/pos/inventory',         iconName: 'ClipboardList' },
+        { label: 'Serialized units',  href: '/pos/serialized-units',  iconName: 'FileBadge' },
+        { label: 'Units (UoM)',       href: '/pos/settings/uom',      iconName: 'Ruler' },
+      ]},
+      { label: 'Warehouse', items: [
+        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
+        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
+      ]},
+    ],
+    receiptFormat: 'STANDARD_OR',
+    productModal: {
+      titleNew:        'New Medical Item',
+      titleEdit:       'Edit Medical Item',
+      namePlaceholder: 'e.g. Standard Folding Wheelchair',
+      allowRecipeProducts: false,
+    },
+  },
+
+  inventory: 'UNIT_WAC',
+
+  ledger: {
+    reportIds:            ['retail.shrinkage', 'retail.abc-analysis'],
+    journalTemplateIds:   [],
+    optionalAccountCodes: ['5060' /* Inventory Write-off */],
+  },
+
+  payroll: {
+    compensationTypes: ['HOURLY', 'SALARY', 'COMMISSION'],
+    timesheetShape:    'SHIFT',
+    extraIds:          ['retail.sales-commission'],
+  },
+
+  settings: { extraCards: [] },
+  help: { sectionsModule: '@/app/pos/(pos)/help/page' },
+};
+
+/**
+ * Gas Station pack — MSME independent stations using manual-meter fuel POS.
+ * Fuel side primary; c-store / lubricants side rides on the same terminal.
+ */
+export const gasStationPack: VerticalPack = {
+  businessTypes: ['GAS_STATION'],
+  category:      'RETAIL',
+  id:            'gas-station',
+  displayName:   'Gas Station',
+  tagline:       'Independent MSME stations. Manual-meter fuel POS + attached c-store.',
+
+  pos: {
+    cashierScreen: 'TERMINAL',
+    sidebarGroups: [
+      { label: 'Overview', items: [{ label: 'Dashboard', href: '/pos/dashboard', iconName: 'LayoutDashboard' }] },
+      { label: 'Fuel',     items: [
+        { label: 'Pumps',         href: '/pos/fuel/pumps',     iconName: 'Fuel' },
+        { label: 'Dispense log',  href: '/pos/fuel/dispenses', iconName: 'ClipboardList' },
+        { label: 'Tank dips',     href: '/pos/fuel/tank-dips', iconName: 'Activity' },
+      ]},
+      { label: 'C-store / Lubricants', items: [
+        { label: 'Terminal',  href: '/pos/terminal',  iconName: 'ShoppingCart' },
+        { label: 'Orders',    href: '/pos/orders',    iconName: 'ShoppingBag' },
+        { label: 'Products',  href: '/pos/products',  iconName: 'Package' },
+        { label: 'Inventory', href: '/pos/inventory', iconName: 'ClipboardList' },
+      ]},
+      { label: 'Warehouse', items: [
+        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
+        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
+      ]},
+    ],
+    receiptFormat: 'STANDARD_OR',
+    productModal: {
+      titleNew:        'New Product',
+      titleEdit:       'Edit Product',
+      namePlaceholder: 'e.g. Diesel (per Liter) or Mobil 1 5W-30 1L',
+      allowRecipeProducts: false,
+    },
+  },
+
+  inventory: 'UNIT_WAC',
+
+  ledger: {
+    reportIds:            ['retail.shrinkage'],
+    journalTemplateIds:   [],
+    optionalAccountCodes: [],
+  },
+
+  payroll: {
+    compensationTypes: ['HOURLY', 'SALARY'],
+    timesheetShape:    'SHIFT',
+    extraIds:          [],
+  },
+
+  settings: { extraCards: [] },
+  help: { sectionsModule: '@/app/pos/(pos)/help/page' },
+};
+
 export const VERTICAL_PACKS: Record<BusinessType, VerticalPack> = {
   // Food-Engine
   COFFEE_SHOP:   fnbPack,
@@ -772,6 +888,9 @@ export const VERTICAL_PACKS: Record<BusinessType, VerticalPack> = {
   PHARMACY:      pharmacyPack,
   TRUCKING:      truckingPack,
   CONSTRUCTION:  constructionPack,
+  // Sprint Bakery+1 — DME + Fuel verticals
+  MEDICAL_EQUIPMENT: medicalEquipmentPack,
+  GAS_STATION:       gasStationPack,
 };
 
 /** Default pack used when a businessType isn't yet registered (defensive). */

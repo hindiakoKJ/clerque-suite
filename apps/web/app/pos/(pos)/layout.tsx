@@ -148,14 +148,22 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       router.replace('/pos/select-display');
       return;
     }
-    // Laundry tenants don't use /pos/terminal at all — bounce anyone landing
-    // on terminal or root /pos straight to the laundry queue.
-    if (
-      isLaundryType(layout?.tenant?.businessType) &&
-      (pathname === '/pos/terminal' || pathname === '/pos')
-    ) {
-      router.replace('/pos/laundry/queue');
-      return;
+    // Vertical-specific landing pages — when a tenant's businessType has its
+    // own terminal (laundry / fuel pumps / DME / pharmacy), bounce off
+    // /pos/terminal so the generic F&B/Retail UI doesn't render even for a
+    // frame. /pos/page.tsx now handles the root case client-side; this
+    // catches the case where a user types /pos/terminal directly.
+    const _bt = layout?.tenant?.businessType;
+    if (pathname === '/pos/terminal' || pathname === '/pos') {
+      let dest: string | null = null;
+      if (isLaundryType(_bt))            dest = '/pos/laundry/queue';
+      else if (_bt === 'GAS_STATION')    dest = '/pos/fuel/pumps';
+      else if (_bt === 'PHARMACY')       dest = '/pos/pharmacy/rx';
+      else if (_bt === 'MEDICAL_EQUIPMENT') dest = '/pos/rentals';
+      if (dest) {
+        router.replace(dest);
+        return;
+      }
     }
     if (
       (pathname === '/pos/terminal' || pathname === '/pos') &&
@@ -725,6 +733,26 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
 
   if (!hydrated) return null;
 
+  // ── Vertical leak-prevention ─────────────────────────────────────────────
+  // The useEffect above schedules a router.replace() for verticals whose
+  // landing page isn't /pos/terminal (laundry → queue, gas station → fuel
+  // pumps). React still renders the {children} of the OLD path until Next
+  // re-renders with the new pathname — which means the F&B terminal flashes
+  // for a frame inside a laundry tenant. To kill the leak, render a thin
+  // skeleton in the layout slot whenever we KNOW the user is on the wrong
+  // vertical's landing page and a redirect is pending.
+  //
+  // Computed synchronously from already-loaded state (no extra round-trip).
+  const _bt = layout?.tenant?.businessType;
+  const isWrongVerticalLanding =
+    hydrated &&
+    !!_bt &&
+    (pathname === '/pos/terminal' || pathname === '/pos') &&
+    (isLaundryType(_bt) ||
+     _bt === 'GAS_STATION' ||
+     _bt === 'PHARMACY' ||
+     _bt === 'MEDICAL_EQUIPMENT');
+
   return (
     <div
       className="theme-counter"
@@ -744,7 +772,14 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         onSignOut={handleLogout}
       >
         <OfflineBanner />
-        <ShiftGate>{children}</ShiftGate>
+        {isWrongVerticalLanding ? (
+          <div className="flex items-center justify-center h-[60vh] text-sm text-muted-foreground gap-2">
+            <span className="inline-block w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" />
+            Loading your terminal…
+          </div>
+        ) : (
+          <ShiftGate>{children}</ShiftGate>
+        )}
       </AppShell>
 
       {activeShift && (

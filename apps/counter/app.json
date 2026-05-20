@@ -8,7 +8,9 @@
     "scheme": "clerque-counter",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "icon": "./assets/icon.png",
     "splash": {
+      "image": "./assets/splash.png",
       "backgroundColor": "#F8F5EE",
       "resizeMode": "contain"
     },
@@ -20,6 +22,7 @@
       "package": "com.clerque.counter",
       "versionCode": 1,
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#8B5E3C"
       },
       "permissions": [

@@ -283,7 +283,51 @@ export default function PrivacyPolicyPage() {
       </section>
 
       <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-2">16. Contact Us</h2>
+        <h2 className="text-lg font-semibold mb-2">16. Clerque Counter — Mobile App</h2>
+        <p>
+          <strong>Clerque Counter</strong> is the Android companion app for the platform, distributed
+          through the Google Play Store. It uses the same Clerque account as the web app and accesses
+          the same tenant data subject to this Privacy Policy. The mobile app additionally requests the
+          following device permissions, each used only for the stated purpose:
+        </p>
+        <div className="bg-muted/30 border border-border rounded-lg p-4 text-sm mt-3 space-y-2">
+          <p>
+            <strong>Internet + Network State</strong> — communicating with our cloud API to ring up
+            sales, sync inventory, and print receipts. Required for the app to function.
+          </p>
+          <p>
+            <strong>Camera</strong> — barcode scanning at the point-of-sale and customer-display pairing.
+            We do not photograph, record, or transmit anything from the camera; the camera feed is
+            processed on-device and discarded immediately after the barcode is read.
+          </p>
+          <p>
+            <strong>Bluetooth (Connect, Scan, Admin)</strong> — discovering and connecting to a paired
+            thermal printer or cash drawer on the same counter. We do not transmit Bluetooth device
+            identifiers off the device.
+          </p>
+          <p>
+            <strong>Local storage (SQLite)</strong> — buffering sales offline so the cashier can keep
+            ringing during a brief internet outage. Queued sales are encrypted on disk and synced to
+            the cloud the moment connectivity returns. The local copy is purged after sync.
+          </p>
+        </div>
+        <p className="mt-3">
+          The Clerque Counter app does <strong>not</strong>:
+        </p>
+        <ul className="list-disc pl-6 mt-2 space-y-1 text-sm">
+          <li>Use third-party advertising SDKs or trackers.</li>
+          <li>Collect location data, contacts, microphone audio, photos, or files outside its own scope.</li>
+          <li>Sell personal information to any party. Ever.</li>
+          <li>Use device identifiers for advertising. Sign-in is by tenant + email + password (or PIN).</li>
+        </ul>
+        <p className="mt-3">
+          Sign-out + uninstall removes every local copy of the data. Tenant data on the cloud is
+          retained per the retention policy described in Section 9 above.
+        </p>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="text-lg font-semibold mb-2">17. Contact Us</h2>
         <p>
           For any questions, concerns, or requests regarding this Privacy Policy or our data-handling
           practices, please contact:

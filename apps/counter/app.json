@@ -2,7 +2,7 @@
   "expo": {
     "name": "Clerque Counter",
     "slug": "clerque-counter",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "_orientationNote": "Default is 'default' (= unrestricted). The JS runtime locks LANDSCAPE on tablet (≥600dp) and PORTRAIT on phone (<600dp) — see App.tsx. Forcing landscape in the manifest would lock phone users to landscape too, which is wrong for the owner-spotcheck phone shell.",
     "orientation": "default",
     "scheme": "clerque-counter",
@@ -18,8 +18,9 @@
     },
     "android": {
       "package": "com.clerque.counter",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#3B82F6"
+        "backgroundColor": "#8B5E3C"
       },
       "permissions": [
         "android.permission.BLUETOOTH",

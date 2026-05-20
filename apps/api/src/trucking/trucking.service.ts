@@ -443,6 +443,92 @@ export class TruckingService {
     }
     return out as Partial<T>;
   }
+
+  // ─── LTFRB compliance — monthly trip summary ─────────────────────────────
+  //
+  // LTFRB doesn't publish a public e-filing API; operators submit paper-based
+  // monthly summary reports per route + per vehicle. This method aggregates
+  // trip data the operator needs for that form. Owner exports the CSV from
+  // the web report and copies into the LTFRB template manually.
+  //
+  // Aggregations:
+  //   - per (vehicle plate, driver) for the month
+  //   - count of completed trips, total revenue, total km (when origin/dest
+  //     captured), days in service
+  async getLtfrbMonthlySummary(tenantId: string, month: string /* YYYY-MM */) {
+    const from = new Date(month + '-01T00:00:00Z');
+    const to   = new Date(from.getFullYear(), from.getMonth() + 1, 1);
+
+    const trips = await this.prisma.tripTicket.findMany({
+      where: {
+        tenantId,
+        status:    { in: ['DELIVERED', 'LIQUIDATED', 'IN_TRANSIT', 'RETURNED'] },
+        createdAt: { gte: from, lt: to },
+      },
+      select: {
+        id:               true,
+        tripNumber:       true,
+        status:           true,
+        freightAmount:    true,
+        originLabel:      true,
+        destinationLabel: true,
+        createdAt:        true,
+        deliveredAt:      true,
+        liquidatedAt:     true,
+        fleetAsset:       { select: { id: true, plateNumber: true, kind: true } },
+        driver:           { select: { id: true, name: true } },
+      },
+    });
+
+    // Group by (plate, driverId).
+    interface Row {
+      plate:       string;
+      vehicle:     string;
+      driverId:    string | null;
+      driverName:  string;
+      tripCount:   number;
+      revenue:     number;
+      routes:      Set<string>;
+      daysActive:  Set<string>;
+    }
+    const key = (plate: string, driverId: string | null) => `${plate}|${driverId ?? ''}`;
+    const map = new Map<string, Row>();
+    for (const t of trips) {
+      const plate    = t.fleetAsset?.plateNumber ?? 'UNKNOWN';
+      const vehicle  = t.fleetAsset?.kind ?? 'Unknown vehicle';
+      const driverId = t.driver?.id ?? null;
+      const k = key(plate, driverId);
+      const r = map.get(k) ?? {
+        plate, vehicle, driverId,
+        driverName: t.driver?.name ?? 'Unassigned',
+        tripCount: 0, revenue: 0,
+        routes: new Set<string>(),
+        daysActive: new Set<string>(),
+      };
+      r.tripCount += 1;
+      r.revenue   += Number(t.freightAmount ?? 0);
+      if (t.originLabel && t.destinationLabel) {
+        r.routes.add(`${t.originLabel} → ${t.destinationLabel}`);
+      }
+      const dayDate = t.liquidatedAt ?? t.deliveredAt ?? t.createdAt;
+      r.daysActive.add(dayDate.toISOString().slice(0, 10));
+      map.set(k, r);
+    }
+
+    return Array.from(map.values())
+      .map((r) => ({
+        plate:      r.plate,
+        vehicle:    r.vehicle,
+        driverId:   r.driverId,
+        driverName: r.driverName,
+        tripCount:  r.tripCount,
+        revenue:    r.revenue,
+        uniqueRoutes: r.routes.size,
+        topRoutes:    Array.from(r.routes).slice(0, 5),
+        daysActive:   r.daysActive.size,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }
 }
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────

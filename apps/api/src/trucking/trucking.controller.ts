@@ -128,6 +128,19 @@ export class TruckingController {
     });
   }
 
+  @ApiOperation({ summary: 'LTFRB monthly trip summary (operator paper-filing input)' })
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER')
+  @Get('reports/ltfrb-monthly')
+  ltfrbMonthly(
+    @CurrentUser() user: JwtPayload,
+    @Query('month') month: string,
+  ) {
+    if (!/^\d{4}-\d{2}$/.test(month ?? '')) {
+      throw new Error('month must be YYYY-MM');
+    }
+    return this.svc.getLtfrbMonthlySummary(user.tenantId!, month);
+  }
+
   @ApiOperation({ summary: 'Get one trip with liquidation items' })
   @Roles(...TruckingController.TRIP_OPS)
   @Get('trips/:id')

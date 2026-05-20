@@ -101,6 +101,47 @@ export class FuelController {
     return this.fuel.recordTankDip(user.tenantId!, user.sub, body);
   }
 
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Get('reports/tank-variance')
+  tankVariance(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId?: string,
+    @Query('from')     fromIso?: string,
+    @Query('to')       toIso?:   string,
+  ) {
+    if (!fromIso || !toIso) {
+      // Default to last 7 days when caller doesn't specify.
+      const to = new Date();
+      const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+      return this.fuel.getTankVariance(user.tenantId!, { branchId, from, to });
+    }
+    return this.fuel.getTankVariance(user.tenantId!, {
+      branchId,
+      from: new Date(fromIso),
+      to:   new Date(toIso),
+    });
+  }
+
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Get('reports/daily-reconciliation')
+  dailyReconciliation(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId?: string,
+    @Query('from')     fromIso?: string,
+    @Query('to')       toIso?:   string,
+  ) {
+    if (!fromIso || !toIso) {
+      const to = new Date();
+      const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+      return this.fuel.getDailyReconciliation(user.tenantId!, { branchId, from, to });
+    }
+    return this.fuel.getDailyReconciliation(user.tenantId!, {
+      branchId,
+      from: new Date(fromIso),
+      to:   new Date(toIso),
+    });
+  }
+
   @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Get('tank-dips')
   listDips(

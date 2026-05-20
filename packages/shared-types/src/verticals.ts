@@ -828,9 +828,11 @@ export const gasStationPack: VerticalPack = {
     sidebarGroups: [
       { label: 'Overview', items: [{ label: 'Dashboard', href: '/pos/dashboard', iconName: 'LayoutDashboard' }] },
       { label: 'Fuel',     items: [
-        { label: 'Pumps',         href: '/pos/fuel/pumps',     iconName: 'Fuel' },
-        { label: 'Dispense log',  href: '/pos/fuel/dispenses', iconName: 'ClipboardList' },
-        { label: 'Tank dips',     href: '/pos/fuel/tank-dips', iconName: 'Activity' },
+        { label: 'Pumps',          href: '/pos/fuel/pumps',          iconName: 'Fuel' },
+        { label: 'Dispense log',   href: '/pos/fuel/dispenses',      iconName: 'ClipboardList' },
+        { label: 'Tank dips',      href: '/pos/fuel/tank-dips',      iconName: 'Activity' },
+        { label: 'Tank variance',  href: '/pos/fuel/variance',       iconName: 'AlertTriangle' },
+        { label: 'Reconciliation', href: '/pos/fuel/reconciliation', iconName: 'Receipt' },
       ]},
       { label: 'C-store / Lubricants', items: [
         { label: 'Terminal',  href: '/pos/terminal',  iconName: 'ShoppingCart' },

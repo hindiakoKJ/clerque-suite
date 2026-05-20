@@ -27,15 +27,17 @@ export interface CreatePumpDto {
   label:       string;
   fuelGrade:   FuelGrade;
   productId:   string;
-  currentMeter?: number;
-  sortOrder?:    number;
+  currentMeter?:        number;
+  doeCeilingPricePhp?:  number | null;
+  sortOrder?:           number;
 }
 
 export interface UpdatePumpDto {
   label?:        string;
   fuelGrade?:    FuelGrade;
   productId?:    string;
-  currentMeter?: number;
+  currentMeter?:        number;
+  doeCeilingPricePhp?:  number | null;
   isActive?:     boolean;
   sortOrder?:    number;
 }
@@ -100,6 +102,9 @@ export class FuelService {
           fuelGrade:    dto.fuelGrade,
           productId:    dto.productId,
           currentMeter: new Prisma.Decimal(dto.currentMeter ?? 0),
+          doeCeilingPricePhp: dto.doeCeilingPricePhp != null
+            ? new Prisma.Decimal(dto.doeCeilingPricePhp)
+            : null,
           sortOrder:    dto.sortOrder ?? 0,
         },
         include: { product: { select: { id: true, name: true, price: true } } },
@@ -129,6 +134,13 @@ export class FuelService {
         fuelGrade:    dto.fuelGrade,
         productId:    dto.productId,
         currentMeter: dto.currentMeter != null ? new Prisma.Decimal(dto.currentMeter) : undefined,
+        // Explicit null clears the ceiling; undefined leaves it untouched.
+        doeCeilingPricePhp:
+          dto.doeCeilingPricePhp === null
+            ? null
+            : dto.doeCeilingPricePhp !== undefined
+              ? new Prisma.Decimal(dto.doeCeilingPricePhp)
+              : undefined,
         isActive:     dto.isActive,
         sortOrder:    dto.sortOrder,
       },
@@ -309,6 +321,181 @@ export class FuelService {
         recordedById,
       },
     });
+  }
+
+  /**
+   * Tank-dip variance — for each (branch, fuelGrade, day) within the window,
+   * computes:
+   *
+   *   expected = morning dip + sum(deliveries) − sum(meter-derived sales for the day)
+   *   actual   = evening dip
+   *   variance = actual − expected
+   *
+   * Positive variance = more on hand than expected (overstatement / sale not
+   * rung). Negative = shrinkage / leak / theft. Owner's "early warning" signal.
+   */
+  async getTankVariance(
+    tenantId: string,
+    opts: { branchId?: string; from: Date; to: Date },
+  ): Promise<Array<{
+    branchId:        string;
+    fuelGrade:       FuelGrade;
+    date:            string;
+    morningLiters:   number | null;
+    eveningLiters:   number | null;
+    deliveryLiters:  number;
+    soldLiters:      number;
+    expectedEvening: number | null;
+    varianceLiters:  number | null;
+  }>> {
+    // Pull all dips + dispenses in the window in two queries; aggregate in JS.
+    const where = { tenantId, ...(opts.branchId ? { branchId: opts.branchId } : {}) };
+    const dips = await this.prisma.tankDip.findMany({
+      where: { ...where, recordedAt: { gte: opts.from, lte: opts.to } },
+      orderBy: { recordedAt: 'asc' },
+    });
+    const dispenses = await this.prisma.fuelDispense.findMany({
+      where: {
+        pump: where,
+        status: 'COMPLETED',
+        endedAt: { gte: opts.from, lte: opts.to },
+      },
+      select: {
+        litersDispensed: true,
+        endedAt:         true,
+        pump:            { select: { branchId: true, fuelGrade: true } },
+      },
+    });
+
+    // Group by branch + grade + date.
+    const key = (b: string, g: FuelGrade, d: string) => `${b}|${g}|${d}`;
+    const ymd = (date: Date): string => date.toISOString().slice(0, 10);
+
+    interface Row {
+      morningLiters:  number | null;
+      eveningLiters:  number | null;
+      deliveryLiters: number;
+      soldLiters:     number;
+    }
+    const map = new Map<string, Row & { branchId: string; fuelGrade: FuelGrade; date: string }>();
+    const ensure = (b: string, g: FuelGrade, d: string) => {
+      const k = key(b, g, d);
+      if (!map.has(k)) {
+        map.set(k, {
+          branchId: b, fuelGrade: g, date: d,
+          morningLiters: null, eveningLiters: null,
+          deliveryLiters: 0, soldLiters: 0,
+        });
+      }
+      return map.get(k)!;
+    };
+
+    for (const dip of dips) {
+      const r = ensure(dip.branchId, dip.fuelGrade, ymd(dip.recordedAt));
+      const liters = Number(dip.litersOnHand);
+      if (dip.kind === 'MORNING')  r.morningLiters = liters;
+      if (dip.kind === 'EVENING')  r.eveningLiters = liters;
+      if (dip.deliveryLiters != null) r.deliveryLiters += Number(dip.deliveryLiters);
+    }
+    for (const d of dispenses) {
+      if (!d.endedAt || d.litersDispensed == null) continue;
+      const r = ensure(d.pump.branchId, d.pump.fuelGrade, ymd(d.endedAt));
+      r.soldLiters += Number(d.litersDispensed);
+    }
+
+    return Array.from(map.values())
+      .map((r) => {
+        const expectedEvening = r.morningLiters != null
+          ? r.morningLiters + r.deliveryLiters - r.soldLiters
+          : null;
+        const varianceLiters = expectedEvening != null && r.eveningLiters != null
+          ? r.eveningLiters - expectedEvening
+          : null;
+        return { ...r, expectedEvening, varianceLiters };
+      })
+      .sort((a, b) => a.date.localeCompare(b.date) || a.branchId.localeCompare(b.branchId));
+  }
+
+  /**
+   * Daily reconciliation — sum of cash collected (from Orders linked to a
+   * dispense) vs sum of meter-derived totals. They should match exactly when
+   * every dispense was tendered; mismatch flags an un-rung pump fill.
+   */
+  async getDailyReconciliation(
+    tenantId: string,
+    opts: { branchId?: string; from: Date; to: Date },
+  ): Promise<Array<{
+    branchId:           string;
+    date:               string;
+    dispenseCount:      number;
+    completedCount:     number;
+    voidedCount:        number;
+    meterTotalCents:    number;
+    cashCollectedCents: number;
+    unrungLitersValueCents: number;
+  }>> {
+    const dispenses = await this.prisma.fuelDispense.findMany({
+      where: {
+        pump: { tenantId, ...(opts.branchId ? { branchId: opts.branchId } : {}) },
+        startedAt: { gte: opts.from, lte: opts.to },
+      },
+      select: {
+        status:     true,
+        startedAt:  true,
+        totalCents: true,
+        orderId:    true,
+        pump:       { select: { branchId: true } },
+      },
+    });
+    // FuelDispense → Order is a scalar back-pointer (no Prisma relation
+    // because Order.id was set up before fuel landed). Fetch the linked
+    // Orders in a single follow-up query, then index by id.
+    const orderIds = dispenses.map((d) => d.orderId).filter((id): id is string => !!id);
+    const orders = orderIds.length > 0
+      ? await this.prisma.order.findMany({
+          where: { id: { in: orderIds } },
+          select: { id: true, totalAmount: true },
+        })
+      : [];
+    const orderTotalByOrderId = new Map(
+      orders.map((o) => [o.id, Number(o.totalAmount)]),
+    );
+    const ymd = (d: Date) => d.toISOString().slice(0, 10);
+    const key = (b: string, d: string) => `${b}|${d}`;
+    interface Row {
+      branchId:           string;
+      date:               string;
+      dispenseCount:      number;
+      completedCount:     number;
+      voidedCount:        number;
+      meterTotalCents:    number;
+      cashCollectedCents: number;
+      unrungLitersValueCents: number;
+    }
+    const map = new Map<string, Row>();
+    for (const d of dispenses) {
+      const k = key(d.pump.branchId, ymd(d.startedAt));
+      const r = map.get(k) ?? {
+        branchId: d.pump.branchId, date: ymd(d.startedAt),
+        dispenseCount: 0, completedCount: 0, voidedCount: 0,
+        meterTotalCents: 0, cashCollectedCents: 0, unrungLitersValueCents: 0,
+      };
+      r.dispenseCount += 1;
+      if (d.status === 'COMPLETED') r.completedCount += 1;
+      if (d.status === 'VOIDED')    r.voidedCount    += 1;
+      if (d.status === 'COMPLETED' && d.totalCents != null) {
+        r.meterTotalCents += d.totalCents;
+        const orderTotal = d.orderId ? orderTotalByOrderId.get(d.orderId) : undefined;
+        if (orderTotal != null) {
+          r.cashCollectedCents += Math.round(orderTotal * 100);
+        } else {
+          // Completed but no order linked → un-rung sale. Flag it.
+          r.unrungLitersValueCents += d.totalCents;
+        }
+      }
+      map.set(k, r);
+    }
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
   }
 
   async listTankDips(tenantId: string, opts: { branchId?: string; from?: Date; to?: Date } = {}) {

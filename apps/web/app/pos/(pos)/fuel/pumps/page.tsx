@@ -25,6 +25,7 @@ interface FuelPump {
   fuelGrade: 'UNLEADED' | 'REGULAR' | 'DIESEL' | 'PREMIUM' | 'KEROSENE' | 'OTHER';
   isActive: boolean;
   currentMeter: number | string;
+  doeCeilingPricePhp: number | string | null;
   sortOrder: number;
   product: { id: string; name: string; price: number | string };
   dispenses: Array<{
@@ -40,6 +41,7 @@ interface PumpDraft {
   fuelGrade: FuelPump['fuelGrade'];
   productId: string;
   currentMeter: string;
+  doeCeilingPricePhp: string;
   branchId: string;
   isActive: boolean;
 }
@@ -49,6 +51,7 @@ const EMPTY: PumpDraft = {
   fuelGrade: 'DIESEL',
   productId: '',
   currentMeter: '0',
+  doeCeilingPricePhp: '',
   branchId: '',
   isActive: true,
 };
@@ -89,6 +92,7 @@ export default function FuelPumpsPage() {
       fuelGrade: p.fuelGrade,
       productId: p.product.id,
       currentMeter: String(p.currentMeter),
+      doeCeilingPricePhp: p.doeCeilingPricePhp != null ? String(p.doeCeilingPricePhp) : '',
       branchId: userBranchId ?? branchesQ.data?.[0]?.id ?? '',
       isActive: p.isActive,
     });
@@ -100,6 +104,7 @@ export default function FuelPumpsPage() {
     if (!draft.productId)    { toast.error('Pick a fuel product.'); return; }
     setSaving(true);
     try {
+      const ceiling = draft.doeCeilingPricePhp ? Number(draft.doeCeilingPricePhp) : null;
       if (drawer?.kind === 'create') {
         await api.post('/fuel/pumps', {
           branchId:     draft.branchId,
@@ -107,6 +112,7 @@ export default function FuelPumpsPage() {
           fuelGrade:    draft.fuelGrade,
           productId:    draft.productId,
           currentMeter: Number(draft.currentMeter) || 0,
+          doeCeilingPricePhp: ceiling,
         });
       } else if (drawer?.kind === 'edit' && drawer.pumpId) {
         await api.patch(`/fuel/pumps/${drawer.pumpId}`, {
@@ -114,6 +120,7 @@ export default function FuelPumpsPage() {
           fuelGrade:    draft.fuelGrade,
           productId:    draft.productId,
           currentMeter: Number(draft.currentMeter) || 0,
+          doeCeilingPricePhp: ceiling,
           isActive:     draft.isActive,
         });
       }
@@ -189,6 +196,17 @@ export default function FuelPumpsPage() {
                 <div className="text-xs text-gray-500 mt-2">
                   Product: <span className="text-gray-800">{p.product.name}</span>
                 </div>
+                {p.doeCeilingPricePhp != null ? (
+                  Number(p.product.price) > Number(p.doeCeilingPricePhp) ? (
+                    <div className="mt-2 text-[11px] font-bold uppercase tracking-wider rounded bg-red-100 text-red-800 px-1.5 py-0.5 inline-flex items-center gap-1">
+                      ⚠ Above DOE ceiling (₱{Number(p.doeCeilingPricePhp).toFixed(2)})
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-[11px] uppercase tracking-wider text-green-700">
+                      ≤ DOE ceiling ₱{Number(p.doeCeilingPricePhp).toFixed(2)}
+                    </div>
+                  )
+                ) : null}
                 <div className="text-xs text-gray-500 mt-1 font-mono">
                   Meter: <span className="text-gray-800">{Number(p.currentMeter).toFixed(3)} L</span>
                 </div>
@@ -264,6 +282,25 @@ export default function FuelPumpsPage() {
               <span className="block text-gray-600 mb-1">Current totalizer (L)</span>
               <input type="number" min="0" step="0.001" value={draft.currentMeter} onChange={(e) => setDraft({ ...draft, currentMeter: e.target.value })} className="w-full border rounded px-2 py-1.5 font-mono text-right" />
               <p className="text-xs text-gray-500 mt-1">The next dispense will use this as the default opening reading.</p>
+            </label>
+
+            <label className="text-sm block mb-3">
+              <span className="block text-gray-600 mb-1">
+                DOE price ceiling (₱/L)
+                <span className="ml-1 text-[10px] uppercase tracking-wider text-gray-500">optional</span>
+              </span>
+              <input
+                type="number" min="0" step="0.01"
+                value={draft.doeCeilingPricePhp}
+                onChange={(e) => setDraft({ ...draft, doeCeilingPricePhp: e.target.value })}
+                placeholder="Leave blank if no ceiling in force"
+                className="w-full border rounded px-2 py-1.5 font-mono text-right"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Set when DOE issues a price freeze. The pump card flashes red if the
+                linked Product&apos;s price exceeds this value. Update manually when
+                the freeze lifts.
+              </p>
             </label>
 
             {drawer.kind === 'edit' ? (

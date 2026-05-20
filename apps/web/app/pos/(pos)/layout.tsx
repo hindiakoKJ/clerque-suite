@@ -398,6 +398,9 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/terminal',          'Terminal',        ShoppingCart,    TERMINAL_ROLES,  role),
         makeNavItem('/pos/orders',            'Orders',          ShoppingBag,     ORDERS_ROLES,    role),
       ]),
+      ...withSection('Compliance', [
+        makeNavItem('/pos/trucking/ltfrb-summary', 'LTFRB monthly', FileBadge,    OWNER_ONLY,      role),
+      ]),
       ...warehouseSection,
     ];
   } else if (isConstruction) {
@@ -519,9 +522,11 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/dashboard',     'Dashboard',     LayoutDashboard, DASHBOARD_ROLES, role),
       ]),
       ...withSection('Fuel', [
-        makeNavItem('/pos/fuel/pumps',     'Pumps',         Fuel,            INVENTORY_ROLES, role),
-        makeNavItem('/pos/fuel/dispenses', 'Dispense log',  ClipboardList,   DASHBOARD_ROLES, role),
-        makeNavItem('/pos/fuel/tank-dips', 'Tank dips',     Activity,        INVENTORY_ROLES, role),
+        makeNavItem('/pos/fuel/pumps',          'Pumps',          Fuel,            INVENTORY_ROLES, role),
+        makeNavItem('/pos/fuel/dispenses',      'Dispense log',   ClipboardList,   DASHBOARD_ROLES, role),
+        makeNavItem('/pos/fuel/tank-dips',      'Tank dips',      Activity,        INVENTORY_ROLES, role),
+        makeNavItem('/pos/fuel/variance',       'Tank variance',  AlertTriangle,   OWNER_ONLY,      role),
+        makeNavItem('/pos/fuel/reconciliation', 'Reconciliation', ReceiptIcon,     OWNER_ONLY,      role),
       ]),
       ...withSection('C-store / Lubricants', [
         makeNavItem('/pos/terminal',     'Terminal',      ShoppingCart,    TERMINAL_ROLES,  role),

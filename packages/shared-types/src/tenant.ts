@@ -23,7 +23,10 @@ export type BusinessType =
   // Sprint 12 — six-engine vertical structure
   | 'PHARMACY'      // Drugstores / botikas — Compliance-Engine
   | 'TRUCKING'      // Trucking / hauling / courier — Logistics-Engine
-  | 'CONSTRUCTION'; // Construction / civil works / fit-out — Project-Engine
+  | 'CONSTRUCTION'  // Construction / civil works / fit-out — Project-Engine
+  // Sprint Bakery+1 — DME + Fuel verticals
+  | 'MEDICAL_EQUIPMENT'  // DME / medical supply retail with serial tracking + rentals
+  | 'GAS_STATION';       // MSME independent gas station with manual-meter fuel POS
 
 /**
  * The complete set of F&B business types.
@@ -68,6 +71,40 @@ export type LaundryBusinessType = (typeof LAUNDRY_BUSINESS_TYPES)[number];
 
 export function isLaundryType(businessType: string | null | undefined): boolean {
   return (LAUNDRY_BUSINESS_TYPES as readonly string[]).includes(businessType ?? '');
+}
+
+/**
+ * Medical Equipment vertical — DME / medical supply retailers.
+ *
+ * Unlocks:
+ *   • Per-unit serial number tracking on selected SKUs (wheelchairs, CPAP, etc.)
+ *   • Rental / lease workflow with deposit + return date + condition log
+ *   • Repair ticket queue (in-for-service, awaiting parts, ready, returned)
+ *   • FDA license number field on the tenant profile
+ *   • Standard RETAIL features (no recipes, no modifiers)
+ */
+export const MEDICAL_BUSINESS_TYPES = ['MEDICAL_EQUIPMENT'] as const;
+export type MedicalBusinessType = (typeof MEDICAL_BUSINESS_TYPES)[number];
+export function isMedicalType(businessType: string | null | undefined): boolean {
+  return (MEDICAL_BUSINESS_TYPES as readonly string[]).includes(businessType ?? '');
+}
+
+/**
+ * Gas Station vertical — MSME independent stations.
+ *
+ * Unlocks the manual-meter fuel POS:
+ *   • Fuel pump grid on Counter (idle / dispensing / completed)
+ *   • Opening + closing meter capture per dispense, system computes liters
+ *   • Tank dipstick reconciliation morning + evening
+ *   • Per-fuel-grade products priced per liter
+ *
+ * Side businesses on the same lot (c-store, lubricants, tire vulcanizing)
+ * ride on the same tenant via Product categories — one shift, one Z-read.
+ */
+export const GAS_STATION_BUSINESS_TYPES = ['GAS_STATION'] as const;
+export type GasStationBusinessType = (typeof GAS_STATION_BUSINESS_TYPES)[number];
+export function isGasStationType(businessType: string | null | undefined): boolean {
+  return (GAS_STATION_BUSINESS_TYPES as readonly string[]).includes(businessType ?? '');
 }
 
 /**

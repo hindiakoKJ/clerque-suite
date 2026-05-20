@@ -82,6 +82,9 @@ enum BusinessType {
   PHARMACY // Drugstores / botikas — Compliance-Engine (Rx, lots, DDB register, expiry)
   TRUCKING // Trucking / hauling / courier — Logistics-Engine (trip tickets, liquidation)
   CONSTRUCTION // Construction / civil works / fit-out — Project-Engine (WIP, progress billing)
+  // ── Sprint Bakery+1 — DME + Fuel verticals ───────────────────────────────
+  MEDICAL_EQUIPMENT // DME / medical supply with serial tracking + rentals + repairs
+  GAS_STATION // MSME independent gas station with manual-meter fuel POS
 }
 
 /// Sprint 19 — Philippine drug-classification taxonomy.
@@ -181,11 +184,11 @@ enum SalaryType {
 /// Form 2316 must be issued within 30 days of any separation regardless
 /// of cause).
 enum SeparationType {
-  RESIGNED      // Voluntary — employee gave notice
-  TERMINATED    // Involuntary — for cause
-  RETIRED       // Reached retirement age / opted in
+  RESIGNED // Voluntary — employee gave notice
+  TERMINATED // Involuntary — for cause
+  RETIRED // Reached retirement age / opted in
   END_OF_CONTRACT // Contractual / project-based ended
-  ABANDONED     // No-show / AWOL beyond company policy
+  ABANDONED // No-show / AWOL beyond company policy
   OTHER
 }
 
@@ -435,58 +438,58 @@ model SuperAdminSession {
 // ─── Tenant ───────────────────────────────────────────────────────────────────
 
 model Tenant {
-  id                       String           @id @default(cuid())
-  name                     String
-  slug                     String           @unique
-  businessType             BusinessType     @default(RETAIL)
-  tin                      String? // Legacy field; use tinNumber going forward
+  id                String           @id @default(cuid())
+  name              String
+  slug              String           @unique
+  businessType      BusinessType     @default(RETAIL)
+  tin               String? // Legacy field; use tinNumber going forward
   /// BIR Tax Identification Number — format: 000-000-000-00000 (15 chars with dashes)
-  tinNumber                String?
+  tinNumber         String?
   /// Business name exactly as it appears on the BIR Certificate of Registration
-  businessName             String?
-  address                  String?
-  contactEmail             String?
-  contactPhone             String?
-  status                   TenantStatus     @default(ACTIVE)
-  tier                     SubscriptionTier @default(TIER_1)
-  expiresAt                DateTime?
-  branchQuota              Int              @default(1)
-  cashierSeatQuota         Int              @default(2)
-  hasTimeMonitoring        Boolean          @default(false)
-  hasBirForms              Boolean          @default(false)
+  businessName      String?
+  address           String?
+  contactEmail      String?
+  contactPhone      String?
+  status            TenantStatus     @default(ACTIVE)
+  tier              SubscriptionTier @default(TIER_1)
+  expiresAt         DateTime?
+  branchQuota       Int              @default(1)
+  cashierSeatQuota  Int              @default(2)
+  hasTimeMonitoring Boolean          @default(false)
+  hasBirForms       Boolean          @default(false)
   // ── Plan & module entitlement (modular pricing, 2026-05-08) ────────────
   /// Authoritative plan code: STD_SOLO / STD_DUO / STD_TEAM / STD_BIZ /
   /// PAIR_T1 / PAIR_T2 / PAIR_T3 / SUITE_T1 / SUITE_T2 / SUITE_T3 / ENTERPRISE.
   /// Drives staffSeatQuota ceilings + module flags. `tier` (SubscriptionTier)
   /// is retained for backward compatibility but is advisory only.
-  planCode                 String           @default("SUITE_T2")
+  planCode          String           @default("SUITE_T2")
   /// Per-module entitlement. Defaults to true for backward compat — existing
   /// tenants get all 3 modules. New plan-aware signups set these per planCode.
-  modulePos                Boolean          @default(true)
-  moduleLedger             Boolean          @default(true)
-  modulePayroll            Boolean          @default(true)
+  modulePos         Boolean          @default(true)
+  moduleLedger      Boolean          @default(true)
+  modulePayroll     Boolean          @default(true)
   /// Base staff seats included in planCode. PLAN_CAPS in shared-types is the
   /// single source of truth; this column mirrors it for fast quota checks.
-  staffSeatQuota           Int              @default(15)
+  staffSeatQuota    Int              @default(15)
   /// Additional purchased seats above quota. Total cap = staffSeatQuota +
   /// staffSeatAddons must remain <= PLAN_CAPS[planCode].maxTotal.
-  staffSeatAddons          Int              @default(0)
+  staffSeatAddons   Int              @default(0)
   /// Marks the public shared demo tenant. Receipts watermarked, settings
   /// locked, nightly cron resets data. Exactly one record should have this true.
-  isDemoTenant             Boolean          @default(false)
+  isDemoTenant      Boolean          @default(false)
 
   /// Sprint 19 — Customizable receipt template. All optional. When null,
   /// the existing baked-in copy is used. Owner edits these from
   /// Settings → Receipt template.
   /// Header note printed BELOW the business name (e.g. tagline / branch
   /// supplemental line). 2 lines max recommended.
-  receiptHeaderNote        String?
+  receiptHeaderNote String?
   /// Footer note printed at the bottom (Wi-Fi password, social media,
   /// "thank you" message). 3 lines max recommended.
-  receiptFooterNote        String?
+  receiptFooterNote String?
   /// Optional logo URL printed at the top of the receipt. Should be a
   /// 1-bit PNG ideally; thermal printers don't render full color anyway.
-  receiptLogoUrl           String?
+  receiptLogoUrl    String?
 
   /// Sprint 19 — Self-service clock-in policy. When false (default), staff
   /// cannot clock in/out from their own Sync account; only the shared
@@ -495,14 +498,14 @@ model Tenant {
   /// personal device. The /payroll/clock/in and /clock/out endpoints
   /// reject with code SELF_CLOCK_DISABLED while this is false; kiosk
   /// punches always work either way.
-  allowSelfClockIn         Boolean          @default(false)
+  allowSelfClockIn Boolean @default(false)
 
   /// Sprint 19 — Returns / refunds policy. When true, only BUSINESS_OWNER
   /// (and SUPER_ADMIN) can void an order or refund a line; cashiers,
   /// sales leads, and branch managers are blocked even with supervisor
   /// PIN. Pharmacy tenants get this on by default (regulatory + audit
   /// pressure); other verticals default off. Owner toggles in Settings.
-  returnsOwnerOnly         Boolean          @default(false)
+  returnsOwnerOnly Boolean @default(false)
 
   /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
   /// endpoints for this tenant return 423 Locked. Use case: detect
@@ -557,128 +560,133 @@ model Tenant {
   createdAt                DateTime         @default(now())
   updatedAt                DateTime         @updatedAt
 
-  branches             Branch[]
-  users                User[]
-  products             Product[]
-  categories           Category[]
-  orders               Order[]
-  shifts               Shift[]
-  accountingEvents     AccountingEvent[]
-  accounts             Account[]
-  journalEntries       JournalEntry[]
-  subscriptionLogs     SubscriptionLog[]
-  discountTypes        DiscountTypeConfig[]
-  promotions           Promotion[]
-  paymentConfigs       PaymentChannelConfig[]
-  modifierGroups       ModifierGroup[]
-  unitsOfMeasure       UnitOfMeasure[]
-  settlementBatches    SettlementBatch[]
-  accountingPeriods    AccountingPeriod[]
-  auditLogs            AuditLog[]
-  zReadLogs            ZReadLog[]
-  xReadLogs            XReadLog[]
-  vendors              Vendor[]
-  expenses             ExpenseEntry[]
-  customers            Customer[]
-  preOrders            PreOrder[]
-  priceLists           PriceList[]
-  rawMaterials         RawMaterial[]
-  payRuns              PayRun[]
-  payslips             Payslip[]
-  documents            Document[]
-  orSequence           OrSequence?
-  expenseClaims        ExpenseClaim[]
-  expenseClaimSeq      ExpenseClaimSequence?
-  arInvoices           ARInvoice[]
-  arPayments           ARPayment[]
-  quotes               Quote[]
-  apBills              APBill[]
-  apPayments           APPayment[]
+  branches                   Branch[]
+  users                      User[]
+  products                   Product[]
+  categories                 Category[]
+  orders                     Order[]
+  shifts                     Shift[]
+  accountingEvents           AccountingEvent[]
+  accounts                   Account[]
+  journalEntries             JournalEntry[]
+  subscriptionLogs           SubscriptionLog[]
+  discountTypes              DiscountTypeConfig[]
+  promotions                 Promotion[]
+  paymentConfigs             PaymentChannelConfig[]
+  modifierGroups             ModifierGroup[]
+  unitsOfMeasure             UnitOfMeasure[]
+  settlementBatches          SettlementBatch[]
+  accountingPeriods          AccountingPeriod[]
+  auditLogs                  AuditLog[]
+  zReadLogs                  ZReadLog[]
+  xReadLogs                  XReadLog[]
+  vendors                    Vendor[]
+  expenses                   ExpenseEntry[]
+  customers                  Customer[]
+  preOrders                  PreOrder[]
+  priceLists                 PriceList[]
+  serializedUnits            SerializedUnit[]
+  rentalAgreements           RentalAgreement[]
+  repairTickets              RepairTicket[]
+  fuelPumps                  FuelPump[]
+  tankDips                   TankDip[]
+  rawMaterials               RawMaterial[]
+  payRuns                    PayRun[]
+  payslips                   Payslip[]
+  documents                  Document[]
+  orSequence                 OrSequence?
+  expenseClaims              ExpenseClaim[]
+  expenseClaimSeq            ExpenseClaimSequence?
+  arInvoices                 ARInvoice[]
+  arPayments                 ARPayment[]
+  quotes                     Quote[]
+  apBills                    APBill[]
+  apPayments                 APPayment[]
   // Sprint 22 — AR/AP standalone-accounting parity
-  creditMemos               CreditMemo[]
-  vendorCreditNotes         VendorCreditNote[]
-  customerAdvances          CustomerAdvance[]
-  vendorAdvances            VendorAdvance[]
-  recurringInvoiceTemplates RecurringInvoiceTemplate[]
-  recurringBillTemplates    RecurringBillTemplate[]
+  creditMemos                CreditMemo[]
+  vendorCreditNotes          VendorCreditNote[]
+  customerAdvances           CustomerAdvance[]
+  vendorAdvances             VendorAdvance[]
+  recurringInvoiceTemplates  RecurringInvoiceTemplate[]
+  recurringBillTemplates     RecurringBillTemplate[]
   // Sprint 24 — subscription payment collection
-  pendingPayments           PendingPayment[]
-  officialReceipts          OfficialReceipt[]
+  pendingPayments            PendingPayment[]
+  officialReceipts           OfficialReceipt[]
   // Sprint 25 — Solo tier feature delivery
-  purchaseOrders            PurchaseOrder[]
-  apiKeys                   ApiKey[]
-  voidApprovals             VoidApproval[]
-  displayPairings           DisplayPairing[]
+  purchaseOrders             PurchaseOrder[]
+  apiKeys                    ApiKey[]
+  voidApprovals              VoidApproval[]
+  displayPairings            DisplayPairing[]
   /// Sprint 25 — when > 0, voids/refunds at/above this peso-cent amount
   /// require maker-checker approval (Solo Pro feature `makerCheckerVoids`).
   /// 0 = no threshold (cashier + supervisor PIN flow only, as today).
-  voidApprovalThresholdCents Int      @default(0)
+  voidApprovalThresholdCents Int                        @default(0)
   /// Sprint 25 — Google Drive auto-backup config (Solo Pro feature).
   /// Shape: { refreshToken: string, folderId: string, lastSyncAt: ISO, frequency: 'DAILY' }
   /// Null until owner enables auto-backup from Settings.
-  autoBackupConfigJson      Json     @default("{}")
-  documentSequences    DocumentNumberSequence[]
-  notifications        Notification[]
-  bankReconciliations  BankReconciliation[]
-  journalTemplates     JournalTemplate[]
-  laundryOrders        LaundryOrder[]
-  laundryMachines      LaundryMachine[]
-  laundryServicePrices LaundryServicePrice[]
-  laundryWashCycles    LaundryWashCycle[]
-  stampCardTemplates   StampCardTemplate[]
-  stampCards           CustomerStampCard[]
+  autoBackupConfigJson       Json                       @default("{}")
+  documentSequences          DocumentNumberSequence[]
+  notifications              Notification[]
+  bankReconciliations        BankReconciliation[]
+  journalTemplates           JournalTemplate[]
+  laundryOrders              LaundryOrder[]
+  laundryMachines            LaundryMachine[]
+  laundryServicePrices       LaundryServicePrice[]
+  laundryWashCycles          LaundryWashCycle[]
+  stampCardTemplates         StampCardTemplate[]
+  stampCards                 CustomerStampCard[]
   // Sprint 25 Phase 2C — Loyalty Pro digital stamp programs (Pro-tier).
-  stampPrograms        StampProgram[]
-  customerStamps       CustomerStamp[]
-  kioskTerminals       KioskTerminal[]
-  deliveryReceipts     DeliveryReceipt[]
-  laundryAddOns        LaundryServiceAddOn[]
-  laundryPromos        LaundryPromo[]
-  stockTransfers       StockTransfer[]
-  cycleCounts          CycleCount[]
-  projects             Project[]
+  stampPrograms              StampProgram[]
+  customerStamps             CustomerStamp[]
+  kioskTerminals             KioskTerminal[]
+  deliveryReceipts           DeliveryReceipt[]
+  laundryAddOns              LaundryServiceAddOn[]
+  laundryPromos              LaundryPromo[]
+  stockTransfers             StockTransfer[]
+  cycleCounts                CycleCount[]
+  projects                   Project[]
   // Sprint 13 — six-engine vertical schemas (back-references)
-  prescriptions            Prescription[]
-  productLots              ProductLot[]
-  controlledSubstanceLogs  ControlledSubstanceLog[]
-  fleetAssets              FleetAsset[]
-  pmSchedules              PMSchedule[]
-  tireSerials              TireSerial[]
-  tripTickets              TripTicket[]
-  liquidationItems         LiquidationItem[]
-  progressBillings         ProgressBilling[]
-  retentionReleases        RetentionRelease[]
-  jobOrders                JobOrder[]
-  idempotencyKeys          IdempotencyKey[]
-  productPhotos            ProductPhoto[]
+  prescriptions              Prescription[]
+  productLots                ProductLot[]
+  controlledSubstanceLogs    ControlledSubstanceLog[]
+  fleetAssets                FleetAsset[]
+  pmSchedules                PMSchedule[]
+  tireSerials                TireSerial[]
+  tripTickets                TripTicket[]
+  liquidationItems           LiquidationItem[]
+  progressBillings           ProgressBilling[]
+  retentionReleases          RetentionRelease[]
+  jobOrders                  JobOrder[]
+  idempotencyKeys            IdempotencyKey[]
+  productPhotos              ProductPhoto[]
   /// Per-tenant tunable severity thresholds for the Ledger ops dashboard.
   /// JSON shape (keys all numbers, optional):
   ///   { eventLagWarnMs, eventLagBadMs, pendingEventsWarn, failedEventsWarn,
   ///     dsoWarn, dsoBad, dpoWarn, dpoBad, voidRateWarn, voidRateBad,
   ///     closeAgeWarn, closeAgeBad }
   /// Null/empty = use the system defaults defined in the dashboard page.
-  metricsThresholds    Json?
+  metricsThresholds          Json?
   /// JE approval threshold — when total absolute debit on a manual JE
   /// exceeds this amount, the JE is held in PENDING_APPROVAL until an
   /// authorised user (Owner / Finance Lead) approves it. 0 = no approval
   /// (everything posts directly). Default ₱50,000.
-  jeApprovalThreshold  Decimal                  @default(50000) @db.Decimal(14, 2)
+  jeApprovalThreshold        Decimal                    @default(50000) @db.Decimal(14, 2)
   /// Coffee shop floor-layout tier (CS_1..CS_5) — only used when businessType
   /// is COFFEE_SHOP. Controls the canonical station/printer/display setup.
   /// Null until the owner picks a layout in the setup wizard.
   /// Sales-controlled — owners cannot self-upgrade (per architectural decision).
-  coffeeShopTier       CoffeeShopTier?
+  coffeeShopTier             CoffeeShopTier?
   /// Sprint 6 — Manufacturing overhead rate applied to COGS at sale time.
   /// Per unit produced; only used when businessType = MANUFACTURING.
   /// Null = no overhead allocation (the F&B / retail default — they record
   /// utilities & rent as Operating Expenses, not COGS, per PFRS for SMEs).
   /// Set this when the tenant manufactures finished goods and needs full
   /// absorption costing (Direct Materials + Direct Labor + MOH = COGS).
-  overheadRatePerUnit  Decimal?                 @db.Decimal(10, 4)
+  overheadRatePerUnit        Decimal?                   @db.Decimal(10, 4)
   /// Optional customer-facing display toggle — meaningful only for CS_1
   /// (where the canonical setup has no customer display). Other tiers have
   /// it included by definition; this flag is ignored for them.
-  hasCustomerDisplay   Boolean                  @default(false)
+  hasCustomerDisplay         Boolean                    @default(false)
 
   // Sprint 3 — Floor Layout relations
   stations  Station[]
@@ -833,16 +841,16 @@ model Branch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  users           User[]
-  inventory       InventoryItem[]
-  orders          Order[]
-  shifts          Shift[]
-  arInvoices      ARInvoice[]
-  arPayments      ARPayment[]
-  quotes          Quote[]
-  apBills         APBill[]
-  apPayments      APPayment[]
+  tenant                    Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users                     User[]
+  inventory                 InventoryItem[]
+  orders                    Order[]
+  shifts                    Shift[]
+  arInvoices                ARInvoice[]
+  arPayments                ARPayment[]
+  quotes                    Quote[]
+  apBills                   APBill[]
+  apPayments                APPayment[]
   // Sprint 22 — AR/AP standalone-accounting parity
   creditMemos               CreditMemo[]
   vendorCreditNotes         VendorCreditNote[]
@@ -852,21 +860,26 @@ model Branch {
   recurringBillTemplates    RecurringBillTemplate[]
   // Sprint 25 — Solo Pro purchase orders
   purchaseOrders            PurchaseOrder[]
-  laundryOrders   LaundryOrder[]
-  laundryMachines LaundryMachine[]
-  transfersOut    StockTransfer[]    @relation("TransferFromBranch")
-  transfersIn     StockTransfer[]    @relation("TransferToBranch")
-  cycleCounts     CycleCount[]
-  projects        Project[]
-  issuances       MaterialIssuance[] @relation("MaterialIssuanceBranch")
+  laundryOrders             LaundryOrder[]
+  laundryMachines           LaundryMachine[]
+  transfersOut              StockTransfer[]            @relation("TransferFromBranch")
+  transfersIn               StockTransfer[]            @relation("TransferToBranch")
+  cycleCounts               CycleCount[]
+  projects                  Project[]
+  issuances                 MaterialIssuance[]         @relation("MaterialIssuanceBranch")
   // Sprint 13
-  productLots     ProductLot[]
-  fleetAssets     FleetAsset[]
-  tripTickets     TripTicket[]
-  jobOrders       JobOrder[]
-  kioskTerminals  KioskTerminal[]
-  deliveryReceipts DeliveryReceipt[]
-  preOrders       PreOrder[]
+  productLots               ProductLot[]
+  fleetAssets               FleetAsset[]
+  tripTickets               TripTicket[]
+  jobOrders                 JobOrder[]
+  kioskTerminals            KioskTerminal[]
+  deliveryReceipts          DeliveryReceipt[]
+  preOrders                 PreOrder[]
+  serializedUnits           SerializedUnit[]
+  rentalAgreements          RentalAgreement[]
+  repairTickets             RepairTicket[]
+  fuelPumps                 FuelPump[]
+  tankDips                  TankDip[]
 
   @@map("branches")
 }
@@ -874,16 +887,16 @@ model Branch {
 // ─── User ─────────────────────────────────────────────────────────────────────
 
 model User {
-  id                       String         @id @default(cuid())
+  id                       String          @id @default(cuid())
   tenantId                 String
   branchId                 String?
   email                    String
   passwordHash             String
   name                     String
   role                     UserRole
-  employmentType           EmploymentType @default(REGULAR)
+  employmentType           EmploymentType  @default(REGULAR)
   salaryType               SalaryType?
-  salaryRate               Decimal?       @db.Decimal(12, 2)
+  salaryRate               Decimal?        @db.Decimal(12, 2)
   shiftStart               String?
   shiftEnd                 String?
   sssNumber                String?
@@ -898,12 +911,12 @@ model User {
   /// dishwashers / drivers without having to invent + manage credentials
   /// for staff who never use the apps. Their TimeEntry records flow into
   /// the same payroll runs as login-using employees.
-  kioskOnly                Boolean        @default(false)
+  kioskOnly                Boolean         @default(false)
   /// Mobile / contact number for HR records
   phone                    String?
   /// Job title / position (e.g. "Barista", "Shift Supervisor")
   position                 String?
-  isActive                 Boolean        @default(true)
+  isActive                 Boolean         @default(true)
   hiredAt                  DateTime?
   separatedAt              DateTime?
   /// Sprint 19 — attrition tracking. Set together with separatedAt at the
@@ -913,11 +926,11 @@ model User {
   /// HR analytics (voluntary vs involuntary attrition rate).
   separationType           SeparationType?
   separationReason         String?
-  enable2fa                Boolean        @default(false)
+  enable2fa                Boolean         @default(false)
   twoFactorSecret          String?
   /// Sprint 17 — 8 single-use, hashed backup codes (bcrypt). Each consumed
   /// code is removed from the array; user can regenerate the set.
-  twoFactorBackupCodes     String[]       @default([])
+  twoFactorBackupCodes     String[]        @default([])
   /// Sprint 17 — when 2FA enroll begins, store the un-confirmed secret.
   /// Verified + activated by /auth/2fa/verify; cleared on cancel.
   twoFactorPendingSecret   String?
@@ -927,7 +940,7 @@ model User {
   prcLicense               String?
   prcLicenseExpiresAt      DateTime?
   /// Time-limited token for self-service password reset (expires in 1 hour)
-  passwordResetToken       String?        @unique
+  passwordResetToken       String?         @unique
   passwordResetTokenExpiry DateTime?
   /// Sprint 25 Phase 2A — Sales Lead delegation flag. When true, this user is
   /// authorized as a supervisor PIN holder for discount + void approvals at
@@ -936,7 +949,7 @@ model User {
   /// delegations per tenant, -1 = unlimited). Independent of UserRole.SALES_LEAD
   /// (the legacy role); a delegated user keeps their original role and just
   /// gains supervisor-PIN authority.
-  isSalesLead              Boolean        @default(false)
+  isSalesLead              Boolean         @default(false)
   /// Bcrypt-hashed 4-6 digit PIN for supervisor void overrides at the till.
   /// Only meaningful for users with VOID_DIRECT_ROLES (SALES_LEAD,
   /// BRANCH_MANAGER, BUSINESS_OWNER). Cashiers can have one set but it
@@ -948,43 +961,48 @@ model User {
   /// RBAC: extra permissions granted on top of the role + persona defaults.
   /// Members are PermissionKey strings (see permissions.ts). JWT-issue time
   /// merges these into the user's effective permission set.
-  customPermissions        String[]       @default([])
+  customPermissions        String[]        @default([])
   /// RBAC: SOD warning overrides. JSON shape:
   ///   { ruleId: string; reason: string; overriddenAt: ISO; overriddenById: cuid }[]
   /// Recorded when the owner explicitly accepts a yellow SOD warning.
   sodOverrides             Json?
-  createdAt                DateTime       @default(now())
-  updatedAt                DateTime       @updatedAt
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
 
-  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch              Branch?              @relation(fields: [branchId], references: [id])
-  sessions            UserSession[]
-  trustedDevices      TrustedDevice[]
-  loginLogs           LoginLog[]
-  appAccess           UserAppAccess[]
-  ordersAsCreator     Order[]              @relation("CreatedByUser")
-  ordersAsUpdatedBy   Order[]              @relation("UpdatedByUser")
-  ordersAsVoidedBy    Order[]              @relation("VoidedByUser")
-  discountsAuthorized OrderDiscount[]      @relation("AuthorizedByUser")
-  timeEntries         TimeEntry[]
-  payslips            Payslip[]
-  notifications       Notification[]
-  bankReconciliations BankReconciliation[]
-  orderItemRefunds    OrderItemRefund[]
-  leaveRequests       LeaveRequest[]       @relation("UserLeaves")
-  leaveApprovals      LeaveRequest[]       @relation("LeaveApprover")
-  employeeRequests    EmployeeRequest[]    @relation("UserEmployeeRequests")
-  employeeRequestApprovals EmployeeRequest[] @relation("EmployeeRequestApprover")
-  thirteenthMonths    ThirteenthMonth[]
+  tenant                   Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch                   Branch?              @relation(fields: [branchId], references: [id])
+  sessions                 UserSession[]
+  trustedDevices           TrustedDevice[]
+  loginLogs                LoginLog[]
+  appAccess                UserAppAccess[]
+  ordersAsCreator          Order[]              @relation("CreatedByUser")
+  ordersAsUpdatedBy        Order[]              @relation("UpdatedByUser")
+  ordersAsVoidedBy         Order[]              @relation("VoidedByUser")
+  discountsAuthorized      OrderDiscount[]      @relation("AuthorizedByUser")
+  timeEntries              TimeEntry[]
+  payslips                 Payslip[]
+  notifications            Notification[]
+  bankReconciliations      BankReconciliation[]
+  orderItemRefunds         OrderItemRefund[]
+  leaveRequests            LeaveRequest[]       @relation("UserLeaves")
+  leaveApprovals           LeaveRequest[]       @relation("LeaveApprover")
+  employeeRequests         EmployeeRequest[]    @relation("UserEmployeeRequests")
+  employeeRequestApprovals EmployeeRequest[]    @relation("EmployeeRequestApprover")
+  thirteenthMonths         ThirteenthMonth[]
 
   // Sprint 13 — vertical engine back-references
-  fleetAssetsAsPrimaryDriver FleetAsset[]   @relation("FleetPrimaryDriver")
-  tripsAsDriver              TripTicket[]   @relation("TripDriver")
-  tripsAsHelper              TripTicket[]   @relation("TripHelper")
-  tripsAsLiquidator          TripTicket[]   @relation("TripLiquidator")
-  jobOrdersAsTechnician      JobOrder[]     @relation("JobOrderTechnician")
-  jobOrderLinesAsTechnician  JobOrderLine[] @relation("JobOrderLineTechnician")
+  fleetAssetsAsPrimaryDriver FleetAsset[]      @relation("FleetPrimaryDriver")
+  tripsAsDriver              TripTicket[]      @relation("TripDriver")
+  tripsAsHelper              TripTicket[]      @relation("TripHelper")
+  tripsAsLiquidator          TripTicket[]      @relation("TripLiquidator")
+  jobOrdersAsTechnician      JobOrder[]        @relation("JobOrderTechnician")
+  jobOrderLinesAsTechnician  JobOrderLine[]    @relation("JobOrderLineTechnician")
   preOrdersCreated           PreOrder[]
+  rentalsCreated             RentalAgreement[]
+  repairsCreated             RepairTicket[]    @relation("RepairCreatedBy")
+  repairsAssigned            RepairTicket[]    @relation("RepairTechnician")
+  fuelDispenses              FuelDispense[]
+  tankDipsRecorded           TankDip[]
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -1086,71 +1104,73 @@ model Category {
 }
 
 model Product {
-  id              String        @id @default(cuid())
-  tenantId        String
-  categoryId      String?
-  name            String
-  description     String?
+  id               String        @id @default(cuid())
+  tenantId         String
+  categoryId       String?
+  name             String
+  description      String?
   /// Internal Stock-Keeping Unit — unique per tenant when set
-  sku             String?
+  sku              String?
   /// Barcode (EAN-13, UPC-A, QR, etc.) — for scanner integration and BIR inventory audit
-  barcode         String?
-  imageUrl        String?
-  price           Decimal       @db.Decimal(12, 2)
-  costPrice       Decimal?      @db.Decimal(12, 2)
-  inventoryMode   InventoryMode @default(UNIT_BASED)
+  barcode          String?
+  imageUrl         String?
+  price            Decimal       @db.Decimal(12, 2)
+  costPrice        Decimal?      @db.Decimal(12, 2)
+  inventoryMode    InventoryMode @default(UNIT_BASED)
   /// Whether this item carries 12% VAT. Drives taxType on OrderItem at checkout.
-  isVatable       Boolean       @default(true)
-  isActive        Boolean       @default(true)
+  isVatable        Boolean       @default(true)
+  isActive         Boolean       @default(true)
   // ── Sprint 13 — Compliance-Engine (Pharmacy) ──────────────────────────
   /// Generic name (per RA 6675 — Generics Act of 1988). Required on every
   /// dispensed-drug receipt. Null for non-pharmacy products.
-  genericName     String?
+  genericName      String?
   /// Brand name shown alongside generic on Rx-required products.
-  brandName       String?
+  brandName        String?
   /// Dosage form (tablet, capsule, syrup, suspension, cream, etc.).
-  dosageForm      String?
+  dosageForm       String?
   /// Strength (e.g. "500mg", "5mg/ml"). Free-text — formularies vary.
-  strength        String?
+  strength         String?
   /// Sprint 19 — PH drug-classification taxonomy. Drives till workflow per
   /// product (OTC = tap-and-charge; RX_ONLY = pharmacist PIN-attest; DDB_S2 =
   /// PIN + Yellow Rx serial; etc). Single source of truth — the two booleans
   /// below are auto-derived from this in ProductsService for backward-compat
   /// with queries that filter on them.
-  drugClass       DrugClass     @default(OTC)
+  drugClass        DrugClass     @default(OTC)
   /// DERIVED from drugClass via ProductsService.deriveBooleans(). Kept as a
   /// real column so existing Prisma queries that filter on it (including
   /// the OrdersService Rx guard from commit 2d30c97) keep working without
   /// a coordinated rename across N callsites.
-  isRxRequired    Boolean       @default(false)
+  isRxRequired     Boolean       @default(false)
   /// DERIVED from drugClass. RA 9165 dangerous drugs (any DDB schedule).
   /// ControlledSubstanceLog continues to auto-create on sale of these.
-  isControlledDrug Boolean      @default(false)
+  isControlledDrug Boolean       @default(false)
   /// Unit of Measure for this product (PC, KG, BOX, LITER, etc.)
-  unitOfMeasureId String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  unitOfMeasureId  String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
-  tenant              Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  category            Category?              @relation(fields: [categoryId], references: [id])
-  unitOfMeasure       UnitOfMeasure?         @relation(fields: [unitOfMeasureId], references: [id])
-  variants            ProductVariant[]
-  inventory           InventoryItem[]
-  inventoryLogs       InventoryLog[]
-  bomItems            BomItem[]
-  orderItems          OrderItem[]
-  preOrderItems       PreOrderItem[]
-  priceListItems      PriceListItem[]
-  promotionItems      PromotionProduct[]
-  modifierGroups      ProductModifierGroup[]
-  laundryProductLines LaundryProductLine[]
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category             Category?              @relation(fields: [categoryId], references: [id])
+  unitOfMeasure        UnitOfMeasure?         @relation(fields: [unitOfMeasureId], references: [id])
+  variants             ProductVariant[]
+  inventory            InventoryItem[]
+  inventoryLogs        InventoryLog[]
+  bomItems             BomItem[]
+  orderItems           OrderItem[]
+  preOrderItems        PreOrderItem[]
+  priceListItems       PriceListItem[]
+  serializedUnits      SerializedUnit[]
+  fuelPumps            FuelPump[]
+  promotionItems       PromotionProduct[]
+  modifierGroups       ProductModifierGroup[]
+  laundryProductLines  LaundryProductLine[]
   // Sprint 13 — Compliance-Engine
-  productLots         ProductLot[]
+  productLots          ProductLot[]
   deliveryReceiptItems DeliveryReceiptItem[]
   // Sprint 13 — Service-Engine
-  jobOrderLines       JobOrderLine[]         @relation("JobOrderLineProduct")
+  jobOrderLines        JobOrderLine[]         @relation("JobOrderLineProduct")
   // Postgres BYTEA-backed product photos (DB storage driver).
-  photos              ProductPhoto[]
+  photos               ProductPhoto[]
 
   @@index([tenantId, sku])
   @@index([tenantId, barcode])
@@ -1220,14 +1240,14 @@ model RawMaterial {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  tenant            Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bomItems          BomItem[]
-  variantBomItems   VariantBomItem[]
-  inventory         RawMaterialInventory[]
-  lots              RawMaterialLot[]
-  transferLines     StockTransferLine[]
-  cycleCountLines   CycleCountLine[]
-  issuanceLines     MaterialIssuanceLine[]
+  tenant                  Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bomItems                BomItem[]
+  variantBomItems         VariantBomItem[]
+  inventory               RawMaterialInventory[]
+  lots                    RawMaterialLot[]
+  transferLines           StockTransferLine[]
+  cycleCountLines         CycleCountLine[]
+  issuanceLines           MaterialIssuanceLine[]
   modifierIngredientLinks ModifierOptionIngredient[]
 
   @@index([tenantId, isActive])
@@ -1285,8 +1305,8 @@ model InventoryItem {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch  Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
   lots    InventoryLot[]
 
   @@unique([branchId, productId])
@@ -1296,18 +1316,18 @@ model InventoryItem {
 /// Sprint 25 — finished-goods inventory lot. Parallel to RawMaterialLot.
 /// Enables FEFO consumption + expiry tracking for SKUs with `lotsTracked=true`.
 model InventoryLot {
-  id              String   @id @default(cuid())
-  tenantId        String
-  inventoryItemId String
-  qtyReceived     Decimal  @db.Decimal(12, 4)
-  qtyRemaining    Decimal  @db.Decimal(12, 4)
-  unitCost        Decimal  @db.Decimal(12, 4)
-  receivedAt      DateTime
-  expirationDate  DateTime?
-  referenceNumber String?
+  id                  String    @id @default(cuid())
+  tenantId            String
+  inventoryItemId     String
+  qtyReceived         Decimal   @db.Decimal(12, 4)
+  qtyRemaining        Decimal   @db.Decimal(12, 4)
+  unitCost            Decimal   @db.Decimal(12, 4)
+  receivedAt          DateTime
+  expirationDate      DateTime?
+  referenceNumber     String?
   /// Optional link to PO line when received against a purchase order.
   purchaseOrderItemId String?
-  createdAt       DateTime @default(now())
+  createdAt           DateTime  @default(now())
 
   inventoryItem     InventoryItem      @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
   purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id])
@@ -1493,26 +1513,26 @@ model Order {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch           Branch            @relation(fields: [branchId], references: [id])
-  shift            Shift?            @relation(fields: [shiftId], references: [id])
-  customer         Customer?         @relation(fields: [customerId], references: [id])
-  createdBy        User?             @relation("CreatedByUser", fields: [createdById], references: [id])
-  updatedBy        User?             @relation("UpdatedByUser", fields: [updatedById], references: [id])
-  voidedBy         User?             @relation("VoidedByUser", fields: [voidedById], references: [id])
-  items            OrderItem[]
-  payments         OrderPayment[]
-  discounts        OrderDiscount[]
-  accountingEvents AccountingEvent[]
-  laundryOrder     LaundryOrder?
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch            Branch             @relation(fields: [branchId], references: [id])
+  shift             Shift?             @relation(fields: [shiftId], references: [id])
+  customer          Customer?          @relation(fields: [customerId], references: [id])
+  createdBy         User?              @relation("CreatedByUser", fields: [createdById], references: [id])
+  updatedBy         User?              @relation("UpdatedByUser", fields: [updatedById], references: [id])
+  voidedBy          User?              @relation("VoidedByUser", fields: [voidedById], references: [id])
+  items             OrderItem[]
+  payments          OrderPayment[]
+  discounts         OrderDiscount[]
+  accountingEvents  AccountingEvent[]
+  laundryOrder      LaundryOrder?
   // Sprint 13 — vertical engine back-references
-  tripTicket         TripTicket?         @relation("TripOrder")
-  progressBillings   ProgressBilling[]   @relation("ProgressBillingOrder")
-  retentionReleases  RetentionRelease[]  @relation("RetentionReleaseOrder")
-  jobOrder           JobOrder?           @relation("JobOrderInvoice")
+  tripTicket        TripTicket?        @relation("TripOrder")
+  progressBillings  ProgressBilling[]  @relation("ProgressBillingOrder")
+  retentionReleases RetentionRelease[] @relation("RetentionReleaseOrder")
+  jobOrder          JobOrder?          @relation("JobOrderInvoice")
   /// Back-pointers when this Order represents a pre-order deposit or balance.
-  preOrderAsDeposit  PreOrder?           @relation("PreOrderDeposit")
-  preOrderAsBalance  PreOrder?           @relation("PreOrderBalance")
+  preOrderAsDeposit PreOrder?          @relation("PreOrderDeposit")
+  preOrderAsBalance PreOrder?          @relation("PreOrderBalance")
 
   @@unique([tenantId, orderNumber])
   @@index([tenantId, createdAt])
@@ -1802,16 +1822,16 @@ model Account {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  parent              Account?             @relation("AccountHierarchy", fields: [parentId], references: [id])
-  children            Account[]            @relation("AccountHierarchy")
-  journalLines        JournalLine[]
-  arInvoiceLines      ARInvoiceLine[]
-  apBillLines         APBillLine[]
-  bankReconciliations BankReconciliation[]
+  tenant                        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent                        Account?                       @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children                      Account[]                      @relation("AccountHierarchy")
+  journalLines                  JournalLine[]
+  arInvoiceLines                ARInvoiceLine[]
+  apBillLines                   APBillLine[]
+  bankReconciliations           BankReconciliation[]
   // Sprint 22 — AR/AP parity
-  creditMemoLines              CreditMemoLine[]
-  vendorCreditNoteLines        VendorCreditNoteLine[]
+  creditMemoLines               CreditMemoLine[]
+  vendorCreditNoteLines         VendorCreditNoteLine[]
   recurringInvoiceTemplateLines RecurringInvoiceTemplateLine[]
   recurringBillTemplateLines    RecurringBillTemplateLine[]
 
@@ -1854,19 +1874,19 @@ model JournalEntry {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
-  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  accountingEvent AccountingEvent? @relation(fields: [accountingEventId], references: [id])
-  lines           JournalLine[]
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accountingEvent  AccountingEvent?  @relation(fields: [accountingEventId], references: [id])
+  lines            JournalLine[]
   /// The original entry that this JE reverses
-  reversalOf      JournalEntry?    @relation("JEReversals", fields: [reversalOfId], references: [id])
+  reversalOf       JournalEntry?     @relation("JEReversals", fields: [reversalOfId], references: [id])
   /// The reversal entry created for this JE (if any)
-  reversedBy      JournalEntry?    @relation("JEReversals")
+  reversedBy       JournalEntry?     @relation("JEReversals")
   /// AR/AP back-references — at most one is non-null per JE (a JE is created
   /// by exactly one document type: invoice post, bill post, or payment).
-  arInvoice       ARInvoice?       @relation("ARInvoiceJE")
-  arPayment       ARPayment?       @relation("ARPaymentJE")
-  apBill          APBill?          @relation("APBillJE")
-  apPayment       APPayment?       @relation("APPaymentJE")
+  arInvoice        ARInvoice?        @relation("ARInvoiceJE")
+  arPayment        ARPayment?        @relation("ARPaymentJE")
+  apBill           APBill?           @relation("APBillJE")
+  apPayment        APPayment?        @relation("APPaymentJE")
   // Sprint 22 — AR/AP parity. Each is also at-most-one per JE.
   creditMemo       CreditMemo?       @relation("CreditMemoJE")
   vendorCreditNote VendorCreditNote? @relation("VendorCreditNoteJE")
@@ -1937,21 +1957,21 @@ model ModifierGroup {
 /// "+1 espresso shot" add-on) and scale the base BOM up or down (a "Grande"
 /// size at 1.25× the Tall recipe).
 model ModifierOption {
-  id              String   @id @default(cuid())
-  modifierGroupId String
-  name            String
-  priceAdjustment Decimal  @default(0) @db.Decimal(12, 2)
+  id               String   @id @default(cuid())
+  modifierGroupId  String
+  name             String
+  priceAdjustment  Decimal  @default(0) @db.Decimal(12, 2)
   /// Multiplier applied to the product's base BOM when this option is
   /// selected. 1.0 = no change (default). 1.25 = consume 25% more of every
   /// base ingredient (used for size upgrades). Only one size-type option
   /// per order item is honoured — if a cashier somehow selects two, the
   /// service uses the highest multiplier.
-  recipeMultiplier Decimal @default(1.0) @db.Decimal(8, 4)
-  isDefault       Boolean  @default(false)
-  sortOrder       Int      @default(0)
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  recipeMultiplier Decimal  @default(1.0) @db.Decimal(8, 4)
+  isDefault        Boolean  @default(false)
+  sortOrder        Int      @default(0)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   group         ModifierGroup              @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
   orderItemMods OrderItemModifier[]
@@ -1977,8 +1997,8 @@ model ModifierOptionIngredient {
   quantity         Decimal @db.Decimal(14, 4)
   unit             String
 
-  option       ModifierOption @relation(fields: [modifierOptionId], references: [id], onDelete: Cascade)
-  rawMaterial  RawMaterial    @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
+  option      ModifierOption @relation(fields: [modifierOptionId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial    @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
 
   @@unique([modifierOptionId, rawMaterialId])
   @@index([modifierOptionId])
@@ -2232,18 +2252,18 @@ model Vendor {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  expenses ExpenseEntry[]
-  bills    APBill[]
-  payments APPayment[]
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  expenses         ExpenseEntry[]
+  bills            APBill[]
+  payments         APPayment[]
   deliveryReceipts DeliveryReceipt[]
 
   // Sprint 22 — AP standalone-accounting parity
-  creditNotes      VendorCreditNote[]
-  vendorAdvances   VendorAdvance[]
-  recurringBills   RecurringBillTemplate[]
+  creditNotes    VendorCreditNote[]
+  vendorAdvances VendorAdvance[]
+  recurringBills RecurringBillTemplate[]
   // Sprint 25 — Solo Pro purchase orders
-  purchaseOrders   PurchaseOrder[]
+  purchaseOrders PurchaseOrder[]
 
   @@index([tenantId, tin])
   @@index([tenantId, isActive])
@@ -2343,30 +2363,32 @@ model Customer {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  priceList     PriceList?     @relation(fields: [priceListId], references: [id], onDelete: SetNull)
-  orders        Order[]
-  invoices      ARInvoice[]
-  payments      ARPayment[]
-  quotes        Quote[]
-  laundryOrders LaundryOrder[]
-  projects      Project[]
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  priceList        PriceList?        @relation(fields: [priceListId], references: [id], onDelete: SetNull)
+  orders           Order[]
+  invoices         ARInvoice[]
+  payments         ARPayment[]
+  quotes           Quote[]
+  laundryOrders    LaundryOrder[]
+  projects         Project[]
   // Sprint 13
-  prescriptions Prescription[]
-  trips         TripTicket[]   @relation("TripCustomer")
-  jobOrders     JobOrder[]     @relation("JobOrderCustomer")
-  preOrders     PreOrder[]
+  prescriptions    Prescription[]
+  trips            TripTicket[]      @relation("TripCustomer")
+  jobOrders        JobOrder[]        @relation("JobOrderCustomer")
+  preOrders        PreOrder[]
+  rentalAgreements RentalAgreement[]
+  repairTickets    RepairTicket[]
 
   // Sprint 19 — Loyalty stamp cards (digital + printable)
-  stampCards    CustomerStampCard[]
+  stampCards CustomerStampCard[]
 
   // Sprint 25 Phase 2C — Loyalty Pro stamp tracking (Pro-tier).
   loyaltyProStamps CustomerStamp[]
 
   // Sprint 22 — AR standalone-accounting parity
-  creditMemos        CreditMemo[]
-  customerAdvances   CustomerAdvance[]
-  recurringInvoices  RecurringInvoiceTemplate[]
+  creditMemos       CreditMemo[]
+  customerAdvances  CustomerAdvance[]
+  recurringInvoices RecurringInvoiceTemplate[]
 
   @@index([tenantId, isActive])
   @@index([tenantId, tin])
@@ -2393,28 +2415,28 @@ enum StampAccrualBasis {
 }
 
 model StampCardTemplate {
-  id              String            @id @default(cuid())
-  tenantId        String
+  id               String            @id @default(cuid())
+  tenantId         String
   /// Display name on the card (e.g. "Coffee Lovers Card").
-  name            String
+  name             String
   /// Description of the reward — printed on the back of the card and
   /// shown digitally. Free-form. (e.g. "Free drink up to ₱150")
-  rewardLabel     String
+  rewardLabel      String
   /// How many stamps to earn the reward.
-  requiredStamps  Int
+  requiredStamps   Int
   /// How stamps are earned. PER_ORDER is the safe default.
-  accrualBasis    StampAccrualBasis @default(PER_ORDER)
+  accrualBasis     StampAccrualBasis @default(PER_ORDER)
   /// Only meaningful when accrualBasis = PER_AMOUNT. Stamp = floor(orderTotal / threshold).
-  accrualThreshold Decimal?         @db.Decimal(10, 2)
+  accrualThreshold Decimal?          @db.Decimal(10, 2)
   /// Optional: minimum order subtotal to earn ANY stamp (cuts low-value gaming).
   /// Null = no minimum. Applied AFTER discounts.
-  minOrderTotal   Decimal?          @db.Decimal(10, 2)
+  minOrderTotal    Decimal?          @db.Decimal(10, 2)
   /// Days until a customer's accrued stamps expire if no new earn activity.
   /// Null = stamps never expire. Common values: 90 / 180 / 365.
-  expiryDays      Int?
-  isActive        Boolean           @default(true)
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  expiryDays       Int?
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   cards  CustomerStampCard[]
@@ -2424,23 +2446,23 @@ model StampCardTemplate {
 }
 
 model CustomerStampCard {
-  id           String   @id @default(cuid())
-  tenantId     String
-  customerId   String
-  templateId   String
+  id              String    @id @default(cuid())
+  tenantId        String
+  customerId      String
+  templateId      String
   /// Current stamp count toward the next reward. Resets to 0 on redemption.
-  stamps       Int      @default(0)
+  stamps          Int       @default(0)
   /// Lifetime stamps earned (never resets — analytics).
-  lifetimeStamps Int    @default(0)
+  lifetimeStamps  Int       @default(0)
   /// Number of times this card has been redeemed.
-  redemptionCount Int   @default(0)
+  redemptionCount Int       @default(0)
   /// Unguessable URL slug for the public /stamps/<token> page.
   /// Format: <8-hex>-<8-hex>; safe to print on physical cards / QR codes.
-  publicToken  String   @unique
+  publicToken     String    @unique
   /// Last earn event — drives the expiry warning ("stamps expire in 14 days").
-  lastEarnedAt DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  lastEarnedAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
@@ -2453,10 +2475,10 @@ model CustomerStampCard {
 }
 
 enum StampEventKind {
-  EARN     // +N stamps from a sale
-  REDEEM   // reward claimed; stamps reset to 0
-  EXPIRE   // cron-triggered when expiryDays elapsed
-  ADJUST   // manual adjustment by owner (audit purposes)
+  EARN // +N stamps from a sale
+  REDEEM // reward claimed; stamps reset to 0
+  EXPIRE // cron-triggered when expiryDays elapsed
+  ADJUST // manual adjustment by owner (audit purposes)
 }
 
 model StampCardEvent {
@@ -2474,7 +2496,7 @@ model StampCardEvent {
   performedBy String?
   createdAt   DateTime       @default(now())
 
-  card        CustomerStampCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  card CustomerStampCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
   @@index([cardId, createdAt])
   @@map("stamp_card_events")
@@ -2494,8 +2516,8 @@ model StampProgram {
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
 
-  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  stamps   CustomerStamp[]
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stamps CustomerStamp[]
 
   @@index([tenantId, isActive])
   @@map("stamp_programs")
@@ -2527,25 +2549,25 @@ model CustomerStamp {
 // punches; no read access to any other tenant data.
 
 model KioskTerminal {
-  id         String   @id @default(cuid())
-  tenantId   String
+  id             String    @id @default(cuid())
+  tenantId       String
   /// Optional branch scope. When set, only users assigned to that branch
   /// (or no branch) can punch from this kiosk. Null = any branch.
-  branchId   String?
-  name       String
+  branchId       String?
+  name           String
   /// Owner-issued long-lived bearer key. Embedded in the kiosk URL once
   /// at enrollment; rotate by revoking + re-issuing.
-  apiKey     String   @unique
-  isActive   Boolean  @default(true)
+  apiKey         String    @unique
+  isActive       Boolean   @default(true)
   /// Telemetry — last successful or failed punch attempt from this kiosk.
-  lastUsedAt DateTime?
+  lastUsedAt     DateTime?
   /// Sliding-window failure counter for PIN brute-force throttling.
-  failedAttempts Int     @default(0)
+  failedAttempts Int       @default(0)
   /// When failedAttempts hit the limit, this is set; punches return 429
   /// until now() > lockedUntil.
   lockedUntil    DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
@@ -2578,9 +2600,9 @@ model DeliveryReceipt {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch Branch @relation(fields: [branchId], references: [id])
-  vendor Vendor @relation(fields: [vendorId], references: [id])
+  tenant Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch                @relation(fields: [branchId], references: [id])
+  vendor Vendor                @relation(fields: [vendorId], references: [id])
   items  DeliveryReceiptItem[]
 
   @@unique([tenantId, vendorId, drNumber])
@@ -2678,16 +2700,16 @@ model ARInvoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch       Branch?                @relation(fields: [branchId], references: [id])
-  customer     Customer               @relation(fields: [customerId], references: [id])
-  journalEntry JournalEntry?          @relation("ARInvoiceJE", fields: [journalEntryId], references: [id])
-  lines        ARInvoiceLine[]
-  applications ARPaymentApplication[]
-  convertedFromQuote Quote? @relation("QuoteConversion")
-  recurringTemplate    RecurringInvoiceTemplate?    @relation("ARInvoiceFromRecurringTemplate", fields: [recurringTemplateId], references: [id])
-  creditApplications   CreditMemoApplication[]      @relation("ARInvoiceCreditApplications")
-  advanceApplications  CustomerAdvanceApplication[] @relation("ARInvoiceAdvanceApplications")
+  tenant              Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch              Branch?                      @relation(fields: [branchId], references: [id])
+  customer            Customer                     @relation(fields: [customerId], references: [id])
+  journalEntry        JournalEntry?                @relation("ARInvoiceJE", fields: [journalEntryId], references: [id])
+  lines               ARInvoiceLine[]
+  applications        ARPaymentApplication[]
+  convertedFromQuote  Quote?                       @relation("QuoteConversion")
+  recurringTemplate   RecurringInvoiceTemplate?    @relation("ARInvoiceFromRecurringTemplate", fields: [recurringTemplateId], references: [id])
+  creditApplications  CreditMemoApplication[]      @relation("ARInvoiceCreditApplications")
+  advanceApplications CustomerAdvanceApplication[] @relation("ARInvoiceAdvanceApplications")
 
   @@unique([tenantId, invoiceNumber])
   @@index([tenantId, customerId, status])
@@ -2729,35 +2751,36 @@ enum QuoteStatus {
 /// Sales Quote (a.k.a. Proforma / Estimate). Pre-revenue: no GL impact.
 /// Converts to an ARInvoice on acceptance, which is when the JE posts.
 model Quote {
-  id                String        @id @default(cuid())
-  tenantId          String
-  branchId          String?
+  id                   String      @id @default(cuid())
+  tenantId             String
+  branchId             String?
   /// Tenant-scoped sequence. Format: Q-YYYY-####
-  quoteNumber       String
-  customerId        String
-  quoteDate         DateTime
+  quoteNumber          String
+  customerId           String
+  quoteDate            DateTime
   /// When the quote auto-expires if not accepted.
-  validUntil        DateTime
+  validUntil           DateTime
   /// Free-text terms (payment terms, scope of work). Owner-set per quote.
-  terms             String?
-  notes             String?
+  terms                String?
+  notes                String?
   /// Set when status becomes CONVERTED; FK to the ARInvoice it became.
-  convertedToInvoiceId String?    @unique
-  status            QuoteStatus   @default(DRAFT)
-  subtotal          Decimal       @db.Decimal(14, 2)
-  vatAmount         Decimal       @default(0) @db.Decimal(14, 2)
-  totalAmount       Decimal       @db.Decimal(14, 2)
-  createdById       String
-  acceptedAt        DateTime?
-  sentAt            DateTime?
-  convertedAt       DateTime?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-  tenant            Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch            Branch?       @relation(fields: [branchId], references: [id])
-  customer          Customer      @relation(fields: [customerId], references: [id])
-  convertedInvoice  ARInvoice?    @relation("QuoteConversion", fields: [convertedToInvoiceId], references: [id])
-  lines             QuoteLine[]
+  convertedToInvoiceId String?     @unique
+  status               QuoteStatus @default(DRAFT)
+  subtotal             Decimal     @db.Decimal(14, 2)
+  vatAmount            Decimal     @default(0) @db.Decimal(14, 2)
+  totalAmount          Decimal     @db.Decimal(14, 2)
+  createdById          String
+  acceptedAt           DateTime?
+  sentAt               DateTime?
+  convertedAt          DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  tenant               Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch               Branch?     @relation(fields: [branchId], references: [id])
+  customer             Customer    @relation(fields: [customerId], references: [id])
+  convertedInvoice     ARInvoice?  @relation("QuoteConversion", fields: [convertedToInvoiceId], references: [id])
+  lines                QuoteLine[]
+
   @@unique([tenantId, quoteNumber])
   @@index([tenantId, customerId, status])
   @@index([tenantId, status, validUntil])
@@ -2774,6 +2797,7 @@ model QuoteLine {
   lineTotal   Decimal  @db.Decimal(14, 2)
   createdAt   DateTime @default(now())
   quote       Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
   @@index([quoteId])
   @@map("quote_lines")
 }
@@ -2898,15 +2922,15 @@ model APBill {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch       Branch?                @relation(fields: [branchId], references: [id])
-  vendor       Vendor                 @relation(fields: [vendorId], references: [id])
-  journalEntry JournalEntry?          @relation("APBillJE", fields: [journalEntryId], references: [id])
-  lines        APBillLine[]
-  applications APPaymentApplication[]
-  recurringTemplate    RecurringBillTemplate?      @relation("APBillFromRecurringTemplate", fields: [recurringTemplateId], references: [id])
-  creditApplications   VendorCreditNoteApplication[] @relation("APBillCreditApplications")
-  advanceApplications  VendorAdvanceApplication[]    @relation("APBillAdvanceApplications")
+  tenant              Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch              Branch?                       @relation(fields: [branchId], references: [id])
+  vendor              Vendor                        @relation(fields: [vendorId], references: [id])
+  journalEntry        JournalEntry?                 @relation("APBillJE", fields: [journalEntryId], references: [id])
+  lines               APBillLine[]
+  applications        APPaymentApplication[]
+  recurringTemplate   RecurringBillTemplate?        @relation("APBillFromRecurringTemplate", fields: [recurringTemplateId], references: [id])
+  creditApplications  VendorCreditNoteApplication[] @relation("APBillCreditApplications")
+  advanceApplications VendorAdvanceApplication[]    @relation("APBillAdvanceApplications")
 
   @@unique([tenantId, billNumber])
   @@index([tenantId, vendorId, status])
@@ -3015,17 +3039,17 @@ model APPaymentApplication {
 
 enum CreditMemoStatus {
   DRAFT
-  POSTED   // GL impact recorded; appears on customer statement
-  APPLIED  // Fully applied to one or more invoices (or refunded in cash)
+  POSTED // GL impact recorded; appears on customer statement
+  APPLIED // Fully applied to one or more invoices (or refunded in cash)
   VOIDED
 }
 
 enum CreditMemoReason {
-  RETURN              // Customer returned goods
-  PRICE_ADJUSTMENT    // Negotiated discount after invoice
-  BILLING_ERROR       // We over-billed
-  GOODWILL            // Customer-service gesture
-  BAD_DEBT_WRITE_OFF  // Uncollectable; written off
+  RETURN // Customer returned goods
+  PRICE_ADJUSTMENT // Negotiated discount after invoice
+  BILLING_ERROR // We over-billed
+  GOODWILL // Customer-service gesture
+  BAD_DEBT_WRITE_OFF // Uncollectable; written off
   OTHER
 }
 
@@ -3039,7 +3063,7 @@ model CreditMemo {
   tenantId String
   branchId String?
 
-  memoNumber String   // Tenant-scoped sequence (CM-YYYY-####)
+  memoNumber String // Tenant-scoped sequence (CM-YYYY-####)
   customerId String
 
   memoDate    DateTime
@@ -3053,11 +3077,11 @@ model CreditMemo {
   /// credit can apply across multiple invoices).
   relatedInvoiceId String?
 
-  subtotal      Decimal @db.Decimal(14, 2)
-  vatAmount     Decimal @default(0) @db.Decimal(14, 2)
-  totalAmount   Decimal @db.Decimal(14, 2)
+  subtotal        Decimal @db.Decimal(14, 2)
+  vatAmount       Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount     Decimal @db.Decimal(14, 2)
   /// Sum of CreditMemoApplication.appliedAmount.
-  appliedAmount Decimal @default(0) @db.Decimal(14, 2)
+  appliedAmount   Decimal @default(0) @db.Decimal(14, 2)
   /// totalAmount - appliedAmount.
   unappliedAmount Decimal @db.Decimal(14, 2)
 
@@ -3152,7 +3176,7 @@ model VendorCreditNote {
   tenantId String
   branchId String?
 
-  noteNumber    String   // Tenant-scoped (VCN-YYYY-####)
+  noteNumber    String // Tenant-scoped (VCN-YYYY-####)
   /// Vendor's credit-note reference printed on their document.
   vendorNoteRef String?
   vendorId      String
@@ -3165,10 +3189,10 @@ model VendorCreditNote {
 
   relatedBillId String?
 
-  subtotal      Decimal @db.Decimal(14, 2)
-  vatAmount     Decimal @default(0) @db.Decimal(14, 2)
-  totalAmount   Decimal @db.Decimal(14, 2)
-  appliedAmount Decimal @default(0) @db.Decimal(14, 2)
+  subtotal        Decimal @db.Decimal(14, 2)
+  vatAmount       Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount     Decimal @db.Decimal(14, 2)
+  appliedAmount   Decimal @default(0) @db.Decimal(14, 2)
   unappliedAmount Decimal @db.Decimal(14, 2)
 
   status VendorCreditNoteStatus @default(DRAFT)
@@ -3237,8 +3261,8 @@ model VendorCreditNoteApplication {
 
 enum AdvanceStatus {
   DRAFT
-  POSTED   // Cash received/sent; sits as liability/asset
-  APPLIED  // Fully applied to invoices/bills
+  POSTED // Cash received/sent; sits as liability/asset
+  APPLIED // Fully applied to invoices/bills
   REFUNDED // Returned to customer/vendor
   VOIDED
 }
@@ -3251,15 +3275,15 @@ model CustomerAdvance {
   tenantId String
   branchId String?
 
-  advanceNumber String  // Tenant-scoped (CA-YYYY-####)
+  advanceNumber String // Tenant-scoped (CA-YYYY-####)
   customerId    String
 
-  advanceDate   DateTime
-  postingDate   DateTime
+  advanceDate DateTime
+  postingDate DateTime
 
-  method      PaymentMethod
-  reference   String?
-  totalAmount Decimal       @db.Decimal(14, 2)
+  method          PaymentMethod
+  reference       String?
+  totalAmount     Decimal       @db.Decimal(14, 2)
   appliedAmount   Decimal       @default(0) @db.Decimal(14, 2)
   unappliedAmount Decimal       @db.Decimal(14, 2)
 
@@ -3314,15 +3338,15 @@ model VendorAdvance {
   tenantId String
   branchId String?
 
-  advanceNumber String   // Tenant-scoped (VA-YYYY-####)
+  advanceNumber String // Tenant-scoped (VA-YYYY-####)
   vendorId      String
 
   advanceDate DateTime
   postingDate DateTime
 
-  method      PaymentMethod
-  reference   String?
-  totalAmount Decimal       @db.Decimal(14, 2)
+  method          PaymentMethod
+  reference       String?
+  totalAmount     Decimal       @db.Decimal(14, 2)
   appliedAmount   Decimal       @default(0) @db.Decimal(14, 2)
   unappliedAmount Decimal       @db.Decimal(14, 2)
 
@@ -3380,7 +3404,7 @@ enum RecurrenceFrequency {
 enum RecurringTemplateStatus {
   ACTIVE
   PAUSED
-  COMPLETED   // End date reached
+  COMPLETED // End date reached
   CANCELLED
 }
 
@@ -3393,7 +3417,7 @@ model RecurringInvoiceTemplate {
   tenantId String
   branchId String?
 
-  templateNumber String  // Tenant-scoped (RI-YYYY-####)
+  templateNumber String // Tenant-scoped (RI-YYYY-####)
   /// Human label shown in lists ("Monthly retainer — ACME Corp").
   name           String
 
@@ -3407,20 +3431,20 @@ model RecurringInvoiceTemplate {
   /// Optional end date. If null, runs forever (until paused/cancelled).
   endDate     DateTime?
   /// Net terms copied into each child invoice.
-  termsDays   Int      @default(0)
+  termsDays   Int                 @default(0)
 
   /// When the next child invoice should be materialized. Cron advances this
   /// after each successful materialization.
-  nextRunAt   DateTime
+  nextRunAt DateTime
   /// When the last child invoice was materialized (audit).
-  lastRunAt   DateTime?
+  lastRunAt DateTime?
   /// Count of children materialized to date (audit).
-  runCount    Int      @default(0)
+  runCount  Int       @default(0)
 
   /// Template totals (denormalized from lines; recomputed on update).
-  subtotal    Decimal  @db.Decimal(14, 2)
-  vatAmount   Decimal  @default(0) @db.Decimal(14, 2)
-  totalAmount Decimal  @db.Decimal(14, 2)
+  subtotal    Decimal @db.Decimal(14, 2)
+  vatAmount   Decimal @default(0) @db.Decimal(14, 2)
+  totalAmount Decimal @db.Decimal(14, 2)
 
   status      RecurringTemplateStatus @default(ACTIVE)
   description String?
@@ -3430,11 +3454,11 @@ model RecurringInvoiceTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant   Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch   Branch?                         @relation(fields: [branchId], references: [id])
-  customer Customer                        @relation(fields: [customerId], references: [id])
+  tenant   Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch   Branch?                        @relation(fields: [branchId], references: [id])
+  customer Customer                       @relation(fields: [customerId], references: [id])
   lines    RecurringInvoiceTemplateLine[]
-  children ARInvoice[]                     @relation("ARInvoiceFromRecurringTemplate")
+  children ARInvoice[]                    @relation("ARInvoiceFromRecurringTemplate")
 
   @@unique([tenantId, templateNumber])
   @@index([tenantId, customerId, status])
@@ -3474,11 +3498,11 @@ model RecurringBillTemplate {
   dayOfPeriod Int
   startDate   DateTime
   endDate     DateTime?
-  termsDays   Int      @default(0)
+  termsDays   Int                 @default(0)
 
   nextRunAt DateTime
   lastRunAt DateTime?
-  runCount  Int      @default(0)
+  runCount  Int       @default(0)
 
   subtotal    Decimal @db.Decimal(14, 2)
   vatAmount   Decimal @default(0) @db.Decimal(14, 2)
@@ -3495,11 +3519,11 @@ model RecurringBillTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant   Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch   Branch?                      @relation(fields: [branchId], references: [id])
-  vendor   Vendor                       @relation(fields: [vendorId], references: [id])
+  tenant   Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch   Branch?                     @relation(fields: [branchId], references: [id])
+  vendor   Vendor                      @relation(fields: [vendorId], references: [id])
   lines    RecurringBillTemplateLine[]
-  children APBill[]                     @relation("APBillFromRecurringTemplate")
+  children APBill[]                    @relation("APBillFromRecurringTemplate")
 
   @@unique([tenantId, templateNumber])
   @@index([tenantId, vendorId, status])
@@ -3533,22 +3557,22 @@ enum SequenceType {
   AP_PAYMENT
   // Sprint 16 — race-safe sequencing for every per-tenant document type.
   // Replaces the legacy MAX+1 / count()+1 generators across modules.
-  POS_ORDER          // Order.orderNumber (ORD-{YYYY}-{####})
-  JOURNAL_ENTRY      // JournalEntry.entryNumber (JE-{YYYYMMDD}-{####})
-  LAUNDRY_CLAIM      // LaundryOrder.claimNumber (CLA-{YYYY}-{######})
-  TRIP_TICKET        // TripTicket.tripNumber (TRIP-{YYYY}-{######})
-  JOB_ORDER          // JobOrder.jobNumber (JO-{YYYY}-{######})
-  PROGRESS_BILLING   // ProgressBilling.billingNumber (PB-{YYYY}-{######})
-  MATERIAL_ISSUANCE  // MaterialIssuance.issuanceNumber (ISS-{YYYY}-{######})
-  PROJECT_CODE       // Project.projectCode (PRJ-{YYYY}-{######})
-  QUOTE              // Quote.quoteNumber (Q-{YYYY}-{####})
+  POS_ORDER // Order.orderNumber (ORD-{YYYY}-{####})
+  JOURNAL_ENTRY // JournalEntry.entryNumber (JE-{YYYYMMDD}-{####})
+  LAUNDRY_CLAIM // LaundryOrder.claimNumber (CLA-{YYYY}-{######})
+  TRIP_TICKET // TripTicket.tripNumber (TRIP-{YYYY}-{######})
+  JOB_ORDER // JobOrder.jobNumber (JO-{YYYY}-{######})
+  PROGRESS_BILLING // ProgressBilling.billingNumber (PB-{YYYY}-{######})
+  MATERIAL_ISSUANCE // MaterialIssuance.issuanceNumber (ISS-{YYYY}-{######})
+  PROJECT_CODE // Project.projectCode (PRJ-{YYYY}-{######})
+  QUOTE // Quote.quoteNumber (Q-{YYYY}-{####})
   // Sprint 22 — AR/AP standalone-accounting parity (Xero/QB feature set).
-  AR_CREDIT_MEMO     // CreditMemo.memoNumber (CM-{YYYY}-{####})
-  AP_CREDIT_NOTE     // VendorCreditNote.noteNumber (VCN-{YYYY}-{####})
-  CUSTOMER_ADVANCE   // CustomerAdvance.advanceNumber (CA-{YYYY}-{####})
-  VENDOR_ADVANCE     // VendorAdvance.advanceNumber (VA-{YYYY}-{####})
-  RECURRING_INVOICE  // RecurringInvoiceTemplate.templateNumber (RI-{YYYY}-{####})
-  RECURRING_BILL     // RecurringBillTemplate.templateNumber (RB-{YYYY}-{####})
+  AR_CREDIT_MEMO // CreditMemo.memoNumber (CM-{YYYY}-{####})
+  AP_CREDIT_NOTE // VendorCreditNote.noteNumber (VCN-{YYYY}-{####})
+  CUSTOMER_ADVANCE // CustomerAdvance.advanceNumber (CA-{YYYY}-{####})
+  VENDOR_ADVANCE // VendorAdvance.advanceNumber (VA-{YYYY}-{####})
+  RECURRING_INVOICE // RecurringInvoiceTemplate.templateNumber (RI-{YYYY}-{####})
+  RECURRING_BILL // RecurringBillTemplate.templateNumber (RB-{YYYY}-{####})
 }
 
 enum SequenceResetPolicy {
@@ -4091,31 +4115,31 @@ model Terminal {
  * during FIFO traversal.
  */
 model RawMaterialLot {
-  id              String   @id @default(cuid())
-  tenantId        String
-  branchId        String
-  rawMaterialId   String
+  id                  String    @id @default(cuid())
+  tenantId            String
+  branchId            String
+  rawMaterialId       String
   /// Original delivery quantity in the ingredient's unit (g, ml, pc, ...)
-  qtyReceived     Decimal  @db.Decimal(12, 4)
+  qtyReceived         Decimal   @db.Decimal(12, 4)
   /// Remaining quantity — drained by FEFO/FIFO consumption.
-  qtyRemaining    Decimal  @db.Decimal(12, 4)
+  qtyRemaining        Decimal   @db.Decimal(12, 4)
   /// Unit cost AT THE TIME of this delivery — frozen per lot.
-  unitCost        Decimal  @db.Decimal(12, 4)
+  unitCost            Decimal   @db.Decimal(12, 4)
   /// Business-date of receipt (cashier-provided; respects period lock).
-  receivedAt      DateTime
+  receivedAt          DateTime
   /// Sprint 25 — expiration date for perishables. When set, consumption
   /// follows FEFO (oldest expiry first); when null, FIFO (oldest receivedAt
   /// first). Drives 7/3/0-day expiry alerts.
-  expirationDate  DateTime?
+  expirationDate      DateTime?
   /// Supplier reference (PO/DR/invoice no.) — purely audit metadata.
-  referenceNumber String?
+  referenceNumber     String?
   /// CASH / CREDIT / OWNER_FUNDED — mirrored from the receipt for reporting.
-  paymentMethod   String?
+  paymentMethod       String?
   /// Sprint 25 — link to PurchaseOrder when received against one.
   purchaseOrderItemId String?
-  createdAt       DateTime @default(now())
+  createdAt           DateTime  @default(now())
 
-  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+  rawMaterial       RawMaterial        @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
   purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id])
 
   // FEFO consumption sort: expirationDate ASC NULLS LAST, then receivedAt ASC
@@ -4160,11 +4184,11 @@ enum LaundryOrderStatus {
 /// Sprint 11 — delivery workflow for laundry tickets. Only set when
 /// LaundryOrder.isDelivery = true; null for walk-in / pickup orders.
 enum LaundryDeliveryStatus {
-  PENDING_PICKUP    /// rider not yet dispatched
-  OUT_FOR_PICKUP    /// rider en route to customer
-  AT_LAUNDROMAT     /// laundry received from customer (back-end of pickup leg)
-  OUT_FOR_DELIVERY  /// rider returning the cleaned load to customer
-  DELIVERED         /// customer received the cleaned load — usually claimed in same beat
+  PENDING_PICKUP /// rider not yet dispatched
+  OUT_FOR_PICKUP /// rider en route to customer
+  AT_LAUNDROMAT /// laundry received from customer (back-end of pickup leg)
+  OUT_FOR_DELIVERY /// rider returning the cleaned load to customer
+  DELIVERED /// customer received the cleaned load — usually claimed in same beat
 }
 
 enum LaundryPaymentStatus {
@@ -4173,54 +4197,54 @@ enum LaundryPaymentStatus {
 }
 
 model LaundryOrder {
-  id          String              @id @default(cuid())
-  tenantId    String
-  branchId    String
-  customerId  String? // optional walk-in
-  claimNumber String // CLA-2026-000001 (unique per tenant per year)
-  status      LaundryOrderStatus  @default(RECEIVED)
+  id              String                 @id @default(cuid())
+  tenantId        String
+  branchId        String
+  customerId      String? // optional walk-in
+  claimNumber     String // CLA-2026-000001 (unique per tenant per year)
+  status          LaundryOrderStatus     @default(RECEIVED)
   /// Sprint 19 — Payment is independent of activity status. Customers
   /// can pay at intake (self-service / walk-in pay-upfront), at claim
   /// time (legacy full-service), or anywhere in between. paidAt + the
   /// existing orderId field get stamped the moment payment lands.
   /// Claim then only records pickup if already PAID — no double-billing.
-  paymentStatus LaundryPaymentStatus @default(UNPAID)
-  paidAt        DateTime?
+  paymentStatus   LaundryPaymentStatus   @default(UNPAID)
+  paidAt          DateTime?
   /// Legacy single-shape header fields. Sprint 7 (2026-05-08) introduced
   /// LaundryOrderLine for multi-line tickets. New tickets create lines and
   /// leave these null; old tickets still read from these. Both flows compute
   /// the same totalAmount.
-  serviceType LaundryServiceType?
-  pricingMode LaundryPricingMode?
-  weightKg    Decimal?            @db.Decimal(10, 3)
-  loadCount   Int?
-  pieceCount  Int?
-  unitPrice   Decimal?            @db.Decimal(12, 2)
-  totalAmount Decimal             @db.Decimal(12, 2)
-  receivedAt  DateTime            @default(now())
-  promisedAt  DateTime?
-  readyAt     DateTime?
-  claimedAt   DateTime?
-  notes       String?
-  intakeBy    String // userId (creator)
-  releasedBy  String?
-  orderId     String?             @unique // POS Order created on claim
+  serviceType     LaundryServiceType?
+  pricingMode     LaundryPricingMode?
+  weightKg        Decimal?               @db.Decimal(10, 3)
+  loadCount       Int?
+  pieceCount      Int?
+  unitPrice       Decimal?               @db.Decimal(12, 2)
+  totalAmount     Decimal                @db.Decimal(12, 2)
+  receivedAt      DateTime               @default(now())
+  promisedAt      DateTime?
+  readyAt         DateTime?
+  claimedAt       DateTime?
+  notes           String?
+  intakeBy        String // userId (creator)
+  releasedBy      String?
+  orderId         String?                @unique // POS Order created on claim
   /// Sprint 11 — pickup/delivery support. When isDelivery=true, the order
   /// is delivered to deliveryAddress (auto-filled from Customer.defaultAddress
   /// if present); deliveryFee is added to totalAmount; deliveryStatus tracks
   /// the rider workflow. Non-delivery walk-in tickets keep these null/false.
-  isDelivery       Boolean                @default(false)
-  deliveryAddress  String?
-  deliveryFee      Decimal?               @db.Decimal(10, 2)
-  deliveryStatus   LaundryDeliveryStatus?
+  isDelivery      Boolean                @default(false)
+  deliveryAddress String?
+  deliveryFee     Decimal?               @db.Decimal(10, 2)
+  deliveryStatus  LaundryDeliveryStatus?
   /// Sprint 11 — short shareable token (e.g. CLA-2026-000001-A1B2) used as
   /// the URL slug for the public claim-stub page. Customer can show their
   /// phone instead of the paper ticket. Token is intentionally unguessable
   /// — random 4-char suffix means an attacker can't iterate sequential
   /// claim numbers to peek at other customers' orders.
-  publicStubToken  String?                @unique
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  publicStubToken String?                @unique
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
 
   tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch            Branch                    @relation(fields: [branchId], references: [id])
@@ -4312,12 +4336,12 @@ model LaundryMachine {
   createdAt  DateTime             @default(now())
   updatedAt  DateTime             @updatedAt
 
-  tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch Branch             @relation(fields: [branchId], references: [id])
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch     Branch             @relation(fields: [branchId], references: [id])
   /// Lines where this machine is the washer (or sole machine for non-combo).
-  lines       LaundryOrderLine[] @relation("LineWasherMachine")
+  lines      LaundryOrderLine[] @relation("LineWasherMachine")
   /// Sprint 19 — Lines where this machine is the dryer half of a combo.
-  dryerLines  LaundryOrderLine[] @relation("LineDryerMachine")
+  dryerLines LaundryOrderLine[] @relation("LineDryerMachine")
 
   @@unique([tenantId, branchId, code])
   @@index([tenantId, branchId, status])
@@ -4333,7 +4357,7 @@ model LaundryMachine {
 /// no manual click. Otherwise the operator still confirms but at least
 /// has the timer in front of them.
 model LaundryWashCycle {
-  id              String              @id @default(cuid())
+  id              String             @id @default(cuid())
   tenantId        String
   /// Display label, e.g. "Regular Wash" / "Premium Wash" / "Heavy Duty Dry".
   name            String
@@ -4343,15 +4367,15 @@ model LaundryWashCycle {
   durationMinutes Int
   /// When true, the @Cron worker promotes the line to DONE automatically
   /// at end of cycle; the operator does NOT need to click "Done".
-  autoComplete    Boolean             @default(false)
+  autoComplete    Boolean            @default(false)
   /// Optional surcharge: cycles like "Premium Wash" can carry a fee
   /// applied on top of the line's base unitPrice. Null = no surcharge.
-  surcharge       Decimal?            @db.Decimal(10, 2)
-  isActive        Boolean             @default(true)
+  surcharge       Decimal?           @db.Decimal(10, 2)
+  isActive        Boolean            @default(true)
   /// Sort order in the cycle picker. Lower = shown first.
-  sortOrder       Int                 @default(0)
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  sortOrder       Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lines  LaundryOrderLine[]
@@ -4380,16 +4404,16 @@ model LaundryServicePrice {
 /// One service line within a LaundryOrder. Multi-line replaces the
 /// single-shape header fields; old fields stay for backward compat.
 model LaundryOrderLine {
-  id            String                   @id @default(cuid())
-  orderId       String
-  serviceCode   LaundryServiceCode
-  mode          LaundryServiceMode
-  sets          Int                      @default(1)
-  unitPrice     Decimal                  @db.Decimal(10, 2)
-  lineTotal     Decimal                  @db.Decimal(12, 2)
-  weightKg      Decimal?                 @db.Decimal(6, 2)
-  notes         String?
-  machineId     String?
+  id             String                   @id @default(cuid())
+  orderId        String
+  serviceCode    LaundryServiceCode
+  mode           LaundryServiceMode
+  sets           Int                      @default(1)
+  unitPrice      Decimal                  @db.Decimal(10, 2)
+  lineTotal      Decimal                  @db.Decimal(12, 2)
+  weightKg       Decimal?                 @db.Decimal(6, 2)
+  notes          String?
+  machineId      String?
   /// Sprint 19 — Wash+Dry combo support. When serviceCode is WASH_DRY_COMBO,
   /// `machineId` is the WASHER (or COMBO) used for the wash phase, and
   /// `dryerMachineId` is the DRYER (or COMBO) used for the dry phase. Most
@@ -4398,9 +4422,9 @@ model LaundryOrderLine {
   /// + dryer pair instead of being forced onto a non-existent COMBO unit.
   /// For non-combo lines this field is always null.
   dryerMachineId String?
-  machineStatus LaundryMachineLineStatus @default(NOT_STARTED)
-  startedAt     DateTime?
-  finishedAt    DateTime?
+  machineStatus  LaundryMachineLineStatus @default(NOT_STARTED)
+  startedAt      DateTime?
+  finishedAt     DateTime?
 
   // Sprint 19 — Cycle tracking. When a cycle is picked at start time,
   // cycleEndsAt is computed = startedAt + cycle.durationMinutes. The
@@ -4408,20 +4432,20 @@ model LaundryOrderLine {
   // cycleAutoComplete=true, a @Cron worker promotes the line to DONE +
   // releases the machine when cycleEndsAt passes. Otherwise the
   // countdown is informational only and the operator clicks Done.
-  cycleId            String?
-  cycleEndsAt        DateTime?
-  cycleAutoComplete  Boolean   @default(false)
+  cycleId           String?
+  cycleEndsAt       DateTime?
+  cycleAutoComplete Boolean   @default(false)
 
   order        LaundryOrder            @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  machine      LaundryMachine?         @relation("LineWasherMachine", fields: [machineId],      references: [id])
-  dryerMachine LaundryMachine?         @relation("LineDryerMachine",  fields: [dryerMachineId], references: [id])
+  machine      LaundryMachine?         @relation("LineWasherMachine", fields: [machineId], references: [id])
+  dryerMachine LaundryMachine?         @relation("LineDryerMachine", fields: [dryerMachineId], references: [id])
   cycle        LaundryWashCycle?       @relation(fields: [cycleId], references: [id])
   addOns       LaundryOrderLineAddOn[]
 
   @@index([orderId])
   @@index([machineId])
   @@index([dryerMachineId])
-  @@index([cycleEndsAt, machineStatus, cycleAutoComplete])  // cron scan target
+  @@index([cycleEndsAt, machineStatus, cycleAutoComplete]) // cron scan target
   @@map("laundry_order_lines")
 }
 
@@ -4631,11 +4655,11 @@ model TenantDataSnapshot {
 /// `payload` is a Json blob; the shape varies by `kind` and is validated in
 /// the service layer (we want to evolve fields without migrating the table).
 enum EmployeeRequestKind {
-  COA       // Certificate of Attendance (missed clock-in/out)
-  SCHEDULE  // Schedule Adjustment (temporary)
-  OB        // Official Business (off-site)
-  OT        // Overtime
-  UT        // Undertime
+  COA // Certificate of Attendance (missed clock-in/out)
+  SCHEDULE // Schedule Adjustment (temporary)
+  OB // Official Business (off-site)
+  OT // Overtime
+  UT // Undertime
 }
 
 enum EmployeeRequestStatus {
@@ -4835,10 +4859,10 @@ model Project {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer  Customer?          @relation(fields: [customerId], references: [id])
-  branch    Branch?            @relation(fields: [branchId], references: [id])
-  issuances MaterialIssuance[]
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer         Customer?          @relation(fields: [customerId], references: [id])
+  branch           Branch?            @relation(fields: [branchId], references: [id])
+  issuances        MaterialIssuance[]
   // Sprint 13 — Construction
   progressBillings ProgressBilling[]
 
@@ -4900,29 +4924,29 @@ model MaterialIssuanceLine {
 /// Pharmacy POS rejects sale of `Product.isRxRequired` items without a
 /// valid (refillsRemaining > 0) Prescription attached.
 model Prescription {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  customerId          String?
+  id                String   @id @default(cuid())
+  tenantId          String
+  customerId        String?
   /// Pharmacy-issued Rx number, scanned or typed at intake.
-  rxNumber            String
+  rxNumber          String
   /// Patient's name as written on the Rx — required even when customerId is null.
-  patientName         String
-  patientIdType       String?
-  patientIdNumber     String?
+  patientName       String
+  patientIdType     String?
+  patientIdNumber   String?
   /// Prescribing physician's name + PRC license + S2 license (for controlled drugs).
-  prescribingDoctor   String
-  doctorPrcLicense    String
-  doctorS2License     String?
-  doctorClinic        String?
-  issuedAt            DateTime
-  refillsRemaining    Int        @default(0)
-  notes               String?
-  createdAt           DateTime   @default(now())
-  updatedAt           DateTime   @updatedAt
+  prescribingDoctor String
+  doctorPrcLicense  String
+  doctorS2License   String?
+  doctorClinic      String?
+  issuedAt          DateTime
+  refillsRemaining  Int      @default(0)
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  tenant              Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer            Customer?  @relation(fields: [customerId], references: [id])
-  orderItems          OrderItem[]
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer                Customer?                @relation(fields: [customerId], references: [id])
+  orderItems              OrderItem[]
   controlledSubstanceLogs ControlledSubstanceLog[]
 
   @@unique([tenantId, rxNumber])
@@ -4932,22 +4956,22 @@ model Prescription {
 
 /// FDA-required lot + expiry tracking for pharmacy products.
 model ProductLot {
-  id           String    @id @default(cuid())
-  tenantId     String
-  productId    String
-  branchId     String
-  lotNumber    String
-  expiresAt    DateTime
-  quantity     Decimal   @db.Decimal(12, 3)
-  costPrice    Decimal   @db.Decimal(12, 2)
-  receivedAt   DateTime  @default(now())
-  supplierRef  String?
-  isActive     Boolean   @default(true)
+  id          String   @id @default(cuid())
+  tenantId    String
+  productId   String
+  branchId    String
+  lotNumber   String
+  expiresAt   DateTime
+  quantity    Decimal  @db.Decimal(12, 3)
+  costPrice   Decimal  @db.Decimal(12, 2)
+  receivedAt  DateTime @default(now())
+  supplierRef String?
+  isActive    Boolean  @default(true)
 
-  tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  product    Product     @relation(fields: [productId], references: [id])
-  branch     Branch      @relation(fields: [branchId], references: [id])
-  orderItems OrderItem[]
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product              Product               @relation(fields: [productId], references: [id])
+  branch               Branch                @relation(fields: [branchId], references: [id])
+  orderItems           OrderItem[]
   deliveryReceiptItems DeliveryReceiptItem[]
 
   @@unique([tenantId, productId, lotNumber])
@@ -4957,21 +4981,21 @@ model ProductLot {
 
 /// DDB controlled-substance dispensing register (RA 9165).
 model ControlledSubstanceLog {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  orderItemId         String   @unique
-  prescriptionId      String?
-  patientName         String
-  patientIdType       String
-  patientIdNumber     String
-  doctorName          String
-  doctorPrcLicense    String
-  doctorS2License     String
-  pharmacistPrc       String
-  drugName            String
-  drugStrength        String?
-  quantityDispensed   Decimal  @db.Decimal(10, 3)
-  dispensedAt         DateTime @default(now())
+  id                String   @id @default(cuid())
+  tenantId          String
+  orderItemId       String   @unique
+  prescriptionId    String?
+  patientName       String
+  patientIdType     String
+  patientIdNumber   String
+  doctorName        String
+  doctorPrcLicense  String
+  doctorS2License   String
+  pharmacistPrc     String
+  drugName          String
+  drugStrength      String?
+  quantityDispensed Decimal  @db.Decimal(10, 3)
+  dispensedAt       DateTime @default(now())
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   prescription Prescription? @relation(fields: [prescriptionId], references: [id])
@@ -5032,9 +5056,9 @@ model FleetAsset {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch        Branch?           @relation(fields: [branchId], references: [id])
-  primaryDriver User?             @relation("FleetPrimaryDriver", fields: [primaryDriverId], references: [id])
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch        Branch?      @relation(fields: [branchId], references: [id])
+  primaryDriver User?        @relation("FleetPrimaryDriver", fields: [primaryDriverId], references: [id])
   trips         TripTicket[]
   pmSchedules   PMSchedule[]
   tireSerials   TireSerial[]
@@ -5045,22 +5069,22 @@ model FleetAsset {
 }
 
 model PMSchedule {
-  id                  String          @id @default(cuid())
-  tenantId            String
-  fleetAssetId        String
-  type                PMScheduleType
-  customLabel         String?
-  intervalKm          Int?
-  intervalDays        Int?
-  lastDoneAt          DateTime?
-  lastDoneMileageKm   Int?
-  nextDueAt           DateTime?
-  nextDueMileageKm    Int?
-  lastCost            Decimal?        @db.Decimal(12, 2)
-  isActive            Boolean         @default(true)
-  notes               String?
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
+  id                String         @id @default(cuid())
+  tenantId          String
+  fleetAssetId      String
+  type              PMScheduleType
+  customLabel       String?
+  intervalKm        Int?
+  intervalDays      Int?
+  lastDoneAt        DateTime?
+  lastDoneMileageKm Int?
+  nextDueAt         DateTime?
+  nextDueMileageKm  Int?
+  lastCost          Decimal?       @db.Decimal(12, 2)
+  isActive          Boolean        @default(true)
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fleetAsset FleetAsset @relation(fields: [fleetAssetId], references: [id], onDelete: Cascade)
@@ -5071,23 +5095,23 @@ model PMSchedule {
 }
 
 model TireSerial {
-  id              String   @id @default(cuid())
-  tenantId        String
-  fleetAssetId    String?
-  serialNumber    String
-  brand           String?
-  size            String?
-  status          String   @default("NEW")
-  installedAt     DateTime?
-  removedAt       DateTime?
-  position        String?
-  installMileage  Int?
-  removeMileage   Int?
-  retreadCount    Int      @default(0)
-  costPrice       Decimal? @db.Decimal(12, 2)
-  notes           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String    @id @default(cuid())
+  tenantId       String
+  fleetAssetId   String?
+  serialNumber   String
+  brand          String?
+  size           String?
+  status         String    @default("NEW")
+  installedAt    DateTime?
+  removedAt      DateTime?
+  position       String?
+  installMileage Int?
+  removeMileage  Int?
+  retreadCount   Int       @default(0)
+  costPrice      Decimal?  @db.Decimal(12, 2)
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fleetAsset FleetAsset? @relation(fields: [fleetAssetId], references: [id])
@@ -5168,27 +5192,27 @@ enum ProgressBillingStatus {
 }
 
 model ProgressBilling {
-  id              String                @id @default(cuid())
-  tenantId        String
-  projectId       String
-  billingNumber   String
+  id               String                @id @default(cuid())
+  tenantId         String
+  projectId        String
+  billingNumber    String
   stageDescription String
-  percentComplete Decimal               @db.Decimal(5, 2)
-  grossAmount     Decimal               @db.Decimal(14, 2)
-  retentionPercent Decimal              @default(10.00) @db.Decimal(5, 2)
-  retentionAmount Decimal               @db.Decimal(14, 2)
-  netAmount       Decimal               @db.Decimal(14, 2)
-  status          ProgressBillingStatus @default(DRAFT)
-  orderId         String?               @unique
-  issuedAt        DateTime?
-  paidAt          DateTime?
-  notes           String?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
+  percentComplete  Decimal               @db.Decimal(5, 2)
+  grossAmount      Decimal               @db.Decimal(14, 2)
+  retentionPercent Decimal               @default(10.00) @db.Decimal(5, 2)
+  retentionAmount  Decimal               @db.Decimal(14, 2)
+  netAmount        Decimal               @db.Decimal(14, 2)
+  status           ProgressBillingStatus @default(DRAFT)
+  orderId          String?               @unique
+  issuedAt         DateTime?
+  paidAt           DateTime?
+  notes            String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  order    Order?   @relation("ProgressBillingOrder", fields: [orderId], references: [id])
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  order            Order?            @relation("ProgressBillingOrder", fields: [orderId], references: [id])
   retentionRelease RetentionRelease?
 
   @@unique([tenantId, billingNumber])
@@ -5198,13 +5222,13 @@ model ProgressBilling {
 }
 
 model RetentionRelease {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  progressBillingId   String   @unique
-  releasedAmount      Decimal  @db.Decimal(14, 2)
-  releasedAt          DateTime @default(now())
-  orderId             String?  @unique
-  notes               String?
+  id                String   @id @default(cuid())
+  tenantId          String
+  progressBillingId String   @unique
+  releasedAmount    Decimal  @db.Decimal(14, 2)
+  releasedAt        DateTime @default(now())
+  orderId           String?  @unique
+  notes             String?
 
   tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   progressBilling ProgressBilling @relation(fields: [progressBillingId], references: [id], onDelete: Cascade)
@@ -5236,27 +5260,27 @@ enum JobOrderLineKind {
 }
 
 model JobOrder {
-  id              String         @id @default(cuid())
-  tenantId        String
-  branchId        String
-  jobNumber       String
-  status          JobOrderStatus @default(DRAFT)
-  customerId      String?
-  itemDescription String
-  customerComplaint String?
-  diagnosis       String?
-  assignedToId    String?
-  estimateAmount  Decimal?       @db.Decimal(12, 2)
+  id                 String         @id @default(cuid())
+  tenantId           String
+  branchId           String
+  jobNumber          String
+  status             JobOrderStatus @default(DRAFT)
+  customerId         String?
+  itemDescription    String
+  customerComplaint  String?
+  diagnosis          String?
+  assignedToId       String?
+  estimateAmount     Decimal?       @db.Decimal(12, 2)
   estimateApprovedAt DateTime?
-  totalAmount     Decimal        @default(0) @db.Decimal(12, 2)
-  orderId         String?        @unique
-  promisedAt      DateTime?
-  startedAt       DateTime?
-  completedAt     DateTime?
-  claimedAt       DateTime?
-  notes           String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  totalAmount        Decimal        @default(0) @db.Decimal(12, 2)
+  orderId            String?        @unique
+  promisedAt         DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  claimedAt          DateTime?
+  notes              String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 
   tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch     Branch         @relation(fields: [branchId], references: [id])
@@ -5272,20 +5296,20 @@ model JobOrder {
 }
 
 model JobOrderLine {
-  id          String           @id @default(cuid())
-  jobOrderId  String
-  kind        JobOrderLineKind
-  productId   String?
-  description String
-  quantity    Decimal          @db.Decimal(12, 3)
-  unitPrice   Decimal          @db.Decimal(12, 2)
-  lineTotal   Decimal          @db.Decimal(14, 2)
+  id           String           @id @default(cuid())
+  jobOrderId   String
+  kind         JobOrderLineKind
+  productId    String?
+  description  String
+  quantity     Decimal          @db.Decimal(12, 3)
+  unitPrice    Decimal          @db.Decimal(12, 2)
+  lineTotal    Decimal          @db.Decimal(14, 2)
   technicianId String?
-  notes       String?
+  notes        String?
 
-  jobOrder    JobOrder         @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
-  product     Product?         @relation("JobOrderLineProduct", fields: [productId], references: [id])
-  technician  User?            @relation("JobOrderLineTechnician", fields: [technicianId], references: [id])
+  jobOrder   JobOrder @relation(fields: [jobOrderId], references: [id], onDelete: Cascade)
+  product    Product? @relation("JobOrderLineProduct", fields: [productId], references: [id])
+  technician User?    @relation("JobOrderLineTechnician", fields: [technicianId], references: [id])
 
   @@index([jobOrderId])
   @@map("job_order_lines")
@@ -5309,54 +5333,54 @@ model JobOrderLine {
 
 model PlatformConfig {
   /// Always "platform" — singleton row.
-  id                       String   @id @default("platform")
+  id                    String    @id @default("platform")
   /// HNS Corp PH legal name printed on receipts.
-  companyName              String   @default("HNS Corp PH")
+  companyName           String    @default("HNS Corp PH")
   /// HNS Corp PH TIN (BIR). Null while pre-registration; set once registered.
-  tin                      String?
+  tin                   String?
   /// Registered office address.
-  address                  String?
+  address               String?
   /// Contact phone for tenant inquiries on the receipt footer.
-  contactPhone             String?
+  contactPhone          String?
   /// Contact email for tenant inquiries.
-  contactEmail             String?
+  contactEmail          String?
   /// HNS Corp PH's tax status. Drives whether subscription bills carry VAT.
   /// Mirrors TaxStatus enum for the HNS tenant; kept here for fast read
   /// without joining the HNS tenant row.
-  taxStatus                TaxStatus @default(UNREGISTERED)
+  taxStatus             TaxStatus @default(UNREGISTERED)
   /// True once BIR has issued ATP for Official Receipts. Drives "AR vs OR"
   /// receipt template selection.
-  isBirRegistered          Boolean  @default(false)
+  isBirRegistered       Boolean   @default(false)
   /// Auto-issuance cron toggle. False = no monthly invoices auto-created.
-  subscriptionAutoIssue    Boolean  @default(true)
+  subscriptionAutoIssue Boolean   @default(true)
   /// Days from issuance until invoice flips to PAST_DUE.
-  subscriptionDueDays      Int      @default(7)
+  subscriptionDueDays   Int       @default(7)
   /// Sprint 16 — when true, auto-post the customer-side APBill (DR 6280 +
   /// optional Input VAT 1040 / CR 2010 AP) immediately after the bill is
   /// created. When false (default), the bill lands in DRAFT for tenant
   /// review before they post it themselves.
-  subscriptionAutoPost     Boolean  @default(false)
+  subscriptionAutoPost  Boolean   @default(false)
   /// HNS tenant link — null until bootstrap-hns-corp runs the first time.
   /// Subscription billing creates Orders inside this tenant.
-  hnsTenantId              String?
+  hnsTenantId           String?
   /// Sprint 24 — Payment methods JSON. Array of method objects shown to
   /// customers on the payment-instructions page during signup + monthly
   /// renewal. Shape:
   /// [{ type: 'MAYA' | 'BDO' | 'MARIBANK' | 'GCASH', label: string,
   ///    accountDisplay: string, instructions: string (markdown) }]
   /// Owner edits this via /admin/payment-methods.
-  paymentMethodsJson       Json     @default("[]")
+  paymentMethodsJson    Json      @default("[]")
   /// Sprint 24 — Sequential BIR Official Receipt number tracking. Holds the
   /// LAST issued OR number from the owner's paper BIR-accredited booklet.
   /// Used by /admin/payments-pending to auto-suggest the next OR number
   /// when the owner confirms a payment. Format: numeric string e.g. "000123".
   /// BIR requires gap-free sequencing — the UI enforces this at OR-entry time.
-  lastOrNumber             String?
+  lastOrNumber          String?
   /// Sprint 24 — OR numbering padding width (e.g., 6 means "000123"). From
   /// the booklet's printed format. Defaults to 6 — typical BIR booklet.
-  orNumberPadding          Int      @default(6)
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  orNumberPadding       Int       @default(6)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   @@map("platform_config")
 }
@@ -5377,59 +5401,59 @@ model PlatformConfig {
 // - Daily cron: expires AWAITING_PROOF rows after 30 days
 
 enum PendingPaymentStatus {
-  AWAITING_PROOF      // Customer hasn't submitted proof yet
-  PROOF_SUBMITTED     // Customer uploaded receipt; owner needs to verify
-  CONFIRMED           // Owner confirmed payment; OR issued; tenant active
-  REJECTED            // Owner rejected (wrong amount, no matching deposit, etc.)
-  EXPIRED             // Customer never paid; auto-expired after 30 days
+  AWAITING_PROOF // Customer hasn't submitted proof yet
+  PROOF_SUBMITTED // Customer uploaded receipt; owner needs to verify
+  CONFIRMED // Owner confirmed payment; OR issued; tenant active
+  REJECTED // Owner rejected (wrong amount, no matching deposit, etc.)
+  EXPIRED // Customer never paid; auto-expired after 30 days
 }
 
 enum PendingPaymentReason {
-  NEW_SIGNUP          // First-month subscription, tenant in GRACE until confirmed
-  MONTHLY_RENEWAL     // Recurring renewal — tenant ACTIVE; goes GRACE if not paid by due date
-  PLAN_UPGRADE        // Customer upgraded mid-cycle (prorated charge)
+  NEW_SIGNUP // First-month subscription, tenant in GRACE until confirmed
+  MONTHLY_RENEWAL // Recurring renewal — tenant ACTIVE; goes GRACE if not paid by due date
+  PLAN_UPGRADE // Customer upgraded mid-cycle (prorated charge)
 }
 
 model PendingPayment {
-  id                String   @id @default(cuid())
-  tenantId          String
+  id       String @id @default(cuid())
+  tenantId String
 
   // Plan + billing details
-  planCode          String   // SOLO_LITE / SOLO_STANDARD / SOLO_PRO
-  amountPhpCents    Int      // ₱199.00 = 19900
-  periodStart       DateTime
-  periodEnd         DateTime
-  reason            PendingPaymentReason
+  planCode       String // SOLO_LITE / SOLO_STANDARD / SOLO_PRO
+  amountPhpCents Int // ₱199.00 = 19900
+  periodStart    DateTime
+  periodEnd      DateTime
+  reason         PendingPaymentReason
 
   // Reference code shown to customer — owner uses this to match the deposit
   // in their banking app. Format: SIGNUP-XXXXX or RENEW-XXXXX (6 chars).
-  referenceCode     String   @unique
+  referenceCode String @unique
 
   // Customer-side: proof submission
   status            PendingPaymentStatus @default(AWAITING_PROOF)
   submittedAt       DateTime?
-  submittedProofUrl String?   // R2 URL of receipt screenshot
-  submittedRefId    String?   // Transaction ID / Maya ref / bank InstaPay ref
-  submittedNotes    String?   // Free-form notes from customer
-  submittedMethod   String?   // 'MAYA' | 'BDO' | 'MARIBANK' | 'GCASH'
+  submittedProofUrl String? // R2 URL of receipt screenshot
+  submittedRefId    String? // Transaction ID / Maya ref / bank InstaPay ref
+  submittedNotes    String? // Free-form notes from customer
+  submittedMethod   String? // 'MAYA' | 'BDO' | 'MARIBANK' | 'GCASH'
 
   // Owner-side: verification
-  confirmedAt       DateTime?
-  confirmedById     String?
-  rejectedAt        DateTime?
-  rejectedById      String?
-  rejectionReason   String?
+  confirmedAt     DateTime?
+  confirmedById   String?
+  rejectedAt      DateTime?
+  rejectedById    String?
+  rejectionReason String?
 
   // BIR OR — linked on confirmation
-  officialReceiptId String?  @unique
+  officialReceiptId String? @unique
 
   // Lifecycle
-  expiresAt         DateTime
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  officialReceipt   OfficialReceipt? @relation(fields: [officialReceiptId], references: [id])
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  officialReceipt OfficialReceipt? @relation(fields: [officialReceiptId], references: [id])
 
   @@index([status, expiresAt])
   @@index([tenantId, status])
@@ -5441,34 +5465,34 @@ model PendingPayment {
 // it for audit + customer download. Optional scanned-copy upload preserves
 // the legal proof.
 model OfficialReceipt {
-  id                String   @id @default(cuid())
+  id String @id @default(cuid())
 
   // BIR-required fields
-  orNumber          String   @unique  // Gap-free per BIR rule. From owner's paper booklet.
-  issuedAt          DateTime
-  issuedById        String   // User who recorded the issuance
+  orNumber   String   @unique // Gap-free per BIR rule. From owner's paper booklet.
+  issuedAt   DateTime
+  issuedById String // User who recorded the issuance
 
   // Payer (customer) details
-  payerTenantId     String?
-  payerName         String   // Business legal name on the receipt
-  payerTin          String?  // Customer's BIR TIN if they have one
-  payerAddress      String?
+  payerTenantId String?
+  payerName     String // Business legal name on the receipt
+  payerTin      String? // Customer's BIR TIN if they have one
+  payerAddress  String?
 
   // Amounts
-  amountPhpCents    Int      // Gross amount received
-  taxStatus         String   // 'NON_VAT' or 'VAT_12' — copied from PlatformConfig at issuance time
-  vatAmountPhpCents Int      @default(0)  // 0 if Non-VAT; computed if VAT-registered
+  amountPhpCents    Int // Gross amount received
+  taxStatus         String // 'NON_VAT' or 'VAT_12' — copied from PlatformConfig at issuance time
+  vatAmountPhpCents Int    @default(0) // 0 if Non-VAT; computed if VAT-registered
 
   // Description on the OR
-  description       String   // e.g., "Clerque Solo Standard subscription, Aug 2026"
+  description String // e.g., "Clerque Solo Standard subscription, Aug 2026"
 
   // Optional scan
-  scannedCopyUrl    String?   // R2 URL of photo/scan of the paper OR
+  scannedCopyUrl String? // R2 URL of photo/scan of the paper OR
 
-  createdAt         DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  payerTenant       Tenant?   @relation(fields: [payerTenantId], references: [id])
-  pendingPayment    PendingPayment?
+  payerTenant    Tenant?         @relation(fields: [payerTenantId], references: [id])
+  pendingPayment PendingPayment?
 
   @@index([orNumber])
   @@index([issuedAt])
@@ -5480,35 +5504,35 @@ model OfficialReceipt {
 
 enum PurchaseOrderStatus {
   DRAFT
-  ORDERED       // Sent to vendor
-  PARTIAL       // Some items received
-  RECEIVED      // All items received
+  ORDERED // Sent to vendor
+  PARTIAL // Some items received
+  RECEIVED // All items received
   CANCELLED
 }
 
 /// Sprint 25 — Purchase order workflow (Solo Pro feature).
 /// Owner drafts a PO → marks ordered → records receipts (which create lots).
 model PurchaseOrder {
-  id          String   @id @default(cuid())
-  tenantId    String
-  branchId    String?
-  vendorId    String?
+  id            String              @id @default(cuid())
+  tenantId      String
+  branchId      String?
+  vendorId      String?
   /// Tenant-scoped human-readable number, e.g. PO-2026-000123.
-  poNumber    String
-  orderDate   DateTime
-  expectedAt  DateTime?
-  status      PurchaseOrderStatus @default(DRAFT)
-  subtotalCents Int     @default(0)
-  taxCents      Int     @default(0)
-  totalCents    Int     @default(0)
-  notes       String?
-  createdById String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  poNumber      String
+  orderDate     DateTime
+  expectedAt    DateTime?
+  status        PurchaseOrderStatus @default(DRAFT)
+  subtotalCents Int                 @default(0)
+  taxCents      Int                 @default(0)
+  totalCents    Int                 @default(0)
+  notes         String?
+  createdById   String
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
-  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  branch Branch? @relation(fields: [branchId], references: [id])
-  vendor Vendor? @relation(fields: [vendorId], references: [id])
+  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch?             @relation(fields: [branchId], references: [id])
+  vendor Vendor?             @relation(fields: [vendorId], references: [id])
   items  PurchaseOrderItem[]
 
   @@unique([tenantId, poNumber])
@@ -5518,18 +5542,18 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id              String   @id @default(cuid())
+  id              String  @id @default(cuid())
   purchaseOrderId String
   /// One of rawMaterialId or productId is set (XOR).
   rawMaterialId   String?
   productId       String?
   description     String
-  qtyOrdered      Decimal  @db.Decimal(12, 4)
-  qtyReceived     Decimal  @db.Decimal(12, 4) @default(0)
-  unitCost        Decimal  @db.Decimal(12, 4)
+  qtyOrdered      Decimal @db.Decimal(12, 4)
+  qtyReceived     Decimal @default(0) @db.Decimal(12, 4)
+  unitCost        Decimal @db.Decimal(12, 4)
   lineTotalCents  Int
 
-  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  purchaseOrder   PurchaseOrder    @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   rawMaterialLots RawMaterialLot[]
   inventoryLots   InventoryLot[]
 
@@ -5541,20 +5565,20 @@ model PurchaseOrderItem {
 /// Owner generates from /admin/api-keys; key prefix stored for display, rest
 /// hashed. Used by accountants integrating with Xero/QB/etc.
 model ApiKey {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   tenantId    String
   /// User-given label, e.g. "Maria's bookkeeper".
   label       String
   /// First 8 chars of the key, shown in the UI (e.g. "ck_live_abcd1234...").
   keyPrefix   String
   /// SHA-256 hash of the full key; full key shown to user once at creation.
-  keyHash     String   @unique
+  keyHash     String    @unique
   /// 'read' for Solo Pro. 'readwrite' for SUITE_T3/ENTERPRISE.
   accessLevel String
-  isActive    Boolean  @default(true)
+  isActive    Boolean   @default(true)
   lastUsedAt  DateTime?
   createdById String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
   expiresAt   DateTime?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -5564,7 +5588,7 @@ model ApiKey {
 }
 
 enum VoidApprovalStatus {
-  PENDING       // Cashier requested; awaiting Sales Lead / Owner
+  PENDING // Cashier requested; awaiting Sales Lead / Owner
   APPROVED
   REJECTED
 }
@@ -5574,18 +5598,18 @@ enum VoidApprovalStatus {
 /// the cashier-initiated void creates a VoidApproval row. Only Sales Lead /
 /// Owner can approve; void doesn't go through until approved.
 model VoidApproval {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  orderId             String
-  orderItemId         String?       // Null for whole-order void
-  amountCents         Int
-  reason              String
-  initiatedById       String        // Cashier
-  initiatedAt         DateTime @default(now())
-  status              VoidApprovalStatus @default(PENDING)
-  approvedById        String?
-  approvedAt          DateTime?
-  rejectionReason     String?
+  id              String             @id @default(cuid())
+  tenantId        String
+  orderId         String
+  orderItemId     String? // Null for whole-order void
+  amountCents     Int
+  reason          String
+  initiatedById   String // Cashier
+  initiatedAt     DateTime           @default(now())
+  status          VoidApprovalStatus @default(PENDING)
+  approvedById    String?
+  approvedAt      DateTime?
+  rejectionReason String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -5603,9 +5627,9 @@ model VoidApproval {
 /// One device token per (tenantId, role, label). Owners can revoke from
 /// Settings → Displays.
 enum DisplayDeviceRole {
-  CUSTOMER_DISPLAY    // Customer-facing screen (cart mirror, branded QR)
-  KDS_KITCHEN         // Kitchen display
-  KDS_BAR             // Bar display
+  CUSTOMER_DISPLAY // Customer-facing screen (cart mirror, branded QR)
+  KDS_KITCHEN // Kitchen display
+  KDS_BAR // Bar display
   KDS_COLD_BAR
   KDS_HOT_BAR
   KDS_PASTRY_PASS
@@ -5613,32 +5637,32 @@ enum DisplayDeviceRole {
 }
 
 model DisplayPairing {
-  id            String   @id @default(cuid())
-  tenantId      String
+  id          String            @id @default(cuid())
+  tenantId    String
   /// 4-digit numeric code. Single-use, expires after 15 min.
-  code          String
+  code        String
   /// Which cashier user generated the code — the redeemed token follows
   /// this user's display stream.
-  createdById   String
+  createdById String
   /// Optional: pin to a specific KDS station. Only relevant when
   /// role is KDS_*.
-  stationId     String?
-  role          DisplayDeviceRole
+  stationId   String?
+  role        DisplayDeviceRole
   /// Friendly label shown in the cashier's Settings → Displays list
   /// once the device redeems the code.
-  label         String?
-  expiresAt     DateTime
+  label       String?
+  expiresAt   DateTime
   /// Set when a device successfully redeems the code. After redemption,
   /// the code is dead and the device uses `deviceToken` for every
   /// subsequent request.
-  redeemedAt    DateTime?
-  deviceToken   String?   @unique
+  redeemedAt  DateTime?
+  deviceToken String?           @unique
   /// Updated on each poll from the paired device — lets the owner see
   /// "last seen 3 min ago" in Settings → Displays.
-  lastSeenAt    DateTime?
+  lastSeenAt  DateTime?
   /// Soft-revoke. The token stays in the DB for audit but stops working.
-  revokedAt     DateTime?
-  createdAt     DateTime @default(now())
+  revokedAt   DateTime?
+  createdAt   DateTime          @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -5672,50 +5696,50 @@ enum PreOrderStatus {
 /// reusable for any vertical that takes a deposit and settles later (e.g.
 /// catering, made-to-order furniture, special orders).
 model PreOrder {
-  id                String         @id @default(cuid())
-  tenantId          String
-  branchId          String
-  customerId        String?
+  id                 String         @id @default(cuid())
+  tenantId           String
+  branchId           String
+  customerId         String?
   /// Cashier or sales person who took the order. Stamps audit attribution.
-  createdById       String
+  createdById        String
   /// Server-generated short code shown to the customer ("PO-000123"). The
   /// receipt prints this so a walk-in cashier can find the order on pickup.
-  preOrderNumber    String
-  status            PreOrderStatus @default(DRAFT)
+  preOrderNumber     String
+  status             PreOrderStatus @default(DRAFT)
   /// When the customer expects to pick up / take delivery. Counter dashboard
   /// surfaces "today's pickups"; production-plan job uses this for tomorrow's
   /// bake list.
-  pickupDate        DateTime
+  pickupDate         DateTime
   /// Optional time-of-day within the pickup date. NULL = anytime.
-  pickupTime        String?        @db.VarChar(8)  // "HH:MM" / "HH:MM:SS"
+  pickupTime         String?        @db.VarChar(8) // "HH:MM" / "HH:MM:SS"
   /// Free-text inscription (cake message). Printed on the production slip.
-  inscription       String?
+  inscription        String?
   /// Anything else the kitchen needs (allergies, colour, theme).
-  notes             String?
+  notes              String?
   /// ₱ cents — totals are snapshotted at order time so price changes after
   /// don't quietly affect the balance owed.
-  subtotalCents     Int            @default(0)
-  discountCents     Int            @default(0)
-  totalCents        Int            @default(0)
-  depositCents      Int            @default(0)
+  subtotalCents      Int            @default(0)
+  discountCents      Int            @default(0)
+  totalCents         Int            @default(0)
+  depositCents       Int            @default(0)
   /// Computed as totalCents − depositCents at write time. Kept here so the
   /// settle-balance flow can read it without recomputing the snapshot.
-  balanceCents      Int            @default(0)
+  balanceCents       Int            @default(0)
   /// Backlinks to the Order rows representing actual cash movement.
   /// depositOrderId is set when DEPOSIT_PAID; balanceOrderId when PICKED_UP.
-  depositOrderId    String?        @unique
-  balanceOrderId    String?        @unique
-  cancelledAt       DateTime?
+  depositOrderId     String?        @unique
+  balanceOrderId     String?        @unique
+  cancelledAt        DateTime?
   cancellationReason String?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 
-  tenant        Tenant     @relation(fields: [tenantId],   references: [id], onDelete: Cascade)
-  branch        Branch     @relation(fields: [branchId],   references: [id])
-  customer      Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  createdBy     User       @relation(fields: [createdById], references: [id])
-  depositOrder  Order?     @relation("PreOrderDeposit", fields: [depositOrderId], references: [id])
-  balanceOrder  Order?     @relation("PreOrderBalance", fields: [balanceOrderId], references: [id])
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch       Branch    @relation(fields: [branchId], references: [id])
+  customer     Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdBy    User      @relation(fields: [createdById], references: [id])
+  depositOrder Order?    @relation("PreOrderDeposit", fields: [depositOrderId], references: [id])
+  balanceOrder Order?    @relation("PreOrderBalance", fields: [balanceOrderId], references: [id])
 
   items PreOrderItem[]
 
@@ -5729,19 +5753,19 @@ model PreOrder {
 /// Line item on a pre-order. Mirrors OrderItem shape so the settle-balance
 /// flow can copy these straight onto the final Order with minimal mapping.
 model PreOrderItem {
-  id              String  @id @default(cuid())
-  preOrderId      String
-  productId       String
-  productName     String  /// Snapshot — survives product rename
-  quantity        Decimal @db.Decimal(12, 3)
-  unitPriceCents  Int
+  id               String  @id @default(cuid())
+  preOrderId       String
+  productId        String
+  productName      String /// Snapshot — survives product rename
+  quantity         Decimal @db.Decimal(12, 3)
+  unitPriceCents   Int
   /// Sum of modifier priceAdjustment × qty. Pre-computed for fast totals.
-  modifierAddCents Int    @default(0)
-  lineTotalCents  Int
-  notes           String?
+  modifierAddCents Int     @default(0)
+  lineTotalCents   Int
+  notes            String?
 
-  preOrder  PreOrder              @relation(fields: [preOrderId], references: [id], onDelete: Cascade)
-  product   Product               @relation(fields: [productId],  references: [id])
+  preOrder  PreOrder               @relation(fields: [preOrderId], references: [id], onDelete: Cascade)
+  product   Product                @relation(fields: [productId], references: [id])
   modifiers PreOrderItemModifier[]
 
   @@index([preOrderId])
@@ -5751,18 +5775,284 @@ model PreOrderItem {
 /// Snapshot of a modifier choice on a pre-order line. Same shape as
 /// OrderItemModifier so copy-on-settle is a 1:1 map.
 model PreOrderItemModifier {
-  id                String  @id @default(cuid())
-  preOrderItemId    String
-  modifierGroupId   String
-  modifierOptionId  String
-  groupName         String
-  optionName        String
-  priceAdjustment   Decimal @db.Decimal(12, 2)
+  id               String  @id @default(cuid())
+  preOrderItemId   String
+  modifierGroupId  String
+  modifierOptionId String
+  groupName        String
+  optionName       String
+  priceAdjustment  Decimal @db.Decimal(12, 2)
 
   preOrderItem PreOrderItem @relation(fields: [preOrderItemId], references: [id], onDelete: Cascade)
 
   @@index([preOrderItemId])
   @@map("pre_order_item_modifiers")
+}
+
+// ─── Medical Equipment (DME) — Serial tracking + Rentals + Repairs ──────────
+
+/// A specific physical unit of a serialized SKU. Wheelchairs, CPAP machines,
+/// hospital beds — anything where the buyer / renter cares which exact one
+/// they got, and the shop has to track it back through repairs + returns.
+///
+/// One Product (e.g. "Standard Folding Wheelchair") can have many
+/// SerializedUnit rows; each unit has its own lifecycle:
+///   IN_STOCK → SOLD | ON_RENT → (returned) → IN_STOCK
+///                              → IN_REPAIR → IN_STOCK
+///   RETIRED (lost / destroyed)
+enum SerializedUnitStatus {
+  IN_STOCK
+  SOLD
+  ON_RENT
+  IN_REPAIR
+  RETIRED
+}
+
+model SerializedUnit {
+  id              String               @id @default(cuid())
+  tenantId        String
+  branchId        String
+  productId       String
+  serialNumber    String /// Manufacturer or vendor-stamped serial
+  status          SerializedUnitStatus @default(IN_STOCK)
+  /// Acquisition cost — used for COGS when sold (overrides Product.costPrice).
+  acquiredAt      DateTime             @default(now())
+  acquiredCost    Decimal?             @db.Decimal(14, 2)
+  /// Free-text condition notes (scratches, missing battery, etc.)
+  conditionNotes  String?
+  /// Set when the unit is sold (links to the Order line that sold it).
+  soldOrderId     String?
+  /// Set when the unit is currently out on rental.
+  currentRentalId String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id])
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  rentals RentalAgreement[]
+  repairs RepairTicket[]
+
+  @@unique([tenantId, serialNumber])
+  @@index([tenantId, productId, status])
+  @@index([branchId, status])
+  @@map("serialized_units")
+}
+
+/// Rental / lease agreement. Used for DME wheelchair-for-30-days style.
+///   OPEN     — unit checked out, return date in the future
+///   RETURNED — unit returned (status flipped back to IN_STOCK)
+///   OVERDUE  — return date passed, no return yet (cron flips daily)
+///   LOST     — declared lost; deposit forfeited; unit RETIRED
+enum RentalStatus {
+  OPEN
+  RETURNED
+  OVERDUE
+  LOST
+}
+
+model RentalAgreement {
+  id               String       @id @default(cuid())
+  tenantId         String
+  branchId         String
+  customerId       String /// Required — rentals always have a known renter
+  serializedUnitId String
+  status           RentalStatus @default(OPEN)
+  rentalRate       Decimal      @db.Decimal(12, 2) /// per-day or per-unit-time rate
+  rateUnit         String /// "day" | "week" | "month"
+  /// ₱ deposit collected up front; refunded on return minus damage fees.
+  depositCents     Int          @default(0)
+  /// Set on rentals tied to an Order — the deposit Order receipt.
+  depositOrderId   String?      @unique
+  /// Set on settlement (return + damage fees) — the balance Order receipt.
+  returnOrderId    String?      @unique
+  startedAt        DateTime     @default(now())
+  /// Promised return date. Cron flips OPEN → OVERDUE after this.
+  dueAt            DateTime
+  returnedAt       DateTime?
+  /// Damage fee charged on return (deducted from depositCents).
+  damageFeeCents   Int          @default(0)
+  /// Refunded amount (depositCents - damageFeeCents), recorded for audit.
+  refundCents      Int          @default(0)
+  /// Free-text condition notes at intake + return.
+  intakeNotes      String?
+  returnNotes      String?
+  createdById      String
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch         Branch         @relation(fields: [branchId], references: [id])
+  customer       Customer       @relation(fields: [customerId], references: [id])
+  serializedUnit SerializedUnit @relation(fields: [serializedUnitId], references: [id])
+  createdBy      User           @relation(fields: [createdById], references: [id])
+
+  @@index([tenantId, branchId, status, dueAt])
+  @@index([customerId])
+  @@index([serializedUnitId])
+  @@map("rental_agreements")
+}
+
+/// Repair ticket queue. DME shops accept units in for cleaning / repair /
+/// part replacement; this row tracks the workflow.
+enum RepairStatus {
+  RECEIVED /// Just dropped off; awaiting diagnosis
+  AWAITING_PARTS /// Diagnosed; ordering replacement parts
+  IN_PROGRESS /// Technician working on it
+  READY_FOR_PICKUP
+  PICKED_UP
+  CANCELLED
+}
+
+model RepairTicket {
+  id               String       @id @default(cuid())
+  tenantId         String
+  branchId         String
+  ticketNumber     String /// "RP-000123"
+  customerId       String? /// Optional — walk-ins without an account
+  serializedUnitId String? /// Optional — sometimes for non-serialized items
+  /// Free-text product description when serializedUnitId is null.
+  itemDescription  String
+  reportedIssue    String /// What the customer said is wrong
+  diagnosis        String? /// Technician's findings
+  status           RepairStatus @default(RECEIVED)
+  /// Quoted price (₱ cents) — confirmed with customer before work starts.
+  quotedFeeCents   Int          @default(0)
+  /// Final invoiced amount when picked up (links to Order).
+  pickupOrderId    String?      @unique
+  receivedAt       DateTime     @default(now())
+  readyAt          DateTime?
+  pickedUpAt       DateTime?
+  createdById      String
+  technicianId     String?
+  notes            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch         Branch          @relation(fields: [branchId], references: [id])
+  customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  serializedUnit SerializedUnit? @relation(fields: [serializedUnitId], references: [id], onDelete: SetNull)
+  createdBy      User            @relation("RepairCreatedBy", fields: [createdById], references: [id])
+  technician     User?           @relation("RepairTechnician", fields: [technicianId], references: [id])
+
+  @@unique([tenantId, ticketNumber])
+  @@index([tenantId, branchId, status])
+  @@index([customerId])
+  @@map("repair_tickets")
+}
+
+// ─── Gas Station (MSME independent) — Fuel pumps + dispenses + tank dips ─────
+
+enum FuelGrade {
+  UNLEADED
+  REGULAR
+  DIESEL
+  PREMIUM
+  KEROSENE
+  OTHER
+}
+
+enum FuelDispenseStatus {
+  OPEN /// Attendant has captured opening meter; pumping in progress
+  COMPLETED /// Closing meter captured + Order rung
+  VOIDED /// Aborted by cashier (no charge)
+}
+
+/// A single fuel dispenser. Independents typically have 2-4. Each pump is
+/// dedicated to one fuel grade (no multi-product nozzle splitting at MSME
+/// level — that's branded territory).
+model FuelPump {
+  id           String    @id @default(cuid())
+  tenantId     String
+  branchId     String
+  label        String /// "Pump 1", "Pump 2 — Diesel side"
+  fuelGrade    FuelGrade
+  /// Product representing this fuel grade. Price-per-liter comes from
+  /// Product.price; updating the price posts in real-time.
+  productId    String
+  /// Cumulative liters dispensed since pump install — used as default
+  /// opening reading for the next dispense. Mechanical pumps typically
+  /// have a physical totalizer; software-tracked here for digital pumps.
+  currentMeter Decimal   @db.Decimal(14, 3)
+  isActive     Boolean   @default(true)
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch    Branch         @relation(fields: [branchId], references: [id])
+  product   Product        @relation(fields: [productId], references: [id])
+  dispenses FuelDispense[]
+
+  @@unique([tenantId, branchId, label])
+  @@index([tenantId, branchId, isActive])
+  @@map("fuel_pumps")
+}
+
+/// One fuel dispense — captures opening + closing meter readings, computes
+/// liters, snapshots the price per liter, and links to the Order rung at
+/// the till. Idempotent on (pumpId, openingMeter) so a double-tap doesn't
+/// create two OPEN dispenses on the same pump.
+model FuelDispense {
+  id              String             @id @default(cuid())
+  pumpId          String
+  attendantId     String /// User who pumped (PIN-attested)
+  openingMeter    Decimal            @db.Decimal(14, 3)
+  closingMeter    Decimal?           @db.Decimal(14, 3) /// null until COMPLETED
+  litersDispensed Decimal?           @db.Decimal(14, 3) /// computed
+  pricePerLiter   Decimal            @db.Decimal(8, 2) /// snapshot
+  totalCents      Int? /// liters * price * 100, snapshot
+  orderId         String?            @unique /// links to the sales Order
+  status          FuelDispenseStatus @default(OPEN)
+  startedAt       DateTime           @default(now())
+  endedAt         DateTime?
+  voidReason      String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  pump      FuelPump @relation(fields: [pumpId], references: [id], onDelete: Cascade)
+  attendant User     @relation(fields: [attendantId], references: [id])
+
+  @@unique([pumpId, openingMeter])
+  @@index([pumpId, status])
+  @@index([attendantId, startedAt])
+  @@map("fuel_dispenses")
+}
+
+/// Tank dipstick log. Owner records morning + evening physical tank levels.
+/// Variance vs (meter-derived dispense + deliveries) is computed in reports.
+model TankDip {
+  id             String      @id @default(cuid())
+  tenantId       String
+  branchId       String
+  fuelGrade      FuelGrade
+  /// Reading time (morning or evening — see kind). Stored as full Date so
+  /// we can sort and filter by day.
+  recordedAt     DateTime
+  kind           TankDipKind
+  /// Liters in the tank at the reading.
+  litersOnHand   Decimal     @db.Decimal(14, 3)
+  /// Deliveries received between this and the previous dip, if any.
+  /// Owner enters when a fuel truck arrives.
+  deliveryLiters Decimal?    @db.Decimal(14, 3)
+  notes          String?
+  recordedById   String
+  createdAt      DateTime    @default(now())
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch     Branch @relation(fields: [branchId], references: [id])
+  recordedBy User   @relation(fields: [recordedById], references: [id])
+
+  @@index([tenantId, branchId, fuelGrade, recordedAt])
+  @@map("tank_dips")
+}
+
+enum TankDipKind {
+  MORNING
+  EVENING
+  DELIVERY /// Recorded at the moment a tanker drops off fuel
 }
 
 // ─── Wholesale Price Lists ────────────────────────────────────────────────────
@@ -5775,13 +6065,13 @@ model PreOrderItemModifier {
 /// Bakery example: "Wholesale (cafes)" list with discounted unit prices for
 /// pandesal, ensaymada, monay that sell to nearby cafes by the dozen.
 model PriceList {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String   /// "Wholesale (cafes)", "Corporate Q4 Promo", etc.
-  notes       String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String /// "Wholesale (cafes)", "Corporate Q4 Promo", etc.
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   items     PriceListItem[]
@@ -5794,17 +6084,17 @@ model PriceList {
 
 /// Per-product price override on a PriceList. Missing rows = use default price.
 model PriceListItem {
-  id              String   @id @default(cuid())
-  priceListId     String
-  productId       String
+  id          String   @id @default(cuid())
+  priceListId String
+  productId   String
   /// ₱ pesos. Stored as Decimal for consistency with Product.price.
-  unitPrice       Decimal  @db.Decimal(12, 2)
+  unitPrice   Decimal  @db.Decimal(12, 2)
   /// Minimum order quantity to unlock this price (e.g. "dozen-or-more").
   /// NULL = no minimum.
-  minQuantity     Decimal? @db.Decimal(12, 3)
+  minQuantity Decimal? @db.Decimal(12, 3)
 
   priceList PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
-  product   Product   @relation(fields: [productId],   references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([priceListId, productId])
   @@index([priceListId])

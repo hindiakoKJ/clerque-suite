@@ -170,6 +170,11 @@ export default function Receipt({
           {tenant.tin ? `TIN ${tenant.tin} · ` : ''}
           {isBirRegistered ? (isVat ? 'VAT-registered' : 'Non-VAT registered') : 'Not BIR-registered'}
         </Text>
+        {/* FDA License — printed only when the tenant has one configured.
+            Mandatory for MEDICAL_EQUIPMENT vertical; safely empty for the rest. */}
+        {tenant.fdaLicenseNumber ? (
+          <Text style={s.meta}>FDA LTO {tenant.fdaLicenseNumber}</Text>
+        ) : null}
         <Text style={s.metaSmall}>{receiptKindFil}</Text>
         {isRefund && (
           <Text style={s.refundBanner}>REFUND · against {numberPrefix} # {originalOrNumber ? pad6(originalOrNumber) : '------'}</Text>

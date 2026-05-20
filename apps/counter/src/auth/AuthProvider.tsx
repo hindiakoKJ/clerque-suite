@@ -56,6 +56,7 @@ function sessionFromJwt(accessToken: string): { user: AuthSession['user']; tenan
     receiptHeaderNote: typeof p.receiptHeaderNote === 'string' ? p.receiptHeaderNote : undefined,
     receiptFooterNote: typeof p.receiptFooterNote === 'string' ? p.receiptFooterNote : undefined,
     receiptLogoUrl:    typeof p.receiptLogoUrl    === 'string' ? p.receiptLogoUrl    : undefined,
+    fdaLicenseNumber:  typeof p.fdaLicenseNumber  === 'string' ? p.fdaLicenseNumber  : undefined,
     planFeatures: features,
   };
   return { user, tenant };

@@ -20,6 +20,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import PhoneHeader from '@/shell/phone/PhoneHeader';
 import { api, ApiHttpError } from '@/api/client';
+import { useBranchContext } from '@/api/BranchContext';
 import { formatPeso } from '@/components/Money';
 import { colors, fonts, radii, spacing, text as textTokens, tnum } from '@/theme';
 
@@ -58,14 +59,82 @@ function daysUntil(iso: string): number {
   return Math.ceil((d - today) / (24 * 3600_000));
 }
 
+interface AvailableUnit {
+  id: string;
+  serialNumber: string;
+  product: { id: string; name: string; price: number | string };
+}
+interface CustomerLite {
+  id: string; name: string; contactPhone: string | null;
+}
+
+interface OpenDraft {
+  serializedUnitId: string;
+  customerId:       string;
+  rentalRate:       string;
+  rateUnit:         'day' | 'week' | 'month';
+  depositCents:     string;
+  dueAt:            string;
+  intakeNotes:      string;
+}
+
+function tomorrowYmd(): string {
+  return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+const EMPTY_OPEN: OpenDraft = {
+  serializedUnitId: '',
+  customerId:       '',
+  rentalRate:       '',
+  rateUnit:         'day',
+  depositCents:     '',
+  dueAt:            tomorrowYmd(),
+  intakeNotes:      '',
+};
+
 export default function PhoneRentalsScreen(): React.ReactElement {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<Filter>('ACTIVE');
   const [returning, setReturning] = useState<Rental | null>(null);
+  const [opening, setOpening]     = useState(false);
+  const [openDraft, setOpenDraft] = useState<OpenDraft>(EMPTY_OPEN);
   const [damageFee, setDamageFee] = useState('');
   const [notes, setNotes]         = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const { activeBranch } = useBranchContext();
+  const branchId = activeBranch?.id ?? null;
+
+  // Pulled only when the Open sheet is visible — avoids needless requests
+  // for cashiers who only return units.
+  const inStockQ = useQuery<AvailableUnit[]>({
+    queryKey: ['rentals', 'in-stock'],
+    enabled:  opening,
+    staleTime: 30_000,
+    queryFn: async () => {
+      try {
+        const data = await api.get<AvailableUnit[]>('/serialized-units?status=IN_STOCK');
+        return Array.isArray(data) ? data : [];
+      } catch (err) {
+        if (err instanceof ApiHttpError) return [];
+        throw err;
+      }
+    },
+  });
+  const customersQ = useQuery<CustomerLite[]>({
+    queryKey: ['rentals', 'customers'],
+    enabled:  opening,
+    staleTime: 60_000,
+    queryFn: async () => {
+      try {
+        const data = await api.get<CustomerLite[]>('/customers');
+        return Array.isArray(data) ? data : [];
+      } catch (err) {
+        if (err instanceof ApiHttpError) return [];
+        throw err;
+      }
+    },
+  });
 
   const rentalsQ = useQuery<Rental[]>({
     queryKey: ['rentals', 'counter'],
@@ -116,6 +185,39 @@ export default function PhoneRentalsScreen(): React.ReactElement {
     setError(null);
   };
 
+  const submitOpen = async () => {
+    if (!branchId) { setError('No active branch.'); return; }
+    if (!openDraft.serializedUnitId) { setError('Pick a unit to rent out.'); return; }
+    if (!openDraft.customerId)       { setError('Pick a customer.'); return; }
+    if (!openDraft.dueAt)            { setError('Due date is required.'); return; }
+    const rate = Number(openDraft.rentalRate);
+    if (!Number.isFinite(rate) || rate <= 0) { setError('Rental rate must be positive.'); return; }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.post('/rentals', {
+        branchId,
+        customerId:       openDraft.customerId,
+        serializedUnitId: openDraft.serializedUnitId,
+        rentalRate:       rate,
+        rateUnit:         openDraft.rateUnit,
+        depositCents:     Math.round((Number(openDraft.depositCents) || 0) * 100),
+        dueAt:            openDraft.dueAt,
+        intakeNotes:      openDraft.intakeNotes || undefined,
+      });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['rentals'] }),
+        qc.invalidateQueries({ queryKey: ['rentals', 'in-stock'] }),
+      ]);
+      setOpening(false);
+      setOpenDraft(EMPTY_OPEN);
+    } catch (err) {
+      setError(err instanceof ApiHttpError ? err.message : 'Could not open rental.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const refundPreview = useMemo(() => {
     if (!returning) return 0;
     const dmg = Math.round((Number(damageFee) || 0) * 100);
@@ -145,8 +247,17 @@ export default function PhoneRentalsScreen(): React.ReactElement {
       <PhoneHeader variant="brand" />
 
       <View style={styles.head}>
-        <Text style={styles.h1}>Rentals</Text>
-        <Text style={styles.sub}>Active wheelchairs, CPAPs, beds — return when due.</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.h1}>Rentals</Text>
+          <Text style={styles.sub}>Active wheelchairs, CPAPs, beds — return when due.</Text>
+        </View>
+        <Pressable
+          onPress={() => setOpening(true)}
+          style={({ pressed }) => [styles.newBtn, pressed && { opacity: 0.85 }]}
+        >
+          <MaterialCommunityIcons name="plus" size={18} color={colors.onPrimary} />
+          <Text style={styles.newBtnLabel}>New</Text>
+        </Pressable>
       </View>
 
       {/* Filter chips */}
@@ -247,6 +358,151 @@ export default function PhoneRentalsScreen(): React.ReactElement {
                 style={({ pressed }) => [styles.btnPrimary, (pressed || submitting) && { opacity: 0.85 }]}
               >
                 <Text style={styles.btnPrimaryLabel}>{submitting ? 'Saving…' : 'Confirm return'}</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Open-rental sheet — DME cashier creates a new lease against an
+       *  IN_STOCK unit. Deposit is captured as a separate sale at the till
+       *  (V1 workaround); the rental row holds the cents for refund math. */}
+      <Modal
+        visible={opening}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !submitting && setOpening(false)}
+      >
+        <Pressable style={styles.scrim} onPress={() => !submitting && setOpening(false)}>
+          <Pressable style={styles.sheet} onPress={() => { /* swallow */ }}>
+            <Text style={styles.sheetTitle}>Open rental</Text>
+            <Text style={styles.sheetSub}>
+              Ring the deposit on the Sell tab FIRST, then capture the rental here.
+            </Text>
+
+            <Text style={styles.fieldLabel}>Unit (IN_STOCK only)</Text>
+            <View style={styles.pickerRow}>
+              {(inStockQ.data ?? []).length === 0 ? (
+                <Text style={styles.emptyInline}>No units in stock. Add via web admin first.</Text>
+              ) : (
+                (inStockQ.data ?? []).map((u) => {
+                  const sel = openDraft.serializedUnitId === u.id;
+                  return (
+                    <Pressable
+                      key={u.id}
+                      onPress={() => setOpenDraft({ ...openDraft, serializedUnitId: u.id })}
+                      style={[styles.pick, sel && styles.pickOn]}
+                    >
+                      <Text style={[styles.pickName, sel && styles.pickNameOn]} numberOfLines={1}>
+                        {u.product.name}
+                      </Text>
+                      <Text style={[styles.pickMeta, sel && styles.pickMetaOn]}>
+                        SN {u.serialNumber}
+                      </Text>
+                    </Pressable>
+                  );
+                })
+              )}
+            </View>
+
+            <Text style={styles.fieldLabel}>Renter</Text>
+            <View style={styles.pickerRow}>
+              {(customersQ.data ?? []).slice(0, 8).map((c) => {
+                const sel = openDraft.customerId === c.id;
+                return (
+                  <Pressable
+                    key={c.id}
+                    onPress={() => setOpenDraft({ ...openDraft, customerId: c.id })}
+                    style={[styles.pick, sel && styles.pickOn]}
+                  >
+                    <Text style={[styles.pickName, sel && styles.pickNameOn]} numberOfLines={1}>
+                      {c.name}
+                    </Text>
+                    {c.contactPhone ? (
+                      <Text style={[styles.pickMeta, sel && styles.pickMetaOn]}>{c.contactPhone}</Text>
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: spacing.s3 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fieldLabel}>Rate (₱)</Text>
+                <TextInput
+                  value={openDraft.rentalRate}
+                  onChangeText={(v) => setOpenDraft({ ...openDraft, rentalRate: v })}
+                  placeholder="500"
+                  placeholderTextColor={colors.faint}
+                  keyboardType="decimal-pad"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fieldLabel}>Per</Text>
+                <View style={styles.segment}>
+                  {(['day', 'week', 'month'] as const).map((u) => {
+                    const sel = openDraft.rateUnit === u;
+                    return (
+                      <Pressable
+                        key={u}
+                        onPress={() => setOpenDraft({ ...openDraft, rateUnit: u })}
+                        style={[styles.segmentBtn, sel && styles.segmentBtnOn]}
+                      >
+                        <Text style={[styles.segmentLabel, sel && styles.segmentLabelOn]}>{u}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: spacing.s3 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fieldLabel}>Deposit (₱)</Text>
+                <TextInput
+                  value={openDraft.depositCents}
+                  onChangeText={(v) => setOpenDraft({ ...openDraft, depositCents: v })}
+                  placeholder="3000"
+                  placeholderTextColor={colors.faint}
+                  keyboardType="decimal-pad"
+                  style={styles.input}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fieldLabel}>Due date</Text>
+                <TextInput
+                  value={openDraft.dueAt}
+                  onChangeText={(v) => setOpenDraft({ ...openDraft, dueAt: v })}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={colors.faint}
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            <Text style={styles.fieldLabel}>Intake condition notes</Text>
+            <TextInput
+              value={openDraft.intakeNotes}
+              onChangeText={(v) => setOpenDraft({ ...openDraft, intakeNotes: v })}
+              placeholder="Working condition. Includes charger. Minor scuff on left arm."
+              placeholderTextColor={colors.faint}
+              multiline
+              style={[styles.input, styles.inputMulti]}
+            />
+
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+
+            <View style={styles.sheetActions}>
+              <Pressable onPress={() => !submitting && setOpening(false)} style={styles.btnGhost}>
+                <Text style={styles.btnGhostLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={submitOpen}
+                disabled={submitting}
+                style={({ pressed }) => [styles.btnPrimary, (pressed || submitting) && { opacity: 0.85 }]}
+              >
+                <Text style={styles.btnPrimaryLabel}>{submitting ? 'Saving…' : 'Open rental'}</Text>
               </Pressable>
             </View>
           </Pressable>
@@ -370,9 +626,46 @@ const cardStyles = StyleSheet.create({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  head: { paddingHorizontal: spacing.s4, paddingTop: spacing.s4, paddingBottom: spacing.s2 },
+  head: { paddingHorizontal: spacing.s4, paddingTop: spacing.s4, paddingBottom: spacing.s2, flexDirection: 'row', alignItems: 'flex-start', gap: spacing.s2 },
   h1: { ...textTokens.displayLg, fontSize: 22, color: colors.ink },
   sub: { ...textTokens.bodySm, color: colors.muted, marginTop: 4 },
+  newBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.s3,
+    paddingVertical: spacing.s2,
+    borderRadius: radii.pill,
+  },
+  newBtnLabel: { color: colors.onPrimary, fontFamily: fonts.bodyBold, fontWeight: '700', fontSize: 13 },
+
+  pickerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4, marginBottom: spacing.s2 },
+  pick: {
+    paddingHorizontal: spacing.s3, paddingVertical: 6,
+    borderRadius: radii.sm,
+    borderWidth: 1, borderColor: colors.rule,
+    backgroundColor: colors.surface,
+    maxWidth: '100%',
+  },
+  pickOn:       { borderColor: colors.primary, backgroundColor: colors.primaryContainer },
+  pickName:     { ...textTokens.bodySm, fontSize: 12, fontWeight: '700', color: colors.ink },
+  pickNameOn:   { color: colors.primaryPress },
+  pickMeta:     { ...textTokens.caption, fontSize: 10, color: colors.muted, marginTop: 2 },
+  pickMetaOn:   { color: colors.primaryPress },
+  emptyInline:  { ...textTokens.caption, fontStyle: 'italic', color: colors.muted, paddingVertical: spacing.s2 },
+
+  segment: {
+    flexDirection: 'row',
+    borderWidth: 1, borderColor: colors.rule,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surface,
+    marginTop: 4,
+  },
+  segmentBtn: { flex: 1, paddingVertical: 12, alignItems: 'center' },
+  segmentBtnOn: { backgroundColor: colors.primaryContainer },
+  segmentLabel: { ...textTokens.caption, fontSize: 12, fontWeight: '700', color: colors.muted },
+  segmentLabelOn: { color: colors.primaryPress },
 
   chipsRow: {
     flexDirection: 'row',
@@ -415,6 +708,7 @@ const styles = StyleSheet.create({
     gap: spacing.s2,
   },
   sheetTitle: { fontFamily: fonts.displayBold, fontSize: 20, fontWeight: '800', color: colors.ink },
+  sheetSub:   { ...textTokens.bodySm, color: colors.muted, marginTop: 2, marginBottom: spacing.s2 },
   sheetMeta:  { backgroundColor: colors.creamSoft, borderRadius: radii.sm, padding: spacing.s3, marginTop: spacing.s2, marginBottom: spacing.s3 },
   sheetMetaName: { ...textTokens.body, fontWeight: '800', color: colors.ink },
   sheetMetaSub:  { ...textTokens.caption, fontSize: 12, color: colors.muted, marginTop: 2 },

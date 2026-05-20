@@ -37,6 +37,8 @@ export interface TenantConfig {
   receiptHeaderNote?: string;
   receiptFooterNote?: string;
   receiptLogoUrl?: string;
+  /** FDA License to Operate — printed on every receipt header for DME tenants. */
+  fdaLicenseNumber?: string;
   /** Plan-feature flags pre-resolved by the Cloud /me endpoint. */
   planFeatures: PlanFeatures;
 }

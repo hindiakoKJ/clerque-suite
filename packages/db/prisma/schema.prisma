@@ -550,6 +550,10 @@ model Tenant {
   ptuNumber                String?
   /// Machine Identification Number (MIN) — BIR CAS accreditation identifier
   minNumber                String?
+  /// FDA License to Operate number — required for MEDICAL_EQUIPMENT tenants
+  /// selling Class A/B/C/D medical devices in the Philippines. Printed on
+  /// every receipt header so the customer (and FDA auditors) can verify.
+  fdaLicenseNumber         String?
   /// Registered address exactly as it appears on BIR Certificate of Registration
   registeredAddress        String?
   managerAccountingEnabled Boolean          @default(false)
@@ -5976,6 +5980,11 @@ model FuelPump {
   /// opening reading for the next dispense. Mechanical pumps typically
   /// have a physical totalizer; software-tracked here for digital pumps.
   currentMeter Decimal   @db.Decimal(14, 3)
+  /// DOE-mandated price ceiling per liter (₱). DOE doesn't publish a real-
+  /// time API today; the owner enters this manually whenever the agency
+  /// issues a price freeze. Counter shows a warning when Product.price
+  /// exceeds this value.
+  doeCeilingPricePhp Decimal? @db.Decimal(8, 2)
   isActive     Boolean   @default(true)
   sortOrder    Int       @default(0)
   createdAt    DateTime  @default(now())

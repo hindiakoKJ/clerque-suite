@@ -149,6 +149,9 @@ export function receiptToEscPos(
     b.line(`TIN ${r.tenant.tin}`);
   }
   b.line(isBirRegistered ? (isVat ? 'VAT-registered' : 'Non-VAT registered') : 'Not BIR-registered');
+  if (r.tenant.fdaLicenseNumber) {
+    b.line(`FDA LTO ${r.tenant.fdaLicenseNumber}`);
+  }
   b.line(slipFilipino);
 
   if (r.isRefund) {

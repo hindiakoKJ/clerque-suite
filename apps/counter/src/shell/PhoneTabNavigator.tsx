@@ -30,6 +30,9 @@ import PhoneMoreScreen from '@/shell/phone/PhoneMoreScreen';
 import PhoneApprovalsScreen from '@/shell/phone/PhoneApprovalsScreen';
 import PhoneDisplaysCodegen from '@/shell/phone/PhoneDisplaysCodegen';
 import PhonePickupsScreen from '@/shell/phone/PhonePickupsScreen';
+import PhonePumpsScreen from '@/shell/phone/PhonePumpsScreen';
+import PhoneRentalsScreen from '@/shell/phone/PhoneRentalsScreen';
+import { useAuth } from '@/auth/AuthProvider';
 
 import type {
   PhoneSellStackParamList,
@@ -91,6 +94,13 @@ export default function PhoneTabNavigator(): React.ReactElement {
   // and icons sit right on top of the gesture bar.
   const insets = useSafeAreaInsets();
 
+  // Vertical-aware primary tab: gas stations get a Pumps tab in the Sell
+  // slot, DME (medical equipment) gets a Rentals tab between Sell and Orders.
+  // Every other vertical sees the default Sell flow.
+  const { tenant } = useAuth();
+  const isGasStation = tenant?.businessType === 'GAS_STATION';
+  const isDme        = tenant?.businessType === 'MEDICAL_EQUIPMENT';
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -109,13 +119,33 @@ export default function PhoneTabNavigator(): React.ReactElement {
           tabBarIcon: ({ color }: { color: string }) => <MaterialCommunityIcons name="view-dashboard-outline" size={22} color={color} />,
         }}
       />
+      {isGasStation ? (
+        <Tab.Screen
+          name="Pumps"
+          component={PhonePumpsScreen}
+          options={{
+            tabBarIcon: ({ color }: { color: string }) => <MaterialCommunityIcons name="gas-station" size={22} color={color} />,
+          }}
+        />
+      ) : null}
       <Tab.Screen
         name="Sell"
         component={SellStackNavigator}
         options={{
           tabBarIcon: ({ color }: { color: string }) => <MaterialCommunityIcons name="cart-outline" size={22} color={color} />,
+          // For gas stations, "Sell" is the c-store side — relabel.
+          tabBarLabel: isGasStation ? 'C-store' : 'Sell',
         }}
       />
+      {isDme ? (
+        <Tab.Screen
+          name="Rentals"
+          component={PhoneRentalsScreen}
+          options={{
+            tabBarIcon: ({ color }: { color: string }) => <MaterialCommunityIcons name="package-variant" size={22} color={color} />,
+          }}
+        />
+      ) : null}
       <Tab.Screen
         name="Orders"
         component={OrdersTabScreen}

@@ -20,6 +20,8 @@ export type PhoneMoreStackParamList = {
 export type PhoneTabParamList = {
   Dashboard: undefined;
   Sell: undefined;
+  Pumps: undefined;       // GAS_STATION vertical replaces Sell with Pumps
+  Rentals: undefined;     // MEDICAL_EQUIPMENT adds a Rentals tab
   Orders: undefined;
   Shift: undefined;
   More: undefined;

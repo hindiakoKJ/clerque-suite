@@ -163,6 +163,26 @@ export default function TenderingHost(): React.ReactElement | null {
           branchId: activeBranch.id,
           isVatRegistered: tenant?.isVatRegistered ?? false,
         });
+        // Gas station: if this sale was rung from a fuel dispense, link the
+        // Order back to the FuelDispense so the audit log + reports tie out.
+        // Imported lazily to avoid an import cycle for non-gas tenants.
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const pumps = require('@/shell/phone/PhonePumpsScreen') as {
+            pendingDispenseId: string | null;
+            clearPendingDispenseId: () => void;
+          };
+          if (pumps.pendingDispenseId && res?.orderId) {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const { api: client } = require('@/api/client') as typeof import('@/api/client');
+            await client.post(`/fuel/dispenses/${pumps.pendingDispenseId}/attach-order`, {
+              orderId: res.orderId,
+            });
+            pumps.clearPendingDispenseId();
+          }
+        } catch {
+          /* best-effort; failure is non-blocking */
+        }
         setResult(res);
         setCapturedPayments(payments);
         setChangeCents(change);

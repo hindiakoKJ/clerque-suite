@@ -5,14 +5,20 @@
  */
 
 export type BusinessType =
-  | 'COFFEE_FB'
+  | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
+  | 'RETAIL'
+  | 'SERVICE'
   | 'LAUNDRY'
-  | 'PHARMACY'
-  | 'RETAIL_SARISARI'
-  | 'F_AND_B'      // alias used by some legacy Cloud rows
-  | 'CONSTRUCTION'
-  | 'TRUCKING'
   | 'MANUFACTURING'
+  | 'PHARMACY'
+  | 'TRUCKING'
+  | 'CONSTRUCTION'
+  | 'MEDICAL_EQUIPMENT'
+  | 'GAS_STATION'
+  // ── Legacy / fallback values kept for older JWTs ────────────────────────
+  | 'COFFEE_FB'
+  | 'RETAIL_SARISARI'
+  | 'F_AND_B'
   | 'OTHER';
 
 /** Plan codes the app cares about (others = no Counter access). */

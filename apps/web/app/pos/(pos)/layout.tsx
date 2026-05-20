@@ -8,7 +8,7 @@ import {
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
   Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity, ChartBar,
   Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
-  FlaskConical,
+  FlaskConical, Fuel,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType, isFnbType } from '@repo/shared-types';
@@ -261,6 +261,9 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   const isPharmacy     = businessType === 'PHARMACY';
   const isTrucking     = businessType === 'TRUCKING';
   const isConstruction = businessType === 'CONSTRUCTION';
+  // Sprint Bakery+1 verticals
+  const isMedicalEquipment = businessType === 'MEDICAL_EQUIPMENT';
+  const isGasStation       = businessType === 'GAS_STATION';
   // Multi-branch features only surface once the tenant has actually provisioned
   // a second branch — not merely because the plan permits it. Reasoning:
   //   - Transfers: nothing to transfer to/from with one branch.
@@ -475,6 +478,48 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
         makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
+      ]),
+      ...warehouseSection,
+    ];
+  } else if (isMedicalEquipment) {
+    // ── MEDICAL EQUIPMENT (DME) ──────────────────────────────────────────────
+    // Inherits the retail catalog; adds Rentals + Repairs for serialized
+    // equipment (wheelchairs, CPAP, hospital beds, etc.).
+    verticalNav = [
+      ...withSection('Overview', [
+        makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
+      ]),
+      ...withSection('Sell', [
+        makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
+        makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
+        makeNavItem('/pos/rentals',      'Rentals',     Wrench,          ORDERS_ROLES,    role),
+      ]),
+      ...withSection('Catalog', [
+        makeNavItem('/pos/products',          'Products',     Package,         PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/inventory',         'Inventory',    ClipboardList,   INVENTORY_ROLES, role),
+        makeNavItem('/pos/serialized-units',  'Serialized units', FileBadge,   INVENTORY_ROLES, role),
+        makeNavItem('/pos/settings/uom',      'Units (UoM)',  Ruler,           UOM_ROLES,       role),
+      ]),
+      ...warehouseSection,
+    ];
+  } else if (isGasStation) {
+    // ── GAS STATION (MSME independent) ───────────────────────────────────────
+    // Fuel pump grid + dispense log on the Sell side. Convenience-store side
+    // rides on the same /pos/terminal as Retail since the catalog is shared.
+    verticalNav = [
+      ...withSection('Overview', [
+        makeNavItem('/pos/dashboard',     'Dashboard',     LayoutDashboard, DASHBOARD_ROLES, role),
+      ]),
+      ...withSection('Fuel', [
+        makeNavItem('/pos/fuel/pumps',     'Pumps',         Fuel,            INVENTORY_ROLES, role),
+        makeNavItem('/pos/fuel/dispenses', 'Dispense log',  ClipboardList,   DASHBOARD_ROLES, role),
+        makeNavItem('/pos/fuel/tank-dips', 'Tank dips',     Activity,        INVENTORY_ROLES, role),
+      ]),
+      ...withSection('C-store / Lubricants', [
+        makeNavItem('/pos/terminal',     'Terminal',      ShoppingCart,    TERMINAL_ROLES,  role),
+        makeNavItem('/pos/orders',       'Orders',        ShoppingBag,     ORDERS_ROLES,    role),
+        makeNavItem('/pos/products',     'Products',      Package,         PRODUCTS_ROLES,  role),
+        makeNavItem('/pos/inventory',    'Inventory',     ClipboardList,   INVENTORY_ROLES, role),
       ]),
       ...warehouseSection,
     ];

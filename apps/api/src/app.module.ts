@@ -17,6 +17,8 @@ import { AccountingModule } from './accounting/accounting.module';
 import { ModifiersModule } from './modifiers/modifiers.module';
 import { PreOrdersModule } from './pre-orders/pre-orders.module';
 import { PriceListsModule } from './price-lists/price-lists.module';
+import { RentalsModule } from './rentals/rentals.module';
+import { FuelModule } from './fuel/fuel.module';
 import { SettlementModule } from './settlement/settlement.module';
 import { AccountingPeriodsModule } from './accounting-periods/accounting-periods.module';
 import { ExportModule } from './export/export.module';
@@ -102,6 +104,8 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     ModifiersModule,
     PreOrdersModule,
     PriceListsModule,
+    RentalsModule,
+    FuelModule,
     SettlementModule,
     AccountingPeriodsModule,
     ExportModule,

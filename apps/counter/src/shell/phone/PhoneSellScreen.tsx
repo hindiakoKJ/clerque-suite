@@ -44,7 +44,10 @@ function hasModifiers(p: ApiProduct): boolean {
 export default function PhoneSellScreen({ navigation }: Props): React.ReactElement {
   const { activeBranch } = useBranchContext();
   const branchId = activeBranch?.id;
-  const catalog = usePosCatalog(branchId);
+  const customer = useCartStore((s) => s.customer);
+  // Pass customerId so the catalog response uses wholesale price overrides
+  // when this customer has a priceListId. Walk-in (no customer) = default.
+  const catalog = usePosCatalog(branchId, customer?.id);
   const addLine = useCartStore((s) => s.addLine);
   const lineCount = useCartStore((s) => s.lineCount());
   const total = useCartStore((s) => s.total());

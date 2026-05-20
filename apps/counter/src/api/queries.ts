@@ -61,7 +61,21 @@ export interface ApiProduct {
   name: string;
   sku?: string | null;
   barcode?: string | null;
+  /** Resolved selling price — either Product.price (default) or the
+   *  wholesale override when the cart-attached customer has a priceListId. */
   price: number | string;
+  /** Original Product.price BEFORE any wholesale override. When equal to
+   *  `price`, no override is active. UI can show a "was ₱X" hint when
+   *  they differ. Server always returns this. */
+  defaultPrice?: number | string;
+  /** Set when this product has a wholesale price for the attached customer.
+   *  minQuantity gates the override — if the cart line qty is below it, the
+   *  client should fall back to defaultPrice. */
+  priceListOverride?: {
+    unitPrice:   number;
+    minQuantity: number | null;
+    defaultPrice: number;
+  } | null;
   costPrice?: number | string | null;
   isVatable: boolean;
   categoryId?: string | null;
@@ -177,19 +191,29 @@ function useCachedQuery<T>(
 // ─── Hooks ────────────────────────────────────────────────────────────────
 
 /**
- * GET /products/pos?branchId=…
+ * GET /products/pos?branchId=…&customerId=…
  *
  * Some Cloud responses paginate `{ items, total }`; some return a bare
  * array. Normalize to `ApiProduct[]` at the edge.
+ *
+ * When a customerId is provided AND that customer has a wholesale price
+ * list, every product's `price` is the override; the original surfaces as
+ * `defaultPrice` so the UI can show "was ₱X" hint when desired.
+ *
+ * The cache key includes customerId so a cart-attached customer with a
+ * different price list doesn't show stale walk-in prices.
  */
-export function usePosCatalog(branchId: string | undefined) {
+export function usePosCatalog(branchId: string | undefined, customerId?: string) {
   const { tenant } = useAuth();
   const tenantId = tenant?.id ?? 'anon';
   return useCachedQuery<ApiProduct[]>(
-    ['pos-catalog', tenantId, branchId ?? ''],
-    `pos-catalog.${tenantId}.${branchId ?? 'none'}`,
+    ['pos-catalog', tenantId, branchId ?? '', customerId ?? ''],
+    `pos-catalog.${tenantId}.${branchId ?? 'none'}.${customerId ?? 'walkin'}`,
     async () => {
-      const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : '';
+      const params: string[] = [];
+      if (branchId)   params.push(`branchId=${encodeURIComponent(branchId)}`);
+      if (customerId) params.push(`customerId=${encodeURIComponent(customerId)}`);
+      const qs = params.length > 0 ? `?${params.join('&')}` : '';
       const res = await api.get<ApiProduct[] | { items: ApiProduct[] }>(
         `/products/pos${qs}`,
       );

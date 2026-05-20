@@ -57,8 +57,16 @@ export class ProductsController {
   }
 
   @Get('pos')
-  findForPos(@CurrentUser() user: JwtPayload, @Query('branchId') branchId: string) {
-    return this.productsService.findForPos(user.tenantId!, branchId ?? user.branchId ?? '');
+  findForPos(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId: string,
+    @Query('customerId') customerId?: string,
+  ) {
+    return this.productsService.findForPos(
+      user.tenantId!,
+      branchId ?? user.branchId ?? '',
+      customerId,
+    );
   }
 
   /** Barcode scanner integration — GET /products/barcode/:barcode */

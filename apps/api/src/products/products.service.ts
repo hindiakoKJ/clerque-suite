@@ -536,7 +536,44 @@ export class ProductsService {
    *   - Gray out tiles where maxProducible = 0 (cannot be sold)
    *   - Show amber "Low" badge when below the product's lowStockAlert
    */
-  async findForPos(tenantId: string, branchId: string) {
+  /**
+   * @param customerId — when provided AND the customer has a priceListId,
+   * every product's `price` is replaced with the per-product override from
+   * the price list (gated by PriceListItem.minQuantity if set; minQuantity
+   * is included on the response so the cart can re-resolve on qty change).
+   * The original `defaultPrice` is also surfaced so the UI can show a
+   * struck-through "was ₱X" hint.
+   */
+  async findForPos(tenantId: string, branchId: string, customerId?: string) {
+    // Step 1: resolve the customer's price list (if any). One DB hit; no-op
+    // when customerId is missing or the customer has no list assigned.
+    let overrides = new Map<string, { unitPrice: number; minQuantity: number | null }>();
+    if (customerId) {
+      const customer = await this.prisma.customer.findFirst({
+        where: { id: customerId, tenantId },
+        select: { priceListId: true },
+      });
+      if (customer?.priceListId) {
+        const items = await this.prisma.priceListItem.findMany({
+          where: { priceListId: customer.priceListId },
+          select: {
+            productId: true,
+            unitPrice: true,
+            minQuantity: true,
+          },
+        });
+        overrides = new Map(
+          items.map((i) => [
+            i.productId,
+            {
+              unitPrice:   Number(i.unitPrice),
+              minQuantity: i.minQuantity != null ? Number(i.minQuantity) : null,
+            },
+          ]),
+        );
+      }
+    }
+
     const products = await this.prisma.product.findMany({
       where: { tenantId, isActive: true },
       include: {
@@ -611,8 +648,24 @@ export class ProductsService {
          (lowStockAlert == null && maxProducible <= 5)); // sensible default for recipes
       const isOutOfStock = maxProducible === 0;
 
+      // Apply wholesale override if one exists for this product. minQuantity
+      // gating happens client-side: we surface BOTH prices so Counter can
+      // pick the right one based on the cart line's qty when re-resolving.
+      const override = overrides.get(p.id);
+      const defaultPrice = Number(p.price);
+      const effectivePrice = override ? override.unitPrice : defaultPrice;
+
       return {
         ...p,
+        price:            effectivePrice,
+        defaultPrice,                            // original Product.price, even if overridden
+        priceListOverride: override
+          ? {
+              unitPrice:   override.unitPrice,
+              minQuantity: override.minQuantity,
+              defaultPrice,
+            }
+          : null,
         maxProducible,
         isLowStock,
         isOutOfStock,

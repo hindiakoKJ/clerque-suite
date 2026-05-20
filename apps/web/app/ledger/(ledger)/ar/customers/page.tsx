@@ -20,6 +20,10 @@ interface Customer {
   contactPhone: string | null;
   creditTermDays: number;
   creditLimit: string | null;
+  /// Optional wholesale price-list assignment. When set, Counter uses
+  /// these per-product price overrides on every cart line for this customer.
+  priceListId: string | null;
+  priceList: { id: string; name: string } | null;
   notes: string | null;
   isActive: boolean;
   outstandingBalance: number;
@@ -34,7 +38,13 @@ interface CustomerFormData {
   contactPhone: string;
   creditTermDays: string;
   creditLimit: string;
+  priceListId: string;
   notes: string;
+}
+
+interface PriceListLite {
+  id: string;
+  name: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -54,6 +64,7 @@ const EMPTY_FORM: CustomerFormData = {
   contactPhone: '',
   creditTermDays: '0',
   creditLimit: '',
+  priceListId: '',
   notes: '',
 };
 
@@ -83,11 +94,20 @@ function CustomerModal({
           contactPhone:   editing.contactPhone   ?? '',
           creditTermDays: String(editing.creditTermDays),
           creditLimit:    editing.creditLimit    ?? '',
+          priceListId:    editing.priceListId    ?? '',
           notes:          editing.notes          ?? '',
         }
       : EMPTY_FORM,
   );
   const [saving, setSaving] = useState(false);
+
+  // Price lists for the dropdown — F&B tenants will have these; other
+  // verticals get an empty list and the dropdown just shows "Default pricing".
+  const { data: priceLists = [] } = useQuery<PriceListLite[]>({
+    queryKey: ['price-lists', 'lite'],
+    queryFn: () => api.get('/price-lists').then((r) => r.data.map((l: { id: string; name: string }) => ({ id: l.id, name: l.name }))),
+    staleTime: 60_000,
+  });
 
   function set(field: keyof CustomerFormData, val: string) {
     setForm((prev) => ({ ...prev, [field]: val }));
@@ -106,6 +126,7 @@ function CustomerModal({
         contactPhone:   form.contactPhone.trim()|| undefined,
         creditTermDays: parseInt(form.creditTermDays, 10) || 0,
         creditLimit:    form.creditLimit ? parseFloat(form.creditLimit) : undefined,
+        priceListId:    form.priceListId || null,   // null = use default pricing
         notes:          form.notes.trim()       || undefined,
       };
 
@@ -228,6 +249,31 @@ function CustomerModal({
                   className={INPUT_CLS}
                 />
               </div>
+            </div>
+
+            {/* Wholesale price list (only meaningful when one exists; otherwise the
+                dropdown gracefully shows just "Default pricing"). */}
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">
+                Price list
+                <span className="ml-1 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                  optional · wholesale
+                </span>
+              </label>
+              <select
+                value={form.priceListId}
+                onChange={(e) => set('priceListId', e.target.value)}
+                className={INPUT_CLS}
+              >
+                <option value="">Default pricing (uses Product price)</option>
+                {priceLists.map((pl) => (
+                  <option key={pl.id} value={pl.id}>{pl.name}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-muted-foreground/70 mt-1">
+                When assigned, Counter rings this customer&apos;s orders at the price-list rates instead of the default.
+                Manage lists at <a href="/pos/price-lists" className="text-[var(--accent)] underline">Price lists</a>.
+              </p>
             </div>
 
             {/* Notes */}

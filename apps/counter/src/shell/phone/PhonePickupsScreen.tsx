@@ -5,22 +5,28 @@
  * how much balance is due, and the inscription so they can confirm the
  * cake is the right one before handing it over.
  *
- * V1 settle flow: cashier taps "Mark picked up" → calls /mark-ready then
- * the cashier rings the balance as a normal sale on the Sell tab and
- * applies a manual "Less deposit ₱X" discount line. V2 will wire a
- * direct settle path through the cart pre-populated with the line items
- * + deposit credit.
+ * Settle flow:
+ *   1. Cashier taps "Mark ready" when production is done (DEPOSIT_PAID → READY)
+ *   2. Customer arrives → cashier taps "Pay balance"
+ *   3. Cart is pre-populated with the pre-order items + a deposit-credit
+ *      discount line equal to the deposit, then navigates to the cart in
+ *      the Sell stack
+ *   4. Cashier confirms tender as usual; receipt prints showing the deposit
+ *      credit
+ *   5. After tendering, cashier returns to Pickups and marks PICKED_UP (V3
+ *      will auto-link via the order metadata).
  */
 import React from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { Text, ActivityIndicator } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, type NavigationProp } from '@react-navigation/native';
 
 import PhoneHeader from '@/shell/phone/PhoneHeader';
 import { api, ApiHttpError } from '@/api/client';
 import { useBranchContext } from '@/api/BranchContext';
+import { useCartStore } from '@/terminal/cartStore';
 import { formatPeso } from '@/components/Money';
 import { colors, fonts, radii, spacing, text as textTokens, tnum } from '@/theme';
 
@@ -37,9 +43,13 @@ interface Pickup {
   balanceCents:   number;
   customer:       { id: string; name: string; contactPhone: string | null } | null;
   items:          Array<{
-    id: string;
-    productName: string;
-    quantity: number | string;
+    id:               string;
+    productId:        string;
+    productName:      string;
+    quantity:         number | string;
+    unitPriceCents:   number;
+    modifierAddCents: number;
+    lineTotalCents:   number;
   }>;
 }
 
@@ -50,9 +60,13 @@ function phYmd(d: Date): string {
 export default function PhonePickupsScreen(): React.ReactElement {
   const { activeBranch } = useBranchContext();
   const branchId = activeBranch?.id ?? null;
-  const nav = useNavigation<{ goBack: () => void }>();
+  const nav = useNavigation<NavigationProp<Record<string, object | undefined>>>();
   const qc = useQueryClient();
   const today = React.useMemo(() => phYmd(new Date()), []);
+  const clearCart = useCartStore((s) => s.clear);
+  const addLine = useCartStore((s) => s.addLine);
+  const setCustomer = useCartStore((s) => s.setCustomer);
+  const applyDiscount = useCartStore((s) => s.applyDiscount);
 
   const list = useQuery<Pickup[]>({
     queryKey: ['pre-orders', 'pickups', branchId, today],
@@ -81,6 +95,50 @@ export default function PhonePickupsScreen(): React.ReactElement {
     }
   };
 
+  /**
+   * Pre-populate the cart with the pre-order items + a deposit-credit
+   * discount, then navigate to the cart drawer for tendering. The cashier
+   * confirms the order as usual; deposit credit appears as a discount line
+   * so the balance owed equals what they need to collect now.
+   */
+  const payBalance = (p: Pickup) => {
+    clearCart();
+    if (p.customer) {
+      setCustomer({ id: p.customer.id, name: p.customer.name });
+    }
+
+    // Add each pre-order line to the cart. We re-stamp the modifier add cost
+    // into the unitPrice so the in-cart total matches the pre-order snapshot
+    // exactly (modifier-recipes deduction has already happened on the deposit
+    // sale; the balance sale is just collecting the rest).
+    let firstLineId: string | null = null;
+    for (const i of p.items) {
+      const qty = Number(i.quantity);
+      if (qty <= 0) continue;
+      // Snapshot the price-per-unit including modifier upgrades, so the in-
+      // cart line total == lineTotalCents from the pre-order.
+      const unitPriceCents = qty > 0 ? Math.round(i.lineTotalCents / qty) : i.unitPriceCents;
+      const lineId = addLine({
+        productId:   i.productId,
+        productName: i.productName,
+        qty,
+        unitPrice:   unitPriceCents,
+      });
+      if (firstLineId === null) firstLineId = lineId;
+    }
+
+    // Apply the deposit credit as a MANUAL fixedCents discount on the first
+    // line. This is the simplest representation; a proper "Deposit applied"
+    // payment row will land when V3 wires preOrderId through OrdersService.
+    if (firstLineId && p.depositCents > 0) {
+      applyDiscount(firstLineId, { kind: 'MANUAL', fixedCents: p.depositCents });
+    }
+
+    // Counter Tabs > Sell > Cart screen. Push directly so the cashier sees
+    // the totals + can tap Charge immediately.
+    nav.navigate('Sell', { screen: 'Cart' });
+  };
+
   return (
     <View style={styles.root}>
       <PhoneHeader title="Today's pickups" subtitle="Custom cake reservations" onBack={() => nav.goBack()} />
@@ -103,13 +161,25 @@ export default function PhonePickupsScreen(): React.ReactElement {
             </View>
           )
         }
-        renderItem={({ item }) => <PickupRow pickup={item} onMarkReady={() => void markReady(item)} />}
+        renderItem={({ item }) => (
+          <PickupRow
+            pickup={item}
+            onMarkReady={() => void markReady(item)}
+            onPayBalance={() => payBalance(item)}
+          />
+        )}
       />
     </View>
   );
 }
 
-function PickupRow({ pickup, onMarkReady }: { pickup: Pickup; onMarkReady: () => void }): React.ReactElement {
+function PickupRow({
+  pickup, onMarkReady, onPayBalance,
+}: {
+  pickup: Pickup;
+  onMarkReady: () => void;
+  onPayBalance: () => void;
+}): React.ReactElement {
   const itemSummary = pickup.items
     .map((i) => `${Number(i.quantity)}× ${i.productName}`)
     .join(' · ');
@@ -176,12 +246,15 @@ function PickupRow({ pickup, onMarkReady }: { pickup: Pickup; onMarkReady: () =>
           <Text style={styles.readyBtnLabel}>Mark ready for pickup</Text>
         </Pressable>
       ) : pickup.status === 'READY' ? (
-        <View style={styles.readyBanner}>
-          <MaterialCommunityIcons name="check-circle" size={18} color={colors.successDeep} />
-          <Text style={styles.readyBannerText}>
-            Ready · ring the {formatPeso(pickup.balanceCents)} balance on the Sell tab to settle
+        <Pressable
+          onPress={onPayBalance}
+          style={({ pressed }) => [styles.payBtn, pressed && styles.payBtnPressed]}
+        >
+          <MaterialCommunityIcons name="cash-register" size={18} color={colors.onPrimary} />
+          <Text style={styles.payBtnLabel}>
+            Pay balance · {formatPeso(pickup.balanceCents)}
           </Text>
-        </View>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -262,15 +335,16 @@ const styles = StyleSheet.create({
   readyBtnPressed: { backgroundColor: colors.primaryPress },
   readyBtnLabel: { color: colors.onPrimary, fontFamily: fonts.bodyBold, fontWeight: '700', fontSize: 14 },
 
-  readyBanner: {
+  payBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: spacing.s2,
-    backgroundColor: colors.successSoft,
-    paddingHorizontal: spacing.s3,
-    paddingVertical: spacing.s2,
-    borderRadius: radii.sm,
+    height: 44,
+    borderRadius: radii.md,
+    backgroundColor: colors.successDeep,
     marginTop: spacing.s2,
   },
-  readyBannerText: { ...textTokens.caption, color: colors.successDeep, fontSize: 11, flex: 1, fontWeight: '600' },
+  payBtnPressed: { opacity: 0.85 },
+  payBtnLabel:   { color: colors.onPrimary, fontFamily: fonts.bodyBold, fontWeight: '700', fontSize: 14 },
 });

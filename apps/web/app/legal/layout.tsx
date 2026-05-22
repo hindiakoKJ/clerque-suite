@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ArrowLeft, FileText, ShieldCheck, LifeBuoy } from 'lucide-react';
+import { ArrowLeft, FileText, ShieldCheck, LifeBuoy, Trash2 } from 'lucide-react';
 
 export default function LegalLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -46,6 +46,17 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
             >
               <LifeBuoy className="h-3.5 w-3.5" />
               Recovery SLA
+            </Link>
+            <Link
+              href="/legal/account-deletion"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
+                pathname === '/legal/account-deletion'
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+              }`}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete Account
             </Link>
           </nav>
         </div>

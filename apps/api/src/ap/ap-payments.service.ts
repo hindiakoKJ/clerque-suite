@@ -54,6 +54,10 @@ export class APPaymentsService {
       MAYA_PERSONAL:  ['maya', 'cash'],
       MAYA_BUSINESS:  ['maya', 'cash'],
       QR_PH:          ['cash in bank', 'bank', 'cash'],
+      // Card settlements land in the merchant's main bank account through
+      // the acquirer (BPI / BDO Network / Maya Bank). Same routing as QR PH
+      // — both end up in the bank account, just via different rails.
+      CARD:           ['cash in bank', 'bank', 'card', 'cash'],
     };
     for (const term of search[method] ?? ['cash']) {
       const acct = await this.prisma.account.findFirst({

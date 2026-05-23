@@ -85,6 +85,7 @@ export class CustomerAdvancesService {
       MAYA_PERSONAL:  ['maya', 'cash'],
       MAYA_BUSINESS:  ['maya', 'cash'],
       QR_PH:          ['cash in bank', 'bank', 'cash'],
+      CARD:           ['cash in bank', 'bank', 'card', 'cash'],
     };
     for (const term of search[method] ?? ['cash']) {
       const acct = await this.prisma.account.findFirst({

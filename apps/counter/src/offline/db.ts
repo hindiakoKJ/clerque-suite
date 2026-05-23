@@ -93,3 +93,20 @@ export async function clearOutbox(): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM sync_outbox');
 }
+
+/**
+ * One-shot cleanup for outbox rows from earlier app versions that the
+ * current dispatcher can never drain. Currently:
+ *   - `shift.open` (v1-v4) had no handler — every row sat in the queue
+ *     forever marked "unknown kind". Server-side shift creation is now
+ *     synchronous via POST /shifts at open time, so these rows are
+ *     duplicates and safe to drop.
+ * Called once at app launch (App.tsx).
+ */
+export async function purgeLegacyOutbox(): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    "DELETE FROM sync_outbox WHERE kind IN ('shift.open')",
+  );
+  return result.changes ?? 0;
+}

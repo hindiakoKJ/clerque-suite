@@ -23,6 +23,8 @@ export interface PrinterService {
   isConnected(): Promise<boolean>;
   /** Structured payload — the same data the visual Receipt consumes. */
   print(receipt: ReceiptForPrinter): Promise<void>;
+  /** Raw ESC/POS byte payload — used for Z-read and other non-receipt documents. */
+  printRaw(bytes: Uint8Array): Promise<void>;
   scanForDevices(): Promise<BluetoothDeviceInfo[]>;
   pair(id: string): Promise<void>;
   /** Drop the current connection (if any). Best-effort. */
@@ -63,6 +65,20 @@ export class ConsolePrinterService implements PrinterService {
       `[ConsolePrinter] (pairedDeviceId=${this.pairedDeviceId ?? 'none'})\n` +
         lines.join('\n'),
     );
+  }
+
+  async printRaw(bytes: Uint8Array): Promise<void> {
+    // Best-effort decode of UTF-8 text in the buffer for human-readable log
+    // output; ESC/POS control bytes appear as � but the text content is
+    // still visible for QA.
+    try {
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      // eslint-disable-next-line no-console
+      console.log(`[ConsolePrinter raw ${bytes.length} bytes]\n${text}`);
+    } catch {
+      // eslint-disable-next-line no-console
+      console.log(`[ConsolePrinter raw ${bytes.length} bytes — undecodable]`);
+    }
   }
 
   async scanForDevices(): Promise<BluetoothDeviceInfo[]> {

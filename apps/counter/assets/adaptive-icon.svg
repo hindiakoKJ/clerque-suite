@@ -13,15 +13,16 @@
   <rect width="1024" height="1024" fill="url(#bg)"/>
   <!-- 3 inset cards, centered. Slightly larger than the standard icon so
        they survive the 66% safe-area clip on round/squircle masks. -->
-  <rect x="290" y="368" width="142" height="288" rx="36" fill="#F4ECFB"/>
-  <text x="361" y="566" font-family="Georgia, serif" font-size="180" font-weight="700"
+  <!-- Group spans 492px (3×142 + 2×33), so left edge = (1024-492)/2 = 266. -->
+  <rect x="266" y="368" width="142" height="288" rx="36" fill="#F4ECFB"/>
+  <text x="337" y="566" font-family="Georgia, serif" font-size="180" font-weight="700"
         fill="#5B21B6" text-anchor="middle">c</text>
-  <rect x="465" y="368" width="142" height="288" rx="36" fill="#E9DCF7"/>
-  <circle cx="536" cy="450" r="22" fill="#7C3AED"/>
-  <circle cx="536" cy="512" r="22" fill="#7C3AED"/>
-  <circle cx="536" cy="574" r="22" fill="#7C3AED"/>
-  <rect x="640" y="368" width="142" height="288" rx="36" fill="#DCC8F2"/>
-  <rect x="676" y="470" width="70" height="16" rx="8" fill="#A78BFA"/>
-  <rect x="676" y="512" width="70" height="16" rx="8" fill="#A78BFA"/>
-  <rect x="676" y="554" width="70" height="16" rx="8" fill="#A78BFA"/>
+  <rect x="441" y="368" width="142" height="288" rx="36" fill="#E9DCF7"/>
+  <circle cx="512" cy="450" r="22" fill="#7C3AED"/>
+  <circle cx="512" cy="512" r="22" fill="#7C3AED"/>
+  <circle cx="512" cy="574" r="22" fill="#7C3AED"/>
+  <rect x="616" y="368" width="142" height="288" rx="36" fill="#DCC8F2"/>
+  <rect x="652" y="470" width="70" height="16" rx="8" fill="#A78BFA"/>
+  <rect x="652" y="512" width="70" height="16" rx="8" fill="#A78BFA"/>
+  <rect x="652" y="554" width="70" height="16" rx="8" fill="#A78BFA"/>
 </svg>

@@ -28,6 +28,7 @@ import {
   enqueueOutbox,
   listOutbox,
   markOutboxFailure,
+  purgeLegacyOutbox,
 } from '@/offline/db';
 import type { SyncState } from '@/types';
 
@@ -70,6 +71,21 @@ async function dispatchOutbox(kind: string, payload: unknown): Promise<boolean> 
       await api.post('/inventory/adjustments', payload);
       return true;
     }
+    case 'shift.close': {
+      // Payload: { shiftId, countedCashCents, varianceCents, notes, ... }
+      // Server endpoint: POST /shifts/:id/close with { closingCashDeclared, notes }.
+      // Drop the row entirely (return true) when the shiftId is the legacy
+      // `shift_<timestamp>` local-only id — that shift was never created
+      // server-side, so closing it server-side is impossible.
+      const body = payload as { shiftId?: string; countedCashCents?: number; notes?: string };
+      const shiftId = body?.shiftId ?? '';
+      if (!shiftId || shiftId.startsWith('shift_')) return true; // local-only legacy
+      await api.post(`/shifts/${encodeURIComponent(shiftId)}/close`, {
+        closingCashDeclared: (body.countedCashCents ?? 0) / 100,
+        notes:               body.notes,
+      });
+      return true;
+    }
     default:
       // eslint-disable-next-line no-console
       console.warn(`[sync] skipping unknown outbox kind: ${kind}`);
@@ -100,6 +116,26 @@ export function SyncProvider({ children }: { children: React.ReactNode }): React
 
   // Ref guard prevents overlapping drains.
   const drainingRef = useRef(false);
+
+  // One-shot: drop legacy outbox rows that the current dispatcher cannot
+  // drain (e.g. v1-v4 `shift.open` rows). Without this, the Pending Sync
+  // banner shows a non-zero count that never goes down.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const n = await purgeLegacyOutbox();
+        if (!cancelled && n > 0) {
+          // eslint-disable-next-line no-console
+          console.log(`[sync] purged ${n} legacy outbox rows`);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[sync] legacy purge failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const refreshCount = useCallback(async () => {
     try {

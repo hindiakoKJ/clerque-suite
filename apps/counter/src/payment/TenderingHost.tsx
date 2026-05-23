@@ -32,7 +32,7 @@ import TenderingScreen from '@/payment/TenderingScreen';
 import ReceiptScreen from '@/receipt/ReceiptScreen';
 import { useAuth } from '@/auth/AuthProvider';
 import { useBranchContext } from '@/api/BranchContext';
-import { useIsShiftOpen } from '@/shift/ShiftProvider';
+import { useIsShiftOpen, useShift } from '@/shift/ShiftProvider';
 import NoShiftSheet from '@/shift/NoShiftSheet';
 import { navigate } from '@/shell/navigationRef';
 import { submitOrder, type SubmitOrderResult } from '@/api/orderSubmit';
@@ -105,6 +105,7 @@ export default function TenderingHost(): React.ReactElement | null {
   const { tenant, cashier, session } = useAuth();
   const { activeBranch } = useBranchContext();
   const shiftIsOpen = useIsShiftOpen();
+  const { active: activeShift } = useShift();
 
   const [pending, setPending] = useState<Pending | null>(null);
   const [stage, setStage] = useState<Stage>('tender');
@@ -161,6 +162,10 @@ export default function TenderingHost(): React.ReactElement | null {
           cart: pending.opts.cart,
           payments,
           branchId: activeBranch.id,
+          // Critical: passing shiftId is what lets /shifts/active aggregate
+          // the order into cashSales / nonCashSales. Without it, the Z-read
+          // always shows 0 even after a successful sale.
+          shiftId: activeShift?.id,
           isVatRegistered: tenant?.isVatRegistered ?? false,
         });
         // Gas station: if this sale was rung from a fuel dispense, link the

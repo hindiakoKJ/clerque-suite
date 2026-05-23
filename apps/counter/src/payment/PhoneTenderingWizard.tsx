@@ -55,14 +55,15 @@ export interface PhoneTenderingWizardProps {
   onCancel:      () => void;
 }
 
-type Method = 'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'SPLIT';
+type Method = 'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'QR_PH' | 'SPLIT';
 type Step = 1 | 2 | 3;
 
 const METHODS: { id: Method; label: string; sub: string; glyph: string; tone: 'primary' | 'gcash' | 'paymaya' | 'neutral' }[] = [
-  { id: 'CASH',    label: 'Cash · Bayad', sub: 'Customer hands over bills · gives sukli', glyph: '₱',  tone: 'primary' },
-  { id: 'GCASH',   label: 'GCash',        sub: 'QR or send request · enter ref number',    glyph: 'G',  tone: 'gcash' },
-  { id: 'PAYMAYA', label: 'PayMaya',      sub: 'QR or send request · enter ref number',    glyph: 'P',  tone: 'paymaya' },
+  { id: 'CASH',    label: 'Cash · Bayad', sub: 'Customer hands over bills · gives sukli',   glyph: '₱',  tone: 'primary' },
+  { id: 'GCASH',   label: 'GCash',        sub: 'QR or send request · enter ref number',     glyph: 'G',  tone: 'gcash'   },
+  { id: 'PAYMAYA', label: 'PayMaya',      sub: 'QR or send request · enter ref number',     glyph: 'P',  tone: 'paymaya' },
   { id: 'CARD',    label: 'Card',         sub: 'Tap to record · external terminal',         glyph: '◧',  tone: 'neutral' },
+  { id: 'QR_PH',   label: 'QR PH',        sub: 'InstaPay national QR · any bank or wallet', glyph: '⛬',  tone: 'neutral' },
   { id: 'SPLIT',   label: 'Split',        sub: 'Two or more tenders',                       glyph: '÷',  tone: 'neutral' },
 ];
 
@@ -176,10 +177,11 @@ export default function PhoneTenderingWizard({
 }
 
 function labelFor(m: Method): string {
-  return m === 'CASH' ? 'Cash' :
-         m === 'GCASH' ? 'GCash' :
+  return m === 'CASH'    ? 'Cash'    :
+         m === 'GCASH'   ? 'GCash'   :
          m === 'PAYMAYA' ? 'PayMaya' :
-         m === 'CARD' ? 'Card' :
+         m === 'CARD'    ? 'Card'    :
+         m === 'QR_PH'   ? 'QR PH'   :
          'Split';
 }
 
@@ -538,6 +540,9 @@ function Step3Confirm({
   if (method === 'CARD') {
     return <CardPanelPhone totalCents={totalCents} onPaid={onPaid} />;
   }
+  if (method === 'QR_PH') {
+    return <QrPhPanelPhone totalCents={totalCents} onPaid={onPaid} />;
+  }
   if (method === 'SPLIT') {
     // Split flow stays tablet-only for V1; phone callers cancel and re-pick
     // a single method. This avoids embedding the broken 2-column SplitTab on
@@ -797,6 +802,91 @@ function CardPanelPhone({
       >
         <Text style={ewalletStyles.confirmLabel}>
           Confirm Card · {formatPeso(totalCents)} ✓
+        </Text>
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+/**
+ * Phone variant — QR PH. Customer scans the merchant's QR PH standee
+ * with any banking/wallet app. Reconciliation hook is the InstaPay
+ * reference code from the customer's "Payment Successful" screen.
+ */
+function QrPhPanelPhone({
+  totalCents, onPaid,
+}: {
+  totalCents: number;
+  onPaid: (payments: CartPayment[], change: number) => void;
+}): React.ReactElement {
+  const [reference, setReference] = useState('');
+  const [sender, setSender]       = useState('');
+  const refValid = reference.trim().length >= 4;
+
+  return (
+    <ScrollView contentContainerStyle={ewalletStyles.scroll} keyboardShouldPersistTaps="handled">
+      <View style={ewalletStyles.amountCard}>
+        <Text style={ewalletStyles.amountLabel}>Receive · QR PH</Text>
+        <Text style={[ewalletStyles.amountValue, tnum]} numberOfLines={1}>
+          {formatPeso(totalCents)}
+        </Text>
+        <Text style={ewalletStyles.amountHint}>
+          Show your QR PH standee. Customer scans from any bank or wallet
+          (GCash · Maya · BPI · BDO · UnionBank · RCBC · Landbank…).
+        </Text>
+      </View>
+
+      <View style={ewalletStyles.fieldWrap}>
+        <Text style={ewalletStyles.fieldLabel}>InstaPay reference no.</Text>
+        <TextInput
+          value={reference}
+          onChangeText={setReference}
+          placeholder="From the customer's success screen"
+          placeholderTextColor={colors.faint}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          maxLength={32}
+          style={ewalletStyles.field}
+        />
+        <Text style={ewalletStyles.fieldHelp}>
+          Required for matching against your bank statement.
+        </Text>
+      </View>
+
+      <View style={ewalletStyles.fieldWrap}>
+        <Text style={ewalletStyles.fieldLabel}>Sender · optional</Text>
+        <TextInput
+          value={sender}
+          onChangeText={setSender}
+          placeholder="Name on the customer's receipt"
+          placeholderTextColor={colors.faint}
+          autoCapitalize="words"
+          maxLength={48}
+          style={ewalletStyles.field}
+        />
+      </View>
+
+      <Pressable
+        disabled={!refValid}
+        onPress={() =>
+          onPaid(
+            [{
+              method:    'QR_PH',
+              amount:    totalCents,
+              reference: sender ? `${reference} · ${sender}` : reference,
+            }],
+            0,
+          )
+        }
+        style={({ pressed }) => [
+          ewalletStyles.confirm,
+          { backgroundColor: colors.primary },
+          !refValid && ewalletStyles.confirmDisabled,
+          pressed && { backgroundColor: colors.primaryPress },
+        ]}
+      >
+        <Text style={ewalletStyles.confirmLabel}>
+          Confirm QR PH · {formatPeso(totalCents)} ✓
         </Text>
       </Pressable>
     </ScrollView>

@@ -33,9 +33,10 @@ import CashTab from './CashTab';
 import GCashTab from './GCashTab';
 import PayMayaTab from './PayMayaTab';
 import CardTab from './CardTab';
+import QrPhTab from './QrPhTab';
 import SplitTab from './SplitTab';
 
-export type TenderingTab = 'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'SPLIT';
+export type TenderingTab = 'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'QR_PH' | 'SPLIT';
 
 export interface TenderingScreenProps {
   cart: CartState;
@@ -54,11 +55,12 @@ export interface TenderingScreenProps {
 }
 
 const TABS: { id: TenderingTab; label: string; tint?: string }[] = [
-  { id: 'CASH', label: 'Cash · Bayad' },
-  { id: 'GCASH', label: 'GCash', tint: colors.gcash },
+  { id: 'CASH',    label: 'Cash · Bayad' },
+  { id: 'GCASH',   label: 'GCash',   tint: colors.gcash   },
   { id: 'PAYMAYA', label: 'PayMaya', tint: colors.paymaya },
-  { id: 'CARD', label: 'Card' },
-  { id: 'SPLIT', label: 'Split' },
+  { id: 'CARD',    label: 'Card' },
+  { id: 'QR_PH',   label: 'QR PH' },
+  { id: 'SPLIT',   label: 'Split' },
 ];
 
 export default function TenderingScreen({
@@ -214,6 +216,9 @@ export default function TenderingScreen({
         )}
         {tab === 'CARD' && (
           <CardTab totalCents={totalCents} onConfirm={p => onPaid([p], 0)} />
+        )}
+        {tab === 'QR_PH' && (
+          <QrPhTab totalCents={totalCents} onConfirm={p => onPaid([p], 0)} />
         )}
         {tab === 'SPLIT' && (
           <SplitTab

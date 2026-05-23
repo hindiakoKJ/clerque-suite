@@ -23,6 +23,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   colors,
@@ -37,12 +38,18 @@ import Pill from '@/components/Pill';
 import { enqueueOutbox } from '@/offline/db';
 import { keypadToCents } from '@/payment/NumericKeypad';
 import { useDeviceSize } from '@/shell/useDeviceSize';
+import { useAuth } from '@/auth/AuthProvider';
+import { getPrinterService } from '@/receipt/printerService';
+import { zReadToEscPos } from '@/receipt/zReadToEscPos';
 
 export interface TenderBreakdown {
-  cashCents: number;
-  gcashCents: number;
+  cashCents:    number;
+  gcashCents:   number;
   paymayaCents: number;
-  cardCents: number;
+  /** Visa / Mastercard / JCB / BancNet through EDC terminal. */
+  cardCents:    number;
+  /** BSP InstaPay national QR (separate rail from card). */
+  qrPhCents:    number;
 }
 
 export interface ZReadSummary {
@@ -101,7 +108,10 @@ export default function ZReadScreen({
   const [countedRaw, setCountedRaw] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
   const isPhone = useDeviceSize() === 'phone';
+  const insets  = useSafeAreaInsets();
+  const { tenant } = useAuth();
 
   const netSalesCents = summary.grossSalesCents - summary.discountsCents;
   const avgTxnCents =
@@ -123,27 +133,34 @@ export default function ZReadScreen({
       summary.tender.cashCents +
       summary.tender.gcashCents +
       summary.tender.paymayaCents +
-      summary.tender.cardCents,
+      summary.tender.cardCents +
+      summary.tender.qrPhCents,
     [summary.tender],
   );
 
   const tenderRows = [
-    { name: 'Cash · Bayad', amount: summary.tender.cashCents, color: colors.primary },
-    { name: 'GCash', amount: summary.tender.gcashCents, color: colors.gcash },
-    { name: 'PayMaya', amount: summary.tender.paymayaCents, color: colors.paymaya },
-    { name: 'Card', amount: summary.tender.cardCents, color: colors.muted },
+    { name: 'Cash · Bayad', amount: summary.tender.cashCents,    color: colors.primary },
+    { name: 'GCash',        amount: summary.tender.gcashCents,   color: colors.gcash   },
+    { name: 'PayMaya',      amount: summary.tender.paymayaCents, color: colors.paymaya },
+    { name: 'Card',         amount: summary.tender.cardCents,    color: colors.muted   },
+    { name: 'QR PH',        amount: summary.tender.qrPhCents,    color: colors.ink     },
   ];
 
   const handlePrint = async () => {
-    // Z-Read print path is its own ESC/POS document (different shape from
-    // a sales receipt) — not yet wired through the new structured
-    // PrinterService. Stub keeps the button live without throwing.
-    // TODO(printer): build `zReadToEscPos` and call printer directly.
-    // eslint-disable-next-line no-console
-    console.log('[ZRead] print stub', {
-      shiftId: summary.shiftId,
-      net: formatPeso(netSalesCents),
-    });
+    setPrintError(null);
+    try {
+      const bytes = zReadToEscPos(summary, {
+        tenantName:       tenant?.name ?? 'Clerque',
+        tenantTin:        tenant?.tin  ?? '000-000-000-00000',
+        counterCashCents: countedCents,
+        notes,
+      });
+      await getPrinterService().printRaw(bytes);
+    } catch (err) {
+      setPrintError(err instanceof Error ? err.message : 'Print failed');
+      // eslint-disable-next-line no-console
+      console.warn('[ZRead] print failed:', err);
+    }
   };
 
   const handleClose = async () => {
@@ -354,22 +371,32 @@ export default function ZReadScreen({
         </View>
       </ScrollView>
 
-      <View style={isPhone ? s.footerPhone : s.footer}>
+      <View
+        style={[
+          isPhone ? s.footerPhone : s.footer,
+          // Lift footer above the bottom tab bar + system gesture inset.
+          // Without this, the secondary row got clipped under the tab bar
+          // on phones (Print Z-read / Keep selling were unreachable).
+          isPhone && { paddingBottom: Math.max(insets.bottom, spacing.s3) },
+        ]}
+      >
         <Pressable
-          style={[s.btn, s.btnPrimary, busy && s.btnDisabled, isPhone && s.btnFull]}
+          style={[s.btn, s.btnPrimary, busy && s.btnDisabled, isPhone && s.btnFull, isPhone && s.btnCompact]}
           onPress={handleClose}
           disabled={busy}
         >
-          <Text style={s.btnText}>{busy ? 'Closing…' : 'Close shift'}</Text>
+          <Text style={[s.btnText, isPhone && s.btnTextCompact]}>{busy ? 'Closing…' : 'Close shift'}</Text>
         </Pressable>
         <View style={isPhone ? s.footerSecondaryRowPhone : { flexDirection: 'row', gap: spacing.s4 }}>
-          <Pressable style={[s.btn, s.btnSecondary, isPhone && s.btnHalf]} onPress={handlePrint}>
-            <Text style={[s.btnText, { color: colors.ink }]}>Print Z-read</Text>
+          <Pressable style={[s.btn, s.btnSecondary, isPhone && s.btnHalf, isPhone && s.btnCompact]} onPress={handlePrint}>
+            <Text style={[s.btnText, isPhone && s.btnTextCompact, { color: colors.ink }]} numberOfLines={1}>
+              {printError ? 'Retry print' : 'Print Z-read'}
+            </Text>
           </Pressable>
           {onCancel ? (
-            <Pressable style={[s.btn, s.btnGhost, isPhone && s.btnHalf]} onPress={onCancel}>
-              <Text style={[s.btnText, { color: colors.ink }]} numberOfLines={1}>
-                Keep selling
+            <Pressable style={[s.btn, s.btnGhost, isPhone && s.btnHalf, isPhone && s.btnCompact]} onPress={onCancel}>
+              <Text style={[s.btnText, isPhone && s.btnTextCompact, { color: colors.ink }]} numberOfLines={1}>
+                {isPhone ? 'Keep open' : 'Keep selling'}
               </Text>
             </Pressable>
           ) : null}
@@ -549,15 +576,20 @@ const s = StyleSheet.create({
     borderTopColor: colors.rule,
   },
   footerPhone: {
-    padding: spacing.s4,
+    padding: spacing.s3,
+    paddingTop: spacing.s3,
     gap: spacing.s2,
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.rule,
   },
   footerSecondaryRowPhone: { flexDirection: 'row', gap: spacing.s2 },
-  btnHalf: { flex: 1 },
+  btnHalf: { flex: 1, paddingHorizontal: spacing.s2 },
   btnFull: { width: '100%' },
+  // Phone footer is tight under the tab bar — shrink the cashier-primary
+  // 64dp height to 52dp so the stack of Close + (Print | Keep open) fits.
+  btnCompact: { height: 52, paddingHorizontal: spacing.s3 },
+  btnTextCompact: { fontSize: 15 },
   btn: {
     height: tap.cashierPrimary,
     borderRadius: radii.md,
@@ -572,7 +604,6 @@ const s = StyleSheet.create({
   },
   btnSecondary: {
     backgroundColor: colors.primaryContainer,
-    marginLeft: 'auto',
   },
   btnPrimary: {
     backgroundColor: colors.primary,

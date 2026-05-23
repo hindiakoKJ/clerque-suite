@@ -41,6 +41,10 @@ async function buildFeatureGraphic() {
   // Embedded SVG so we don't depend on a separate file. Mirrors the Clerque
   // mark colors. Title font uses a generic system stack so it renders
   // identically on any rasterizer.
+  // Layout target: mark on the left (~240px), generous gap, wordmark stacked
+  // on two lines so "Clerque" and "Counter" never overflow the 1024px width.
+  // All text is right-anchored to the safe zone (x=1000) — no measurement
+  // surprises across rasterizers.
   const svg = `
 <svg width="1024" height="500" viewBox="0 0 1024 500" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -55,32 +59,33 @@ async function buildFeatureGraphic() {
   </defs>
   <rect width="1024" height="500" fill="url(#bg)"/>
 
-  <!-- Mark on the left -->
-  <g transform="translate(80, 100)">
-    <rect width="300" height="300" rx="60" fill="url(#mark)"/>
-    <rect x="90" y="80" width="50" height="140" rx="12" fill="#F4ECFB"/>
-    <text x="115" y="180" font-family="Georgia, serif" font-size="82" font-weight="700"
+  <!-- Mark on the left (240×240, vertically centered) -->
+  <g transform="translate(60, 130)">
+    <rect width="240" height="240" rx="48" fill="url(#mark)"/>
+    <rect x="72" y="64" width="40" height="112" rx="10" fill="#F4ECFB"/>
+    <text x="92" y="144" font-family="Georgia, serif" font-size="66" font-weight="700"
           fill="#5B21B6" text-anchor="middle">c</text>
-    <rect x="155" y="80" width="50" height="140" rx="12" fill="#E9DCF7"/>
-    <circle cx="180" cy="115" r="8" fill="#7C3AED"/>
-    <circle cx="180" cy="150" r="8" fill="#7C3AED"/>
-    <circle cx="180" cy="185" r="8" fill="#7C3AED"/>
-    <rect x="220" y="80" width="50" height="140" rx="12" fill="#DCC8F2"/>
-    <rect x="232" y="110" width="26" height="7" rx="3.5" fill="#A78BFA"/>
-    <rect x="232" y="130" width="26" height="7" rx="3.5" fill="#A78BFA"/>
-    <rect x="232" y="150" width="26" height="7" rx="3.5" fill="#A78BFA"/>
+    <rect x="124" y="64" width="40" height="112" rx="10" fill="#E9DCF7"/>
+    <circle cx="144" cy="92"  r="6" fill="#7C3AED"/>
+    <circle cx="144" cy="120" r="6" fill="#7C3AED"/>
+    <circle cx="144" cy="148" r="6" fill="#7C3AED"/>
+    <rect x="176" y="64" width="40" height="112" rx="10" fill="#DCC8F2"/>
+    <rect x="186" y="88"  width="20" height="6" rx="3" fill="#A78BFA"/>
+    <rect x="186" y="104" width="20" height="6" rx="3" fill="#A78BFA"/>
+    <rect x="186" y="120" width="20" height="6" rx="3" fill="#A78BFA"/>
   </g>
 
-  <!-- Wordmark + tagline on the right -->
-  <text x="430" y="220" font-family="'Plus Jakarta Sans', system-ui, sans-serif"
-        font-size="78" font-weight="800" fill="#FFFFFF" letter-spacing="-2">
-    Clerque · Counter
-  </text>
-  <text x="430" y="280" font-family="system-ui, sans-serif"
-        font-size="28" font-weight="500" fill="#EEE9DF">
+  <!-- Wordmark stacked on two lines, comfortably inside the canvas -->
+  <text x="340" y="210" font-family="'Plus Jakarta Sans', system-ui, sans-serif"
+        font-size="86" font-weight="800" fill="#FFFFFF" letter-spacing="-2">Clerque</text>
+  <text x="340" y="300" font-family="'Plus Jakarta Sans', system-ui, sans-serif"
+        font-size="86" font-weight="800" fill="#FFFFFF" letter-spacing="-2">Counter</text>
+
+  <text x="340" y="360" font-family="system-ui, sans-serif"
+        font-size="26" font-weight="500" fill="#EEE9DF">
     POS · BIR receipts · FEFO inventory
   </text>
-  <text x="430" y="340" font-family="system-ui, sans-serif"
+  <text x="340" y="398" font-family="system-ui, sans-serif"
         font-size="22" font-weight="400" fill="#DDD4C2">
     Built for Philippine SMBs.
   </text>

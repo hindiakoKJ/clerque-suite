@@ -26,10 +26,22 @@
  * float. A server-backed provider survives any reload.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { api, ApiHttpError } from '@/api/client';
 import { useAuth } from '@/auth/AuthProvider';
 import { useBranchContext } from '@/api/BranchContext';
+
+/**
+ * Persisted-shift key. Scoped to `<tenantId>:<branchId>:<cashierId>` so a
+ * different cashier signing in on the same device doesn't inherit someone
+ * else's open shift. We use AsyncStorage rather than SecureStore — this is
+ * cache, not a credential, and SecureStore on Android caps payloads at 2KB.
+ */
+const STORAGE_PREFIX = '@clerque/counter/shift/v1/';
+function storageKey(tenantId: string, branchId: string, cashierId: string): string {
+  return `${STORAGE_PREFIX}${tenantId}:${branchId}:${cashierId}`;
+}
 
 interface ActiveShift {
   id:                string;
@@ -50,6 +62,14 @@ interface ShiftContextValue {
   loading: boolean;
   /** Force a refetch — called after ShiftOpenScreen / ZReadScreen finish. */
   refresh: () => Promise<void>;
+  /**
+   * Optimistically set the open shift before the outbox drains to the
+   * server. Counter is offline-first — `shift.open` is queued, not awaited —
+   * so without this, the Cart's `useIsShiftOpen()` would keep returning false
+   * until the outbox round-trip succeeds (could be minutes on bad WiFi).
+   * Pass `null` to optimistically close.
+   */
+  setOptimistic: (shift: ActiveShift | null) => void;
 }
 
 const ShiftContext = createContext<ShiftContextValue | null>(null);
@@ -102,14 +122,57 @@ function adapt(row: ApiActiveShiftRow | null): ActiveShift | null {
 }
 
 export function ShiftProvider({ children }: { children: React.ReactNode }): React.ReactElement {
-  const { session, cashier } = useAuth();
+  const { session, cashier, tenant } = useAuth();
   const { activeBranch } = useBranchContext();
   const [active, setActive]   = useState<ActiveShift | null>(null);
   const [ready, setReady]     = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const branchId = activeBranch?.id ?? null;
-  const signedIn = !!session && !!cashier?.pinVerifiedAt;
+  const tenantId  = tenant?.id ?? '';
+  const branchId  = activeBranch?.id ?? null;
+  const cashierId = cashier?.id ?? '';
+  const signedIn  = !!session && !!cashier?.pinVerifiedAt;
+
+  const persistKey = (tenantId && branchId && cashierId)
+    ? storageKey(tenantId, branchId, cashierId)
+    : null;
+
+  /** Persist or clear the locally cached open shift. */
+  const persistShift = useCallback(async (shift: ActiveShift | null): Promise<void> => {
+    if (!persistKey) return;
+    try {
+      if (shift) await AsyncStorage.setItem(persistKey, JSON.stringify(shift));
+      else       await AsyncStorage.removeItem(persistKey);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[shift] persist failed:', err);
+    }
+  }, [persistKey]);
+
+  /** Hydrate cached shift on mount/cashier-change — this is the fix for
+   *  "every app restart asks to open the shift again". The outbox may not
+   *  have drained to /shifts/active yet, so the server doesn't know about
+   *  this shift; the locally persisted record is the authoritative copy
+   *  until sync catches up. */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!persistKey) return;
+      try {
+        const raw = await AsyncStorage.getItem(persistKey);
+        if (cancelled || !raw) return;
+        const parsed = JSON.parse(raw) as ActiveShift;
+        if (parsed?.id && parsed?.openedAt) {
+          setActive(parsed);
+          setReady(true);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[shift] hydrate failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [persistKey]);
 
   const fetchActive = useCallback(async (): Promise<void> => {
     if (!branchId || !signedIn) {
@@ -122,24 +185,37 @@ export function ShiftProvider({ children }: { children: React.ReactNode }): Reac
       const row = await api.get<ApiActiveShiftRow | null>(
         `/shifts/active?branchId=${encodeURIComponent(branchId)}`,
       );
-      setActive(adapt(row));
+      const serverShift = adapt(row);
+      if (serverShift) {
+        // Server confirms an open shift — overwrite local cache.
+        setActive(serverShift);
+        void persistShift(serverShift);
+      } else {
+        // Server says "no shift" BUT the outbox may still be holding an
+        // unsynced shift.open. Trust the locally persisted record if it
+        // exists; the next outbox drain will reconcile. Only clear when
+        // we have no cached shift either (truly clean state).
+        const cachedRaw = persistKey ? await AsyncStorage.getItem(persistKey) : null;
+        if (!cachedRaw) {
+          setActive(null);
+        }
+      }
     } catch (err) {
-      // 404 from the API = "no open shift for this branch + cashier" — that's
-      // a valid state, not a failure. Bubble anything else to console for
-      // diagnostics; the UI proceeds as if no shift is open (which is safer
-      // than letting it silently believe a stale one is open).
+      // 404 from the API = "no open shift for this branch + cashier" — see
+      // the same outbox-may-be-stale reasoning above; preserve local cache.
       if (err instanceof ApiHttpError && err.status === 404) {
-        setActive(null);
+        const cachedRaw = persistKey ? await AsyncStorage.getItem(persistKey) : null;
+        if (!cachedRaw) setActive(null);
       } else {
         // eslint-disable-next-line no-console
         console.warn('[shift] /shifts/active failed:', err);
-        setActive(null);
+        // Network blip — keep current state (likely the persisted shift).
       }
     } finally {
       setLoading(false);
       setReady(true);
     }
-  }, [branchId, signedIn]);
+  }, [branchId, signedIn, persistKey, persistShift]);
 
   // Initial + branch-change fetch.
   useEffect(() => { void fetchActive(); }, [fetchActive]);
@@ -152,14 +228,21 @@ export function ShiftProvider({ children }: { children: React.ReactNode }): Reac
     return () => clearInterval(id);
   }, [signedIn, fetchActive]);
 
+  const setOptimistic = useCallback((shift: ActiveShift | null) => {
+    setActive(shift);
+    setReady(true);
+    void persistShift(shift);
+  }, [persistShift]);
+
   const value = useMemo<ShiftContextValue>(
     () => ({
       active,
       ready,
       loading,
       refresh: fetchActive,
+      setOptimistic,
     }),
-    [active, ready, loading, fetchActive],
+    [active, ready, loading, fetchActive, setOptimistic],
   );
 
   return <ShiftContext.Provider value={value}>{children}</ShiftContext.Provider>;

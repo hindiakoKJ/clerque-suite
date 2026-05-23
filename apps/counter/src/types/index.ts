@@ -115,7 +115,7 @@ export interface CartModifier {
   priceAdjustment: number;     // ₱ cents
 }
 
-export type PaymentMethod = 'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'OTHER';
+export type PaymentMethod = 'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'QR_PH' | 'OTHER';
 
 export interface CartPayment {
   method: PaymentMethod;

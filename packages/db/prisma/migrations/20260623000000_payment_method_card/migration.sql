@@ -1,0 +1,15 @@
+-- Add CARD to PaymentMethod enum.
+--
+-- Why: Counter previously mapped its "Card" tender option to QR_PH because
+-- the server enum lacked a CARD value. That conflated two distinct
+-- settlement rails:
+--   • QR_PH  — InstaPay national QR, no merchant fee, settles via bank
+--   • CARD   — Visa / Mastercard / JCB / BancNet through EDC terminal,
+--              acquirer-issued, 2-3.5% MDR, settles via acquiring bank
+--
+-- Existing QR_PH rows are NOT migrated — they remain QR_PH. The
+-- assumption is that pilot tenants (v1-v5) almost certainly used QR PH
+-- via printed standee, since no EDC terminal integration shipped before
+-- this version. If a tenant believes some of those rows are actually
+-- card transactions, they can re-categorise in the admin web UI.
+ALTER TYPE "PaymentMethod" ADD VALUE 'CARD';

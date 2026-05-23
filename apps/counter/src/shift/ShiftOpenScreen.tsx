@@ -29,7 +29,6 @@ import {
   tnum,
 } from '@/theme/tokens';
 import { formatPeso } from '@/components/Money';
-import { enqueueOutbox } from '@/offline/db';
 import { useDeviceSize } from '@/shell/useDeviceSize';
 
 /** Each denomination in centavos. */
@@ -85,12 +84,12 @@ export default function ShiftOpenScreen({
   const handleOpen = async () => {
     setBusy(true);
     try {
-      await enqueueOutbox('shift.open', {
-        cashierId,
-        openedAt: new Date().toISOString(),
-        openingFloatCents: totalCents,
-        counts,
-      });
+      // Server-side shift creation is owned by ShiftCoordinator.onOpened
+      // (POST /shifts). We drop the legacy `shift.open` outbox enqueue
+      // because the dispatcher had no handler for it — it was filling the
+      // outbox with permanent-fail rows. The cashier still sees the same
+      // optimistic-open UX because ShiftProvider.setOptimistic mirrors
+      // the shift into the global context immediately.
       onOpened(totalCents, counts);
     } finally {
       setBusy(false);

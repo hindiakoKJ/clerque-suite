@@ -10,20 +10,23 @@
   </defs>
   <rect width="1024" height="1024" rx="205" fill="url(#bg)"/>
 
+  <!-- Three-card group centered on canvas. Group spans 550px (3×164 + 2×29 gap),
+       so left edge = (1024-550)/2 = 237. Vertical centerline = 512. -->
+
   <!-- Card 1 — Counter (serif c) -->
-  <rect x="320" y="338" width="164" height="348" rx="41" fill="#F4ECFB"/>
-  <text x="402" y="565" font-family="Georgia, serif" font-size="205" font-weight="700"
+  <rect x="237" y="338" width="164" height="348" rx="41" fill="#F4ECFB"/>
+  <text x="319" y="565" font-family="Georgia, serif" font-size="205" font-weight="700"
         fill="#5B21B6" text-anchor="middle">c</text>
 
   <!-- Card 2 — Ledger (3 vertical dots) -->
-  <rect x="513" y="338" width="164" height="348" rx="41" fill="#E9DCF7"/>
-  <circle cx="595" cy="437" r="26" fill="#7C3AED"/>
-  <circle cx="595" cy="512" r="26" fill="#7C3AED"/>
-  <circle cx="595" cy="587" r="26" fill="#7C3AED"/>
+  <rect x="430" y="338" width="164" height="348" rx="41" fill="#E9DCF7"/>
+  <circle cx="512" cy="437" r="26" fill="#7C3AED"/>
+  <circle cx="512" cy="512" r="26" fill="#7C3AED"/>
+  <circle cx="512" cy="587" r="26" fill="#7C3AED"/>
 
   <!-- Card 3 — Sync (3 horizontal lines) -->
-  <rect x="706" y="338" width="164" height="348" rx="41" fill="#DCC8F2"/>
-  <rect x="747" y="453" width="82" height="18" rx="9" fill="#A78BFA"/>
-  <rect x="747" y="503" width="82" height="18" rx="9" fill="#A78BFA"/>
-  <rect x="747" y="553" width="82" height="18" rx="9" fill="#A78BFA"/>
+  <rect x="623" y="338" width="164" height="348" rx="41" fill="#DCC8F2"/>
+  <rect x="664" y="453" width="82" height="18" rx="9" fill="#A78BFA"/>
+  <rect x="664" y="503" width="82" height="18" rx="9" fill="#A78BFA"/>
+  <rect x="664" y="553" width="82" height="18" rx="9" fill="#A78BFA"/>
 </svg>

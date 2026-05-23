@@ -56,11 +56,12 @@ function formatDateTime(ms: number): string {
 
 function methodLabel(m: CartPayment['method']): string {
   switch (m) {
-    case 'CASH': return 'Cash';
-    case 'GCASH': return 'GCash';
+    case 'CASH':    return 'Cash';
+    case 'GCASH':   return 'GCash';
     case 'PAYMAYA': return 'PayMaya';
-    case 'CARD': return 'Card';
-    case 'OTHER': return 'Other';
+    case 'CARD':    return 'Card';
+    case 'QR_PH':   return 'QR PH';
+    case 'OTHER':   return 'Other';
   }
 }
 

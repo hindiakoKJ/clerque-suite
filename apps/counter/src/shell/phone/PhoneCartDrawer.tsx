@@ -25,6 +25,8 @@ import { openTendering } from '@/payment/TenderingHost';
 import { formatPeso } from '@/components/Money';
 import { useIsShiftOpen } from '@/shift/ShiftProvider';
 import NoShiftSheet from '@/shift/NoShiftSheet';
+import CustomerPickerSheet, { type CustomerRow } from '@/shell/phone/CustomerPickerSheet';
+import PwdScCaptureSheet, { type PwdScCaptureResult } from '@/shell/phone/PwdScCaptureSheet';
 import { colors, fonts, radii, spacing, text as textTokens, tnum } from '@/theme';
 import type { PhoneSellStackParamList } from '@/shell/phone/types';
 import type { CartState, CartLine } from '@/types';
@@ -42,27 +44,54 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
   const applyDiscount = useCartStore((s) => s.applyDiscount);
   const clear = useCartStore((s) => s.clear);
   const customer = useCartStore((s) => s.customer);
+  const setCustomer = useCartStore((s) => s.setCustomer);
+  const pwdScId  = useCartStore((s) => s.pwdScId);
+  const setPwdScId = useCartStore((s) => s.setPwdScId);
 
   const [discountSheet, setDiscountSheet] = useState(false);
   const [noShiftSheet, setNoShiftSheet]   = useState(false);
+  const [customerSheet, setCustomerSheet] = useState(false);
+  /** Holds the kind while the PWD/SC capture sheet collects ID + name. */
+  const [pendingPwdSc, setPendingPwdSc] = useState<'SENIOR' | 'PWD' | null>(null);
   const shiftIsOpen = useIsShiftOpen();
 
   const active = lines.filter((l) => !l.removed && !l.voidedAt);
 
   /** Apply a tax-status-aware discount kind to every active line.
-   *  SENIOR / PWD = 20% legally fixed.
+   *  SENIOR / PWD = 20% legally fixed — REQUIRES PWD/SC capture first.
    *  MARKDOWN     = 50% default (bakery end-of-day) — NOT VAT-exempt. */
   const setBulkDiscount = (kind: 'SENIOR' | 'PWD' | 'MARKDOWN' | null) => {
     setDiscountSheet(false);
+    if (kind === 'SENIOR' || kind === 'PWD') {
+      // Don't apply the discount yet — open the capture sheet first. We
+      // commit the discount AFTER the cashier enters cardholder name + ID,
+      // so the cart is never in a "discount applied, no ID captured" state.
+      setPendingPwdSc(kind);
+      return;
+    }
     for (const l of active) {
       if (kind === null) {
         applyDiscount(l.id, undefined);
-      } else if (kind === 'MARKDOWN') {
-        applyDiscount(l.id, { kind, percent: 50 });
       } else {
-        applyDiscount(l.id, { kind, percent: 20 });
+        // MARKDOWN — bakery EOD 50%.
+        applyDiscount(l.id, { kind, percent: 50 });
       }
     }
+    if (kind === null) {
+      // Clearing all discounts removes the order-level PWD/SC ID too.
+      setPwdScId(undefined);
+    }
+  };
+
+  /** Finalise a Senior/PWD discount after the cashier captured ID + name.
+   *  Records the ID on the cart (order-level) AND tags every line with the
+   *  20% discount kind so the per-line VAT-exempt + discount math works. */
+  const onPwdScConfirmed = (r: PwdScCaptureResult) => {
+    setPwdScId({ idRef: r.idRef, ownerName: r.ownerName, kind: r.kind });
+    for (const l of active) {
+      applyDiscount(l.id, { kind: r.kind, percent: 20 });
+    }
+    setPendingPwdSc(null);
   };
   const currentDiscountKind: 'SENIOR' | 'PWD' | 'MARKDOWN' | null = (() => {
     if (active.length === 0) return null;
@@ -144,7 +173,7 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
                 <View style={styles.actionDivider} />
 
                 <Pressable
-                  onPress={() => { /* TODO: customer picker — backend search hook pending */ }}
+                  onPress={() => setCustomerSheet(true)}
                   style={({ pressed }) => [styles.actionRow, pressed && styles.actionRowPressed]}
                 >
                   <View style={styles.actionIconWrap}>
@@ -234,6 +263,25 @@ export default function PhoneCartDrawer({ navigation }: Props): React.ReactEleme
             </View>
           </Swipeable>
         )}
+      />
+
+      {/* Customer picker */}
+      <CustomerPickerSheet
+        visible={customerSheet}
+        currentName={customer?.name}
+        onClose={() => setCustomerSheet(false)}
+        onPick={(c: CustomerRow | null) => {
+          setCustomer(c ? { id: c.id, name: c.name, phone: c.phone, tin: c.tin } : undefined);
+        }}
+      />
+
+      {/* PWD / Senior Citizen ID capture */}
+      <PwdScCaptureSheet
+        visible={pendingPwdSc !== null}
+        kind={pendingPwdSc}
+        initial={pwdScId ? { idRef: pwdScId.idRef, ownerName: pwdScId.ownerName } : undefined}
+        onCancel={() => setPendingPwdSc(null)}
+        onConfirm={onPwdScConfirmed}
       />
 
       {/* No-shift gate */}

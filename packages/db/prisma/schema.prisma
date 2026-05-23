@@ -209,6 +209,10 @@ enum AccountingMethod {
   ACCRUAL
 }
 
+/// BSP-compliant payment rails. QR_PH (InstaPay national QR) and CARD
+/// (Visa/MC/JCB via EDC terminal) are intentionally separate — they
+/// settle through different rails, have different MDR, and reconcile
+/// against different statements. Lumping them confuses MSME bookkeeping.
 enum PaymentMethod {
   CASH
   GCASH_PERSONAL
@@ -216,6 +220,9 @@ enum PaymentMethod {
   MAYA_PERSONAL
   MAYA_BUSINESS
   QR_PH
+  /// Visa / Mastercard / JCB / BancNet via EDC terminal (tap, dip, swipe).
+  /// Distinct from QR_PH which settles through InstaPay.
+  CARD
 }
 
 enum OrderStatus {

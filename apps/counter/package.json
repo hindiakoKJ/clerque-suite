@@ -34,6 +34,7 @@
     "expo-secure-store": "~15.0.5",
     "expo-sqlite": "~16.0.5",
     "expo-status-bar": "~3.0.5",
+    "expo-updates": "~29.0.17",
     "jwt-decode": "^4.0.0",
     "qrcode": "1.5.4",
     "react": "19.1.0",

@@ -164,13 +164,17 @@ export class BluetoothPrinterService implements PrinterService {
   }
 
   async print(receipt: ReceiptForPrinter): Promise<void> {
+    const bytes = receiptToEscPos(receipt, this.width);
+    await this.printRaw(bytes);
+  }
+
+  async printRaw(bytes: Uint8Array): Promise<void> {
     const id = await this.getPairedId();
     if (!id) {
       throw new PrinterError('No printer paired — pair one in Settings → Printer.');
     }
     await ensureAndroidPermissions();
     const RNBT = loadRNBluetoothClassic();
-    const bytes = receiptToEscPos(receipt, this.width);
     const b64 = bytesToBase64(bytes);
 
     const tryWrite = async (): Promise<void> => {

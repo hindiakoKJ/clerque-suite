@@ -26,8 +26,8 @@
     "postinstall": "prisma generate --schema=../../packages/db/prisma/schema.prisma"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.91.1",
-    "@aws-sdk/client-s3": "^3.1045.0",
+    "@anthropic-ai/sdk": "^0.98.0",
+    "@aws-sdk/client-s3": "^3.1053.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
@@ -50,7 +50,7 @@
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "exceljs": "^4.4.0",
-    "helmet": "^8.1.0",
+    "helmet": "^8.2.0",
     "joi": "^18.1.2",
     "multer": "^2.1.1",
     "otplib": "^13.4.0",

@@ -25,6 +25,7 @@ import { usePosCatalog, type ApiProduct } from '@/api/queries';
 import { useCartStore } from '@/terminal/cartStore';
 import { formatPeso } from '@/components/Money';
 import { getWebOrigin, getWebHost } from '@/api/webOrigin';
+import { openBarcodeScanner } from '@/components/BarcodeScannerSheet';
 import { colors, radii, spacing, text as textTokens, tnum } from '@/theme';
 import type { PhoneSellStackParamList } from '@/shell/phone/types';
 
@@ -92,6 +93,33 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
     });
   };
 
+  /** Camera barcode scan → product lookup → add to cart (or focus search
+   *  with the scanned code if no SKU/barcode match). Mirrors the tablet
+   *  RetailTerminal flow so phone parity is preserved. */
+  const handleScan = async () => {
+    try {
+      const code = await openBarcodeScanner();
+      if (!code) return;
+      const all = catalog.data ?? [];
+      const needle = code.trim().toLowerCase();
+      const hit = all.find(
+        (p) =>
+          (p.barcode?.toLowerCase() === needle) ||
+          (p.sku?.toLowerCase()     === needle),
+      );
+      if (hit) {
+        onPickProduct(hit);
+      } else {
+        // Surface the code in the search box so the cashier can fall back
+        // to a name-search or visually scan the grid.
+        setQ(code);
+      }
+    } catch {
+      // Host not mounted yet — silently no-op; permission denial handled
+      // inside the scanner sheet.
+    }
+  };
+
   return (
     <View style={styles.root}>
       <PhoneHeader
@@ -99,7 +127,8 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
         subtitle={lineCount > 0 ? `${lineCount} item${lineCount === 1 ? '' : 's'} · ${formatPeso(total)}` : 'Tap a product to add'}
       />
 
-      {/* Search field */}
+      {/* Search field — magnify icon is decorative; barcode-scan icon is
+          a real Pressable that opens the camera scanner. */}
       <View style={styles.searchWrap}>
         <MaterialCommunityIcons name="magnify" size={20} color={colors.muted} />
         <TextInput
@@ -111,7 +140,15 @@ export default function PhoneSellScreen({ navigation }: Props): React.ReactEleme
           autoCorrect={false}
           autoCapitalize="none"
         />
-        <MaterialCommunityIcons name="barcode-scan" size={20} color={colors.muted} />
+        <Pressable
+          onPress={handleScan}
+          hitSlop={12}
+          style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.6 }]}
+          accessibilityLabel="Open barcode scanner"
+          accessibilityRole="button"
+        >
+          <MaterialCommunityIcons name="barcode-scan" size={22} color={colors.primary} />
+        </Pressable>
       </View>
 
       {/* Category chips strip */}
@@ -258,6 +295,14 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.rule,
   },
   search: { flex: 1, ...textTokens.body, color: colors.ink, paddingVertical: spacing.s2 },
+  scanBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primaryContainer,
+  },
 
   chipsBar: {
     backgroundColor: colors.surface,

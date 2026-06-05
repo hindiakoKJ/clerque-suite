@@ -199,15 +199,24 @@ async function bootstrap() {
   // API responds with JSON only; CSP on JSON has no effect anyway.
   app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 
-  // Allow configured origins + always allow the known production domains.
-  // clerque.hnscorpph.com → tenant-facing apps (POS / Ledger / Sync).
-  // console.hnscorpph.com → platform-wide super-admin (Clerque Console).
-  // Both share the same Next.js deployment + this same backend.
+  // SecAudit 2026-05 C7 + I5 — CORS origin allow-list.
+  //   • Production NEVER allows localhost (was a CSRF-with-credentials risk
+  //     on victim LAN setups).
+  //   • Wildcards and empty entries (e.g. trailing comma in env) rejected
+  //     since credentials: true + wildcard is forbidden by the spec anyway.
+  //   • Production domains hard-coded so a missing ALLOWED_ORIGINS env var
+  //     can't silently lock real users out.
+  const isProd = process.env.NODE_ENV === 'production';
+  const rawConfigured = (process.env.ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0 && o !== '*');
   const allowedOrigins = [
-    ...(process.env.ALLOWED_ORIGINS?.split(',') ?? []),
-    'http://localhost:3000',
+    ...rawConfigured,
     'https://clerque.hnscorpph.com',
     'https://console.hnscorpph.com',
+    // Localhost only in dev — gated on NODE_ENV.
+    ...(isProd ? [] : ['http://localhost:3000']),
   ];
   app.enableCors({ origin: allowedOrigins, credentials: true });
 
@@ -275,7 +284,16 @@ async function bootstrap() {
   await app.listen(port);
   logger.log(`🚀 Clerque API running on port ${port}`);
 
-  // Run seed after server is up so DB connection is guaranteed
-  await runSeed(logger);
+  // SecAudit 2026-05 C14 — runSeed plants hardcoded `Admin1234!`,
+  // `Super1234!`, `Cashier1234!` credentials and is meant only for the
+  // local dev demo tenant. Running in production = an attacker who
+  // knows the seed creds can sign in as SUPER_ADMIN. Gate by NODE_ENV
+  // AND an explicit opt-in env var so staging environments don't seed
+  // by accident either.
+  if (process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEMO_SEED === '1') {
+    await runSeed(logger);
+  } else if (process.env.NODE_ENV === 'production') {
+    logger.log('Skipping demo seed (NODE_ENV=production).');
+  }
 }
 bootstrap();

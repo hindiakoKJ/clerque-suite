@@ -10,6 +10,7 @@ import {
   Delete,
   BadRequestException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '@nestjs/passport';
 import type { Response as ExpressResponse } from 'express';
 import { AuthService } from './auth.service';
@@ -57,6 +58,12 @@ export class AuthController {
     private prisma:      PrismaService,
   ) {}
 
+  // SecAudit 2026-05 C2 (High) — pre-resolution rate limit on /auth/login.
+  // Per-user lockout kicks in only AFTER a user is resolved, so invalid
+  // emails were unlimited (enumeration timing). 10 attempts / 60s / IP is
+  // tight enough to block PIN-spray and credential-stuffing but loose
+  // enough for a cashier who fat-fingers their password a few times.
+  @Throttle({ short: { ttl: 60_000, limit: 10 } })
   @UseGuards(AuthGuard('local'))
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -258,6 +265,9 @@ export class AuthController {
    * Cashier fast-login. tenantSlug + email + 4-8 digit PIN.
    * Returns the same JWT shape as /auth/login.
    */
+  // SecAudit 2026-05 C2 — tighter throttle on PIN login (4-8 digit space
+  // makes spraying viable without it). 5 attempts / 60s / IP.
+  @Throttle({ short: { ttl: 60_000, limit: 5 } })
   @Post('pin-login')
   @HttpCode(HttpStatus.OK)
   async pinLogin(@Request() req: any, @Body() dto: PinLoginDto, @Response({ passthrough: true }) res: ExpressResponse) {
@@ -321,6 +331,8 @@ export class AuthController {
    * Accepts email + tenantSlug. Always responds 204 (no email enumeration).
    * If the user exists and is active, a password-reset email is sent.
    */
+  // SecAudit 2026-05 C2 — email-amplification protection. 3 requests / 60s / IP.
+  @Throttle({ short: { ttl: 60_000, limit: 3 } })
   @Post('forgot-password')
   @HttpCode(HttpStatus.NO_CONTENT)
   async forgotPassword(@Body() body: { email?: string; tenantSlug?: string }) {
@@ -333,6 +345,10 @@ export class AuthController {
    * Validates the one-time reset token and sets the new password.
    * All sessions are revoked after a successful reset.
    */
+  // SecAudit 2026-05 C2 — token-guessing protection (tokens are 32 random
+  // bytes hashed; brute force is impractical but throttle adds defense in
+  // depth). 5 attempts / 60s / IP.
+  @Throttle({ short: { ttl: 60_000, limit: 5 } })
   @Post('reset-password')
   @HttpCode(HttpStatus.NO_CONTENT)
   async resetPassword(@Body() body: { token?: string; newPassword?: string }) {

@@ -940,10 +940,19 @@ export class AuthService {
     await this.logoutAllDevices(userId);
   }
 
-  /** Verify refresh token signature and return the subject (userId). Throws 401 on invalid/expired token. */
+  /** Verify refresh token signature and return the subject (userId). Throws 401 on invalid/expired token.
+   *
+   *  SecAudit 2026-05 C1 — refresh tokens are signed with JWT_REFRESH_SECRET
+   *  (see issueTokens), NOT the access secret JwtModule was registered with.
+   *  Previously this verify call passed no override and silently used the
+   *  access secret. Result: rotating JWT_REFRESH_SECRET had no effect, and
+   *  the two secrets had no real separation. Explicit override below.
+   */
   extractRefreshSub(token: string): string {
     try {
-      const payload = this.jwt.verify(token) as { sub: string };
+      const payload = this.jwt.verify(token, {
+        secret: process.env.JWT_REFRESH_SECRET!,
+      }) as { sub: string };
       return payload.sub;
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');

@@ -64,7 +64,17 @@ export class ReadOnlyModeInterceptor implements NestInterceptor {
     // SUPER_ADMIN bypass — they need to unfreeze + investigate.
     if (user.isSuperAdmin || user.role === 'SUPER_ADMIN') return next.handle();
 
-    if (!user.tenantId) return next.handle();
+    // SecAudit 2026-05 R3 — previously this fell through with `return
+    // next.handle()`, meaning a JWT lacking tenantId (malformed, legacy,
+    // or stripped during a token-tampering attempt) silently bypassed
+    // the kill switch. A JWT for a tenant-bound role should always
+    // carry a tenantId; absence is a token-shape error or worse.
+    if (!user.tenantId) {
+      throw new HttpException(
+        { code: 'TENANT_REQUIRED', message: 'JWT is missing tenantId — please sign in again.' },
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
 
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: user.tenantId },

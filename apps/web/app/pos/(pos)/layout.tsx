@@ -272,6 +272,16 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // Sprint Bakery+1 verticals
   const isMedicalEquipment = businessType === 'MEDICAL_EQUIPMENT';
   const isGasStation       = businessType === 'GAS_STATION';
+  // Bakery-only sub-gate. The 3 nav items "Bake list", "Pre-orders", and
+  // "Price lists" were added during the bakery pilot sprint, but the
+  // surrounding `isFnb` branch shows them to every F&B tenant —
+  // coffee shops, restaurants, food stalls, bars, catering. None of
+  // those run a custom-cake pre-order workflow or a wholesale B2B
+  // price list. Coffee shop owners reported the distraction; gating
+  // these items behind `isBakery` keeps the FNB pack clean for the
+  // majority case. Pages remain live for any tenant who URL-types in
+  // (back-compat for the pilot); only the nav is hidden.
+  const isBakery           = businessType === 'BAKERY';
   // Multi-branch features only surface once the tenant has actually provisioned
   // a second branch — not merely because the plan permits it. Reasoning:
   //   - Transfers: nothing to transfer to/from with one branch.
@@ -432,18 +442,28 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     verticalNav = [
       ...withSection('Overview', [
         makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
-        makeNavItem('/pos/bake-list',    'Bake list',   ChefHat,         DASHBOARD_ROLES, role),
+        // Bake list — only bakeries plan a daily production run.
+        ...(isBakery
+          ? [makeNavItem('/pos/bake-list', 'Bake list', ChefHat, DASHBOARD_ROLES, role)]
+          : []),
       ]),
       ...withSection('Sell', [
         makeNavItem('/pos/terminal',     'Terminal',    ShoppingCart,    TERMINAL_ROLES,  role),
         makeNavItem('/pos/orders',       'Orders',      ShoppingBag,     ORDERS_ROLES,    role),
-        makeNavItem('/pos/pre-orders',   'Pre-orders',  Cake,            ORDERS_ROLES,    role),
+        // Pre-orders — custom-cake deposit + balance workflow, bakery only.
+        ...(isBakery
+          ? [makeNavItem('/pos/pre-orders', 'Pre-orders', Cake, ORDERS_ROLES, role)]
+          : []),
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',          'Products',          Package,         PRODUCTS_ROLES,  role),
         makeNavItem('/pos/inventory',         'Ingredients',       ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/modifier-recipes',  'Modifier recipes',  FlaskConical,    PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/price-lists',       'Price lists',       Tag,             PRODUCTS_ROLES,  role),
+        // Wholesale price lists — bakery B2B (wholesale to a coffee shop or
+        // hotel chain). Coffee shops + restaurants don't need it.
+        ...(isBakery
+          ? [makeNavItem('/pos/price-lists', 'Price lists', Tag, PRODUCTS_ROLES, role)]
+          : []),
         makeNavItem('/pos/settings/uom',      'Units (UoM)',       Ruler,           UOM_ROLES,       role),
       ]),
       ...warehouseSection,

@@ -81,6 +81,79 @@ export class OrdersService {
     // cause inventory deductions and order records to be created at another tenant's branch.
     await this.assertBranchBelongsToTenant(tenantId, payload.branchId);
 
+    // Guard (Security Audit 2026-05 T3): every other FK in the payload must
+    // also belong to this tenant. Previously only branchId + productId +
+    // authorizedById + prescriptionId were validated; customerId, shiftId,
+    // variantId, modifierGroupId/OptionId, discountConfigId were trusted
+    // from the payload. A crafted offline order could attach Tenant B's
+    // customer/shift/modifier IDs onto Tenant A's order, producing
+    // orphaned FKs in customer ledgers and loyalty programs.
+    {
+      if (payload.customerId) {
+        const customerCount = await this.prisma.customer.count({
+          where: { id: payload.customerId, tenantId },
+        });
+        if (customerCount !== 1) {
+          throw new BadRequestException('Customer does not belong to your organization.');
+        }
+      }
+      if ((payload as any).shiftId) {
+        const shiftCount = await this.prisma.shift.count({
+          where: { id: (payload as any).shiftId, tenantId },
+        });
+        if (shiftCount !== 1) {
+          throw new BadRequestException('Shift does not belong to your organization.');
+        }
+      }
+      const variantIds = Array.from(new Set(
+        payload.items.map((i) => i.variantId).filter((v): v is string => !!v),
+      ));
+      if (variantIds.length > 0) {
+        // ProductVariant inherits tenancy via Product — join through.
+        const validVariants = await this.prisma.productVariant.count({
+          where: { id: { in: variantIds }, product: { tenantId } },
+        });
+        if (validVariants !== variantIds.length) {
+          throw new BadRequestException('One or more product variants do not belong to your organization.');
+        }
+      }
+      const modifierGroupIds = Array.from(new Set(
+        payload.items.flatMap((i) => (i.modifiers ?? []).map((m) => m.modifierGroupId).filter((v): v is string => !!v)),
+      ));
+      if (modifierGroupIds.length > 0) {
+        const validGroups = await this.prisma.modifierGroup.count({
+          where: { id: { in: modifierGroupIds }, tenantId },
+        });
+        if (validGroups !== modifierGroupIds.length) {
+          throw new BadRequestException('One or more modifier groups do not belong to your organization.');
+        }
+      }
+      const modifierOptionIds = Array.from(new Set(
+        payload.items.flatMap((i) => (i.modifiers ?? []).map((m) => m.modifierOptionId).filter((v): v is string => !!v)),
+      ));
+      if (modifierOptionIds.length > 0) {
+        // ModifierOption inherits tenancy via ModifierGroup — join via the
+        // `group` relation field (named in schema.prisma:1987).
+        const validOptions = await this.prisma.modifierOption.count({
+          where: { id: { in: modifierOptionIds }, group: { tenantId } },
+        });
+        if (validOptions !== modifierOptionIds.length) {
+          throw new BadRequestException('One or more modifier options do not belong to your organization.');
+        }
+      }
+      const discountConfigIds = Array.from(new Set(
+        payload.discounts.map((d) => d.discountConfigId).filter((v): v is string => !!v),
+      ));
+      if (discountConfigIds.length > 0) {
+        const validConfigs = await this.prisma.discountTypeConfig.count({
+          where: { id: { in: discountConfigIds }, tenantId },
+        });
+        if (validConfigs !== discountConfigIds.length) {
+          throw new BadRequestException('One or more discount configs do not belong to your organization.');
+        }
+      }
+    }
+
     // Sprint 19 — Pharmacy PIN-attest validation. Replaces the earlier
     // RX_REQUIRED_NO_PRESCRIPTION guard (commit 2d30c97 → revised plan).
     // Real Filipino pharmacy workflow: the assistant has already verified
@@ -1048,12 +1121,29 @@ export class OrdersService {
     return { data, total, take: safeTake, skip: safeSkip };
   }
 
-  async findOne(tenantId: string, id: string) {
-    // Note: findOne intentionally INCLUDES soft-deleted records — the receipt
-    // detail page needs to render voided orders for audit. Lists use findAll
-    // which filters them out.
+  /**
+   * Fetch a single order. CRITICAL: callers MUST pass `branchScope` (the
+   * effectiveBranchId for the requesting user). Without it, a CASHIER from
+   * Branch A could read any Branch B order in the same tenant — exposing
+   * PWD/SC IDs, customer TIN, payment amounts, and pharmacist PRC.
+   *
+   * `branchScope === undefined` means "owner-tier / cross-branch caller"
+   * (BUSINESS_OWNER, SUPER_ADMIN, ACCOUNTANT, etc.). For those, we keep
+   * the tenant-only scope. The controller is responsible for computing
+   * `branchScope` via `effectiveBranchId(user)` so this method has a
+   * single source of truth for the policy.
+   *
+   * Note: findOne intentionally INCLUDES soft-deleted records — the receipt
+   * detail page needs to render voided orders for audit. Lists use findAll
+   * which filters them out.
+   */
+  async findOne(tenantId: string, id: string, branchScope?: string) {
     const order = await this.prisma.order.findFirst({
-      where: { id, tenantId },
+      where: {
+        id,
+        tenantId,
+        ...(branchScope ? { branchId: branchScope } : {}),
+      },
       include: {
         items: {
           include: {

@@ -97,9 +97,16 @@ export class OrdersController {
   @Get(':id')
   async findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     try {
-      return await this.ordersService.findOne(user.tenantId!, id);
+      // CRITICAL: branch scope MUST flow through so branch-scoped roles
+      // (CASHIER, SALES_LEAD, BRANCH_MANAGER, MDM, WAREHOUSE_STAFF) cannot
+      // read another branch's order details. Pre-fix, a Branch-A cashier
+      // could GET /orders/<branch-B-order-id> and see PWD/SC IDs, customer
+      // TIN, payment amounts, and pharmacist PRC.
+      const branchScope = effectiveBranchId(user, undefined);
+      return await this.ordersService.findOne(user.tenantId!, id, branchScope);
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
+      if (err instanceof ForbiddenException) throw err;
       throw new InternalServerErrorException('Failed to retrieve order');
     }
   }

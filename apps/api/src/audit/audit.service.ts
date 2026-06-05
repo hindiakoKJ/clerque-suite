@@ -40,6 +40,8 @@ export interface LogParams {
   description?: string;
   performedBy?: string;
   ipAddress?:   string;
+  /** SecAudit 2026-05 A4 — request `user-agent` header for forensics. */
+  userAgent?:   string;
 }
 
 @Injectable()
@@ -62,6 +64,7 @@ export class AuditService {
         description: params.description,
         performedBy: params.performedBy,
         ipAddress:   params.ipAddress,
+        userAgent:   params.userAgent,
       },
     });
   }

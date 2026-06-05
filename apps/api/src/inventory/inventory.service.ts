@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
@@ -397,6 +398,59 @@ export class InventoryService {
 
     // Verify branch belongs to tenant (CRITICAL-2 fix — prevents cross-tenant branch injection)
     await this.assertBranchBelongsToTenant(tenantId, branchId);
+
+    // SecAudit 2026-05 A3 (High) — SOD on negative inventory adjustments.
+    // Pre-fix: reasonCode optional, no PIN gate, no threshold. A branch
+    // manager could write off inventory to COGS without leaving a
+    // justification trail. Classic shrinkage-hiding vector + direct BIR
+    // examination finding.
+    //
+    // Rule: STOCK_OUT or negative quantity ⇒ reasonCode REQUIRED.
+    // Rule: any negative adjustment ⇒ supervisor PIN attest REQUIRED
+    //   from a user with VOID_DIRECT_ROLES.
+    const isNegativeFlow = type === 'STOCK_OUT' || quantity < 0;
+    if (isNegativeFlow) {
+      if (!dto.reasonCode) {
+        throw new BadRequestException(
+          'SecAudit A3: negative inventory adjustments require a reasonCode (DAMAGE / THEFT / EXPIRY / COUNT_CORRECTION / SAMPLE / INTERNAL_USE / PROMO_GIVEAWAY / OTHER).',
+        );
+      }
+      // Supervisor PIN attest. Roles permitted to attest:
+      //   BUSINESS_OWNER, BRANCH_MANAGER, SALES_LEAD (treats inventory
+      //   write-offs with the same care as POS voids).
+      if (!dto.supervisorPin) {
+        throw new BadRequestException(
+          'SecAudit A3: negative inventory adjustments require a supervisorPin attest from a supervisor account.',
+        );
+      }
+      const supervisorRoles: Array<string> = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'];
+      const supervisors = await this.prisma.user.findMany({
+        where: {
+          tenantId,
+          isActive: true,
+          role: { in: supervisorRoles as any },
+          supervisorPinHash: { not: null },
+        },
+        select: { id: true, supervisorPinHash: true, name: true, role: true },
+      });
+      let attestedBy: { id: string; name: string; role: string } | null = null;
+      for (const sup of supervisors) {
+        if (!sup.supervisorPinHash) continue;
+        if (await bcrypt.compare(dto.supervisorPin, sup.supervisorPinHash)) {
+          attestedBy = { id: sup.id, name: sup.name, role: sup.role };
+          break;
+        }
+      }
+      if (!attestedBy) {
+        throw new BadRequestException(
+          'SecAudit A3: supervisor PIN does not match any authorised attester.',
+        );
+      }
+      // Stash so the audit log + journal entry can record who attested.
+      (dto as any).__attestedById   = attestedBy.id;
+      (dto as any).__attestedByName = attestedBy.name;
+      (dto as any).__attestedByRole = attestedBy.role;
+    }
 
     // SECURITY H10 — bound `unitCost` against `product.costPrice`. Without
     // this, a BRANCH_MANAGER or WAREHOUSE_STAFF could STOCK_IN qty=1 at a

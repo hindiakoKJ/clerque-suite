@@ -752,6 +752,11 @@ model AuditLog {
   /// User who triggered the change (null = system action)
   performedBy String?
   ipAddress   String?
+  /// SecAudit 2026-05 A4 — captured from request `user-agent` header at the
+  /// controller. Distinguishes "owner on phone" from "leaked token from
+  /// headless script" during incident forensics. Required by NPC breach
+  /// reports under RA 10173 IRR §10.f.
+  userAgent   String?
   createdAt   DateTime    @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)

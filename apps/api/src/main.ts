@@ -174,6 +174,13 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  // SecAudit 2026-05 I16 — trust the Railway edge proxy so req.ip is the
+  // real client address (not the Railway edge IP). Without this, the global
+  // throttler keys every request to the same IP and either lets through too
+  // much or blocks legitimate traffic. Same applies to audit-log IP capture.
+  // One hop = Railway -> our process; if you put Cloudflare in front, bump to 2.
+  app.set('trust proxy', 1);
+
   app.use(compression());
   app.use(cookieParser());
 

@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    # SecAudit 2026-05 Infra I3 — branch-name parity. CI was triggered on
+    # main/develop while deploy-notify ran on master. Deploys could bypass
+    # CI. Now triggered on the actual default branch (master).
+    branches: [master, main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [master, main, develop]
 
 jobs:
   # ── Type check both apps ────────────────────────────────────────────────────
@@ -64,21 +67,42 @@ jobs:
       - name: Lint — API
         run: npm run lint --workspace=apps/api
 
-  # ── Docker build check (verifies the Dockerfile compiles cleanly) ───────────
-  docker-build:
-    name: Docker Build (API)
+  # ── Tests (API) ─────────────────────────────────────────────────────────────
+  #
+  # SecAudit 2026-05 Testing Gap #1 (Critical) — the 31 spec files in
+  # apps/api were never executed in CI. They could all be red and nobody
+  # would know; coverage was theatre.
+  #
+  # This job runs `jest` on every PR + push so the existing tests become
+  # a real safety net. Web + Counter have no specs yet so they're skipped;
+  # add their jobs here when specs land.
+  tests:
+    name: Tests (API)
     runs-on: ubuntu-latest
-    # Only run on push to main to keep PR feedback fast
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          context: .
-          file: Dockerfile
-          push: false
-          tags: clerque-api:ci
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --workspaces --include-workspace-root
+
+      - name: Build shared-types
+        run: npm run build --workspace=packages/shared-types
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/db/prisma/schema.prisma
+
+      - name: Run API tests
+        run: npm test --workspace=apps/api
+
+  # NOTE: docker-build was removed. Audit I2 — the workflow built `Dockerfile`
+  # at repo root but no Dockerfile exists (Railway uses nixpacks via
+  # railway.toml). The job failed silently on main and masked real CI
+  # signals. Re-add when a real Dockerfile lands.

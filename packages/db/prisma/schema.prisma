@@ -1907,6 +1907,11 @@ model JournalEntry {
   @@index([tenantId, postingDate])
   @@index([tenantId, date])
   @@index([tenantId, status])
+  /// SecAudit 2026-05 A1 (Critical) — gapless JE numbering per BIR. Comment
+  /// in journal.service.ts:41 has long claimed this constraint exists; it
+  /// only existed as @@index before — NumberingService races could silently
+  /// double-issue. Now enforced at the DB level.
+  @@unique([tenantId, entryNumber])
   @@map("journal_entries")
 }
 

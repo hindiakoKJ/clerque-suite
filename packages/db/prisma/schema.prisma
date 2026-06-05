@@ -366,6 +366,10 @@ enum AuditAction {
   /// Audit-D10-D — set by the bulk-export scheduler when a user exports >5
   /// reports inside a one-hour window (potential exfiltration signal).
   BULK_EXPORT_FLAGGED
+  /// SecAudit 2026-05 A5 — BUSINESS_OWNER / SUPER_ADMIN approving their
+  /// own JE. Intentional ("final authority") but flagged distinctly so
+  /// BIR sampling surfaces it cleanly during examination.
+  SELF_APPROVAL
 }
 
 enum SessionStatus {

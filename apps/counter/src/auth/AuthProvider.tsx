@@ -373,6 +373,17 @@ async function clearAllPersisted(): Promise<void> {
     AsyncStorage.removeItem(AS_TENANT_TS_KEY),
     AsyncStorage.removeItem(AS_USER_KEY),
   ]);
+  // SecAudit 2026-05 B11 — purge ALL persisted shift caches scoped under
+  // `@clerque/counter/shift/v1/<tenantId>:<branchId>:<cashierId>`. Without
+  // this, the previous cashier's open shift would survive sign-out and
+  // could be reanimated by the next cashier on a shared device.
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const stale = keys.filter((k) => k.startsWith('@clerque/counter/shift/'));
+    if (stale.length > 0) await AsyncStorage.multiRemove(stale);
+  } catch {
+    /* AsyncStorage may be uninitialized in tests; not fatal */
+  }
 }
 
 // Re-export error type for callers that want to branch on `code`.

@@ -116,8 +116,16 @@ export class JournalService {
       });
       const threshold = Number(tenant?.jeApprovalThreshold ?? 0);
       if (threshold > 0) {
-        const totalDebit = dto.lines.reduce((s, l) => s + Number(l.debit ?? 0), 0);
-        if (totalDebit >= threshold) {
+        // SecAudit 2026-05 A6 — use max(totalDebit, totalCredit) so a
+        // malformed line set (debits 0, credits = total) cannot understate
+        // the entry size and slip past the approval gate. Balanced entries
+        // hit both sums equally; unbalanced entries are caught by the
+        // separate balance check and we want the LARGER side to drive the
+        // gate, not the smaller one.
+        const totalDebit  = dto.lines.reduce((s, l) => s + Number(l.debit  ?? 0), 0);
+        const totalCredit = dto.lines.reduce((s, l) => s + Number(l.credit ?? 0), 0);
+        const entryAmount = Math.max(totalDebit, totalCredit);
+        if (entryAmount >= threshold) {
           status = 'PENDING_APPROVAL';
         }
       }
@@ -227,7 +235,10 @@ export class JournalService {
     if (entry.status !== 'PENDING_APPROVAL') {
       throw new BadRequestException(`Entry is ${entry.status} — only PENDING_APPROVAL entries can be approved.`);
     }
-    if (entry.createdBy === approverId && approverRole !== 'BUSINESS_OWNER' && approverRole !== 'SUPER_ADMIN') {
+    const isSelfApproval =
+      entry.createdBy === approverId &&
+      (approverRole === 'BUSINESS_OWNER' || approverRole === 'SUPER_ADMIN');
+    if (entry.createdBy === approverId && !isSelfApproval) {
       throw new ForbiddenException(
         'Segregation of Duties — the approver cannot be the same person who created the entry. Have a different supervisor approve.',
       );
@@ -245,6 +256,30 @@ export class JournalService {
         postedAt:     new Date(),
       },
     });
+
+    // SecAudit 2026-05 A5 — owner self-approval is allowed (final authority)
+    // but tagged distinctly in the audit log so BIR examiners can sample
+    // it cleanly. Best-effort: catch any audit write failure so the
+    // approval still succeeds.
+    if (isSelfApproval) {
+      try {
+        await this.prisma.auditLog.create({
+          data: {
+            tenantId,
+            action:      'SELF_APPROVAL' as any,
+            entityType:  'JournalEntry',
+            entityId:    id,
+            description: `Owner self-approval of JE ${id} (role ${approverRole}).`,
+            performedBy: approverId,
+          },
+        });
+      } catch (err) {
+        // Log but don't block the approval. The audit log shouldn't be
+        // the source of truth for whether the JE posted.
+        // eslint-disable-next-line no-console
+        console.warn('[journal] SELF_APPROVAL audit log failed:', err);
+      }
+    }
     return this.prisma.journalEntry.findFirst({
       where: { id, tenantId },
       include: { lines: { include: { account: { select: { code: true, name: true } } } } },

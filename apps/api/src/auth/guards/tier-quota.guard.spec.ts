@@ -101,12 +101,25 @@ describe('TierQuotaGuard', () => {
     });
   });
 
-  it('falls back to SUITE_T2 when planCode is null (legacy tenants)', async () => {
+  it('falls back to SOLO_LITE when planCode is null (legacy tenants)', async () => {
+    // Solo tier redesign (commits 83e32ff / 91ce574 / 669f7c4) made
+    // SOLO_LITE the conservative default for legacy / unset planCode.
+    // SOLO_LITE ceiling = 1; with 0 staff already, adding 1 must pass.
     prisma.tenant.findUnique.mockResolvedValue({ planCode: null, staffSeatAddons: 0 });
-    prisma.user.count.mockResolvedValue(5);
+    prisma.user.count.mockResolvedValue(0);
     const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
-    // SUITE_T2 ceiling allows 10 → 5 < 10 → pass
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
+  });
+
+  it('blocks when planCode null fallback exhausts the SOLO_LITE seat', async () => {
+    // Same fallback path but now the one allowed seat is taken — adding
+    // another must reject. Asserts the fallback isn't silently permissive.
+    prisma.tenant.findUnique.mockResolvedValue({ planCode: null, staffSeatAddons: 0 });
+    prisma.user.count.mockResolvedValue(1);
+    const ctx = makeCtx({ tenantId: 't1' }, { role: 'CASHIER' });
+    await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+      response: expect.objectContaining({ ceiling: 1 }),
+    });
   });
 
   it('does not count BUSINESS_OWNER toward the seat cap (filter in user.count where)', async () => {

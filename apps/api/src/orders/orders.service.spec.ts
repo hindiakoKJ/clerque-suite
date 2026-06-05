@@ -11,6 +11,7 @@ import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
+import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -100,6 +101,14 @@ describe('OrdersService — void()', () => {
     // out so the module compiles. The catch in OrdersService.create swallows
     // any error here, but a no-op mock keeps logs clean.
     const loyaltyMock = { accrueStampsForOrder: jest.fn().mockResolvedValue(undefined) } as any;
+    // Sprint 22 — Maker-checker for voids over threshold. OrdersService.void()
+    // calls hasApprovedFor() when the cashier passes a void-approval id;
+    // tests in this file don't exercise that path so a permissive mock that
+    // claims every check has been pre-approved keeps the rest of the suite
+    // green.
+    const voidApprovalsMock = {
+      hasApprovedFor: jest.fn().mockResolvedValue(true),
+    } as any;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -109,6 +118,7 @@ describe('OrdersService — void()', () => {
         { provide: AuditService,               useValue: audit   },
         { provide: NumberingService,           useValue: numberingMock },
         { provide: LoyaltyService,             useValue: loyaltyMock   },
+        { provide: VoidApprovalsService,       useValue: voidApprovalsMock },
       ],
     }).compile();
 

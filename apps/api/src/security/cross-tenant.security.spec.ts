@@ -28,6 +28,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersService }    from '../orders/orders.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService }   from '../loyalty/loyalty.service';
+import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ShiftsService }    from '../shifts/shifts.service';
 
@@ -77,7 +78,18 @@ function makePrismaMock() {
       create:     jest.fn(),
       update:     jest.fn(),
       updateMany: shiftUpdateMany,
+      // SecAudit 2026-05 T3 — orders.service.create now validates that
+      // dto.shiftId (and customerId / variantId / modifier* / discountConfigId)
+      // belongs to the tenant via count({where:{id, tenantId}}). Mock as
+      // present-by-default so legitimate test payloads pass; specific
+      // tests that need to assert rejection override these per-case.
+      count:      jest.fn().mockResolvedValue(1),
     },
+    customer:           { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(1) },
+    productVariant:     { count: jest.fn().mockResolvedValue(1) },
+    modifierGroup:      { count: jest.fn().mockResolvedValue(1) },
+    modifierOption:     { count: jest.fn().mockResolvedValue(1) },
+    discountTypeConfig: { count: jest.fn().mockResolvedValue(1) },
     inventoryItem: {
       findUnique: jest.fn(),
       findMany:   jest.fn().mockResolvedValue([]),
@@ -212,6 +224,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
 
     const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
     const loyaltyMock   = { accrueStampsForOrder: jest.fn().mockResolvedValue(undefined) } as any;
+    const voidApprovalsMock = { hasApprovedFor: jest.fn().mockResolvedValue(true) } as any;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -221,6 +234,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
         { provide: AuditService,             useValue: audit   },
         { provide: NumberingService,         useValue: numberingMock },
         { provide: LoyaltyService,           useValue: loyaltyMock   },
+        { provide: VoidApprovalsService,     useValue: voidApprovalsMock },
       ],
     }).compile();
 
@@ -747,6 +761,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
     prisma  = makePrismaMock();
     const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
     const loyaltyMock   = { accrueStampsForOrder: jest.fn().mockResolvedValue(undefined) } as any;
+    const voidApprovalsMock = { hasApprovedFor: jest.fn().mockResolvedValue(true) } as any;
     const module = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -756,6 +771,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
         { provide: AuditService,             useValue: makeAuditMock()  },
         { provide: NumberingService,         useValue: numberingMock     },
         { provide: LoyaltyService,           useValue: loyaltyMock       },
+        { provide: VoidApprovalsService,     useValue: voidApprovalsMock },
       ],
     }).compile();
     ordersService = module.get(OrdersService);

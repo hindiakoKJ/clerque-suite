@@ -14,6 +14,7 @@ import {
   Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { JournalService } from '../accounting/journal.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { Prisma, type PaymentMethod } from '@prisma/client';
@@ -120,6 +121,10 @@ export class APPaymentsService {
 
     const apAccount   = await this.findApPayablesAccount(tenantId);
     const cashAccount = await this.findCashAccountForMethod(tenantId, dto.method);
+
+
+    // SecAudit 2026-05 T2 — assert dto.branchId belongs to this tenant.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     return this.prisma.$transaction(async (tx) => {
       const paymentNumber = await this.numbering.next(tenantId, 'AP_PAYMENT', null, tx);

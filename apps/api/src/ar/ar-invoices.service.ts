@@ -35,6 +35,7 @@ import { JournalService } from '../accounting/journal.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { Prisma, InvoiceStatus, type TaxStatus } from '@prisma/client';
 
 /**
@@ -166,6 +167,10 @@ export class ARInvoicesService {
     if (validAccounts !== accountIds.length) {
       throw new BadRequestException('One or more line accounts are invalid for this tenant.');
     }
+
+    // SecAudit 2026-05 T2: assert dto.branchId belongs to this tenant.
+    // Without this, a user from Tenant A could submit Tenant B's branchId.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     const invoiceDate = new Date(dto.invoiceDate);
     const postingDate = dto.postingDate ? new Date(dto.postingDate) : invoiceDate;

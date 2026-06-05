@@ -21,6 +21,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { JournalService } from '../accounting/journal.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { NumberingService } from '../numbering/numbering.service';
@@ -110,6 +111,10 @@ export class VendorCreditNotesService {
     const subtotal  = dto.lines.reduce((s, l) => s + (l.lineTotal - (l.taxAmount ?? 0)), 0);
     const vatAmount = dto.lines.reduce((s, l) => s + (l.taxAmount ?? 0), 0);
     const total     = dto.lines.reduce((s, l) => s + l.lineTotal, 0);
+
+
+    // SecAudit 2026-05 T2 — assert dto.branchId belongs to this tenant.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     return this.prisma.$transaction(async (tx) => {
       const noteNumber = await this.numbering.next(tenantId, 'AP_CREDIT_NOTE', null, tx);

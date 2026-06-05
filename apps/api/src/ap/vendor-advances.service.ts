@@ -20,6 +20,7 @@ import {
   Injectable, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { JournalService } from '../accounting/journal.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { NumberingService } from '../numbering/numbering.service';
@@ -99,6 +100,10 @@ export class VendorAdvancesService {
 
     const advanceDate = new Date(dto.advanceDate);
     const postingDate = dto.postingDate ? new Date(dto.postingDate) : advanceDate;
+
+
+    // SecAudit 2026-05 T2 — assert dto.branchId belongs to this tenant.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     return this.prisma.$transaction(async (tx) => {
       const advanceNumber = await this.numbering.next(tenantId, 'VENDOR_ADVANCE', null, tx);

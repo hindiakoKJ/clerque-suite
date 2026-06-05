@@ -21,6 +21,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { NumberingService } from '../numbering/numbering.service';
 import { ARInvoicesService } from './ar-invoices.service';
 import { Prisma, QuoteStatus } from '@prisma/client';
@@ -82,6 +83,10 @@ export class QuotesService {
     if (!customer) throw new NotFoundException('Customer not found.');
 
     const { subtotal, vatAmount, total } = this.computeTotals(dto.lines);
+
+
+    // SecAudit 2026-05 T2 — assert dto.branchId belongs to this tenant.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     return this.prisma.$transaction(async (tx) => {
       const quoteNumber = await this.numbering.next(tenantId, 'QUOTE', null, tx);

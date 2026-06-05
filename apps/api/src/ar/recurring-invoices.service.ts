@@ -22,6 +22,7 @@ import {
   Injectable, NotFoundException, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { NumberingService } from '../numbering/numbering.service';
 import { Prisma, RecurringTemplateStatus } from '@prisma/client';
 import { computeNextRunAt } from '../common/recurrence';
@@ -144,6 +145,10 @@ export class RecurringInvoicesService {
     if (endDate && endDate.getTime() <= tpl.startDate.getTime()) {
       throw new BadRequestException('endDate must be after startDate.');
     }
+
+
+    // SecAudit 2026-05 T2 — assert dto.branchId belongs to this tenant.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     return this.prisma.$transaction(async (tx) => {
       if (dto.lines) {

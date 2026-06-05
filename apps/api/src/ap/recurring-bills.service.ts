@@ -12,6 +12,7 @@ import {
   Injectable, NotFoundException, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { NumberingService } from '../numbering/numbering.service';
 import { Prisma, RecurringTemplateStatus } from '@prisma/client';
 import { computeNextRunAt } from '../common/recurrence';
@@ -54,6 +55,10 @@ export class RecurringBillsService {
     const subtotal  = dto.lines.reduce((s, l) => s + (l.lineTotal - (l.taxAmount ?? 0)), 0);
     const vatAmount = dto.lines.reduce((s, l) => s + (l.taxAmount ?? 0), 0);
     const total     = dto.lines.reduce((s, l) => s + l.lineTotal, 0);
+
+
+    // SecAudit 2026-05 T2 — assert dto.branchId belongs to this tenant.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     return this.prisma.$transaction(async (tx) => {
       const templateNumber = await this.numbering.next(tenantId, 'RECURRING_BILL', null, tx);

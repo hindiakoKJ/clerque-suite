@@ -8,7 +8,7 @@ import {
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
   Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity, ChartBar,
   Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
-  FlaskConical, Fuel,
+  FlaskConical, Fuel, Sun,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType, isFnbType } from '@repo/shared-types';
@@ -442,6 +442,12 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     verticalNav = [
       ...withSection('Overview', [
         makeNavItem('/pos/dashboard',    'Dashboard',   LayoutDashboard, DASHBOARD_ROLES, role),
+        // Close & Plan — the evening routine, bakery-specific for now.
+        // Sits at the top of Overview so it's the natural late-night
+        // destination for owners.
+        ...(isBakery
+          ? [makeNavItem('/pos/close-and-plan', 'Close & Plan', Sun, DASHBOARD_ROLES, role)]
+          : []),
         // Bake list — only bakeries plan a daily production run.
         ...(isBakery
           ? [makeNavItem('/pos/bake-list', 'Bake list', ChefHat, DASHBOARD_ROLES, role)]

@@ -15,6 +15,7 @@ export type PhoneMoreStackParamList = {
   Printer: undefined;
   Settings: undefined;
   Pickups: undefined;
+  CloseAndPlan: undefined;
 };
 
 export type PhoneTabParamList = {

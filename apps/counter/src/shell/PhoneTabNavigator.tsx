@@ -30,6 +30,7 @@ import PhoneMoreScreen from '@/shell/phone/PhoneMoreScreen';
 import PhoneApprovalsScreen from '@/shell/phone/PhoneApprovalsScreen';
 import PhoneDisplaysCodegen from '@/shell/phone/PhoneDisplaysCodegen';
 import PhonePickupsScreen from '@/shell/phone/PhonePickupsScreen';
+import PhoneCloseAndPlanScreen from '@/shell/phone/PhoneCloseAndPlanScreen';
 import PhonePumpsScreen from '@/shell/phone/PhonePumpsScreen';
 import PhoneRentalsScreen from '@/shell/phone/PhoneRentalsScreen';
 import { useAuth } from '@/auth/AuthProvider';
@@ -72,6 +73,7 @@ function MoreStackNavigator(): React.ReactElement {
         {(p) => <SettingsScreen onMenuPress={() => p.navigation.goBack()} />}
       </MoreStack.Screen>
       <MoreStack.Screen name="Pickups" component={PhonePickupsScreen} />
+      <MoreStack.Screen name="CloseAndPlan" component={PhoneCloseAndPlanScreen} />
     </MoreStack.Navigator>
   );
 }

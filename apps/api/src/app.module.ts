@@ -16,6 +16,7 @@ import { UsersModule } from './users/users.module';
 import { AccountingModule } from './accounting/accounting.module';
 import { ModifiersModule } from './modifiers/modifiers.module';
 import { PreOrdersModule } from './pre-orders/pre-orders.module';
+import { CloseAndPlanModule } from './close-and-plan/close-and-plan.module';
 import { PriceListsModule } from './price-lists/price-lists.module';
 import { RentalsModule } from './rentals/rentals.module';
 import { FuelModule } from './fuel/fuel.module';
@@ -103,6 +104,7 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     AccountingModule,
     ModifiersModule,
     PreOrdersModule,
+    CloseAndPlanModule,
     PriceListsModule,
     RentalsModule,
     FuelModule,

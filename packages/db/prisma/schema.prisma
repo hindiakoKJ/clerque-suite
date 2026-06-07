@@ -4163,6 +4163,19 @@ model RawMaterialLot {
   /// Sprint 25 — link to PurchaseOrder when received against one.
   purchaseOrderItemId String?
   createdAt           DateTime  @default(now())
+  /// Sprint 26 — Close & Plan: sticker tier driven by FEFO position +
+  /// days-to-expiry. USE_FIRST = soonest-expiring active lot of this
+  /// raw material in this branch. EXPIRING_SOON = ≤ 3 days to expiry.
+  /// EXPIRED = past expiry. NORMAL = everything else.
+  /// Recomputed by the daily cron and by batchReceive().
+  stickerTier         StickerTier?       @default(NORMAL)
+  /// True when the owner clicked "It's real — save anyway" past a
+  /// duplicate-detection warning. Lets us audit how often the heuristic
+  /// produces false positives and improve thresholds.
+  dupeOverride        Boolean            @default(false)
+  /// Last time a sticker was printed for this lot. Drives the
+  /// "needs reprint" banner when tier changes.
+  stickerLastPrintedAt DateTime?
 
   rawMaterial       RawMaterial        @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
   purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id])
@@ -4171,7 +4184,20 @@ model RawMaterialLot {
   @@index([rawMaterialId, branchId, expirationDate, receivedAt])
   @@index([rawMaterialId, branchId, receivedAt])
   @@index([tenantId, expirationDate])
+  /// Duplicate-detection: scan recent receives per item per branch.
+  @@index([tenantId, branchId, rawMaterialId, receivedAt])
   @@map("raw_material_lots")
+}
+
+/// Sprint 26 — Sticker tier for the Close & Plan briefing print.
+/// Computed: USE_FIRST when this lot is the soonest-expiring ACTIVE
+/// lot of its RawMaterial in its branch; EXPIRING_SOON when ≤ 3 days
+/// to expiry; EXPIRED when past expiry; NORMAL otherwise.
+enum StickerTier {
+  USE_FIRST
+  EXPIRING_SOON
+  EXPIRED
+  NORMAL
 }
 
 // ─── Laundry vertical (BusinessType.LAUNDRY) ─────────────────────────────────

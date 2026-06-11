@@ -44,7 +44,6 @@ const CTRL_CONFIG: Record<PostingControl, { label: string; Icon: React.ElementTy
   SYSTEM_ONLY: { label: 'System',  Icon: Lock,        color: 'text-muted-foreground bg-muted/60', tip: 'Posted automatically by the event queue only' },
 };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export default function AccountsPage() {
   const router       = useRouter();
@@ -66,7 +65,7 @@ export default function AccountsPage() {
   async function handleExport() {
     setExporting(true);
     try {
-      const url      = `${API_URL}/api/v1/export/chart-of-accounts`;
+      const url      = `/export/chart-of-accounts`;
       const filename = `chart-of-accounts-${new Date().toISOString().slice(0, 10)}.xlsx`;
       await downloadAuthFile(url, filename);
     } finally {

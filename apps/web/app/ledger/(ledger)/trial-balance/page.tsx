@@ -51,7 +51,6 @@ function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export default function TrialBalancePage() {
   const router   = useRouter();
@@ -62,7 +61,7 @@ export default function TrialBalancePage() {
     setExporting(true);
     try {
       await downloadAuthFile(
-        `${API_URL}/api/v1/export/trial-balance?asOf=${asOf}`,
+        `/export/trial-balance?asOf=${asOf}`,
         `trial-balance-${asOf}.xlsx`,
       );
     } catch {

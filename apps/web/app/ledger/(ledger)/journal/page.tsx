@@ -93,8 +93,6 @@ export default function JournalPage() {
   const [exporting, setExporting]           = useState(false);
   const [showImport, setShowImport]         = useState(false);
 
-  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
-
   async function handleExport() {
     setExporting(true);
     try {
@@ -104,7 +102,7 @@ export default function JournalPage() {
       if (filterStatus) params.set('status', filterStatus);
       const range    = [from, to].filter(Boolean).join('_to_') || 'all';
       await downloadAuthFile(
-        `${API_URL}/api/v1/export/journal?${params}`,
+        `/export/journal?${params}`,
         `journal-${range}.xlsx`,
       );
     } catch {
@@ -431,7 +429,7 @@ export default function JournalPage() {
                                         try {
                                           const { downloadAuthFile: dlf } = await import('@/lib/utils');
                                           await dlf(
-                                            `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}/api/v1/bir/eis/${entry.accountingEvent!.orderId}`,
+                                            `/bir/eis/${entry.accountingEvent!.orderId}`,
                                             `eis-${entry.entryNumber}.json`,
                                           );
                                         } catch {

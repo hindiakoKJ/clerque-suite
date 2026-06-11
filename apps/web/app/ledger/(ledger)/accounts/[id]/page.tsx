@@ -87,7 +87,6 @@ function firstDayOfMonth() {
   return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export default function AccountLedgerPage() {
   const router = useRouter();
@@ -103,7 +102,7 @@ export default function AccountLedgerPage() {
     try {
       const params = new URLSearchParams({ from, to });
       await downloadAuthFile(
-        `${API_URL}/api/v1/export/account-ledger/${id}?${params}`,
+        `/export/account-ledger/${id}?${params}`,
         `ledger-${id}-${from}_to_${to}.xlsx`,
       );
     } catch {

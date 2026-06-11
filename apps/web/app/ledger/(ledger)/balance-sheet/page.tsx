@@ -1,10 +1,11 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Scale, AlertCircle } from 'lucide-react';
+import { Scale, AlertCircle, Download } from 'lucide-react';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { formatPeso } from '@/lib/utils';
+import { formatPeso, downloadAuthFile } from '@/lib/utils';
 import { Spinner } from '@/components/ui/Spinner';
 
 interface Row {
@@ -98,6 +99,7 @@ function Group({ label, rows, total }: { label: string; rows: Row[]; total: numb
 export default function BalanceSheetPage() {
   const user = useAuthStore((s) => s.user);
   const [asOf, setAsOf] = useState(todayIso());
+  const [exporting, setExporting] = useState(false);
   const canRead = user ? READ_ROLES.includes(user.role) : false;
 
   const { data, isLoading, error } = useQuery<BalanceSheet>({
@@ -105,6 +107,17 @@ export default function BalanceSheetPage() {
     queryFn:  () => api.get(`/accounting/accounts/balance-sheet?asOf=${asOf}`).then((r) => r.data),
     enabled:  !!user && canRead,
   });
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await downloadAuthFile(`/export/balance-sheet?asOf=${asOf}`, `balance-sheet-${asOf}.xlsx`);
+    } catch {
+      toast.error('Failed to download Balance Sheet. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (!canRead) {
     return <div className="p-8 text-center text-muted-foreground">Balance Sheet is restricted to finance roles.</div>;
@@ -125,10 +138,21 @@ export default function BalanceSheetPage() {
             Snapshot of Assets = Liabilities + Equity at a point in time.
           </p>
         </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground block mb-1">As of</label>
-          <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)}
-            className="h-9 px-3 rounded-lg border border-border bg-background text-sm" />
+        <div className="flex items-end gap-2">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">As of</label>
+            <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)}
+              className="h-9 px-3 rounded-lg border border-border bg-background text-sm" />
+          </div>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || !data}
+            className="h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted disabled:opacity-50 inline-flex items-center gap-1.5"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {exporting ? 'Exporting…' : 'XLSX'}
+          </button>
         </div>
       </div>
 

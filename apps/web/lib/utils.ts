@@ -26,9 +26,34 @@ export function formatTime(date: Date | string): string {
 
 /**
  * Download a file from an authenticated API endpoint.
+ *
+ * Pass either:
+ *   - A relative API path like `/export/journal?from=...` — the API base
+ *     URL (with `/api/v1` prefix) is auto-prepended. This is the
+ *     recommended pattern.
+ *   - An absolute URL like `https://...` — used as-is (rare).
+ *
  * Reads the Bearer token from the persisted auth store in localStorage,
  * fetches the resource, and triggers a browser download.
+ *
+ * Historical bug context: half the codebase called this with raw paths
+ * (`/export/foo`) which `fetch` interpreted as same-origin (the web
+ * server, not the API → 404); the other half wrote
+ * `${API_URL}/api/v1/export/foo` which doubled the `/api/v1` prefix
+ * because `NEXT_PUBLIC_API_URL` already includes it (also → 404).
+ * Both patterns now route correctly through this helper.
  */
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
+
+function resolveApiUrl(input: string): string {
+  if (/^https?:\/\//i.test(input)) return input;          // absolute — passthrough
+  const path = input.startsWith('/') ? input : `/${input}`;
+  // Strip a leading "/api/v1" if a caller still includes it manually so
+  // the URL doesn't end up as "...api/v1/api/v1/..." (legacy callers).
+  const cleaned = path.replace(/^\/api\/v\d+\//, '/');
+  return API_URL.replace(/\/$/, '') + cleaned;
+}
+
 export async function downloadAuthFile(url: string, filename: string): Promise<void> {
   let token: string | null = null;
   try {
@@ -43,7 +68,8 @@ export async function downloadAuthFile(url: string, filename: string): Promise<v
     console.error('[downloadAuthFile] could not read auth token from localStorage:', err);
   }
 
-  const res = await fetch(url, {
+  const fullUrl = resolveApiUrl(url);
+  const res = await fetch(fullUrl, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 

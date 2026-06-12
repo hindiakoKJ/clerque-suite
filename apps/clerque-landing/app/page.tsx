@@ -3,7 +3,6 @@ import Hero from '@/components/Hero';
 import Modules from '@/components/Modules';
 import Verticals from '@/components/Verticals';
 import BirReady from '@/components/BirReady';
-import Pricing from '@/components/Pricing';
 import Hardware from '@/components/Hardware';
 import Faq from '@/components/Faq';
 import Cta from '@/components/Cta';
@@ -18,7 +17,6 @@ export default function HomePage() {
         <Modules />
         <Verticals />
         <BirReady />
-        <Pricing />
         <Hardware />
         <Faq />
         <Cta />

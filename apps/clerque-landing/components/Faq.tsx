@@ -16,8 +16,8 @@ const FAQS = [
     a: 'Yes. Every report — Sales Detail, Purchase Book, Forms 2550M / 2550Q, alphalists, Trial Balance, Balance Sheet, P&L, Journal Entries — exports to XLSX in the format BIR expects.',
   },
   {
-    q: 'What if I outgrow Solo Pro?',
-    a: 'The Pair, Suite, and Enterprise tiers add multi-branch, multi-module, custom roles, and cross-tenant reporting. Migration from Solo Pro is in-place — no data loss.',
+    q: 'What if I outgrow my current plan?',
+    a: 'Larger tiers add multi-branch, multi-module, custom roles, and cross-tenant reporting. Migration is in-place — no data loss, no re-onboarding. Talk to sales about Pair, Suite, and Enterprise when you need more.',
   },
   {
     q: 'How do I cancel?',

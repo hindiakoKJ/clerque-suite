@@ -22,7 +22,7 @@ export default function Hero() {
             <p className="text-lg text-muted leading-relaxed max-w-xl">
               POS, accounting, and payroll built for Filipino MSMEs — cafés, bakeries, restaurants, retail
               shops, laundromats, pharmacies. BIR-compliant receipts. GCash · Maya · QR PH · Card.
-              Senior and PWD discounts done right. From <strong className="text-clerque-700">₱199/month</strong>.
+              Senior and PWD discounts done right.
             </p>
 
             <ul className="space-y-2.5">
@@ -48,10 +48,10 @@ export default function Hero() {
                 <ArrowRight className="w-4 h-4" />
               </a>
               <a
-                href="#pricing"
+                href="#modules"
                 className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-lg border-2 border-clerque-200 text-clerque-800 font-semibold hover:bg-clerque-100 transition"
               >
-                See pricing
+                See what's inside
               </a>
             </div>
 

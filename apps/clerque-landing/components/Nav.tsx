@@ -16,7 +16,6 @@ export default function Nav() {
           <a href="#modules"   className="px-3 py-1.5 rounded-md hover:bg-clerque-100 hover:text-clerque-900 transition">Modules</a>
           <a href="#verticals" className="px-3 py-1.5 rounded-md hover:bg-clerque-100 hover:text-clerque-900 transition">Verticals</a>
           <a href="#bir"       className="px-3 py-1.5 rounded-md hover:bg-clerque-100 hover:text-clerque-900 transition">BIR ready</a>
-          <a href="#pricing"   className="px-3 py-1.5 rounded-md hover:bg-clerque-100 hover:text-clerque-900 transition">Pricing</a>
           <a href="#faq"       className="px-3 py-1.5 rounded-md hover:bg-clerque-100 hover:text-clerque-900 transition">FAQ</a>
         </nav>
 

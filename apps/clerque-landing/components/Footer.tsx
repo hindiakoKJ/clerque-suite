@@ -27,7 +27,6 @@ export default function Footer() {
               <li><a href="#modules"   className="hover:text-white">Modules</a></li>
               <li><a href="#verticals" className="hover:text-white">Verticals</a></li>
               <li><a href="#bir"       className="hover:text-white">BIR compliance</a></li>
-              <li><a href="#pricing"   className="hover:text-white">Pricing</a></li>
               <li><a href="#faq"       className="hover:text-white">FAQ</a></li>
             </ul>
           </div>

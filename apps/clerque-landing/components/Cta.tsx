@@ -12,7 +12,7 @@ export default function Cta() {
         </h2>
         <p className="text-lg text-clerque-200 max-w-2xl mx-auto leading-relaxed">
           Pilot signups open now. Counter for Android in Play Store internal testing.
-          Solo Lite starts at ₱199/month — under what most cafés spend on milk every week.
+          Built for the way Filipino MSMEs actually work — not the way Silicon Valley imagines they do.
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
           <a

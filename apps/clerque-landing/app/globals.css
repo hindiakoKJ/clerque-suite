@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/* ─── Tailwind v4 theme — Clerque brown ──────────────────────────────── */
+@theme inline {
+  /* Brown brand mirroring Counter mobile (src/theme/tokens.ts) */
+  --color-clerque-50:  #FBF7F1;
+  --color-clerque-100: #F4EBDB;
+  --color-clerque-200: #EEE9DF;
+  --color-clerque-300: #D7C3A4;
+  --color-clerque-400: #B58E60;
+  --color-clerque-500: #8B5E3C;
+  --color-clerque-600: #714A2D;
+  --color-clerque-700: #5A3B22;
+  --color-clerque-800: #432B19;
+  --color-clerque-900: #2A1F18;
+
+  /* Accent purple — Clerque logo mark */
+  --color-accent-400: #A78BFA;
+  --color-accent-500: #7C3AED;
+  --color-accent-600: #5B21B6;
+
+  /* Module-specific tints */
+  --color-pos-500:    #D97706;  /* amber */
+  --color-ledger-500: #059669;  /* emerald */
+  --color-sync-500:   #2563EB;  /* blue */
+
+  /* Surfaces */
+  --color-paper: #FBF8F2;
+  --color-sand:  #F4ECDF;
+  --color-cream: #EEE9DF;
+  --color-ink:   #2A1F18;
+  --color-muted: #6F5B4B;
+
+  /* Font */
+  --font-sans: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;
+
+  /* Typography */
+  --tracking-wordmark-tight: -0.03em;
+}
+
+/* ─── Base ───────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background-color: var(--color-paper);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle background pattern for hero */
+.bg-grain {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(139, 94, 60, 0.05) 1px,
+    transparent 0
+  );
+  background-size: 24px 24px;
+}
+
+/* Wordmark / display tight tracking */
+.tracking-tight-display {
+  letter-spacing: -0.025em;
+}
+.tracking-tighter-display {
+  letter-spacing: -0.04em;
+}
+
+/* Reduce motion respected by default */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}

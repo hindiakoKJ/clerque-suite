@@ -14,6 +14,13 @@
       "runtimeArgs": ["next", "dev", "--port", "3000"],
       "cwd": "apps/web",
       "port": 3000
+    },
+    {
+      "name": "clerque-landing",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "--port", "3003"],
+      "cwd": "apps/clerque-landing",
+      "port": 3003
     }
   ]
 }

@@ -30,8 +30,3 @@ packages/db/prisma/migrations/dev.db-journal
 
 # Vercel
 .vercel
-
-# Clerque landing — independent app, ignore build artifacts
-apps/clerque-landing/.next/
-apps/clerque-landing/node_modules/
-apps/clerque-landing/tsconfig.tsbuildinfo

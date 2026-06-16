@@ -266,7 +266,7 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'I tried the PIN and it says &ldquo;Invalid PIN&rdquo;.',
+        q: 'I tried the PIN and it says "Invalid PIN".',
         a: (
           <ul className="list-disc pl-5 space-y-1">
             <li>Make sure the supervisor has set a PIN in Settings → Security.</li>
@@ -348,8 +348,8 @@ const SECTIONS: HelpSection[] = [
         a: (
           <ul className="list-disc pl-5 space-y-1">
             <li><strong>Unit-Based</strong> — each sale deducts 1 unit from inventory. For finished goods (bottled water, packaged snacks).</li>
-            <li><strong>Recipe-Based</strong> — each sale deducts the BOM (recipe) from raw materials. For F&amp;B (latte = espresso shot + milk + syrup).</li>
-            <li>You set up raw materials in the Inventory page, then attach a BOM to a Recipe-Based product.</li>
+            <li><strong>Recipe-Based</strong> — each sale subtracts the recipe (the list of ingredients) from your ingredient stock. For food &amp; drink (one ensaymada = flour + butter + sugar + cheese).</li>
+            <li>You add your ingredients in the Ingredients page, then attach a recipe (the list of ingredients and how much of each) to a Recipe-Based product.</li>
           </ul>
         ),
       },
@@ -516,12 +516,687 @@ const SECTIONS: HelpSection[] = [
 
   // ─────────────────────────────────────────────────────────────────────────
   {
+    id: 'close-and-plan',
+    title: 'Close & Plan (evening routine)',
+    icon: 'guide',
+    description: 'Your night-time routine: wrap up today and get tomorrow ready, all on one screen.',
+    items: [
+      {
+        q: 'What do I do on this page each night?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Look at <strong>Today recap</strong> to see your sales and number of orders.</li>
+            <li>If any flour, butter, or other supplies were delivered today, add them under <strong>Today&apos;s deliveries</strong>.</li>
+            <li>Check <strong>Tomorrow&apos;s plan</strong> so you know what to bake and who is picking up.</li>
+            <li>Tap the big <strong>Print morning briefing</strong> button at the bottom.</li>
+            <li>Stick the printed sheet on the kitchen wall for the baker.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'A delivery of flour came in today. How do I record it?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>In the <strong>Today&apos;s deliveries</strong> box, tap <strong>Add a delivery</strong>.</li>
+            <li>Tap <strong>Pick a raw material…</strong> and choose the item (like flour).</li>
+            <li>Type the <strong>Quantity</strong> and the <strong>Cost / unit</strong> (price for one bag or kilo).</li>
+            <li>If it spoils, type the <strong>Expiration date</strong> (you can skip this).</li>
+            <li>Tap <strong>Add to delivery</strong>, then the green <strong>Save delivery items</strong> button.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'A yellow "Possible duplicate" box popped up. What does that mean?',
+        a: (
+          <p>
+            It means you may have already typed in this same delivery a few minutes ago. The app is just
+            double-checking so you don&apos;t count it twice. If it really is the same one, tap <strong>Skip — it
+            was a duplicate</strong>. If it is a separate, real delivery, tap <strong>It&apos;s real — save anyway</strong>.
+          </p>
+        ),
+      },
+      {
+        q: 'What is the "Use first" list telling me?',
+        a: (
+          <p>
+            These are perishable supplies (things that spoil, like fresh milk or butter) that should be used soon so
+            nothing goes to waste. Items marked <strong>Use first</strong> or <strong>Soon</strong> should go into
+            tomorrow&apos;s baking before the newer stock. <strong>Expired</strong> means do not use it.
+          </p>
+        ),
+      },
+      {
+        q: 'I forgot to print the briefing. Can I print it again?',
+        a: (
+          <p>
+            Yes. Just tap <strong>Print morning briefing</strong> again. A preview opens in a new tab — print to your
+            usual receipt printer from there.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'bake-list',
+    title: 'Bake list',
+    icon: 'how-to',
+    description: 'A simple daily list that tells the baker how many of each item to bake.',
+    items: [
+      {
+        q: 'How does the app decide the bake numbers?',
+        a: (
+          <p>
+            It compares two things and picks the bigger one: your average daily sales over the last 7 days, and any
+            pre-orders for that date. So you never run short on a busy day and never forget a promised cake.
+          </p>
+        ),
+      },
+      {
+        q: 'How do I see the list for a different day?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>Today</strong> to see today, or <strong>Tomorrow</strong> for the next day.</li>
+            <li>For any other date, tap the date box next to <strong>Bake for</strong> and pick the day.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'How do I print the list for the kitchen?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Pick the right date first.</li>
+            <li>Tap the purple <strong>Print</strong> button at the top right.</li>
+            <li>Print to your thermal (receipt) printer.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'The page says "Nothing to bake yet." Why?',
+        a: (
+          <p>
+            This is normal for a brand-new shop. The app needs a few days of sales (or some pre-orders for that date)
+            before it can suggest amounts. Keep ringing up sales and the numbers will appear. Tap <strong>Refresh</strong> to
+            pull the latest numbers.
+          </p>
+        ),
+      },
+      {
+        q: 'What do the columns "7-day avg," "Pre-orders," and "Bake" mean?',
+        a: (
+          <p>
+            <strong>7-day avg</strong> is how many you usually sell in a day. <strong>Pre-orders</strong> is how many
+            were already reserved. <strong>Bake</strong> (the big purple number) is the final amount to bake — that is
+            the one the baker follows.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'pre-orders',
+    title: 'Pre-orders (custom cakes & advance orders)',
+    icon: 'how-to',
+    description: 'Your digital logbook for custom cakes and advance orders — who, what, when, and the deposit paid.',
+    items: [
+      {
+        q: 'A customer wants a custom birthday cake next Saturday. How do I write it down?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>New pre-order</strong> at the top right.</li>
+            <li>Choose the <strong>Customer</strong> (or leave it as <strong>Walk-in / unknown</strong>).</li>
+            <li>Set the <strong>Pickup date</strong> and, if you know it, <strong>Pickup time</strong>.</li>
+            <li>Type the cake message in <strong>Inscription</strong>, like &ldquo;Happy Birthday Maria.&rdquo;</li>
+            <li>Add any <strong>Notes</strong> (color, allergies, photo reference).</li>
+            <li>Under <strong>Items</strong>, pick the product and type the quantity. Tap <strong>Add another item</strong> for more.</li>
+            <li>Type the <strong>Deposit (₱)</strong> the customer paid, then tap <strong>Create pre-order</strong>.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'What does the purple "Today\x27s pickups" box at the top mean?',
+        a: (
+          <p>
+            It shows how many orders are being picked up today, and the total money still owed (<strong>balance
+            due</strong>) for them. It&apos;s your quick morning glance so nothing is forgotten.
+          </p>
+        ),
+      },
+      {
+        q: 'The cake is finished. How do I mark it ready?',
+        a: (
+          <p>
+            Find the order in the list and tap the green check-circle button on its row. Its tag changes to
+            <strong> Ready</strong>, so anyone can see it&apos;s done and waiting for pickup.
+          </p>
+        ),
+      },
+      {
+        q: 'How do deposits and balances work?',
+        a: (
+          <p>
+            When you type a deposit, the app saves it as money already received. The leftover amount becomes the
+            <strong> Balance due on pickup</strong>. The customer pays that balance at the counter when they collect.
+          </p>
+        ),
+      },
+      {
+        q: 'A customer changed or cancelled their order. What do I do?',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>To change it:</strong> tap the pencil button on its row, edit the items/message/deposit/date, then <strong>Save changes</strong>.</li>
+            <li><strong>To cancel it:</strong> tap the X button, type a reason (e.g. &ldquo;customer changed mind&rdquo;), and confirm. The tag changes to <strong>Cancelled</strong>. Check your own refund rules for the deposit.</li>
+          </ul>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'modifier-recipes',
+    title: 'Modifier recipes (sizes & add-ons)',
+    icon: 'how-to',
+    description: 'Tell the app what extra ingredients each option uses, so every sale subtracts the right amount of stock by itself.',
+    items: [
+      {
+        q: 'What are the two parts of this page?',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>Recipe × (the multiplier)</strong> — for sizes. It tells the app how much of the normal recipe a size uses. Normal = 1. A &ldquo;Large&rdquo; that uses one-and-a-quarter of everything = 1.25. A small that uses half = 0.5.</li>
+            <li><strong>Adds on top of base recipe (the ingredients)</strong> — for add-ons. Extra stuff the option puts in, on top of the normal recipe. Example: &ldquo;Oat milk&rdquo; adds 240 ml of oat milk; &ldquo;Extra cheese&rdquo; adds 20 g of cheese.</li>
+          </ul>
+        ),
+      },
+      {
+        q: 'My "Large" uses more dough than the regular one. How do I tell the app?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Find the group with your size choices (like &ldquo;Size&rdquo;) and tap it to open it.</li>
+            <li>Find the <strong>Large</strong> option.</li>
+            <li>In the box next to <strong>Recipe ×</strong>, type how much it uses compared to normal. If Large uses one-and-a-quarter, type 1.25.</li>
+            <li>Tap <strong>Save changes</strong>.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'A customer can add extra cheese. How do I make the app remove cheese from my stock?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Open the group that has &ldquo;Extra cheese&rdquo; and find that option.</li>
+            <li>Under <strong>Adds on top of base recipe</strong>, tap <strong>Add ingredient</strong>.</li>
+            <li>Pick the ingredient (Cheese) from the list.</li>
+            <li>In the <strong>qty</strong> box, type how much it adds, like 20. The unit (g) shows beside it.</li>
+            <li>Tap <strong>Save changes</strong>.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'What is "Est. COGS" beside my ingredients?',
+        a: (
+          <p>
+            COGS just means <strong>what the ingredients cost you</strong>. It is a quick estimate of how much that
+            add-on costs you in money, based on your ingredient prices. It helps you check your add-on price is fair.
+            You don&apos;t type it — the app figures it out.
+          </p>
+        ),
+      },
+      {
+        q: 'My size doesn\x27t add anything new, it just uses more of the normal recipe. Do I add ingredients?',
+        a: (
+          <p>
+            No. Just set the <strong>Recipe ×</strong> number and leave the ingredients empty. The app will say
+            &ldquo;No add-on ingredients&rdquo; and that is fine. Use ingredients only for extra things added on top.
+          </p>
+        ),
+      },
+      {
+        q: 'I don\x27t see my product choices here. Where are they?',
+        a: (
+          <p>
+            This page only shows choices you already made. If it says there are none, create them first on the
+            <strong> Products</strong> page, then come back here to set the recipe.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'price-lists',
+    title: 'Price lists (wholesale / special prices)',
+    icon: 'how-to',
+    description: 'Give certain customers their own special prices — like a lower price for shops that buy in bulk.',
+    items: [
+      {
+        q: 'A coffee shop wants to buy my pandesal cheaper than the store price. How do I set this up?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>In the box at the top, type a name like &ldquo;Wholesale (cafes)&rdquo;, then tap <strong>Create list</strong>.</li>
+            <li>Find your new list and tap <strong>Edit prices</strong>.</li>
+            <li>Tap <strong>Add product</strong> and pick Pandesal.</li>
+            <li>In the <strong>Override</strong> box, type their special price, like 8. Your normal price shows beside it as <strong>Default</strong>.</li>
+            <li>Tap <strong>Save price list</strong>.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'What does "Override" mean?',
+        a: (
+          <p>
+            It&apos;s simply the special price that replaces your normal price for this customer. The normal price is
+            shown as <strong>Default</strong> so you can compare. You only override the products you want; everything
+            else stays at the normal price.
+          </p>
+        ),
+      },
+      {
+        q: 'How does the customer actually get these prices?',
+        a: (
+          <p>
+            Making the list is only step one. You must <strong>link the list to the customer on their profile</strong>.
+            After that, when you ring up that customer at the counter, their special prices come up by themselves.
+          </p>
+        ),
+      },
+      {
+        q: 'What is the "Min qty" box for?',
+        a: (
+          <p>
+            <strong>Min qty</strong> is the smallest amount they must buy to get the special price. Example: pandesal is
+            ₱8 only if they buy 50 or more. Leave it blank and the special price always applies. It is optional.
+          </p>
+        ),
+      },
+      {
+        q: 'I added a product to the list but didn\x27t set a price. What happens?',
+        a: (
+          <p>
+            If you leave the price empty or zero, that product won&apos;t be saved to the list — it just sells at your
+            normal price. Always type a real price in the <strong>Override</strong> box for products you want to discount.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'units-uom',
+    title: 'Units (grams, ml, pieces)',
+    icon: 'how-to',
+    description: 'The measuring words your shop uses, so stock counts are always clear.',
+    items: [
+      {
+        q: 'How do I add a new unit, like "piece"?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>Add Unit</strong> at the top right.</li>
+            <li>In <strong>Name</strong>, type the full word, like &ldquo;Piece&rdquo;.</li>
+            <li>In <strong>Abbreviation</strong>, type the short form, like &ldquo;PC&rdquo;.</li>
+            <li>Tap <strong>Add Unit</strong> to save.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'I buy flour by the sack but my recipes use grams. How do I link them?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>Add Unit</strong> (or edit the Sack unit with the pencil).</li>
+            <li>Name it &ldquo;Sack&rdquo;, abbreviation &ldquo;SACK&rdquo;.</li>
+            <li>Under <strong>Conversion</strong>, in <strong>Base Unit Abbrev.</strong> type the small unit, &ldquo;G&rdquo;.</li>
+            <li>In <strong>Factor</strong>, type how many of the small unit are in one big unit. For 1 sack = 25,000 grams, type 25000.</li>
+            <li>Tap <strong>Add Unit</strong> (or <strong>Save Changes</strong>).</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'What do "Base Unit" and "Factor" mean? They confuse me.',
+        a: (
+          <p>
+            <strong>Base Unit</strong> is the small unit you want to count in (like grams). <strong>Factor</strong> is
+            how many of that small unit fit in this one. This part is optional — if a unit stands alone, like
+            &ldquo;Piece&rdquo;, just leave it blank.
+          </p>
+        ),
+      },
+      {
+        q: 'I don\x27t use a unit anymore. Can I hide it without deleting it?',
+        a: (
+          <p>
+            Yes. Tap the green toggle switch on that unit&apos;s row to turn it off — it moves to the
+            <strong> Inactive</strong> list and is grayed out. Tap the toggle again to bring it back. (Only the owner
+            sees this switch.)
+          </p>
+        ),
+      },
+      {
+        q: 'I can\x27t see the "Add Unit" button. Why?',
+        a: (
+          <p>
+            Those controls are only for owners and managers. A regular cashier can look at the list but can&apos;t
+            change it. If you need a new unit, ask the owner or manager to add it.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'staff',
+    title: 'Staff (your workers)',
+    icon: 'how-to',
+    description: 'Add your workers and choose what each one is allowed to do.',
+    items: [
+      {
+        q: 'How do I add a new cashier?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>Add Staff</strong> at the top right.</li>
+            <li>Type the full name, like &ldquo;Maria Santos&rdquo;.</li>
+            <li>Type their email.</li>
+            <li>Type a starting password (at least 8 letters or numbers). Tap <strong>Show password</strong> to check it.</li>
+            <li>Tap the <strong>Role</strong> box and pick <strong>Cashier</strong>.</li>
+            <li>Tap <strong>Create Staff</strong>. Maria can now log in and ring up pandesal.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'My cook only needs to clock in and out. What do I do?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>Add Staff</strong> and type his name and email.</li>
+            <li>Type a <strong>Kiosk PIN</strong>, like 1234 — the secret number he taps to clock in.</li>
+            <li>Tick the box <strong>Clock-only employee</strong>.</li>
+            <li>Tap <strong>Create Staff</strong>. He can punch in at the shared tablet, but cannot open the register or reports.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'What is a "Sales Lead", and why would I turn on that star?',
+        a: (
+          <p>
+            A Sales Lead is a trusted worker you allow to approve special things, like a manager discount or cancelling
+            (voiding) an order. Tapping the star next to their name gives them this power; tap again to take it back.
+            (Your plan may only allow a few Sales Leads.)
+          </p>
+        ),
+      },
+      {
+        q: 'A cashier left the bakery. How do I stop them from logging in?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Find their name in the list.</li>
+            <li>On the far right, tap the toggle switch (the round on/off button).</li>
+            <li>Their status changes to <strong>INACTIVE</strong> — they can no longer log in. You can turn it back on if they return.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'A worker forgot their password. How do I give them a new one?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Find their name and tap the key icon on the right.</li>
+            <li>Type a new password (at least 8 characters).</li>
+            <li>Tap <strong>Reset Password</strong>. This logs them out everywhere, so they must log in again with the new password.</li>
+          </ol>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'promotions',
+    title: 'Promotions (sales & discounts)',
+    icon: 'how-to',
+    description: 'Set up deals so the register lowers the price by itself.',
+    items: [
+      {
+        q: 'How do I make a "20% off day-old bread" deal?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>New Promotion</strong>.</li>
+            <li>In Name, type &ldquo;20% off day-old bread&rdquo;.</li>
+            <li>Leave Discount Type on <strong>Percentage</strong>.</li>
+            <li>In Discount Percent, type 20.</li>
+            <li>Under <strong>Applies To</strong>, tap <strong>Specific products</strong>, search for your bread, and tick it.</li>
+            <li>Tap <strong>Create Promotion</strong>.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'I want a flat ₱25 price on ensaymada instead of a percent off. Can I?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Tap <strong>New Promotion</strong> and give it a name.</li>
+            <li>For Discount Type, tap <strong>Fixed Price</strong>.</li>
+            <li>In the Fixed Price box, type 25.</li>
+            <li>Choose the ensaymada under <strong>Specific products</strong>.</li>
+            <li>Tap <strong>Create Promotion</strong>.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'How do I make a deal that only runs on weekends from 3pm to 5pm?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Under <strong>Active Days</strong>, tap <strong>Sa</strong> and <strong>Su</strong>.</li>
+            <li>In <strong>Hours From</strong>, set 15:00. In <strong>Hours To</strong>, set 17:00.</li>
+            <li>Save. Leave days empty to run every day; leave hours empty to run all day.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'I want to end a sale. Do I delete it?',
+        a: (
+          <p>
+            You turn it off, you don&apos;t erase it. Find the promotion, tap the trash-can icon, then tap
+            <strong> Deactivate</strong>. It stops at the register right away, and you can switch it back on later by
+            editing it.
+          </p>
+        ),
+      },
+      {
+        q: 'What does "Stackable" mean?',
+        a: (
+          <p>
+            Stackable means this deal can be added on top of another deal at the same time. If it&apos;s off, only one
+            deal applies. Leave it off unless you really want two discounts to combine.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'pending-sync',
+    title: 'Pending Sync (offline orders)',
+    icon: 'how-to',
+    description: 'Sales you made while the internet was down, waiting to be uploaded.',
+    items: [
+      {
+        q: 'The internet went out. Did I lose the sales I made?',
+        a: (
+          <p>
+            No. Every offline sale is saved safely on this page. You&apos;ll see an orange <strong>Offline</strong> tag
+            at the top, and the number tells you how many sales are still waiting.
+          </p>
+        ),
+      },
+      {
+        q: 'The internet is back. How do I upload the waiting sales?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Open the <strong>Pending Sync</strong> page.</li>
+            <li>Tap <strong>Sync Now</strong> at the top right.</li>
+            <li>Wait a moment — it tells you how many sales went up, and the list empties out. (The button only works when you&apos;re back online.)</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'Can I print a receipt for an offline sale?',
+        a: (
+          <p>
+            Yes. Find the order and tap the printer icon on its row. The receipt prints with a note saying
+            &ldquo;OFFLINE ORDER — PENDING SYNC&rdquo;. The customer still gets their paper.
+          </p>
+        ),
+      },
+      {
+        q: 'One order says "FAILED" in red. What do I do?',
+        a: (
+          <p>
+            First, just tap <strong>Sync Now</strong> again — many times it works the second time. If it keeps failing,
+            note the small red message under the order and tell your manager. <strong>Do not delete it.</strong>
+          </p>
+        ),
+      },
+      {
+        q: 'What does the trash can on an order do?',
+        a: (
+          <p>
+            It removes that one waiting sale and it will <strong>not</strong> be uploaded. Only do this if the sale was
+            a mistake, because the money won&apos;t show in your reports. It asks you to confirm first.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'sales-report',
+    title: 'Sales Report',
+    icon: 'guide',
+    description: 'A summary of how much your bakery sold and earned over the days you choose.',
+    items: [
+      {
+        q: 'How do I see this week\x27s sales?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Open the Sales Report page.</li>
+            <li>Tap the <strong>Last 7d</strong> button near the top. (<strong>Last 30d</strong> and <strong>Last 90d</strong> are there too.)</li>
+            <li>The numbers update by themselves. You can also pick exact <strong>From</strong> and <strong>To</strong> dates.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'What do the four boxes at the top mean?',
+        a: (
+          <ul className="list-disc pl-5 space-y-1">
+            <li><strong>Total Revenue</strong> — all the money that came in from sales.</li>
+            <li><strong>Gross Profit</strong> — what&apos;s left after taking out what the items cost you. The margin percent shows how much of each peso is profit.</li>
+            <li><strong>Avg Order Value</strong> — the typical amount one customer spends per order.</li>
+            <li><strong>Voids</strong> — cancelled orders. These are NOT counted as money earned.</li>
+          </ul>
+        ),
+      },
+      {
+        q: 'Which of my breads sells the best?',
+        a: (
+          <p>
+            Scroll down to <strong>Top products by revenue</strong>. It lists your best sellers, number 1 first, with
+            how much money each made and how many were sold.
+          </p>
+        ),
+      },
+      {
+        q: 'How do I save this report to open in Excel?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Pick the dates you want.</li>
+            <li>Tap <strong>Export CSV</strong> at the top right.</li>
+            <li>A file downloads — open it in Excel or Google Sheets and send it to your bookkeeper.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'Why is my Gross Profit smaller than my Total Revenue?',
+        a: (
+          <p>
+            Because profit is what&apos;s left AFTER you pay for ingredients and goods. If you sold ₱100 of bread but the
+            flour and supplies cost you ₱60, your gross profit is ₱40. That is normal.
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: 'displays',
+    title: 'Displays (extra screens)',
+    icon: 'how-to',
+    description: 'Connect an extra screen — a customer-facing TV or a kitchen monitor — without logging in twice.',
+    items: [
+      {
+        q: 'I have a TV I want to face the customers. How do I connect it?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Find the <strong>Customer-facing display</strong> card.</li>
+            <li>Tap <strong>Generate pairing code</strong>. A big 4-digit number and a QR code appear.</li>
+            <li>On the TV (or other tablet), open the website address shown, or scan the QR code.</li>
+            <li>Type the 4-digit number on that device. The screens are now linked — no second login needed.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'The big number disappeared before I finished. What happened?',
+        a: (
+          <p>
+            The code only lasts a short time for safety (you can see the countdown). If it runs out, just tap
+            <strong> Generate pairing code</strong> again for a fresh number, then type that one.
+          </p>
+        ),
+      },
+      {
+        q: 'How do I set up a kitchen screen so my bakers see the orders?',
+        a: (
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>Find the <strong>Kitchen Display (KDS)</strong> card.</li>
+            <li>Pick a station if you have them set up, or leave it as <strong>Any matching station</strong>.</li>
+            <li>Tap <strong>Generate pairing code</strong>.</li>
+            <li>On the kitchen monitor, open the address or scan the QR, then type the number.</li>
+          </ol>
+        ),
+      },
+      {
+        q: 'How do I know my screens are still connected?',
+        a: (
+          <p>
+            Look at the <strong>Paired devices</strong> list. Each screen shows a status: <strong>Active</strong>
+            (working now), <strong>Idle</strong> (quiet but fine), <strong>Stale</strong> (hasn&apos;t checked in for a
+            while — may be off), or <strong>Awaiting pairing</strong> (code made, no device used it yet).
+          </p>
+        ),
+      },
+      {
+        q: 'A screen is broken or I don\x27t use it anymore. How do I remove it?',
+        a: (
+          <p>
+            Find it in the <strong>Paired devices</strong> list, tap <strong>Revoke</strong> on its row, and confirm.
+            The screen is kicked off the next time it refreshes. (Only owners and managers can do this.)
+          </p>
+        ),
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  {
     id: 'troubleshooting',
     title: 'Troubleshooting',
     icon: 'troubleshoot',
     items: [
       {
-        q: 'My order won\'t go through — &ldquo;Failed to process payment&rdquo; appears.',
+        q: 'My order won\'t go through — "Failed to process payment" appears.',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
             <li>Check your internet — a yellow Offline banner means saving locally is fine, but online sync failed.</li>
@@ -553,7 +1228,7 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'I clicked Counter and got &ldquo;This page couldn\'t load.&rdquo;',
+        q: 'I clicked Counter and got "This page couldn\'t load."',
         a: (
           <p>
             Hard refresh (Ctrl+Shift+R). If it persists, clear the browser&apos;s site data for clerque.cc and

@@ -136,9 +136,9 @@ you. These give you push alerts within minutes.
 
 **UptimeRobot steps:**
 1. https://uptimerobot.com → sign up (free tier sufficient).
-2. Add Monitor → HTTPS → `https://api.clerque.hnscorpph.com/health`.
+2. Add Monitor → HTTPS → `https://api.clerque.cc/health`.
 3. Interval: 5 minutes. Alert contacts: your email + SMS.
-4. Repeat for `https://clerque.hnscorpph.com` (web).
+4. Repeat for `https://clerque.cc` (web).
 5. Configure "alert when down for 2 consecutive checks" to avoid pager fatigue.
 
 **Sentry steps:**
@@ -186,7 +186,7 @@ edge, before requests even reach Railway.
 4. Security → WAF → Managed Rules → Cloudflare OWASP Core Rule Set: **On**.
 5. Security → Rate Limiting → add rule: `/api/v1/auth/*` → 20 requests / 10s
    per IP. Block on violation.
-6. Update Railway: set custom domain to `api.clerque.hnscorpph.com`.
+6. Update Railway: set custom domain to `api.clerque.cc`.
 7. Update Vercel env `NEXT_PUBLIC_API_URL` to the new hostname.
 
 **Effort:** 2 hours. **Cost:** zero (Cloudflare Free tier covers this).
@@ -201,7 +201,7 @@ The in-memory throttle ledger works fine on a single instance and is
 documented as such in the operations runbook.
 
 ### ☐ D2-03 — Publish a Data Recovery SLA page
-**Steps:** Add a 1-page public document at `clerque.hnscorpph.com/legal/sla`
+**Steps:** Add a 1-page public document at `clerque.cc/legal/sla`
 stating RPO=24h, RTO=4h, retention=30 days. Link it from
 Settings → Data Backups page.
 

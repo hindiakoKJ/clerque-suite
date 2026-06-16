@@ -4,12 +4,11 @@
  * Used wherever we render a URL that points back at the Clerque web
  * surface (pairing QR codes, "open in browser" deep links, receipt
  * footer attribution). Single source of truth so swapping the domain
- * from clerque.hnscorpph.com → clerque.com is a one-line change in
- * app.json.
+ * is a one-line change in app.json.
  */
 import Constants from 'expo-constants';
 
-const FALLBACK = 'https://clerque.hnscorpph.com';
+const FALLBACK = 'https://clerque.cc';
 
 export function getWebOrigin(): string {
   const extra = (Constants.expoConfig?.extra ?? {}) as { webOrigin?: string };
@@ -19,7 +18,7 @@ export function getWebOrigin(): string {
 
 /**
  * Strip the leading scheme so the value reads cleanly on a printed
- * receipt or in plain text body copy. e.g. "clerque.hnscorpph.com".
+ * receipt or in plain text body copy. e.g. "clerque.cc".
  */
 export function getWebHost(): string {
   return getWebOrigin().replace(/^https?:\/\//i, '');

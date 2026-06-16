@@ -57,7 +57,7 @@ export function useFloorLayout() {
   // tenant context. SUPER_ADMIN sessions on console.* (and the unauth login
   // page itself) don't have a real tenant; firing /layouts there returns
   // 401, which the api.ts interceptor handles by force-redirecting to /login,
-  // causing an infinite reload loop on console.hnscorpph.com/login.
+  // causing an infinite reload loop on console.clerque.cc/login.
   const user        = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
   const enabled     = !!accessToken && !!user?.tenantId && !user?.isSuperAdmin;

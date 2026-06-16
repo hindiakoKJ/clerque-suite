@@ -220,6 +220,13 @@ async function bootstrap() {
     .filter((o) => o.length > 0 && o !== '*');
   const allowedOrigins = [
     ...rawConfigured,
+    // Primary product domains (post clerque.cc migration).
+    'https://clerque.cc',
+    'https://console.clerque.cc',
+    'https://www.clerque.cc',
+    // Legacy domains — kept temporarily so the API still accepts the
+    // old hostnames during the DNS cutover. Remove ~30 days after the
+    // Vercel/Cloudflare domain swap is complete.
     'https://clerque.hnscorpph.com',
     'https://console.hnscorpph.com',
     // Localhost only in dev — gated on NODE_ENV.

@@ -43,7 +43,7 @@ export default function AccountDeletionPage() {
         </p>
         <ul className="list-disc pl-6 mt-2 space-y-1 text-sm">
           <li><strong>Clerque Cloud</strong> — the web application at{' '}
-            <a href="https://clerque.hnscorpph.com" className="text-[var(--accent)]">clerque.hnscorpph.com</a>
+            <a href="https://clerque.cc" className="text-[var(--accent)]">clerque.cc</a>
           </li>
           <li><strong>Clerque Counter</strong> — the Android companion app on the Google Play Store</li>
         </ul>

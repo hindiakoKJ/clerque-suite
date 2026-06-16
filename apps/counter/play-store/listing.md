@@ -77,9 +77,9 @@ Recommended: Samsung Galaxy Tab A8 10.5″ landscape or any Android 9+ tablet, a
 
 ★ SUBSCRIPTION
 
-This app is a sign-in client for a Clerque tenant account. Subscriptions are sold separately at clerque.hnscorpph.com — Solo Lite ₱199, Solo Standard ₱399, Solo Pro ₱499 monthly. No in-app purchases, no billing inside the app (consumption-only pattern; same as Spotify and Netflix).
+This app is a sign-in client for a Clerque tenant account. Subscriptions are sold separately at clerque.cc — Solo Lite ₱199, Solo Standard ₱399, Solo Pro ₱499 monthly. No in-app purchases, no billing inside the app (consumption-only pattern; same as Spotify and Netflix).
 
-Need help? help.clerque.hnscorpph.com or support@hnscorpph.com.
+Need help? help.clerque.cc or support@hnscorpph.com.
 ```
 
 ## What's new (max 500 chars per release)
@@ -110,7 +110,7 @@ Need help? help.clerque.hnscorpph.com or support@hnscorpph.com.
 ## Pricing
 
 Free download. In-app purchases: **none**. The app is a sign-in client
-for an existing Clerque subscription sold at clerque.hnscorpph.com.
+for an existing Clerque subscription sold at clerque.cc.
 
 > 🚨 Important for Play Console review: Clerque Counter qualifies for
 > the "consumption-only app" exemption from Google Play Billing because
@@ -124,8 +124,8 @@ for an existing Clerque subscription sold at clerque.hnscorpph.com.
 
 - Developer name: HNS Corporation Philippines
 - Email: support@hnscorpph.com
-- Website: https://clerque.hnscorpph.com
-- Privacy policy: https://clerque.hnscorpph.com/legal/privacy
+- Website: https://clerque.cc
+- Privacy policy: https://clerque.cc/legal/privacy
 
 ## Target audience + content
 

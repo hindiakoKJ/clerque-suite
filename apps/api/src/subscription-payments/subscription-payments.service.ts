@@ -85,7 +85,7 @@ export class SubscriptionPaymentsService {
   }
 
   private buildPayUrl(referenceCode: string): string {
-    const base = process.env.WEB_PUBLIC_URL || 'https://clerque.hnscorpph.com';
+    const base = process.env.WEB_PUBLIC_URL || 'https://clerque.cc';
     return `${base}/pay/${referenceCode}`;
   }
 

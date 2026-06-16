@@ -36,7 +36,7 @@
 ## Part 2 — Counter Demo (8 min)
 
 ### Sign in as Cashier
-- Open `clerque.hnscorpph.com/login?product=pos`
+- Open `clerque.cc/login?product=pos`
 - Email `cashier@demo.test` · Password `Test1234!`
 - Or use the PIN-only login: PIN `1234`
 

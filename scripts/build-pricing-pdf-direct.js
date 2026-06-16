@@ -357,7 +357,7 @@ function drawHeaderFooter() {
 
     // Footer text
     doc.fillColor(C.textMuted).font('Helvetica').fontSize(8)
-       .text('HNS Corporation Philippines  •  clerque.hnscorpph.com',
+       .text('HNS Corporation Philippines  •  clerque.cc',
              MARGIN, PAGE_H - MARGIN + 18, { width: CONTENT_W / 2 });
     doc.text(`Page ${i + 1} / ${range.count}`,
              MARGIN + CONTENT_W / 2, PAGE_H - MARGIN + 18, { width: CONTENT_W / 2, align: 'right' });
@@ -398,7 +398,7 @@ doc.fillColor(C.brownDark).font('Helvetica-Bold').fontSize(13)
    .text('Clerque', MARGIN, coverFooterY + 14, { width: CONTENT_W });
 doc.fillColor(C.textMuted).font('Helvetica').fontSize(11)
    .text('by HNS Corporation Philippines', MARGIN, doc.y);
-doc.text('clerque.hnscorpph.com', MARGIN, doc.y);
+doc.text('clerque.cc', MARGIN, doc.y);
 doc.font('Helvetica-Oblique').fontSize(10).fillColor(C.textMuted)
    .text('Confidential — Draft', MARGIN, doc.y + 4);
 
@@ -751,7 +751,7 @@ p('Two paths to "try before you buy" — designed to remove friction.', { italic
 
 h2('Public Demo Tenant');
 doc.fillColor(C.brownDark).font('Courier-Bold').fontSize(11)
-   .text('clerque.hnscorpph.com/demo', MARGIN, doc.y);
+   .text('clerque.cc/demo', MARGIN, doc.y);
 doc.moveDown(0.3);
 bullet('Pre-loaded with realistic café data; resets nightly at 3 AM PHT');
 bullet('Full read + write functionality');
@@ -833,7 +833,7 @@ doc.fillColor(C.brownDark).font('Courier-Bold').fontSize(13).text('partnerships@
 doc.moveDown(0.5);
 
 h3('Website');
-doc.fillColor(C.brownDark).font('Courier-Bold').fontSize(13).text('clerque.hnscorpph.com', MARGIN, doc.y);
+doc.fillColor(C.brownDark).font('Courier-Bold').fontSize(13).text('clerque.cc', MARGIN, doc.y);
 doc.moveDown(2);
 
 rule();

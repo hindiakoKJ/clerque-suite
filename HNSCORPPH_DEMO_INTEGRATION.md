@@ -4,13 +4,13 @@
 >
 > **Source of truth for this brief:** the Clerque app-suite session (this conversation, working in `E:\AI Projects\app-suite\apps\web`) that built the live demo feature.
 
-This file is the handoff document. The Clerque app-suite team built a public live-demo experience at `https://clerque.hnscorpph.com/demo`. The HNScorpPH landing page now needs a CTA that links to it. Everything below specifies what to add and where — copy this brief into your session prompt or read it from `E:\AI Projects\app-suite\HNSCORPPH_DEMO_INTEGRATION.md`.
+This file is the handoff document. The Clerque app-suite team built a public live-demo experience at `https://clerque.cc/demo`. The HNScorpPH landing page now needs a CTA that links to it. Everything below specifies what to add and where — copy this brief into your session prompt or read it from `E:\AI Projects\app-suite\HNSCORPPH_DEMO_INTEGRATION.md`.
 
 ---
 
 ## What the demo is
 
-The Clerque app-suite ships a live, no-signup demo at `https://clerque.hnscorpph.com/demo`. Visitors:
+The Clerque app-suite ships a live, no-signup demo at `https://clerque.cc/demo`. Visitors:
 
 - Click "Start the Demo" on a welcome screen
 - Land in the POS Terminal of a fictional **Bambu Coffee** business
@@ -33,7 +33,7 @@ This means the demo is:
 
 ### 1. Primary CTA on the hero section
 
-The landing page currently has a "Sign Up" or "Get Started" CTA. Add a SECONDARY CTA next to it: **"Try Live Demo"** that links to `https://clerque.hnscorpph.com/demo`.
+The landing page currently has a "Sign Up" or "Get Started" CTA. Add a SECONDARY CTA next to it: **"Try Live Demo"** that links to `https://clerque.cc/demo`.
 
 **Suggested copy variations** (pick whichever fits the existing landing tone):
 
@@ -84,13 +84,13 @@ with SSS, PhilHealth, and Pag-IBIG contributions.
 The demo lives at:
 
 ```
-https://clerque.hnscorpph.com/demo
+https://clerque.cc/demo
 ```
 
 It accepts an optional query param `?reset=1` that forces a fresh demo state on entry (useful if you want a "Try Again" link somewhere on the marketing site — e.g., on a feature page deep-link).
 
 ```
-https://clerque.hnscorpph.com/demo?reset=1
+https://clerque.cc/demo?reset=1
 ```
 
 The demo URL is hosted from the same Vercel deployment as the rest of the Clerque web app — no separate hosting setup needed. Once a Vercel deploy of `apps/web` ships, `/demo` is live.
@@ -151,7 +151,7 @@ The HNScorpPH landing page already follows similar warm-tone branding, so the CT
 After deploying the updated landing:
 
 1. Visit the landing page
-2. Click "Try Live Demo" CTA → should redirect to `https://clerque.hnscorpph.com/demo`
+2. Click "Try Live Demo" CTA → should redirect to `https://clerque.cc/demo`
 3. Click "Start the Demo" on the welcome screen
 4. Confirm you land in the POS Terminal
 5. Add a Coffee + Sandwich, click Pay → confirm receipt prints

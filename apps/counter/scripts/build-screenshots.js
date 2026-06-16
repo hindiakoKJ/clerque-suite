@@ -157,7 +157,7 @@ function signIn() {
   <rect x="80" y="1520" width="920" height="110" rx="18" fill="${C.primary}"/>
   <text x="${W/2}" y="1592" font-family="system-ui" font-size="36" font-weight="700" text-anchor="middle" fill="${C.white}">Sign in</text>
 
-  <text x="${W/2}" y="1720" font-family="system-ui" font-size="24" text-anchor="middle" fill="${C.muted}">Subscription managed at clerque.hnscorpph.com</text>
+  <text x="${W/2}" y="1720" font-family="system-ui" font-size="24" text-anchor="middle" fill="${C.muted}">Subscription managed at clerque.cc</text>
 </svg>`;
 }
 

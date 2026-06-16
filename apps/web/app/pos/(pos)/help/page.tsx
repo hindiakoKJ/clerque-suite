@@ -556,7 +556,7 @@ const SECTIONS: HelpSection[] = [
         q: 'I clicked Counter and got &ldquo;This page couldn\'t load.&rdquo;',
         a: (
           <p>
-            Hard refresh (Ctrl+Shift+R). If it persists, clear the browser&apos;s site data for clerque.hnscorpph.com and
+            Hard refresh (Ctrl+Shift+R). If it persists, clear the browser&apos;s site data for clerque.cc and
             sign in again. This was a known bug fixed in build 2026-04-30.
           </p>
         ),

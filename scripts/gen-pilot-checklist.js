@@ -423,7 +423,7 @@ children.push(
 // ── SECTION 3: TENANT CONFIGURATION ──
 children.push(
   h1('3. Tenant configuration in the web admin (Day 2)'),
-  para('All of this is at clerque.hnscorpph.com. Sign in as the bakery owner; do this together so they see how it works.'),
+  para('All of this is at clerque.cc. Sign in as the bakery owner; do this together so they see how it works.'),
 
   h2('3.1 Tenant profile'),
   checklistTable([

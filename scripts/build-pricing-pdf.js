@@ -278,7 +278,7 @@ const coverPage = [
   }),
   new Paragraph({
     spacing: { after: 60 },
-    children: [new TextRun({ text: 'clerque.hnscorpph.com', font: 'Calibri', size: 20, color: TEXT_MUTED })],
+    children: [new TextRun({ text: 'clerque.cc', font: 'Calibri', size: 20, color: TEXT_MUTED })],
   }),
   new Paragraph({
     spacing: { after: 0 },
@@ -838,7 +838,7 @@ const trialPage = [
 
   h2('Public Demo Tenant'),
   p([
-    new TextRun({ text: 'clerque.hnscorpph.com/demo', font: 'Consolas', size: 22, bold: true, color: BRAND_BROWN_DARK }),
+    new TextRun({ text: 'clerque.cc/demo', font: 'Consolas', size: 22, bold: true, color: BRAND_BROWN_DARK }),
   ]),
   bullet('Pre-loaded with realistic café data; resets nightly at 3 AM PHT'),
   bullet('Full read + write functionality'),
@@ -979,7 +979,7 @@ const contactPage = [
   h3('Website'),
   new Paragraph({
     spacing: { after: 480 },
-    children: [new TextRun({ text: 'clerque.hnscorpph.com', font: 'Consolas', size: 24, bold: true, color: BRAND_BROWN_DARK })],
+    children: [new TextRun({ text: 'clerque.cc', font: 'Consolas', size: 24, bold: true, color: BRAND_BROWN_DARK })],
   }),
 
   new Paragraph({
@@ -1067,7 +1067,7 @@ const doc = new Document({
     footers: {
       default: new Footer({ children: [new Paragraph({
         children: [
-          new TextRun({ text: 'HNS Corporation Philippines   •   clerque.hnscorpph.com', font: 'Calibri', size: 18, color: TEXT_MUTED }),
+          new TextRun({ text: 'HNS Corporation Philippines   •   clerque.cc', font: 'Calibri', size: 18, color: TEXT_MUTED }),
           new TextRun({ text: '\t', font: 'Calibri', size: 18 }),
           new TextRun({ text: 'Page ', font: 'Calibri', size: 18, color: TEXT_MUTED }),
           new TextRun({ children: [PageNumber.CURRENT], font: 'Calibri', size: 18, color: TEXT_MUTED }),

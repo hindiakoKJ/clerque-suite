@@ -161,7 +161,7 @@ Do NOT build these yourself. Request them from the web/api session. Coordinate v
 - Icon (1024×1024 + adaptive)
 - Feature graphic + 6 phone/tablet screenshots
 - Listing copy ("Subscription sold separately at clerque.com" — required phrase)
-- Privacy policy URL (hosted at `clerque.hnscorpph.com/legal/counter-privacy`)
+- Privacy policy URL (hosted at `clerque.cc/legal/counter-privacy`)
 - DPA disclosure (RA 10173 compliance — Data Privacy Act)
 - EAS Build → AAB upload to Play Console internal testing track
 

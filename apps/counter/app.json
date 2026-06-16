@@ -57,8 +57,8 @@
       ]
     ],
     "extra": {
-      "apiBaseUrl": "https://clerque-suite-production-93b1.up.railway.app",
-      "webOrigin": "https://clerque.hnscorpph.com",
+      "apiBaseUrl": "https://api.clerque.cc",
+      "webOrigin": "https://clerque.cc",
       "tenantSlugDefault": "demo",
       "eas": {
         "projectId": "63627b26-7575-4822-b925-2270da96375d"

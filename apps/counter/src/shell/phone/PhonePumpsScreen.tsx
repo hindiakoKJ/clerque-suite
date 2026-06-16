@@ -198,7 +198,7 @@ export default function PhonePumpsScreen(): React.ReactElement {
               <MaterialCommunityIcons name="gas-station" size={48} color={colors.faint} />
               <Text style={styles.emptyTitle}>No pumps configured</Text>
               <Text style={styles.emptySub}>
-                Owner: create pumps on the web at clerque.hnscorpph.com/pos/fuel/pumps.
+                Owner: create pumps on the web at clerque.cc/pos/fuel/pumps.
               </Text>
             </View>
           )

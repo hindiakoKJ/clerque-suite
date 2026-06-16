@@ -32,16 +32,21 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: '**.r2.cloudflarestorage.com' },
       { protocol: 'https', hostname: '**.up.railway.app' },
+      // Post-migration product domains.
+      { protocol: 'https', hostname: 'clerque.cc' },
+      { protocol: 'https', hostname: 'console.clerque.cc' },
+      { protocol: 'https', hostname: 'www.clerque.cc' },
+      { protocol: 'https', hostname: 'cdn.clerque.cc' },
+      // Legacy domains during cutover.
       { protocol: 'https', hostname: 'clerque.hnscorpph.com' },
       { protocol: 'https', hostname: 'console.hnscorpph.com' },
-      { protocol: 'https', hostname: 'cdn.clerque.app' },
     ],
   },
 
   // I4 — global security headers. Applied to every route.
   async headers() {
     const apiOrigin =
-      process.env.NEXT_PUBLIC_API_BASE_URL ?? 'https://*.up.railway.app';
+      process.env.NEXT_PUBLIC_API_BASE_URL ?? 'https://api.clerque.cc';
     const cspDirectives = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",

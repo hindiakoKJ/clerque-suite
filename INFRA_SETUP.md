@@ -11,7 +11,7 @@ These are already running in production. Listed for completeness.
 | Service | What | Status |
 |---|---|---|
 | **Railway** | Postgres + NestJS API host | ✅ Running |
-| **Vercel** | Next.js frontend host (`clerque.hnscorpph.com`, `console.hnscorpph.com`) | ✅ Running |
+| **Vercel** | Next.js frontend host (`clerque.cc`, `console.clerque.cc`) | ✅ Running |
 | **DNS** | `hnscorpph.com` zone with both subdomains pointing at Vercel + API at `api.hnscorpph.com` | ✅ Configured |
 
 ---
@@ -98,8 +98,8 @@ npm run migrate-uploads-to-s3
 1. Sign up at uptimerobot.com (free tier — 50 monitors, 5-minute checks)
 2. Create three monitors:
    - HTTP(s): `https://api.hnscorpph.com/health`
-   - HTTP(s): `https://clerque.hnscorpph.com`
-   - HTTP(s): `https://console.hnscorpph.com`
+   - HTTP(s): `https://clerque.cc`
+   - HTTP(s): `https://console.clerque.cc`
 3. Alert contacts: your email + SMS (free tier supports both)
 4. Set the alert threshold to 2 consecutive failures (avoids false positives from a single hiccup)
 

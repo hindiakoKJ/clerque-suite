@@ -145,7 +145,7 @@ del test-branch-protection.txt
 1. Schedule a 2-hour block. Lock it on the calendar. Don't accept other meetings.
 2. Read `docs/INCIDENT_RESPONSE.md §A — Ransomware` aloud to your secondary contact. Time: ~15 min.
 3. Pick a **scenario script** (write this beforehand and don't share with the participant in advance):
-   - 2026-XX-XX, 08:42 — UptimeRobot pings you: "clerque.hnscorpph.com is down."
+   - 2026-XX-XX, 08:42 — UptimeRobot pings you: "clerque.cc is down."
    - You log in and find a vendor invoice file in R2 has been replaced with a `README_TO_DECRYPT.txt` demanding 5 BTC.
    - You check `/admin/backups` — last successful backup was last night 02:00 UTC.
    - The attacker has your R2 access key (somehow). They're threatening to delete all snapshots.
@@ -241,7 +241,7 @@ del test-branch-protection.txt
 2. **Vercel side:**
    - `https://vercel.com` → Add New → Project → import `clerque-suite` (it's already imported for prod — go to Settings → Git instead).
    - Or: in the existing project, **Settings → Git → Production Branch** stays `master`. Vercel auto-creates preview deployments for non-master branches → the `staging` branch gets `clerque-suite-git-staging-<your-team>.vercel.app`.
-   - Add Vercel Domain alias `staging.clerque.hnscorpph.com` → CNAME to the preview URL.
+   - Add Vercel Domain alias `staging.clerque.cc` → CNAME to the preview URL.
 3. **Seed staging with anonymised production data:**
    - On prod: trigger a manual backup via `POST /admin/backups/run` → wait for the new snapshot in R2.
    - Download it: `GET /admin/backups/<tenant-slug>/download` → save the JSON.
@@ -265,7 +265,7 @@ del test-branch-protection.txt
    - `.github/workflows/staging.yml` — copy your existing prod deploy workflow but trigger on `staging` branch only. Most teams just let Railway auto-deploy; no GitHub Action needed.
 
 **Verify:**
-- `https://staging.clerque.hnscorpph.com` loads the login page.
+- `https://staging.clerque.cc` loads the login page.
 - You can log in with a known staging user.
 - `/api/v1/health` returns OK.
 
@@ -284,13 +284,13 @@ del test-branch-protection.txt
 4. Settings:
    - **Monitor Type**: HTTP(s)
    - **Friendly Name**: `Clerque API`
-   - **URL**: `https://api.clerque.hnscorpph.com/api/v1/health` (use whatever your actual API host is; check by curling it now)
+   - **URL**: `https://api.clerque.cc/api/v1/health` (use whatever your actual API host is; check by curling it now)
    - **Monitoring Interval**: 5 minutes (free tier minimum)
    - **Monitor Timeout**: 30 seconds
 5. Click **Create Monitor**.
 6. Repeat for the web app:
    - Friendly Name: `Clerque Web`
-   - URL: `https://clerque.hnscorpph.com`
+   - URL: `https://clerque.cc`
 7. **My Settings → Alert Contacts → Add Alert Contact**:
    - E-mail: your primary email
    - Add a second: e-mail or webhook to your phone (free SMS in some regions; otherwise Telegram bot)
@@ -383,13 +383,13 @@ del test-branch-protection.txt
    - Rate: 20 requests / 10 seconds, same IP
    - Action: Block for 30 minutes
    - Save.
-7. **Page Rules** (optional): Add a rule for `*.clerque.hnscorpph.com/*` → **Browser Cache TTL: Respect Existing Headers**, **Cache Level: Bypass** (your API responses shouldn't be CDN-cached).
+7. **Page Rules** (optional): Add a rule for `*.clerque.cc/*` → **Browser Cache TTL: Respect Existing Headers**, **Cache Level: Bypass** (your API responses shouldn't be CDN-cached).
 
 **Verify:**
-1. `curl -I https://api.clerque.hnscorpph.com/api/v1/health` → look for response header `cf-ray:` (proves Cloudflare proxied it).
+1. `curl -I https://api.clerque.cc/api/v1/health` → look for response header `cf-ray:` (proves Cloudflare proxied it).
 2. Run 30 quick auth attempts:
    ```cmd
-   for /L %i in (1,1,30) do curl -X POST https://api.clerque.hnscorpph.com/api/v1/auth/login -d "{}" -H "Content-Type: application/json"
+   for /L %i in (1,1,30) do curl -X POST https://api.clerque.cc/api/v1/auth/login -d "{}" -H "Content-Type: application/json"
    ```
    After ~20 requests you should start getting 429 responses.
 3. WAF stats: Cloudflare → Security → Events → confirm rules are firing.
@@ -417,7 +417,7 @@ del test-branch-protection.txt
 2. **Fetch the snapshot** (use any admin token):
    ```cmd
    curl -H "Authorization: Bearer <admin-token>" ^
-     "https://staging.clerque.hnscorpph.com/api/v1/admin/backups/<tenant-slug>/download" ^
+     "https://staging.clerque.cc/api/v1/admin/backups/<tenant-slug>/download" ^
      -o snapshot-before.json
    ```
 3. **Note timestamp**: this is your "before" point.
@@ -426,7 +426,7 @@ del test-branch-protection.txt
    curl -X POST -H "Authorization: Bearer <admin-token>" ^
      -H "Content-Type: application/json" ^
      -d "{\"confirmationToken\":\"<tenant-slug>\"}" ^
-     "https://staging.clerque.hnscorpph.com/api/v1/admin/tenants/<tenant-id>/wipe-data"
+     "https://staging.clerque.cc/api/v1/admin/tenants/<tenant-id>/wipe-data"
    ```
    (Adjust to the actual admin-wipe endpoint your code exposes; if none exists, manually `DELETE` from the major tables in staging Postgres via Railway DB console.)
 5. **Verify wiped**: re-run the row-count SQL → all zeros.
@@ -435,7 +435,7 @@ del test-branch-protection.txt
    curl -X POST -H "Authorization: Bearer <admin-token>" ^
      -H "Content-Type: application/json" ^
      -d "{\"confirmationToken\":\"<tenant-slug>\"}" ^
-     "https://staging.clerque.hnscorpph.com/api/v1/admin/backups/<tenant-slug>/restore"
+     "https://staging.clerque.cc/api/v1/admin/backups/<tenant-slug>/restore"
    ```
 7. **Post-restore row counts**: re-run the SQL.
    - If counts match pre-snapshot → success.

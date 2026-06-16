@@ -287,7 +287,7 @@ const REPORT = {
         ['D5-04',
          'CORS policy in production not evidenced from codebase audit. NestJS default CORS is permissive.',
          'Medium', 'CLOSED',
-         'Verified existing: apps/api/src/main.ts:206-212 already declares explicit allowedOrigins list (production clerque.hnscorpph.com + console.hnscorpph.com + localhost dev). Audit was sampling and did not find this.',
+         'Verified existing: apps/api/src/main.ts:206-212 already declares explicit allowedOrigins list (production clerque.cc + console.clerque.cc + localhost dev). Audit was sampling and did not find this.',
          'apps/api/src/main.ts:206-212.'],
 
         ['D5-05',

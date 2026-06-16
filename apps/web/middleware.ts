@@ -12,7 +12,7 @@ import { levelValue } from '@repo/shared-types';
  *                            blocked → redirected to /admin (or /login).
  *   • everything else      → Tenant apps allowed. /admin is BLOCKED →
  *                            redirected to /select (so customers visiting
- *                            clerque.hnscorpph.com never see Console).
+ *                            clerque.cc never see Console).
  *
  * Detection: if the hostname starts with `console.` we treat it as the
  * platform-admin entrypoint. Local dev (`localhost`, `127.0.0.1`) is
@@ -63,7 +63,7 @@ function getToken(req: NextRequest): string | null {
 }
 
 function isConsoleHost(hostname: string): boolean {
-  // Production: `console.hnscorpph.com` (or any `console.<anything>`)
+  // Production: `console.clerque.cc` (or any `console.<anything>`)
   // Vercel preview: `console-<branch>-<team>.vercel.app` not auto-detected
   //   (use ?host=console query to force Console mode in previews)
   return hostname.toLowerCase().startsWith('console.');

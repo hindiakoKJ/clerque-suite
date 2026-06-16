@@ -328,7 +328,7 @@ function PairingCodeModal({
   if (!code) return null;
 
   // Use the actual site's origin so the QR works on any deployed
-  // domain — clerque.hnscorpph.com (current prod), clerque.com (future),
+  // domain — clerque.cc (current prod), clerque.com (future),
   // staging, localhost, whatever. Falls back to clerque.com only on
   // server render where window doesn't exist (and this dialog is
   // client-only anyway, so the fallback never paints).

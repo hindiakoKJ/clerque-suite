@@ -185,7 +185,7 @@ This app talks to the Clerque Cloud API (NestJS, deployed on Railway).
 The base URL is set in `app.json`:
 
 ```json
-"extra": { "apiBaseUrl": "https://clerque-suite-production-93b1.up.railway.app" }
+"extra": { "apiBaseUrl": "https://api.clerque.cc" }
 ```
 
 Change for self-hosted or staging:

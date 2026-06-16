@@ -37,7 +37,9 @@ const nextConfig = {
       { protocol: 'https', hostname: 'console.clerque.cc' },
       { protocol: 'https', hostname: 'www.clerque.cc' },
       { protocol: 'https', hostname: 'cdn.clerque.cc' },
-      // Legacy domains during cutover.
+      // Legacy domains during cutover. Cutover finished 2026-06-16.
+      // TODO(2026-07-16): remove these + matching entries in apps/api/src/main.ts
+      // CORS allowlist once 30 days of clean traffic on clerque.cc.
       { protocol: 'https', hostname: 'clerque.hnscorpph.com' },
       { protocol: 'https', hostname: 'console.hnscorpph.com' },
     ],
@@ -46,7 +48,7 @@ const nextConfig = {
   // I4 — global security headers. Applied to every route.
   async headers() {
     const apiOrigin =
-      process.env.NEXT_PUBLIC_API_BASE_URL ?? 'https://api.clerque.cc';
+      process.env.NEXT_PUBLIC_API_URL ?? 'https://api.clerque.cc';
     const cspDirectives = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",

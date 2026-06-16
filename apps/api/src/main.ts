@@ -225,8 +225,9 @@ async function bootstrap() {
     'https://console.clerque.cc',
     'https://www.clerque.cc',
     // Legacy domains — kept temporarily so the API still accepts the
-    // old hostnames during the DNS cutover. Remove ~30 days after the
-    // Vercel/Cloudflare domain swap is complete.
+    // old hostnames during the DNS cutover. Cutover finished 2026-06-16.
+    // TODO(2026-07-16): remove these + matching entries in apps/web/next.config.js
+    // images.remotePatterns once 30 days of clean traffic on clerque.cc.
     'https://clerque.hnscorpph.com',
     'https://console.hnscorpph.com',
     // Localhost only in dev — gated on NODE_ENV.

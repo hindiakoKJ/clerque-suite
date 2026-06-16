@@ -2,8 +2,8 @@
  * Standalone Ledger landing page — Sprint 21.
  *
  * Marketing/awareness entry point for prospects who want accounting WITHOUT
- * a POS. Public (no auth) — sits under apps/web (not apps/landing — that
- * repo is in a separate session).
+ * a POS. Public (no auth) — lives in apps/web; the standalone HNScorpPH
+ * landing page lives in the hns-corp-ph repo.
  *
  * Three audience hooks:
  *   1. BIR-pain — "file 2550Q in 15 minutes, no accountant required"

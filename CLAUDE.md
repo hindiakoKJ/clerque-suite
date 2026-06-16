@@ -1,9 +1,7 @@
 # Clerque App-Suite — Session Instructions
 
-This session is for **Clerque and its supporting services only**.
-
-> HNScorpPH landing page (`apps/landing`) is maintained in a separate session.
-> Do not make changes to `apps/landing` here unless explicitly asked.
+This session is for **Clerque and its supporting services only**. The
+HNScorpPH landing page lives in the separate `hns-corp-ph` repo, not here.
 
 ---
 
@@ -25,7 +23,7 @@ E:\AI Projects\app-suite\
 ├── apps/
 │   ├── web/          ← Next.js frontend (Clerque UI, port 3000)
 │   ├── api/          ← NestJS backend (port 3001)
-│   └── landing/      ← HNScorpPH landing page (NOT this session)
+│   └── counter/      ← Expo mobile POS app
 ├── packages/         ← Shared packages
 └── package.json      ← Turborepo root
 ```
@@ -61,7 +59,6 @@ All 10 planned phases are complete. See `project_clerque.md` for the full list.
 
 ## Key Rules
 
-- Never touch `apps/landing` — that's the HNScorpPH landing page session
 - Always check `project_clerque.md` before proposing new features — it may already be built
 - Follow existing arch decisions in `arch_decisions.md` — do not re-litigate locked decisions
 - No DB triggers — use NestJS `@Cron` or BullMQ

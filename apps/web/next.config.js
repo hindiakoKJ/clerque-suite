@@ -47,8 +47,18 @@ const nextConfig = {
 
   // I4 — global security headers. Applied to every route.
   async headers() {
-    const apiOrigin =
-      process.env.NEXT_PUBLIC_API_URL ?? 'https://api.clerque.cc';
+    // CSP connect-src must be an ORIGIN with no path — a path turns CSP into
+    // exact-match mode, which blocks every sub-path (e.g. /api/v1/auth/login).
+    // NEXT_PUBLIC_API_URL carries the /api/v1 path for the fetch client, so we
+    // strip it back to the bare origin here.
+    const apiUrlRaw = process.env.NEXT_PUBLIC_API_URL ?? 'https://api.clerque.cc';
+    const apiOrigin = (() => {
+      try {
+        return new URL(apiUrlRaw).origin;
+      } catch {
+        return 'https://api.clerque.cc';
+      }
+    })();
     const cspDirectives = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",

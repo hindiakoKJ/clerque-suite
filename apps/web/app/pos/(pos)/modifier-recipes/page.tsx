@@ -79,7 +79,7 @@ export default function ModifierRecipesPage() {
 
   const rmQ = useQuery<RawMaterial[]>({
     queryKey: ['modifier-recipes', 'raw-materials'],
-    queryFn: () => api.get('/raw-materials').then((r) => r.data),
+    queryFn: () => api.get('/inventory/raw-materials').then((r) => r.data),
     staleTime: 60_000,
   });
 

@@ -238,6 +238,10 @@ export default function InvoicesPage() {
   const { user } = useAuthStore();
   const qc       = useQueryClient();
   const canCollect = COLLECTION_ROLES.includes(user?.role ?? '');
+  // POS-derived AR is a SIMPLE-ledger page, but the customer master (/ar/customers)
+  // is full-accounting gated. Only fetch it on plans that have advancedAccounting
+  // so simple-tier (Solo Books) tenants don't hit a 403 on the customer filter.
+  const hasFullAccounting = user?.planFeatures?.advancedAccounting ?? false;
 
   const [tab,          setTab]          = useState<TabFilter>('all');
   const [customerId,   setCustomerId]   = useState('');
@@ -274,7 +278,7 @@ export default function InvoicesPage() {
   const { data: customers = [] } = useQuery<Customer[]>({
     queryKey: ['ar-customers-list'],
     queryFn:  () => api.get('/ar/customers?isActive=true').then((r) => r.data),
-    enabled:  !!user,
+    enabled:  !!user && hasFullAccounting,
   });
 
   function onCollectSaved() {
@@ -340,16 +344,20 @@ export default function InvoicesPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <select
-          value={customerId}
-          onChange={(e) => { setCustomerId(e.target.value); setPage(1); }}
-          className={`${INPUT_CLS} w-auto`}
-        >
-          <option value="">All Customers</option>
-          {customers.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
+        {/* Customer filter needs the full-accounting customer master; hidden on
+            the simple tier (Solo Books) where /ar/customers is not available. */}
+        {hasFullAccounting && (
+          <select
+            value={customerId}
+            onChange={(e) => { setCustomerId(e.target.value); setPage(1); }}
+            className={`${INPUT_CLS} w-auto`}
+          >
+            <option value="">All Customers</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        )}
         <div className="flex items-center gap-2">
           <label className="text-xs text-muted-foreground">From</label>
           <input

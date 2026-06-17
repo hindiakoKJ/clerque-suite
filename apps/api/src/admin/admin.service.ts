@@ -572,12 +572,19 @@ export class AdminService {
     //     exactly one module enabled. Default to POS-only if caller passed
     //     nothing, for backward compat with the prior POS-only behaviour.
     //   - PAIR: respects dto.module* booleans (2 of 3 must be on)
-    const isSuite = cap.moduleCount === 3;
-    const isStd   = planCode.startsWith('STD_');
+    const isSuite     = cap.moduleCount === 3;
+    const isSolo      = planCode.startsWith('SOLO_');
+    const isSoloBooks = planCode === 'SOLO_BOOKS';
+    // Module defaults when the caller omits flags:
+    //   - SUITE: all 3 forced on.
+    //   - SOLO_BOOKS: POS + Ledger (the only Solo plan that bundles ledger).
+    //   - Other SOLO (Solo/Lite/Standard): POS-only — Ledger/Payroll off, else
+    //     validateSoloModuleCombo would reject the auto-defaulted combo.
+    //   - PAIR: POS + Ledger by default (a valid 2-module combo); caller can override.
     const planMods = {
-      modulePos:     isSuite ? true  : (dto.modulePos     ?? (isStd ? true  : true)),
-      moduleLedger:  isSuite ? true  : (dto.moduleLedger  ?? (isStd ? false : true)),
-      modulePayroll: isSuite ? true  : (dto.modulePayroll ?? (isStd ? false : false)),
+      modulePos:     isSuite ? true : (dto.modulePos     ?? true),
+      moduleLedger:  isSuite ? true : (dto.moduleLedger  ?? (isSolo && !isSoloBooks ? false : true)),
+      modulePayroll: isSuite ? true : (dto.modulePayroll ?? false),
     };
     // Validate STD plans have exactly one module enabled.
     const { validateSoloModuleCombo } = await import('@repo/shared-types');

@@ -1148,7 +1148,8 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 // (for STD / PAIR plans), and adjust seat add-on count. Validates against
 // PLAN_CAPS server-side; this UI only sends the user's intent.
 const PLAN_CODES = [
-  'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
+  // Solo — actively offered, then legacy (grandfathered)
+  'SOLO_PRO', 'SOLO_BOOKS', 'SOLO_LITE', 'SOLO_STANDARD',
   // PARKED — multi-module legacy
   'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
   'SUITE_T1', 'SUITE_T2', 'SUITE_T3', 'ENTERPRISE',

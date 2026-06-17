@@ -52,8 +52,10 @@ const BUSINESS_TYPES = [
 // Legacy TIER_1..TIER_6 still in DB but advisory — auto-derived from the
 // chosen plan code. STD_* are POS-only; PAIR_* require pick-2; SUITE_* all-3.
 const PLAN_CODES = [
-  // Solo lineup — actively offered
-  'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
+  // Solo lineup — actively offered at signup
+  'SOLO_PRO', 'SOLO_BOOKS',
+  // Solo legacy — grandfathered tenants only (retired from signup)
+  'SOLO_LITE', 'SOLO_STANDARD',
   // PARKED — multi-module legacy (kept here for grandfathered-tenant admin
   // operations; not promoted to new signups until the PAIR redesign lands)
   'PAIR_T1',   'PAIR_T2',  'PAIR_T3',
@@ -61,10 +63,12 @@ const PLAN_CODES = [
   'ENTERPRISE',
 ] as const;
 const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
-  // Solo lineup
-  SOLO_LITE:      'Solo Lite (POS · 1 staff · ₱199/mo) — Loyverse-Free baseline + PH compliance',
-  SOLO_STANDARD:  'Solo Standard (POS · 3 staff · ₱399/mo) — unlimited recipes + 10 FEFO items + customer lookup',
-  SOLO_PRO:       'Solo Pro (POS · 5 staff · ₱499/mo) — all Solo features + audit log + advanced reports + auto-backup',
+  // Solo lineup — actively offered
+  SOLO_PRO:       'Solo (full POS · 5 staff · ₱299/mo) — full-access point of sale',
+  SOLO_BOOKS:     'Solo Books (full POS + simple ledger · 5 staff · ₱399/mo) — POS + simple bookkeeping',
+  // Solo legacy — grandfathered only
+  SOLO_LITE:      'Solo Lite legacy (POS · 1 staff · ₱199/mo)',
+  SOLO_STANDARD:  'Solo Standard legacy (POS · 3 staff · ₱399/mo)',
   // PARKED — multi-module legacy
   PAIR_T1:    'Pair T1 legacy (any 2 modules · 3 staff · ₱799/mo)',
   PAIR_T2:    'Pair T2 legacy (any 2 modules · 10 staff · ₱1,599/mo)',
@@ -76,7 +80,7 @@ const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
 };
 // Legacy tier kept on Tenant table for rollback; auto-mapped from planCode.
 const PLAN_TO_TIER: Record<typeof PLAN_CODES[number], string> = {
-  SOLO_LITE: 'TIER_1', SOLO_STANDARD: 'TIER_2', SOLO_PRO: 'TIER_2',
+  SOLO_PRO: 'TIER_2', SOLO_BOOKS: 'TIER_2', SOLO_LITE: 'TIER_1', SOLO_STANDARD: 'TIER_2',
   PAIR_T1: 'TIER_2', PAIR_T2: 'TIER_3', PAIR_T3: 'TIER_4',
   SUITE_T1: 'TIER_3', SUITE_T2: 'TIER_5', SUITE_T3: 'TIER_6',
   ENTERPRISE: 'TIER_6',
@@ -228,10 +232,13 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
               <select required value={form.planCode}
                 onChange={(e) => set('planCode', e.target.value as typeof form.planCode)}
                 className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm">
-                <optgroup label="Solo — POS only (actively offered)">
+                <optgroup label="Solo — actively offered">
+                  <option value="SOLO_PRO">{PLAN_LABELS.SOLO_PRO}</option>
+                  <option value="SOLO_BOOKS">{PLAN_LABELS.SOLO_BOOKS}</option>
+                </optgroup>
+                <optgroup label="Solo — legacy (grandfathered tenants only)">
                   <option value="SOLO_LITE">{PLAN_LABELS.SOLO_LITE}</option>
                   <option value="SOLO_STANDARD">{PLAN_LABELS.SOLO_STANDARD}</option>
-                  <option value="SOLO_PRO">{PLAN_LABELS.SOLO_PRO}</option>
                 </optgroup>
                 <optgroup label="Two Modules — PARKED (grandfathered tenants only)">
                   <option value="PAIR_T1">{PLAN_LABELS.PAIR_T1}</option>

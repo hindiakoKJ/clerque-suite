@@ -41,9 +41,10 @@ interface PaymentMethod {
 }
 
 const PLAN_LABELS: Record<string, string> = {
+  SOLO_PRO:      'Solo',
+  SOLO_BOOKS:    'Solo Books',
   SOLO_LITE:     'Solo Lite',
   SOLO_STANDARD: 'Solo Standard',
-  SOLO_PRO:      'Solo Pro',
 };
 
 function fmtPhp(cents: number): string {

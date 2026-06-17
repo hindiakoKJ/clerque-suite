@@ -67,9 +67,10 @@ function nextOrNumber(last: string | null, padding: number): string {
 }
 
 const PLAN_LABELS: Record<string, string> = {
-  SOLO_LITE:     'Solo Lite',
-  SOLO_STANDARD: 'Solo Standard',
-  SOLO_PRO:      'Solo Pro',
+  SOLO_PRO:      'Solo',
+  SOLO_BOOKS:    'Solo Books',
+  SOLO_LITE:     'Solo Lite (legacy)',
+  SOLO_STANDARD: 'Solo Standard (legacy)',
 };
 
 const STATUS_COLORS: Record<string, string> = {

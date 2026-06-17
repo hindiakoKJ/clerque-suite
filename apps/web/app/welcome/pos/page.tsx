@@ -2,8 +2,8 @@
  * Counter (POS) standalone landing page — Sprint 23.
  *
  * Marketing entry point for prospects considering Clerque POS / Counter.
- * Three pricing tiers (Solo Lite / Solo Standard / Solo Pro) all positioned
- * against Loyverse-paid pricing — cheaper at every level with PH compliance
+ * Two plans (Solo ₱299 full POS / Solo Books ₱399 full POS + simple ledger)
+ * positioned against Loyverse-paid pricing — cheaper with PH compliance
  * Loyverse doesn't offer at any price.
  *
  * Public (no auth). CTAs route to /signup/pos (or /signup, if pos-specific
@@ -26,7 +26,7 @@ export const metadata = {
 
 // Format the price from PLAN_CAPS so the marketing copy is always in sync
 // with the canonical source. If pricing changes, this updates automatically.
-function priceLabel(code: 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO'): string {
+function priceLabel(code: 'SOLO_PRO' | 'SOLO_BOOKS'): string {
   const peso = Math.round(PLAN_CAPS[code].pricePhpMonthlyCents / 100);
   return `₱${peso.toLocaleString('en-PH')}`;
 }
@@ -50,8 +50,8 @@ function Hero() {
         </h1>
         <p className="text-lg text-zinc-600 max-w-2xl mx-auto mb-8 leading-relaxed">
           Loyverse Free is missing BIR compliance, GCash native flows, and PWD/Senior discounts.
-          Loyverse Paid is ₱2,800+/month. Clerque Counter starts at ₱199/mo with PH compliance
-          built in — and Solo Pro at ₱499/mo includes more than Loyverse with every add-on.
+          Loyverse Paid is ₱2,800+/month. Clerque Counter is ₱299/mo for full POS with PH
+          compliance built in — or ₱399/mo for Solo Books, which adds simple bookkeeping.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <Link
@@ -91,7 +91,7 @@ function WhyUs() {
     {
       icon: Coffee,
       title: 'Recipe COGS that auto-blends costs',
-      body: 'Bought milk at ₱120 Monday and ₱140 Wednesday? Solo Standard auto-blends to a weighted average so every drink\'s COGS is right — no manual tracking.',
+      body: 'Bought milk at ₱120 Monday and ₱140 Wednesday? Clerque auto-blends to a weighted average so every drink\'s COGS is right — no manual tracking.',
     },
     {
       icon: Smartphone,
@@ -132,54 +132,39 @@ function Pricing() {
   // Prices auto-read from PLAN_CAPS so this page can never drift from the
   // canonical billing source (Sprint 23 invariant).
   const tiers: Array<{
-    code: 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO';
+    code: 'SOLO_PRO' | 'SOLO_BOOKS';
     name: string;
     subtitle: string;
     features: string[];
     recommended?: boolean;
   }> = [
     {
-      code: 'SOLO_LITE',
-      name: 'Solo Lite',
-      subtitle: 'Owner-operator · 1 user',
+      code: 'SOLO_PRO',
+      name: 'Solo',
+      subtitle: 'Full-access POS · up to 5 users',
       features: [
         'Unlimited transactions, products, customers',
         'BIR-compliant Z-read + OR# sequencing',
-        'Modifiers, discounts, open tickets',
-        'GCash / PayMaya / card tendering',
-        'Up to 5 recipe products with WAC ingredient COGS',
-        'Basic stock count + low-stock alerts',
+        'Unlimited recipe products with WAC ingredient COGS',
+        'Unlimited batch / FEFO / expiry on every item (+ FIFO option)',
+        'Modifiers, discounts, PWD/Senior, open tickets',
+        'GCash / Maya / QR Ph / card tendering',
+        'Audit log + custom roles + maker-checker voids',
+        'Advanced reports, Loyalty Pro, Google Drive auto-backup, API read',
       ],
     },
     {
-      code: 'SOLO_STANDARD',
-      name: 'Solo Standard',
-      subtitle: 'Owner + 1-2 helpers · 3 users',
+      code: 'SOLO_BOOKS',
+      name: 'Solo Books',
+      subtitle: 'Full POS + simple bookkeeping · up to 5 users',
       features: [
-        'Everything in Solo Lite',
-        'Unlimited recipe products',
-        '10 inventory items with batch + FEFO + expiry alerts',
-        '1 Sales Lead delegation (separate supervisor PIN)',
-        'Customer phone-lookup at the till',
-        'Receipt header / footer customization',
+        'Everything in Solo',
+        'Simple bookkeeping — record income & expenses',
+        'See money owed from charge sales',
+        'Simple income-vs-expense summary',
+        'Upgrade anytime for full accounting — journal, BIR forms, statements',
       ],
       recommended: true,
-    },
-    {
-      code: 'SOLO_PRO',
-      name: 'Solo Pro',
-      subtitle: 'Owner + co-owner + staff · 5 users',
-      features: [
-        'Everything in Solo Standard, unlimited',
-        'Unlimited batch / FEFO / expiry on every item',
-        'FIFO valuation option (alongside WAC)',
-        'Multiple Sales Lead delegations',
-        'Audit log + custom roles + maker-checker voids',
-        'Advanced reports (hourly heatmaps, cohorts)',
-        'Loyalty Pro (digital stamps + QR redemption)',
-        'Auto-backup to your Google Drive',
-        'API read access',
-      ],
     },
   ];
 
@@ -272,17 +257,17 @@ function VsLoyverse() {
               <tr className="border-t border-zinc-200">
                 <td className="p-3 text-zinc-700">Basic POS with PH BIR Z-read</td>
                 <td className="p-3 text-right text-zinc-500 italic">Not available at any price</td>
-                <td className="p-3 text-right font-semibold" style={{ color: ACCENT }}>Solo Lite ₱199</td>
+                <td className="p-3 text-right font-semibold" style={{ color: ACCENT }}>Included in Solo ₱299</td>
               </tr>
               <tr className="border-t border-zinc-200">
-                <td className="p-3 text-zinc-700">+ Unlimited recipe COGS</td>
-                <td className="p-3 text-right text-zinc-500">Free + Advanced Inventory ~₱1,400/mo</td>
-                <td className="p-3 text-right font-semibold" style={{ color: ACCENT }}>Solo Standard ₱399 (3.5× cheaper)</td>
-              </tr>
-              <tr className="border-t border-zinc-200">
-                <td className="p-3 text-zinc-700">+ FEFO perishables + audit + 5 users</td>
+                <td className="p-3 text-zinc-700">+ Unlimited recipe COGS, FEFO, audit, 5 users</td>
                 <td className="p-3 text-right text-zinc-500">Free + 3 add-ons ~₱3,300/mo</td>
-                <td className="p-3 text-right font-semibold" style={{ color: ACCENT }}>Solo Pro ₱499 (6.6× cheaper)</td>
+                <td className="p-3 text-right font-semibold" style={{ color: ACCENT }}>Solo ₱299 (11× cheaper)</td>
+              </tr>
+              <tr className="border-t border-zinc-200">
+                <td className="p-3 text-zinc-700">+ Simple bookkeeping (income & expenses)</td>
+                <td className="p-3 text-right text-zinc-500 italic">Not available — no accounting</td>
+                <td className="p-3 text-right font-semibold" style={{ color: ACCENT }}>Solo Books ₱399</td>
               </tr>
             </tbody>
           </table>

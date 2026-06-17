@@ -25,55 +25,49 @@ interface SignupResponse {
   referenceCode: string | null;
 }
 
+// Two-plan Solo lineup (Sprint-24 pricing overhaul):
+//   Solo        = full-access POS                         (code SOLO_PRO,   ₱299)
+//   Solo Books  = full-access POS + simple bookkeeping    (code SOLO_BOOKS, ₱399)
+// Legacy codes SOLO_LITE / SOLO_STANDARD are retained for existing tenants but
+// are no longer offered at signup.
+type OfferedPlan = 'SOLO_PRO' | 'SOLO_BOOKS';
+
 const PLANS: Array<{
-  code: 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO';
+  code: OfferedPlan;
   name: string;
   tagline: string;
   highlights: string[];
   recommended?: boolean;
 }> = [
   {
-    code: 'SOLO_LITE',
-    name: 'Solo Lite',
-    tagline: 'Owner-operator, no staff',
+    code: 'SOLO_PRO',
+    name: 'Solo',
+    tagline: 'Full-access point of sale',
     highlights: [
-      '1 user / cashier',
-      'Unlimited transactions',
-      'BIR-compliant Z-read',
-      'GCash + PayMaya + card tendering',
-      'Up to 5 recipe products',
+      'Up to 5 users / cashiers',
+      'Full POS — unlimited products, recipes & FEFO inventory',
+      'GCash + Maya + QR Ph + card tendering',
+      'BIR-compliant Z-read & receipts',
+      'Audit log, advanced reports & Loyalty Pro',
+      'API read access + daily auto-backup',
     ],
   },
   {
-    code: 'SOLO_STANDARD',
-    name: 'Solo Standard',
-    tagline: 'Owner + 1-2 helpers',
+    code: 'SOLO_BOOKS',
+    name: 'Solo Books',
+    tagline: 'Full POS + simple bookkeeping',
     highlights: [
-      '3 users / cashiers',
-      'Everything in Solo Lite',
-      'Unlimited recipes',
-      '10 inventory items with FEFO + expiry',
-      'Customer phone-lookup at till',
-      'Receipt header/footer customization',
+      'Everything in Solo',
+      'Simple bookkeeping — record income & expenses',
+      'See money owed from charge sales',
+      'Simple income-vs-expense summary',
+      'Upgrade anytime for full accounting (journal, BIR, statements)',
     ],
     recommended: true,
   },
-  {
-    code: 'SOLO_PRO',
-    name: 'Solo Pro',
-    tagline: 'Owner + co-owner + staff',
-    highlights: [
-      '5 users / cashiers',
-      'Everything in Solo Standard',
-      'Unlimited FEFO inventory',
-      'Audit log + advanced reports',
-      'Loyalty Pro (digital stamps)',
-      'API read access + auto-backup',
-    ],
-  },
 ];
 
-function priceLabel(code: 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO'): string {
+function priceLabel(code: OfferedPlan): string {
   const peso = Math.round(PLAN_CAPS[code].pricePhpMonthlyCents / 100);
   return `₱${peso.toLocaleString('en-PH')}`;
 }
@@ -83,7 +77,7 @@ export default function PosSignupPage() {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api/v1';
 
   const [form, setForm] = useState({
-    planCode:      'SOLO_STANDARD' as 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO',
+    planCode:      'SOLO_BOOKS' as OfferedPlan,
     businessName:  '',
     businessType:  'COFFEE_SHOP' as
       | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'

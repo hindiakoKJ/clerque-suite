@@ -60,13 +60,16 @@ export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
     pricePhpMonthlyCents: 39_900, addonSeatPhpMonthlyCents: 0,
     annualMonthEquivalent: 10,
   },
+  // "Solo" — the full-access POS plan (₱299). Repriced from ₱499 in the
+  // Sprint-24 pricing overhaul: full POS access is now the ₱299 entry plan.
   SOLO_PRO: {
     moduleCount: 1, baseSeats: 5, maxAddons: 0, maxTotal: 5,
-    pricePhpMonthlyCents: 49_900, addonSeatPhpMonthlyCents: 0,
+    pricePhpMonthlyCents: 29_900, addonSeatPhpMonthlyCents: 0,
     annualMonthEquivalent: 10,
   },
+  // "Solo Books" — full POS (same as Solo) + SIMPLE ledger (₱399).
   SOLO_BOOKS: {
-    moduleCount: 1, baseSeats: 3, maxAddons: 0, maxTotal: 3,
+    moduleCount: 1, baseSeats: 5, maxAddons: 0, maxTotal: 5,
     pricePhpMonthlyCents: 39_900, addonSeatPhpMonthlyCents: 0,
     annualMonthEquivalent: 10,
   },
@@ -130,7 +133,7 @@ export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
   SOLO_LITE:     { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_STANDARD: { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_PRO:      { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
-  SOLO_BOOKS:    { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
+  SOLO_BOOKS:    { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
   // PARKED — multi-module legacy
   PAIR_T1:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
   PAIR_T2:    { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
@@ -227,12 +230,13 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
     advancedAccounting: false,
   },
   SOLO_BOOKS: {
-    // Clone of SOLO_STANDARD — bundles POS + SIMPLE ledger. No full accounting.
-    birForms: false, customRoles: false, auditLog: false, crossModuleReports: false,
-    aiAddons: false, apiAccess: 'none', whitelabel: false, customDomain: false,
-    maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1,
-    customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false,
-    loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
+    // Full POS (identical to "Solo"/SOLO_PRO) + SIMPLE ledger. The only thing it
+    // does NOT unlock vs full-accounting plans is advancedAccounting.
+    birForms: false, customRoles: true, auditLog: true, crossModuleReports: false,
+    aiAddons: false, apiAccess: 'read', whitelabel: false, customDomain: false,
+    maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1,
+    customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true,
+    loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true,
     advancedAccounting: false,
   },
 
@@ -334,8 +338,8 @@ export function planLabel(code: PlanCode): string {
   return ({
     SOLO_LITE:     'Solo Lite',
     SOLO_STANDARD: 'Solo Standard',
-    SOLO_PRO:      'Solo Pro',
-    SOLO_BOOKS:    'Solo + Books',
+    SOLO_PRO:      'Solo',
+    SOLO_BOOKS:    'Solo Books',
     // PARKED — multi-module legacy (will be renamed/redesigned in a follow-up sprint)
     PAIR_T1:       'Pair T1 (legacy)',
     PAIR_T2:       'Pair T2 (legacy)',

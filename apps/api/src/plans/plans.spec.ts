@@ -21,7 +21,7 @@ import {
 
 describe('Plans constants', () => {
   const ALL_PLAN_CODES: PlanCode[] = [
-    'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO',
+    'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'SOLO_BOOKS',
     'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
     'SUITE_T1', 'SUITE_T2', 'SUITE_T3',
     'ENTERPRISE',
@@ -54,7 +54,7 @@ describe('Plans constants', () => {
     });
 
     it('module-count tiers are correct (1=SOLO_*, 2=PAIR, 3=SUITE/ENTERPRISE)', () => {
-      ['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO'].forEach((c) => {
+      ['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'SOLO_BOOKS'].forEach((c) => {
         expect(PLAN_CAPS[c as PlanCode].moduleCount).toBe(1);
       });
       ['PAIR_T1', 'PAIR_T2', 'PAIR_T3'].forEach((c) => {
@@ -234,6 +234,16 @@ describe('Plans constants', () => {
       expect(validateSoloModuleCombo('SUITE_T2',   true, true, true)).toBeNull();
       expect(validateSoloModuleCombo('ENTERPRISE', true, true, true)).toBeNull();
     });
+
+    it('SOLO_BOOKS is the only Solo plan that bundles POS + Ledger', () => {
+      // Valid: POS + Ledger together.
+      expect(validateSoloModuleCombo('SOLO_BOOKS', true, true, false)).toBeNull();
+      // Must include Ledger (it is the whole point of the tier).
+      expect(validateSoloModuleCombo('SOLO_BOOKS', true, false, false)).toMatch(/Ledger/i);
+      // Still requires POS, and still excludes Payroll.
+      expect(validateSoloModuleCombo('SOLO_BOOKS', false, true, false)).toMatch(/POS/i);
+      expect(validateSoloModuleCombo('SOLO_BOOKS', true, true, true)).toMatch(/Payroll/i);
+    });
   });
 
   describe('planLabel', () => {
@@ -270,6 +280,24 @@ describe('Plans constants', () => {
       expect(isPermissionAvailableUnderPlan('ledger:journal_entry', noLed)).toBe(false);
       expect(isPermissionAvailableUnderPlan('ledger:view',          led)).toBe(true);
       expect(isPermissionAvailableUnderPlan('ledger:journal_entry', led)).toBe(true);
+    });
+
+    it('SOLO_BOOKS gets SIMPLE ledger but NOT full accounting (advancedAccounting=false)', () => {
+      const books = { planCode: 'SOLO_BOOKS' as PlanCode, ...POS_LED };
+      // SIMPLE — available with the Ledger module on.
+      expect(isPermissionAvailableUnderPlan('ledger:view',          books)).toBe(true);
+      expect(isPermissionAvailableUnderPlan('ledger:export',        books)).toBe(true);
+      // FULL — require advancedAccounting, which SOLO_BOOKS does not have.
+      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', books)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('ledger:period_close',  books)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('ledger:trial_balance', books)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('finance:cash_flow',    books)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('finance:bank_recon',   books)).toBe(false);
+      expect(isPermissionAvailableUnderPlan('bir:view',             books)).toBe(false);
+      // A PAIR plan WITH advancedAccounting gets the full set.
+      const pair = { planCode: 'PAIR_T1' as PlanCode, ...POS_LED };
+      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', pair)).toBe(true);
+      expect(isPermissionAvailableUnderPlan('ledger:trial_balance', pair)).toBe(true);
     });
 
     it('payroll:* requires modulePayroll', () => {

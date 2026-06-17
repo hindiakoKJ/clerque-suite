@@ -15,6 +15,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AppAccessGuard } from '../auth/guards/app-access.guard';
 import { RequireApp } from '../auth/decorators/require-app.decorator';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -37,8 +39,12 @@ const AP_POST_VOID_ROLES = [
 
 @ApiTags('AP — Expenses')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard)
+// Vendor-linked, GL-posting expense entry (DRAFT/POSTED/VOIDED) is FULL-ledger
+// accountant tooling, gated to advancedAccounting and matching the frontend nav
+// lock. SIMPLE-tier (SOLO_BOOKS) records cash expenses via the POS Paid-Out flow.
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard, PlanFeatureGuard)
 @RequireApp('LEDGER', 'READ_ONLY')
+@RequirePlanFeature('advancedAccounting')
 @Controller('ap/expenses')
 export class ExpensesController {
   constructor(private readonly expensesService: ExpensesService) {}

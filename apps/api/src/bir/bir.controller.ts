@@ -6,12 +6,15 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { BirService } from './bir.service';
 
 @ApiTags('BIR')
 @ApiBearerAuth('access-token')
 @Controller('bir')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PlanFeatureGuard)
+@RequirePlanFeature('advancedAccounting')
 export class BirController {
   constructor(private readonly svc: BirService) {}
 

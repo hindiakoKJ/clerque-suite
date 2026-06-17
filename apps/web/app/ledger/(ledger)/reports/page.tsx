@@ -13,8 +13,10 @@
  *     the card only if `user.role` is in that list. (Backend still enforces
  *     via @Roles decorators; this is purely cosmetic.)
  *   - Plan-gating: reports gated by a plan feature carry `planFeature:
- *     'birForms' | 'auditLog'`. When the tenant's plan doesn't include the
- *     feature, the card renders in a locked state with upsell copy.
+ *     'birForms' | 'auditLog' | 'advancedAccounting'`. When the tenant's plan
+ *     doesn't include the feature, the card renders in a locked state with
+ *     upsell copy. FULL-ledger reports use 'advancedAccounting' so SIMPLE
+ *     (SOLO_BOOKS) tenants see them locked rather than missing.
  *
  * To add a new report after this commit: add an entry to REPORTS below.
  * No new download code needed.
@@ -50,7 +52,7 @@ interface ReportDef {
   desc:         string;
   filter:       FilterKind;
   roles:        readonly string[];           // allowed roles
-  planFeature?: 'birForms' | 'auditLog';     // optional plan-feature gate
+  planFeature?: 'birForms' | 'auditLog' | 'advancedAccounting'; // optional plan-feature gate
   section:     'Financial Statements' | 'General Ledger' | 'AR' | 'AP' | 'Bank & Cash' | 'BIR & Compliance' | 'Operations';
 }
 
@@ -63,33 +65,33 @@ const MGMT_VIEW   = [...BASE, 'FINANCE_LEAD', 'EXTERNAL_AUDITOR'] as const;
 
 const REPORTS: ReportDef[] = [
   // ── Financial Statements ─────────────────────────────────────────────────
-  { id: 'trial-balance',       name: 'Trial Balance',          desc: 'Account balances at a point in time. The starting point of every audit.', filter: 'asOf',       roles: READ_ALL, section: 'Financial Statements' },
-  { id: 'pl-summary',          name: 'Income Statement (P&L)', desc: 'Revenue vs expenses for the period. Net income trend.',                     filter: 'dateRange',  roles: MGMT_VIEW, section: 'Financial Statements' },
-  { id: 'balance-sheet',       name: 'Balance Sheet',          desc: 'Assets, liabilities, and equity at a point in time.',                        filter: 'asOf',       roles: MGMT_VIEW, section: 'Financial Statements' },
-  { id: 'cash-flow',           name: 'Cash Flow Statement',    desc: 'Operating, investing, financing cash movements for the period.',            filter: 'dateRange',  roles: MGMT_VIEW, section: 'Financial Statements' },
+  { id: 'trial-balance',       name: 'Trial Balance',          desc: 'Account balances at a point in time. The starting point of every audit.', filter: 'asOf',       roles: READ_ALL, planFeature: 'advancedAccounting', section: 'Financial Statements' },
+  { id: 'pl-summary',          name: 'Income Statement (P&L)', desc: 'Revenue vs expenses for the period. Net income trend.',                     filter: 'dateRange',  roles: MGMT_VIEW, planFeature: 'advancedAccounting', section: 'Financial Statements' },
+  { id: 'balance-sheet',       name: 'Balance Sheet',          desc: 'Assets, liabilities, and equity at a point in time.',                        filter: 'asOf',       roles: MGMT_VIEW, planFeature: 'advancedAccounting', section: 'Financial Statements' },
+  { id: 'cash-flow',           name: 'Cash Flow Statement',    desc: 'Operating, investing, financing cash movements for the period.',            filter: 'dateRange',  roles: MGMT_VIEW, planFeature: 'advancedAccounting', section: 'Financial Statements' },
 
   // ── General Ledger ───────────────────────────────────────────────────────
-  { id: 'chart-of-accounts',   name: 'Chart of Accounts',      desc: 'Full account master with codes, types, and posting controls.',              filter: 'none',       roles: READ_ALL, section: 'General Ledger' },
-  { id: 'journal',             name: 'Journal Entries',        desc: 'All posted JEs with debits, credits, and references.',                      filter: 'dateRangeStatus', roles: BASE, section: 'General Ledger' },
-  { id: 'journal-templates',   name: 'Journal Templates',      desc: 'Recurring JE patterns and next-run schedules.',                              filter: 'none',       roles: BASE, section: 'General Ledger' },
+  { id: 'chart-of-accounts',   name: 'Chart of Accounts',      desc: 'Full account master with codes, types, and posting controls.',              filter: 'none',       roles: READ_ALL, planFeature: 'advancedAccounting', section: 'General Ledger' },
+  { id: 'journal',             name: 'Journal Entries',        desc: 'All posted JEs with debits, credits, and references.',                      filter: 'dateRangeStatus', roles: BASE, planFeature: 'advancedAccounting', section: 'General Ledger' },
+  { id: 'journal-templates',   name: 'Journal Templates',      desc: 'Recurring JE patterns and next-run schedules.',                              filter: 'none',       roles: BASE, planFeature: 'advancedAccounting', section: 'General Ledger' },
 
   // ── Accounts Receivable ──────────────────────────────────────────────────
-  { id: 'quotes',              name: 'Quotes Register',        desc: 'Sales quotes in the period — status, totals, and converted invoice link.',  filter: 'dateRangeStatus', roles: AR_ROLES, section: 'AR' },
-  { id: 'ar-invoice-register', name: 'AR Invoice Register',    desc: 'All AR invoices in the period with status and balances.',                   filter: 'dateRangeStatus', roles: AR_ROLES, section: 'AR' },
-  { id: 'ar-aging',            name: 'AR Aging',               desc: 'Outstanding receivables bucketed by age (1-30, 31-60, 61-90, 90+).',        filter: 'none',       roles: AR_ROLES, section: 'AR' },
-  { id: 'ar-customer-statement', name: 'AR Customer Statement', desc: 'Per-customer invoice + payment history for the period.',                 filter: 'customerId', roles: AR_ROLES, section: 'AR' },
-  { id: 'ar-payments',         name: 'AR Payments Received',   desc: 'All payments collected from customers in the period.',                       filter: 'dateRange',  roles: AR_ROLES, section: 'AR' },
+  { id: 'quotes',              name: 'Quotes Register',        desc: 'Sales quotes in the period — status, totals, and converted invoice link.',  filter: 'dateRangeStatus', roles: AR_ROLES, planFeature: 'advancedAccounting', section: 'AR' },
+  { id: 'ar-invoice-register', name: 'AR Invoice Register',    desc: 'All AR invoices in the period with status and balances.',                   filter: 'dateRangeStatus', roles: AR_ROLES, planFeature: 'advancedAccounting', section: 'AR' },
+  { id: 'ar-aging',            name: 'AR Aging',               desc: 'Outstanding receivables bucketed by age (1-30, 31-60, 61-90, 90+).',        filter: 'none',       roles: AR_ROLES, planFeature: 'advancedAccounting', section: 'AR' },
+  { id: 'ar-customer-statement', name: 'AR Customer Statement', desc: 'Per-customer invoice + payment history for the period.',                 filter: 'customerId', roles: AR_ROLES, planFeature: 'advancedAccounting', section: 'AR' },
+  { id: 'ar-payments',         name: 'AR Payments Received',   desc: 'All payments collected from customers in the period.',                       filter: 'dateRange',  roles: AR_ROLES, planFeature: 'advancedAccounting', section: 'AR' },
 
   // ── Accounts Payable ─────────────────────────────────────────────────────
-  { id: 'ap-bill-register',    name: 'AP Bill Register',       desc: 'All vendor bills in the period with status, WHT, and balances.',            filter: 'dateRangeStatus', roles: AP_ROLES, section: 'AP' },
-  { id: 'ap-aging',            name: 'AP Aging',               desc: 'Outstanding payables bucketed by age (1-30, 31-60, 61-90, 90+).',           filter: 'none',       roles: AP_ROLES, section: 'AP' },
-  { id: 'ap-vendor-statement', name: 'AP Vendor Statement',    desc: 'Per-vendor bill + payment history for the period.',                          filter: 'vendorId',   roles: AP_ROLES, section: 'AP' },
-  { id: 'ap-payments',         name: 'AP Payments Made',       desc: 'All payments to vendors in the period, with WHT breakdown.',                filter: 'dateRange',  roles: AP_ROLES, section: 'AP' },
-  { id: 'ap-expenses',         name: 'AP Expenses Register',   desc: 'Simple expense entries (non-bill) — utilities, rent, supplies.',           filter: 'dateRange',  roles: AP_ROLES, section: 'AP' },
-  { id: 'expense-claims',      name: 'Expense Claims',         desc: 'Employee reimbursements: submitted, approved, paid.',                       filter: 'dateRangeStatus', roles: AP_ROLES, section: 'AP' },
+  { id: 'ap-bill-register',    name: 'AP Bill Register',       desc: 'All vendor bills in the period with status, WHT, and balances.',            filter: 'dateRangeStatus', roles: AP_ROLES, planFeature: 'advancedAccounting', section: 'AP' },
+  { id: 'ap-aging',            name: 'AP Aging',               desc: 'Outstanding payables bucketed by age (1-30, 31-60, 61-90, 90+).',           filter: 'none',       roles: AP_ROLES, planFeature: 'advancedAccounting', section: 'AP' },
+  { id: 'ap-vendor-statement', name: 'AP Vendor Statement',    desc: 'Per-vendor bill + payment history for the period.',                          filter: 'vendorId',   roles: AP_ROLES, planFeature: 'advancedAccounting', section: 'AP' },
+  { id: 'ap-payments',         name: 'AP Payments Made',       desc: 'All payments to vendors in the period, with WHT breakdown.',                filter: 'dateRange',  roles: AP_ROLES, planFeature: 'advancedAccounting', section: 'AP' },
+  { id: 'ap-expenses',         name: 'AP Expenses Register',   desc: 'Simple expense entries (non-bill) — utilities, rent, supplies.',           filter: 'dateRange',  roles: AP_ROLES, planFeature: 'advancedAccounting', section: 'AP' },
+  { id: 'expense-claims',      name: 'Expense Claims',         desc: 'Employee reimbursements: submitted, approved, paid.',                       filter: 'dateRangeStatus', roles: AP_ROLES, planFeature: 'advancedAccounting', section: 'AP' },
 
   // ── Bank & Cash ──────────────────────────────────────────────────────────
-  { id: 'bank-reconciliation', name: 'Bank Reconciliation',    desc: 'Matched and unmatched items for the chosen bank account.',                  filter: 'accountId',  roles: BASE, section: 'Bank & Cash' },
+  { id: 'bank-reconciliation', name: 'Bank Reconciliation',    desc: 'Matched and unmatched items for the chosen bank account.',                  filter: 'accountId',  roles: BASE, planFeature: 'advancedAccounting', section: 'Bank & Cash' },
   { id: 'settlement-batches',  name: 'Settlement Batches',     desc: 'E-wallet / QR-PH / Maya batches grouped for bank deposit.',                 filter: 'dateRange',  roles: BASE, section: 'Bank & Cash' },
   { id: 'cash-position',       name: 'Cash Position',          desc: 'All cash + bank account balances at a point in time.',                       filter: 'asOf',       roles: READ_ALL, section: 'Bank & Cash' },
 
@@ -102,8 +104,8 @@ const REPORTS: ReportDef[] = [
   { id: 'audit-log', name: 'Audit Log',                    desc: 'Immutable trail of sensitive actions (price changes, role updates, etc).', filter: 'dateRange', roles: READ_ALL, planFeature: 'auditLog', section: 'BIR & Compliance' },
 
   // ── Operations ───────────────────────────────────────────────────────────
-  { id: 'accounting-events',     name: 'Accounting Events',     desc: 'POS → GL event queue: created, synced, failed.',                       filter: 'dateRangeStatus', roles: READ_ALL, section: 'Operations' },
-  { id: 'period-close-summary',  name: 'Period Close Summary',  desc: 'Closing checklist + per-account balances at period end.',              filter: 'periodId',  roles: BASE, section: 'Operations' },
+  { id: 'accounting-events',     name: 'Accounting Events',     desc: 'POS → GL event queue: created, synced, failed.',                       filter: 'dateRangeStatus', roles: READ_ALL, planFeature: 'advancedAccounting', section: 'Operations' },
+  { id: 'period-close-summary',  name: 'Period Close Summary',  desc: 'Closing checklist + per-account balances at period end.',              filter: 'periodId',  roles: BASE, planFeature: 'advancedAccounting', section: 'Operations' },
   { id: 'ledger-kpi-snapshot',   name: 'Ledger KPI Snapshot',   desc: 'Event lag, DSO/DPO, void rate, period-close age — single-sheet.',     filter: 'asOf',      roles: READ_ALL, section: 'Operations' },
 ];
 
@@ -376,7 +378,15 @@ export default function ReportsHubPage() {
         if (!hasRole) return null;
         // Plan-feature gate: locked card with upsell if feature absent
         if (r.planFeature && user?.planFeatures && !user.planFeatures[r.planFeature]) {
-          return { def: r, locked: true as const, reason: `Locked — your plan does not include ${r.planFeature === 'birForms' ? 'BIR forms' : 'audit log'}. Upgrade to unlock.` };
+          const featureLabel =
+            r.planFeature === 'birForms'           ? 'BIR forms'
+            : r.planFeature === 'auditLog'         ? 'audit log'
+            : r.planFeature === 'advancedAccounting' ? 'full accounting'
+            : r.planFeature;
+          const reason = r.planFeature === 'advancedAccounting'
+            ? 'Locked — upgrade to full accounting to unlock this report.'
+            : `Locked — your plan does not include ${featureLabel}. Upgrade to unlock.`;
+          return { def: r, locked: true as const, reason };
         }
         return { def: r, locked: false as const };
       })

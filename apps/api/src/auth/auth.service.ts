@@ -208,7 +208,7 @@ export class AuthService {
     ownerName:     string;
     ownerEmail:    string;
     ownerPassword: string;
-    planCode:      'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO';
+    planCode:      'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO' | 'SOLO_BOOKS';
     taxStatus?:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
     businessType?: string;
   }) {
@@ -219,8 +219,8 @@ export class AuthService {
     if (!ownerName)    throw new BadRequestException('Owner name is required.');
     if (!ownerEmail)   throw new BadRequestException('Owner email is required.');
     if (!dto.planCode) throw new BadRequestException('Plan is required.');
-    if (!['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO'].includes(dto.planCode)) {
-      throw new BadRequestException('Plan must be SOLO_LITE, SOLO_STANDARD, or SOLO_PRO.');
+    if (!['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'SOLO_BOOKS'].includes(dto.planCode)) {
+      throw new BadRequestException('Plan must be SOLO_LITE, SOLO_STANDARD, SOLO_PRO, or SOLO_BOOKS.');
     }
 
     // Specialized verticals + service/manufacturing require Solo Standard or higher
@@ -270,8 +270,8 @@ export class AuthService {
           // GRACE = limited access until payment confirmed.
           status:       'GRACE',
           planCode:     dto.planCode,
-          modulePos:        true,   // Solo plans are POS-only
-          moduleLedger:     false,
+          modulePos:        true,   // All Solo plans include POS
+          moduleLedger:     dto.planCode === 'SOLO_BOOKS', // SOLO_BOOKS bundles SIMPLE ledger
           modulePayroll:    false,
           staffSeatQuota:   cap.baseSeats,
           staffSeatAddons:  0,

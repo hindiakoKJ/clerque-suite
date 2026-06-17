@@ -21,7 +21,7 @@ export type ClerqueModule = 'POS' | 'LEDGER' | 'PAYROLL';
 export type PlanCode =
   // Sprint 23 — Solo lineup (POS-only, three tiers). The only actively
   // promoted plan family for new signups.
-  | 'SOLO_LITE'  | 'SOLO_STANDARD' | 'SOLO_PRO'
+  | 'SOLO_LITE'  | 'SOLO_STANDARD' | 'SOLO_PRO' | 'SOLO_BOOKS'
   // ── PARKED — kept in code for grandfathered tenants, NOT actively
   //    promoted to new signups. Redesign queued for a follow-up sprint:
   //    repositioning around "Counter + Sync" naming, smoothing the seat-
@@ -63,6 +63,11 @@ export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
   SOLO_PRO: {
     moduleCount: 1, baseSeats: 5, maxAddons: 0, maxTotal: 5,
     pricePhpMonthlyCents: 49_900, addonSeatPhpMonthlyCents: 0,
+    annualMonthEquivalent: 10,
+  },
+  SOLO_BOOKS: {
+    moduleCount: 1, baseSeats: 3, maxAddons: 0, maxTotal: 3,
+    pricePhpMonthlyCents: 39_900, addonSeatPhpMonthlyCents: 0,
     annualMonthEquivalent: 10,
   },
 
@@ -125,6 +130,7 @@ export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
   SOLO_LITE:     { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_STANDARD: { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   SOLO_PRO:      { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
+  SOLO_BOOKS:    { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
   // PARKED — multi-module legacy
   PAIR_T1:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
   PAIR_T2:    { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
@@ -160,6 +166,9 @@ export interface PlanFeatures {
   whitelabel:         boolean;
   /** tenant.com instead of clerque.com/tenant */
   customDomain:       boolean;
+  /** Full ledger (double-entry, COA, financial statements, AR/AP, periods,
+   *  BIR, bank recon, audit, GL queue). Off = SIMPLE ledger only. */
+  advancedAccounting: boolean;
 
   // ── Sprint 23 — Solo-tier-specific gating ──────────────────────────────
   /** Recipe-based product cap. -1 = unlimited, 0 = recipe mode disabled. */
@@ -197,6 +206,7 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
     maxRecipes: 5, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0,
     customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false,
     loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
+    advancedAccounting: false,
   },
   SOLO_STANDARD: {
     // Adds unlimited recipes + 10 FEFO/batch/expiry items + Sales Lead + customer lookup + receipt header/footer.
@@ -205,6 +215,7 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
     maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1,
     customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false,
     loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
+    advancedAccounting: false,
   },
   SOLO_PRO: {
     // All Solo-line features unlocked. Single module (POS) — multi-module is PAIR/SUITE.
@@ -213,16 +224,26 @@ export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
     maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1,
     customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true,
     loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true,
+    advancedAccounting: false,
+  },
+  SOLO_BOOKS: {
+    // Clone of SOLO_STANDARD — bundles POS + SIMPLE ledger. No full accounting.
+    birForms: false, customRoles: false, auditLog: false, crossModuleReports: false,
+    aiAddons: false, apiAccess: 'none', whitelabel: false, customDomain: false,
+    maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1,
+    customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false,
+    loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
+    advancedAccounting: false,
   },
 
   // ── PARKED — multi-module legacy ────────────────────────────────────────
-  PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1, customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
-  PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  PAIR_T3:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  SUITE_T1:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  SUITE_T2:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  SUITE_T3:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: false, customDomain: false, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  ENTERPRISE: { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: true,  customDomain: true,  maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1, customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
+  PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  PAIR_T3:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  SUITE_T1:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  SUITE_T2:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  SUITE_T3:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
+  ENTERPRISE: { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: true,  customDomain: true,  advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
 };
 
 // Sprint 23 — PLAN_MONTHLY_PRICE_PHP_CENTS deleted.
@@ -242,6 +263,7 @@ export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
   SOLO_LITE:       0,
   SOLO_STANDARD:   0,
   SOLO_PRO:        0,
+  SOLO_BOOKS:      0,
   // PARKED — multi-module legacy
   PAIR_T1:    99_900,
   PAIR_T2:   199_900,
@@ -285,11 +307,18 @@ export function validateSoloModuleCombo(
     .toLowerCase()
     .replace(/\b./g, (c) => c.toUpperCase());
 
+  const isSoloBooks = planCode === 'SOLO_BOOKS';
   if (!modulePos) {
-    return `${planLabel} plan is POS-only — the POS module must be enabled.`;
+    return `${planLabel} plan requires the POS module to be enabled.`;
   }
-  if (moduleLedger || modulePayroll) {
-    return `${planLabel} plan is POS-only — Ledger and Payroll cannot be enabled. Upgrade to Pair for 2 modules.`;
+  if (modulePayroll) {
+    return `${planLabel} plan does not include Payroll. Upgrade to Pair for multiple modules.`;
+  }
+  if (!isSoloBooks && moduleLedger) {
+    return `${planLabel} plan is POS-only — Ledger cannot be enabled. Choose Solo + Books or upgrade to Pair.`;
+  }
+  if (isSoloBooks && !moduleLedger) {
+    return `Solo + Books bundles POS + Ledger — the Ledger module must be enabled.`;
   }
   return null;
 }
@@ -306,6 +335,7 @@ export function planLabel(code: PlanCode): string {
     SOLO_LITE:     'Solo Lite',
     SOLO_STANDARD: 'Solo Standard',
     SOLO_PRO:      'Solo Pro',
+    SOLO_BOOKS:    'Solo + Books',
     // PARKED — multi-module legacy (will be renamed/redesigned in a follow-up sprint)
     PAIR_T1:       'Pair T1 (legacy)',
     PAIR_T2:       'Pair T2 (legacy)',
@@ -379,16 +409,22 @@ export function isPermissionAvailableUnderPlan(
   const f = PLAN_FEATURES[ctx.planCode];
 
   switch (permission) {
-    // Ledger surface
+    // SIMPLE ledger — available whenever the Ledger module is on (SOLO_BOOKS included)
     case 'ledger:view':
-    case 'ledger:trial_balance':
     case 'ledger:export':
+      return ctx.moduleLedger || PLAN_CAPS[ctx.planCode].moduleCount === 3;
+
+    // FULL ledger — requires advancedAccounting. Trial balance and the cash-flow
+    // statement are double-entry accounting outputs served by the FULL-gated
+    // accounts controller, so they live here (NOT in SIMPLE) to match the API.
+    case 'ledger:trial_balance':
     case 'finance:cash_flow':
     case 'ledger:journal_entry':
     case 'ledger:period_close':
     case 'ledger:period_reopen':
     case 'finance:bank_recon':
-      return ctx.moduleLedger || PLAN_CAPS[ctx.planCode].moduleCount === 3;
+      return (ctx.moduleLedger && f.advancedAccounting) ||
+             PLAN_CAPS[ctx.planCode].moduleCount === 3;
 
     // Payroll surface
     case 'payroll:view_salary':

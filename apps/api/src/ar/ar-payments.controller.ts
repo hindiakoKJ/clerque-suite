@@ -6,6 +6,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AppAccessGuard } from '../auth/guards/app-access.guard';
 import { RequireApp } from '../auth/decorators/require-app.decorator';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -15,8 +17,9 @@ import { CreateARPaymentDto, ApplyARPaymentDto } from './dto/ar-payment.dto';
 
 @ApiTags('AR Payments')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard, PlanFeatureGuard)
 @RequireApp('LEDGER', 'READ_ONLY')
+@RequirePlanFeature('advancedAccounting')
 @Controller('ar/payments')
 export class ARPaymentsController {
   constructor(private svc: ARPaymentsService) {}

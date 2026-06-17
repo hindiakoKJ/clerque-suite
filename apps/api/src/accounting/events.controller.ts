@@ -13,10 +13,14 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { JournalService } from './journal.service';
 import { EventsService } from './events.service';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// GL event queue is a FULL-ledger feature — gate on advancedAccounting.
+@UseGuards(JwtAuthGuard, RolesGuard, PlanFeatureGuard)
+@RequirePlanFeature('advancedAccounting')
 @Controller('accounting/events')
 export class EventsController {
   constructor(

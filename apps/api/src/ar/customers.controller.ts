@@ -6,6 +6,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AppAccessGuard } from '../auth/guards/app-access.guard';
 import { RequireApp } from '../auth/decorators/require-app.decorator';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -16,8 +18,9 @@ import { UpdateCustomerDto } from './dto/update-customer.dto';
 const READ_ROLES  = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR'] as const;
 const WRITE_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT'] as const;
 
-@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard, PlanFeatureGuard)
 @RequireApp('LEDGER', 'READ_ONLY')
+@RequirePlanFeature('advancedAccounting')
 @Controller('ar/customers')
 export class CustomersController {
   constructor(private readonly svc: CustomersService) {}

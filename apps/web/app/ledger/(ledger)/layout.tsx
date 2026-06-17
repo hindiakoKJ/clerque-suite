@@ -63,7 +63,7 @@ function inLedgerRoles(role: string | undefined | null, set: readonly string[]) 
 function makeLedgerNavItem(
   href: string, label: string, icon: React.ElementType,
   allowedRoles: readonly string[], role: string | undefined | null,
-  opts: { extraCondition?: boolean; sectionStart?: string } = {},
+  opts: { extraCondition?: boolean; sectionStart?: string; lockedReason?: string } = {},
 ): NavItem {
   const extraCondition = opts.extraCondition ?? true;
   const hasAccess = extraCondition && inLedgerRoles(role, allowedRoles);
@@ -72,7 +72,7 @@ function makeLedgerNavItem(
     sectionStart: opts.sectionStart,
     disabled: !hasAccess,
     disabledReason: !extraCondition
-      ? 'Requires BIR registration — enable in Settings → BIR & Tax'
+      ? (opts.lockedReason ?? 'Requires BIR registration — enable in Settings → BIR & Tax')
       : hasAccess ? undefined : 'Your role doesn\'t have access to this section',
   };
 }
@@ -81,6 +81,7 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
   const router         = useRouter();
   const { user, clear } = useAuthStore();
   const isBirRegistered = user?.isBirRegistered ?? false;
+  const isFullLedger   = user?.planFeatures?.advancedAccounting ?? false;
   const role           = user?.role;
 
   // ── App-level guard ────────────────────────────────────────────────────────
@@ -133,42 +134,54 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
 
     // ── Receivables (sub-ledger) ────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ar/quotes',     'Quotes',             FileSignature,   AR_ROLES,         role,
-      { sectionStart: 'Receivables' }),
+      { sectionStart: 'Receivables', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
     // Sprint 21 — clearer labels. Flow is Customer → Quote → Invoice →
     // Payment. "Customer Billing" was ambiguous; renamed to "Invoices"
     // which matches what people actually click for. POS-derived AR keeps
     // the POS-collections lens but with a label that says what it IS.
-    makeLedgerNavItem('/ledger/ar/billing',    'Invoices',           FileSpreadsheet, AR_ROLES,         role),
+    makeLedgerNavItem('/ledger/ar/billing',    'Invoices',           FileSpreadsheet, AR_ROLES,         role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
     makeLedgerNavItem('/ledger/ar/invoices',   'POS-derived AR',     TrendingUp,      AR_ROLES,         role),
-    makeLedgerNavItem('/ledger/ar/advances',   'Customer Advances',  Wallet,          AR_ROLES,         role),
+    makeLedgerNavItem('/ledger/ar/advances',   'Customer Advances',  Wallet,          AR_ROLES,         role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
 
     // ── Payables (sub-ledger) ───────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role,
-      { sectionStart: 'Payables' }),
-    makeLedgerNavItem('/ledger/ap/expenses',   'Expense Claims',     TrendingDown,    AP_ROLES,         role),
-    makeLedgerNavItem('/ledger/ap/advances',   'Vendor Advances',    Wallet,          AP_ROLES,         role),
-    makeLedgerNavItem('/ledger/expense-approvals', 'Expense Approvals', ClipboardCheck, EXPENSE_APPROVAL_ROLES, role),
+      { sectionStart: 'Payables', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/ap/expenses',   'Expense Claims',     TrendingDown,    AP_ROLES,         role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/ap/advances',   'Vendor Advances',    Wallet,          AP_ROLES,         role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/expense-approvals', 'Expense Approvals', ClipboardCheck, EXPENSE_APPROVAL_ROLES, role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
 
     // ── Cash & Bank ─────────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role,
       { sectionStart: 'Cash & Bank' }),
-    makeLedgerNavItem('/ledger/bank-recon',    'Bank Reconciliation', Landmark,       PERIODS_ROLES,    role),
+    makeLedgerNavItem('/ledger/bank-recon',    'Bank Reconciliation', Landmark,       PERIODS_ROLES,    role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
 
     // ── General Ledger ──────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/accounts',      'Chart of Accounts',  ListOrdered,     ACCOUNTS_ROLES,   role,
-      { sectionStart: 'General Ledger' }),
-    makeLedgerNavItem('/ledger/journal',       'Journal Entries',    BookMarked,      JOURNAL_ROLES,    role),
-    makeLedgerNavItem('/ledger/events',        'Event Queue',        Zap,             EVENT_ROLES,      role),
+      { sectionStart: 'General Ledger', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/journal',       'Journal Entries',    BookMarked,      JOURNAL_ROLES,    role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/events',        'Event Queue',        Zap,             EVENT_ROLES,      role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
 
     // ── Period Close & Reports ──────────────────────────────────────────────
     makeLedgerNavItem('/ledger/periods',         'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role,
-      { sectionStart: 'Period & Reports' }),
-    makeLedgerNavItem('/ledger/trial-balance',   'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role),
-    makeLedgerNavItem('/ledger/pl-statement',    'Income Statement',   BarChart3,       PERIODS_ROLES,    role),
-    makeLedgerNavItem('/ledger/balance-sheet',   'Balance Sheet',      Scale,           TRIAL_BAL_ROLES,  role),
-    makeLedgerNavItem('/ledger/cash-flow',       'Cash Flow Statement', BarChart3,      PERIODS_ROLES,    role),
+      { sectionStart: 'Period & Reports', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/trial-balance',   'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/pl-statement',    'Income Statement',   BarChart3,       PERIODS_ROLES,    role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/balance-sheet',   'Balance Sheet',      Scale,           TRIAL_BAL_ROLES,  role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    makeLedgerNavItem('/ledger/cash-flow',       'Cash Flow Statement', BarChart3,      PERIODS_ROLES,    role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
     makeLedgerNavItem('/ledger/bir',             'Tax Estimation',     FileText,        BIR_ROLES,        role,
-      { extraCondition: isBirRegistered }),
+      { extraCondition: isFullLedger && isBirRegistered, lockedReason: 'Upgrade to full accounting to unlock this' }),
 
     // ── Reports hub (Sprint 21) ─────────────────────────────────────────────
     // Single entry point for every exportable XLSX report across the Ledger.
@@ -178,8 +191,10 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
 
     // ── Audit ───────────────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/audit',         'Audit Log',          ShieldCheck,     AUDIT_ROLES,      role,
-      { sectionStart: 'Audit' }),
-  ].filter((item) => !item.disabled || item.disabledReason?.startsWith('Requires'));
+      { sectionStart: 'Audit', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+  ].filter((item) => !item.disabled
+    || item.disabledReason?.startsWith('Requires')
+    || item.disabledReason === 'Upgrade to full accounting to unlock this');
 
   return (
     <div

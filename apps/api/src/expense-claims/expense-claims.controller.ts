@@ -17,6 +17,11 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { AppAccessGuard } from '../auth/guards/app-access.guard';
+import { RequireApp } from '../auth/decorators/require-app.decorator';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ExpenseClaimStatus } from '@prisma/client';
@@ -29,7 +34,12 @@ import {
 
 @ApiTags('Expense Claims')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard)
+// Expense-claim approvals are a FULL-ledger feature. Tier split: the whole
+// controller requires the Ledger module + advancedAccounting. Per-action role
+// checks (reviewer/payer) are enforced in the service (REVIEWER_ROLES/PAY_ROLES).
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard, PlanFeatureGuard)
+@RequireApp('LEDGER', 'READ_ONLY')
+@RequirePlanFeature('advancedAccounting')
 @Controller('expense-claims')
 export class ExpenseClaimsController {
   constructor(private readonly service: ExpenseClaimsService) {}

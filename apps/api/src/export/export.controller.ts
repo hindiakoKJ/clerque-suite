@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query, Res, UseGuards, Header, BadRequestExcept
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -49,7 +50,10 @@ function logDataExport(
 @ApiTags('Export')
 @ApiBearerAuth('access-token')
 @Controller('export')
-@UseGuards(JwtAuthGuard, RolesGuard)
+// PlanFeatureGuard activates @RequirePlanFeature gates: per-route advancedAccounting
+// (FULL-ledger statement/register exports) and the pre-existing birForms gates.
+// SIMPLE/POS/payroll exports (z-read, settlement, cash-position, payroll) stay open.
+@UseGuards(JwtAuthGuard, RolesGuard, PlanFeatureGuard)
 @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN')
 export class ExportController {
   constructor(
@@ -93,6 +97,7 @@ export class ExportController {
    * Downloads Trial Balance as of the given date (defaults to today).
    */
   @Get('trial-balance')
+  @RequirePlanFeature('advancedAccounting')
   async trialBalance(
     @CurrentUser() user: JwtPayload,
     @Query('asOf') asOf: string | undefined,
@@ -108,6 +113,7 @@ export class ExportController {
    * Downloads journal entries filtered by date range and/or status.
    */
   @Get('journal')
+  @RequirePlanFeature('advancedAccounting')
   async journal(
     @CurrentUser() user: JwtPayload,
     @Query('from')   from:   string | undefined,
@@ -126,6 +132,7 @@ export class ExportController {
    * Downloads the GL activity (FBL3N equivalent) for a single account.
    */
   @Get('account-ledger/:id')
+  @RequirePlanFeature('advancedAccounting')
   async accountLedger(
     @CurrentUser() user: JwtPayload,
     @Param('id')   accountId: string,
@@ -144,6 +151,7 @@ export class ExportController {
    * Downloads a Profit & Loss summary for the date range.
    */
   @Get('pl-summary')
+  @RequirePlanFeature('advancedAccounting')
   async plSummary(
     @CurrentUser() user: JwtPayload,
     @Query('from') from: string,
@@ -160,6 +168,7 @@ export class ExportController {
    * Downloads AP Aging report as Excel.
    */
   @Get('ap-aging')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN', 'FINANCE_LEAD', 'AP_ACCOUNTANT')
   async apAging(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const buffer = await this.svc.exportApAging(user.tenantId!);
@@ -171,6 +180,7 @@ export class ExportController {
    * Downloads AR Aging report as Excel.
    */
   @Get('ar-aging')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN', 'FINANCE_LEAD', 'AR_ACCOUNTANT')
   async arAging(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const buffer = await this.svc.exportArAging(user.tenantId!);
@@ -217,6 +227,7 @@ export class ExportController {
    * Roles: all accounting roles + BOOKKEEPER + FINANCE_LEAD.
    */
   @Get('chart-of-accounts')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'SUPER_ADMIN', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   async chartOfAccounts(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const buffer   = await this.svc.exportChartOfAccounts(user.tenantId!);
@@ -234,6 +245,7 @@ export class ExportController {
    * Roles: BUSINESS_OWNER, ACCOUNTANT, BOOKKEEPER, FINANCE_LEAD (broader than XLSX exports)
    */
   @Get('accountant-csv')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'SUPER_ADMIN')
   async accountantCsv(
     @CurrentUser() user: JwtPayload,
@@ -256,6 +268,7 @@ export class ExportController {
 
   /** GET /export/balance-sheet?asOf=YYYY-MM-DD */
   @Get('balance-sheet')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   async balanceSheet(
     @CurrentUser() user: JwtPayload,
@@ -269,6 +282,7 @@ export class ExportController {
 
   /** GET /export/cash-flow?from=YYYY-MM-DD&to=YYYY-MM-DD */
   @Get('cash-flow')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   async cashFlow(
     @CurrentUser() user: JwtPayload,
@@ -284,6 +298,7 @@ export class ExportController {
 
   /** GET /export/journal-templates */
   @Get('journal-templates')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   async journalTemplates(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const buffer   = await this.svc.exportJournalTemplates(user.tenantId!);
@@ -293,6 +308,7 @@ export class ExportController {
 
   /** GET /export/quotes?from=&to=&status= */
   @Get('quotes')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'SALES_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async quotes(
     @CurrentUser() user: JwtPayload,
@@ -309,6 +325,7 @@ export class ExportController {
 
   /** GET /export/ar-invoice-register?from=&to=&status= */
   @Get('ar-invoice-register')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async arInvoiceRegister(
     @CurrentUser() user: JwtPayload,
@@ -325,6 +342,7 @@ export class ExportController {
 
   /** GET /export/ar-customer-statement/:customerId?from=&to= */
   @Get('ar-customer-statement/:customerId')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async arCustomerStatement(
     @CurrentUser() user: JwtPayload,
@@ -341,6 +359,7 @@ export class ExportController {
 
   /** GET /export/ar-payments?from=&to= */
   @Get('ar-payments')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async arPayments(
     @CurrentUser() user: JwtPayload,
@@ -356,6 +375,7 @@ export class ExportController {
 
   /** GET /export/ap-bill-register?from=&to=&status= */
   @Get('ap-bill-register')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async apBillRegister(
     @CurrentUser() user: JwtPayload,
@@ -372,6 +392,7 @@ export class ExportController {
 
   /** GET /export/ap-vendor-statement/:vendorId?from=&to= */
   @Get('ap-vendor-statement/:vendorId')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async apVendorStatement(
     @CurrentUser() user: JwtPayload,
@@ -388,6 +409,7 @@ export class ExportController {
 
   /** GET /export/ap-payments?from=&to= */
   @Get('ap-payments')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async apPayments(
     @CurrentUser() user: JwtPayload,
@@ -403,6 +425,7 @@ export class ExportController {
 
   /** GET /export/ap-expenses?from=&to= */
   @Get('ap-expenses')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async apExpenses(
     @CurrentUser() user: JwtPayload,
@@ -418,6 +441,7 @@ export class ExportController {
 
   /** GET /export/expense-claims?from=&to=&status= */
   @Get('expense-claims')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AP_ACCOUNTANT', 'FINANCE_LEAD', 'BOOKKEEPER', 'EXTERNAL_AUDITOR')
   async expenseClaims(
     @CurrentUser() user: JwtPayload,
@@ -434,6 +458,7 @@ export class ExportController {
 
   /** GET /export/bank-reconciliation/:accountId?asOf= */
   @Get('bank-reconciliation/:accountId')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   async bankReconciliation(
     @CurrentUser() user: JwtPayload,
@@ -610,6 +635,7 @@ export class ExportController {
 
   /** GET /export/accounting-events?status=&from=&to= */
   @Get('accounting-events')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   async accountingEvents(
     @CurrentUser() user: JwtPayload,
@@ -626,6 +652,7 @@ export class ExportController {
 
   /** GET /export/period-close-summary?periodId= */
   @Get('period-close-summary')
+  @RequirePlanFeature('advancedAccounting')
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR')
   async periodCloseSummary(
     @CurrentUser() user: JwtPayload,

@@ -99,7 +99,7 @@ type PlanFeatureFlag =
 
 /** Plan codes from plans.ts (subset — vertical may exclude specific plans). */
 type PlanCode =
-  | 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO'
+  | 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO' | 'SOLO_BOOKS'
   | 'PAIR_T1'  | 'PAIR_T2' | 'PAIR_T3'
   | 'SUITE_T1' | 'SUITE_T2' | 'SUITE_T3'
   | 'ENTERPRISE';

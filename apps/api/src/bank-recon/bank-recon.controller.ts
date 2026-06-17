@@ -6,6 +6,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AppAccessGuard } from '../auth/guards/app-access.guard';
 import { RequireApp } from '../auth/decorators/require-app.decorator';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '@repo/shared-types';
@@ -15,8 +17,9 @@ const RECON_ROLES = ['BUSINESS_OWNER', 'ACCOUNTANT', 'FINANCE_LEAD', 'SUPER_ADMI
 
 @ApiTags('Bank Reconciliation')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard, PlanFeatureGuard)
 @RequireApp('LEDGER', 'READ_ONLY')
+@RequirePlanFeature('advancedAccounting')
 @Controller('bank-recon')
 export class BankReconciliationController {
   constructor(private svc: BankReconciliationService) {}

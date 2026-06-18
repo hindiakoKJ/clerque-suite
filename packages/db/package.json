@@ -18,6 +18,6 @@
     "typescript": "^5.9.2",
     "@repo/typescript-config": "*",
     "bcryptjs": "^3.0.3",
-    "@types/bcryptjs": "^2.4.6"
+    "@types/bcryptjs": "^3.0.0"
   }
 }

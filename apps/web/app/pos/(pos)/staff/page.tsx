@@ -218,7 +218,7 @@ export default function StaffPage() {
       setModal(null);
     } catch (err: unknown) {
       const data = (err as { response?: { data?: { code?: string; message?: string; requiredTier?: string } } })?.response?.data;
-      if (data?.code === 'TIER_QUOTA_EXCEEDED') {
+      if (data?.code === 'PLAN_CEILING_REACHED' || data?.code === 'TIER_QUOTA_EXCEEDED') {
         toast.error(data.message ?? 'Staff cap reached.', {
           action: { label: 'Upgrade', onClick: () => { window.location.href = '/settings/subscription'; } },
         });

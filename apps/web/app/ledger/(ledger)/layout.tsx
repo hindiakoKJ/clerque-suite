@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart, FileSignature, Wallet } from 'lucide-react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart, FileSignature, Wallet, NotebookPen } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -47,6 +47,9 @@ const JOURNAL_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKE
 const EVENT_ROLES      = SENSITIVE_GL;
 const SETTLEMENT_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD',
                           'AR_ACCOUNTANT', 'AP_ACCOUNTANT'] as const;
+// Simple Entry — SIMPLE-tier operational bookkeeping (available on Solo Books).
+const SIMPLE_ENTRY_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
+                            'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD'] as const;
 const PERIODS_ROLES    = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'FINANCE_LEAD'] as const;
 const BIR_ROLES        = ACCOUNTING_LEAD;
 const AP_ROLES         = AP_TEAM;
@@ -156,8 +159,11 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
 
     // ── Cash & Bank ─────────────────────────────────────────────────────────
-    makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role,
+    // Record Entry — SIMPLE tier (no lock): log non-till expenses, owner cash,
+    // other income, and cash↔bank moves; posts to the books automatically.
+    makeLedgerNavItem('/ledger/simple-entries', 'Record Entry',      NotebookPen,     SIMPLE_ENTRY_ROLES, role,
       { sectionStart: 'Cash & Bank' }),
+    makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role),
     makeLedgerNavItem('/ledger/bank-recon',    'Bank Reconciliation', Landmark,       PERIODS_ROLES,    role,
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
 

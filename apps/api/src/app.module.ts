@@ -38,6 +38,7 @@ import { ExpenseClaimsModule } from './expense-claims/expense-claims.module';
 import { NumberingModule } from './numbering/numbering.module';
 import { AiModule } from './ai/ai.module';
 import { LedgerMetricsModule } from './ledger-metrics/ledger-metrics.module';
+import { SimpleEntriesModule } from './simple-entries/simple-entries.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { BankReconciliationModule } from './bank-recon/bank-recon.module';
 import { JournalTemplatesModule } from './journal-templates/journal-templates.module';
@@ -126,6 +127,7 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     NumberingModule,
     AiModule,
     LedgerMetricsModule,
+    SimpleEntriesModule,
     NotificationsModule,
     BankReconciliationModule,
     JournalTemplatesModule,

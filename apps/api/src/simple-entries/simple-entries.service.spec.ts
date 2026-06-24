@@ -18,8 +18,10 @@ describe('SimpleEntriesService', () => {
       captured = dto;
       return Promise.resolve({ id: 'je1', entryNumber: 'JE-1', date: new Date(dto.date), description: dto.description, status: 'POSTED' });
     }),
+    reverse: jest.fn((_t: string, _id: string, _u: string) =>
+      Promise.resolve({ id: 'rev1', entryNumber: 'JE-REV-1' })),
   };
-  const prisma = { journalEntry: { findMany: jest.fn() } };
+  const prisma = { journalEntry: { findMany: jest.fn(), findFirst: jest.fn() } };
 
   const TID = 'tenant-1';
   const UID = 'user-1';
@@ -112,5 +114,18 @@ describe('SimpleEntriesService', () => {
   it('throws a friendly error if an account is missing', async () => {
     accounts.findByCode.mockResolvedValueOnce(null as any);
     await expect(run({ type: 'EXPENSE', source: 'CASH' })).rejects.toThrow(/not fully set up/i);
+  });
+
+  it('reverse: delegates to journal.reverse for a simple entry', async () => {
+    prisma.journalEntry.findFirst.mockResolvedValueOnce({ id: 'je1' } as any);
+    const out = await svc.reverse(TID, UID, 'je1');
+    expect(journal.reverse).toHaveBeenCalledWith(TID, 'je1', UID);
+    expect(out).toEqual({ id: 'rev1', entryNumber: 'JE-REV-1', reversalOf: 'je1' });
+  });
+
+  it('reverse: refuses to reverse a non-simple entry (e.g. a sale JE)', async () => {
+    prisma.journalEntry.findFirst.mockResolvedValueOnce(null as any);
+    await expect(svc.reverse(TID, UID, 'sale-je')).rejects.toThrow(/only reverse entries you recorded/i);
+    expect(journal.reverse).not.toHaveBeenCalled();
   });
 });

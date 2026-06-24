@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Body, UseGuards, HttpCode, HttpStatus,
+  Controller, Get, Post, Body, Param, UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -31,6 +31,14 @@ export class SimpleEntriesController {
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateSimpleEntryDto) {
     return this.svc.create(user.tenantId!, user.sub, dto);
+  }
+
+  @ApiOperation({ summary: 'Reverse a simple entry recorded by mistake (posts an offsetting entry)' })
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD')
+  @Post(':id/reverse')
+  @HttpCode(HttpStatus.OK)
+  reverse(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.svc.reverse(user.tenantId!, user.sub, id);
   }
 
   @ApiOperation({ summary: 'List recent simple entries' })

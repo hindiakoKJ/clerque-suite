@@ -146,14 +146,43 @@ export class SimpleEntriesService {
       where:   { tenantId, reference: SE_REFERENCE, status: 'POSTED' },
       orderBy: { date: 'desc' },
       take:    50,
-      include: { lines: true },
+      include: { lines: true, reversedBy: { select: { entryNumber: true } } },
     });
     return rows.map((r) => ({
-      id:          r.id,
-      entryNumber: r.entryNumber,
-      date:        r.date,
-      description: r.description,
-      amount:      r.lines.reduce((s, l) => s + Number(l.debit), 0),
+      id:               r.id,
+      entryNumber:      r.entryNumber,
+      date:             r.date,
+      description:      r.description,
+      amount:           r.lines.reduce((s, l) => s + Number(l.debit), 0),
+      reversed:         !!r.reversedBy,
+      reversedByNumber: r.reversedBy?.entryNumber ?? null,
     }));
+  }
+
+  /**
+   * Reverse a simple entry the owner recorded by mistake. Posts a balanced
+   * offsetting entry (debit/credit flipped) and links it to the original —
+   * the original is kept for the audit trail (proper accounting: reverse,
+   * don't delete).
+   *
+   * SECURITY: only entries this feature created (reference 'SE') may be
+   * reversed here — never a system-generated SALE/COGS/settlement JE, which
+   * would corrupt the books. journal.reverse() adds POSTED-only + already-
+   * reversed guards and tenant scoping on top.
+   */
+  async reverse(tenantId: string, userId: string, id: string) {
+    const entry = await this.prisma.journalEntry.findFirst({
+      where:  { id, tenantId, reference: SE_REFERENCE },
+      select: { id: true },
+    });
+    if (!entry) {
+      throw new BadRequestException('You can only reverse entries you recorded here.');
+    }
+    const reversal = await this.journal.reverse(tenantId, id, userId);
+    return {
+      id:          reversal.id,
+      entryNumber: reversal.entryNumber,
+      reversalOf:  id,
+    };
   }
 }

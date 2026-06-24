@@ -29,6 +29,7 @@ const CATEGORIES: { key: string; label: string }[] = [
 
 interface RecentEntry {
   id: string; entryNumber: string; date: string; description: string; amount: number;
+  reversed: boolean; reversedByNumber: string | null;
 }
 
 function today(): string {
@@ -73,6 +74,16 @@ export default function SimpleEntriesPage() {
     },
     onError: (e: { response?: { data?: { message?: string } } }) =>
       toast.error(e?.response?.data?.message ?? 'Could not save. Please try again.'),
+  });
+
+  const { mutate: reverse, isPending: reversing } = useMutation({
+    mutationFn: (id: string) => api.post(`/simple-entries/${id}/reverse`).then((r) => r.data),
+    onSuccess: () => {
+      toast.success('Entry reversed.');
+      qc.invalidateQueries({ queryKey: ['simple-entries'] });
+    },
+    onError: (e: { response?: { data?: { message?: string } } }) =>
+      toast.error(e?.response?.data?.message ?? 'Could not reverse. Please try again.'),
   });
 
   function submit(e: React.FormEvent) {
@@ -195,12 +206,29 @@ export default function SimpleEntriesPage() {
         ) : (
           <ul className="divide-y divide-border">
             {recent.map((r) => (
-              <li key={r.id} className="flex items-center justify-between px-4 py-3 text-sm">
+              <li key={r.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
                 <div className="min-w-0">
-                  <div className="font-medium text-foreground truncate">{r.description}</div>
-                  <div className="text-xs text-muted-foreground">{new Date(r.date).toLocaleDateString('en-PH')} · {r.entryNumber}</div>
+                  <div className={`font-medium truncate ${r.reversed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{r.description}</div>
+                  <div className="text-xs text-muted-foreground flex items-center gap-2">
+                    <span>{new Date(r.date).toLocaleDateString('en-PH')} · {r.entryNumber}</span>
+                    {r.reversed && (
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Reversed</span>
+                    )}
+                  </div>
                 </div>
-                <div className="font-mono font-semibold text-foreground shrink-0 ml-3">{formatPeso(r.amount * 100)}</div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className={`font-mono font-semibold ${r.reversed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{formatPeso(r.amount * 100)}</span>
+                  {!r.reversed && (
+                    <button
+                      type="button"
+                      onClick={() => { if (window.confirm('Reverse this entry? This posts an offsetting entry to undo it. The original stays for your records.')) reverse(r.id); }}
+                      disabled={reversing}
+                      className="text-xs text-muted-foreground hover:text-red-500 underline disabled:opacity-50"
+                    >
+                      Reverse
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>

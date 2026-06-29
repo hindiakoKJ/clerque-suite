@@ -16,8 +16,8 @@
     "db:generate": "npx prisma generate --schema=packages/db/prisma/schema.prisma"
   },
   "devDependencies": {
-    "prettier": "^3.3.3",
-    "turbo": "^2.9.6",
+    "prettier": "^3.9.1",
+    "turbo": "^2.10.0",
     "typescript": "^5.9.2"
   },
   "engines": {

@@ -13,7 +13,14 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { AppAccessGuard } from '../auth/guards/app-access.guard';
+import { RequireApp } from '../auth/decorators/require-app.decorator';
+import { PlanFeatureGuard } from '../auth/guards/plan-feature.guard';
+import { RequirePlanFeature } from '../auth/decorators/require-plan-feature.decorator';
 import { ImportService } from './import.service';
+import { IMPORT_UPLOAD } from './import-upload.options';
 import type { JwtPayload } from '@repo/shared-types';
 
 interface AuthRequest extends Express.Request {
@@ -21,13 +28,23 @@ interface AuthRequest extends Express.Request {
 }
 
 @Controller('import')
-@UseGuards(JwtAuthGuard)
+// Bulk import overwrites master data (catalog, stock, ledger), so it is
+// restricted to owners/managers and master-data roles. Previously this
+// controller carried ONLY JwtAuthGuard, which let any signed-in user —
+// including a CASHIER — overwrite the entire product catalog and inventory.
+// AppAccessGuard/PlanFeatureGuard are inert unless a method adds their
+// decorator; the full-accounting imports below opt in.
+@UseGuards(JwtAuthGuard, RolesGuard, AppAccessGuard, PlanFeatureGuard)
+@Roles(
+  'BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM', 'BRANCH_MANAGER',
+  'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD',
+)
 export class ImportController {
   constructor(private readonly importService: ImportService) {}
 
   // ── Products ───────────────────────────────────────────────────────────────
   @Post('products')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importProducts(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: AuthRequest,
@@ -53,7 +70,7 @@ export class ImportController {
 
   // ── Inventory ──────────────────────────────────────────────────────────────
   @Post('inventory')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importInventory(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: AuthRequest,
@@ -82,8 +99,11 @@ export class ImportController {
   }
 
   // ── Chart of Accounts ─────────────────────────────────────────────────────
+  // Full-accounting only — the chart of accounts is a FULL-tier surface.
   @Post('chart-of-accounts')
-  @UseInterceptors(FileInterceptor('file'))
+  @RequireApp('LEDGER', 'READ_ONLY')
+  @RequirePlanFeature('advancedAccounting')
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importChartOfAccounts(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: AuthRequest,
@@ -105,8 +125,13 @@ export class ImportController {
   }
 
   // ── Journal Entries ────────────────────────────────────────────────────────
+  // Full-accounting only: importing journal entries would otherwise let a
+  // SIMPLE-tier (Solo Books) tenant post arbitrary double-entry and bypass the
+  // advancedAccounting lock that guards the Journal screens/API.
   @Post('journal-entries')
-  @UseInterceptors(FileInterceptor('file'))
+  @RequireApp('LEDGER', 'READ_ONLY')
+  @RequirePlanFeature('advancedAccounting')
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importJournal(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: AuthRequest,
@@ -133,7 +158,7 @@ export class ImportController {
 
   // ── Setup Pack: one upload to seed Products + Inventory ────────────────
   @Post('setup-pack')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importSetupPack(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: AuthRequest,
@@ -163,7 +188,7 @@ export class ImportController {
 
   // ── Customers (AR master) ──────────────────────────────────────────────
   @Post('customers')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importCustomers(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
     if (!file) throw new BadRequestException('No file uploaded.');
     return this.importService.importCustomers(file, req.user.tenantId!);
@@ -180,7 +205,7 @@ export class ImportController {
 
   // ── Stock Receipts (raw-material purchases / WAC) ──────────────────────
   @Post('stock-receipts')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importStockReceipts(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
     if (!file) throw new BadRequestException('No file uploaded.');
     return this.importService.importStockReceipts(file, req.user.tenantId!, req.user.sub);
@@ -196,8 +221,11 @@ export class ImportController {
   }
 
   // ── Vendors (AP master) ────────────────────────────────────────────────
+  // Full-accounting only — vendors belong to the AP module.
   @Post('vendors')
-  @UseInterceptors(FileInterceptor('file'))
+  @RequireApp('LEDGER', 'READ_ONLY')
+  @RequirePlanFeature('advancedAccounting')
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importVendors(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
     if (!file) throw new BadRequestException('No file uploaded.');
     return this.importService.importVendors(file, req.user.tenantId!);
@@ -214,7 +242,7 @@ export class ImportController {
 
   // ── Ingredients / Raw Materials (Sprint 19) ────────────────────────────
   @Post('ingredients')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importIngredients(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
     if (!file) throw new BadRequestException('No file uploaded.');
     return this.importService.importIngredients(file, req.user.tenantId!);
@@ -231,7 +259,7 @@ export class ImportController {
 
   // ── Recipes / BOM (Sprint 19) ──────────────────────────────────────────
   @Post('recipes')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
   importRecipes(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
     if (!file) throw new BadRequestException('No file uploaded.');
     return this.importService.importRecipes(file, req.user.tenantId!);

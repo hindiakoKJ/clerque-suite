@@ -30,11 +30,7 @@ export class ImportService {
     const ext = file.originalname.split('.').pop()?.toLowerCase();
     const result = new Map<string, string[][]>();
     if (ext === 'csv') {
-      const text = file.buffer.toString('utf-8');
-      result.set('Sheet1', text
-        .split('\n')
-        .filter((l) => l.trim())
-        .map((l) => l.split(',').map((c) => c.trim().replace(/^"|"$/g, ''))));
+      result.set('Sheet1', this.parseCsv(file.buffer.toString('utf-8')));
       return result;
     }
     const wb = new ExcelJS.Workbook();
@@ -52,6 +48,50 @@ export class ImportService {
       result.set(ws.name, rows);
     }
     return result;
+  }
+
+  /**
+   * RFC 4180 CSV parser.
+   *
+   * Replaces a naive `split(',')`, which corrupted any file where a quoted
+   * field contained a comma — e.g. a product named `Pandesal, Large` or an
+   * address `123 Main St, Manila` split into extra columns and shifted every
+   * later value (price/cost landed in the wrong field). Also handles escaped
+   * quotes (`""`), CRLF line endings, embedded newlines inside quoted fields,
+   * and strips the UTF-8 BOM that Excel writes when you "Save as CSV" (the BOM
+   * otherwise glues itself to the first header cell so the header row is never
+   * matched).
+   */
+  private parseCsv(input: string): string[][] {
+    const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }  // escaped quote
+          else inQuotes = false;
+        } else field += ch;
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        row.push(field); field = '';
+      } else if (ch === '\n') {
+        row.push(field); field = ''; rows.push(row); row = [];
+      } else if (ch !== '\r') {
+        field += ch;
+      }
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+
+    // Trim cells and drop fully-blank rows (template spacer rows).
+    return rows
+      .map((r) => r.map((c) => c.trim()))
+      .filter((r) => r.some((c) => c !== ''));
   }
 
   /**

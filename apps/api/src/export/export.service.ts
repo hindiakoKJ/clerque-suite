@@ -1,6 +1,23 @@
 import { Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
+
+/**
+ * Render one CSV cell safely.
+ *
+ * 1. Escapes embedded double quotes (RFC 4180 `""`) — without this, a value
+ *    like `6" Cake` breaks the whole row into the wrong columns.
+ * 2. Neutralises spreadsheet formula injection: Excel / Google Sheets execute a
+ *    cell that begins with = + - @ (or tab/CR). Since product, customer and note
+ *    text is user-supplied, an exported file opened by the owner's accountant
+ *    could otherwise run a formula. Prefixing with an apostrophe makes Excel
+ *    treat it as literal text.
+ */
+export function csvCell(value: unknown): string {
+  let s = value == null ? '' : String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
 import { AccountsService } from '../accounting/accounts.service';
 import { JournalService } from '../accounting/journal.service';
 import { ExpensesService } from '../ap/expenses.service';
@@ -460,7 +477,7 @@ export class ExportService {
       'Cash',
       'Non-Cash',
       'Payment Methods',
-    ].map((h) => `"${h}"`).join(','));
+    ].map(csvCell).join(','));
 
     // Data rows
     for (const order of orders) {
@@ -483,7 +500,7 @@ export class ExportService {
         cash.toFixed(2),
         nonCash.toFixed(2),
         methodsSummary,
-      ].map((v) => `"${v}"`).join(','));
+      ].map(csvCell).join(','));
     }
 
     // Totals row
@@ -494,14 +511,14 @@ export class ExportService {
 
     lines.push('');
     lines.push([
-      `"TOTALS (${orders.length} orders)"`,
-      '""',
-      `"${totalGross.toFixed(2)}"`,
-      `"${totalDiscount.toFixed(2)}"`,
-      `"${totalVat.toFixed(2)}"`,
-      `"${totalNet.toFixed(2)}"`,
-      '""', '""', '""',
-    ].join(','));
+      `TOTALS (${orders.length} orders)`,
+      '',
+      totalGross.toFixed(2),
+      totalDiscount.toFixed(2),
+      totalVat.toFixed(2),
+      totalNet.toFixed(2),
+      '', '', '',
+    ].map(csvCell).join(','));
 
     return lines.join('\r\n');
   }

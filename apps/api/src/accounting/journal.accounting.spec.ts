@@ -39,6 +39,7 @@ import { NumberingService } from '../numbering/numbering.service';
 
 const ACCOUNT_IDS: Record<string, string> = {
   '1010': 'acct-1010-cash',
+  '1020': 'acct-1020-bank',
   '1030': 'acct-1030-ar',
   '1031': 'acct-1031-digital',
   '1034': 'acct-1034-driver-advance',
@@ -48,6 +49,9 @@ const ACCOUNT_IDS: Record<string, string> = {
   '2020': 'acct-2020-vat',
   '3010': 'acct-3010-equity',
   '4010': 'acct-4010-sales',
+  '4110': 'acct-4110-court',
+  '4111': 'acct-4111-openplay',
+  '4112': 'acct-4112-tournament',
   '5010': 'acct-5010-cogs',
   '6100': 'acct-6100-transport',
   '6101': 'acct-6101-fuel',
@@ -92,7 +96,7 @@ function round(n: number) { return Math.round(n * 100) / 100; }
 async function runProcessEvent(
   payload: Record<string, unknown>,
   type:
-    | 'SALE' | 'COGS' | 'VOID' | 'INVENTORY_ADJUSTMENT'
+    | 'SALE' | 'COGS' | 'VOID' | 'INVENTORY_ADJUSTMENT' | 'SETTLEMENT'
     | 'TRIP_CASH_ADVANCE' | 'TRIP_LIQUIDATION'
     | 'PROGRESS_BILLING' | 'RETENTION_RELEASE',
   origSale?: { payload: Record<string, unknown>; lines: Array<{ accountId: string; debit: unknown; credit: unknown; description: string }> },
@@ -202,6 +206,95 @@ describe('JournalService — accounting correctness across business types', () =
 
   // ── 1. SALE handler ────────────────────────────────────────────────────────
 
+  describe('SALE revenue routing by line', () => {
+    it('splits revenue to per-line accounts, VAT-exclusive, balanced', async () => {
+      // Three court streams in one paid order — each must credit its own income
+      // account, never a merged bucket. All amounts VAT-inclusive at 12%.
+      const lines = await runProcessEvent({
+        orderId: 'o-court', orderNumber: 'ORD-1',
+        completedAt: new Date().toISOString(),
+        totalAmount: 3360, vatAmount: 360,   // 3000 net + 360 VAT
+        payments: [{ method: 'GCASH_BUSINESS', amount: 3360 }],
+        lines: [
+          { productId: 'p-court', lineTotal: 1120, vatAmount: 120, revenueAccountCode: '4110' },
+          { productId: 'p-open',  lineTotal: 1120, vatAmount: 120, revenueAccountCode: '4111' },
+          { productId: 'p-tour',  lineTotal: 1120, vatAmount: 120, revenueAccountCode: '4112' },
+        ],
+      }, 'SALE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.credits.get('4110')).toBeCloseTo(1000, 2);  // Court Rental net
+      expect(s.credits.get('4111')).toBeCloseTo(1000, 2);  // Open Play net
+      expect(s.credits.get('4112')).toBeCloseTo(1000, 2);  // Tournament net
+      expect(s.credits.get('2020')).toBeCloseTo(360, 2);   // Output VAT
+      expect(s.credits.get('4010')).toBeUndefined();        // nothing merged into the default
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);   // balanced
+    });
+
+    it('falls back to 4010 when a line carries no revenue account', async () => {
+      const lines = await runProcessEvent({
+        orderId: 'o-plain', orderNumber: 'ORD-2',
+        completedAt: new Date().toISOString(),
+        totalAmount: 112, vatAmount: 12,
+        payments: [{ method: 'CASH', amount: 112 }],
+        lines: [{ productId: 'p', lineTotal: 112, vatAmount: 12 }], // no revenueAccountCode
+      }, 'SALE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.credits.get('4010')).toBeCloseTo(100, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('keeps the entry balanced when an order discount makes net < line sum', async () => {
+      // total (900) is less than the lines' gross (1000) — an order-level
+      // discount. Revenue credits must still sum EXACTLY to net (900 - VAT).
+      const lines = await runProcessEvent({
+        orderId: 'o-disc', orderNumber: 'ORD-3',
+        completedAt: new Date().toISOString(),
+        totalAmount: 900, vatAmount: 96.43,   // discounted total, VAT on it
+        discountAmount: 100,
+        payments: [{ method: 'CASH', amount: 900 }],
+        lines: [
+          { productId: 'a', lineTotal: 500, vatAmount: 53.57, revenueAccountCode: '4110' },
+          { productId: 'b', lineTotal: 500, vatAmount: 53.57, revenueAccountCode: '4111' },
+        ],
+      }, 'SALE') as CapturedLine[];
+
+      const s = summarise(lines);
+      const revenueCredited = (s.credits.get('4110') ?? 0) + (s.credits.get('4111') ?? 0);
+      expect(revenueCredited).toBeCloseTo(900 - 96.43, 2); // exact net, discount absorbed
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);   // balanced regardless
+    });
+  });
+
+  describe('SETTLEMENT event', () => {
+    it('clears the digital-wallet receivable to the bank — DR 1020 / CR 1031', async () => {
+      const lines = await runProcessEvent({
+        batchId:        'batch-abc123',
+        method:         'GCASH_BUSINESS',
+        expectedAmount: 5000,
+        actualAmount:   5000,
+        completedAt:    new Date().toISOString(),
+      }, 'SETTLEMENT') as CapturedLine[];
+
+      const s = summarise(lines);
+      // Money moves out of the write-only 1031 receivable and into the bank.
+      expect(s.debits.get('1020')).toBeCloseTo(5000, 2);   // Cash in Bank up
+      expect(s.credits.get('1031')).toBeCloseTo(5000, 2);  // Digital receivable relieved
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);  // balanced
+      // Nothing else moves.
+      expect(s.debits.size).toBe(1);
+      expect(s.credits.size).toBe(1);
+    });
+
+    it('skips a zero-amount batch without posting', async () => {
+      const result = await runProcessEvent({
+        batchId: 'batch-empty', method: 'QR_PH', expectedAmount: 0,
+      }, 'SETTLEMENT');
+      expect(result).toEqual({ skipped: true });
+    });
+  });
+
   describe('SALE event', () => {
     it('cash sale ₱120 with VAT 12% — café/retail/service all post identically', async () => {
       const lines = await runProcessEvent({
@@ -254,7 +347,100 @@ describe('JournalService — accounting correctness across business types', () =
       const s = summarise(lines);
       expect(s.debits.get('1010')).toBeCloseTo(120, 2);
       expect(s.credits.get('4010')).toBeCloseTo(120, 2);
-      expect(s.credits.get('2020') ?? 0).toBe(0);
+      // NO line may reference 2020 at all. The old assertion
+      // (credits.get('2020') ?? 0 === 0) passed whether or not a phantom
+      // zero-amount "Output VAT 12%" line existed, which is how the 3-line
+      // zero-VAT JE shipped green.
+      expect(lines.some((l) => l.account === '2020')).toBe(false);
+      // A simple UNREGISTERED cash sale is exactly 2 lines: DR 1010 / CR 4010.
+      expect(lines).toHaveLength(2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+  });
+
+  // ── 1b. Sprint 26 (#43) — CHARGE (credit) sales post to AR, not cash ──────
+
+  describe('SALE event — invoiceType routing', () => {
+    it('CHARGE sale — DR 1030 for the full total, NO 1010/1031 debit', async () => {
+      const lines = await runProcessEvent({
+        orderId:     'order-chg-1',
+        orderNumber: 'ORD-2026-0100',
+        completedAt: new Date().toISOString(),
+        totalAmount: 1120,
+        vatAmount:   120,
+        payments:    [],                      // CHARGE carries no tender
+        invoiceType: 'CHARGE',
+      }, 'SALE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1030')).toBeCloseTo(1120, 2);   // full total to AR
+      expect(s.debits.get('1010')).toBeUndefined();        // no phantom cash
+      expect(s.debits.get('1031')).toBeUndefined();        // no wallet debit
+      expect(s.credits.get('4010')).toBeCloseTo(1000, 2);  // revenue net of VAT
+      expect(s.credits.get('2020')).toBeCloseTo(120, 2);   // VAT > 0 → line present
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('CHARGE sale for a non-VAT tenant — 2 lines exactly, no 2020', async () => {
+      const lines = await runProcessEvent({
+        orderId:     'order-chg-2',
+        orderNumber: 'ORD-2026-0101',
+        completedAt: new Date().toISOString(),
+        totalAmount: 500,
+        vatAmount:   0,
+        payments:    [],
+        invoiceType: 'CHARGE',
+      }, 'SALE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1030')).toBeCloseTo(500, 2);
+      expect(s.credits.get('4010')).toBeCloseTo(500, 2);
+      expect(lines.some((l) => l.account === '2020')).toBe(false);
+      expect(lines).toHaveLength(2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('explicit CASH_SALE — byte-identical to the pre-#43 cash posting', async () => {
+      const lines = await runProcessEvent({
+        orderId:     'order-cash-1',
+        orderNumber: 'ORD-2026-0102',
+        completedAt: new Date().toISOString(),
+        totalAmount: 120,
+        vatAmount:   12.86,
+        payments:    [{ method: 'CASH', amount: 120 }],
+        invoiceType: 'CASH_SALE',
+      }, 'SALE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1010')).toBeCloseTo(120, 2);
+      expect(s.debits.get('1030')).toBeUndefined();
+      expect(s.credits.get('4010')).toBeCloseTo(107.14, 2);
+      expect(s.credits.get('2020')).toBeCloseTo(12.86, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('legacy event WITHOUT invoiceType — defaults to CASH_SALE tender split', async () => {
+      // Already-queued events predate the invoiceType stamp; they MUST post
+      // exactly as before (cash/digital split, never 1030).
+      const lines = await runProcessEvent({
+        orderId:     'order-legacy-1',
+        orderNumber: 'ORD-2026-0103',
+        completedAt: new Date().toISOString(),
+        totalAmount: 200,
+        vatAmount:   21.43,
+        payments:    [
+          { method: 'CASH',           amount: 100 },
+          { method: 'GCASH_PERSONAL', amount: 100 },
+        ],
+        // no invoiceType key at all
+      }, 'SALE') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1010')).toBeCloseTo(100, 2);
+      expect(s.debits.get('1031')).toBeCloseTo(100, 2);
+      expect(s.debits.get('1030')).toBeUndefined();
+      expect(s.credits.get('4010')).toBeCloseTo(178.57, 2);
+      expect(s.credits.get('2020')).toBeCloseTo(21.43, 2);
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
   });
@@ -306,6 +492,112 @@ describe('JournalService — accounting correctness across business types', () =
 
       expect(result).toEqual({ skipped: true });
     });
+
+    it('zero-cost COGS event is marked SYNCED, not left PENDING', async () => {
+      // Regression: the skip used to return { skipped: true } WITHOUT writing
+      // status, so the event stayed PENDING forever. processAllPending pages
+      // by "first 100 still-PENDING" with no cursor, so once a service-heavy
+      // tenant (a court venue is ~100% zero-COGS) accumulated 100 such events
+      // the cron re-fetched the same 100 endlessly and no tenant's books
+      // posted again. The old test above asserted only the return value, which
+      // is why the bug shipped green — this one asserts the STATUS write.
+      const updateSpy = jest.fn().mockResolvedValue({});
+      const prisma = {
+        accountingEvent: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'evt-z', tenantId: 'tenant-1', type: 'COGS', status: 'PENDING',
+            payload: { orderId: 'order-z', lines: [] }, orderId: 'order-z',
+            createdAt: new Date(),
+          }),
+          update: updateSpy,
+        },
+        journalEntry: {
+          count: jest.fn().mockResolvedValue(0),
+          create: jest.fn(),
+          findFirst: jest.fn().mockResolvedValue(null),
+        },
+        tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: 'VAT' }) },
+        $transaction: jest.fn(),
+      };
+
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          JournalService,
+          { provide: PrismaService,            useValue: prisma },
+          { provide: AccountsService,          useValue: { seedDefaultAccounts: jest.fn().mockResolvedValue(undefined), findByCode: jest.fn() } },
+          { provide: AccountingPeriodsService, useValue: { assertDateIsOpen: jest.fn() } },
+          { provide: NumberingService,         useValue: { next: jest.fn() } },
+          { provide: (require('../audit/audit.service') as typeof import('../audit/audit.service')).AuditService,
+            useValue: { log: jest.fn(), findSodViolations: jest.fn() } },
+        ],
+      }).compile();
+
+      const svc = moduleRef.get(JournalService);
+      const result = await svc.processEvent('tenant-1', 'evt-z');
+
+      expect(result).toEqual({ skipped: true });
+      // The event must be flipped off PENDING, or the cron loops forever.
+      expect(updateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'evt-z' },
+          data:  expect.objectContaining({ status: 'SYNCED' }),
+        }),
+      );
+      // And it must post nothing.
+      expect(prisma.journalEntry.create).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── 2b. processAllPending never spins forever ──────────────────────────────
+
+  describe('processAllPending — non-terminating-loop backstop', () => {
+    it('stops after a full page makes no progress instead of looping forever', async () => {
+      // Simulate the pathological state the zero-COGS bug produced: a full page
+      // of 100 events that stay PENDING no matter how often they are processed.
+      // Before the backstop this while(true) never returned. This test would
+      // hang (and time out) if the guard regressed.
+      const page = Array.from({ length: 100 }, (_, i) => ({
+        id: `evt-${i}`, tenantId: 'tenant-1', type: 'COGS', status: 'PENDING',
+        payload: { orderId: `o-${i}`, lines: [] }, orderId: `o-${i}`,
+        createdAt: new Date(),
+      }));
+
+      const prisma = {
+        accountingEvent: {
+          // Always returns the same full page — the events never leave PENDING.
+          findMany:   jest.fn().mockResolvedValue(page),
+          // findUnique reports each event as still PENDING after processing,
+          // so advancedThisPass stays 0 and the backstop must fire.
+          findUnique: jest.fn().mockResolvedValue({ status: 'PENDING' }),
+          update:     jest.fn().mockResolvedValue({}),
+          findFirst:  jest.fn().mockResolvedValue(null),
+        },
+        journalEntry: { count: jest.fn().mockResolvedValue(0), create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
+        tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: 'VAT' }) },
+        $transaction: jest.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
+          cb({ journalEntry: { create: jest.fn() }, accountingEvent: { update: jest.fn() } })),
+      };
+
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          JournalService,
+          { provide: PrismaService,            useValue: prisma },
+          { provide: AccountsService,          useValue: { seedDefaultAccounts: jest.fn().mockResolvedValue(undefined), findByCode: jest.fn() } },
+          { provide: AccountingPeriodsService, useValue: { assertDateIsOpen: jest.fn() } },
+          { provide: NumberingService,         useValue: { next: jest.fn() } },
+          { provide: (require('../audit/audit.service') as typeof import('../audit/audit.service')).AuditService,
+            useValue: { log: jest.fn(), findSodViolations: jest.fn() } },
+        ],
+      }).compile();
+
+      const svc = moduleRef.get(JournalService);
+      const result = await svc.processAllPending('tenant-1');
+
+      // It returned at all — that is the assertion. It processed exactly one
+      // page and stopped rather than re-fetching the stuck rows endlessly.
+      expect(result.processed).toBe(100);
+      expect(prisma.accountingEvent.findMany).toHaveBeenCalledTimes(1);
+    }, 10_000);
   });
 
   // ── 3. VOID handler — FULL_VOID ────────────────────────────────────────────

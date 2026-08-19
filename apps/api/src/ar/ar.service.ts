@@ -5,11 +5,17 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { JournalService } from '../accounting/journal.service';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { RecordCollectionDto } from './dto/record-collection.dto';
 
 @Injectable()
 export class ArService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly journal: JournalService,
+    private readonly periods: AccountingPeriodsService,
+  ) {}
 
   // ── List CHARGE orders as AR invoices ──────────────────────────────────────
 
@@ -124,19 +130,26 @@ export class ArService {
     }
 
     const collectedAt = dto.collectedAt ? new Date(dto.collectedAt) : new Date();
+    const postingDate = new Date();
     const customer    = order.customer;
 
-    // Find GL accounts
-    const cashAccount = await this.prisma.account.findFirst({
-      where: { tenantId, code: '1010' },
+    // Find GL accounts. Tender routing mirrors the SALE handler: CASH lands
+    // in the drawer (1010); every digital method (GCash, Maya, QR Ph, card)
+    // is a wallet receivable (1031) until its settlement batch clears it to
+    // the bank via the SETTLEMENT event.
+    const tenderCode    = dto.paymentMethod === 'CASH' ? '1010' : '1031';
+    const tenderAccount = await this.prisma.account.findFirst({
+      where: { tenantId, code: tenderCode },
     });
     const arAccount = await this.prisma.account.findFirst({
       where: { tenantId, code: '1030' },
     });
 
-    if (!cashAccount) {
+    if (!tenderAccount) {
       throw new BadRequestException(
-        'Cash on Hand account (1010) not found. Please seed the chart of accounts.',
+        tenderCode === '1010'
+          ? 'Cash on Hand account (1010) not found. Please seed the chart of accounts.'
+          : 'Digital Wallet Receivable account (1031) not found. Please seed the chart of accounts.',
       );
     }
     if (!arAccount) {
@@ -148,9 +161,19 @@ export class ArService {
     const newlyCollected = alreadyPaid + dto.amount;
     const isFullyPaid    = newlyCollected >= invoiceAmt - 0.01;
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    // Ordering matters here. journal.create manages its own prisma writes
+    // (atomic entry numbering via NumberingService, posting control, period
+    // lock, balance validation), so it must NOT be called inside the data
+    // transaction below. Following the equipment-rentals pattern: run the
+    // data tx (OrderPayment row + COMPLETED transition) first, then post the
+    // JE after. To avoid committing a payment row whose JE would then be
+    // rejected by a closed accounting period, pre-validate the posting date
+    // BEFORE the tx — the same check journal.create re-runs at post time.
+    await this.periods.assertDateIsOpen(tenantId, postingDate);
+
+    const { payment } = await this.prisma.$transaction(async (tx) => {
       // 1. Create OrderPayment record
-      const payment = await tx.orderPayment.create({
+      const created = await tx.orderPayment.create({
         data: {
           orderId,
           method:    dto.paymentMethod as any,
@@ -167,48 +190,30 @@ export class ArService {
         });
       }
 
-      // 3. Post Journal Entry: DR Cash 1010 / CR AR 1030
-      const customerName = customer?.name ?? order.customerName ?? 'Unknown';
-      const je = await tx.journalEntry.create({
-        data: {
-          tenantId,
-          entryNumber:  `AR-${Date.now()}`,
-          date:         collectedAt,
-          postingDate:  new Date(),
-          description:  `AR Collection: ${order.orderNumber} — ${customerName}`,
-          reference:    dto.reference ?? null,
-          status:       'POSTED',
-          source:       'AR',
-          createdBy:    userId,
-          postedBy:     userId,
-          postedAt:     new Date(),
-          lines: {
-            create: [
-              {
-                accountId:   cashAccount.id,
-                description: 'Collection received',
-                debit:       new Prisma.Decimal(dto.amount),
-                credit:      new Prisma.Decimal(0),
-                currency:    'PHP',
-                exchangeRate: 1,
-              },
-              {
-                accountId:   arAccount.id,
-                description: `Invoice ${order.orderNumber}`,
-                debit:       new Prisma.Decimal(0),
-                credit:      new Prisma.Decimal(dto.amount),
-                currency:    'PHP',
-                exchangeRate: 1,
-              },
-            ],
-          },
-        },
-      });
-
-      return { payment, journalEntry: je, fullyCollected: isFullyPaid };
+      return { payment: created };
     });
 
-    return result;
+    // 3. Post Journal Entry: DR Cash 1010 (or 1031 wallet) / CR AR 1030 —
+    //    through journal.create so the entry gets race-safe numbering and
+    //    the full guard suite instead of a raw `AR-${Date.now()}` insert.
+    const customerName = customer?.name ?? order.customerName ?? 'Unknown';
+    const je = await this.journal.create(
+      tenantId,
+      {
+        date:        collectedAt.toISOString(),
+        postingDate: postingDate.toISOString(),
+        description: `AR Collection: ${order.orderNumber} — ${customerName}`,
+        reference:   dto.reference ?? undefined,
+        lines: [
+          { accountId: tenderAccount.id, debit:  dto.amount, description: 'Collection received' },
+          { accountId: arAccount.id,     credit: dto.amount, description: `Invoice ${order.orderNumber}` },
+        ],
+      },
+      userId,
+      'AR',
+    );
+
+    return { payment, journalEntry: je, fullyCollected: isFullyPaid };
   }
 
   // ── AR Aging ───────────────────────────────────────────────────────────────

@@ -5,6 +5,12 @@ import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 export { CreateAccountDto, UpdateAccountDto };
 
+/** Last instant of the calendar day `d` falls on (UTC, matching how a bare
+ *  'YYYY-MM-DD' string parses). Used so a `to` bound includes the whole day. */
+function endOfDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Standard Philippine Chart of Accounts — v2 (SAP-aligned, PH GAAP / PFRS)
 //
@@ -170,6 +176,10 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '2075', name: 'Unearned Revenue',                          type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '2076', name: 'Dividends Payable',                         type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '2077', name: 'Other Current Liabilities',                 type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
+  // Rental Deposits Held — refundable equipment-rental security deposits.
+  // Cash the club is holding but OWES BACK, so it is a liability, NOT income,
+  // while the item is out. Cleared on good return; forfeited to 4114 on loss.
+  { code: '2078', name: 'Rental Deposits Held',                      type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
 
   // ── Non-Current Liabilities ──────────────────────────────────────────────────
   { code: '2090', name: 'Long-term Bank Loans',                      type: 'LIABILITY', normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
@@ -223,6 +233,20 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '4040', name: 'Service Revenue',                           type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '4050', name: 'Other Income',                              type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '4060', name: 'Rental Income',                             type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
+  // ── Courts / sports-facility income (Requirement 1: three DISTINCT court
+  //    streams on their own GL + Z-report lines, never a merged bucket) ──────
+  // Sales-driven, auto-posted by the SALE handler → SYSTEM_ONLY like 4010 so
+  // a manual JE can't drift them from the sales subledger.
+  { code: '4110', name: 'Court Rental Income',                       type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'SYSTEM_ONLY', isSystem: true  },
+  { code: '4111', name: 'Open Play Income',                          type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'SYSTEM_ONLY', isSystem: true  },
+  { code: '4112', name: 'Tournament Income',                         type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'SYSTEM_ONLY', isSystem: true  },
+  { code: '4115', name: 'Retail Sales Income',                       type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'SYSTEM_ONLY', isSystem: true  },
+  // Contra-income for CourtSide refunds/cancellations (DEBIT normal balance).
+  { code: '4116', name: 'Refunds & Cancellations',                   type: 'REVENUE',   normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY', isSystem: true  },
+  // Rentals-driven income — lower volume, manual correction is legitimate, so
+  // OPEN. The automated postings use source SYSTEM, which posts to OPEN fine.
+  { code: '4113', name: 'Equipment Rental Income',                   type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
+  { code: '4114', name: 'Forfeited Deposit / Damage Recovery',       type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '4070', name: 'Interest Income',                           type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '4080', name: 'Dividend Income',                           type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '4090', name: 'Gain on Sale of Assets',                    type: 'REVENUE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
@@ -635,7 +659,11 @@ export class AccountsService {
 
   async getPLSummary(tenantId: string, from: string, to: string) {
     // Use postingDate for period filtering; fall back to document date for legacy entries.
-    const dateRange = { gte: new Date(from), lte: new Date(to) };
+    // `to` is a calendar day — include the WHOLE day. A bare new Date('YYYY-MM-DD')
+    // is midnight, so entries stamped later that day (journal.reverse() and
+    // ingest refunds write postingDate = now() with a time) fell out of the
+    // period they belong to. Date-only stamps (midnight) are unaffected.
+    const dateRange = { gte: new Date(from), lte: endOfDay(new Date(to)) };
     const plJeFilter = {
       tenantId,
       status: 'POSTED',
@@ -664,10 +692,21 @@ export class AccountsService {
     for (const acct of accounts) {
       const debit   = acct.journalLines.reduce((s, l) => s + Number(l.debit),  0);
       const credit  = acct.journalLines.reduce((s, l) => s + Number(l.credit), 0);
+      // Row balance is in the account's OWN normal-balance direction — the
+      // right thing to DISPLAY (a contra account like 4116 Refunds shows as a
+      // positive figure on its own line, as accountants expect).
       const balance = acct.normalBalance === 'DEBIT' ? debit - credit : credit - debit;
       const row = { id: acct.id, code: acct.code, name: acct.name, balance };
-      if (acct.type === 'REVENUE') { revenueAccounts.push(row); totalRevenue  += balance; }
-      else                         { expenseAccounts.push(row); totalExpenses += balance; }
+      // Section TOTALS must be direction-uniform, NOT own-direction. Revenue
+      // is Σ(credit − debit) over every REVENUE account and expenses are
+      // Σ(debit − credit) over every EXPENSE account, so a contra account
+      // (DEBIT-normal 4116 Refunds & Cancellations; a CREDIT-normal
+      // expense-recovery account) comes out NEGATIVE and REDUCES its section.
+      // The old code added the own-direction row balance, so a ₱100 refund
+      // RAISED total revenue by ₱100 — overstating profit on the P&L, the
+      // Income Statement export, period-close, and the simple profit card.
+      if (acct.type === 'REVENUE') { revenueAccounts.push(row); totalRevenue  += credit - debit; }
+      else                         { expenseAccounts.push(row); totalExpenses += debit - credit; }
     }
 
     return { from, to, revenueAccounts, expenseAccounts, totalRevenue, totalExpenses, netIncome: totalRevenue - totalExpenses };
@@ -717,13 +756,22 @@ export class AccountsService {
     for (const acct of accounts) {
       const debit  = acct.journalLines.reduce((s, l) => s + Number(l.debit),  0);
       const credit = acct.journalLines.reduce((s, l) => s + Number(l.credit), 0);
+      // Row balance in the account's OWN direction (display: a contra account
+      // shows positive on its own line). Section totals below are
+      // direction-UNIFORM so the 19 contra accounts in the seeded COA
+      // (Accumulated Depreciation, Allowance for Doubtful Accounts, Treasury
+      // Shares, Owner's Drawing, Sales Returns/Discounts, Refunds, Purchase
+      // Returns/Discounts) REDUCE their section instead of inflating it. The
+      // old `+= bal` added own-direction balances, so an owner drawing RAISED
+      // equity and accumulated depreciation RAISED assets — and the equation
+      // Assets = Liabilities + Equity silently broke. See getPLSummary.
       const bal = acct.normalBalance === 'DEBIT' ? debit - credit : credit - debit;
       const row = { id: acct.id, code: acct.code, name: acct.name, balance: bal };
-      if (acct.type === 'ASSET')        { assets.push(row);      totalAssets      += bal; }
-      else if (acct.type === 'LIABILITY'){ liabilities.push(row); totalLiabilities += bal; }
-      else if (acct.type === 'EQUITY')   { equity.push(row);      totalEquity      += bal; }
-      else if (acct.type === 'REVENUE')  { retainedEarnings      += bal; }
-      else if (acct.type === 'EXPENSE')  { retainedEarnings      -= bal; }
+      if (acct.type === 'ASSET')        { assets.push(row);      totalAssets      += debit - credit; }
+      else if (acct.type === 'LIABILITY'){ liabilities.push(row); totalLiabilities += credit - debit; }
+      else if (acct.type === 'EQUITY')   { equity.push(row);      totalEquity      += credit - debit; }
+      else if (acct.type === 'REVENUE')  { retainedEarnings      += credit - debit; }
+      else if (acct.type === 'EXPENSE')  { retainedEarnings      -= debit - credit; }
     }
 
     // Append retained earnings as a synthetic equity row so the equation

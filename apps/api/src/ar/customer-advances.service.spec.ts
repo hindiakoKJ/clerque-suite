@@ -21,7 +21,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 
 const ACCT_CASH = 'acct-cash';
-const ACCT_LIAB = 'acct-2031-liab';
+const ACCT_LIAB = 'acct-2074-customer-deposits';
 
 interface CapturedJE { lines: Array<{ accountId: string; debit?: number; credit?: number }>; description: string }
 
@@ -44,8 +44,10 @@ function buildPrismaMock() {
     },
     account: {
       findFirst: jest.fn().mockImplementation(({ where }: any) => {
-        if (where.code === '2031') return Promise.resolve({ id: ACCT_LIAB });
-        if (where.code === '2030') return Promise.resolve(null);
+        // 2074 = Customer Deposits & Advances (the correct liability).
+        // The service used to probe 2031/2030 — SSS payroll accounts — so
+        // every advance was miscredited to SSS. This mock now pins 2074.
+        if (where.code === '2074') return Promise.resolve({ id: ACCT_LIAB });
         if (where.type === 'ASSET') return Promise.resolve({ id: ACCT_CASH });
         return Promise.resolve(null);
       }),

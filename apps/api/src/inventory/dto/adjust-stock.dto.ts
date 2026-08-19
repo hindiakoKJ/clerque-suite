@@ -1,10 +1,11 @@
 import {
   IsEnum,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
-  
+
   MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -102,4 +103,17 @@ export class AdjustStockDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 4 })
   unitCost?: number;
+
+  /**
+   * How this stock receipt was funded — drives which account the journal
+   * handler credits (CASH → 1010 Cash on Hand, OWNER_FUNDED → 3010 Owner's
+   * Capital). Omitted ⇒ handler defaults to OWNER_FUNDED (preserves the
+   * behaviour of clients that don't send it, e.g. the counter mobile app).
+   * 'CREDIT' is deliberately excluded: credit purchases need a vendor bill —
+   * an unattributed 2010 AP entry would never reconcile.
+   */
+  @ApiPropertyOptional({ enum: ['CASH', 'OWNER_FUNDED'], example: 'CASH' })
+  @IsOptional()
+  @IsIn(['CASH', 'OWNER_FUNDED'])
+  paymentMethod?: 'CASH' | 'OWNER_FUNDED';
 }

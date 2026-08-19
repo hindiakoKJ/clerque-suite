@@ -388,7 +388,7 @@ export class InventoryService {
   // ─── Adjust stock ─────────────────────────────────────────────────────────
 
   async adjust(tenantId: string, createdById: string, dto: AdjustStockDto) {
-    const { productId, branchId, quantity, type, reason, note, unitCost } = dto;
+    const { productId, branchId, quantity, type, reason, note, unitCost, paymentMethod } = dto;
 
     // Verify product belongs to tenant
     const product = await this.prisma.product.findFirst({
@@ -456,9 +456,9 @@ export class InventoryService {
     // this, a BRANCH_MANAGER or WAREHOUSE_STAFF could STOCK_IN qty=1 at a
     // wildly inflated unitCost, poisoning the WAC `avgCost` upward — every
     // subsequent SALE_DEDUCTION would then drain inflated COGS, silently
-    // hiding shrinkage. Meanwhile the INVENTORY_ADJUSTMENT accounting event
-    // uses `product.costPrice` (not unitCost) so the GL doesn't show the
-    // spike — books and ops diverge.
+    // hiding shrinkage. The INVENTORY_ADJUSTMENT accounting event values
+    // positive receipts at the same unitCost, so this bound protects the
+    // GL too — books and ops stay in step.
     //
     // We allow up to ±50% drift from costPrice without ceremony (real-world
     // suppliers change prices); beyond that, the operator must update the
@@ -553,7 +553,12 @@ export class InventoryService {
       // Journal processor uses cost value; if costPrice is null the event
       // will be marked SYNCED (skipped) without posting a zero-value JE.
       const costPrice = product.costPrice ? Number(product.costPrice) : 0;
-      const totalValue = Math.abs(quantity) * costPrice;
+      // Positive receipts (STOCK_IN / INITIAL) are valued at what was
+      // actually paid — the same unitCost that drives WAC above — falling
+      // back to the product master costPrice when the operator didn't type
+      // one. Negative flows (stock-out / damage / recount) keep costPrice.
+      const effectiveUnitCost = quantity > 0 && unitCost != null ? unitCost : costPrice;
+      const totalValue = Math.round(Math.abs(quantity) * effectiveUnitCost * 100) / 100;
       await tx.accountingEvent.create({
         data: {
           tenantId,
@@ -570,6 +575,10 @@ export class InventoryService {
             costPrice,
             totalValue,
             reason: reason ?? null,
+            // Only included when the client sent one — absent ⇒ journal
+            // handler defaults to OWNER_FUNDED (back-compat: the counter
+            // mobile app doesn't send it).
+            ...(paymentMethod ? { paymentMethod } : {}),
           },
         },
       });

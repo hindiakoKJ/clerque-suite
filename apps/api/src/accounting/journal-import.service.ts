@@ -132,10 +132,10 @@ export class JournalImportService {
     const sampleAccounts = accounts.length >= 2
       ? [accounts[0].code, accounts[1].code]
       : ['1010', '6020']; // fallback so the template is usable even on a fresh tenant
-    dataSheet.addRow(['JE-001', today, today, 'Sample: Paid utilities',  'Meralco-202604', sampleAccounts[1], 'Electric bill April', 7589.29, null]);
-    dataSheet.addRow(['JE-001', today, today, 'Sample: Paid utilities',  'Meralco-202604', sampleAccounts[0], 'BPI checking',        null,    7589.29]);
-    dataSheet.addRow(['JE-002', today, today, 'Sample: Bank fee',         null,             sampleAccounts[1], 'BPI service charge',  100.00,  null]);
-    dataSheet.addRow(['JE-002', today, today, 'Sample: Bank fee',         null,             sampleAccounts[0], 'BPI checking',        null,    100.00]);
+    dataSheet.addRow(['SAMPLE - JE-001', today, today, 'Sample: Paid utilities',  'Meralco-202604', sampleAccounts[1], 'Electric bill April', 7589.29, null]);
+    dataSheet.addRow(['SAMPLE - JE-001', today, today, 'Sample: Paid utilities',  'Meralco-202604', sampleAccounts[0], 'BPI checking',        null,    7589.29]);
+    dataSheet.addRow(['SAMPLE - JE-002', today, today, 'Sample: Bank fee',         null,             sampleAccounts[1], 'BPI service charge',  100.00,  null]);
+    dataSheet.addRow(['SAMPLE - JE-002', today, today, 'Sample: Bank fee',         null,             sampleAccounts[0], 'BPI checking',        null,    100.00]);
     // Leave a few blank rows for the user to type into
     for (let i = 0; i < 10; i++) dataSheet.addRow([]);
 
@@ -228,6 +228,11 @@ export class JournalImportService {
       const groupKey = stringValue(row.getCell(1).value);
       // Treat a row with no group key + no data as fully blank → skip silently
       if (!groupKey && allCellsBlank(row)) return;
+      // The template's example entries are keyed 'SAMPLE - JE-001' etc. They are
+      // IGNORED on import so a first-time owner who forgets to delete them does
+      // not post fake utilities/bank-fee entries into real books. (Same
+      // convention as the import.service templates.)
+      if (/^\s*sample\s*[-–—:]/i.test(groupKey ?? '')) return;
 
       rows.push({
         rowNumber,

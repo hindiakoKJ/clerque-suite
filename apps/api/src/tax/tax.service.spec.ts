@@ -167,12 +167,30 @@ describe('TaxCalculatorService', () => {
   // ─── validateTin ─────────────────────────────────────────────────────────
 
   describe('validateTin()', () => {
-    it('accepts a valid 15-char BIR TIN format', () => {
+    it('accepts a 5-digit branch code (eFPS-style)', () => {
       expect(svc.validateTin('123-456-789-00001')).toBe('123-456-789-00001');
+    });
+
+    it('accepts a 3-digit branch code — the form printed on most CORs', () => {
+      // Regression: the validator used to demand 5 digits, so it rejected the
+      // format on a real Certificate of Registration. HNS Corp PH's own TIN
+      // is this shape, meaning Clerque could not store its operator's TIN.
+      expect(svc.validateTin('010-986-552-000')).toBe('010-986-552-000');
+    });
+
+    it('does not pad a 3-digit branch code to 5', () => {
+      // The TIN is printed on receipts and BIR forms. Padding would put a
+      // number on a receipt that does not match the certificate behind it.
+      expect(svc.validateTin('010-986-552-000')).not.toBe('010-986-552-00000');
     });
 
     it('normalises to uppercase and trims whitespace', () => {
       expect(svc.validateTin('  123-456-789-00001  ')).toBe('123-456-789-00001');
+    });
+
+    it('rejects a branch code that is neither 3 nor 5 digits', () => {
+      expect(() => svc.validateTin('123-456-789-0000')).toThrow(BadRequestException);
+      expect(() => svc.validateTin('123-456-789-00')).toThrow(BadRequestException);
     });
 
     it('throws BadRequestException for 9-segment TIN (missing branch code)', () => {

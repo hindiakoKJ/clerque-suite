@@ -40,14 +40,44 @@ export class ImportService {
       const rows: string[][] = [];
       ws.eachRow((row) => {
         rows.push(
-          (row.values as (string | number | null | undefined)[])
+          (row.values as unknown[])
             .slice(1)
-            .map((v) => (v == null ? '' : String(v))),
+            .map((v) => this.cellToString(v)),
         );
       });
       result.set(ws.name, rows);
     }
     return result;
+  }
+
+  /**
+   * Flatten one ExcelJS cell value to the plain string the importers expect.
+   *
+   * Bare String(v) turned every non-primitive cell into garbage: a rich-text
+   * cell ({richText:[...]}), a formula cell ({formula,result}) and a hyperlink
+   * cell ({text,hyperlink}) all became '[object Object]', and a real Excel
+   * date became a 60-char locale string. The owner WILL type a date into the
+   * Date column and Excel WILL store it as a Date, so these must round-trip.
+   * ExcelJS reads Excel dates as UTC instants, hence the UTC getters.
+   */
+  private cellToString(v: unknown): string {
+    if (v == null) return '';
+    if (v instanceof Date) {
+      if (isNaN(v.getTime())) return '';
+      const mm = String(v.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(v.getUTCDate()).padStart(2, '0');
+      return `${v.getUTCFullYear()}-${mm}-${dd}`;
+    }
+    if (typeof v !== 'object') return String(v);
+    const o = v as Record<string, unknown>;
+    if (Array.isArray(o.richText)) {
+      return (o.richText as { text?: unknown }[]).map((r) => (r?.text == null ? '' : String(r.text))).join('');
+    }
+    if ('formula' in o || 'sharedFormula' in o) return this.cellToString(o.result);
+    if ('hyperlink' in o) return this.cellToString(o.text);
+    if ('error' in o) return '';
+    if ('text' in o) return this.cellToString(o.text);
+    return String(v);
   }
 
   /**
@@ -109,6 +139,62 @@ export class ImportService {
     return -1;
   }
 
+  /**
+   * The optional column-hints row makeTemplate() writes directly under the
+   * header (italic grey "Required. ..." / "Optional. ..." cells). It is NOT
+   * data. Detect it literally rather than guessing from a value's shape, so a
+   * genuine row with an odd value is never silently swallowed.
+   */
+  /**
+   * Parse a number the way a Philippine owner actually types it into Excel:
+   * "1,250.50", "PHP 1,200", "P1,200", "1 250", "(500)" for negative.
+   *
+   * Bare this.num() stops at the first comma, so "1,250.50" silently became
+   * 1 -- a 1250x error with NO error message, on every price, cost, quantity
+   * and journal amount. Returns NaN for anything that is not a clean number so
+   * the existing isNaN() / `|| 0` guards at each call site keep their meaning.
+   */
+  private num(raw: unknown): number {
+    if (raw == null) return NaN;
+    if (typeof raw === 'number') return raw;
+    let t = String(raw).trim();
+    if (!t) return NaN;
+    const negated = /^\(.*\)$/.test(t);
+    if (negated) t = t.slice(1, -1).trim();
+    t = t.replace(/^(PHP|Php|php)\s*/, '').replace(/^[P\u20B1\$]\s*/, '');
+    t = t.replace(/[\u00A0\s,]/g, '');
+    if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return NaN;
+    const n = parseFloat(t);
+    if (!Number.isFinite(n)) return NaN;
+    return negated ? -n : n;
+  }
+
+  private isHintRow(r?: string[]): boolean {
+    if (!r) return false;
+    return r.filter((c) => /^\s*(Required|Optional)\.?\s/i.test(String(c ?? ''))).length >= 2;
+  }
+
+  /**
+   * Sample rows. Every template ships realistic example rows, and a first-time
+   * owner WILL forget to delete them -- which used to import 'Espresso Solo',
+   * 'Globe Telecom' (with a made-up TIN) and two fake journal entries as REAL
+   * data. makeTemplate() now stamps the first cell of every sample row with
+   * SAMPLE_MARKER and every parser skips rows that carry it (counted in
+   * result.skipped), so leaving the samples in place is harmless.
+   *
+   * Tolerates hand edits: 'SAMPLE - x', 'SAMPLE -x', 'SAMPLE — x', 'Sample: x'.
+   */
+  private static readonly SAMPLE_MARKER = 'SAMPLE - ';
+  private static readonly SAMPLE_INSTRUCTION =
+    'Rows starting with "SAMPLE - " are examples. They are IGNORED on import. Delete them or leave them — either is safe. Add your real rows below them.';
+
+  private isSampleRow(r?: string[]): boolean {
+    if (!r) return false;
+    const first = r.find((c) => String(c ?? '').trim() !== '');
+    if (first == null) return false;
+    return /^\s*sample\s*[-\u2013\u2014:]/i.test(String(first));
+  }
+
   // ── Helper: generate Excel template buffer ──
   /**
    * Build a self-documenting Excel template.
@@ -119,7 +205,8 @@ export class ImportService {
    *   Row N+1          — blank separator
    *   Row N+2          — column headers (dark fill, accent text)
    *   Row N+3          — column descriptions / format hints (italic, gray)
-   *   Row N+4..        — sample data rows
+   *   Row N+4..        — sample data rows (first cell prefixed "SAMPLE - ",
+   *                      light-grey italic; every parser ignores them)
    *
    * Required columns are marked with "*" in the header by convention.
    */
@@ -153,8 +240,12 @@ export class ImportService {
     }
 
     // ── Instructions ───────────────────────────────────────────────────────
-    if (opts.instructions?.length) {
-      for (const line of opts.instructions) {
+    // Every template that ships sample rows tells the owner they are ignored.
+    const instructions = sampleRows.length
+      ? [ImportService.SAMPLE_INSTRUCTION, ...(opts.instructions ?? [])]
+      : (opts.instructions ?? []);
+    if (instructions.length) {
+      for (const line of instructions) {
         ws.mergeCells(`A${cursor}:${lastColLetter}${cursor}`);
         const c = ws.getCell(`A${cursor}`);
         c.value = line;
@@ -188,8 +279,15 @@ export class ImportService {
     }
 
     // ── Sample data rows ───────────────────────────────────────────────────
+    // Stamp the first cell with the SAMPLE marker (see isSampleRow) and style
+    // the row light-grey italic so it is visibly "not yours".
     for (const r of sampleRows) {
-      ws.getRow(cursor).values = r;
+      const [first, ...rest] = r;
+      const marked = this.isSampleRow(r)
+        ? r
+        : [`${ImportService.SAMPLE_MARKER}${first ?? ''}`, ...rest];
+      ws.getRow(cursor).values = marked;
+      ws.getRow(cursor).font = { italic: true, color: { argb: 'FF9E9E9E' } };
       cursor++;
     }
 
@@ -237,10 +335,11 @@ export class ImportService {
 
     // Optional column-hints row (italic gray under the header). If row 1 of
     // dataRows looks like a hints row (no numeric Price), skip it.
-    if (dataRows.length > 0) {
-      const priceCellLooksNumeric = !isNaN(parseFloat(dataRows[0][2] ?? ''));
-      if (!priceCellLooksNumeric) dataRows = dataRows.slice(1);
-    }
+    // Detect the hints row LITERALLY. The old test ("is the Price cell
+    // numeric?") silently DELETED a genuine first product whenever its price
+    // was blank, currency-prefixed or a formula -- not counted as skipped, not
+    // reported as an error, so the owner saw "imported 42" for 43 rows.
+    if (this.isHintRow(dataRows[0])) dataRows = dataRows.slice(1);
 
     // Sprint 19 — Pharmacy columns are appended to the template AFTER the
     // 7 standard columns. They're optional for every vertical; pharmacy
@@ -262,6 +361,7 @@ export class ImportService {
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = i + 2;
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [
         name, categoryName, priceStr, costStr, vatStr, barcode, description,
         // Sprint 19 — pharmacy-specific (all optional)
@@ -273,7 +373,7 @@ export class ImportService {
         result.skipped++;
         continue;
       }
-      const price = parseFloat(priceStr);
+      const price = this.num(priceStr);
       if (isNaN(price) || price < 0) {
         result.errors.push({
           row: rowNum,
@@ -290,7 +390,7 @@ export class ImportService {
         });
         continue;
       }
-      const costPrice = parseFloat(costStr);
+      const costPrice = this.num(costStr);
       if (isNaN(costPrice) || costPrice < 0) {
         result.errors.push({
           row: rowNum,
@@ -337,7 +437,7 @@ export class ImportService {
         }
         lotExpiryDate = parsed;
       }
-      const initialStock = initialStockStr?.trim() ? parseFloat(initialStockStr) : 0;
+      const initialStock = initialStockStr?.trim() ? this.num(initialStockStr) : 0;
       if (initialStockStr?.trim() && (isNaN(initialStock) || initialStock < 0)) {
         result.errors.push({
           row: rowNum,
@@ -348,22 +448,27 @@ export class ImportService {
 
       try {
         // Find or create category
+        // Find-or-create the category. This used to upsert on a
+        // `tenantId_name` compound unique that does NOT exist on Category, so
+        // the upsert threw on EVERY row, the .catch fell back to findFirst,
+        // and on a fresh tenant that returned null -- meaning every imported
+        // product landed with no category at all. Category drives barista /
+        // kitchen ticket routing (stationId) and the GL revenue split
+        // (revenueAccountCode), so uncategorised products break both.
+        // Matched case-insensitively so "Beans" and "beans" don't diverge.
         let categoryId: string | undefined;
-        if (categoryName?.trim()) {
-          const cat = await this.prisma.category
-            .upsert({
-              where: {
-                tenantId_name: { tenantId, name: categoryName.trim() },
-              } as any,
-              update: {},
-              create: { tenantId, name: categoryName.trim() },
-            })
-            .catch(async () => {
-              return this.prisma.category.findFirst({
-                where: { tenantId, name: categoryName.trim() },
-              });
-            });
-          categoryId = cat?.id;
+        const catName = categoryName?.trim();
+        if (catName) {
+          const found = await this.prisma.category.findFirst({
+            where:  { tenantId, name: { equals: catName, mode: 'insensitive' } },
+            select: { id: true },
+          });
+          categoryId = found
+            ? found.id
+            : (await this.prisma.category.create({
+                data:   { tenantId, name: catName },
+                select: { id: true },
+              })).id;
         }
 
         const existing = await this.prisma.product.findFirst({
@@ -535,7 +640,7 @@ export class ImportService {
           title: 'Clerque — Pharmacy Product Master Import Template',
           instructions: [
             'How to use:',
-            '  1. Fill the rows below the headers. Remove the sample rows when you\'re ready.',
+            '  1. Fill the rows below the headers. The grey SAMPLE rows are ignored — delete them or leave them.',
             '  2. Columns marked with * are required. Existing products are matched by Name (or Barcode if provided) and updated.',
             '  3. Cost Price is REQUIRED. It drives COGS posting on every sale. Enter 0 for complimentary items.',
             '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
@@ -605,7 +710,7 @@ export class ImportService {
           ['Matcha Latte 16oz','Beverages',   '170', '45',  'Y', '',              'Ceremonial matcha + steamed milk'],
           ['Croissant',        'Bakery',      '85',  '28',  'Y', '',              'Butter croissant, baked daily'],
           ['Banana Bread',     'Bakery',      '95',  '32',  'Y', '',              'Slice of banana loaf'],
-          ['Bottled Water',    'Beverages',   '40',  '12',  'N', '4806507000123', '500ml'],
+          ['Bottled Water',    'Beverages',   '40',  '12',  'Y', '4806507000123', '500ml'],
           ['Espresso Beans',   'Retail',      '550', '320', 'Y', '',              '250g whole beans, single origin'],
         ];
         break;
@@ -693,7 +798,7 @@ export class ImportService {
         title,
         instructions: [
           'How to use:',
-          '  1. Fill the rows below the headers. Remove the sample rows when you\'re ready.',
+          '  1. Fill the rows below the headers. The grey SAMPLE rows are ignored — delete them or leave them.',
           '  2. Columns marked with * are required. Existing products are matched by Name (or Barcode if provided) and updated.',
           '  3. Cost Price is REQUIRED. It drives COGS posting on every sale. Enter 0 for services or complimentary items.',
           '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
@@ -740,13 +845,13 @@ export class ImportService {
     };
     let dataRows = rows.slice(dataStart);
     // Skip optional hints row (qty cell isn't numeric)
-    if (dataRows.length > 0) {
-      const qtyLooksNumeric = !isNaN(parseFloat(dataRows[0][1] ?? ''));
-      if (!qtyLooksNumeric) dataRows = dataRows.slice(1);
-    }
+    // Same literal hints-row detection as the products importer -- the old
+    // numeric guess silently swallowed a real first row.
+    if (this.isHintRow(dataRows[0])) dataRows = dataRows.slice(1);
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = i + 2;
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [productName, barcodeOrQty, qtyOrAlert, alertStr] = dataRows[i];
 
       // Support two column layouts: [Name, Qty, Alert] or [Name, Barcode, Qty, Alert]
@@ -760,13 +865,13 @@ export class ImportService {
       }
 
       // Detect if 2nd col is barcode or qty
-      const col2IsNum = !isNaN(parseFloat(barcodeOrQty));
+      const col2IsNum = !isNaN(this.num(barcodeOrQty));
       if (col2IsNum) {
-        qty = parseFloat(barcodeOrQty);
-        lowAlert = parseFloat(qtyOrAlert) || 0;
+        qty = this.num(barcodeOrQty);
+        lowAlert = this.num(qtyOrAlert) || 0;
       } else {
-        qty = parseFloat(qtyOrAlert);
-        lowAlert = parseFloat(alertStr) || 0;
+        qty = this.num(qtyOrAlert);
+        lowAlert = this.num(alertStr) || 0;
       }
 
       if (isNaN(qty) || qty < 0) {
@@ -875,7 +980,13 @@ export class ImportService {
       skipped: 0,
       errors: [],
     };
-    const dataRows = rows.slice(1);
+    // Header is not row 0 — the template has a title + instruction block above
+    // it. Without this, "How to use:" is read as an account code and NOTHING
+    // imports (this is the path used for opening balances).
+    const headerIdx = this.findHeaderRow(rows, ['Reference*', 'Reference']);
+    let dataStart   = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (this.isHintRow(rows[dataStart])) dataStart++;
+    const dataRows = rows.slice(dataStart);
 
     // Group rows by Reference
     const groups = new Map<
@@ -894,15 +1005,18 @@ export class ImportService {
     >();
 
     for (let i = 0; i < dataRows.length; i++) {
-      const rowNum = i + 2;
+      const rowNum = dataStart + i + 1;   // real spreadsheet row
+      // Sample lines never reach a group, so an all-sample Reference (the
+      // template's JE-2026-001 / -002) is never posted.
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [ref, date, description, accountCode, debitStr, creditStr, memo] =
         dataRows[i];
       if (!ref?.trim()) {
         result.skipped++;
         continue;
       }
-      const debit = parseFloat(debitStr) || 0;
-      const credit = parseFloat(creditStr) || 0;
+      const debit = this.num(debitStr) || 0;
+      const credit = this.num(creditStr) || 0;
       if (!accountCode?.trim()) {
         result.errors.push({
           row: rowNum,
@@ -987,7 +1101,11 @@ export class ImportService {
                 accountId: l.accountId,
                 debit: l.debit,
                 credit: l.credit,
-                memo: l.memo,
+                // The template's per-line "Memo" column maps to
+                // JournalLine.description — there is no `memo` field on the
+                // model, and passing one made Prisma reject EVERY entry, so
+                // opening-balance imports failed wholesale.
+                description: l.memo,
               })),
             },
           },
@@ -1026,7 +1144,14 @@ export class ImportService {
     }
 
     const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
-    const dataRows = rows.slice(1);
+    // The template ships a title + "How to use:" instruction block ABOVE the
+    // header, so the header is not row 0. Locate it (same helper the other
+    // importers use) or the instruction text is parsed as an account and the
+    // whole import fails. Then skip the column-hints row if present.
+    const headerIdx = this.findHeaderRow(rows, ['Code*', 'Code']);
+    let dataStart   = headerIdx >= 0 ? headerIdx + 1 : 1;
+    if (this.isHintRow(rows[dataStart])) dataStart++;
+    const dataRows = rows.slice(dataStart);
 
     // Build a local code → id map for parent resolution (includes existing + rows above current)
     const existingMap = new Map<string, { id: string; isSystem: boolean }>();
@@ -1037,7 +1162,8 @@ export class ImportService {
     for (const a of existing) existingMap.set(a.code, { id: a.id, isSystem: a.isSystem });
 
     for (let i = 0; i < dataRows.length; i++) {
-      const rowNum = i + 2;
+      const rowNum = dataStart + i + 1;   // real spreadsheet row
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       // Columns: Code, Name, Type, Normal Balance, Description, Parent Code
       const [codeRaw, nameRaw, typeRaw, normalBalanceRaw, descriptionRaw, parentCodeRaw] = dataRows[i];
 
@@ -1151,7 +1277,7 @@ export class ImportService {
           '  4. Normal Balance: DEBIT for ASSET/EXPENSE, CREDIT for LIABILITY/EQUITY/REVENUE.',
           '  5. Parent Code: optional, for nested grouping (e.g. a new bank account under "1020 Cash in Bank").',
           '     Leave blank for top-level accounts. NEVER point a code at itself.',
-          '  6. Sample rows below are EXAMPLES of typical additions. Replace with your own; remove sample rows before importing.',
+          '  6. Sample rows below are EXAMPLES of typical additions. They are ignored on import — add your own rows below them.',
           '  7. Save as .xlsx (or .csv). Upload via Ledger → Chart of Accounts → Import.',
         ],
         columnHints: [
@@ -1364,21 +1490,22 @@ export class ImportService {
     const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
     let dataRows = rows.slice(dataStart);
     if (dataRows.length > 0) {
-      const looksLikeHints = isNaN(parseFloat(dataRows[0][5] ?? '')) && (dataRows[0][0] ?? '').toLowerCase().includes('required');
+      const looksLikeHints = isNaN(this.num(dataRows[0][5] ?? '')) && (dataRows[0][0] ?? '').toLowerCase().includes('required');
       if (looksLikeHints) dataRows = dataRows.slice(1);
     }
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [name, tin, address, email, phone, termsStr, limitStr, notes] = dataRows[i];
       if (!name?.trim()) { result.skipped++; continue; }
 
-      const creditTermDays = termsStr ? parseInt(termsStr, 10) : 0;
+      const creditTermDays = termsStr ? Math.trunc(this.num(termsStr)) : 0;
       if (termsStr && (isNaN(creditTermDays) || creditTermDays < 0)) {
         result.errors.push({ row: rowNum, message: `Invalid credit term days: "${termsStr}"` });
         continue;
       }
-      const creditLimit = limitStr ? parseFloat(limitStr) : null;
+      const creditLimit = limitStr ? this.num(limitStr) : null;
       if (limitStr && (isNaN(creditLimit!) || creditLimit! < 0)) {
         result.errors.push({ row: rowNum, message: `Invalid credit limit: "${limitStr}"` });
         continue;
@@ -1467,12 +1594,13 @@ export class ImportService {
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [name, tin, address, email, phone, atcCode, whtRateStr, notes] = dataRows[i];
       if (!name?.trim()) { result.skipped++; continue; }
 
       let whtRate: number | null = null;
       if (whtRateStr && whtRateStr.trim()) {
-        whtRate = parseFloat(whtRateStr);
+        whtRate = this.num(whtRateStr);
         if (isNaN(whtRate) || whtRate < 0 || whtRate > 1) {
           result.errors.push({ row: rowNum, message: `Invalid WHT rate: "${whtRateStr}". Use decimal (0.05 for 5%).` });
           continue;
@@ -1570,6 +1698,7 @@ export class ImportService {
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [name, unit, costStr, lowStockStr, notes] = dataRows[i];
       void notes; // currently unused — RawMaterial has no notes column
 
@@ -1582,14 +1711,14 @@ export class ImportService {
         result.errors.push({ row: rowNum, message: 'Cost per Unit is required for COGS calculation.' });
         continue;
       }
-      const costPrice = parseFloat(costStr);
+      const costPrice = this.num(costStr);
       if (isNaN(costPrice) || costPrice < 0) {
         result.errors.push({ row: rowNum, message: `Invalid Cost per Unit: "${costStr}".` });
         continue;
       }
       let lowStockAlert: number | null = null;
       if (lowStockStr && lowStockStr.trim()) {
-        lowStockAlert = parseFloat(lowStockStr);
+        lowStockAlert = this.num(lowStockStr);
         if (isNaN(lowStockAlert) || lowStockAlert < 0) {
           result.errors.push({ row: rowNum, message: `Invalid Low Stock Alert: "${lowStockStr}".` });
           continue;
@@ -1738,41 +1867,61 @@ export class ImportService {
       if (looksLikeHints) dataRows = dataRows.slice(1);
     }
 
-    // Track which products have at least one BOM line so we can flip them to
-    // RECIPE_BASED at the end. If a row imports but the product is missing,
-    // we skip the row (no auto-create — products must be loaded first).
-    const productsToFlip = new Set<string>();
+    // Track every product a row touched (keyed by normalised name) so we can
+    // flip ONLY the products whose rows ALL imported cleanly. Flipping a
+    // product with a half-loaded BOM made an incomplete recipe the COGS
+    // authority (Product.costPrice ignored from then on) with no warning.
+    // If a row imports but the product is missing, we skip the row (no
+    // auto-create — products must be loaded first).
+    const touched = new Map<string, { id?: string; name: string; firstRow: number; ok: number; failed: number }>();
+    // Names are matched case-insensitively with whitespace collapsed --
+    // "Whole Milk" vs "whole milk" failing to link is the #1 support call.
+    const normName = (raw: string) => raw.trim().replace(/\s+/g, ' ');
+    const track = (name: string, rowNum: number) => {
+      const key = name.toLowerCase();
+      if (!touched.has(key)) touched.set(key, { name, firstRow: rowNum, ok: 0, failed: 0 });
+      return touched.get(key)!;
+    };
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [productName, ingredientName, qtyStr] = dataRows[i];
 
       if (!productName?.trim() || !ingredientName?.trim()) { result.skipped++; continue; }
+      const prodName = normName(productName);
+      const ingName  = normName(ingredientName);
+      const tracked  = track(prodName, rowNum);
       if (qtyStr == null || qtyStr.trim() === '') {
         result.errors.push({ row: rowNum, message: 'Quantity is required.' });
+        tracked.failed++;
         continue;
       }
-      const quantity = parseFloat(qtyStr);
+      const quantity = this.num(qtyStr);
       if (isNaN(quantity) || quantity <= 0) {
         result.errors.push({ row: rowNum, message: `Invalid Quantity "${qtyStr}". Must be > 0.` });
+        tracked.failed++;
         continue;
       }
 
       try {
         const product = await this.prisma.product.findFirst({
-          where:  { tenantId, name: productName.trim() },
+          where:  { tenantId, name: { equals: prodName, mode: 'insensitive' } },
           select: { id: true },
         });
         if (!product) {
           result.errors.push({ row: rowNum, message: `Product "${productName}" not found. Run the Products import first.` });
+          tracked.failed++;
           continue;
         }
+        tracked.id = product.id;
         const rm = await this.prisma.rawMaterial.findFirst({
-          where:  { tenantId, name: ingredientName.trim() },
+          where:  { tenantId, name: { equals: ingName, mode: 'insensitive' } },
           select: { id: true },
         });
         if (!rm) {
           result.errors.push({ row: rowNum, message: `Ingredient "${ingredientName}" not found. Run the Ingredients import first.` });
+          tracked.failed++;
           continue;
         }
 
@@ -1797,16 +1946,31 @@ export class ImportService {
           });
           result.imported++;
         }
-        productsToFlip.add(product.id);
+        tracked.ok++;
       } catch (err: any) {
         result.errors.push({ row: rowNum, message: err.message ?? 'Unknown error' });
+        tracked.failed++;
       }
     }
 
-    // Flip every product that received a BOM line to RECIPE_BASED. Idempotent.
-    if (productsToFlip.size > 0) {
+    // Flip to RECIPE_BASED ONLY the products whose rows all imported cleanly.
+    // A product with any failed row keeps its current mode and gets a note so
+    // the owner knows its recipe is incomplete and not yet the COGS source.
+    const productsToFlip: string[] = [];
+    for (const t of touched.values()) {
+      if (!t.id || t.ok === 0) continue;
+      if (t.failed > 0) {
+        result.errors.push({
+          row: t.firstRow,
+          message: `Product "${t.name}": partially imported — not activated (${t.failed} of ${t.ok + t.failed} recipe rows failed). Fix those rows and re-import to switch it to recipe-based COGS.`,
+        });
+        continue;
+      }
+      productsToFlip.push(t.id);
+    }
+    if (productsToFlip.length > 0) {
       await this.prisma.product.updateMany({
-        where: { id: { in: Array.from(productsToFlip) }, tenantId, inventoryMode: 'UNIT_BASED' },
+        where: { id: { in: productsToFlip }, tenantId, inventoryMode: 'UNIT_BASED' },
         data:  { inventoryMode: 'RECIPE_BASED' },
       });
     }
@@ -1963,6 +2127,50 @@ export class ImportService {
     );
   }
 
+  /**
+   * Parse the Date* cell of a stock-receipt row into a noon-PH-time Date.
+   *
+   * Accepts what a PH owner actually produces: a real Excel date (already
+   * flattened to YYYY-MM-DD by cellToString), typed 'YYYY-MM-DD' (or
+   * YYYY/MM/DD), and typed 'DD/MM/YYYY' (or DD-MM-YYYY / DD.MM.YYYY), read
+   * day first. A value that is ALSO a valid month-first date with a different
+   * meaning (05/06/2026: 5 June or 6 May?) is REJECTED, not guessed: Windows
+   * en-PH / fil-PH and PH Excel default to M/d/yyyy, so a silently day-first
+   * read would back-date real receipts and GL lines with no error shown.
+   * The error text says which way round we read an unambiguous value when
+   * that reading is invalid. Returns an error string instead of throwing: a
+   * bad date is a row-level problem, never a 500.
+   */
+  private parseReceiptDate(raw: string): { date: Date } | { error: string } {
+    const t = (raw ?? '').trim();
+    if (!t) return { error: 'Date is required.' };
+    let y: number, m: number, d: number;
+    let readAs = '';
+    let match: RegExpMatchArray | null;
+    if ((match = t.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})(?:[T\s].*)?$/))) {
+      y = +match[1]; m = +match[2]; d = +match[3];
+    } else if ((match = t.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/))) {
+      d = +match[1]; m = +match[2]; y = +match[3];
+      readAs = ' (read as DD/MM/YYYY, day first)';
+      if (d !== m && d <= 12 && m <= 12) {
+        const iso = (mo: number, da: number) => `${y}-${String(mo).padStart(2, '0')}-${String(da).padStart(2, '0')}`;
+        return {
+          error: `Ambiguous date: "${raw}" could be ${iso(m, d)} (day first) or ${iso(d, m)} (month first). Type it as YYYY-MM-DD.`,
+        };
+      }
+    } else {
+      return { error: `Invalid date: "${raw}". Use YYYY-MM-DD or DD/MM/YYYY (day first).` };
+    }
+    const mm = String(m).padStart(2, '0');
+    const dd = String(d).padStart(2, '0');
+    const date = new Date(`${y}-${mm}-${dd}T12:00:00+08:00`);
+    // Round-trip check rejects 31/02 and 13/25 style values (JS would roll over).
+    if (isNaN(date.getTime()) || date.getUTCFullYear() !== y || date.getUTCMonth() + 1 !== m || date.getUTCDate() !== d) {
+      return { error: `Invalid date: "${raw}"${readAs}. Use YYYY-MM-DD or DD/MM/YYYY (day first).` };
+    }
+    return { date };
+  }
+
   async importStockReceipts(file: Express.Multer.File, tenantId: string, userId: string): Promise<ImportResult> {
     const rows = await this.parseFile(file);
     const headerIdx = this.findHeaderRow(rows, ['Date*', 'Date* (YYYY-MM-DD)', 'Date']);
@@ -1989,16 +2197,22 @@ export class ImportService {
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
-      const [dateStr, name, qtyStr, costStr, branchName, paymentMethodRaw, vendorName, refNumber] = dataRows[i];
-      if (!name?.trim()) { result.skipped++; continue; }
+      if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
+      // Every cell is guarded with (x ?? '') -- a short row (blank trailing
+      // cells dropped by the parser) used to make .trim() throw on undefined,
+      // which 500'd the WHOLE import instead of reporting one bad row.
+      const [dateStr, name, qtyStr, costStr, branchName, paymentMethodRaw, vendorName, refNumber] =
+        Array.from({ length: 8 }, (_, c) => (dataRows[i][c] ?? '').trim());
+      if (!name) { result.skipped++; continue; }
 
-      const date = new Date(`${dateStr.trim()}T12:00:00+08:00`);
-      if (isNaN(date.getTime())) {
-        result.errors.push({ row: rowNum, message: `Invalid date: "${dateStr}".` });
+      const parsedDate = this.parseReceiptDate(dateStr);
+      if ('error' in parsedDate) {
+        result.errors.push({ row: rowNum, message: parsedDate.error });
         continue;
       }
-      const qty = parseFloat(qtyStr);
-      const cost = parseFloat(costStr);
+      const { date } = parsedDate;
+      const qty = this.num(qtyStr);
+      const cost = this.num(costStr);
       if (isNaN(qty) || qty <= 0) {
         result.errors.push({ row: rowNum, message: `Invalid quantity: "${qtyStr}".` });
         continue;

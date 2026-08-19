@@ -143,10 +143,21 @@ export class TaxCalculatorService {
    */
   validateTin(tin: string): string {
     const normalised = tin.trim().toUpperCase();
-    const TIN_REGEX  = /^\d{3}-\d{3}-\d{3}-\d{5}$/;
+    // A PH TIN is 9 digits plus a branch code, and BIR writes that branch code
+    // BOTH ways: 3 digits on most Certificates of Registration (000-000-000-000,
+    // head office = 000) and 5 digits in newer/eFPS contexts
+    // (000-000-000-00000). This used to accept the 5-digit form ONLY, which
+    // rejected the format actually printed on most CORs — including HNS Corp
+    // PH's own (010-986-552-000).
+    //
+    // Deliberately NOT normalised to one length. The TIN is printed on
+    // receipts and BIR forms, and it must read exactly as it does on the
+    // taxpayer's COR; silently padding 000 to 00000 would put a number on a
+    // receipt that does not match the certificate behind it.
+    const TIN_REGEX = /^\d{3}-\d{3}-\d{3}-(\d{3}|\d{5})$/;
     if (!TIN_REGEX.test(normalised)) {
       throw new BadRequestException(
-        `Invalid TIN format: "${normalised}". Expected format: 000-000-000-00000`,
+        `Invalid TIN format: "${normalised}". Expected 000-000-000-000 or 000-000-000-00000.`,
       );
     }
     return normalised;

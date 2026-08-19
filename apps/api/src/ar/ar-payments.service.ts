@@ -208,6 +208,11 @@ export class ARPaymentsService {
           ],
         },
         userId,
+        // Source 'AR', not the 'MANUAL' default — the name-based fallback in
+        // findArReceivablesAccount can resolve to 1030 (postingControl
+        // AR_ONLY, seeded in accounts.service DEFAULT_ACCOUNTS), which
+        // rejects MANUAL-sourced entries.
+        'AR',
       );
 
       // Link payment to JE

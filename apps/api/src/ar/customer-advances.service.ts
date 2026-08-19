@@ -49,17 +49,24 @@ export class CustomerAdvancesService {
   // ── Account discovery ─────────────────────────────────────────────────────
 
   /**
-   * Find the tenant's Customer Deposits Liability account. Tries seeded COA
-   * codes 2031 then 2030. Throws a friendly error if neither exists.
+   * Find the tenant's Customer Deposits Liability account: seeded code 2074
+   * "Customer Deposits & Advances".
+   *
+   * This USED TO probe codes 2031 then 2030 — both of which the seeded chart
+   * defines as SSS payroll liabilities (2030 SSS Contributions Payable, 2031
+   * SSS Salary Loan Payable). Both are seeded and active for every tenant, so
+   * the probe always matched 2031 and every customer advance was credited to
+   * an SSS payroll account, and the name-based fallback below never ran.
    */
   private async getCustomerDepositsLiabilityAccountId(tenantId: string): Promise<string> {
-    for (const code of ['2031', '2030']) {
-      const a = await this.prisma.account.findFirst({
-        where:  { tenantId, code, isActive: true },
-        select: { id: true },
-      });
-      if (a) return a.id;
-    }
+    const seeded = await this.prisma.account.findFirst({
+      where:  { tenantId, code: '2074', isActive: true },
+      select: { id: true },
+    });
+    if (seeded) return seeded.id;
+
+    // Fallback by name for tenants on an older/customised chart that has a
+    // customer-deposits account under a different code.
     const fallback = await this.prisma.account.findFirst({
       where: {
         tenantId, type: 'LIABILITY', isActive: true,
@@ -74,7 +81,8 @@ export class CustomerAdvancesService {
     if (fallback) return fallback.id;
     throw new BadRequestException(
       'Customer Deposits Liability account not found in your Chart of Accounts. ' +
-      'Create an account with code 2031 (or 2030) under Ledger → Chart of Accounts.',
+      'Create an account with code 2074 (Customer Deposits & Advances) under ' +
+      'Ledger → Chart of Accounts.',
     );
   }
 

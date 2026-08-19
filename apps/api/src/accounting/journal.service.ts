@@ -1,5 +1,5 @@
 import {
-  Injectable, NotFoundException, BadRequestException, ForbiddenException,
+  Injectable, Logger, NotFoundException, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountsService } from './accounts.service';
@@ -9,6 +9,33 @@ import { AuditService } from '../audit/audit.service';
 import { Prisma, JournalSource } from '@prisma/client';
 
 type LineInput = { accountId: string; debit?: number; credit?: number; description?: string };
+
+/** Round to 2 decimals (peso centavos), half-away-from-zero. */
+function round2c(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * The Manila (UTC+8, no DST) calendar date of an instant, as YYYY-MM-DD.
+ *
+ * The GL business date MUST agree with how the Z-Read buckets the day, and the
+ * Z-Read builds its window at +08:00 (reports.service.ts:325-326). Deriving the
+ * JE date from `.toISOString()` used UTC instead, so any sale between PH
+ * midnight and 08:00 landed on the previous calendar day in the GL while the
+ * Z-Read counted it on the current one — and at a month boundary the JE could
+ * post into an already-closed period, fail, and (because the cron only retries
+ * PENDING, not FAILED) never post at all. A POS-only tenant is shut in that
+ * window and never notices; a 24/7 booking channel sits in it every night.
+ *
+ * Same shift-and-read-UTC-fields trick as numbering.service's toManila().
+ */
+export function phDateString(d: Date): string {
+  const ph = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  const y = ph.getUTCFullYear();
+  const m = String(ph.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(ph.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 export interface CreateJournalDto {
   date:         string;           // Document Date — when the economic event occurred
@@ -30,6 +57,8 @@ export class JournalService {
     // Real DI in AccountingModule (which imports AuditModule) always supplies it.
     private audit?: AuditService,
   ) {}
+
+  private readonly logger = new Logger(JournalService.name);
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -71,7 +100,11 @@ export class JournalService {
     for (const acct of accounts) {
       const ctrl = acct.postingControl;
       if (ctrl === 'OPEN') continue;
-      if (ctrl === 'SYSTEM_ONLY' && source === 'SYSTEM') continue;
+      // SYSTEM_ONLY blocks *manually-entered* JEs; any service-layer source
+      // (SYSTEM cron, AP/AR sub-ledgers, PAYROLL) is first-party code and may
+      // post here — e.g. an AR collection tendered via GCash debits 1031
+      // Digital Wallet Receivable, exactly like the SALE handler does.
+      if (ctrl === 'SYSTEM_ONLY' && source !== 'MANUAL') continue;
       if (ctrl === 'AP_ONLY'     && source === 'AP')     continue;
       if (ctrl === 'AR_ONLY'     && source === 'AR')     continue;
 
@@ -427,8 +460,11 @@ export class JournalService {
       (typeof payload['receivedAt']  === 'string' && payload['receivedAt']) ||
       (typeof payload['completedAt'] === 'string' && payload['completedAt']) ||
       undefined;
-    const date = (businessDate ? new Date(businessDate) : (event.createdAt ?? new Date()))
-      .toISOString().split('T')[0];
+    // Manila calendar date, NOT UTC — see phDateString. This is what makes the
+    // GL entry fall on the same business day the Z-Read counts it on.
+    const date = phDateString(
+      businessDate ? new Date(businessDate) : (event.createdAt ?? new Date()),
+    );
 
     try {
       if (event.type === 'SALE') {
@@ -438,20 +474,103 @@ export class JournalService {
 
         description = `Sale ${payload['orderNumber'] ?? event.id}`;
 
-        const digitalTotal   = payments.filter(p => p.method !== 'CASH').reduce((s, p) => s + Number(p.amount), 0);
-        const digitalPortion = Math.min(digitalTotal, total);
-        const cashPortion    = Math.round((total - digitalPortion) * 100) / 100;
+        // #43 — CHARGE (credit) sales carry no tender at the point of sale:
+        // the SALE debits 1030 Accounts Receivable for the full total and the
+        // AR collection later relieves it (DR cash|wallet / CR 1030). Before
+        // this branch, `payments` being empty made cashPortion = total, so a
+        // CHARGE sale debited 1010 for cash that never entered the drawer AND
+        // the collection debited 1010 again — double-counting cash. A
+        // missing/undefined invoiceType MUST default to 'CASH_SALE' so
+        // already-queued legacy events post exactly as before.
+        const invoiceType = String(payload['invoiceType'] ?? 'CASH_SALE');
 
-        if (cashPortion > 0)    lines.push({ accountId: await getAccount('1010'), debit: cashPortion,    description: 'Cash sales' });
-        if (digitalPortion > 0) lines.push({ accountId: await getAccount('1031'), debit: digitalPortion, description: 'Digital wallet sales' });
+        if (invoiceType === 'CHARGE') {
+          if (total > 0) {
+            lines.push({ accountId: await getAccount('1030'), debit: total, description: 'Credit sale — receivable' });
+          }
+        } else {
+          const digitalTotal   = payments.filter(p => p.method !== 'CASH').reduce((s, p) => s + Number(p.amount), 0);
+          const digitalPortion = Math.min(digitalTotal, total);
+          const cashPortion    = Math.round((total - digitalPortion) * 100) / 100;
 
-        lines.push({ accountId: await getAccount('4010'), credit: total - vatAmt, description: 'Sales revenue' });
-        lines.push({ accountId: await getAccount('2020'), credit: vatAmt,         description: 'Output VAT 12%' });
+          if (cashPortion > 0)    lines.push({ accountId: await getAccount('1010'), debit: cashPortion,    description: 'Cash sales' });
+          if (digitalPortion > 0) lines.push({ accountId: await getAccount('1031'), debit: digitalPortion, description: 'Digital wallet sales' });
+        }
+
+        // Revenue, SPLIT BY ACCOUNT. Each sale line carries a revenueAccountCode
+        // resolved from its product's category (null → 4010, the POS default),
+        // so Court Rental / Open Play / Tournament / Equipment / Retail each
+        // credit their own income account instead of one merged "sales" bucket.
+        //
+        // The credits must sum EXACTLY to (total − vatAmt) so the entry stays
+        // balanced against the cash/VAT lines. Each line's weight is its
+        // net-of-VAT amount; the group totals are distributed proportionally
+        // over (total − vatAmt) and the last group absorbs the rounding
+        // remainder — which also correctly spreads an order-level discount.
+        const netTotal = round2c(total - vatAmt);
+        const saleLines = (payload['lines'] as Array<Record<string, unknown>>) ?? [];
+        const weightByCode = new Map<string, number>();
+        for (const l of saleLines) {
+          const code = (typeof l['revenueAccountCode'] === 'string' && l['revenueAccountCode'])
+            ? String(l['revenueAccountCode'])
+            : '4010';
+          const lineNet = Number(l['lineTotal'] ?? 0) - Number(l['vatAmount'] ?? 0);
+          weightByCode.set(code, (weightByCode.get(code) ?? 0) + lineNet);
+        }
+        const totalWeight = [...weightByCode.values()].reduce((s, w) => s + w, 0);
+
+        if (weightByCode.size === 0 || totalWeight <= 0) {
+          // No line-level revenue info (legacy events) or a fully-comped order —
+          // fall back to the original single 4010 credit.
+          if (netTotal !== 0) {
+            lines.push({ accountId: await getAccount('4010'), credit: netTotal, description: 'Sales revenue' });
+          }
+        } else {
+          const codes = [...weightByCode.keys()];
+          let assigned = 0;
+          for (let i = 0; i < codes.length; i++) {
+            const code = codes[i];
+            const credit = i === codes.length - 1
+              ? round2c(netTotal - assigned)                                   // last group absorbs rounding
+              : round2c(netTotal * (weightByCode.get(code)! / totalWeight));
+            assigned = round2c(assigned + credit);
+            if (credit !== 0) {
+              lines.push({ accountId: await getAccount(code), credit, description: `Sales revenue (${code})` });
+            }
+          }
+        }
+
+        // Only VAT-registered sales carry an Output VAT line. Pushing the
+        // credit unconditionally posted a phantom ₱0.00 "Output VAT 12%" line
+        // on every non-VAT sale (a 3-line JE) and forced account 2020 to
+        // exist for tenants that never owe output VAT. Matches the
+        // PROGRESS_BILLING guard below.
+        if (vatAmt > 0) {
+          lines.push({ accountId: await getAccount('2020'), credit: vatAmt,       description: 'Output VAT 12%' });
+        }
 
       } else if (event.type === 'COGS') {
         const cogsLines = (payload['lines'] as Array<{ totalCost: number }>) ?? [];
         const totalCost = cogsLines.reduce((s, l) => s + Number(l.totalCost ?? 0), 0);
-        if (totalCost === 0) return { skipped: true };
+        // A zero-cost COGS event is legitimately done — a service line (a court
+        // hour, a wedding site) has no inventory to relieve. It MUST be marked
+        // SYNCED before returning, exactly like every other skip path below
+        // (see the INVENTORY_ADJUSTMENT skip at the totalValue===0 branch).
+        //
+        // This line used to `return { skipped: true }` WITHOUT the status write.
+        // The event stayed PENDING forever, and processAllPending pages by
+        // take:100 and only breaks when a page is short — so once a tenant
+        // accumulated 100 permanently-skipped events the while(true) refetched
+        // the same 100 rows endlessly and NO tenant's books posted again. A
+        // service-heavy tenant (a court venue is ~100% zero-COGS) reached that
+        // threshold in days.
+        if (totalCost === 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data:  { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
 
         description = `COGS ${payload['orderId'] ?? event.id}`;
         lines.push({ accountId: await getAccount('5010'), debit: totalCost,  description: 'Cost of goods sold' });
@@ -537,9 +656,25 @@ export class JournalService {
           } else {
             const total  = Number(payload['totalAmount'] ?? 0);
             const vatAmt = Number(payload['vatAmount']   ?? 0);
+            // #43 — a CHARGE order's SALE debited 1030 Accounts Receivable,
+            // so its void must credit 1030; crediting 1010 would fabricate
+            // cash leaving a drawer it never entered. Missing/undefined
+            // invoiceType defaults to 'CASH_SALE' (legacy events post as
+            // before); the VOID payload is preferred, the original SALE
+            // event's payload is the fallback when the void predates the
+            // stamp.
+            const origPayload = (origSale?.payload as Record<string, unknown>) ?? {};
+            const invoiceType = String(payload['invoiceType'] ?? origPayload['invoiceType'] ?? 'CASH_SALE');
             lines.push({ accountId: await getAccount('4010'), debit:  total - vatAmt, description: 'Void - reverse revenue' });
-            lines.push({ accountId: await getAccount('2020'), debit:  vatAmt,         description: 'Void - reverse VAT' });
-            lines.push({ accountId: await getAccount('1010'), credit: total,           description: 'Void - reverse cash' });
+            // Same phantom-zero-VAT guard as the SALE handler above.
+            if (vatAmt > 0) {
+              lines.push({ accountId: await getAccount('2020'), debit:  vatAmt,       description: 'Void - reverse VAT' });
+            }
+            if (invoiceType === 'CHARGE') {
+              lines.push({ accountId: await getAccount('1030'), credit: total,        description: 'Void - reverse receivable' });
+            } else {
+              lines.push({ accountId: await getAccount('1010'), credit: total,        description: 'Void - reverse cash' });
+            }
           }
 
           // Step 2: Reverse the COGS for items physically restocked.
@@ -690,6 +825,43 @@ export class JournalService {
           lines.push({ accountId: await getAccount('6140'), debit:  absVariance, description: 'Cash drawer shortage' });
           lines.push({ accountId: await getAccount('1010'), credit: absVariance, description: 'Missing cash from till' });
         }
+
+      } else if (event.type === 'SETTLEMENT') {
+        // A digital-wallet settlement batch cleared into the bank. Every
+        // non-cash payment (GCash, Maya, QR Ph) is debited to 1031 Digital
+        // Wallet Receivable at sale time; this is where that receivable is
+        // relieved once the money actually lands.
+        //
+        //   DR 1020 Cash in Bank
+        //   CR 1031 Digital Wallet Receivable
+        //
+        // Without this, 1031 grew forever and could never be reconciled to the
+        // bank — a nuisance for a cash-heavy shop, but for a venue paid almost
+        // entirely by e-wallet it made the balance sheet visibly wrong within a
+        // month. Only cleanly-settled batches emit this event (see
+        // SettlementService.confirmSettlement); a batch whose bank credit
+        // differs from expected by more than a centavo is flagged DISPUTED and
+        // is resolved by hand, so any merchant-discount-rate fee shows up as a
+        // dispute rather than being silently absorbed here.
+        const amount    = Number(payload['expectedAmount'] ?? payload['amount'] ?? 0);
+        const method    = payload['method'] ? String(payload['method']) : 'DIGITAL';
+        const batchId   = payload['batchId'] ? String(payload['batchId']) : null;
+        const bankRef   = payload['bankReference'] ? String(payload['bankReference']) : null;
+
+        if (amount <= 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data: { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+
+        const batchSuffix = batchId ? ` (batch ${batchId.slice(-6)})` : '';
+        const refSuffix   = bankRef ? ` ref ${bankRef}` : '';
+        description = `${method} settlement to bank${batchSuffix}${refSuffix}`;
+
+        lines.push({ accountId: await getAccount('1020'), debit:  amount, description: `${method} settled to bank` });
+        lines.push({ accountId: await getAccount('1031'), credit: amount, description: `Clear ${method} receivable` });
 
       } else if (event.type === 'TRIP_CASH_ADVANCE') {
         // Sprint 13 — Trucking. Cash advance issued to driver at dispatch.
@@ -1012,15 +1184,40 @@ export class JournalService {
       });
       if (pending.length === 0) break;
 
+      // Backstop against a non-terminating loop. This method pages by "fetch
+      // the first 100 still-PENDING events" with no cursor, so it relies on
+      // every processed event LEAVING the PENDING set (SYNCED or FAILED). If a
+      // handler ever again returns without changing status — the exact bug that
+      // hung this loop before — a full page would refetch the same rows
+      // forever. Track how many events actually moved off PENDING this pass and
+      // stop if a full page changed nothing, rather than spinning.
+      let advancedThisPass = 0;
+
       for (const evt of pending) {
         try {
           const result = await this.processEvent(tenantId, evt.id);
           if (result.skipped) skipped++; else synced++;
         } catch { failed++; }
         processed++;
+
+        const after = await this.prisma.accountingEvent.findUnique({
+          where:  { id: evt.id },
+          select: { status: true },
+        });
+        if (after?.status !== 'PENDING') advancedThisPass++;
       }
 
       if (pending.length < BATCH) break;
+      if (advancedThisPass === 0) {
+        // A full page of PENDING events, none of which left PENDING. Something
+        // is wedged; refuse to spin. Surface it rather than loop silently.
+        this.logger.error(
+          `[journal] processAllPending stalled for tenant ${tenantId}: a full ` +
+          `page of ${BATCH} events made no progress. Stopping to avoid an ` +
+          `infinite loop. Investigate stuck AccountingEvent rows.`,
+        );
+        break;
+      }
     }
 
     return { processed, synced, failed, skipped };

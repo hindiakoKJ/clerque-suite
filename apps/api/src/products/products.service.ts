@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, DrugClass } from '@prisma/client';
-import { hasPermission, PLAN_FEATURES, type PlanCode } from '@repo/shared-types';
+import { hasPermission, planFeaturesFor } from '@repo/shared-types';
 
 /**
  * Sprint 19 — Single source of truth for the Product.isRxRequired and
@@ -224,7 +224,7 @@ export class ProductsService {
         where:  { id: tenantId },
         select: { planCode: true },
       });
-      const maxRecipes = PLAN_FEATURES[tenant?.planCode as PlanCode]?.maxRecipes ?? -1;
+      const maxRecipes = planFeaturesFor(tenant?.planCode).maxRecipes;
       if (maxRecipes >= 0) {
         const existingRecipes = await this.prisma.product.count({
           where: { tenantId, inventoryMode: 'RECIPE_BASED', isActive: true },
@@ -368,7 +368,7 @@ export class ProductsService {
         where:  { id: tenantId },
         select: { planCode: true },
       });
-      const maxRecipes = PLAN_FEATURES[tenant?.planCode as PlanCode]?.maxRecipes ?? -1;
+      const maxRecipes = planFeaturesFor(tenant?.planCode).maxRecipes;
       if (maxRecipes >= 0) {
         const existingRecipes = await this.prisma.product.count({
           where: { tenantId, inventoryMode: 'RECIPE_BASED', isActive: true },

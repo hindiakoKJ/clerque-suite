@@ -163,11 +163,11 @@ export class UsersService {
       });
       if (tenant) {
         // Lazy-import to avoid pulling shared-types into the hot path of every test.
-        const { PLAN_CAPS, effectiveSeatCeiling } = await import('@repo/shared-types');
-        // Fail CLOSED on a missing plan code — default to the smallest plan so a
-        // null/blank planCode can never grant a larger seat ceiling than paid for.
-        // (Matches plan-feature.guard + tier-quota.guard, which also default SOLO_LITE.)
-        const planCode = (tenant.planCode || 'SOLO_LITE') as keyof typeof PLAN_CAPS;
+        const { effectiveSeatCeiling, normalizePlanCode } = await import('@repo/shared-types');
+        // Any stored code resolves onto the package. This used to fall back to
+        // the smallest plan, which silently handed a legacy tenant a 1-seat
+        // ceiling instead of the one they actually had.
+        const planCode = normalizePlanCode(tenant.planCode);
         const ceiling  = effectiveSeatCeiling(planCode, tenant.staffSeatAddons || 0);
 
         const currentHeadcount = await this.prisma.user.count({
@@ -612,9 +612,9 @@ export class UsersService {
         where:  { id: tenantId },
         select: { planCode: true },
       });
-      const { PLAN_FEATURES } = await import('@repo/shared-types');
-      const planCode = (tenant?.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_FEATURES;
-      const cap = PLAN_FEATURES[planCode]?.salesLeadDelegation ?? 0;
+      const { planFeaturesFor, normalizePlanCode } = await import('@repo/shared-types');
+      const planCode = normalizePlanCode(tenant?.planCode);
+      const cap = planFeaturesFor(planCode).salesLeadDelegation;
 
       if (cap === 0) {
         throw new ForbiddenException({

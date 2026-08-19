@@ -29,6 +29,7 @@ import { OrdersService }    from '../orders/orders.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService }   from '../loyalty/loyalty.service';
 import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
+import { OrderQuoteService } from '../orders/order-quote.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ShiftsService }    from '../shifts/shifts.service';
 
@@ -225,6 +226,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
     const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
     const loyaltyMock   = { accrueStampsForOrder: jest.fn().mockResolvedValue(undefined) } as any;
     const voidApprovalsMock = { hasApprovedFor: jest.fn().mockResolvedValue(true) } as any;
+    const quoteMock = { quote: jest.fn() } as any;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -235,6 +237,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
         { provide: NumberingService,         useValue: numberingMock },
         { provide: LoyaltyService,           useValue: loyaltyMock   },
         { provide: VoidApprovalsService,     useValue: voidApprovalsMock },
+        { provide: OrderQuoteService,        useValue: quoteMock },
       ],
     }).compile();
 
@@ -762,6 +765,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
     const numberingMock = { next: jest.fn().mockResolvedValue('ORD-2026-000001') } as any;
     const loyaltyMock   = { accrueStampsForOrder: jest.fn().mockResolvedValue(undefined) } as any;
     const voidApprovalsMock = { hasApprovedFor: jest.fn().mockResolvedValue(true) } as any;
+    const quoteMock = { quote: jest.fn() } as any;
     const module = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -772,6 +776,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
         { provide: NumberingService,         useValue: numberingMock     },
         { provide: LoyaltyService,           useValue: loyaltyMock       },
         { provide: VoidApprovalsService,     useValue: voidApprovalsMock },
+        { provide: OrderQuoteService,        useValue: quoteMock },
       ],
     }).compile();
     ordersService = module.get(OrdersService);

@@ -159,7 +159,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
                   endpoint,
                   statusCode,
                   responseBody: json,
-                  performedBy:  user.sub ?? null,
+                  // Empty for a service (API-key) principal — there is no
+                  // user behind it, so record null rather than "".
+                  performedBy:  user.sub || null,
                   expiresAt:    new Date(Date.now() + TTL_MS),
                 },
               });

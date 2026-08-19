@@ -54,7 +54,7 @@ async function runSeed(logger: Logger) {
       create: {
         name: 'Demo Business', slug: SLUG,
         businessType: 'RETAIL', status: 'ACTIVE',
-        tier: 'TIER_1', branchQuota: 3, cashierSeatQuota: 5,
+        branchQuota: 3, cashierSeatQuota: 5,
         aiQuotaOverride: 9999,
         isBirRegistered: true,
         isVatRegistered: true,

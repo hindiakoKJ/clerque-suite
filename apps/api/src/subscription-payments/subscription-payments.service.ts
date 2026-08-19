@@ -25,7 +25,7 @@ import {
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { PLAN_CAPS, planLabel, type PlanCode } from '@repo/shared-types';
+import { planCapsFor, planLabel, type PlanCode } from '@repo/shared-types';
 
 const REFERENCE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No 0/O/1/I to avoid confusion
 const REFERENCE_CODE_LENGTH = 5;
@@ -114,7 +114,7 @@ export class SubscriptionPaymentsService {
    * create duplicates.
    */
   async createPendingPayment(input: CreatePendingPaymentInput) {
-    const cap = PLAN_CAPS[input.planCode];
+    const cap = planCapsFor(input.planCode);
     if (!cap) {
       throw new BadRequestException(`Unknown plan code: ${input.planCode}`);
     }

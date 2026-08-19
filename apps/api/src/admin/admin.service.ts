@@ -12,7 +12,7 @@ import {
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEFAULT_APP_ACCESS } from '@repo/shared-types';
+import { DEFAULT_APP_ACCESS, DEFAULT_PLAN_CODE } from '@repo/shared-types';
 import { DEMO_SCENARIOS, ScenarioKey, allProducts } from './demo-scenarios';
 import { COFFEE_SHOP_INGREDIENTS } from './coffee-shop-ingredients';
 import { COFFEE_SHOP_CATEGORIES } from './coffee-shop-categories';
@@ -31,7 +31,6 @@ export interface CreateTenantDto {
     | 'RETAIL' | 'SERVICE' | 'LAUNDRY' | 'MANUFACTURING'
     // Sprint 12 — six-engine vertical structure
     | 'PHARMACY' | 'TRUCKING' | 'CONSTRUCTION';
-  tier:          'TIER_1' | 'TIER_2' | 'TIER_3' | 'TIER_4' | 'TIER_5' | 'TIER_6';
   ownerName:     string;
   ownerEmail:    string;
   contactEmail?: string;
@@ -559,40 +558,27 @@ export class AdminService {
     // Sprint 17 — apply plan + module flags atomically within tenant
     // creation. Avoids the half-configured-tenant window where the
     // separate PATCH /plan call could fail after the tenant existed.
-    const { PLAN_CAPS } = await import('@repo/shared-types');
-    const planCode = (dto.planCode ?? 'SUITE_T2');
-    const cap      = PLAN_CAPS[planCode as keyof typeof PLAN_CAPS];
+    const { PLAN_CAPS, planCapsFor, normalizePlanCode } = await import('@repo/shared-types');
+    const planCode = normalizePlanCode(dto.planCode);
+    const cap      = planCapsFor(planCode);
     if (!cap) {
       throw new BadRequestException(`Unknown plan code: ${planCode}.`);
     }
-    // Resolve module flags consistent with plan rules:
-    //   - SUITE: always forces all 3 modules on
-    //   - STD (Single Module, Sprint 21): respects dto.module* flags, but
-    //     `validateSoloModuleCombo` will reject any combo that doesn't have
-    //     exactly one module enabled. Default to POS-only if caller passed
-    //     nothing, for backward compat with the prior POS-only behaviour.
-    //   - PAIR: respects dto.module* booleans (2 of 3 must be on)
-    const isSuite     = cap.moduleCount === 3;
-    const isSolo      = planCode.startsWith('SOLO_');
-    const isSoloBooks = planCode === 'SOLO_BOOKS';
-    // Module defaults when the caller omits flags:
-    //   - SUITE: all 3 forced on.
-    //   - SOLO_BOOKS: POS + Ledger (the only Solo plan that bundles ledger).
-    //   - Other SOLO (Solo/Lite/Standard): POS-only — Ledger/Payroll off, else
-    //     validateSoloModuleCombo would reject the auto-defaulted combo.
-    //   - PAIR: POS + Ledger by default (a valid 2-module combo); caller can override.
+    // The package no longer dictates the module combination — the caller
+    // picks it. Defaults are POS + Ledger (a shop that sells and keeps its
+    // books); Payroll stays off until switched on deliberately, since it
+    // needs its own setup before it is any use.
     const planMods = {
-      modulePos:     isSuite ? true : (dto.modulePos     ?? true),
-      moduleLedger:  isSuite ? true : (dto.moduleLedger  ?? (isSolo && !isSoloBooks ? false : true)),
-      modulePayroll: isSuite ? true : (dto.modulePayroll ?? false),
+      modulePos:     dto.modulePos     ?? true,
+      moduleLedger:  dto.moduleLedger  ?? true,
+      modulePayroll: dto.modulePayroll ?? false,
     };
-    // Validate STD plans have exactly one module enabled.
-    const { validateSoloModuleCombo } = await import('@repo/shared-types');
-    const soloErr = validateSoloModuleCombo(
-      planCode as Parameters<typeof validateSoloModuleCombo>[0],
+    const { validateModuleCombo } = await import('@repo/shared-types');
+    const comboErr = validateModuleCombo(
+      planCode as Parameters<typeof validateModuleCombo>[0],
       planMods.modulePos, planMods.moduleLedger, planMods.modulePayroll,
     );
-    if (soloErr) throw new BadRequestException(soloErr);
+    if (comboErr) throw new BadRequestException(comboErr);
     const staffSeatAddons = Math.min(dto.staffSeatAddons ?? 0, cap.maxAddons);
 
     const tenant = await this.prisma.$transaction(async (tx) => {
@@ -603,8 +589,6 @@ export class AdminService {
           slug,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           businessType: dto.businessType as any,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tier:         dto.tier as any,
           contactEmail: dto.contactEmail?.trim() ?? dto.ownerEmail.trim(),
           contactPhone: dto.contactPhone?.trim() ?? null,
           status:       'ACTIVE',
@@ -665,7 +649,7 @@ export class AdminService {
       userId:     tenant.user.id,
       userEmail:  dto.ownerEmail,
       action:     'TENANT_CREATED',
-      detail:     { ownerName: dto.ownerName, tier: dto.tier, businessType: dto.businessType, coaTemplate },
+      detail:     { ownerName: dto.ownerName, planCode, businessType: dto.businessType, coaTemplate },
     });
 
     return {
@@ -1881,16 +1865,15 @@ export class AdminService {
             name:         tenantName,
             slug,
             businessType: 'SERVICE' as Prisma.TenantCreateInput['businessType'],
-            tier:         'TIER_6' as Prisma.TenantCreateInput['tier'],
             // Modular pricing — HNS Corp PH (operator of Clerque) gets the
             // full SUITE_T3 plan: all 3 modules, 50-staff ceiling.
-            planCode:        'SUITE_T3',
+            planCode:        DEFAULT_PLAN_CODE,
             modulePos:       true,
             moduleLedger:    true,
             modulePayroll:   true,
-            staffSeatQuota:  20,  // matches PLAN_CAPS.SUITE_T3.baseSeats
+            staffSeatQuota:  20,
             staffSeatAddons: 0,
-            branchQuota:     5,   // matches PLAN_LIMITS.SUITE_T3.maxBranches
+            branchQuota:     5,
             taxStatus:    'UNREGISTERED' as Prisma.TenantCreateInput['taxStatus'],
             contactEmail: ownerEmail,
             status:       'ACTIVE',
@@ -2058,16 +2041,15 @@ export class AdminService {
             name:         tenantName,
             slug,
             businessType: 'SERVICE' as Prisma.TenantCreateInput['businessType'],
-            tier:         'TIER_4' as Prisma.TenantCreateInput['tier'],
             // Ledger demo lives on the full Suite T2 plan — service business
             // with full back-office (POS + Ledger + Payroll, 15-staff cap).
-            planCode:        'SUITE_T2',
+            planCode:        DEFAULT_PLAN_CODE,
             modulePos:       true,
             moduleLedger:    true,
             modulePayroll:   true,
             staffSeatQuota:  8,
             staffSeatAddons: 0,
-            branchQuota:     3,   // matches PLAN_LIMITS.SUITE_T2.maxBranches
+            branchQuota:     3,
             taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
             tinNumber:    '009-876-543-000',
             businessName: 'Acme Consulting Services Inc.',
@@ -2335,7 +2317,7 @@ export class AdminService {
   async updateTenantPlan(
     tenantId: string,
     dto: {
-      planCode?:        string;        // 'STD_SOLO' | ... | 'SUITE_T3' | 'ENTERPRISE'
+      planCode?:        string;        // resolved via normalizePlanCode
       modulePos?:       boolean;
       moduleLedger?:    boolean;
       modulePayroll?:   boolean;
@@ -2345,7 +2327,7 @@ export class AdminService {
     actor: ConsoleActor,
   ) {
     // Lazy-import to avoid loading shared-types in cold paths.
-    const { PLAN_CAPS, PLAN_LIMITS, validateSoloModuleCombo } = await import('@repo/shared-types');
+    const { PLAN_CAPS, validateModuleCombo, normalizePlanCode, planCapsFor, planLimitsFor } = await import('@repo/shared-types');
 
     const before = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -2359,26 +2341,23 @@ export class AdminService {
     // Sprint 17 — typed-slug guard on plan downgrades. A downgrade reduces
     // module count, seat quota, or branch quota — that's destructive (locks
     // tenant out of features). Requires the operator to type the slug.
+    // Downgrade detection is dormant while there is a single package: no two
+    // codes differ, so nothing here can shrink. Kept rather than deleted
+    // because it is exactly the guard that matters again the moment a second
+    // package exists.
     if (dto.planCode && before.planCode && dto.planCode !== before.planCode) {
-      const beforeCap = PLAN_CAPS[before.planCode as keyof typeof PLAN_CAPS];
-      const afterCap  = PLAN_CAPS[dto.planCode  as keyof typeof PLAN_CAPS];
-      const isDowngrade =
-        afterCap && beforeCap &&
-        (afterCap.moduleCount < beforeCap.moduleCount ||
-         afterCap.maxTotal    < beforeCap.maxTotal);
-      if (isDowngrade) {
+      const beforeCap = planCapsFor(before.planCode);
+      const afterCap  = planCapsFor(dto.planCode);
+      if (afterCap.maxTotal < beforeCap.maxTotal) {
         await this.assertTypedSlug(tenantId, dto.confirmationToken);
       }
     }
 
-    // Validate plan code if changing.
-    if (dto.planCode !== undefined) {
-      if (!Object.prototype.hasOwnProperty.call(PLAN_CAPS, dto.planCode)) {
-        throw new BadRequestException(`Unknown plan code: ${dto.planCode}.`);
-      }
-    }
-
-    const targetPlan = (dto.planCode ?? before.planCode ?? 'SUITE_T2') as keyof typeof PLAN_CAPS;
+    // Any supplied or stored code resolves onto the package. The previous
+    // hasOwnProperty check hard-rejected anything not already in PLAN_CAPS,
+    // which is why a tenant could never be moved onto a newly-added code
+    // until shared-types had shipped and deployed first.
+    const targetPlan = normalizePlanCode(dto.planCode ?? before.planCode);
     const cap = PLAN_CAPS[targetPlan];
 
     // Validate seat addon count against plan ceiling.
@@ -2393,49 +2372,32 @@ export class AdminService {
       }
     }
 
-    // For SUITE plans, force all three modules on (suite is all-3 by definition).
-    // For PAIR / STD plans, respect the explicit booleans the caller sent.
+    // Modules are whatever the caller sent. This used to force all three on
+    // for any Suite plan, which silently overrode a deliberate choice to run
+    // POS without Payroll.
     const moduleOverrides: { modulePos?: boolean; moduleLedger?: boolean; modulePayroll?: boolean } = {};
-    if (cap.moduleCount === 3) {
-      moduleOverrides.modulePos     = true;
-      moduleOverrides.moduleLedger  = true;
-      moduleOverrides.modulePayroll = true;
-    } else {
-      if (dto.modulePos     !== undefined) moduleOverrides.modulePos     = dto.modulePos;
-      if (dto.moduleLedger  !== undefined) moduleOverrides.moduleLedger  = dto.moduleLedger;
-      if (dto.modulePayroll !== undefined) moduleOverrides.modulePayroll = dto.modulePayroll;
-    }
+    if (dto.modulePos     !== undefined) moduleOverrides.modulePos     = dto.modulePos;
+    if (dto.moduleLedger  !== undefined) moduleOverrides.moduleLedger  = dto.moduleLedger;
+    if (dto.modulePayroll !== undefined) moduleOverrides.modulePayroll = dto.modulePayroll;
 
-    // Validate exactly the right number of modules are on.
     const flagsAfter = {
       modulePos:     moduleOverrides.modulePos     ?? before.modulePos,
       moduleLedger:  moduleOverrides.moduleLedger  ?? before.moduleLedger,
       modulePayroll: moduleOverrides.modulePayroll ?? before.modulePayroll,
     };
-    const onCount = [flagsAfter.modulePos, flagsAfter.moduleLedger, flagsAfter.modulePayroll].filter(Boolean).length;
-    if (cap.moduleCount === 1 && onCount !== 1) {
-      throw new BadRequestException(`Standalone plans require exactly 1 module; current selection has ${onCount}.`);
-    }
-    if (cap.moduleCount === 2 && onCount !== 2) {
-      throw new BadRequestException(`Pair plans require exactly 2 modules; current selection has ${onCount}.`);
-    }
-
-    // Standalone (Single Module) plans are POS-only across the board —
-    // Solo / Duo / Team / Business all require modulePos=true with Ledger
-    // and Payroll disabled. Anyone needing Ledger or Payroll standalone
-    // should start at a Pair plan.
-    const standaloneError = validateSoloModuleCombo(
+    // The only module rule left: a tenant must not end up with everything off.
+    const comboError = validateModuleCombo(
       targetPlan,
       flagsAfter.modulePos,
       flagsAfter.moduleLedger,
       flagsAfter.modulePayroll,
     );
-    if (standaloneError) {
-      throw new BadRequestException(standaloneError);
+    if (comboError) {
+      throw new BadRequestException(comboError);
     }
 
     // Branch quota — auto-sync to PLAN_LIMITS so it always matches the plan.
-    const planLimits = PLAN_LIMITS[targetPlan];
+    const planLimits = planLimitsFor(targetPlan);
 
     // Safety check: if downgrading would put the tenant over the new branch cap,
     // refuse the change so existing data isn't orphaned.
@@ -2582,18 +2544,17 @@ export class AdminService {
             name:         tenantName,
             slug,
             businessType: 'LAUNDRY' as Prisma.TenantCreateInput['businessType'],
-            tier:         'TIER_3' as Prisma.TenantCreateInput['tier'],
             // Sprint 23 — Laundry demo lands on SOLO_PRO (POS-only, 5-seat
             // cap, ₱499/mo). Previously STD_TEAM; STD_TEAM was removed in
             // the Solo tier cleanup. SOLO_PRO has more features (audit log,
             // advanced reports, FIFO valuation) — better demo surface.
-            planCode:        'SOLO_PRO',
+            planCode:        DEFAULT_PLAN_CODE,
             modulePos:       true,
             moduleLedger:    false,
             modulePayroll:   false,
             staffSeatQuota:  5,
             staffSeatAddons: 0,
-            branchQuota:     1,   // matches PLAN_LIMITS.SOLO_PRO.maxBranches
+            branchQuota:     1,
             taxStatus:    'NON_VAT' as Prisma.TenantCreateInput['taxStatus'],
             isDemoTenant: true,
             contactEmail: ownerEmail,

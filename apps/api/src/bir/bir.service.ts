@@ -72,6 +72,35 @@ function quarterBounds(year: number, quarter: 1 | 2 | 3 | 4): { from: Date; to: 
   return { from, to };
 }
 
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/**
+ * Manila month boundaries for reports that filter on a real TIMESTAMP
+ * (paidAt / expenseDate), plus a header label derived from the inputs.
+ *
+ * `new Date(year, month-1, 1)` used the server timezone — UTC on Railway — so a
+ * sale at 00:30 PHT on the 1st (16:30 UTC the prior day) fell into the wrong
+ * month while the Z-Read (+08:00) and the GL business date counted it in this
+ * one. `to` is an EXCLUSIVE next-month boundary, so callers must filter
+ * `{ gte: from, lt: to }`, not `lte`.
+ *
+ * The label is built from (year, month) directly, NOT from `from`: `from` is a
+ * PH-midnight INSTANT (16:00 UTC the prior day), and toLocaleString ignores the
+ * locale's timezone, so formatting it on a UTC server would name the wrong
+ * month.
+ */
+export function phMonthBounds(year: number, month: number): { from: Date; to: Date; label: string } {
+  const mm       = String(month).padStart(2, '0');
+  const from     = new Date(`${year}-${mm}-01T00:00:00+08:00`);
+  const nextYear = month === 12 ? year + 1 : year;
+  const nmm      = String(month === 12 ? 1 : month + 1).padStart(2, '0');
+  const to       = new Date(`${nextYear}-${nmm}-01T00:00:00+08:00`);
+  return { from, to, label: `${MONTH_NAMES[month - 1]} ${year}` };
+}
+
 function toIso(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -342,7 +371,7 @@ export class BirService {
       where: {
         tenantId,
         status: 'POSTED',
-        expenseDate: { gte: from, lte: to },
+        expenseDate: { gte: from, lt: to },
         whtAmount: { gt: 0 },
       },
       include: { vendor: { select: { name: true, tin: true } } },
@@ -399,8 +428,7 @@ export class BirService {
   async exportSalesBook(tenantId: string, year: number, month: number): Promise<Buffer> {
     await this.assertBirRegistered(tenantId);
 
-    const from = new Date(year, month - 1, 1);
-    const to   = new Date(year, month, 0, 23, 59, 59, 999);
+    const { from, to, label: monthName } = phMonthBounds(year, month);
 
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -414,7 +442,7 @@ export class BirService {
       where: {
         tenantId,
         status: { in: ['PAID', 'COMPLETED'] },
-        paidAt: { gte: from, lte: to },
+        paidAt: { gte: from, lt: to },
       },
       include: { items: true, payments: true },
       orderBy: { paidAt: 'asc' },
@@ -424,7 +452,6 @@ export class BirService {
     wb.creator = 'Clerque';
     const ws = wb.addWorksheet('Sales Book', { views: [{ state: 'frozen', ySplit: 4 }] });
 
-    const monthName = from.toLocaleString('en-PH', { month: 'long', year: 'numeric' });
     ws.mergeCells('A1:I1');
     ws.getCell('A1').value = `${tenant?.businessName ?? tenant?.name} — Sales Book — ${monthName}`;
     ws.getCell('A1').font  = { bold: true, size: 13 };
@@ -485,8 +512,7 @@ export class BirService {
   async exportPurchaseBook(tenantId: string, year: number, month: number): Promise<Buffer> {
     await this.assertBirRegistered(tenantId);
 
-    const from = new Date(year, month - 1, 1);
-    const to   = new Date(year, month, 0, 23, 59, 59, 999);
+    const { from, to, label: monthName } = phMonthBounds(year, month);
 
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -494,14 +520,13 @@ export class BirService {
     });
 
     const expenses = await this.prisma.expenseEntry.findMany({
-      where: { tenantId, status: 'POSTED', expenseDate: { gte: from, lte: to } },
+      where: { tenantId, status: 'POSTED', expenseDate: { gte: from, lt: to } },
       include: { vendor: { select: { name: true, tin: true } } },
       orderBy: { expenseDate: 'asc' },
     });
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Clerque';
-    const monthName = from.toLocaleString('en-PH', { month: 'long', year: 'numeric' });
     const ws = wb.addWorksheet('Purchase Book', { views: [{ state: 'frozen', ySplit: 4 }] });
 
     ws.mergeCells('A1:H1');
@@ -551,8 +576,7 @@ export class BirService {
   async exportCashDisbursements(tenantId: string, year: number, month: number): Promise<Buffer> {
     await this.assertBirRegistered(tenantId);
 
-    const from = new Date(year, month - 1, 1);
-    const to   = new Date(year, month, 0, 23, 59, 59, 999);
+    const { from, to, label: monthName } = phMonthBounds(year, month);
 
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
@@ -560,14 +584,13 @@ export class BirService {
     });
 
     const payments = await this.prisma.expenseEntry.findMany({
-      where: { tenantId, paidAt: { gte: from, lte: to }, status: { in: ['POSTED'] } },
+      where: { tenantId, paidAt: { gte: from, lt: to }, status: { in: ['POSTED'] } },
       include: { vendor: { select: { name: true, tin: true } } },
       orderBy: { paidAt: 'asc' },
     });
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Clerque';
-    const monthName = from.toLocaleString('en-PH', { month: 'long', year: 'numeric' });
     const ws = wb.addWorksheet('Cash Disbursements', { views: [{ state: 'frozen', ySplit: 4 }] });
 
     ws.mergeCells('A1:G1');

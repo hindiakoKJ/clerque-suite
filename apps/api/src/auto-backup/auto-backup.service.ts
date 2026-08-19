@@ -15,7 +15,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
-import { PLAN_FEATURES, type PlanCode } from '@repo/shared-types';
+import { planFeaturesFor } from '@repo/shared-types';
 
 export interface AutoBackupConfig {
   /** Placeholder for the OAuth refresh token once Google Drive lands. */
@@ -95,7 +95,7 @@ export class AutoBackupService {
     });
 
     const eligible = tenants.filter((t) => {
-      const features = PLAN_FEATURES[t.planCode as PlanCode];
+      const features = planFeaturesFor(t.planCode);
       return features?.autoBackup === true;
     });
 

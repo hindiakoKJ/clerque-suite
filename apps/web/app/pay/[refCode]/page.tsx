@@ -41,10 +41,9 @@ interface PaymentMethod {
 }
 
 const PLAN_LABELS: Record<string, string> = {
-  SOLO_PRO:      'Solo',
-  SOLO_BOOKS:    'Solo Books',
-  SOLO_LITE:     'Solo Lite',
-  SOLO_STANDARD: 'Solo Standard',
+  // Historic payment rows still carry retired codes; unmapped values fall
+  // back to the raw string at the callsite.
+  CLERQUE: 'Clerque',
 };
 
 function fmtPhp(cents: number): string {

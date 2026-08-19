@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { counterReceiptAuthority } from './receiptAuthority';
 import {
   Pressable,
   ScrollView,
@@ -136,7 +137,7 @@ export default function ReceiptScreen({
             <Text style={ph.headerTitle}>Sale complete</Text>
             <View style={ph.headerMetaRow}>
               <Pill tone="success" dot>Paid</Pill>
-              <Text style={ph.orInline}>OR # {orPadded}</Text>
+              <Text style={ph.orInline}>{counterReceiptAuthority(receipt.tenant).numberPrefix} # {orPadded}</Text>
             </View>
           </View>
           {printedAt ? <Pill tone="info" dot>⎙ Sent</Pill> : null}

@@ -10,8 +10,8 @@ import { Button } from '@/components/ui/button';
 import { formatPeso } from '@/lib/utils';
 import { computeVat, round2 } from '@/lib/pos/utils';
 import { api } from '@/lib/api';
-import type { PaymentMethod, TaxStatus } from '@repo/shared-types';
-import { getProviderPhase } from '@repo/shared-types';
+import type { PaymentMethod, TaxStatus, ReceiptAuthority } from '@repo/shared-types';
+import { getProviderPhase, receiptAuthority } from '@repo/shared-types';
 import { isDemoMode } from '@/lib/demo/config';
 import { useSound } from '@/hooks/pos/useSound';
 
@@ -98,26 +98,13 @@ interface ReceiptModalProps {
   onClose: () => void;
 }
 
-// ── Document title — phase-aware ─────────────────────────────────────────────
+// ── Document kind ────────────────────────────────────────────────────────────
 //
-// Phase 1 (Internal Management): all receipts are "ACKNOWLEDGEMENT RECEIPT".
-//   The business has NOT yet obtained BIR CAS accreditation + PTU. Issuing
-//   an "Official Receipt" without BIR approval is a regulatory violation.
-//
-// Phase 2 (BIR Certified): title follows taxStatus per RR No. 1-2026.
-//   VAT → "VAT OFFICIAL RECEIPT"
-//   NON_VAT → "OFFICIAL RECEIPT"
-//   UNREGISTERED → "ACKNOWLEDGEMENT RECEIPT" (unchanged — not applicable)
-
-function receiptTitle(taxStatus: TaxStatus): string {
-  const phase = getProviderPhase();
-  if (phase === 1) return 'ACKNOWLEDGEMENT RECEIPT';
-  switch (taxStatus) {
-    case 'VAT':          return 'VAT OFFICIAL RECEIPT';
-    case 'NON_VAT':      return 'OFFICIAL RECEIPT';
-    case 'UNREGISTERED': return 'ACKNOWLEDGEMENT RECEIPT';
-  }
-}
+// Decided by receiptAuthority() in @repo/shared-types from THE TENANT's own
+// facts (taxStatus + isPtuHolder) with the provider phase as a safety catch:
+//   ACKNOWLEDGEMENT → "ACKNOWLEDGEMENT RECEIPT", "AR #", gross only, disclaimer
+//   SALES_INVOICE   → "[VAT ]SALES INVOICE", "SI #", PTU/MIN + BIR footer
+// Phase 2 alone never promotes a tenant without a PTU.
 
 // ── TIN header line per RR No. 1-2026 (Phase 2 only) ────────────────────────
 
@@ -133,19 +120,18 @@ function TinLine({ taxStatus, tinNumber }: { taxStatus: TaxStatus; tinNumber?: s
   );
 }
 
-// ── PTU / MIN line (Phase 2 only, when tenant has PTU) ───────────────────────
+// ── PTU / MIN line (only when receiptAuthority() says the slip is a Sales Invoice) ──
 
 function PtuLine({
-  isPtuHolder,
+  showPtu,
   ptuNumber,
   minNumber,
 }: {
-  isPtuHolder:  boolean;
+  showPtu:      boolean;
   ptuNumber?:   string | null;
   minNumber?:   string | null;
 }) {
-  const phase = getProviderPhase();
-  if (phase !== 2 || !isPtuHolder) return null;
+  if (!showPtu) return null;
   return (
     <>
       {ptuNumber && (
@@ -162,37 +148,34 @@ function PtuLine({
   );
 }
 
-// ── BIR tax footer breakdown per RR No. 1-2026 (Phase 2 only) ───────────────
+// ── BIR tax footer breakdown per RR No. 1-2026 (Sales Invoice only) ─────────
 
 function TaxFooter({
+  auth,
   taxStatus,
   vatAmount,
   totalAmount,
   discountAmount,
 }: {
+  auth:           ReceiptAuthority;
   taxStatus:      TaxStatus;
   vatAmount:      number;
   totalAmount:    number;
   discountAmount: number;
 }) {
-  const phase = getProviderPhase();
-
-  // Phase 1: show a simple "internal use" disclaimer instead of BIR breakdown
-  if (phase === 1) {
+  // Acknowledgement Receipt: print the mandatory disclaimer instead of a BIR breakdown
+  if (auth.disclaimer) {
     return (
       <div className="mt-2 pt-1.5 border-t border-dashed border-gray-200">
         <p className="text-[9px] text-gray-500 text-center leading-tight">
-          THIS IS NOT A SALES INVOICE OR OFFICIAL RECEIPT.
-        </p>
-        <p className="text-[9px] text-gray-500 text-center leading-tight">
-          FOR INTERNAL MANAGEMENT USE ONLY.
+          {auth.disclaimer}
         </p>
       </div>
     );
   }
 
-  // Phase 2: full BIR breakdown
-  if (taxStatus === 'VAT') {
+  // Sales Invoice: full BIR breakdown
+  if (auth.showVatLine) {
     // VATable Sales = gross amount (VAT-inclusive) less discounts
     const vatableSales    = round2(totalAmount);
     // Net of VAT (the true revenue) = VATable Sales / 1.12
@@ -231,7 +214,7 @@ function TaxFooter({
     );
   }
 
-  // UNREGISTERED in Phase 2 — no BIR disclaimer lines
+  // Unreachable in practice — UNREGISTERED never reaches SALES_INVOICE
   return null;
 }
 
@@ -362,7 +345,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const cashTendered  = data.payments.filter((p) => p.method === 'CASH').reduce((s, p) => s + p.amount, 0);
   const nonCashTotal  = data.payments.filter((p) => p.method !== 'CASH').reduce((s, p) => s + p.amount, 0);
   const change        = Math.max(0, cashTendered - (data.totalAmount - nonCashTotal));
-  const docTitle      = receiptTitle(taxStatus);
+  // Document kind from THE TENANT's own facts (taxStatus + PTU) — phase is only a safety catch.
+  const auth          = receiptAuthority({ taxStatus, isPtuHolder });
+  const docTitle      = auth.title;
+  // True only when the printed document is the tenant's official sales document (Sales Invoice).
+  const isOfficialReceipt = auth.kind === 'SALES_INVOICE';
 
   return (
     <>
@@ -387,7 +374,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                   Paid
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  OR # <span className="font-mono-counter tnum">{data.orderNumber}</span> · {date.toLocaleDateString('en-PH')} · {date.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
+                  {auth.numberPrefix} # <span className="font-mono-counter tnum">{data.orderNumber}</span> · {date.toLocaleDateString('en-PH')} · {date.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </div>
             </div>
@@ -442,17 +429,17 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
               )}
               {/* TIN line per RR No. 1-2026 (Phase 2 only) */}
               <TinLine taxStatus={taxStatus} tinNumber={tinNumber} />
-              {/* PTU / MIN (Phase 2 only, when tenant has PTU) */}
-              <PtuLine isPtuHolder={isPtuHolder} ptuNumber={ptuNumber} minNumber={minNumber} />
+              {/* PTU / MIN (only when the slip is a Sales Invoice) */}
+              <PtuLine showPtu={auth.showPtu} ptuNumber={ptuNumber} minNumber={minNumber} />
               {/* Registered address (Phase 2 BIR-registered tenants) */}
               {getProviderPhase() === 2 && registeredAddress && (
                 <p className="text-gray-500 text-[10px]">{registeredAddress}</p>
               )}
               {/* Document title */}
               <p className="font-display font-semibold text-gray-700 text-[10px] uppercase tracking-[0.08em] mt-1">{docTitle}</p>
-              {/* OR # — huge mono */}
+              {/* AR / SI # — huge mono */}
               <p className="font-mono-counter tnum font-extrabold mt-2" style={{ fontSize: 28, letterSpacing: '0.02em' }}>
-                OR # {data.orderNumber}
+                {auth.numberPrefix} # {data.orderNumber}
               </p>
               <p className="text-gray-500 mt-1">
                 {date.toLocaleDateString('en-PH')}{' '}
@@ -553,8 +540,8 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
               </div>
             ) : null}
 
-            {/* VAT line — only shown for VAT-registered businesses */}
-            {taxStatus === 'VAT' && (
+            {/* VAT line — only on a VAT Sales Invoice (Acknowledgement Receipts are gross only) */}
+            {auth.showVatLine && (
               <div className="flex justify-between text-gray-500">
                 <span>VAT (12%)</span>
                 <span>{formatPeso(data.vatAmount)}</span>
@@ -588,6 +575,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
 
             {/* ── BIR-mandated footer per RR No. 1-2026 ── */}
             <TaxFooter
+              auth={auth}
               taxStatus={taxStatus}
               vatAmount={data.vatAmount}
               totalAmount={data.totalAmount}
@@ -600,9 +588,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 ? 'Order queued — will sync when connection is restored.'
                 : (receiptFooterNote ?? 'Salamat po · Thank you!')}
             </p>
-            <p className="text-center text-gray-400 text-[9px] mt-1 uppercase tracking-[0.08em] font-display">
-              Pang-opisyal na Resibo · This serves as your official receipt
-            </p>
+            {isOfficialReceipt && (
+              <p className="text-center text-gray-400 text-[9px] mt-1 uppercase tracking-[0.08em] font-display">
+                {auth.titleFil} · This serves as your sales invoice
+              </p>
+            )}
           </div>
 
           {/* ── Right-side action panel (Counter design) ────────────────────── */}
@@ -647,9 +637,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             >
               Start next sale →
             </button>
-            <div className="rounded-xl px-4 py-3 text-[12px] text-muted-foreground leading-relaxed bg-secondary">
-              <b className="text-foreground">BIR ·</b> This sale is appended to your OR sequence (gap-free). Daily Z-read closes at 23:59 or when shift ends.
-            </div>
+            {taxStatus !== 'UNREGISTERED' && (
+              <div className="rounded-xl px-4 py-3 text-[12px] text-muted-foreground leading-relaxed bg-secondary">
+                <b className="text-foreground">BIR ·</b> This sale is appended to your OR sequence (gap-free). Daily Z-read closes at 23:59 or when shift ends.
+              </div>
+            )}
             {canVoid && !isVoided && (
               <button
                 onClick={() => setVoidOpen(true)}

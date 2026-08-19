@@ -69,7 +69,7 @@ export default function TermsOfServicePage() {
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-2">5. Subscription, Fees, and Billing</h2>
         <ol className="list-decimal pl-6 space-y-1 mt-2">
-          <li>The Service is offered in tiered subscription plans (TIER_1 through TIER_6) with different feature sets and staff capacity.</li>
+          <li>The Service is offered on one or more subscription plans, with the features, capacity, and pricing published at the time of subscription.</li>
           <li>Fees are billed in advance on a monthly or annual basis at the rate published at the time of subscription.</li>
           <li>All fees are exclusive of applicable taxes (VAT) which will be added where required by law.</li>
           <li>Payment is due upon receipt of invoice. Accounts unpaid for more than 30 days may be moved to GRACE status; accounts unpaid for more than 60 days may be SUSPENDED.</li>
@@ -243,9 +243,9 @@ export default function TermsOfServicePage() {
         <h2 className="text-lg font-semibold mb-2">18. Contact</h2>
         <div className="bg-muted/30 border border-border rounded-lg p-4 text-sm">
           <p className="font-medium">HNS Corporation Philippines</p>
-          <p>Customer support: <a className="text-[var(--accent)]" href="mailto:support@hnscorpph.com">support@hnscorpph.com</a></p>
-          <p>Legal inquiries: <a className="text-[var(--accent)]" href="mailto:legal@hnscorpph.com">legal@hnscorpph.com</a></p>
-          <p>Privacy: <a className="text-[var(--accent)]" href="mailto:privacy@hnscorpph.com">privacy@hnscorpph.com</a></p>
+          <p>Customer support: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a></p>
+          <p>Legal inquiries: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a></p>
+          <p>Privacy: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a></p>
         </div>
       </section>
     </article>

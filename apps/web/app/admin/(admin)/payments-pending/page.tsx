@@ -66,11 +66,10 @@ function nextOrNumber(last: string | null, padding: number): string {
   return String(n + 1).padStart(padding, '0');
 }
 
+// Historic rows still carry retired codes; anything unmapped falls back to
+// the single package name at the callsite.
 const PLAN_LABELS: Record<string, string> = {
-  SOLO_PRO:      'Solo',
-  SOLO_BOOKS:    'Solo Books',
-  SOLO_LITE:     'Solo Lite (legacy)',
-  SOLO_STANDARD: 'Solo Standard (legacy)',
+  CLERQUE: 'Clerque',
 };
 
 const STATUS_COLORS: Record<string, string> = {

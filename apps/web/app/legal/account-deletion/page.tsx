@@ -61,7 +61,7 @@ export default function AccountDeletionPage() {
         <p>Send an email from the address registered on your Clerque account to:</p>
         <div className="bg-muted/30 border border-border rounded-lg p-4 mt-3">
           <p className="font-semibold text-[var(--accent)]">
-            <a href="mailto:dpo@hnscorpph.com">dpo@hnscorpph.com</a>
+            <a href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a>
           </p>
           <p className="text-xs text-muted-foreground mt-2">
             Data Protection Officer, HNS Corporation Philippines
@@ -207,8 +207,8 @@ I confirm I am the account holder or its authorized representative.`}
         <div className="bg-muted/30 border border-border rounded-lg p-4 text-sm mt-2 space-y-1">
           <p><strong>Data Protection Officer</strong></p>
           <p>HNS Corporation Philippines</p>
-          <p>Email: <a className="text-[var(--accent)]" href="mailto:dpo@hnscorpph.com">dpo@hnscorpph.com</a></p>
-          <p>General inquiries: <a className="text-[var(--accent)]" href="mailto:privacy@hnscorpph.com">privacy@hnscorpph.com</a></p>
+          <p>Email: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a></p>
+          <p>General inquiries: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a></p>
         </div>
         <p className="mt-3 text-sm">
           If you are dissatisfied with our response, you may file a complaint

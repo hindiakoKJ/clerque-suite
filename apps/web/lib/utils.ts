@@ -5,13 +5,72 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatPeso(amount: number | string): string {
+// ---------------------------------------------------------------------------
+// Money formatting
+//
+// Single-currency per tenant (NOT an FX engine). The app sets the display
+// currency once at login via setDisplayCurrency(user.currency); formatPeso
+// (394 call sites, signature unchanged) reads it. Default is PHP so every
+// existing PH tenant renders exactly as before.
+// ---------------------------------------------------------------------------
+
+const CURRENCY_LOCALES: Record<string, string> = {
+  PHP: 'en-PH',
+  USD: 'en-US',
+  AUD: 'en-AU',
+};
+
+function localeForCurrency(currency: string): string {
+  return CURRENCY_LOCALES[currency.toUpperCase()] ?? 'en';
+}
+
+let displayCurrency = 'PHP';
+
+/** Set the tenant's display currency (ISO 4217, e.g. 'PHP', 'USD'). Called once at login. */
+export function setDisplayCurrency(currency: string): void {
+  displayCurrency = (currency || 'PHP').toUpperCase();
+}
+
+/** The currency formatPeso currently renders in. */
+export function getDisplayCurrency(): string {
+  return displayCurrency;
+}
+
+/**
+ * Format an amount (MAJOR units) in the given currency. Locale is derived
+ * from the currency when not supplied (PHP→en-PH, USD→en-US, AUD→en-AU, else 'en').
+ */
+export function formatMoney(amount: number | string, currency: string = 'PHP', locale?: string): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return new Intl.NumberFormat('en-PH', {
-    style: 'currency',
-    currency: 'PHP',
-    minimumFractionDigits: 2,
-  }).format(num);
+  return moneyFormatter((currency || 'PHP').toUpperCase(), locale).format(num);
+}
+
+/** Currency symbol only (e.g. '₱', '$', 'A$') — for input labels like "Amount ($)". */
+export function currencySymbol(currency: string = 'PHP'): string {
+  const cur = (currency || 'PHP').toUpperCase();
+  const part = moneyFormatter(cur).formatToParts(0).find((p) => p.type === 'currency');
+  return part?.value ?? cur;
+}
+
+/**
+ * Intl formatter for a currency. A malformed code on the tenant row (e.g. 'PH')
+ * makes Intl throw RangeError — which would blank every money cell in the app —
+ * so fall back to the PHP default instead of throwing.
+ */
+function moneyFormatter(cur: string, locale?: string): Intl.NumberFormat {
+  try {
+    return new Intl.NumberFormat(locale ?? localeForCurrency(cur), {
+      style: 'currency',
+      currency: cur,
+      minimumFractionDigits: 2,
+    });
+  } catch {
+    return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2 });
+  }
+}
+
+export function formatPeso(amount: number | string): string {
+  return formatMoney(amount, displayCurrency);
 }
 
 export function formatDate(date: Date | string, options?: Intl.DateTimeFormatOptions): string {

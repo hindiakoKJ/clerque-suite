@@ -30,7 +30,7 @@ export function ReadOnlyBanner() {
           )}
         </div>
         <a
-          href="mailto:support@hnscorpph.com"
+          href="mailto:devsupport@hnscorpph.com"
           className="text-xs underline decoration-red-200 hover:text-white whitespace-nowrap"
         >
           Contact support

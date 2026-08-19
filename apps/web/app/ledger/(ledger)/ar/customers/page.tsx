@@ -525,7 +525,7 @@ export default function CustomersPage() {
         open={showImport}
         title="Import Customers"
         description="Upload a spreadsheet to bulk-create or update customers (AR master). Customers are matched by exact Name."
-        templateUrl="/api/v1/import/template/customers"
+        templateUrl="/import/template/customers"
         uploadUrl="/import/customers"
         onClose={() => setShowImport(false)}
         onSuccess={() => {

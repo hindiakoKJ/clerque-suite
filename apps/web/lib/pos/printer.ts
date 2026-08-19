@@ -10,6 +10,8 @@
  *   printer.disconnect();
  */
 
+import { receiptAuthority } from '@repo/shared-types';
+
 // ── Web Serial type shim ──────────────────────────────────────────────────────────
 declare global {
   interface SerialPortInfo { usbVendorId?: number; usbProductId?: number; }
@@ -66,6 +68,18 @@ function twoCol(left: string, right: string): Uint8Array {
 }
 
 function dash(): Uint8Array { return txt('-'.repeat(COLS)); }
+
+/** Word-wrap a sentence into lines no wider than `n` columns. */
+function wrapWords(s: string, n: number): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (const w of s.split(' ')) {
+    if (cur && cur.length + 1 + w.length > n) { out.push(cur); cur = w; }
+    else cur = cur ? `${cur} ${w}` : w;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 /** Merge all Uint8Array chunks into one. */
 function concat(chunks: Uint8Array[]): Uint8Array {
@@ -161,26 +175,6 @@ function fmtDate(iso: string) {
 
 // ── ESC/POS document builders ───────────────────────────────────────────────────
 
-/**
- * Map TaxStatus to BIR-mandated receipt title per provider phase.
- *
- * Phase 1 (Internal Management): always "ACKNOWLEDGEMENT RECEIPT"
- *   — pre-BIR-accreditation; issuing OR without PTU is a regulatory violation.
- * Phase 2 (BIR Certified): follows taxStatus per RR No. 1-2026.
- */
-function birReceiptTitle(taxStatus?: 'VAT' | 'NON_VAT' | 'UNREGISTERED'): string {
-  // Read NEXT_PUBLIC_PROVIDER_PHASE at call time (supports SSR + runtime changes)
-  const phase = (process.env.NEXT_PUBLIC_PROVIDER_PHASE ?? '1').trim();
-  if (phase !== '2') return 'ACKNOWLEDGEMENT RECEIPT';
-
-  switch (taxStatus) {
-    case 'VAT':          return 'VAT OFFICIAL RECEIPT';
-    case 'NON_VAT':      return 'OFFICIAL RECEIPT';
-    case 'UNREGISTERED':
-    default:             return 'ACKNOWLEDGEMENT RECEIPT';
-  }
-}
-
 function buildReceipt(data: PrintReceiptData): Uint8Array {
   const parts: Uint8Array[] = [];
   const p = (...c: Uint8Array[]) => parts.push(...c, C.lf);
@@ -188,6 +182,11 @@ function buildReceipt(data: PrintReceiptData): Uint8Array {
   const taxStatus    = data.taxStatus ?? 'UNREGISTERED';
   const isVat        = taxStatus === 'VAT';
   const isRegistered = taxStatus !== 'UNREGISTERED';
+  // What document this slip IS — decided by THE TENANT's own facts
+  // (taxStatus + isPtuHolder); the provider phase is only a safety catch.
+  // Acknowledgement Receipt → "AR #", gross only, mandatory disclaimer.
+  // Sales Invoice           → "SI #", PTU/MIN, VAT line + BIR footer.
+  const auth         = receiptAuthority({ taxStatus, isPtuHolder: data.isPtuHolder });
 
   const cashTendered = data.payments.filter(x => x.method === 'CASH').reduce((s, x) => s + x.amount, 0);
   const nonCash      = data.payments.filter(x => x.method !== 'CASH').reduce((s, x) => s + x.amount, 0);
@@ -221,16 +220,16 @@ function buildReceipt(data: PrintReceiptData): Uint8Array {
     const tinLabel = isVat ? 'VAT REG TIN' : 'NON-VAT REG TIN';
     p(txt(`${tinLabel}: ${data.tinNumber}`));
   }
-  // PTU / MIN (Phase 2 only, when tenant holds PTU)
-  if (isPhase2 && data.isPtuHolder) {
+  // PTU / MIN (only when the slip is a Sales Invoice)
+  if (auth.showPtu) {
     if (data.ptuNumber) p(txt(`PTU No.: ${data.ptuNumber}`));
     if (data.minNumber) p(txt(`MIN: ${data.minNumber}`));
   }
-  p(txt(birReceiptTitle(taxStatus)));
+  p(txt(auth.title));
   p(txt(fmtDate(data.completedAt)));
   p(C.lf);
   parts.push(C.boldOn);
-  p(txt(`# ${data.orderNumber}`));
+  p(txt(`${auth.numberPrefix} # ${data.orderNumber}`));
   parts.push(C.boldOff);
   p(C.lf);
 
@@ -286,8 +285,8 @@ function buildReceipt(data: PrintReceiptData): Uint8Array {
     parts.push(twoCol('Discount', `-${fmtPeso(data.discountAmount)}`), C.lf);
   }
 
-  // VAT line — only for VAT-registered businesses
-  if (isVat) {
+  // VAT line — only on a VAT Sales Invoice (Acknowledgement Receipts are gross only)
+  if (auth.showVatLine) {
     parts.push(twoCol('VAT (12%)', fmtPeso(data.vatAmount)), C.lf);
   }
   p(dash());
@@ -314,16 +313,14 @@ function buildReceipt(data: PrintReceiptData): Uint8Array {
   parts.push(C.alignCenter);
   p(txt(data.isOffline ? 'QUEUED - will sync on reconnect' : 'Thank you for your purchase!'));
 
-  // ── BIR tax footer (RR No. 1-2026, Phase 2 only) ───────────────────────────
-  if (!isPhase2) {
-    // Phase 1 disclaimer — no BIR classification breakdown
+  // ── BIR tax footer (RR No. 1-2026, Sales Invoice only) ─────────────────────
+  if (auth.disclaimer) {
+    // Acknowledgement Receipt — mandatory disclaimer, no BIR classification breakdown
     p(dash());
     parts.push(C.alignCenter);
-    p(txt('THIS IS NOT A SALES INVOICE OR'));
-    p(txt('OFFICIAL RECEIPT.'));
-    p(txt('FOR INTERNAL MANAGEMENT USE ONLY.'));
+    for (const line of wrapWords(auth.disclaimer, COLS)) p(txt(line));
     parts.push(C.alignLeft);
-  } else if (isVat) {
+  } else if (auth.showVatLine) {
     p(dash());
     // VATable Sales = totalAmount (gross, VAT-inclusive)
     const vatableSales    = data.totalAmount;

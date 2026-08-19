@@ -85,6 +85,11 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
   const { user, clear } = useAuthStore();
   const isBirRegistered = user?.isBirRegistered ?? false;
   const isFullLedger   = user?.planFeatures?.advancedAccounting ?? false;
+  // Magnet Books — SIMPLE is an owner *choice*, not a plan lock: hide the
+  // full-accounting items outright so a non-accountant sees a clean 5-item
+  // ledger. FULL/undefined with advancedAccounting=false is a genuine plan
+  // lock and keeps today's visible-but-grayed upsell behavior.
+  const isSimpleBooks  = user?.ledgerMode === 'SIMPLE';
   const role           = user?.role;
 
   // ── App-level guard ────────────────────────────────────────────────────────
@@ -198,9 +203,24 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     // ── Audit ───────────────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/audit',         'Audit Log',          ShieldCheck,     AUDIT_ROLES,      role,
       { sectionStart: 'Audit', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
-  ].filter((item) => !item.disabled
-    || item.disabledReason?.startsWith('Requires')
-    || item.disabledReason === 'Upgrade to full accounting to unlock this');
+  ].reduce<{ items: NavItem[]; pending?: string }>((acc, item) => {
+    const visible = !item.disabled
+      || item.disabledReason?.startsWith('Requires')
+      || (!isSimpleBooks && item.disabledReason === 'Upgrade to full accounting to unlock this');
+    // When the item that *carries* a section header is hidden (SIMPLE mode, or
+    // a role that can't see it), hand the header to the next visible item in
+    // that same section — otherwise POS-derived AR lands under "Overview" and
+    // Reports under "Cash & Bank". A header whose whole section is hidden is
+    // dropped as soon as the next section starts.
+    if (!visible) {
+      if (item.sectionStart) acc.pending = item.sectionStart;
+      return acc;
+    }
+    if (item.sectionStart) acc.pending = undefined;
+    else if (acc.pending) { item = { ...item, sectionStart: acc.pending }; acc.pending = undefined; }
+    acc.items.push(item);
+    return acc;
+  }, { items: [] }).items;
 
   return (
     <div

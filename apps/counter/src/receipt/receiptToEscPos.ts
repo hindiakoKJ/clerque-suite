@@ -3,7 +3,8 @@
  *
  * Pure transform: takes a `ReceiptForPrinter` payload (the same data the
  * visual `Receipt.tsx` consumes) and emits the raw byte sequence for a
- * thermal printer. Mirrors the visual layout — header, OR# huge, lines
+ * thermal printer. Mirrors the visual layout — header, slip # huge
+ * ("AR #" / "SI #" per receiptAuthority — never "OR #" without PTU), lines
  * with right-aligned prices, totals, payments, bilingual footer.
  *
  * Width defaults to 32 columns (58 mm — the cheap PH standard). Pass 48
@@ -19,6 +20,7 @@ import type {
   TenantConfig,
 } from '@/types';
 import type { ReceiptVatBreakdown } from './Receipt';
+import { counterReceiptAuthority } from './receiptAuthority';
 
 /** Serializable shape of what `Receipt.tsx` consumes — safe to send over IPC / store in queues. */
 export interface ReceiptForPrinter {
@@ -119,6 +121,18 @@ function itemRow(line: CartLine, width: number): string[] {
   return rows;
 }
 
+/** Word-wrap a sentence into lines no wider than `width` columns. */
+function wrapWords(s: string, width: number): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (const w of s.split(' ')) {
+    if (cur && cur.length + 1 + w.length > width) { out.push(cur); cur = w; }
+    else cur = cur ? `${cur} ${w}` : w;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 function paymentsHaveCash(payments: CartPayment[]): boolean {
   return payments.some(p => p.method === 'CASH');
 }
@@ -129,12 +143,13 @@ export function receiptToEscPos(
 ): Uint8Array {
   const b = new EscPosBuilder();
   const isVat = r.tenant.taxStatus === 'VAT' && r.tenant.isVatRegistered;
-  /** BIR-registered tenants (VAT or Non-VAT) issue Official Receipts.
-   *  UNREGISTERED tenants must print Acknowledgement Receipts and may NOT
-   *  use the "OR" prefix on the slip. */
+  /** Tenant fact for the header status line only — registration alone does
+   *  NOT make the slip an official document (see receiptAuthority.ts). */
   const isBirRegistered = r.tenant.taxStatus === 'VAT' || r.tenant.taxStatus === 'NON_VAT';
-  const numberPrefix    = isBirRegistered ? 'OR' : 'AR';
-  const slipFilipino    = isBirRegistered ? 'Pang-opisyal na Resibo' : 'Resibo ng Pagtanggap';
+  /** What this slip IS — same verdict as the visual Receipt.tsx. Fails SAFE
+   *  to Acknowledgement Receipt ("AR #") until Counter carries isPtuHolder. */
+  const auth            = counterReceiptAuthority(r.tenant);
+  const numberPrefix    = auth.numberPrefix;
 
   b.init();
 
@@ -153,7 +168,9 @@ export function receiptToEscPos(
   if (r.tenant.fdaLicenseNumber) {
     b.line(`FDA LTO ${r.tenant.fdaLicenseNumber}`);
   }
-  b.line(slipFilipino);
+  // Document title + Filipino name — two lines so they fit a 32-col slip.
+  b.bold(true).line(auth.title).bold(false);
+  b.line(auth.titleFil);
 
   if (r.isRefund) {
     b.bold(true);
@@ -203,14 +220,15 @@ export function receiptToEscPos(
     b.line(labelAmount(discLabel, `- ${formatPesoPlain(r.discountCents)}`, width));
   }
 
-  if (isVat && r.vat) {
+  if (auth.showVatLine && isVat && r.vat) {
     b.line(labelAmount('Vatable sales', formatPesoPlain(r.vat.vatableSalesCents), width));
     b.line(labelAmount('VAT-exempt sales', formatPesoPlain(r.vat.vatExemptCents), width));
     b.line(labelAmount('VAT zero-rated', formatPesoPlain(r.vat.vatZeroRatedCents), width));
     b.line(labelAmount('VAT (12%)', formatPesoPlain(r.vat.vatAmountCents), width));
-  } else {
+  } else if (auth.kind === 'SALES_INVOICE') {
     b.line(labelAmount('VAT-exempt sales', formatPesoPlain(r.totalCents), width));
   }
+  // Acknowledgement Receipt — gross only, no VAT lines.
 
   b.divider('-', width);
 
@@ -248,7 +266,15 @@ export function receiptToEscPos(
   }
   b.line('Powered by Clerque');
   b.line(getWebHost());
-  b.line(isBirRegistered ? 'Official Receipt · Pang-opisyal na Resibo' : 'Acknowledgement Receipt · Resibo ng Pagtanggap');
+  if (auth.disclaimer) {
+    b.bold(true);
+    for (const l of wrapWords(auth.disclaimer, width)) b.line(l);
+    b.bold(false);
+  }
+  const closing = auth.kind === 'SALES_INVOICE'
+    ? `Sales Invoice · ${auth.titleFil}`
+    : `Acknowledgement Receipt · ${auth.titleFil}`;
+  for (const l of wrapWords(closing, width)) b.line(l);
 
   b.align('L').feed(3);
 

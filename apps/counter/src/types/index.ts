@@ -21,8 +21,14 @@ export type BusinessType =
   | 'F_AND_B'
   | 'OTHER';
 
-/** Plan codes the app cares about (others = no Counter access). */
-export type PlanCode = 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO';
+/**
+ * The single package. This was a hand-copied duplicate of the cloud union
+ * and had already drifted — it never gained SOLO_BOOKS, so a tenant on that
+ * plan fell through to the 'SOLO_LITE' default below and silently lost till
+ * features. Kept as a local type (rather than importing shared-types) because
+ * Counter builds standalone for Expo.
+ */
+export type PlanCode = 'CLERQUE';
 
 export interface TenantConfig {
   id: string;
@@ -52,10 +58,8 @@ export interface PlanFeatures {
   advancedReports: boolean;
   loyaltyPro: boolean;
   autoBackup: boolean;
-  fifoValuation: boolean;
   makerCheckerVoids: boolean;
   auditLog: boolean;
-  customRoles: boolean;
   apiAccess: 'none' | 'read' | 'readwrite';
 }
 

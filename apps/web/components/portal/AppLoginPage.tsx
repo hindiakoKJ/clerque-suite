@@ -248,7 +248,7 @@ export function AppLoginPage({
           <span className="ml-auto flex gap-3">
             <a href="/legal/terms" className="hover:underline">Terms</a>
             <a href="/legal/privacy" className="hover:underline">Privacy</a>
-            <a href="mailto:support@hnscorpph.com" className="hover:underline">Support</a>
+            <a href="mailto:devsupport@hnscorpph.com" className="hover:underline">Support</a>
           </span>
         </div>
       </div>

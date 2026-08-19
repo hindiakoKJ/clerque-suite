@@ -788,7 +788,7 @@ export default function ProductsPage() {
         onClose={() => setShowSetupPack(false)}
         title="Setup Pack — Products + Opening Stock"
         description="One workbook, two sheets. Stand up your full catalog and starting inventory in a single upload. Download the template, fill both sheets, then upload here."
-        templateUrl="/api/v1/import/template/setup-pack"
+        templateUrl="/import/template/setup-pack"
         uploadUrl="/import/setup-pack"
         extraParams={userBranchId ? { branchId: userBranchId } : undefined}
         onSuccess={() => invalidate()}

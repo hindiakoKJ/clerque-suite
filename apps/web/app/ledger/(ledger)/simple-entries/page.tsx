@@ -3,9 +3,11 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowUpCircle, ArrowDownCircle, PlusCircle, MinusCircle, ArrowRightLeft, Loader2,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { formatPeso } from '@/lib/utils';
+import { formatPeso, currencySymbol } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 
 type EntryType =
@@ -32,8 +34,23 @@ interface RecentEntry {
   reversed: boolean; reversedByNumber: string | null;
 }
 
+interface ProfitSummary {
+  from: string; to: string; moneyIn: number; moneyOut: number; profit: number; currency: string;
+}
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** First/last day of a month as YYYY-MM-DD (month is 0-based, local calendar). */
+function monthRange(year: number, month: number): { from: string; to: string } {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return { from: `${year}-${pad(month + 1)}-01`, to: `${year}-${pad(month + 1)}-${pad(lastDay)}` };
+}
+
+function monthLabel(year: number, month: number): string {
+  return new Date(year, month, 1).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
 }
 
 const INPUT =
@@ -41,6 +58,7 @@ const INPUT =
 
 export default function SimpleEntriesPage() {
   const qc = useQueryClient();
+  const user = useAuthStore((s) => s.user);
   const [type, setType]         = useState<EntryType>('EXPENSE');
   const [amount, setAmount]     = useState('');
   const [date, setDate]         = useState(today());
@@ -52,10 +70,27 @@ export default function SimpleEntriesPage() {
   const isExpense  = type === 'EXPENSE';
   const sourceLabel = isExpense || type === 'OWNER_DRAWING' ? 'Paid from' : 'Received in';
 
+  const now = new Date();
+  const [month, setMonth]       = useState<{ year: number; month: number }>({ year: now.getFullYear(), month: now.getMonth() });
+  const isCurrentMonth = month.year === now.getFullYear() && month.month === now.getMonth();
+  const range = monthRange(month.year, month.month);
+
   const { data: recent = [], isLoading } = useQuery<RecentEntry[]>({
     queryKey: ['simple-entries'],
     queryFn:  () => api.get('/simple-entries').then((r) => r.data),
   });
+
+  const { data: summary, isLoading: summaryLoading } = useQuery<ProfitSummary>({
+    queryKey: ['simple-entries-summary', range.from, range.to],
+    queryFn:  () => api.get('/simple-entries/summary', { params: range }).then((r) => r.data),
+  });
+
+  function shiftMonth(delta: number) {
+    setMonth((m) => {
+      const d = new Date(m.year, m.month + delta, 1);
+      return { year: d.getFullYear(), month: d.getMonth() };
+    });
+  }
 
   const { mutate, isPending } = useMutation({
     mutationFn: () =>
@@ -68,9 +103,10 @@ export default function SimpleEntriesPage() {
         note: note.trim() || undefined,
       }).then((r) => r.data),
     onSuccess: (d: { description: string; amount: number }) => {
-      toast.success(`Recorded: ${d.description} · ${formatPeso(d.amount * 100)}`);
+      toast.success(`Recorded: ${d.description} · ${formatPeso(d.amount)}`);
       setAmount(''); setNote('');
       qc.invalidateQueries({ queryKey: ['simple-entries'] });
+      qc.invalidateQueries({ queryKey: ['simple-entries-summary'] });
     },
     onError: (e: { response?: { data?: { message?: string } } }) =>
       toast.error(e?.response?.data?.message ?? 'Could not save. Please try again.'),
@@ -81,6 +117,7 @@ export default function SimpleEntriesPage() {
     onSuccess: () => {
       toast.success('Entry reversed.');
       qc.invalidateQueries({ queryKey: ['simple-entries'] });
+      qc.invalidateQueries({ queryKey: ['simple-entries-summary'] });
     },
     onError: (e: { response?: { data?: { message?: string } } }) =>
       toast.error(e?.response?.data?.message ?? 'Could not reverse. Please try again.'),
@@ -100,6 +137,57 @@ export default function SimpleEntriesPage() {
         <p className="text-sm text-muted-foreground mt-1">
           Log money in and out that doesn&apos;t go through the till — rent, utilities, owner cash, deposits.
           Every entry is saved to your books automatically.
+        </p>
+      </div>
+
+      {/* Profit card */}
+      <div className="bg-card border border-border rounded-xl p-4 sm:p-5">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h2 className="text-sm font-semibold text-foreground">
+            {isCurrentMonth ? 'This month' : monthLabel(month.year, month.month)}
+          </h2>
+          <div className="flex items-center gap-1">
+            <button
+              type="button" onClick={() => shiftMonth(-1)} aria-label="Previous month"
+              className="rounded-md border border-border p-1 text-muted-foreground hover:bg-muted/40"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-xs text-muted-foreground min-w-[7.5rem] text-center">
+              {monthLabel(month.year, month.month)}
+            </span>
+            <button
+              type="button" onClick={() => shiftMonth(1)} disabled={isCurrentMonth} aria-label="Next month"
+              className="rounded-md border border-border p-1 text-muted-foreground hover:bg-muted/40 disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Money in</div>
+            <div className="font-mono font-semibold text-foreground text-sm sm:text-base">
+              {summaryLoading || !summary ? '—' : formatPeso(summary.moneyIn)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Money out</div>
+            <div className="font-mono font-semibold text-foreground text-sm sm:text-base">
+              {summaryLoading || !summary ? '—' : formatPeso(summary.moneyOut)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Profit</div>
+            <div className={`font-mono font-semibold text-sm sm:text-base ${
+              !summary ? 'text-foreground' : summary.profit >= 0 ? 'text-emerald-600' : 'text-red-500'
+            }`}>
+              {summaryLoading || !summary ? '—' : formatPeso(summary.profit)}
+            </div>
+          </div>
+        </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Sales and expenses only — money you put in or take out yourself, and cash↔bank transfers, don&rsquo;t change profit.
         </p>
       </div>
 
@@ -133,7 +221,7 @@ export default function SimpleEntriesPage() {
         {/* Amount + date */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Amount (₱)</label>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Amount ({currencySymbol(user?.currency ?? 'PHP')})</label>
             <input
               type="number" inputMode="decimal" min="0.01" step="0.01" value={amount}
               onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className={INPUT} autoFocus
@@ -217,7 +305,7 @@ export default function SimpleEntriesPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
-                  <span className={`font-mono font-semibold ${r.reversed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{formatPeso(r.amount * 100)}</span>
+                  <span className={`font-mono font-semibold ${r.reversed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{formatPeso(r.amount)}</span>
                   {!r.reversed && (
                     <button
                       type="button"

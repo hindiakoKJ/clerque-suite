@@ -4,7 +4,7 @@
  * Sprint 25 — API Keys admin page.
  *
  * Owners on plans with `apiAccess !== 'none'` can issue API keys for
- * read-only (or readwrite, on SUITE_T3+) access to /public-api/v1/*. The
+ * read or readwrite access to /public-api/v1/*. The
  * plaintext key is shown ONCE at creation time and then never again — the
  * user must copy it to their integration before closing the modal.
  */
@@ -13,8 +13,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Key, Plus, Trash2, Copy, Check, AlertTriangle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { PLAN_FEATURES } from '@repo/shared-types';
-import type { PlanCode, ApiAccessLevel } from '@repo/shared-types';
+import { planFeaturesFor } from '@repo/shared-types';
+import type { ApiAccessLevel } from '@repo/shared-types';
 
 interface ApiKeyRow {
   id:          string;
@@ -40,9 +40,10 @@ export default function ApiKeysPage() {
   const [issued, setIssued]           = useState<IssuedApiKey | null>(null);
   const [copied, setCopied]           = useState(false);
 
-  // Resolve plan feature gate from JWT planCode (fallback to SUITE_T2 if missing).
-  const planCode = (user?.planCode ?? 'SUITE_T2') as PlanCode;
-  const apiAccess: ApiAccessLevel = PLAN_FEATURES[planCode]?.apiAccess ?? 'none';
+  // planFeaturesFor resolves any stored code, so the client agrees with the
+  // server. The old `?? 'SUITE_T2'` fallback showed full entitlement for an
+  // unrecognised code while the server denied it — enabled buttons that 403.
+  const apiAccess: ApiAccessLevel = planFeaturesFor(user?.planCode).apiAccess;
   const allowed = apiAccess !== 'none';
   const canIssueReadwrite = apiAccess === 'readwrite';
 

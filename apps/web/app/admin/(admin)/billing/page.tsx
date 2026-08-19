@@ -117,7 +117,6 @@ export default function BillingPage() {
   const billables = tenants.filter((t) =>
     t.status === 'ACTIVE' &&
     t.planCode &&
-    t.planCode !== 'ENTERPRISE' &&
     t.id !== cfg.hnsTenantId,
   );
 

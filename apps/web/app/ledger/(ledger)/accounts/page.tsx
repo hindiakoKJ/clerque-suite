@@ -260,7 +260,7 @@ export default function AccountsPage() {
         open={showImport}
         title="Import Chart of Accounts"
         description="Upload your existing COA to add or update accounts. System accounts are protected and cannot be overwritten. New accounts are created with Open posting control."
-        templateUrl="/api/v1/import/template/chart-of-accounts"
+        templateUrl="/import/template/chart-of-accounts"
         uploadUrl="/import/chart-of-accounts"
         onClose={() => setShowImport(false)}
         onSuccess={() => {

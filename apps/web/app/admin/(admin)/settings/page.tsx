@@ -126,7 +126,7 @@ function CompanyTab() {
         <p className="text-xs text-muted-foreground">Printed on every subscription receipt sent to tenants.</p>
 
         <Field label="Company name *" v={merged.companyName ?? ''} on={(v) => field('companyName', v)} />
-        <Field label="TIN" v={merged.tin ?? ''} on={(v) => field('tin', v || null)} mono placeholder="000-000-000-00000" />
+        <Field label="TIN" v={merged.tin ?? ''} on={(v) => field('tin', v || null)} mono placeholder="010-986-552-000" />
         <Field label="Registered address" v={merged.address ?? ''} on={(v) => field('address', v || null)} />
         <div className="grid grid-cols-2 gap-3">
           <Field label="Contact phone" v={merged.contactPhone ?? ''} on={(v) => field('contactPhone', v || null)} mono />

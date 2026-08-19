@@ -13,6 +13,7 @@
  */
 
 import type { ReceiptForPrinter } from './receiptToEscPos';
+import { counterReceiptAuthority } from './receiptAuthority';
 
 export interface BluetoothDeviceInfo {
   id: string;
@@ -47,7 +48,8 @@ export class ConsolePrinterService implements PrinterService {
     lines.push('═══════════════════════════════════════════');
     lines.push(` ${receipt.tenant.name.toUpperCase()}`);
     lines.push(` TIN ${receipt.tenant.tin}`);
-    lines.push(` OR # ${receipt.orNumber.toString().padStart(6, '0')}`);
+    // Same document authority as every real print path: never 'OR #' without PTU.
+    lines.push(` ${counterReceiptAuthority(receipt.tenant).numberPrefix} # ${receipt.orNumber.toString().padStart(6, '0')}`);
     lines.push(` Cashier: ${receipt.cashierName}`);
     lines.push('───────────────────────────────────────────');
     for (const l of receipt.cart.lines) {

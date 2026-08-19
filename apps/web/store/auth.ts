@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { JwtPayload, AppCode, AccessLevel } from '@repo/shared-types';
 import { levelValue } from '@repo/shared-types';
 import { useCartStore } from './pos/cart';
+import { setDisplayCurrency } from '@/lib/utils';
 
 interface AuthState {
   accessToken: string | null;
@@ -30,8 +31,13 @@ export const useAuthStore = create<AuthState>()(
         // Push tenant tax classification into the POS cart store so all VAT/discount
         // logic at checkout uses the correct BIR tax engine without extra API calls.
         useCartStore.getState().setTenantFlags(user.taxStatus ?? 'UNREGISTERED');
+        // Tenant display currency for formatPeso/formatMoney (single-currency, default PHP).
+        setDisplayCurrency(user.currency ?? 'PHP');
       },
-      clear: () => set({ accessToken: null, refreshToken: null, user: null }),
+      clear: () => {
+        set({ accessToken: null, refreshToken: null, user: null });
+        setDisplayCurrency('PHP');
+      },
 
       hasAccess: (app, minLevel) => {
         const { user } = get();
@@ -49,6 +55,11 @@ export const useAuthStore = create<AuthState>()(
         refreshToken: state.refreshToken,
         user: state.user,
       }),
+      // On reload the user is restored from localStorage without going through
+      // setUser, so re-apply the tenant display currency here too.
+      onRehydrateStorage: () => (state) => {
+        setDisplayCurrency(state?.user?.currency ?? 'PHP');
+      },
     },
   ),
 );

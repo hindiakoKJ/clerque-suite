@@ -85,7 +85,6 @@ export default function AdminDashboard() {
 
   if (isLoading || !data) return <Spinner size="lg" message="Loading platform metrics…" />;
 
-  const tierMap = Object.fromEntries(data.tenants.byTier.map((r) => [r.tier, r.count]));
   const statusMap = Object.fromEntries(data.tenants.byStatus.map((r) => [r.status, r.count]));
 
   return (
@@ -132,18 +131,10 @@ export default function AdminDashboard() {
         </div>
       </section>
 
-      {/* ── Tier distribution ─────────────────────────────────────────────── */}
-      <section>
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Tiers</h2>
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-          {(['TIER_1', 'TIER_2', 'TIER_3', 'TIER_4', 'TIER_5', 'TIER_6'] as const).map((t) => (
-            <div key={t} className="rounded-lg border border-border bg-background px-3 py-2">
-              <div className="text-[10px] uppercase text-muted-foreground tracking-wider">{t.replace('_', ' ')}</div>
-              <div className="text-base font-semibold tabular-nums">{tierMap[t] ?? 0}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+      {/* Tier distribution chart removed with the TIER_1..TIER_6 ladder.
+          Every tenant is on one package, so the breakdown was six columns of
+          stale counts. A per-module or per-channel breakdown would be the
+          useful replacement once there is something to compare. */}
 
       {/* ── Security Posture (Sprint 19) ──────────────────────────────────── */}
       {data.security && (

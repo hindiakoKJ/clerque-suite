@@ -1,63 +1,52 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ArrowLeft, FileText, ShieldCheck, LifeBuoy, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft, FileText, ShieldCheck, LifeBuoy, Trash2,
+  ShieldAlert, Cookie, Receipt, FileLock2, Network,
+} from 'lucide-react';
+
+const LEGAL_LINKS = [
+  { href: '/legal/privacy',          label: 'Privacy Policy',    icon: ShieldCheck },
+  { href: '/legal/terms',            label: 'Terms of Service',  icon: FileText },
+  { href: '/legal/acceptable-use',   label: 'Acceptable Use',    icon: ShieldAlert },
+  { href: '/legal/cookies',          label: 'Cookies',           icon: Cookie },
+  { href: '/legal/refunds',          label: 'Refunds',           icon: Receipt },
+  { href: '/legal/dpa',              label: 'Data Processing',   icon: FileLock2 },
+  { href: '/legal/subprocessors',    label: 'Sub-processors',    icon: Network },
+  { href: '/legal/sla',              label: 'Recovery SLA',      icon: LifeBuoy },
+  { href: '/legal/account-deletion', label: 'Delete Account',    icon: Trash2 },
+] as const;
 
 export default function LegalLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border bg-card">
-        <div className="mx-auto max-w-3xl px-6 py-4 flex items-center justify-between">
-          <Link href="/login" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+        <div className="mx-auto max-w-3xl px-6 py-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <Link href="/login" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0">
             <ArrowLeft className="h-4 w-4" />
             Back to login
           </Link>
-          <nav className="flex items-center gap-1 text-xs">
-            <Link
-              href="/legal/privacy"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
-                pathname === '/legal/privacy'
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-              }`}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Privacy Policy
-            </Link>
-            <Link
-              href="/legal/terms"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
-                pathname === '/legal/terms'
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-              }`}
-            >
-              <FileText className="h-3.5 w-3.5" />
-              Terms of Service
-            </Link>
-            <Link
-              href="/legal/sla"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
-                pathname === '/legal/sla'
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-              }`}
-            >
-              <LifeBuoy className="h-3.5 w-3.5" />
-              Recovery SLA
-            </Link>
-            <Link
-              href="/legal/account-deletion"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
-                pathname === '/legal/account-deletion'
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-              }`}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete Account
-            </Link>
+          <nav aria-label="Legal documents" className="flex flex-wrap items-center gap-1 text-xs sm:justify-end">
+            {LEGAL_LINKS.map(({ href, label, icon: Icon }) => {
+              const active = pathname === href;
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-current={active ? 'page' : undefined}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
+                    active
+                      ? 'bg-secondary text-foreground'
+                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </Link>
+              );
+            })}
           </nav>
         </div>
       </header>

@@ -1143,17 +1143,10 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   );
 }
 
-// ── Modular Plan panel (admin-side) ───────────────────────────────────────
-// Lets SUPER_ADMIN flip a tenant onto any plan code, toggle module flags
-// (for STD / PAIR plans), and adjust seat add-on count. Validates against
-// PLAN_CAPS server-side; this UI only sends the user's intent.
-const PLAN_CODES = [
-  // Solo — actively offered, then legacy (grandfathered)
-  'SOLO_PRO', 'SOLO_BOOKS', 'SOLO_LITE', 'SOLO_STANDARD',
-  // PARKED — multi-module legacy
-  'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
-  'SUITE_T1', 'SUITE_T2', 'SUITE_T3', 'ENTERPRISE',
-] as const;
+// ── Plan panel (admin-side) ───────────────────────────────────────────────
+// There is one package, so this panel is now about MODULES and seat add-ons.
+// It used to carry a second 11-option plan dropdown (duplicating the one on
+// the tenants list) whose selection then forced module flags on or off.
 
 function PlanPanel({
   tenant, busy, setBusy, qc,
@@ -1163,35 +1156,28 @@ function PlanPanel({
   setBusy: (b: boolean) => void;
   qc:     ReturnType<typeof useQueryClient>;
 }) {
-  const [planCode, setPlanCode]   = useState<string>(tenant.planCode ?? 'SUITE_T2');
+  const planCode = 'CLERQUE';
   const [pos, setPos]             = useState(tenant.modulePos ?? true);
   const [ledger, setLedger]       = useState(tenant.moduleLedger ?? true);
   const [payroll, setPayroll]     = useState(tenant.modulePayroll ?? true);
   const [addons, setAddons]       = useState<number>(tenant.staffSeatAddons ?? 0);
 
-  // Suite plans force all-3 modules on; reflect that in the UI.
-  const isSuite = planCode.startsWith('SUITE_') || planCode === 'ENTERPRISE';
-  const isPair  = planCode.startsWith('PAIR_');
-  const isStd   = planCode.startsWith('STD_');
 
   async function save() {
-    if (!confirm(`Apply plan ${planCode} to ${tenant.name}?`)) return;
+    if (!confirm(`Update modules and seats for ${tenant.name}?`)) return;
     setBusy(true);
     try {
-      const body: any = { planCode, staffSeatAddons: Number(addons) };
-      if (isStd) {
-        // Standalone (Single Module) plans are POS-only by design — force
-        // the flags so admin clicks don't drift into invalid states.
-        body.modulePos     = true;
-        body.moduleLedger  = false;
-        body.modulePayroll = false;
-      } else if (!isSuite) {
-        body.modulePos     = pos;
-        body.moduleLedger  = ledger;
-        body.modulePayroll = payroll;
-      }
+      // Modules are sent exactly as chosen. The server's only remaining rule
+      // is that at least one must be on.
+      const body: any = {
+        planCode,
+        staffSeatAddons: Number(addons),
+        modulePos:     pos,
+        moduleLedger:  ledger,
+        modulePayroll: payroll,
+      };
       await api.patch(`/admin/tenants/${tenant.id}/plan`, body);
-      toast.success(`Plan updated to ${planCode}.`);
+      toast.success('Tenant updated.');
       qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] });
     } catch (err: unknown) {
       toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed.');
@@ -1203,40 +1189,29 @@ function PlanPanel({
   return (
     <div className="rounded-lg border border-border bg-background p-4 space-y-3">
       <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-        Modular Plan
+        Plan &amp; Modules
       </h2>
 
-      <div>
-        <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Plan code</label>
-        <select
-          value={planCode}
-          onChange={(e) => setPlanCode(e.target.value)}
-          disabled={busy}
-          className="mt-1 w-full h-8 px-2 rounded-md border border-border bg-background text-xs"
-        >
-          {PLAN_CODES.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-      </div>
+      <p className="text-[10px] text-muted-foreground">
+        Every tenant is on the Clerque package. Choose which modules they use.
+      </p>
 
-      {/* Module toggles — disabled for Suite (forced all-on) and STD (forced POS-only) */}
+      {/* Module toggles */}
       <div>
         <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Modules</p>
         <div className="grid grid-cols-3 gap-2">
           {[
-            { v: pos,     set: setPos,     label: 'POS',     code: 'POS' as const     },
-            { v: ledger,  set: setLedger,  label: 'Ledger',  code: 'LEDGER' as const  },
-            { v: payroll, set: setPayroll, label: 'Payroll', code: 'PAYROLL' as const },
-          ].map(({ v, set, label, code }) => {
-            // STD plans: force POS=true, others=false. Suite: all forced true.
-            const stdValue   = isStd && (code === 'POS');
-            const checked    = isSuite ? true : isStd ? stdValue : v;
-            const isLocked   = isSuite || isStd;
+            { v: pos,     set: setPos,     label: 'POS'     },
+            { v: ledger,  set: setLedger,  label: 'Ledger'  },
+            { v: payroll, set: setPayroll, label: 'Payroll' },
+          ].map(({ v, set, label }) => {
+            const checked = v;
             return (
-              <label key={label} className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs ${isLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-muted'} ${checked ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-border'}`}>
+              <label key={label} className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs cursor-pointer hover:bg-muted ${checked ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-border'}`}>
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={busy || isLocked}
+                  disabled={busy}
                   onChange={(e) => set(e.target.checked)}
                 />
                 {label}
@@ -1244,9 +1219,9 @@ function PlanPanel({
             );
           })}
         </div>
-        {isStd  && <p className="text-[10px] text-muted-foreground mt-1">Single Module is POS-only. Need Ledger or Payroll? Switch to a Pair or Suite plan.</p>}
-        {isPair && <p className="text-[10px] text-muted-foreground mt-1">Pair — exactly two modules.</p>}
-        {isSuite && <p className="text-[10px] text-muted-foreground mt-1">Suite — all three modules included.</p>}
+        {!pos && !ledger && !payroll && (
+          <p className="text-[10px] text-amber-600 mt-1">At least one module must be enabled.</p>
+        )}
       </div>
 
       <div>

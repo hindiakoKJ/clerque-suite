@@ -35,6 +35,7 @@ export function StockAdjustModal({
   const [direction, setDirection] = useState<AdjustType>('STOCK_IN');
   const [qtyStr, setQtyStr] = useState('');
   const [unitCostStr, setUnitCostStr] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'OWNER_FUNDED'>('CASH');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
@@ -62,6 +63,9 @@ export function StockAdjustModal({
         unitCost: direction === 'STOCK_IN' && qty > 0 && !isNaN(unitCost) && unitCost >= 0
           ? unitCost
           : undefined,
+        // Only send paymentMethod on stock-in — tells the ledger whether the
+        // purchase was paid from cash on hand or funded by the owner.
+        paymentMethod: direction === 'STOCK_IN' ? paymentMethod : undefined,
       });
       onSuccess();
       onClose();
@@ -77,7 +81,7 @@ export function StockAdjustModal({
 
   function handleClose() {
     if (loading) return;
-    setQtyStr(''); setUnitCostStr(''); setReason(''); setNote(''); setError('');
+    setQtyStr(''); setUnitCostStr(''); setPaymentMethod('CASH'); setReason(''); setNote(''); setError('');
     onClose();
   }
 
@@ -160,6 +164,27 @@ export function StockAdjustModal({
             </div>
           )}
 
+          {/* Paid with — only for STOCK_IN, tells the ledger the funding source */}
+          {direction === 'STOCK_IN' && (
+            <div>
+              <label className="text-xs text-muted-foreground font-medium">Paid with</label>
+              <div className="mt-1 flex rounded-lg border border-border overflow-hidden text-xs font-medium">
+                {([['CASH', 'Cash on hand'], ['OWNER_FUNDED', 'Owner funds']] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => setPaymentMethod(value)}
+                    className={`flex-1 py-2 flex items-center justify-center transition-colors ${
+                      paymentMethod === value ? 'text-white' : 'text-muted-foreground hover:bg-muted'
+                    }`}
+                    style={paymentMethod === value ? { background: 'var(--accent)' } : undefined}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Reason */}
           <div>
             <label className="text-xs text-muted-foreground font-medium">Reason</label>
@@ -167,7 +192,14 @@ export function StockAdjustModal({
               {REASONS[direction].map((r) => (
                 <button
                   key={r}
-                  onClick={() => { setReason(r); setError(''); }}
+                  onClick={() => {
+                    setReason(r); setError('');
+                    // Smart default for the ledger: opening stock ("Initial
+                    // count") is owner-funded, not a cash purchase; every
+                    // other stock-in reason defaults to cash. The operator
+                    // can still override via the "Paid with" picker.
+                    if (direction === 'STOCK_IN') setPaymentMethod(r === 'Initial count' ? 'OWNER_FUNDED' : 'CASH');
+                  }}
                   className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
                     reason === r ? 'text-white' : 'bg-muted text-muted-foreground hover:bg-secondary'
                   }`}

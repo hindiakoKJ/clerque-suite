@@ -24,11 +24,12 @@ export const metadata = {
     'BIR-compliant POS for owner-operated cafés and retail. Recipe COGS, batch inventory with FEFO, and PH-native payments — at a fraction of Loyverse-paid pricing.',
 };
 
-// Format the price from PLAN_CAPS so the marketing copy is always in sync
-// with the canonical source. If pricing changes, this updates automatically.
-function priceLabel(code: 'SOLO_PRO' | 'SOLO_BOOKS'): string {
-  const peso = Math.round(PLAN_CAPS[code].pricePhpMonthlyCents / 100);
-  return `₱${peso.toLocaleString('en-PH')}`;
+// Reads the canonical price so marketing copy can never drift from billing.
+// Returns null while pricing is unset, so the page says so plainly instead of
+// advertising ₱0.
+function priceLabel(): string | null {
+  const peso = Math.round(PLAN_CAPS.CLERQUE.pricePhpMonthlyCents / 100);
+  return peso > 0 ? `₱${peso.toLocaleString('en-PH')}` : null;
 }
 
 function Hero() {
@@ -129,106 +130,55 @@ function WhyUs() {
 }
 
 function Pricing() {
-  // Prices auto-read from PLAN_CAPS so this page can never drift from the
-  // canonical billing source (Sprint 23 invariant).
-  const tiers: Array<{
-    code: 'SOLO_PRO' | 'SOLO_BOOKS';
-    name: string;
-    subtitle: string;
-    features: string[];
-    recommended?: boolean;
-  }> = [
-    {
-      code: 'SOLO_PRO',
-      name: 'Solo',
-      subtitle: 'Full-access POS · up to 5 users',
-      features: [
-        'Unlimited transactions, products, customers',
-        'BIR-compliant Z-read + OR# sequencing',
-        'Unlimited recipe products with WAC ingredient COGS',
-        'Unlimited batch / FEFO / expiry on every item (+ FIFO option)',
-        'Modifiers, discounts, PWD/Senior, open tickets',
-        'GCash / Maya / QR Ph / card tendering',
-        'Audit log + custom roles + maker-checker voids',
-        'Advanced reports, Loyalty Pro, Google Drive auto-backup, API read',
-      ],
-    },
-    {
-      code: 'SOLO_BOOKS',
-      name: 'Solo Books',
-      subtitle: 'Full POS + simple bookkeeping · up to 5 users',
-      features: [
-        'Everything in Solo',
-        'Simple bookkeeping — record income & expenses',
-        'See money owed from charge sales',
-        'Simple income-vs-expense summary',
-        'Upgrade anytime for full accounting — journal, BIR forms, statements',
-      ],
-      recommended: true,
-    },
+  // One package. The two-tier comparison this replaced (Solo vs Solo Books)
+  // sold a module split that no longer exists.
+  const price = priceLabel();
+
+  const features: string[] = [
+    'Unlimited transactions, products, customers',
+    'BIR-compliant Z-read + OR# sequencing',
+    'Unlimited recipe products with WAC ingredient COGS',
+    'Unlimited batch / FEFO / expiry on every item (+ FIFO option)',
+    'Modifiers, discounts, PWD/Senior, open tickets',
+    'GCash / Maya / QR Ph / card tendering',
+    'Audit log + custom roles + maker-checker voids',
+    'Bookkeeping \u2014 income, expenses, money owed, full accounting',
+    'Advanced reports, Loyalty Pro, Google Drive auto-backup',
+    'API access so your own apps can record sales',
   ];
 
   return (
     <section className="px-6 py-16" style={{ background: ACCENT_SOFT }}>
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-3xl mx-auto">
         <h2 className="text-2xl sm:text-3xl font-bold text-zinc-900 text-center mb-2">
-          Three Solo tiers. All paid. All cheaper than Loyverse.
+          One plan. Everything included.
         </h2>
         <p className="text-center text-zinc-600 mb-10 text-sm">
-          We don&apos;t do a stripped &quot;free&quot; tier. Every plan is a real BIR-ready product.
-          Compare any tier to Loyverse-with-add-ons — we win on price and features.
+          No stripped &quot;free&quot; tier and no feature ladder \u2014 a real BIR-ready
+          product, whether you run one till or feed it from your own app.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {tiers.map((t) => (
-            <div
-              key={t.name}
-              className={`bg-white rounded-xl p-6 border-2 ${
-                t.recommended ? '' : 'border-zinc-200'
-              }`}
-              style={t.recommended ? { borderColor: ACCENT } : {}}
-            >
-              {t.recommended && (
-                <div className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: ACCENT }}>
-                  Most popular
-                </div>
-              )}
-              <h3 className="font-bold text-xl text-zinc-900 mb-1">{t.name}</h3>
-              <p className="text-xs text-zinc-500 mb-4">{t.subtitle}</p>
-              <div className="mb-5">
-                <span className="text-3xl font-bold text-zinc-900">{priceLabel(t.code)}</span>
+        <div className="bg-white rounded-xl p-6 sm:p-8 border-2" style={{ borderColor: ACCENT }}>
+          <h3 className="font-bold text-xl text-zinc-900 mb-1">Clerque</h3>
+          <p className="text-xs text-zinc-500 mb-4">POS + books, for one shop or a whole ecosystem</p>
+          <div className="mb-6">
+            {price ? (
+              <>
+                <span className="text-3xl font-bold text-zinc-900">{price}</span>
                 <span className="text-sm text-zinc-500">/month</span>
-              </div>
-              <ul className="space-y-2 mb-6">
-                {t.features.map((f) => (
-                  <li key={f} className="text-sm text-zinc-700 flex items-start gap-2">
-                    <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" style={{ color: ACCENT }} />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-              <Link
-                href="/signup"
-                className="block text-center text-sm font-medium px-4 py-2 rounded-lg w-full"
-                style={
-                  t.recommended
-                    ? { background: ACCENT, color: 'white' }
-                    : { border: `1px solid ${ACCENT}`, color: ACCENT }
-                }
-              >
-                Start free trial
-              </Link>
-            </div>
-          ))}
+              </>
+            ) : (
+              <span className="text-lg font-semibold text-zinc-600">Pricing coming soon</span>
+            )}
+          </div>
+          <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+            {features.map((f) => (
+              <li key={f} className="text-sm text-zinc-700 flex items-start gap-2">
+                <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" style={{ color: ACCENT }} />
+                {f}
+              </li>
+            ))}
+          </ul>
         </div>
-        <p className="text-xs text-zinc-500 text-center mt-8 max-w-2xl mx-auto">
-          Outgrowing Solo? Multiple branches, more than 5 staff, need Ledger/Payroll too? See our{' '}
-          <Link href="/welcome/ledger" className="underline">Pair and Suite plans</Link> with full accounting + payroll modules.
-          Each Solo plan above covers single-location POS with BIR compliance.
-        </p>
-        <p className="text-[11px] text-zinc-500 text-center mt-2 italic">
-          Some advanced features (batch inventory, custom roles, offline POS) are shipping over the next 3-4 months
-          and will auto-unlock for tier subscribers when they go live — no re-pricing.
-        </p>
       </div>
     </section>
   );

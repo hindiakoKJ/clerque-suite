@@ -13,7 +13,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Coffee, ArrowRight, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
-import { PLAN_CAPS } from '@repo/shared-types';
 
 const ACCENT      = '#8B5E3C';
 const ACCENT_SOFT = '#EEE9DF';
@@ -25,59 +24,24 @@ interface SignupResponse {
   referenceCode: string | null;
 }
 
-// Two-plan Solo lineup (Sprint-24 pricing overhaul):
-//   Solo        = full-access POS                         (code SOLO_PRO,   ₱299)
-//   Solo Books  = full-access POS + simple bookkeeping    (code SOLO_BOOKS, ₱399)
-// Legacy codes SOLO_LITE / SOLO_STANDARD are retained for existing tenants but
-// are no longer offered at signup.
-type OfferedPlan = 'SOLO_PRO' | 'SOLO_BOOKS';
-
-const PLANS: Array<{
-  code: OfferedPlan;
-  name: string;
-  tagline: string;
-  highlights: string[];
-  recommended?: boolean;
-}> = [
-  {
-    code: 'SOLO_PRO',
-    name: 'Solo',
-    tagline: 'Full-access point of sale',
-    highlights: [
-      'Up to 5 users / cashiers',
-      'Full POS — unlimited products, recipes & FEFO inventory',
-      'GCash + Maya + QR Ph + card tendering',
-      'BIR-compliant Z-read & receipts',
-      'Audit log, advanced reports & Loyalty Pro',
-      'API read access + daily auto-backup',
-    ],
-  },
-  {
-    code: 'SOLO_BOOKS',
-    name: 'Solo Books',
-    tagline: 'Full POS + simple bookkeeping',
-    highlights: [
-      'Everything in Solo',
-      'Simple bookkeeping — record income & expenses',
-      'See money owed from charge sales',
-      'Simple income-vs-expense summary',
-      'Upgrade anytime for full accounting (journal, BIR, statements)',
-    ],
-    recommended: true,
-  },
+// One package. The signup used to ask the buyer to choose between Solo
+// (POS only) and Solo Books (POS + simple bookkeeping); the module matrix
+// behind that choice is gone, so there is nothing to pick. Pricing is being
+// redesigned, so no figure is shown rather than a placeholder one.
+const INCLUDED: string[] = [
+  'Full POS \u2014 unlimited products, recipes & FEFO inventory',
+  'GCash + Maya + QR Ph + card tendering',
+  'BIR-compliant Z-read & receipts',
+  'Bookkeeping \u2014 income, expenses & money owed',
+  'Audit log, advanced reports & Loyalty Pro',
+  'API access for your own apps + daily auto-backup',
 ];
-
-function priceLabel(code: OfferedPlan): string {
-  const peso = Math.round(PLAN_CAPS[code].pricePhpMonthlyCents / 100);
-  return `₱${peso.toLocaleString('en-PH')}`;
-}
 
 export default function PosSignupPage() {
   const router = useRouter();
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '/api/v1';
 
   const [form, setForm] = useState({
-    planCode:      'SOLO_BOOKS' as OfferedPlan,
     businessName:  '',
     businessType:  'COFFEE_SHOP' as
       | 'COFFEE_SHOP' | 'RESTAURANT' | 'BAKERY' | 'FOOD_STALL' | 'BAR_LOUNGE' | 'CATERING'
@@ -113,7 +77,6 @@ export default function PosSignupPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          planCode:      form.planCode,
           businessName:  form.businessName.trim(),
           businessType:  form.businessType,
           ownerName:     form.ownerName.trim(),
@@ -157,55 +120,26 @@ export default function PosSignupPage() {
             Start your BIR-compliant POS
           </h1>
           <p className="text-zinc-600 max-w-xl mx-auto">
-            Pick a plan, fill in your details, send payment. We&apos;ll activate your account within 4 business hours and email you the BIR Official Receipt.
+            Fill in your details and send payment. We&apos;ll activate your account within 4 business hours and email you the BIR Official Receipt.
           </p>
         </div>
 
         <form onSubmit={submit} className="space-y-10">
-          {/* Step 1: Plan picker */}
+          {/* Step 1: What's included */}
           <section>
             <div className="mb-4">
-              <h2 className="text-lg font-bold text-zinc-900">1. Pick your plan</h2>
-              <p className="text-sm text-zinc-600">All plans are paid; you can upgrade or downgrade later.</p>
+              <h2 className="text-lg font-bold text-zinc-900">1. What you get</h2>
+              <p className="text-sm text-zinc-600">One package, everything included.</p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {PLANS.map((p) => {
-                const selected = form.planCode === p.code;
-                return (
-                  <button
-                    key={p.code}
-                    type="button"
-                    onClick={() => set('planCode', p.code)}
-                    className={`text-left rounded-xl border-2 p-5 transition-colors ${
-                      selected ? 'shadow-md' : 'border-zinc-200 hover:border-zinc-400'
-                    }`}
-                    style={selected ? { borderColor: ACCENT, background: ACCENT_SOFT } : {}}
-                  >
-                    {p.recommended && (
-                      <div className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: ACCENT }}>
-                        Most popular
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between mb-1">
-                      <h3 className="font-bold text-lg text-zinc-900">{p.name}</h3>
-                      {selected && <CheckCircle2 className="h-5 w-5" style={{ color: ACCENT }} />}
-                    </div>
-                    <p className="text-xs text-zinc-500 mb-3">{p.tagline}</p>
-                    <div className="mb-4">
-                      <span className="text-2xl font-bold text-zinc-900">{priceLabel(p.code)}</span>
-                      <span className="text-sm text-zinc-500">/mo</span>
-                    </div>
-                    <ul className="space-y-1.5">
-                      {p.highlights.map((h) => (
-                        <li key={h} className="text-xs text-zinc-700 flex items-start gap-1.5">
-                          <CheckCircle2 className="h-3 w-3 mt-0.5 shrink-0" style={{ color: ACCENT }} />
-                          {h}
-                        </li>
-                      ))}
-                    </ul>
-                  </button>
-                );
-              })}
+            <div className="rounded-xl border-2 p-5" style={{ borderColor: ACCENT, background: ACCENT_SOFT }}>
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+                {INCLUDED.map((h) => (
+                  <li key={h} className="text-sm text-zinc-700 flex items-start gap-1.5">
+                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: ACCENT }} />
+                    {h}
+                  </li>
+                ))}
+              </ul>
             </div>
           </section>
 

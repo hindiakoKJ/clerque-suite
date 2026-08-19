@@ -20,14 +20,13 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { TIERS, nextTier, type TierId, PLAN_CAPS, planLabel, effectiveSeatCeiling, type PlanCode } from '@repo/shared-types';
+import { planCapsFor, planLabel, effectiveSeatCeiling, normalizePlanCode } from '@repo/shared-types';
 import { toast } from 'sonner';
 import { ShoppingCart, BookOpen, Users as UsersIcon, ArrowRight } from 'lucide-react';
 
 type AiAddonType = 'STARTER_50' | 'STANDARD_200' | 'PRO_500';
 
 interface SubscriptionResponse {
-  tier:              TierId;
   expiresAt:         string | null;
   staffCount:        number;
   branchCount:       number;
@@ -47,7 +46,7 @@ interface SubscriptionResponse {
     monthlyQuota:    number;
     usedThisMonth:   number;
     remaining:       number;
-    source:          'tier_locked' | 'tier_included' | 'addon_only' | 'tier+addon' | 'override' | 'kill_switch';
+    source:          'plan_locked' | 'plan_included' | 'addon_only' | 'plan+addon' | 'override' | 'kill_switch';
     enabled:         boolean;
     addonType:       AiAddonType | null;
     addonExpiresAt:  string | null;
@@ -99,9 +98,7 @@ export default function SubscriptionPage() {
     );
   }
 
-  const tier      = TIERS[data.tier];
-  const upgrade   = nextTier(data.tier);
-  const staffCap  = tier.maxStaff;
+  const staffCap  = data.cashierSeatQuota;
   const staffUsed = data.staffCount;
   const staffPct  = staffCap === -1 ? 0 : Math.min(100, Math.round((staffUsed / Math.max(1, staffCap)) * 100));
   const isAtCap   = staffCap !== -1 && staffUsed >= staffCap;
@@ -135,7 +132,7 @@ export default function SubscriptionPage() {
 
         {/* ── Modular Plan card (primary, NEW) ──────────────────────────────── */}
         <ModulePlanCard
-          planCode={(user?.planCode ?? 'SUITE_T2') as PlanCode}
+          planCode={normalizePlanCode(user?.planCode)}
           modulePos={user?.modulePos !== false}
           moduleLedger={user?.moduleLedger !== false}
           modulePayroll={user?.modulePayroll !== false}
@@ -161,26 +158,12 @@ export default function SubscriptionPage() {
               <div className="flex items-center gap-2">
                 <Crown className="w-4 h-4 text-amber-500" />
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Current plan
+                  Usage
                 </p>
               </div>
-              <h2 className="text-2xl font-bold text-foreground mt-1">{tier.displayName}</h2>
-              <p className="text-sm text-muted-foreground mt-1 max-w-md">{tier.tagline}</p>
-              {/* Pricing — what they pay */}
-              <div className="flex items-baseline gap-3 mt-3 pt-3 border-t border-border">
-                <p className="text-2xl font-bold text-foreground">
-                  ₱{data.pricing.monthlyPhp.toLocaleString('en-PH')}
-                  <span className="text-sm font-normal text-muted-foreground">/mo</span>
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  or ₱{data.pricing.annualPhp.toLocaleString('en-PH')}/yr (2 months free)
-                </p>
-              </div>
-              {!data.pricing.setupFeePaidAt && (
-                <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
-                  ⓘ One-time setup fee (₱{data.pricing.setupFeePhp.toLocaleString('en-PH')}) not yet recorded.
-                </p>
-              )}
+              <p className="text-sm text-muted-foreground mt-1 max-w-md">
+                What this account is using against its limits.
+              </p>
             </div>
             {data.expiresAt && (
               <div className="text-right">
@@ -260,25 +243,26 @@ export default function SubscriptionPage() {
               </div>
             )}
             <p className="text-[11px] text-muted-foreground">
-              {data.ai.source === 'tier_locked'   && 'Available on Team plan and above, or as an add-on for Squad tier.'}
-              {data.ai.source === 'tier_included' && `Included with your ${tier.displayName} plan.`}
+              {data.ai.source === 'plan_locked'   && 'No AI allowance on this account yet — add a package below.'}
+              {data.ai.source === 'plan_included' && 'Included with your plan.'}
               {data.ai.source === 'addon_only'    && data.ai.addonPackage && `${data.ai.addonPackage.displayName} add-on — renews ${formatExpiry(data.ai.addonExpiresAt)}.`}
-              {data.ai.source === 'tier+addon'    && data.ai.addonPackage && `Tier-included plus ${data.ai.addonPackage.displayName} add-on.`}
+              {data.ai.source === 'plan+addon'    && data.ai.addonPackage && `Plan-included plus ${data.ai.addonPackage.displayName} add-on.`}
               {data.ai.source === 'override'      && 'Custom quota set by support.'}
               {data.ai.source === 'kill_switch'   && 'Disabled by support — contact us to re-enable.'}
             </p>
           </div>
         </div>
 
-        {/* AI add-on packages — visible to TIER_4+ */}
-        {(data.tier === 'TIER_4' || data.tier === 'TIER_5' || data.tier === 'TIER_6') && (
+        {/* AI add-on packages */}
+        {(
+          true) && (
           <div className="rounded-xl border border-border bg-card p-5 sm:p-6 space-y-3">
             <div className="flex items-start gap-3">
               <Sparkles className="w-5 h-5 text-[var(--accent)] shrink-0 mt-0.5" />
               <div>
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">AI Add-ons</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Stack on top of your tier-included quota. Cheaper than a part-time bookkeeper.
+                  Stack on top of the quota your plan includes. Cheaper than a part-time bookkeeper.
                 </p>
               </div>
             </div>
@@ -307,7 +291,7 @@ export default function SubscriptionPage() {
               })}
             </div>
             <a
-              href="mailto:support@hnscorpph.com?subject=AI%20Add-on%20Request"
+              href="mailto:devsupport@hnscorpph.com?subject=AI%20Add-on%20Request"
               className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-white font-semibold hover:brightness-110 active:scale-[0.98] transition-all text-sm"
               style={{ background: 'var(--accent)' }}
             >
@@ -320,18 +304,6 @@ export default function SubscriptionPage() {
           </div>
         )}
 
-        {/* Included features */}
-        <div className="rounded-xl border border-border bg-card p-5 sm:p-6 space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Included in your plan</h3>
-          <ul className="space-y-2">
-            {tier.enabledFeatures.map((flag) => (
-              <li key={flag} className="flex items-start gap-2 text-sm">
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                <span className="text-foreground">{humanizeFeature(flag)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
 
         {/* Test users seeder (BUSINESS_OWNER only) — DEMO TENANTS ONLY.
             Real customer tenants should never see this — predictable passwords
@@ -339,46 +311,7 @@ export default function SubscriptionPage() {
         {data.isDemoTenant && <TestUsersSeederCard />}
 
 
-        {/* Upgrade CTA */}
-        {upgrade && (
-          <div className="rounded-xl border border-[var(--accent)]/30 bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] p-5 sm:p-6 space-y-3">
-            <div className="flex items-start gap-3">
-              <Sparkles className="w-5 h-5 text-[var(--accent)] shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm text-muted-foreground">Next step up</p>
-                <h3 className="text-lg font-bold text-foreground">{upgrade.displayName}</h3>
-                <p className="text-sm text-muted-foreground mt-1">{upgrade.tagline}</p>
-              </div>
-            </div>
 
-            <div className="text-sm space-y-1 pl-8">
-              <p className="font-semibold text-foreground">What's new</p>
-              <ul className="space-y-1">
-                {upgrade.enabledFeatures
-                  .filter((f) => !tier.enabledFeatures.includes(f))
-                  .map((f) => (
-                    <li key={f} className="flex items-center gap-2 text-foreground">
-                      <span className="w-1 h-1 rounded-full bg-[var(--accent)]" />
-                      {humanizeFeature(f)}
-                    </li>
-                  ))}
-                <li className="flex items-center gap-2 text-foreground">
-                  <span className="w-1 h-1 rounded-full bg-[var(--accent)]" />
-                  Up to {upgrade.maxStaff === -1 ? 'unlimited' : upgrade.maxStaff} staff
-                </li>
-              </ul>
-            </div>
-
-            <button
-              onClick={() => alert('Upgrade flow coming soon — contact support@hnscorpph.com to upgrade today.')}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-white font-semibold hover:brightness-110 active:scale-[0.98] transition-all"
-              style={{ background: 'var(--accent)' }}
-            >
-              Upgrade to {upgrade.displayName}
-              <ArrowUpRight className="w-4 h-4" />
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -388,34 +321,25 @@ export default function SubscriptionPage() {
 function ModulePlanCard({
   planCode, modulePos, moduleLedger, modulePayroll, staffCount,
 }: {
-  planCode:      PlanCode;
+  planCode:      ReturnType<typeof normalizePlanCode>;
   modulePos:     boolean;
   moduleLedger:  boolean;
   modulePayroll: boolean;
   staffCount:    number;
 }) {
-  const cap         = PLAN_CAPS[planCode];
+  const cap         = planCapsFor(planCode);
   const ceiling     = effectiveSeatCeiling(planCode, 0);
   const seatsLeft   = Math.max(0, ceiling - staffCount);
   const usedPct     = Math.min(100, Math.round((staffCount / Math.max(1, ceiling)) * 100));
   const monthlyPhp  = Math.round(cap.pricePhpMonthlyCents / 100);
   const addonPhp    = Math.round(cap.addonSeatPhpMonthlyCents / 100);
-  const moduleCount = cap.moduleCount;
 
-  const isStandalone = moduleCount === 1;
-
-  // Standalone plans are POS-only; Ledger / Payroll show "Pair upgrade required"
-  // instead of just "Not on plan" to make the upsell path obvious.
+  // A module being off is now a choice this business made, not something a
+  // cheaper plan withheld — so there is no upsell note to show.
   const modules: Array<{ key: 'POS' | 'LEDGER' | 'PAYROLL'; on: boolean; Icon: any; label: string; tagline: string; lockedNote?: string }> = [
     { key: 'POS',     on: modulePos,     Icon: ShoppingCart, label: 'POS',     tagline: 'Run the till' },
-    {
-      key: 'LEDGER',  on: moduleLedger,  Icon: BookOpen,     label: 'Ledger',  tagline: 'Books that match BIR',
-      lockedNote: isStandalone ? 'Upgrade to a Pair plan' : undefined,
-    },
-    {
-      key: 'PAYROLL', on: modulePayroll, Icon: UsersIcon,    label: 'Payroll', tagline: 'Pay people right',
-      lockedNote: isStandalone ? 'Upgrade to a Pair plan' : undefined,
-    },
+    { key: 'LEDGER',  on: moduleLedger,  Icon: BookOpen,     label: 'Ledger',  tagline: 'Books that match BIR' },
+    { key: 'PAYROLL', on: modulePayroll, Icon: UsersIcon,    label: 'Payroll', tagline: 'Pay people right' },
   ];
 
   return (
@@ -425,13 +349,19 @@ function ModulePlanCard({
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Modular plan</p>
           <h2 className="text-2xl font-bold text-foreground mt-1">{planLabel(planCode)}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {moduleCount === 1 ? 'Single Module · POS-only' : moduleCount === 2 ? 'Two-module pair' : 'Full suite'} · plan code <span className="font-mono">{planCode}</span>
+            Switch modules on or off from the admin console.
           </p>
         </div>
         <div className="text-right">
           <p className="text-2xl font-bold text-foreground">
-            ₱{monthlyPhp.toLocaleString('en-PH')}
-            <span className="text-sm font-normal text-muted-foreground">/mo</span>
+            {monthlyPhp > 0 ? (
+              <>
+                ₱{monthlyPhp.toLocaleString('en-PH')}
+                <span className="text-sm font-normal text-muted-foreground">/mo</span>
+              </>
+            ) : (
+              <span className="text-base font-medium text-muted-foreground">Pricing not set</span>
+            )}
           </p>
           {addonPhp > 0 && (
             <p className="text-[11px] text-muted-foreground mt-0.5">+₱{addonPhp.toLocaleString('en-PH')} per add-on seat/mo</p>
@@ -496,7 +426,7 @@ function ModulePlanCard({
 
       {/* Plan switch CTA — opens email since billing is sales-led */}
       <a
-        href={`mailto:support@hnscorpph.com?subject=Plan%20change%20request%20-%20${planCode}`}
+        href={`mailto:devsupport@hnscorpph.com?subject=Plan%20change%20request%20-%20${planCode}`}
         className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg border border-border hover:bg-muted text-sm font-medium transition-colors"
       >
         Change plan or buy seats

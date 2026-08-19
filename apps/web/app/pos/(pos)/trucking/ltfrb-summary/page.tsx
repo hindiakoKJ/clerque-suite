@@ -111,7 +111,7 @@ export default function LtfrbSummaryPage() {
         <Stat label="Vehicles" value={String(totals.vehicles)} />
         <Stat label="Drivers"  value={String(totals.drivers)} />
         <Stat label="Trips"    value={String(totals.trips)} />
-        <Stat label="Revenue"  value={formatPeso(Math.round(totals.revenue * 100))} />
+        <Stat label="Revenue"  value={formatPeso(totals.revenue)} />
       </div>
 
       {q.isLoading ? (
@@ -141,7 +141,7 @@ export default function LtfrbSummaryPage() {
                   <td className="p-2 text-xs">{r.vehicle}</td>
                   <td className="p-2 text-xs">{r.driverName}</td>
                   <td className="p-2 text-right font-mono">{r.tripCount}</td>
-                  <td className="p-2 text-right font-mono">{formatPeso(Math.round(r.revenue * 100))}</td>
+                  <td className="p-2 text-right font-mono">{formatPeso(r.revenue)}</td>
                   <td className="p-2 text-right font-mono">
                     {r.uniqueRoutes}
                     {r.topRoutes.length > 0 ? (

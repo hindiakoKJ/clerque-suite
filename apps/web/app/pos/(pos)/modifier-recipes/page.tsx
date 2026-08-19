@@ -293,7 +293,7 @@ export default function ModifierRecipesPage() {
                                 Price adj{' '}
                                 <span className="font-mono text-gray-700">
                                   {Number(opt.priceAdjustment) >= 0 ? '+' : ''}
-                                  {formatPeso(Number(opt.priceAdjustment) * 100)}
+                                  {formatPeso(Number(opt.priceAdjustment))}
                                 </span>
                               </div>
                             </div>
@@ -323,7 +323,7 @@ export default function ModifierRecipesPage() {
                               </div>
                               <div className="text-xs text-gray-500">
                                 Est. COGS{' '}
-                                <span className="font-mono text-gray-800">{formatPeso(Math.round(cogs * 100))}</span>
+                                <span className="font-mono text-gray-800">{formatPeso(cogs)}</span>
                               </div>
                             </div>
 

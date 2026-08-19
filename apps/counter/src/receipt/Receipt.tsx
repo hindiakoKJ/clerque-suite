@@ -8,12 +8,17 @@
  * Layout mirrors `ReceiptTablet` in design-source/screens-tablet-v2.jsx.
  *
  * BIR notes baked in:
- *   - OR number rendered HUGE at the top in mono tabular-nums (≥32pt).
+ *   - Slip number rendered HUGE at the top in mono tabular-nums (≥32pt),
+ *     prefixed "AR" (Acknowledgement Receipt) or "SI" (Sales Invoice) per
+ *     receiptAuthority() — NEVER "OR #" / "Official Receipt" without PTU.
  *   - Non-VAT registered: prints "Non-VAT registered" line; no VAT breakdown.
- *   - VAT-registered: prints vatable / vat-exempt / vat-amount split.
+ *   - VAT-registered: vatable / vat-exempt / vat-amount split — on a VAT
+ *     Sales Invoice only. Acknowledgement Receipts are gross only.
+ *   - Acknowledgement Receipts print the mandatory "NOT A SALES INVOICE OR
+ *     OFFICIAL RECEIPT" disclaimer.
  *   - Voided lines stay in sequence, struck-through (audit requirement).
  *   - Senior/PWD ID and owner name + signature line print.
- *   - Closing line bilingual: "official receipt — Pang-opisyal na Resibo".
+ *   - Closing line bilingual, e.g. "acknowledgement receipt — Resibo ng Pagtanggap".
  */
 
 import React from 'react';
@@ -35,6 +40,7 @@ import type {
 } from '@/types';
 import { formatPeso } from '@/components/Money';
 import { getWebHost } from '@/api/webOrigin';
+import { counterReceiptAuthority } from './receiptAuthority';
 
 export interface ReceiptVatBreakdown {
   /** ₱ cents — vatable net base (excludes VAT). */
@@ -149,15 +155,16 @@ export default function Receipt({
   originalOrNumber,
 }: ReceiptProps): React.ReactElement {
   const isVat = tenant.taxStatus === 'VAT' && tenant.isVatRegistered;
-  /** BIR-registered tenants (VAT or Non-VAT) issue Official Receipts.
-   *  UNREGISTERED tenants must label every slip "Acknowledgement Receipt"
-   *  per BIR rules — they cannot use the OR series number.  */
+  /** Tenant fact for the header status line only — registration alone does
+   *  NOT make the slip an official document (see receiptAuthority). */
   const isBirRegistered = tenant.taxStatus === 'VAT' || tenant.taxStatus === 'NON_VAT';
-  const receiptKind     = isBirRegistered ? 'Official Receipt' : 'Acknowledgement Receipt';
-  const receiptKindFil  = isBirRegistered ? 'Pang-opisyal na Resibo' : 'Resibo ng Pagtanggap';
-  /** Display label for the giant receipt number. ORs use the "OR #" prefix
-   *  per BIR conventions; ARs use "AR #" to avoid impersonating an OR. */
-  const numberPrefix    = isBirRegistered ? 'OR' : 'AR';
+  /** What this slip IS — see receiptAuthority.ts (shared with the thermal
+   *  path). Fails SAFE to Acknowledgement Receipt until TenantConfig carries
+   *  isPtuHolder: Counter must never print "Official Receipt" / "OR #"
+   *  without PTU authority. */
+  const auth            = counterReceiptAuthority(tenant);
+  /** Display label for the giant receipt number — "AR #" or "SI #". */
+  const numberPrefix    = auth.numberPrefix;
 
   return (
     <View style={s.paper}>
@@ -176,7 +183,7 @@ export default function Receipt({
         {tenant.fdaLicenseNumber ? (
           <Text style={s.meta}>FDA LTO {tenant.fdaLicenseNumber}</Text>
         ) : null}
-        <Text style={s.metaSmall}>{receiptKindFil}</Text>
+        <Text style={s.metaSmall}>{auth.title} · {auth.titleFil}</Text>
         {isRefund && (
           <Text style={s.refundBanner}>REFUND · against {numberPrefix} # {originalOrNumber ? pad6(originalOrNumber) : '------'}</Text>
         )}
@@ -211,7 +218,7 @@ export default function Receipt({
         </View>
       )}
 
-      {isVat && vat ? (
+      {auth.showVatLine && isVat && vat ? (
         <>
           <View style={s.row}>
             <Text style={s.totalsLabel}>Vatable sales</Text>
@@ -230,12 +237,12 @@ export default function Receipt({
             <Text style={[s.totalsLabel, tnum]}>{formatPeso(vat.vatAmountCents)}</Text>
           </View>
         </>
-      ) : (
+      ) : auth.kind === 'SALES_INVOICE' ? (
         <View style={s.row}>
           <Text style={s.totalsLabel}>VAT-exempt sales</Text>
           <Text style={[s.totalsLabel, tnum]}>{formatPeso(totalCents)}</Text>
         </View>
-      )}
+      ) : null /* Acknowledgement Receipt — gross only, no VAT lines */}
 
       <View style={s.hr} />
       <View style={s.row}>
@@ -284,8 +291,11 @@ export default function Receipt({
           <Text style={s.metaSmall}>{tenant.receiptFooterNote}</Text>
         ) : null}
         <Text style={s.metaSmall}>Powered by Clerque · {getWebHost()}</Text>
+        {auth.disclaimer ? (
+          <Text style={s.disclaimer}>{auth.disclaimer}</Text>
+        ) : null}
         <Text style={s.closingLine}>
-          This serves as an {receiptKind.toLowerCase()} — {receiptKindFil}
+          This serves as {auth.kind === 'SALES_INVOICE' ? 'a sales invoice' : 'an acknowledgement receipt'} — {auth.titleFil}
         </Text>
       </View>
     </View>
@@ -387,6 +397,13 @@ const s = StyleSheet.create({
     ...textTokens.bodySm,
     color: colors.ink,
     fontWeight: '700',
+  },
+  disclaimer: {
+    ...textTokens.caption,
+    color: colors.ink,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: spacing.s2,
   },
   closingLine: {
     ...textTokens.caption,

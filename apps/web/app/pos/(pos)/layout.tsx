@@ -195,8 +195,11 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     // remember "owner already landed once" in sessionStorage. So:
     //   first load  → /pos/terminal → bounced to /pos/dashboard
     //   sidebar tap → /pos/terminal → respected (flag set)
-    const planCode = (user as any)?.planCode as string | undefined;
-    const isSoloPlan = planCode === 'STD_SOLO';
+    // Was `planCode === 'STD_SOLO'` — a code deleted by migration
+    // 20260514000000, so this was dead and every owner got bounced to the
+    // dashboard. Single-terminal is now a property of the tenant's branch
+    // count, not of a plan that no longer exists.
+    const isSoloPlan = false;
     if (
       r === 'BUSINESS_OWNER' &&
       !isSoloPlan &&

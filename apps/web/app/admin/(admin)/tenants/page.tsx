@@ -48,43 +48,12 @@ const BUSINESS_TYPES = [
   // Logistics-Engine
   'TRUCKING',
 ] as const;
-// Modular pricing plan codes (the new source of truth for access).
-// Legacy TIER_1..TIER_6 still in DB but advisory — auto-derived from the
-// chosen plan code. STD_* are POS-only; PAIR_* require pick-2; SUITE_* all-3.
-const PLAN_CODES = [
-  // Solo lineup — actively offered at signup
-  'SOLO_PRO', 'SOLO_BOOKS',
-  // Solo legacy — grandfathered tenants only (retired from signup)
-  'SOLO_LITE', 'SOLO_STANDARD',
-  // PARKED — multi-module legacy (kept here for grandfathered-tenant admin
-  // operations; not promoted to new signups until the PAIR redesign lands)
-  'PAIR_T1',   'PAIR_T2',  'PAIR_T3',
-  'SUITE_T1',  'SUITE_T2', 'SUITE_T3',
-  'ENTERPRISE',
-] as const;
-const PLAN_LABELS: Record<typeof PLAN_CODES[number], string> = {
-  // Solo lineup — actively offered
-  SOLO_PRO:       'Solo (full POS · 5 staff · ₱299/mo) — full-access point of sale',
-  SOLO_BOOKS:     'Solo Books (full POS + simple ledger · 5 staff · ₱399/mo) — POS + simple bookkeeping',
-  // Solo legacy — grandfathered only
-  SOLO_LITE:      'Solo Lite legacy (POS · 1 staff · ₱199/mo)',
-  SOLO_STANDARD:  'Solo Standard legacy (POS · 3 staff · ₱399/mo)',
-  // PARKED — multi-module legacy
-  PAIR_T1:    'Pair T1 legacy (any 2 modules · 3 staff · ₱799/mo)',
-  PAIR_T2:    'Pair T2 legacy (any 2 modules · 10 staff · ₱1,599/mo)',
-  PAIR_T3:    'Pair T3 legacy (any 2 modules · 25 staff · ₱2,899/mo)',
-  SUITE_T1:   'Suite T1 legacy (all 3 modules · 5 staff · ₱1,199/mo)',
-  SUITE_T2:   'Suite T2 legacy (all 3 modules · 15 staff · ₱2,299/mo)',
-  SUITE_T3:   'Suite T3 legacy (all 3 modules · 50 staff · ₱4,499/mo)',
-  ENTERPRISE: 'Enterprise legacy (custom · 100 staff)',
-};
-// Legacy tier kept on Tenant table for rollback; auto-mapped from planCode.
-const PLAN_TO_TIER: Record<typeof PLAN_CODES[number], string> = {
-  SOLO_PRO: 'TIER_2', SOLO_BOOKS: 'TIER_2', SOLO_LITE: 'TIER_1', SOLO_STANDARD: 'TIER_2',
-  PAIR_T1: 'TIER_2', PAIR_T2: 'TIER_3', PAIR_T3: 'TIER_4',
-  SUITE_T1: 'TIER_3', SUITE_T2: 'TIER_5', SUITE_T3: 'TIER_6',
-  ENTERPRISE: 'TIER_6',
-};
+// One package. This used to be an 11-option dropdown backed by a
+// hand-maintained PLAN_TO_TIER map that had to be kept in sync with
+// plans.ts by hand. Modules are now chosen directly rather than implied
+// by the plan.
+const PLAN_LABEL = 'Clerque \u2014 POS + books, all modules available';
+
 const ROLES = [
   'BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER', 'SALES_LEAD',
   'BOOKKEEPER', 'ACCOUNTANT', 'FINANCE_LEAD', 'PAYROLL_MASTER',
@@ -110,7 +79,6 @@ interface CreatedResult { tenantId: string; slug: string; ownerUserId: string; g
 function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated: (r: CreatedResult) => void }) {
   const [form, setForm] = useState({
     name: '', slug: '', businessType: 'RETAIL' as typeof BUSINESS_TYPES[number],
-    planCode: 'SUITE_T2' as typeof PLAN_CODES[number],
     ownerName: '', ownerEmail: '',
     contactEmail: '', contactPhone: '',
   });
@@ -126,64 +94,33 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
     if (key === 'name' && !form.slug) {
       setForm((f) => ({ ...f, name: val, slug: val.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-') }));
     }
-    // Auto-adjust modules to match plan-tier rules when plan changes.
-    if (key === 'planCode') {
-      if (val.startsWith('SUITE_') || val === 'ENTERPRISE') {
-        setModules({ pos: true, ledger: true, payroll: true });
-      } else if (val.startsWith('PAIR_')) {
-        // Default to POS + Ledger for PAIR; operator can toggle to POS + Payroll
-        // or Ledger + Payroll.
-        setModules({ pos: true, ledger: true, payroll: false });
-      } else if (val.startsWith('STD_')) {
-        // Default to POS-only for backwards compat; operator can flip.
-        setModules({ pos: true, ledger: false, payroll: false });
-      } else if (val.startsWith('SOLO_')) {
-        // Sprint 23 Solo lineup is POS-only by design — no operator flexibility.
-        // Solo customers who need Ledger/Payroll upgrade to PAIR or SUITE.
-        setModules({ pos: true, ledger: false, payroll: false });
-      }
-    }
   }
 
   function toggleModule(key: 'pos' | 'ledger' | 'payroll') {
     setModules((m) => ({ ...m, [key]: !m[key] }));
   }
 
-  const isSuite  = form.planCode.startsWith('SUITE_') || form.planCode === 'ENTERPRISE';
-  const isStd    = form.planCode.startsWith('STD_');
-  const isSolo   = form.planCode.startsWith('SOLO_');
-  const isPair   = form.planCode.startsWith('PAIR_');
   const onCount  = [modules.pos, modules.ledger, modules.payroll].filter(Boolean).length;
-  // Validation messages mirror server-side validateSoloModuleCombo + PAIR rules.
-  const moduleError =
-    isSolo && (!modules.pos || modules.ledger || modules.payroll)
-      ? 'Solo plans are POS-only. Upgrade to Pair for 2 modules or Suite for all 3.'
-    : isStd && onCount !== 1 ? 'Single Module plan requires exactly one of POS / Ledger / Payroll.'
-    : isPair && onCount !== 2 ? 'Pair plan requires exactly two modules.'
+  // Mirrors the server's validateModuleCombo — the only rule left is that a
+  // tenant must not end up with every module switched off.
+  const moduleError = onCount === 0
+    ? 'Enable at least one module (POS, Ledger or Payroll).'
     : null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     try {
-      // Send legacy tier (auto-mapped from plan code) for backend compat,
-      // then immediately PATCH the plan to set planCode + correct module flags
-      // so the new tenant lands in the right modular-pricing state from day 1.
-      const tier = PLAN_TO_TIER[form.planCode];
       const createPayload = {
         name:          form.name,
         slug:          form.slug,
         businessType:  form.businessType,
-        tier,
         ownerName:     form.ownerName,
         ownerEmail:    form.ownerEmail,
         contactEmail:  form.contactEmail,
         contactPhone:  form.contactPhone,
-        // Sprint 17 — atomic plan apply (no more two-PATCH dance).
-        planCode:      form.planCode,
         staffSeatAddons: 0,
-        // Sprint 21 — explicit module flags so Single Module plans can choose
-        // Ledger-only / Payroll-only and Pair plans can pick any 2 modules.
+        // Modules are an explicit choice, not something the plan dictates.
         modulePos:     modules.pos,
         moduleLedger:  modules.ledger,
         modulePayroll: modules.payroll,
@@ -228,34 +165,12 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
               </select>
             </div>
             <div className="col-span-2">
-              <label className="block text-xs text-muted-foreground mb-1">Plan *</label>
-              <select required value={form.planCode}
-                onChange={(e) => set('planCode', e.target.value as typeof form.planCode)}
-                className="w-full h-9 px-3 rounded-md border border-border bg-background text-sm">
-                <optgroup label="Solo — actively offered">
-                  <option value="SOLO_PRO">{PLAN_LABELS.SOLO_PRO}</option>
-                  <option value="SOLO_BOOKS">{PLAN_LABELS.SOLO_BOOKS}</option>
-                </optgroup>
-                <optgroup label="Solo — legacy (grandfathered tenants only)">
-                  <option value="SOLO_LITE">{PLAN_LABELS.SOLO_LITE}</option>
-                  <option value="SOLO_STANDARD">{PLAN_LABELS.SOLO_STANDARD}</option>
-                </optgroup>
-                <optgroup label="Two Modules — PARKED (grandfathered tenants only)">
-                  <option value="PAIR_T1">{PLAN_LABELS.PAIR_T1}</option>
-                  <option value="PAIR_T2">{PLAN_LABELS.PAIR_T2}</option>
-                  <option value="PAIR_T3">{PLAN_LABELS.PAIR_T3}</option>
-                </optgroup>
-                <optgroup label="Full Suite — PARKED (grandfathered tenants only)">
-                  <option value="SUITE_T1">{PLAN_LABELS.SUITE_T1}</option>
-                  <option value="SUITE_T2">{PLAN_LABELS.SUITE_T2}</option>
-                  <option value="SUITE_T3">{PLAN_LABELS.SUITE_T3}</option>
-                </optgroup>
-                <optgroup label="Enterprise — PARKED (sales-led, grandfathered)">
-                  <option value="ENTERPRISE">{PLAN_LABELS.ENTERPRISE}</option>
-                </optgroup>
-              </select>
+              <label className="block text-xs text-muted-foreground mb-1">Plan</label>
+              <div className="w-full h-9 px-3 rounded-md border border-border bg-secondary/40 text-sm flex items-center text-muted-foreground">
+                {PLAN_LABEL}
+              </div>
               <p className="text-[10px] text-muted-foreground mt-0.5">
-                Single Module = pick ONE of POS / Ledger / Payroll · Pair = pick any 2 · Suite = all 3. Staff cap auto-applied.
+                Every tenant is on the same package. Pick the modules below.
               </p>
             </div>
             {/* Sprint 21 — module selector */}
@@ -270,10 +185,9 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
                   <label key={key}
                     className={`flex-1 min-w-[140px] flex items-start gap-2 rounded-md border p-2 cursor-pointer ${
                       modules[key] ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-border bg-background'
-                    } ${isSuite ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    }`}
                   >
                     <input type="checkbox" checked={modules[key]}
-                      disabled={isSuite /* SUITE always has all 3 on */}
                       onChange={() => toggleModule(key)}
                       className="mt-0.5 accent-[var(--accent)]" />
                     <span>
@@ -286,7 +200,7 @@ function AddTenantModal({ onClose, onCreated }: { onClose: () => void; onCreated
               {moduleError && (
                 <p className="text-[11px] text-amber-600 mt-2">{moduleError}</p>
               )}
-              {isStd && modules.ledger && !modules.pos && (
+              {modules.ledger && !modules.pos && (
                 <p className="text-[10px] text-emerald-600 mt-1">
                   Ledger-only tenant — they'll be seeded with a Ledger-focused Chart of Accounts (no POS-specific accounts).
                 </p>

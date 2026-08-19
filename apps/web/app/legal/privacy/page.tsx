@@ -35,8 +35,8 @@ export default function PrivacyPolicyPage() {
         <h2 className="text-lg font-semibold mb-2">2. Personal Information Controller (PIC)</h2>
         <div className="bg-muted/30 border border-border rounded-lg p-4 text-sm">
           <p className="font-medium">HNS Corporation Philippines</p>
-          <p>Email: <a className="text-[var(--accent)]" href="mailto:privacy@hnscorpph.com">privacy@hnscorpph.com</a></p>
-          <p>Data Protection Officer (DPO): <a className="text-[var(--accent)]" href="mailto:dpo@hnscorpph.com">dpo@hnscorpph.com</a></p>
+          <p>Email: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a></p>
+          <p>Data Protection Officer (DPO): <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a></p>
           <p className="text-xs text-muted-foreground mt-2">
             Our DPO is designated to oversee compliance with the Data Privacy Act and to handle data
             subject inquiries.
@@ -208,8 +208,8 @@ export default function PrivacyPolicyPage() {
         </ul>
         <p className="mt-3">
           To exercise any of these rights, write to{' '}
-          <a className="text-[var(--accent)]" href="mailto:dpo@hnscorpph.com">
-            dpo@hnscorpph.com
+          <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">
+            devsupport@hnscorpph.com
           </a>
           . We will respond within 15 working days.
         </p>
@@ -335,10 +335,10 @@ export default function PrivacyPolicyPage() {
         <div className="bg-muted/30 border border-border rounded-lg p-4 text-sm mt-2">
           <p>Data Protection Officer, HNS Corporation Philippines</p>
           <p>
-            Email: <a className="text-[var(--accent)]" href="mailto:dpo@hnscorpph.com">dpo@hnscorpph.com</a>
+            Email: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a>
           </p>
           <p>
-            General inquiries: <a className="text-[var(--accent)]" href="mailto:privacy@hnscorpph.com">privacy@hnscorpph.com</a>
+            General inquiries: <a className="text-[var(--accent)]" href="mailto:devsupport@hnscorpph.com">devsupport@hnscorpph.com</a>
           </p>
         </div>
       </section>

@@ -435,7 +435,7 @@ export default function VendorsPage() {
         open={showImport}
         title="Import Vendors"
         description="Upload a spreadsheet to bulk-create or update vendors (AP master). Vendors are matched by exact Name."
-        templateUrl="/api/v1/import/template/vendors"
+        templateUrl="/import/template/vendors"
         uploadUrl="/import/vendors"
         onClose={() => setShowImport(false)}
         onSuccess={() => {

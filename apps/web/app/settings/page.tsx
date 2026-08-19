@@ -55,6 +55,8 @@ interface TenantProfile {
   returnsOwnerOnly?:    boolean | null;
   // Sprint 25 — maker-checker void threshold (peso-cents). 0 = disabled.
   voidApprovalThresholdCents?: number | null;
+  // Magnet Books — owner's saved ledger mode (JWT copy is what gates the ledger).
+  ledgerMode?: 'FULL' | 'SIMPLE' | null;
 }
 
 interface StaffUser {
@@ -702,6 +704,11 @@ export default function SettingsPage() {
             {/* ── Maker-checker void threshold (Sprint 25, Solo Pro) ────────── */}
             {isOwner && profile && (
               <VoidApprovalThresholdCard profile={profile} qc={qc} />
+            )}
+
+            {/* ── Ledger mode (Magnet Books — Simple books vs Full accounting) ── */}
+            {isOwner && profile && (
+              <LedgerModeCard profile={profile} active={user?.ledgerMode ?? 'FULL'} qc={qc} />
             )}
 
             {/* Read-only system info — driven by modular pricing (planCode + module flags).
@@ -1746,6 +1753,88 @@ function VoidApprovalThresholdCard({
       </div>
       <p className="text-[11px] text-muted-foreground">
         Current: {initialCents > 0 ? `₱${(initialCents / 100).toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : 'Disabled'}
+      </p>
+    </div>
+  );
+}
+
+// ── Magnet Books — Ledger mode card (Simple books vs Full accounting) ──────
+
+type LedgerMode = 'FULL' | 'SIMPLE';
+
+const LEDGER_MODE_OPTIONS: { value: LedgerMode; title: string; desc: string }[] = [
+  { value: 'SIMPLE', title: 'Simple books',    desc: 'Record money in and out, see your profit. No accounting jargon.' },
+  { value: 'FULL',   title: 'Full accounting', desc: 'Journal, chart of accounts, statements, AR/AP, tax, periods.' },
+];
+
+function LedgerModeCard({
+  profile, active, qc,
+}: {
+  /** Saved choice (DB, via /tenant/profile) — what the tiles reflect. */
+  profile: { ledgerMode?: LedgerMode | null };
+  /** Mode baked into the current JWT — what the ledger is actually using right now. */
+  active: LedgerMode;
+  qc: ReturnType<typeof useQueryClient>;
+}) {
+  const saved = profile.ledgerMode ?? 'FULL';
+  const [mode, setMode] = useState<LedgerMode>(saved);
+  const pendingRelogin = saved !== active;
+
+  const updateMut = useMutation({
+    mutationFn: (next: LedgerMode) =>
+      api.patch('/tenant/profile', { ledgerMode: next }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      toast.success('Ledger mode saved. Please log out and back in for this to take effect.');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Failed to save ledger mode.');
+      setMode(saved); // roll back local state
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Ledger mode</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          Choose how much of the ledger you want to see. You can switch any time — your records are kept
+          either way.
+        </p>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {LEDGER_MODE_OPTIONS.map((opt) => {
+          const selected = mode === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={updateMut.isPending}
+              onClick={() => {
+                if (selected) return;
+                setMode(opt.value);
+                updateMut.mutate(opt.value);
+              }}
+              className={`text-left rounded-lg border px-3 py-2.5 transition-colors disabled:opacity-60 ${
+                selected
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                  : 'border-border bg-muted/30 hover:bg-muted/50'
+              }`}
+            >
+              <div className="text-sm font-medium text-foreground">{opt.title}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{opt.desc}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="text-[11px] text-muted-foreground">
+        {pendingRelogin
+          ? `Saved: ${LEDGER_MODE_OPTIONS.find((o) => o.value === saved)?.title}. You're still on ${LEDGER_MODE_OPTIONS.find((o) => o.value === active)?.title} until you log out and back in.`
+          : 'Changes apply after you log out and back in.'}
       </p>
     </div>
   );

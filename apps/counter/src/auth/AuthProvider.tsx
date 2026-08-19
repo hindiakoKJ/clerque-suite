@@ -28,13 +28,16 @@ function sessionFromJwt(accessToken: string): { user: AuthSession['user']; tenan
   // Loose payload type — the API may evolve fields; we read defensively.
   const p = jwtDecode<Record<string, unknown>>(accessToken);
   const role = (p.role as AuthSession['user']['role']) ?? 'CASHIER';
-  const planCode = (p.planCode as TenantConfig['planCode']) ?? 'SOLO_LITE';
+  const planCode = (p.planCode as TenantConfig['planCode']) ?? 'CLERQUE';
+  // Fallback when the token predates plan claims. It used to be all-false,
+  // which quietly turned OFF recipes, FEFO, phone lookup and receipt
+  // customisation on the till for anyone with an older token.
   const features = (p.planFeatures as TenantConfig['planFeatures']) ?? {
-    maxRecipes: 5, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0,
-    customerPhoneLookup: false, receiptCustomization: 'none',
-    advancedReports: false, loyaltyPro: false, autoBackup: false,
-    fifoValuation: false, makerCheckerVoids: false, auditLog: false,
-    customRoles: false, apiAccess: 'none',
+    maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1,
+    customerPhoneLookup: true, receiptCustomization: 'full',
+    advancedReports: true, loyaltyPro: true, autoBackup: true,
+    makerCheckerVoids: true, auditLog: true,
+    apiAccess: 'readwrite',
   };
   const tax = ((p.taxStatus as TenantConfig['taxStatus']) ?? 'UNREGISTERED');
   const user: AuthSession['user'] = {

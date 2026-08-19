@@ -9,6 +9,8 @@ import { TenantModule } from './tenant/tenant.module';
 import { CategoriesModule } from './categories/categories.module';
 import { ProductsModule } from './products/products.module';
 import { OrdersModule } from './orders/orders.module';
+import { IngestModule } from './ingest/ingest.module';
+import { EquipmentRentalsModule } from './equipment-rentals/equipment-rentals.module';
 import { ShiftsModule } from './shifts/shifts.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { ReportsModule } from './reports/reports.module';
@@ -68,7 +70,6 @@ import { VoidApprovalsModule } from './void-approvals/void-approvals.module';
 import { DisplayPairingModule } from './display-pairing/display-pairing.module';
 import { ReportsAdvancedModule } from './reports-advanced/reports-advanced.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
-import { PublicApiModule } from './public-api/public-api.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { InventoryReportsModule } from './inventory-reports/inventory-reports.module';
 import { HealthController } from './health/health.controller';
@@ -98,6 +99,8 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     CategoriesModule,
     ProductsModule,
     OrdersModule,
+    IngestModule,
+    EquipmentRentalsModule,
     ShiftsModule,
     InventoryModule,
     ReportsModule,
@@ -157,7 +160,6 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     DisplayPairingModule,
     ReportsAdvancedModule,
     ApiKeysModule,
-    PublicApiModule,
     PurchaseOrdersModule,
     InventoryReportsModule,
   ],

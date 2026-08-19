@@ -1,35 +1,57 @@
 /**
- * Modular pricing plans (2026-05-08).
+ * Clerque packaging.
  *
- * Replaces the old single-axis SubscriptionTier (TIER_1..TIER_6) with a
- * two-axis model: how many modules + staff cap. The legacy `tier` enum is
- * retained on Tenant for rollback safety but is advisory only.
+ * ── History ────────────────────────────────────────────────────────────────
+ * This file used to hold an 11-code ladder (SOLO_LITE/STANDARD/PRO/BOOKS,
+ * PAIR_T1..T3, SUITE_T1..T3, ENTERPRISE) crossed with a module matrix, where
+ * a plan dictated WHICH of POS / Ledger / Payroll a tenant could switch on.
+ * That ladder was retired: only two of the eleven codes were ever sellable,
+ * the active lineup was non-monotonic (SOLO_STANDARD cost more than SOLO_PRO
+ * and granted strictly less), and the module matrix made the one thing the
+ * product now needs — a tenant running POS and the books together, fed by
+ * both a till and an ecosystem app — the awkward case.
  *
- * The module set per plan code:
- *   STD_*   → exactly one of POS / Ledger / Payroll (chosen by buyer)
- *   PAIR_*  → exactly two
- *   SUITE_* → all three
- *   ENTERPRISE → all three, custom-negotiated, no automated enforcement
+ * ── Today ──────────────────────────────────────────────────────────────────
+ * There is ONE package. Everything is on. Pricing and tiering will be designed
+ * fresh on top of this, so nothing here encodes a price or a ceiling that
+ * anyone has agreed to yet — see UNCAPPED_* below.
  *
- * Each plan has a HARD ceiling — staffSeatQuota + staffSeatAddons must remain
- * <= maxTotal. There are no unlimited tiers; over-50-staff customers go through
- * an Enterprise sales contact form.
+ * The MECHANISM is deliberately intact. PLAN_CAPS / PLAN_LIMITS /
+ * PLAN_FEATURES are still `Record<PlanCode, …>`, so re-introducing tiers later
+ * means adding entries to these tables rather than rebuilding the plumbing
+ * that reads them (48 `@RequirePlanFeature` decorator sites, AppAccessGuard,
+ * the JWT, the API-key resolver).
+ *
+ * ── Why no data migration was needed ───────────────────────────────────────
+ * `Tenant.planCode` is an unvalidated TEXT column. Previously, a value with no
+ * entry in these tables was a live hazard: PlanFeatureGuard fails closed,
+ * `PLAN_CAPS[code].baseSeats` throws, and — worst — the API-key resolver reads
+ * `apiAccess` as 'none' and returns null, which surfaces as
+ * "Invalid or expired API key", indistinguishable from a revoked key.
+ * With a single package, `normalizePlanCode()` maps ANY stored string onto it,
+ * so legacy rows keep working and that entire class of bug is gone.
  */
 
 export type ClerqueModule = 'POS' | 'LEDGER' | 'PAYROLL';
 
-export type PlanCode =
-  // Sprint 23 — Solo lineup (POS-only, three tiers). The only actively
-  // promoted plan family for new signups.
-  | 'SOLO_LITE'  | 'SOLO_STANDARD' | 'SOLO_PRO' | 'SOLO_BOOKS'
-  // ── PARKED — kept in code for grandfathered tenants, NOT actively
-  //    promoted to new signups. Redesign queued for a follow-up sprint:
-  //    repositioning around "Counter + Sync" naming, smoothing the seat-
-  //    count cliff above SOLO_PRO, and consolidating the 7 SKUs below
-  //    into a smaller, clearer ladder.
-  | 'PAIR_T1'  | 'PAIR_T2' | 'PAIR_T3'
-  | 'SUITE_T1' | 'SUITE_T2' | 'SUITE_T3'
-  | 'ENTERPRISE';
+/**
+ * The only package. Named neutrally on purpose — when tiering returns, this
+ * stays as the base entry and new codes join it.
+ */
+export type PlanCode = 'CLERQUE';
+
+/** The single package every tenant is on. Use instead of the literal. */
+export const DEFAULT_PLAN_CODE: PlanCode = 'CLERQUE';
+
+/**
+ * Placeholder ceilings. Large finite numbers rather than -1/Infinity so every
+ * existing numeric comparison (seat guard, branch cap, subscription screen)
+ * keeps working unchanged and still renders sensibly. These are NOT commercial
+ * limits — they exist so the enforcement paths stay exercised until real
+ * pricing sets real numbers.
+ */
+const UNCAPPED_SEATS    = 9_999;
+const UNCAPPED_BRANCHES = 999;
 
 export interface PlanCap {
   /** Modules included in the plan: 1 (standalone), 2 (pair), 3 (suite). */
@@ -40,7 +62,7 @@ export interface PlanCap {
   maxAddons:      number;
   /** Hard ceiling = baseSeats + maxAddons. Cannot be exceeded by any means. */
   maxTotal:       number;
-  /** Monthly price in PHP centavos (₱1.00 = 100). */
+  /** Monthly price in PHP centavos (₱1.00 = 100). 0 = not yet priced. */
   pricePhpMonthlyCents:   number;
   /** Per-additional-seat ₱/mo in centavos. 0 means add-ons not allowed. */
   addonSeatPhpMonthlyCents: number;
@@ -49,69 +71,15 @@ export interface PlanCap {
 }
 
 export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
-  // ── Sprint 23 Solo lineup (POS-only, 3 tiers) ───────────────────────────
-  SOLO_LITE: {
-    moduleCount: 1, baseSeats: 1, maxAddons: 0, maxTotal: 1,
-    pricePhpMonthlyCents: 19_900, addonSeatPhpMonthlyCents: 0,
-    annualMonthEquivalent: 10,
-  },
-  SOLO_STANDARD: {
-    moduleCount: 1, baseSeats: 3, maxAddons: 0, maxTotal: 3,
-    pricePhpMonthlyCents: 39_900, addonSeatPhpMonthlyCents: 0,
-    annualMonthEquivalent: 10,
-  },
-  // "Solo" — the full-access POS plan (₱299). Repriced from ₱499 in the
-  // Sprint-24 pricing overhaul: full POS access is now the ₱299 entry plan.
-  SOLO_PRO: {
-    moduleCount: 1, baseSeats: 5, maxAddons: 0, maxTotal: 5,
-    pricePhpMonthlyCents: 29_900, addonSeatPhpMonthlyCents: 0,
-    annualMonthEquivalent: 10,
-  },
-  // "Solo Books" — full POS (same as Solo) + SIMPLE ledger (₱399).
-  SOLO_BOOKS: {
-    moduleCount: 1, baseSeats: 5, maxAddons: 0, maxTotal: 5,
-    pricePhpMonthlyCents: 39_900, addonSeatPhpMonthlyCents: 0,
-    annualMonthEquivalent: 10,
-  },
-
-  // ── PARKED — Pair (any two modules) ─────────────────────────────────────
-  PAIR_T1: {
-    moduleCount: 2, baseSeats: 3, maxAddons: 0, maxTotal: 3,
-    pricePhpMonthlyCents: 79_900, addonSeatPhpMonthlyCents: 9_900,
-    annualMonthEquivalent: 10,
-  },
-  PAIR_T2: {
-    moduleCount: 2, baseSeats: 5, maxAddons: 5, maxTotal: 10,
-    pricePhpMonthlyCents: 159_900, addonSeatPhpMonthlyCents: 5_900,
-    annualMonthEquivalent: 10,
-  },
-  PAIR_T3: {
-    moduleCount: 2, baseSeats: 10, maxAddons: 15, maxTotal: 25,
-    pricePhpMonthlyCents: 289_900, addonSeatPhpMonthlyCents: 3_900,
-    annualMonthEquivalent: 10,
-  },
-
-  // ── Suite (all three modules) ───────────────────────────────────────────
-  SUITE_T1: {
-    moduleCount: 3, baseSeats: 5, maxAddons: 0, maxTotal: 5,
-    pricePhpMonthlyCents: 119_900, addonSeatPhpMonthlyCents: 9_900,
-    annualMonthEquivalent: 10,
-  },
-  SUITE_T2: {
-    moduleCount: 3, baseSeats: 8, maxAddons: 7, maxTotal: 15,
-    pricePhpMonthlyCents: 229_900, addonSeatPhpMonthlyCents: 5_900,
-    annualMonthEquivalent: 10,
-  },
-  SUITE_T3: {
-    moduleCount: 3, baseSeats: 20, maxAddons: 30, maxTotal: 50,
-    pricePhpMonthlyCents: 449_900, addonSeatPhpMonthlyCents: 3_900,
-    annualMonthEquivalent: 10,
-  },
-
-  // ── Enterprise (sales-led, custom contract) ─────────────────────────────
-  // Hard ceiling: 100 staff. Above that = bespoke contract negotiated separately.
-  ENTERPRISE: {
-    moduleCount: 3, baseSeats: 50, maxAddons: 50, maxTotal: 100,
+  CLERQUE: {
+    // All three modules. A tenant may still switch an individual module off
+    // for itself (Tenant.modulePos/moduleLedger/modulePayroll) — the package
+    // no longer dictates the combination.
+    moduleCount: 3,
+    baseSeats: UNCAPPED_SEATS, maxAddons: 0, maxTotal: UNCAPPED_SEATS,
+    // Pricing is a deliberate blank. Every price read goes through
+    // PLAN_CAPS[plan].pricePhpMonthlyCents, so setting a real number here is
+    // the single edit that turns pricing back on.
     pricePhpMonthlyCents: 0, addonSeatPhpMonthlyCents: 0,
     annualMonthEquivalent: 10,
   },
@@ -119,7 +87,6 @@ export const PLAN_CAPS: Record<PlanCode, PlanCap> = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PLAN_LIMITS — branch / AI / API ceilings per plan.
-// Every value is a HARD CEILING — no unlimited tiers anywhere.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface PlanLimits {
@@ -129,19 +96,20 @@ export interface PlanLimits {
 }
 
 export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
-  // Solo lineup
-  SOLO_LITE:     { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
-  SOLO_STANDARD: { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour:   0 },
-  SOLO_PRO:      { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
-  SOLO_BOOKS:    { maxBranches: 1, maxAiPerMonth:   0, apiRatePerHour: 100 },
-  // PARKED — multi-module legacy
-  PAIR_T1:    { maxBranches:  1, maxAiPerMonth:   20, apiRatePerHour:     0 },
-  PAIR_T2:    { maxBranches:  2, maxAiPerMonth:   50, apiRatePerHour:     0 },
-  PAIR_T3:    { maxBranches:  3, maxAiPerMonth:  100, apiRatePerHour:   100 },
-  SUITE_T1:   { maxBranches:  1, maxAiPerMonth:   50, apiRatePerHour:     0 },
-  SUITE_T2:   { maxBranches:  3, maxAiPerMonth:  200, apiRatePerHour:   500 },
-  SUITE_T3:   { maxBranches:  5, maxAiPerMonth:  500, apiRatePerHour: 1_000 },
-  ENTERPRISE: { maxBranches: 15, maxAiPerMonth: 1_000, apiRatePerHour: 5_000 },
+  // maxAiPerMonth is now the ENFORCED quota, not a display value. It used to
+  // be decorative while the real quota came from the legacy Tenant.tier
+  // column, which meant the subscription screen and the AI guard could
+  // disagree — a tenant could be shown 200 prompts and get 0.
+  //
+  // This is what the package bundles WHEN AI is switched on. It is currently
+  // moot: AI_FEATURES_ENABLED is off, so every tenant resolves to 0 no matter
+  // what this says (see apps/api/src/ai/ai-availability.ts). Revisit the
+  // number when pricing decides what a prompt is worth.
+  CLERQUE: {
+    maxBranches: UNCAPPED_BRANCHES,
+    maxAiPerMonth: 1_000,
+    apiRatePerHour: 5_000,
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,28 +120,23 @@ export const PLAN_LIMITS: Record<PlanCode, PlanLimits> = {
 
 export type ApiAccessLevel = 'none' | 'read' | 'readwrite';
 
+/**
+ * Six flags were removed alongside the ladder — crossModuleReports, aiAddons,
+ * whitelabel, customDomain, customRoles and fifoValuation. Each was defined
+ * and populated for all 11 plans but read by no guard, no service and no UI.
+ * (FIFO is really controlled by Tenant.valuationMethod, which is untouched.)
+ * Every field below is load-bearing: it has at least one live reader.
+ */
 export interface PlanFeatures {
   /** BIR forms (2550Q, 1701Q, 2551Q, EWT, SAWT, 2307, EIS) */
   birForms:           boolean;
-  /** Owner can edit the 38-permission matrix to create custom role variants */
-  customRoles:        boolean;
   /** UI to browse the centralized audit trail */
   auditLog:           boolean;
-  /** Reports that join sales × AR × payroll cost across modules */
-  crossModuleReports: boolean;
-  /** Buy AI prompt add-on packages on top of included quota */
-  aiAddons:           boolean;
   /** External REST API access level */
   apiAccess:          ApiAccessLevel;
-  /** Strip Clerque branding from receipts; replace with tenant's */
-  whitelabel:         boolean;
-  /** tenant.com instead of clerque.com/tenant */
-  customDomain:       boolean;
   /** Full ledger (double-entry, COA, financial statements, AR/AP, periods,
    *  BIR, bank recon, audit, GL queue). Off = SIMPLE ledger only. */
   advancedAccounting: boolean;
-
-  // ── Sprint 23 — Solo-tier-specific gating ──────────────────────────────
   /** Recipe-based product cap. -1 = unlimited, 0 = recipe mode disabled. */
   maxRecipes:                 number;
   /** Number of inventory items that can have advanced tracking (batches +
@@ -192,162 +155,89 @@ export interface PlanFeatures {
   loyaltyPro:                 boolean;
   /** Auto-backup to user's Google Drive on a daily schedule. */
   autoBackup:                 boolean;
-  /** FIFO valuation as an alternative to default WAC (Pro-tier only).
-   *  WAC is universal; FIFO is the opt-in upgrade for accountants who want
-   *  historical-cost matching during inflationary periods. */
-  fifoValuation:              boolean;
   /** Maker-checker authorization on voids/refunds above a tenant-set threshold. */
   makerCheckerVoids:          boolean;
 }
 
 export const PLAN_FEATURES: Record<PlanCode, PlanFeatures> = {
-  // ── Sprint 23 Solo lineup ────────────────────────────────────────────────
-  SOLO_LITE: {
-    // Loyverse-Free-equivalent baseline + PH compliance. No premium features.
-    birForms: false, customRoles: false, auditLog: false, crossModuleReports: false,
-    aiAddons: false, apiAccess: 'none', whitelabel: false, customDomain: false,
-    maxRecipes: 5, maxAdvancedInventoryItems: 0, salesLeadDelegation: 0,
-    customerPhoneLookup: false, receiptCustomization: 'none', advancedReports: false,
-    loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
-    advancedAccounting: false,
+  CLERQUE: {
+    birForms: true,
+    auditLog: true,
+    // 'readwrite' is what lets an ecosystem app POST a sale. It previously
+    // existed only on the two most expensive plans, which made Clerque
+    // unusable as a backend for anything but an enterprise venue.
+    apiAccess: 'readwrite',
+    advancedAccounting: true,
+    maxRecipes: -1,
+    maxAdvancedInventoryItems: -1,
+    salesLeadDelegation: -1,
+    customerPhoneLookup: true,
+    receiptCustomization: 'full',
+    advancedReports: true,
+    loyaltyPro: true,
+    autoBackup: true,
+    makerCheckerVoids: true,
   },
-  SOLO_STANDARD: {
-    // Adds unlimited recipes + 10 FEFO/batch/expiry items + Sales Lead + customer lookup + receipt header/footer.
-    birForms: false, customRoles: false, auditLog: false, crossModuleReports: false,
-    aiAddons: false, apiAccess: 'none', whitelabel: false, customDomain: false,
-    maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1,
-    customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false,
-    loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false,
-    advancedAccounting: false,
-  },
-  SOLO_PRO: {
-    // All Solo-line features unlocked. Single module (POS) — multi-module is PAIR/SUITE.
-    birForms: false, customRoles: true, auditLog: true, crossModuleReports: false,
-    aiAddons: false, apiAccess: 'read', whitelabel: false, customDomain: false,
-    maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1,
-    customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true,
-    loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true,
-    advancedAccounting: false,
-  },
-  SOLO_BOOKS: {
-    // Full POS (identical to "Solo"/SOLO_PRO) + SIMPLE ledger. The only thing it
-    // does NOT unlock vs full-accounting plans is advancedAccounting.
-    birForms: false, customRoles: true, auditLog: true, crossModuleReports: false,
-    aiAddons: false, apiAccess: 'read', whitelabel: false, customDomain: false,
-    maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1,
-    customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true,
-    loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true,
-    advancedAccounting: false,
-  },
-
-  // ── PARKED — multi-module legacy ────────────────────────────────────────
-  PAIR_T1:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: false, apiAccess: 'none',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: 10, salesLeadDelegation: 1, customerPhoneLookup: true, receiptCustomization: 'headerFooter', advancedReports: false, loyaltyPro: false, autoBackup: false, fifoValuation: false, makerCheckerVoids: false },
-  PAIR_T2:    { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  PAIR_T3:    { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  SUITE_T1:   { birForms: true,  customRoles: false, auditLog: false, crossModuleReports: true,  aiAddons: true,  apiAccess: 'none',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  SUITE_T2:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'read',      whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  SUITE_T3:   { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: false, customDomain: false, advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
-  ENTERPRISE: { birForms: true,  customRoles: true,  auditLog: true,  crossModuleReports: true,  aiAddons: true,  apiAccess: 'readwrite', whitelabel: true,  customDomain: true,  advancedAccounting: true, maxRecipes: -1, maxAdvancedInventoryItems: -1, salesLeadDelegation: -1, customerPhoneLookup: true, receiptCustomization: 'full', advancedReports: true, loyaltyPro: true, autoBackup: true, fifoValuation: true, makerCheckerVoids: true },
 };
 
-// Sprint 23 — PLAN_MONTHLY_PRICE_PHP_CENTS deleted.
-//
-// Previously there was a separate map here that disagreed with
-// `PLAN_CAPS[plan].pricePhpMonthlyCents` (e.g., STD_SOLO was ₱199 in
-// PLAN_CAPS but ₱499 in this duplicate map). The billing service used
-// the duplicate while the marketing/settings UI used PLAN_CAPS — meaning
-// customers saw ₱199 on the website but got billed ₱499.
-//
-// Canonical source for ALL price reads is now `PLAN_CAPS[plan].pricePhpMonthlyCents`.
-// The plans.spec.ts invariant test asserts there is exactly one price per plan.
-
-/** Plan-level setup fee in PHP centavos. One-time, waived on annual prepay. */
+/** Plan-level setup fee in PHP centavos. Display-only — nothing enforces it. */
 export const PLAN_SETUP_FEE_PHP_CENTS: Record<PlanCode, number> = {
-  // Solo lineup — no setup fees (entry-friendly)
-  SOLO_LITE:       0,
-  SOLO_STANDARD:   0,
-  SOLO_PRO:        0,
-  SOLO_BOOKS:      0,
-  // PARKED — multi-module legacy
-  PAIR_T1:    99_900,
-  PAIR_T2:   199_900,
-  PAIR_T3:   349_900,
-  SUITE_T1:  149_900,
-  SUITE_T2:  299_900,
-  SUITE_T3:  499_900,
-  ENTERPRISE: 999_900,
+  CLERQUE: 0,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Safe lookups
+//
+// Tenant.planCode is an unvalidated TEXT column with a legacy default, and
+// rows written before the collapse still carry codes like "SUITE_T2" or the
+// long-deleted "STD_TEAM". Everything below resolves those onto the single
+// package instead of returning undefined, so no read path can be handed a
+// hole. Always prefer these over indexing the tables directly.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Maps any stored plan string — legacy, unknown, null — onto the package. */
+export function normalizePlanCode(raw: string | null | undefined): PlanCode {
+  return raw === 'CLERQUE' ? 'CLERQUE' : DEFAULT_PLAN_CODE;
+}
+
+export function planCapsFor(raw: string | null | undefined): PlanCap {
+  return PLAN_CAPS[normalizePlanCode(raw)];
+}
+
+export function planLimitsFor(raw: string | null | undefined): PlanLimits {
+  return PLAN_LIMITS[normalizePlanCode(raw)];
+}
+
+export function planFeaturesFor(raw: string | null | undefined): PlanFeatures {
+  return PLAN_FEATURES[normalizePlanCode(raw)];
+}
 
 /**
- * STD_* (Single Module) plans must have exactly one of {POS, Ledger, Payroll}
- * enabled — the user picks which module they want at the plan-selection step.
+ * Module combination validity.
  *
- * Previously this was hard-coded to POS-only; Sprint 21 broadened to support
- * Ledger-only signups (accounting-firm tenants, bookkeepers servicing
- * multiple SMEs) and Payroll-only signups (HR-outsource shops). Pricing is
- * unchanged — a Single Module plan at any module costs the same.
+ * The package no longer dictates which modules a tenant may run — that was
+ * the whole point of retiring the matrix. The one invariant left is that a
+ * tenant must have SOMETHING switched on, otherwise every AppAccessGuard
+ * check fails and the account is silently dark.
  *
- * Returns the validation error message if the combination is invalid for
- * the standalone tier, or null if valid. PAIR / SUITE / ENTERPRISE plans
- * always return null here — they have their own module-count enforcement
- * in the moduleCount-vs-onCount check.
+ * Returns an error message, or null when the combination is fine.
  */
-export function validateSoloModuleCombo(
-  planCode: PlanCode,
+export function validateModuleCombo(
+  _planCode: PlanCode,
   modulePos: boolean,
   moduleLedger: boolean,
   modulePayroll: boolean,
 ): string | null {
-  // After Sprint 23 cleanup, only SOLO_* plans are single-module-restricted.
-  // PAIR_* / SUITE_* / ENTERPRISE handle module-count enforcement via their
-  // own logic in tenant.service. (Previously STD_BIZ also fell here; it was
-  // removed in commit 91ce574's successor.)
-  const isSolo = planCode.startsWith('SOLO_');
-  if (!isSolo) return null;
-
-  const planLabel = planCode
-    .replace('SOLO_', 'Solo ')
-    .replace(/_/g, ' ')
-    .toLowerCase()
-    .replace(/\b./g, (c) => c.toUpperCase());
-
-  const isSoloBooks = planCode === 'SOLO_BOOKS';
-  if (!modulePos) {
-    return `${planLabel} plan requires the POS module to be enabled.`;
-  }
-  if (modulePayroll) {
-    return `${planLabel} plan does not include Payroll. Upgrade to Pair for multiple modules.`;
-  }
-  if (!isSoloBooks && moduleLedger) {
-    return `${planLabel} plan is POS-only — Ledger cannot be enabled. Choose Solo + Books or upgrade to Pair.`;
-  }
-  if (isSoloBooks && !moduleLedger) {
-    return `Solo + Books bundles POS + Ledger — the Ledger module must be enabled.`;
+  if (!modulePos && !moduleLedger && !modulePayroll) {
+    return 'At least one module (POS, Ledger or Payroll) must be enabled.';
   }
   return null;
 }
 
-/**
- * Alias kept for clarity in newer callers. Same logic — name better reflects
- * that this rule applies to all STD_* plans, not just Solo.
- */
-export const validateStandaloneModuleCombo = validateSoloModuleCombo;
-
 /** Returns the user-facing display name for a plan code. */
 export function planLabel(code: PlanCode): string {
   return ({
-    SOLO_LITE:     'Solo Lite',
-    SOLO_STANDARD: 'Solo Standard',
-    SOLO_PRO:      'Solo',
-    SOLO_BOOKS:    'Solo Books',
-    // PARKED — multi-module legacy (will be renamed/redesigned in a follow-up sprint)
-    PAIR_T1:       'Pair T1 (legacy)',
-    PAIR_T2:       'Pair T2 (legacy)',
-    PAIR_T3:       'Pair T3 (legacy)',
-    SUITE_T1:      'Suite T1 (legacy)',
-    SUITE_T2:      'Suite T2 (legacy)',
-    SUITE_T3:      'Suite T3 (legacy)',
-    ENTERPRISE:    'Enterprise (legacy)',
+    CLERQUE: 'Clerque',
   } satisfies Record<PlanCode, string>)[code];
 }
 
@@ -357,21 +247,28 @@ export function planLabel(code: PlanCode): string {
  *   (b) PLAN_CAPS[planCode].maxTotal (the absolute ceiling for the plan)
  */
 export function effectiveSeatCeiling(
-  planCode: PlanCode,
+  planCode: PlanCode | string | null | undefined,
   staffSeatAddons: number,
 ): number {
-  const cap = PLAN_CAPS[planCode];
+  const cap = planCapsFor(planCode);
   const purchased = cap.baseSeats + Math.max(0, staffSeatAddons);
   return Math.min(purchased, cap.maxTotal);
 }
 
+/**
+ * Whether an app is available to a tenant.
+ *
+ * Reads the per-tenant module flags ONLY. It used to short-circuit to true
+ * for any plan with moduleCount 3, which contradicted AppAccessGuard — that
+ * guard has always read the flags alone, so a Suite tenant with modulePos
+ * false was "enabled" here and 403'd at the wall. The flags are the single
+ * source of truth now.
+ */
 export function isModuleEnabled(
-  planCode: PlanCode,
+  _planCode: PlanCode | string | null | undefined,
   modules: { modulePos: boolean; moduleLedger: boolean; modulePayroll: boolean },
   app: ClerqueModule,
 ): boolean {
-  // Suite plans always include all three. Pair / Standalone respect the per-module flags.
-  if (PLAN_CAPS[planCode].moduleCount === 3) return true;
   if (app === 'POS')     return modules.modulePos;
   if (app === 'LEDGER')  return modules.moduleLedger;
   return modules.modulePayroll;
@@ -379,11 +276,6 @@ export function isModuleEnabled(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Plan-based permission / persona availability
-//
-// Replaces the legacy tier-feature-flag indirection with a direct mapping to
-// plan modules + PLAN_FEATURES. Used by the Staff Edit UI and assertPermission
-// defense-in-depth checks. The legacy isPermissionAvailableAtTier still exists
-// in tiers.ts for backward compatibility but is no longer consulted at runtime.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface PlanContext {
@@ -394,29 +286,25 @@ export interface PlanContext {
 }
 
 /**
- * Permission → plan-availability check. Returns true when the tenant's plan
- * (modules + features) makes the permission exercisable. Permissions not
- * listed below are universal — gated only by role.
+ * Permission → plan-availability check. Returns true when the tenant's
+ * modules + features make the permission exercisable. Permissions not listed
+ * are universal — gated only by role.
  *
- * Mirrors the semantic intent of tiers.PERMISSION_REQUIRES_FEATURE:
- *   ledger:* read       → Ledger module on
- *   ledger:* full       → Ledger module on (no extra feature flag — Ledger is binary)
- *   payroll:*           → Payroll module on
- *   audit:view          → PLAN_FEATURES.auditLog
- *   bir:view            → PLAN_FEATURES.birForms
- *   staff:assign_payroll_master → Payroll module on
+ * NOTE this is a UI affordance, not a security boundary. Despite older
+ * comments claiming otherwise, `assertPermission` never calls it; the server
+ * enforces via RolesGuard / AppAccessGuard / PlanFeatureGuard.
  */
 export function isPermissionAvailableUnderPlan(
   permission: string,
   ctx: PlanContext,
 ): boolean {
-  const f = PLAN_FEATURES[ctx.planCode];
+  const f = planFeaturesFor(ctx.planCode);
 
   switch (permission) {
-    // SIMPLE ledger — available whenever the Ledger module is on (SOLO_BOOKS included)
+    // SIMPLE ledger — available whenever the Ledger module is on
     case 'ledger:view':
     case 'ledger:export':
-      return ctx.moduleLedger || PLAN_CAPS[ctx.planCode].moduleCount === 3;
+      return ctx.moduleLedger;
 
     // FULL ledger — requires advancedAccounting. Trial balance and the cash-flow
     // statement are double-entry accounting outputs served by the FULL-gated
@@ -427,15 +315,14 @@ export function isPermissionAvailableUnderPlan(
     case 'ledger:period_close':
     case 'ledger:period_reopen':
     case 'finance:bank_recon':
-      return (ctx.moduleLedger && f.advancedAccounting) ||
-             PLAN_CAPS[ctx.planCode].moduleCount === 3;
+      return ctx.moduleLedger && f.advancedAccounting;
 
     // Payroll surface
     case 'payroll:view_salary':
     case 'payroll:edit':
     case 'payroll:run':
     case 'staff:assign_payroll_master':
-      return ctx.modulePayroll || PLAN_CAPS[ctx.planCode].moduleCount === 3;
+      return ctx.modulePayroll;
 
     // Compliance
     case 'audit:view': return f.auditLog;
@@ -447,9 +334,10 @@ export function isPermissionAvailableUnderPlan(
 }
 
 /**
- * Returns the human-readable upgrade hint for a plan-locked permission, or
- * null if the permission is universally available. Used by the Staff Edit UI
- * to render "Upgrade to Pair / Suite / Enterprise" tooltips.
+ * Upgrade hint for a permission the tenant's setup cannot exercise. With a
+ * single package these are always about a switched-off MODULE, never about
+ * buying a higher tier — the old copy named plans that no longer exist
+ * ("Upgrade to Duo", "Pair T3").
  */
 export function getRequiredPlanForPermission(permission: string): string | null {
   switch (permission) {
@@ -461,16 +349,12 @@ export function getRequiredPlanForPermission(permission: string): string | null 
     case 'ledger:period_close':
     case 'ledger:period_reopen':
     case 'finance:bank_recon':
-      return 'Add the Ledger module (Pair or Suite plan).';
+      return 'Enable the Ledger module for this business.';
     case 'payroll:view_salary':
     case 'payroll:edit':
     case 'payroll:run':
     case 'staff:assign_payroll_master':
-      return 'Add the Payroll module (Pair or Suite plan).';
-    case 'audit:view':
-      return 'Upgrade to Business / Pair T3 / Suite T2 or higher (audit log).';
-    case 'bir:view':
-      return 'Upgrade to Duo or higher (BIR forms).';
+      return 'Enable the Payroll module for this business.';
     default:
       return null;
   }

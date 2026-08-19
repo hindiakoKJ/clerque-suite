@@ -20,6 +20,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
+import { isAiEnabled } from './ai-availability';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -97,6 +98,16 @@ export class AiService {
    * ForbiddenException if the tenant has hit its monthly budget.
    */
   async call(params: CallParams): Promise<string> {
+    // Master switch, checked before anything else. AiQuotaGuard already
+    // rejects /ai/* routes, but this is the gate that actually prevents
+    // spend: any future caller — a scheduler, an internal service, a route
+    // added without the guard — stops here rather than at the provider.
+    if (!isAiEnabled()) {
+      throw new ServiceUnavailableException(
+        'AI features are switched off on this deployment.',
+      );
+    }
+
     if (!this.client) {
       throw new ServiceUnavailableException('AI service is not configured on this deployment.');
     }

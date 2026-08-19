@@ -117,9 +117,11 @@ export type AccountingMethod = 'CASH' | 'ACCRUAL';
 /**
  * BIR registration / VAT status — the single source of truth for tax behavior.
  *
- * VAT          → BIR-registered + VAT-registered (12% VAT on sales, issues VAT Official Receipt)
- * NON_VAT      → BIR-registered but NOT VAT-registered (no 12% VAT, issues Official Receipt)
+ * VAT          → BIR-registered + VAT-registered (12% VAT on sales; VAT Sales Invoice once PTU-authorised)
+ * NON_VAT      → BIR-registered but NOT VAT-registered (no 12% VAT; Sales Invoice once PTU-authorised)
  * UNREGISTERED → No BIR COR (issues Acknowledgement Receipt only; no TIN displayed)
+ *
+ * Which document a receipt actually is = receiptAuthority() below (taxStatus + isPtuHolder + phase).
  *
  * Derivations (maintained on Tenant for backward compatibility):
  *   isVatRegistered  = taxStatus === 'VAT'
@@ -207,8 +209,9 @@ export interface TenantContext {
  *   the necessary BIR accreditation (PTU, COR, CAS).
  *
  * Phase 2 — BIR Certified (post-accreditation):
- *   Receipt titles follow taxStatus: VAT OR / Non-VAT OR / AR.
- *   PTU and MIN printed when available. Full BIR compliance footers shown.
+ *   A tenant MAY be promoted to a Sales Invoice, but ONLY if the tenant
+ *   itself is BIR-registered AND holds a PTU — see receiptAuthority() below.
+ *   Phase 2 alone never promotes anyone; it merely releases the safety catch.
  */
 export type ProviderPhase = 1 | 2;
 
@@ -221,4 +224,91 @@ export function getProviderPhase(): ProviderPhase {
   if (typeof process === 'undefined') return 1;
   const raw = (process.env.NEXT_PUBLIC_PROVIDER_PHASE ?? '1').trim();
   return raw === '2' ? 2 : 1;
+}
+
+/* ─── Receipt Authority ──────────────────────────────────────────────────────
+ *
+ * Decides WHAT DOCUMENT a POS receipt is. Owner's rule (KJ): this is decided
+ * by THE TENANT's own status — not by HNS's registration and not by a global
+ * env var alone. Two tenant facts combine:
+ *
+ *   taxStatus    — are THEY BIR-registered, and VAT or NON_VAT?
+ *   isPtuHolder  — does THIS system hold the authority (ATP / PTU + MIN) to
+ *                  issue THEIR official sales document?
+ *
+ * getProviderPhase() stays ONLY as a provider-side SAFETY CATCH: phase 1 can
+ * HOLD every tenant at Acknowledgement Receipt, but phase 2 must NEVER promote
+ * a tenant that is not a PTU holder.
+ *
+ * Under the Ease of Paying Taxes Act (RA 11976) the primary document for a
+ * seller of goods is the SALES INVOICE (not "Official Receipt"), so the
+ * promoted kind is SALES_INVOICE, prefixed "VAT " for VAT-registered tenants.
+ *
+ * Pure + side-effect free (reads env only via getProviderPhase() when `phase`
+ * is not supplied) so every receipt surface — web modal, web thermal, mobile
+ * Counter — reaches the same verdict.
+ */
+export type ReceiptKind = 'ACKNOWLEDGEMENT' | 'SALES_INVOICE';
+
+export interface ReceiptAuthorityInput {
+  taxStatus:    TaxStatus;
+  /** Tenant.isPtuHolder — undefined / null is treated as false (fail safe). */
+  isPtuHolder?: boolean | null;
+  /** Provider safety catch. Defaults to getProviderPhase(); pass explicitly in tests / non-Next runtimes. */
+  phase?:       ProviderPhase;
+}
+
+export interface ReceiptAuthority {
+  kind:         ReceiptKind;
+  /** Document title printed on the slip — 'ACKNOWLEDGEMENT RECEIPT' | 'SALES INVOICE' | 'VAT SALES INVOICE'. */
+  title:        string;
+  /** Filipino document name printed alongside the title. */
+  titleFil:     string;
+  /** Prefix for the giant slip number — an 'AR' must never impersonate an 'SI'. */
+  numberPrefix: 'AR' | 'SI';
+  /** Print the VAT (12%) line / VAT breakdown. Acknowledgement Receipts are gross only. */
+  showVatLine:  boolean;
+  /** Print the PTU No. / MIN header lines. */
+  showPtu:      boolean;
+  /** Mandatory disclaimer for a non-official slip; null on a Sales Invoice. */
+  disclaimer:   string | null;
+}
+
+/** Printed verbatim on every Acknowledgement Receipt. */
+export const ACKNOWLEDGEMENT_DISCLAIMER =
+  'THIS IS NOT A SALES INVOICE OR OFFICIAL RECEIPT. FOR INTERNAL MANAGEMENT USE ONLY.';
+
+/**
+ * kind = 'SALES_INVOICE' ONLY when the tenant is BIR-registered (VAT or
+ * NON_VAT) AND isPtuHolder === true AND the provider phase is 2.
+ * Every other combination falls back to 'ACKNOWLEDGEMENT' (fail safe).
+ */
+export function receiptAuthority(input: ReceiptAuthorityInput): ReceiptAuthority {
+  const { taxStatus, isPtuHolder } = input;
+  const phase        = input.phase ?? getProviderPhase();
+  const isRegistered = taxStatus === 'VAT' || taxStatus === 'NON_VAT';
+  const promote      = isRegistered && isPtuHolder === true && phase === 2;
+
+  if (!promote) {
+    return {
+      kind:         'ACKNOWLEDGEMENT',
+      title:        'ACKNOWLEDGEMENT RECEIPT',
+      titleFil:     'Resibo ng Pagtanggap',
+      numberPrefix: 'AR',
+      showVatLine:  false,
+      showPtu:      false,
+      disclaimer:   ACKNOWLEDGEMENT_DISCLAIMER,
+    };
+  }
+
+  const isVat = taxStatus === 'VAT';
+  return {
+    kind:         'SALES_INVOICE',
+    title:        isVat ? 'VAT SALES INVOICE' : 'SALES INVOICE',
+    titleFil:     'Resibo ng Benta',
+    numberPrefix: 'SI',
+    showVatLine:  isVat,
+    showPtu:      true,
+    disclaimer:   null,
+  };
 }

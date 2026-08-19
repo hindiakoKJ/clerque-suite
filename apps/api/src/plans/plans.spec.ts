@@ -1,372 +1,250 @@
 /**
- * Unit tests for the modular pricing constants and helpers.
+ * Invariants for the packaging model.
  *
- * These constants drive every plan-gated decision in the system —
- * staff caps, branch caps, AI quotas, module entitlement, feature flags.
- * If any of them drifts, billing and access control silently break.
+ * These constants drive every plan-gated decision in the system — staff caps,
+ * branch caps, AI quotas, module entitlement, feature flags. If any of them
+ * drifts, billing and access control silently break.
+ *
+ * This suite used to hard-enumerate 11 plan codes and assert per-code
+ * properties (moduleCount 1 for SOLO_*, 2 for PAIR_*, 3 for SUITE_*). That
+ * ladder is retired. What matters now is different and, mostly, more
+ * important: that an UNRECOGNISED plan string cannot break a tenant. The DB
+ * column is unvalidated text and still holds legacy values, so the resolution
+ * helpers are the real contract.
  */
 import {
   PLAN_CAPS,
   PLAN_LIMITS,
   PLAN_FEATURES,
   PLAN_SETUP_FEE_PHP_CENTS,
+  DEFAULT_PLAN_CODE,
+  normalizePlanCode,
+  planCapsFor,
+  planLimitsFor,
+  planFeaturesFor,
   effectiveSeatCeiling,
   isModuleEnabled,
-  validateSoloModuleCombo,
+  validateModuleCombo,
   planLabel,
   isPermissionAvailableUnderPlan,
   getRequiredPlanForPermission,
   type PlanCode,
 } from '@repo/shared-types';
 
-describe('Plans constants', () => {
-  const ALL_PLAN_CODES: PlanCode[] = [
-    'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'SOLO_BOOKS',
-    'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
-    'SUITE_T1', 'SUITE_T2', 'SUITE_T3',
-    'ENTERPRISE',
-  ];
+const ALL_PLAN_CODES: PlanCode[] = ['CLERQUE'];
 
-  describe('PLAN_CAPS — every code present + maxTotal = base + maxAddons', () => {
-    test.each(ALL_PLAN_CODES)('%s has consistent caps', (code) => {
-      const cap = PLAN_CAPS[code];
-      expect(cap).toBeDefined();
-      expect(cap.maxTotal).toBe(cap.baseSeats + cap.maxAddons);
-      expect(cap.moduleCount).toBeGreaterThanOrEqual(1);
-      expect(cap.moduleCount).toBeLessThanOrEqual(3);
-      expect(cap.pricePhpMonthlyCents).toBeGreaterThanOrEqual(0);
-    });
+/** Values that really do sit in tenants.plan_code today, plus junk. */
+const LEGACY_AND_JUNK = [
+  'SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'SOLO_BOOKS',
+  'PAIR_T1', 'PAIR_T2', 'PAIR_T3',
+  'SUITE_T1', 'SUITE_T2', 'SUITE_T3', 'ENTERPRISE',
+  // Deleted two migrations before the collapse but still written by
+  // demo-bootstrap until it was fixed.
+  'STD_SOLO', 'STD_DUO', 'STD_TEAM', 'STD_BIZ',
+  '', 'nonsense', 'clerque', 'Clerque',
+];
 
-    it('has no unlimited tiers — every maxTotal is finite and ≤ 100 except ENTERPRISE which is bounded', () => {
-      for (const code of ALL_PLAN_CODES) {
-        const total = PLAN_CAPS[code].maxTotal;
-        expect(Number.isFinite(total)).toBe(true);
-        // Enterprise is capped at 100 staff — anything above is bespoke contract.
-        expect(total).toBeLessThanOrEqual(100);
-      }
-    });
-
-    it('Solo Lite is exactly 1 staff, no add-ons', () => {
-      expect(PLAN_CAPS.SOLO_LITE.baseSeats).toBe(1);
-      expect(PLAN_CAPS.SOLO_LITE.maxAddons).toBe(0);
-      expect(PLAN_CAPS.SOLO_LITE.maxTotal).toBe(1);
-      expect(PLAN_CAPS.SOLO_LITE.moduleCount).toBe(1);
-    });
-
-    it('module-count tiers are correct (1=SOLO_*, 2=PAIR, 3=SUITE/ENTERPRISE)', () => {
-      ['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'SOLO_BOOKS'].forEach((c) => {
-        expect(PLAN_CAPS[c as PlanCode].moduleCount).toBe(1);
-      });
-      ['PAIR_T1', 'PAIR_T2', 'PAIR_T3'].forEach((c) => {
-        expect(PLAN_CAPS[c as PlanCode].moduleCount).toBe(2);
-      });
-      ['SUITE_T1', 'SUITE_T2', 'SUITE_T3', 'ENTERPRISE'].forEach((c) => {
-        expect(PLAN_CAPS[c as PlanCode].moduleCount).toBe(3);
-      });
-    });
+describe('Plan tables', () => {
+  test.each(ALL_PLAN_CODES)('%s has consistent caps', (code) => {
+    const cap = PLAN_CAPS[code];
+    expect(cap).toBeDefined();
+    expect(cap.maxTotal).toBe(cap.baseSeats + cap.maxAddons);
+    expect(cap.pricePhpMonthlyCents).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(cap.maxTotal)).toBe(true);
   });
 
-  describe('PLAN_LIMITS — branch / AI / API ceilings', () => {
-    test.each(ALL_PLAN_CODES)('%s has finite ceilings', (code) => {
-      const lim = PLAN_LIMITS[code];
-      expect(lim).toBeDefined();
-      expect(Number.isFinite(lim.maxBranches)).toBe(true);
-      expect(Number.isFinite(lim.maxAiPerMonth)).toBe(true);
-      expect(Number.isFinite(lim.apiRatePerHour)).toBe(true);
-      expect(lim.maxBranches).toBeGreaterThanOrEqual(1);
-      expect(lim.maxBranches).toBeLessThanOrEqual(15); // Enterprise cap
-    });
-
-    it('Solo is 1 branch, no AI, no API', () => {
-      expect(PLAN_LIMITS.SOLO_LITE.maxBranches).toBe(1);
-      expect(PLAN_LIMITS.SOLO_LITE.maxAiPerMonth).toBe(0);
-      expect(PLAN_LIMITS.SOLO_LITE.apiRatePerHour).toBe(0);
-    });
-
-    it('AI quotas are monotonically non-decreasing within each tier ladder', () => {
-      // Standalone ladder
-      expect(PLAN_LIMITS.SOLO_LITE.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SOLO_STANDARD.maxAiPerMonth);
-      expect(PLAN_LIMITS.SOLO_STANDARD.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SOLO_PRO.maxAiPerMonth);
-      // (STD_BIZ removed; SOLO_PRO is now the top single-module plan)
-      // Suite ladder
-      expect(PLAN_LIMITS.SUITE_T1.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SUITE_T2.maxAiPerMonth);
-      expect(PLAN_LIMITS.SUITE_T2.maxAiPerMonth).toBeLessThanOrEqual(PLAN_LIMITS.SUITE_T3.maxAiPerMonth);
-    });
+  test.each(ALL_PLAN_CODES)('%s has finite limits', (code) => {
+    const limits = PLAN_LIMITS[code];
+    expect(Number.isFinite(limits.maxBranches)).toBe(true);
+    expect(Number.isFinite(limits.maxAiPerMonth)).toBe(true);
+    expect(Number.isFinite(limits.apiRatePerHour)).toBe(true);
   });
 
-  describe('PLAN_FEATURES — feature flags', () => {
-    test.each(ALL_PLAN_CODES)('%s has all feature keys defined', (code) => {
-      const f = PLAN_FEATURES[code];
-      expect(f).toBeDefined();
-      expect(typeof f.birForms).toBe('boolean');
-      expect(typeof f.customRoles).toBe('boolean');
-      expect(typeof f.auditLog).toBe('boolean');
-      expect(typeof f.crossModuleReports).toBe('boolean');
-      expect(typeof f.aiAddons).toBe('boolean');
-      expect(['none', 'read', 'readwrite']).toContain(f.apiAccess);
-      expect(typeof f.whitelabel).toBe('boolean');
-      expect(typeof f.customDomain).toBe('boolean');
-    });
-
-    it('Solo unlocks only the bare minimum (no BIR forms, no audit)', () => {
-      const f = PLAN_FEATURES.SOLO_LITE;
-      expect(f.birForms).toBe(false);
-      expect(f.auditLog).toBe(false);
-      expect(f.customRoles).toBe(false);
-      expect(f.apiAccess).toBe('none');
-    });
-
-    it('Enterprise unlocks everything', () => {
-      const f = PLAN_FEATURES.ENTERPRISE;
-      expect(f.birForms).toBe(true);
-      expect(f.customRoles).toBe(true);
-      expect(f.auditLog).toBe(true);
-      expect(f.crossModuleReports).toBe(true);
-      expect(f.aiAddons).toBe(true);
-      expect(f.apiAccess).toBe('readwrite');
-      expect(f.whitelabel).toBe(true);
-      expect(f.customDomain).toBe(true);
-    });
-
-    it('white-label and custom domain are Enterprise-only', () => {
-      for (const code of ALL_PLAN_CODES) {
-        if (code === 'ENTERPRISE') continue;
-        expect(PLAN_FEATURES[code].whitelabel).toBe(false);
-        expect(PLAN_FEATURES[code].customDomain).toBe(false);
-      }
-    });
+  it('defines every table for the default code', () => {
+    expect(PLAN_CAPS[DEFAULT_PLAN_CODE]).toBeDefined();
+    expect(PLAN_LIMITS[DEFAULT_PLAN_CODE]).toBeDefined();
+    expect(PLAN_FEATURES[DEFAULT_PLAN_CODE]).toBeDefined();
+    expect(PLAN_SETUP_FEE_PHP_CENTS[DEFAULT_PLAN_CODE]).toBeDefined();
+    expect(planLabel(DEFAULT_PLAN_CODE)).toBeTruthy();
   });
 
-  describe('PLAN_SETUP_FEE_PHP_CENTS', () => {
-    test.each(ALL_PLAN_CODES)('%s has a non-negative setup fee', (code) => {
-      const fee = PLAN_SETUP_FEE_PHP_CENTS[code];
-      expect(typeof fee).toBe('number');
-      expect(fee).toBeGreaterThanOrEqual(0);
-    });
-
-    it('Solo setup fee is 0 (no friction at entry)', () => {
-      expect(PLAN_SETUP_FEE_PHP_CENTS.SOLO_LITE).toBe(0);
-    });
-
-    it('Enterprise setup fee is the floor', () => {
-      // Other plans should be ≤ Enterprise setup fee
-      for (const code of ALL_PLAN_CODES) {
-        if (code === 'ENTERPRISE') continue;
-        expect(PLAN_SETUP_FEE_PHP_CENTS[code]).toBeLessThanOrEqual(PLAN_SETUP_FEE_PHP_CENTS.ENTERPRISE);
-      }
-    });
+  it('grants readwrite API access — an ecosystem app must be able to post a sale', () => {
+    // This is the flag that decides whether Clerque can act as a commerce
+    // backend at all. It previously lived only on the two most expensive
+    // plans, which put the platform story out of reach of a small venue.
+    expect(PLAN_FEATURES[DEFAULT_PLAN_CODE].apiAccess).toBe('readwrite');
   });
 
-  describe('effectiveSeatCeiling', () => {
-    it('returns base seats when no add-ons', () => {
-      expect(effectiveSeatCeiling('SOLO_PRO', 0)).toBe(5);
-      expect(effectiveSeatCeiling('SUITE_T2', 0)).toBe(8);
-    });
-
-    it('returns base + addons when within plan ceiling', () => {
-      // SUITE_T3: base 20, maxAddons 30 → buyer adds 10 → ceiling = 30
-      expect(effectiveSeatCeiling('SUITE_T3', 10)).toBe(30);
-      // PAIR_T2: base 5, maxAddons 5 → buyer adds 3 → ceiling = 8
-      expect(effectiveSeatCeiling('PAIR_T2', 3)).toBe(8);
-    });
-
-    it('clamps to plan maxTotal regardless of addons paid', () => {
-      expect(effectiveSeatCeiling('SUITE_T3', 999)).toBe(50);
-      expect(effectiveSeatCeiling('SOLO_LITE', 5)).toBe(1); // Solo is hard 1 regardless
-      expect(effectiveSeatCeiling('SOLO_PRO', 100)).toBe(5); // Solo Pro caps at 5 (no addons allowed)
-    });
-
-    it('treats negative addons as zero', () => {
-      expect(effectiveSeatCeiling('SOLO_PRO', -3)).toBe(5);
-    });
+  it('grants full accounting — one package means one set of books', () => {
+    expect(PLAN_FEATURES[DEFAULT_PLAN_CODE].advancedAccounting).toBe(true);
   });
 
-  describe('isModuleEnabled', () => {
-    it('Suite plans return true for any module regardless of flags', () => {
-      expect(isModuleEnabled('SUITE_T1', { modulePos: false, moduleLedger: false, modulePayroll: false }, 'POS')).toBe(true);
-      expect(isModuleEnabled('SUITE_T2', { modulePos: false, moduleLedger: false, modulePayroll: false }, 'LEDGER')).toBe(true);
-      expect(isModuleEnabled('ENTERPRISE', { modulePos: false, moduleLedger: false, modulePayroll: false }, 'PAYROLL')).toBe(true);
-    });
+  it('has no leftover flags that nothing reads', () => {
+    // crossModuleReports, aiAddons, whitelabel, customDomain, customRoles and
+    // fifoValuation were each defined for all 11 plans and read by no guard,
+    // service or screen. Re-adding one without a reader is how the last set
+    // of dead flags accumulated.
+    const features = PLAN_FEATURES[DEFAULT_PLAN_CODE] as unknown as Record<string, unknown>;
+    for (const dead of [
+      'crossModuleReports', 'aiAddons', 'whitelabel',
+      'customDomain', 'customRoles', 'fifoValuation',
+    ]) {
+      expect(features).not.toHaveProperty(dead);
+    }
+  });
+});
 
-    it('Standalone plans respect the per-module flags', () => {
-      const onlyPos = { modulePos: true, moduleLedger: false, modulePayroll: false };
-      expect(isModuleEnabled('SOLO_PRO', onlyPos, 'POS')).toBe(true);
-      expect(isModuleEnabled('SOLO_PRO', onlyPos, 'LEDGER')).toBe(false);
-      expect(isModuleEnabled('SOLO_PRO', onlyPos, 'PAYROLL')).toBe(false);
-    });
-
-    it('Pair plans respect the per-module flags', () => {
-      const posLedger = { modulePos: true, moduleLedger: true, modulePayroll: false };
-      expect(isModuleEnabled('PAIR_T2', posLedger, 'POS')).toBe(true);
-      expect(isModuleEnabled('PAIR_T2', posLedger, 'LEDGER')).toBe(true);
-      expect(isModuleEnabled('PAIR_T2', posLedger, 'PAYROLL')).toBe(false);
-    });
+describe('normalizePlanCode — the DB boundary', () => {
+  // The whole point of this function: tenants.plan_code is unvalidated TEXT
+  // with a legacy default. Before it existed, an unrecognised value meant
+  // PlanFeatureGuard fell back to the lowest tier, PLAN_CAPS[code].baseSeats
+  // threw, and — worst — the API-key resolver read apiAccess as 'none' and
+  // returned null, surfacing as "Invalid or expired API key". A stale string
+  // silently killed a working integration.
+  test.each(LEGACY_AND_JUNK)('resolves %p onto the package', (raw) => {
+    expect(normalizePlanCode(raw)).toBe(DEFAULT_PLAN_CODE);
   });
 
-  describe('validateSoloModuleCombo (Sprint 23 — applies to SOLO_* only)', () => {
-    it('returns null for any Solo plan + POS only (the only valid combo)', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE',     true, false, false)).toBeNull();
-      expect(validateSoloModuleCombo('SOLO_STANDARD', true, false, false)).toBeNull();
-      expect(validateSoloModuleCombo('SOLO_PRO',      true, false, false)).toBeNull();
-    });
-
-    it('rejects any Solo plan without POS', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE',     false, false, false)).toMatch(/POS/i);
-      expect(validateSoloModuleCombo('SOLO_STANDARD', false, false, false)).toMatch(/POS/i);
-      expect(validateSoloModuleCombo('SOLO_PRO',      false, false, false)).toMatch(/POS/i);
-    });
-
-    it('rejects any Solo plan with Ledger enabled (Solo is POS-only)', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE',     true, true, false)).toMatch(/Ledger/i);
-      expect(validateSoloModuleCombo('SOLO_STANDARD', true, true, false)).toMatch(/Ledger/i);
-      expect(validateSoloModuleCombo('SOLO_PRO',      true, true, false)).toMatch(/Ledger/i);
-    });
-
-    it('rejects any Solo plan with Payroll enabled (Solo is POS-only)', () => {
-      expect(validateSoloModuleCombo('SOLO_LITE',     true, false, true)).toMatch(/Payroll/i);
-      expect(validateSoloModuleCombo('SOLO_STANDARD', true, false, true)).toMatch(/Payroll/i);
-      expect(validateSoloModuleCombo('SOLO_PRO',      true, false, true)).toMatch(/Payroll/i);
-    });
-
-    it('returns null for PAIR / SUITE / ENTERPRISE plans (validation handled elsewhere)', () => {
-      expect(validateSoloModuleCombo('PAIR_T1',    true, true, false)).toBeNull();
-      expect(validateSoloModuleCombo('PAIR_T2',    false, true, true)).toBeNull();
-      expect(validateSoloModuleCombo('SUITE_T2',   true, true, true)).toBeNull();
-      expect(validateSoloModuleCombo('ENTERPRISE', true, true, true)).toBeNull();
-    });
-
-    it('SOLO_BOOKS is the only Solo plan that bundles POS + Ledger', () => {
-      // Valid: POS + Ledger together.
-      expect(validateSoloModuleCombo('SOLO_BOOKS', true, true, false)).toBeNull();
-      // Must include Ledger (it is the whole point of the tier).
-      expect(validateSoloModuleCombo('SOLO_BOOKS', true, false, false)).toMatch(/Ledger/i);
-      // Still requires POS, and still excludes Payroll.
-      expect(validateSoloModuleCombo('SOLO_BOOKS', false, true, false)).toMatch(/POS/i);
-      expect(validateSoloModuleCombo('SOLO_BOOKS', true, true, true)).toMatch(/Payroll/i);
-    });
+  it('resolves null and undefined', () => {
+    expect(normalizePlanCode(null)).toBe(DEFAULT_PLAN_CODE);
+    expect(normalizePlanCode(undefined)).toBe(DEFAULT_PLAN_CODE);
   });
 
-  describe('planLabel', () => {
-    it('returns a non-empty display label for every plan code', () => {
-      for (const code of ALL_PLAN_CODES) {
-        const label = planLabel(code);
-        expect(label).toBeTruthy();
-        expect(label.length).toBeGreaterThan(0);
-      }
-    });
+  it('keeps a recognised code', () => {
+    expect(normalizePlanCode('CLERQUE')).toBe('CLERQUE');
+  });
+});
+
+describe('Safe accessors never return undefined', () => {
+  test.each([...LEGACY_AND_JUNK, null, undefined])('%p yields full tables', (raw) => {
+    expect(planCapsFor(raw as string).baseSeats).toBeGreaterThan(0);
+    expect(planLimitsFor(raw as string).maxBranches).toBeGreaterThan(0);
+    expect(planFeaturesFor(raw as string).apiAccess).toBe('readwrite');
   });
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Plan-based permission gate (replaces legacy tier-feature indirection)
-  // ───────────────────────────────────────────────────────────────────────────
+  it('never grants unlimited by accident on an unknown code', () => {
+    // products.service and inventory.service used `?? -1` fallbacks, and -1
+    // means UNLIMITED — so an unrecognised plan failed OPEN. The accessor
+    // returns the real package instead of a hole, so the value is deliberate.
+    expect(planFeaturesFor('nonsense').maxRecipes).toBe(
+      PLAN_FEATURES[DEFAULT_PLAN_CODE].maxRecipes,
+    );
+  });
+});
 
-  describe('isPermissionAvailableUnderPlan', () => {
-    const POS_ONLY = { modulePos: true,  moduleLedger: false, modulePayroll: false };
-    const POS_LED  = { modulePos: true,  moduleLedger: true,  modulePayroll: false };
-    const POS_PAY  = { modulePos: true,  moduleLedger: false, modulePayroll: true  };
-    const SUITE    = { modulePos: true,  moduleLedger: true,  modulePayroll: true  };
-
-    it('universal permissions are always available', () => {
-      const ctx = { planCode: 'SOLO_LITE' as PlanCode, ...POS_ONLY };
-      expect(isPermissionAvailableUnderPlan('product:create', ctx)).toBe(true);
-      expect(isPermissionAvailableUnderPlan('order:create',   ctx)).toBe(true);
-      expect(isPermissionAvailableUnderPlan('staff:view',     ctx)).toBe(true);
-    });
-
-    it('ledger:* requires moduleLedger', () => {
-      const noLed = { planCode: 'SOLO_LITE' as PlanCode, ...POS_ONLY };
-      const led   = { planCode: 'PAIR_T1' as PlanCode, ...POS_LED };
-      expect(isPermissionAvailableUnderPlan('ledger:view',          noLed)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', noLed)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('ledger:view',          led)).toBe(true);
-      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', led)).toBe(true);
-    });
-
-    it('SOLO_BOOKS gets SIMPLE ledger but NOT full accounting (advancedAccounting=false)', () => {
-      const books = { planCode: 'SOLO_BOOKS' as PlanCode, ...POS_LED };
-      // SIMPLE — available with the Ledger module on.
-      expect(isPermissionAvailableUnderPlan('ledger:view',          books)).toBe(true);
-      expect(isPermissionAvailableUnderPlan('ledger:export',        books)).toBe(true);
-      // FULL — require advancedAccounting, which SOLO_BOOKS does not have.
-      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', books)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('ledger:period_close',  books)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('ledger:trial_balance', books)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('finance:cash_flow',    books)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('finance:bank_recon',   books)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('bir:view',             books)).toBe(false);
-      // A PAIR plan WITH advancedAccounting gets the full set.
-      const pair = { planCode: 'PAIR_T1' as PlanCode, ...POS_LED };
-      expect(isPermissionAvailableUnderPlan('ledger:journal_entry', pair)).toBe(true);
-      expect(isPermissionAvailableUnderPlan('ledger:trial_balance', pair)).toBe(true);
-    });
-
-    it('payroll:* requires modulePayroll', () => {
-      const noPay = { planCode: 'SOLO_LITE' as PlanCode, ...POS_ONLY };
-      const pay   = { planCode: 'PAIR_T2' as PlanCode, ...POS_PAY };
-      expect(isPermissionAvailableUnderPlan('payroll:view_salary',         noPay)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('payroll:run',                  noPay)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('staff:assign_payroll_master', noPay)).toBe(false);
-      expect(isPermissionAvailableUnderPlan('payroll:view_salary',         pay)).toBe(true);
-      expect(isPermissionAvailableUnderPlan('payroll:run',                  pay)).toBe(true);
-    });
-
-    it('SUITE plans always include all module-gated permissions even if a module flag is somehow false', () => {
-      // moduleCount === 3 short-circuits to true regardless of per-module flags.
-      const buggy = { planCode: 'SUITE_T2' as PlanCode, modulePos: true, moduleLedger: false, modulePayroll: false };
-      expect(isPermissionAvailableUnderPlan('ledger:view',  buggy)).toBe(true);
-      expect(isPermissionAvailableUnderPlan('payroll:run',  buggy)).toBe(true);
-    });
-
-    it('audit:view follows PLAN_FEATURES.auditLog', () => {
-      // SOLO_LITE does NOT include auditLog
-      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'SOLO_LITE',  ...POS_ONLY })).toBe(false);
-      // SOLO_PRO DOES include auditLog (it's the new "top single-module" plan)
-      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'SOLO_PRO',  ...POS_ONLY })).toBe(true);
-      // PAIR_T3 includes auditLog too
-      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'PAIR_T3',  ...POS_LED  })).toBe(true);
-      // SUITE plans always include it
-      expect(isPermissionAvailableUnderPlan('audit:view', { planCode: 'SUITE_T2',  ...SUITE })).toBe(true);
-    });
-
-    it('bir:view follows PLAN_FEATURES.birForms', () => {
-      // Sprint 23 — BIR parked as a Solo-tier differentiator. No Solo plan has
-      // BIR forms unlocked. No Solo plan has BIR forms (parked per Sprint 23 decision).
-      // Customers needing BIR exports must upgrade to PAIR/SUITE (parked but still live).
-      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'SOLO_LITE',     ...POS_ONLY })).toBe(false);
-      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'SOLO_STANDARD', ...POS_ONLY })).toBe(false);
-      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'SOLO_PRO',      ...POS_ONLY })).toBe(false);
-      // PAIR_* + SUITE_* (parked) still have BIR forms enabled
-      expect(isPermissionAvailableUnderPlan('bir:view', { planCode: 'PAIR_T1',  ...POS_LED  })).toBe(true);
-    });
-
-    it('unknown permission keys default to true (universal)', () => {
-      const ctx = { planCode: 'SOLO_LITE' as PlanCode, ...POS_ONLY };
-      expect(isPermissionAvailableUnderPlan('completely:made_up', ctx)).toBe(true);
-    });
+describe('effectiveSeatCeiling', () => {
+  it('clamps purchased seats to the plan ceiling', () => {
+    const cap = PLAN_CAPS[DEFAULT_PLAN_CODE];
+    expect(effectiveSeatCeiling(DEFAULT_PLAN_CODE, 0)).toBe(
+      Math.min(cap.baseSeats, cap.maxTotal),
+    );
+    expect(effectiveSeatCeiling(DEFAULT_PLAN_CODE, 10_000)).toBe(cap.maxTotal);
   });
 
-  describe('getRequiredPlanForPermission', () => {
-    it('returns null for universal permissions', () => {
-      expect(getRequiredPlanForPermission('product:create')).toBeNull();
-      expect(getRequiredPlanForPermission('staff:view')).toBeNull();
-      expect(getRequiredPlanForPermission('unknown:thing')).toBeNull();
-    });
+  it('treats negative addons as zero', () => {
+    expect(effectiveSeatCeiling(DEFAULT_PLAN_CODE, -5)).toBe(
+      effectiveSeatCeiling(DEFAULT_PLAN_CODE, 0),
+    );
+  });
 
-    it('returns Ledger hint for ledger permissions', () => {
-      expect(getRequiredPlanForPermission('ledger:view')).toMatch(/ledger/i);
-      expect(getRequiredPlanForPermission('ledger:journal_entry')).toMatch(/ledger/i);
-      expect(getRequiredPlanForPermission('finance:bank_recon')).toMatch(/ledger/i);
-    });
+  it('does not throw on a legacy stored code', () => {
+    expect(() => effectiveSeatCeiling('SUITE_T2', 0)).not.toThrow();
+  });
+});
 
-    it('returns Payroll hint for payroll permissions', () => {
-      expect(getRequiredPlanForPermission('payroll:view_salary')).toMatch(/payroll/i);
-      expect(getRequiredPlanForPermission('payroll:run')).toMatch(/payroll/i);
-      expect(getRequiredPlanForPermission('staff:assign_payroll_master')).toMatch(/payroll/i);
-    });
+describe('isModuleEnabled — the flags are the only source of truth', () => {
+  const on  = { modulePos: true,  moduleLedger: true,  modulePayroll: true  };
+  const off = { modulePos: false, moduleLedger: false, modulePayroll: false };
 
-    it('returns audit / bir hints for compliance permissions', () => {
-      expect(getRequiredPlanForPermission('audit:view')).toMatch(/audit/i);
-      expect(getRequiredPlanForPermission('bir:view')).toMatch(/bir/i);
-    });
+  it('reports each module from its own flag', () => {
+    expect(isModuleEnabled(DEFAULT_PLAN_CODE, on, 'POS')).toBe(true);
+    expect(isModuleEnabled(DEFAULT_PLAN_CODE, on, 'LEDGER')).toBe(true);
+    expect(isModuleEnabled(DEFAULT_PLAN_CODE, on, 'PAYROLL')).toBe(true);
+    expect(isModuleEnabled(DEFAULT_PLAN_CODE, off, 'POS')).toBe(false);
+    expect(isModuleEnabled(DEFAULT_PLAN_CODE, off, 'LEDGER')).toBe(false);
+    expect(isModuleEnabled(DEFAULT_PLAN_CODE, off, 'PAYROLL')).toBe(false);
+  });
+
+  it('agrees with AppAccessGuard when a module is switched off', () => {
+    // Regression: this used to short-circuit to true for any plan with
+    // moduleCount 3, while AppAccessGuard read the flags alone. A Suite
+    // tenant with modulePos false was "enabled" here and 403'd at the wall.
+    const posOff = { modulePos: false, moduleLedger: true, modulePayroll: true };
+    expect(isModuleEnabled(DEFAULT_PLAN_CODE, posOff, 'POS')).toBe(false);
+  });
+});
+
+describe('validateModuleCombo', () => {
+  it('accepts any combination with at least one module on', () => {
+    expect(validateModuleCombo(DEFAULT_PLAN_CODE, true,  false, false)).toBeNull();
+    expect(validateModuleCombo(DEFAULT_PLAN_CODE, false, true,  false)).toBeNull();
+    expect(validateModuleCombo(DEFAULT_PLAN_CODE, false, false, true )).toBeNull();
+    expect(validateModuleCombo(DEFAULT_PLAN_CODE, true,  true,  true )).toBeNull();
+  });
+
+  it('accepts Ledger-only, which the old validator rejected outright', () => {
+    // The public Ledger signup wrote exactly this shape (modulePos false,
+    // moduleLedger true) while validateSoloModuleCombo demanded POS on every
+    // SOLO_* plan. Such tenants existed in the DB and could not be edited in
+    // the admin console at all without first changing their plan.
+    expect(validateModuleCombo(DEFAULT_PLAN_CODE, false, true, false)).toBeNull();
+  });
+
+  it('rejects a tenant with every module off', () => {
+    const err = validateModuleCombo(DEFAULT_PLAN_CODE, false, false, false);
+    expect(err).toMatch(/at least one module/i);
+  });
+});
+
+describe('isPermissionAvailableUnderPlan', () => {
+  const ctx = (mods: Partial<{ pos: boolean; ledger: boolean; payroll: boolean }>) => ({
+    planCode:      DEFAULT_PLAN_CODE,
+    modulePos:     mods.pos     ?? false,
+    moduleLedger:  mods.ledger  ?? false,
+    modulePayroll: mods.payroll ?? false,
+  });
+
+  it('gates simple ledger on the Ledger module', () => {
+    expect(isPermissionAvailableUnderPlan('ledger:view', ctx({ ledger: true  }))).toBe(true);
+    expect(isPermissionAvailableUnderPlan('ledger:view', ctx({ ledger: false }))).toBe(false);
+  });
+
+  it('gates full ledger on the Ledger module plus advancedAccounting', () => {
+    expect(isPermissionAvailableUnderPlan('ledger:journal_entry', ctx({ ledger: true  }))).toBe(true);
+    expect(isPermissionAvailableUnderPlan('ledger:period_close',  ctx({ ledger: false }))).toBe(false);
+    expect(isPermissionAvailableUnderPlan('finance:bank_recon',   ctx({ ledger: false }))).toBe(false);
+  });
+
+  it('gates payroll on the Payroll module', () => {
+    expect(isPermissionAvailableUnderPlan('payroll:run', ctx({ payroll: true  }))).toBe(true);
+    expect(isPermissionAvailableUnderPlan('payroll:run', ctx({ payroll: false }))).toBe(false);
+  });
+
+  it('does not let a switched-off module leak through', () => {
+    // Regression: moduleCount === 3 used to short-circuit all three branches
+    // to true, so a Suite tenant with Payroll off still saw payroll
+    // permissions offered in the staff editor.
+    expect(isPermissionAvailableUnderPlan('payroll:edit', ctx({ pos: true, ledger: true }))).toBe(false);
+  });
+
+  it('treats unlisted permissions as universal', () => {
+    expect(isPermissionAvailableUnderPlan('pos:sell', ctx({}))).toBe(true);
+  });
+});
+
+describe('getRequiredPlanForPermission', () => {
+  it('points at the module, not at a plan that no longer exists', () => {
+    // Old copy read "Upgrade to Duo or higher" and "Pair T3 / Suite T2" —
+    // Duo and Business had already been deleted by earlier migrations.
+    const ledger = getRequiredPlanForPermission('ledger:journal_entry');
+    expect(ledger).toMatch(/Ledger module/i);
+    expect(ledger).not.toMatch(/\bPair\b|\bSuite\b|\bDuo\b|Upgrade to/i);
+
+    const payroll = getRequiredPlanForPermission('payroll:run');
+    expect(payroll).toMatch(/Payroll module/i);
+  });
+
+  it('returns null for universal permissions', () => {
+    expect(getRequiredPlanForPermission('pos:sell')).toBeNull();
   });
 });

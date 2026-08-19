@@ -12,7 +12,30 @@ import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
-import { OfflineOrder, PLAN_FEATURES, type PlanCode } from '@repo/shared-types';
+import { OfflineOrder, planFeaturesFor } from '@repo/shared-types';
+import { OrderQuoteService } from './order-quote.service';
+
+/** Peso tolerance when comparing a caller's totals against our own. One
+ *  centavo absorbs float noise without letting a real discrepancy through. */
+const TOTAL_TOLERANCE = 0.01;
+
+/**
+ * How this sale reached us. Everything defaults to the first-party POS, so
+ * existing callers behave exactly as before.
+ */
+export interface CreateOrderOptions {
+  channel?:           'POS' | 'API' | 'ONLINE';
+  /** The key that made the sale, for service calls. */
+  createdByApiKeyId?: string | null;
+  /** The consumer app's own id for this sale; unique per tenant. */
+  externalRef?:       string | null;
+  /**
+   * Recompute the money from the catalog and reject a payload that
+   * disagrees. On for machine callers, off for the POS (whose displayed
+   * totals are the receipt the customer already saw).
+   */
+  enforceServerTotals?: boolean;
+}
 
 @Injectable()
 export class OrdersService {
@@ -24,11 +47,80 @@ export class OrdersService {
     private numbering: NumberingService,
     private loyalty:   LoyaltyService,
     private voidApprovals: VoidApprovalsService,
+    private quotes:    OrderQuoteService,
   ) {}
+
+  /**
+   * Re-derive this sale from the catalog and reject it if the caller's
+   * numbers disagree by more than a centavo.
+   *
+   * Deliberately compares the ORDER totals, not each line: a caller may
+   * legitimately structure lines differently (bundling, its own naming) as
+   * long as the customer is charged what the catalog says. What it may not
+   * do is decide the VAT split or the amount due.
+   */
+  private async assertTotalsMatchCatalog(
+    tenantId: string,
+    payload: OfflineOrder,
+  ): Promise<void> {
+    const quote = await this.quotes.quote(tenantId, {
+      items: payload.items.map((i) => ({
+        productId:  i.productId,
+        variantId:  i.variantId,
+        quantity:   Number(i.quantity),
+        modifierOptionIds: (i.modifiers ?? []).map((m) => m.modifierOptionId),
+      })),
+      isPwdScDiscount: payload.isPwdScDiscount,
+    });
+
+    const mismatches: string[] = [];
+    const check = (label: string, submitted: number, expected: number) => {
+      if (Math.abs(Number(submitted) - expected) > TOTAL_TOLERANCE) {
+        mismatches.push(`${label}: sent ${Number(submitted).toFixed(2)}, expected ${expected.toFixed(2)}`);
+      }
+    };
+    check('subtotal',    payload.subtotal,       quote.subtotal);
+    check('discount',    payload.discountAmount, quote.discountAmount);
+    check('VAT',         payload.vatAmount,      quote.vatAmount);
+    check('total',       payload.totalAmount,    quote.totalAmount);
+
+    if (mismatches.length) {
+      throw new BadRequestException({
+        code:    'ORDER_TOTALS_MISMATCH',
+        message:
+          'The amounts sent do not match this catalog. Price the cart with ' +
+          'POST /orders/quote and submit those totals unchanged.',
+        mismatches,
+        expected: {
+          subtotal:       quote.subtotal,
+          discountAmount: quote.discountAmount,
+          vatAmount:      quote.vatAmount,
+          totalAmount:    quote.totalAmount,
+        },
+      });
+    }
+  }
 
   // ─── Create order (online or from offline sync) ─────────────────────────
 
-  async create(tenantId: string, cashierId: string, payload: OfflineOrder) {
+  async create(
+    tenantId: string,
+    /**
+     * The cashier who rang the sale. Null for a service (API-key) call —
+     * there is no user behind it, and the sale is attributed via
+     * `opts.createdByApiKeyId` instead.
+     */
+    cashierId: string | null,
+    payload: OfflineOrder,
+    opts: CreateOrderOptions = {},
+  ) {
+    const {
+      channel             = 'POS',
+      createdByApiKeyId   = null,
+      externalRef         = null,
+      enforceServerTotals = false,
+    } = opts;
+
     // Idempotency: if clientUuid already exists FOR THIS TENANT, return it.
     // Tenant scope is critical — clientUuid is globally unique on the Order
     // model, so a malicious payload could otherwise echo back another
@@ -37,6 +129,17 @@ export class OrdersService {
     if (payload.clientUuid) {
       const existing = await this.prisma.order.findFirst({
         where: { clientUuid: payload.clientUuid, tenantId },
+      });
+      if (existing) return existing;
+    }
+
+    // Second idempotency key, for callers that track sales by their OWN id
+    // (a booking reference, an invoice number in another system). A network
+    // timeout followed by a retry must never bill the customer twice, and
+    // the consumer app should not have to keep our clientUuid to get that.
+    if (externalRef) {
+      const existing = await this.prisma.order.findFirst({
+        where: { externalRef, tenantId },
       });
       if (existing) return existing;
     }
@@ -54,6 +157,70 @@ export class OrdersService {
       Number(payload.vatAmount),
       (tenant.taxStatus ?? 'UNREGISTERED') as 'VAT' | 'NON_VAT' | 'UNREGISTERED',
     );
+
+    // Guard: payments must reconcile to the total — the PHANTOM CASH fix.
+    //
+    // The SALE journal handler derives the cash debit as (total − non-cash
+    // payments) and never checks that the payments actually sum to the total.
+    // So a CASH_SALE tendered for LESS than its total (a deposit: ₱1000 order,
+    // ₱500 paid) posted DR Cash ₱1000 for ₱500 that never entered the drawer,
+    // and it also inflated the cashier's expected drawer, manufacturing a
+    // false shortage. This is the single thing that blocks any deposit-shaped
+    // flow (a court reservation, an equipment hire deposit) from being taken
+    // through the system safely.
+    //
+    //   CASH_SALE — fully settled at point of sale: Σ payments ≈ total.
+    //   CHARGE    — billed, collected later via AR: no payment is tendered now.
+    //
+    // A real deposit is TWO full orders (the PreOrder pattern) or an AR charge,
+    // never one order with a partial tender — so this rejects the broken shape
+    // rather than trying to book it.
+    const invoiceType = (payload.invoiceType ?? 'CASH_SALE') as 'CASH_SALE' | 'CHARGE';
+
+    // BIR CAS: the default tax classification derives from the tenant's
+    // registered tax status — a NON_VAT / UNREGISTERED tenant's sale is
+    // VAT_EXEMPT, never VAT_12. An explicit payload.taxType (e.g. a
+    // ZERO_RATED export sale rung by the POS) still wins.
+    const defaultTaxType = tenant.taxStatus === 'VAT' ? 'VAT_12' : 'VAT_EXEMPT';
+    const paidTotal = (payload.payments ?? []).reduce(
+      (s, p) => s + Number(p.amount ?? 0), 0,
+    );
+    if (invoiceType === 'CHARGE') {
+      if (Math.abs(paidTotal) > TOTAL_TOLERANCE) {
+        throw new BadRequestException({
+          code:    'CHARGE_HAS_PAYMENT',
+          message:
+            'A CHARGE (credit) sale is billed and collected later — it must ' +
+            'carry no payment at the point of sale. Record a CASH_SALE if the ' +
+            'customer is paying now.',
+        });
+      }
+    } else {
+      if (Math.abs(paidTotal - Number(payload.totalAmount)) > TOTAL_TOLERANCE) {
+        throw new BadRequestException({
+          code:    'PAYMENTS_DO_NOT_MATCH_TOTAL',
+          message:
+            `Payments (₱${paidTotal.toFixed(2)}) must equal the order total ` +
+            `(₱${Number(payload.totalAmount).toFixed(2)}). Partial payment on a ` +
+            `single sale is not supported — take a deposit as a separate order.`,
+          paid:  paidTotal,
+          total: Number(payload.totalAmount),
+        });
+      }
+    }
+
+    // Guard: for machine callers, ENFORCE the money rather than trust it.
+    //
+    // The POS is first-party code operated by a person inside the business,
+    // so it sends the totals it displayed and we check them for internal
+    // consistency. An ecosystem app is neither, and an app that quietly
+    // under-reports VAT would corrupt the tenant's BIR filings, not ours.
+    // So we re-derive the sale from the catalog and refuse any payload that
+    // disagrees. This is the same calculator /orders/quote uses, which is
+    // why quoting first always produces an accepted payload.
+    if (enforceServerTotals) {
+      await this.assertTotalsMatchCatalog(tenantId, payload);
+    }
 
     // Guard: period lock — offline orders cannot land in a closed accounting period
     await this.periods.assertDateIsOpen(tenantId, new Date(payload.createdAt));
@@ -279,7 +446,10 @@ export class OrdersService {
       const productsForRouting = productIds.length
         ? await tx.product.findMany({
             where:  { id: { in: productIds }, tenantId },
-            select: { id: true, category: { select: { stationId: true } } },
+            select: {
+              id: true,
+              category: { select: { stationId: true, revenueAccountCode: true } },
+            },
           })
         : [];
       if (productsForRouting.length !== new Set(productIds).size) {
@@ -289,6 +459,13 @@ export class OrdersService {
       }
       const hasAnyRoutedItem = productsForRouting.some(
         (p) => p.category?.stationId != null,
+      );
+      // Per-product revenue account (from its category). Baked into each SALE
+      // line below so the journal can split revenue by stream — Court Rental
+      // vs Open Play vs Tournament vs Retail — instead of dumping everything
+      // into 4010. Null category / null code → the handler's 4010 default.
+      const revenueCodeByProduct = new Map(
+        productsForRouting.map((p) => [p.id, p.category?.revenueAccountCode ?? null]),
       );
       const paidAtTs = new Date(payload.createdAt);
       const initialStatus: 'PAID' | 'COMPLETED' = hasAnyRoutedItem ? 'PAID' : 'COMPLETED';
@@ -311,12 +488,18 @@ export class OrdersService {
           pwdScIdOwnerName: payload.pwdScIdOwnerName,
           clientUuid: payload.clientUuid,
           createdById: cashierId,
+          // Platform attribution — which app made this sale, and (for a
+          // service call) which key. Both are needed to report per-app
+          // revenue for a tenant that runs the till and a booking app.
+          channel,
+          createdByApiKeyId,
+          externalRef,
           paidAt: paidAtTs,
           readyAt: initialReadyAt,
           completedAt: initialCompletedAt,
           // ── BIR CAS: Invoice classification & B2B customer fields ──────────
-          invoiceType:     (payload.invoiceType ?? 'CASH_SALE') as any,
-          taxType:         (payload.taxType      ?? 'VAT_12')    as any,
+          invoiceType:     (payload.invoiceType ?? 'CASH_SALE')   as any,
+          taxType:         (payload.taxType      ?? defaultTaxType) as any,
           customerName:    payload.customerName,
           customerTin:     payload.customerTin,
           customerAddress: payload.customerAddress,
@@ -719,7 +902,13 @@ export class OrdersService {
             orderNumber,
             branchId: payload.branchId,
             completedAt: payload.createdAt,
-            lines: payload.items,
+            // Each line carries its resolved revenue account so the SALE
+            // handler can split revenue by stream. Lines without a code fall
+            // back to 4010 in the handler.
+            lines: payload.items.map((i) => ({
+              ...i,
+              revenueAccountCode: revenueCodeByProduct.get(i.productId) ?? null,
+            })),
             payments: payload.payments,
             vatAmount: payload.vatAmount,
             totalAmount: payload.totalAmount,
@@ -727,7 +916,7 @@ export class OrdersService {
             isPwdScDiscount: payload.isPwdScDiscount,
             // BIR CAS: include invoice classification and customer for journal narrative
             invoiceType:     payload.invoiceType ?? 'CASH_SALE',
-            taxType:         payload.taxType      ?? 'VAT_12',
+            taxType:         payload.taxType      ?? defaultTaxType,
             customerName:    payload.customerName,
             customerTin:     payload.customerTin,
           } as unknown as Prisma.JsonObject,
@@ -883,8 +1072,7 @@ export class OrdersService {
       select: { planCode: true, voidApprovalThresholdCents: true },
     });
     if (tenantForMakerChecker) {
-      const pc = (tenantForMakerChecker.planCode ?? 'SOLO_LITE') as PlanCode;
-      const features = PLAN_FEATURES[pc];
+      const features = planFeaturesFor(tenantForMakerChecker.planCode);
       const threshold = tenantForMakerChecker.voidApprovalThresholdCents ?? 0;
       if (features?.makerCheckerVoids === true && threshold > 0) {
         const orderForAmount = await this.prisma.order.findFirst({
@@ -1057,6 +1245,10 @@ export class OrdersService {
             totalAmount:    Number(order.totalAmount),
             vatAmount:      Number(order.vatAmount),
             discountAmount: Number(order.discountAmount),
+            // #43 — lets the journal processor's no-original-JE fallback
+            // credit 1030 (receivable) instead of 1010 (cash) for CHARGE
+            // orders when the SALE event hasn't been synced yet.
+            invoiceType:    order.invoiceType ?? 'CASH_SALE',
             payments: payments.map((p) => ({ method: p.method, amount: Number(p.amount) })),
             // Sprint 9: total cost of items physically restocked. Drives the
             // partial COGS reversal in the journal processor. Zero for café

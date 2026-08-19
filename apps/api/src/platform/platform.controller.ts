@@ -18,7 +18,7 @@ import { PlatformService, type UpdatePlatformConfigDto } from './platform.servic
 import { SubscriptionBillingService } from './subscription-billing.service';
 import { DemoBootstrapService } from './demo-bootstrap.service';
 import type { ScenarioKey } from '../admin/demo-scenarios';
-import { DEFAULT_APP_ACCESS } from '@repo/shared-types';
+import { DEFAULT_APP_ACCESS, DEFAULT_PLAN_CODE } from '@repo/shared-types';
 
 /**
  * Sprint 15 — Console-only platform endpoints. SUPER_ADMIN exclusively.
@@ -89,8 +89,7 @@ export class PlatformController {
             name:            tenantName,
             slug,
             businessType:    'SERVICE' as Prisma.TenantCreateInput['businessType'],
-            tier:            'TIER_3' as Prisma.TenantCreateInput['tier'],
-            planCode:        'ENTERPRISE',
+            planCode:        DEFAULT_PLAN_CODE,
             modulePos:       true,
             moduleLedger:    true,
             modulePayroll:   true,

@@ -1,8 +1,13 @@
 /**
- * AiQuotaGuard — monthly AI prompt quota enforcement.
+ * AiQuotaGuard — the master switch, then monthly prompt quota enforcement.
  *
  * Verifies the structured 403 payload the frontend uses for upgrade CTAs and
- * confirms platform admins bypass. Mocks Prisma so no DB is touched.
+ * confirms platform admins bypass the QUOTA (but not the master switch).
+ * Mocks Prisma so no DB is touched.
+ *
+ * These tests switch AI ON, because otherwise the master switch short-circuits
+ * every one of them — which is itself covered, in the "master switch" block
+ * at the bottom.
  */
 import { ForbiddenException, ExecutionContext } from '@nestjs/common';
 import { AiQuotaGuard } from './ai-quota.guard';
@@ -23,9 +28,17 @@ describe('AiQuotaGuard', () => {
   let prisma: ReturnType<typeof makePrismaMock>;
   let guard: AiQuotaGuard;
 
+  const ORIGINAL_ENV = process.env.AI_FEATURES_ENABLED;
+
   beforeEach(() => {
+    process.env.AI_FEATURES_ENABLED = 'true';
     prisma = makePrismaMock();
     guard  = new AiQuotaGuard(prisma as any);
+  });
+
+  afterAll(() => {
+    if (ORIGINAL_ENV === undefined) delete process.env.AI_FEATURES_ENABLED;
+    else process.env.AI_FEATURES_ENABLED = ORIGINAL_ENV;
   });
 
   it('bypasses platform admins', async () => {
@@ -51,15 +64,19 @@ describe('AiQuotaGuard', () => {
     });
   });
 
-  it('uses TIER_5+ language no longer — message references plan tiers / addons', async () => {
+  it('tells the user what to actually do, without naming a retired plan', async () => {
+    // No AI is bundled with the package, so this 403 is the normal first
+    // experience rather than an edge case — the message has to be actionable.
+    // It used to name TIER_5, then Team / Pair T2 / Suite; none of those
+    // plans exist any more.
     const ctx = makeCtx({ tenantId: 't1', aiQuotaMonthly: 0 });
     try {
       await guard.canActivate(ctx);
       fail('expected throw');
     } catch (e: any) {
       const msg = e.response.message as string;
-      expect(msg).not.toMatch(/TIER_/i);
-      expect(msg).toMatch(/Team|Pair|Suite|add-on/i);
+      expect(msg).not.toMatch(/TIER_|Team|Pair|Suite|Solo/i);
+      expect(msg).toMatch(/add-on/i);
     }
   });
 
@@ -107,5 +124,50 @@ describe('AiQuotaGuard', () => {
     expect(gte.getUTCDate()).toBe(1);
     expect(gte.getUTCHours()).toBe(0);
     expect(gte.getUTCMinutes()).toBe(0);
+  });
+
+  describe('master switch', () => {
+    // "AI is off" has to mean everyone. If the platform-admin bypass ran
+    // first, the deployment would still have a live path to a paid provider.
+    const cases: Array<[string, string | undefined]> = [
+      ['unset',        undefined],
+      ['"false"',      'false'],
+      ['"TRUE"',       'TRUE'],     // only the exact lowercase literal counts
+      ['empty string', ''],
+      ['"1"',          '1'],
+    ];
+
+    test.each(cases)('stays off when AI_FEATURES_ENABLED is %s', async (_label, value) => {
+      if (value === undefined) delete process.env.AI_FEATURES_ENABLED;
+      else process.env.AI_FEATURES_ENABLED = value;
+
+      await expect(guard.canActivate(makeCtx({ tenantId: 't1', aiQuotaMonthly: 500 })))
+        .rejects.toMatchObject({ response: expect.objectContaining({ code: 'AI_DISABLED' }) });
+    });
+
+    it('refuses a platform admin too', async () => {
+      process.env.AI_FEATURES_ENABLED = 'false';
+      await expect(guard.canActivate(makeCtx({ isSuperAdmin: true, tenantId: 't1' })))
+        .rejects.toMatchObject({ response: expect.objectContaining({ code: 'AI_DISABLED' }) });
+    });
+
+    it('refuses a tenant holding a large SUPER_ADMIN override', async () => {
+      process.env.AI_FEATURES_ENABLED = 'false';
+      await expect(guard.canActivate(makeCtx({ tenantId: 't1', aiQuotaMonthly: 9_999 })))
+        .rejects.toMatchObject({ response: expect.objectContaining({ code: 'AI_DISABLED' }) });
+    });
+
+    it('never reaches the usage query while off', async () => {
+      process.env.AI_FEATURES_ENABLED = 'false';
+      await guard.canActivate(makeCtx({ tenantId: 't1', aiQuotaMonthly: 500 })).catch(() => undefined);
+      expect(prisma.aiUsage.count).not.toHaveBeenCalled();
+    });
+
+    it('lets a quota-holding tenant through once switched on', async () => {
+      process.env.AI_FEATURES_ENABLED = 'true';
+      prisma.aiUsage.count.mockResolvedValue(0);
+      await expect(guard.canActivate(makeCtx({ tenantId: 't1', aiQuotaMonthly: 500 })))
+        .resolves.toBe(true);
+    });
   });
 });

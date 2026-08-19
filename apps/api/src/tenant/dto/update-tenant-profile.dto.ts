@@ -2,6 +2,7 @@ import {
   IsBoolean,
   IsEmail,
   IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -10,6 +11,10 @@ import {
   MaxLength,
   Matches,
 } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+
+export const LEDGER_MODES = ['FULL', 'SIMPLE'] as const;
+export type LedgerModeValue = (typeof LEDGER_MODES)[number];
 
 export const BUSINESS_TYPES = [
   // F&B group
@@ -82,4 +87,13 @@ export class UpdateTenantProfileDto {
   @IsInt()
   @Min(0)
   voidApprovalThresholdCents?: number;
+
+  /** Magnet Books — owner preference. SIMPLE hides the full accounting
+   *  surface (journal, COA, statements, AR/AP, periods) and the ledger
+   *  shows only money in / money out / profit. JWT-baked, so a change
+   *  takes effect on next login. */
+  @ApiPropertyOptional({ enum: LEDGER_MODES })
+  @IsOptional()
+  @IsIn(LEDGER_MODES)
+  ledgerMode?: LedgerModeValue;
 }

@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import type { JwtPayload } from '@repo/shared-types';
+import { isAiEnabled } from './ai-availability';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -30,6 +31,18 @@ export class AiQuotaGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest();
     const user = req.user as JwtPayload | undefined;
 
+    // Master switch first — ahead of the platform-admin bypass below, because
+    // "AI is off" has to mean everyone, including support. Anything less and
+    // the deployment still has a live path to a paid provider.
+    if (!isAiEnabled()) {
+      throw new ForbiddenException({
+        code:          'AI_DISABLED',
+        monthlyQuota:  0,
+        usedThisMonth: 0,
+        message:       'AI features are temporarily unavailable.',
+      });
+    }
+
     // Platform admins bypass — useful for support / debugging
     if (user?.isSuperAdmin) return true;
 
@@ -41,7 +54,10 @@ export class AiQuotaGuard implements CanActivate {
         code:          'AI_NOT_ENABLED',
         monthlyQuota:  0,
         usedThisMonth: 0,
-        message:       'AI features are not active on your plan. Upgrade to a Team / Pair T2 / Suite plan or higher, or buy an AI add-on package.',
+        // Named Team / Pair T2 / Suite before — plans that no longer exist.
+        // With no AI bundled into the package, this is the normal state for a
+        // new tenant, so the message has to say what to actually do.
+        message:       'AI features are not active on this account. Add an AI add-on to enable them.',
       });
     }
 

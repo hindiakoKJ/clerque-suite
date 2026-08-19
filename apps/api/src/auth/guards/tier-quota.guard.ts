@@ -5,7 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { PLAN_CAPS, effectiveSeatCeiling, type PlanCode } from '@repo/shared-types';
+import { planCapsFor, effectiveSeatCeiling, normalizePlanCode } from '@repo/shared-types';
 import type { JwtPayload } from '@repo/shared-types';
 
 /**
@@ -47,7 +47,7 @@ export class TierQuotaGuard implements CanActivate {
       throw new ForbiddenException('Tenant not found.');
     }
 
-    const planCode = (tenant.planCode ?? 'SOLO_LITE') as PlanCode;
+    const planCode = normalizePlanCode(tenant.planCode);
     const ceiling  = effectiveSeatCeiling(planCode, tenant.staffSeatAddons ?? 0);
 
     // Count active non-owner / non-machine staff.
@@ -61,7 +61,7 @@ export class TierQuotaGuard implements CanActivate {
 
     if (currentCount < ceiling) return true;
 
-    const cap = PLAN_CAPS[planCode];
+    const cap = planCapsFor(planCode);
     throw new ForbiddenException({
       code:          'PLAN_CEILING_REACHED',
       planCode,

@@ -12,6 +12,7 @@ import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
+import { OrderQuoteService } from './order-quote.service';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -109,6 +110,7 @@ describe('OrdersService — void()', () => {
     const voidApprovalsMock = {
       hasApprovedFor: jest.fn().mockResolvedValue(true),
     } as any;
+    const quoteMock = { quote: jest.fn() } as any;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OrdersService,
@@ -119,6 +121,9 @@ describe('OrdersService — void()', () => {
         { provide: NumberingService,           useValue: numberingMock },
         { provide: LoyaltyService,             useValue: loyaltyMock   },
         { provide: VoidApprovalsService,       useValue: voidApprovalsMock },
+        // Only used on the service-principal path (enforceServerTotals);
+        // these suites exercise the POS path, which never calls it.
+        { provide: OrderQuoteService,          useValue: quoteMock },
       ],
     }).compile();
 

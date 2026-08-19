@@ -209,6 +209,17 @@ enum AccountingMethod {
   ACCRUAL
 }
 
+/// How much of the Ledger a tenant sees and may post to.
+/// FULL   — the whole double-entry suite (journal, COA, statements, AR/AP, BIR, periods, audit).
+/// SIMPLE — the non-accountant surface only: Record Entry, Profit, Reports, Settlement.
+///          Advanced ledger is HIDDEN in the nav and 403'd server-side (the JWT mints
+///          advancedAccounting=false). Same lever serves a PH owner who isn't an
+///          accountant and a magnetmoments.cc home seller abroad.
+enum LedgerMode {
+  FULL
+  SIMPLE
+}
+
 /// BSP-compliant payment rails. QR_PH (InstaPay national QR) and CARD
 /// (Visa/MC/JCB via EDC terminal) are intentionally separate — they
 /// settle through different rails, have different MDR, and reconcile
@@ -223,6 +234,18 @@ enum PaymentMethod {
   /// Visa / Mastercard / JCB / BancNet via EDC terminal (tap, dip, swipe).
   /// Distinct from QR_PH which settles through InstaPay.
   CARD
+}
+
+/// Which app wrote a sale. Clerque is both a first-party POS and a headless
+/// commerce backend for other apps in the ecosystem, so every order records
+/// its writer to keep per-app revenue separable in reports and the books.
+enum OrderChannel {
+  /// First-party POS UI (web POS or the Counter mobile app).
+  POS
+  /// An ecosystem app calling the API with a service key (e.g. a booking app).
+  API
+  /// Customer-facing self-service checkout.
+  ONLINE
 }
 
 enum OrderStatus {
@@ -568,6 +591,14 @@ model Tenant {
   /// Registered address exactly as it appears on BIR Certificate of Registration
   registeredAddress        String?
   managerAccountingEnabled Boolean          @default(false)
+  /// Owner-toggled ledger surface. Default FULL keeps every existing tenant unchanged.
+  ledgerMode               LedgerMode       @default(FULL)
+  /// Locale for a single-currency tenant. NOT an FX engine — one tenant, one
+  /// currency; the GL Decimal amounts are simply "in this currency". Defaults
+  /// keep the PH fleet byte-identical. ISO 3166-1 alpha-2 / ISO 4217 / IANA tz.
+  country                  String           @default("PH")
+  currency                 String           @default("PHP")
+  timezone                 String           @default("Asia/Manila")
   inventoryMode            InventoryMode    @default(UNIT_BASED)
   valuationMethod          ValuationMethod  @default(WAC)
   firstTransactionAt       DateTime?
@@ -583,6 +614,9 @@ model Tenant {
   shifts                     Shift[]
   accountingEvents           AccountingEvent[]
   accounts                   Account[]
+  rentableItems              RentableItem[]
+  rentalTransactions         RentalTransaction[]
+  ingestReceipts             IngestReceipt[]
   journalEntries             JournalEntry[]
   subscriptionLogs           SubscriptionLog[]
   discountTypes              DiscountTypeConfig[]
@@ -1110,6 +1144,12 @@ model Category {
   /// Sprint 3 — which station prepares this category's items.
   /// Null = goes to receipt printer only (no separate station ticket).
   stationId   String?
+  /// Chart-of-accounts code that revenue for this category's products credits
+  /// on a sale. Null = the default POS revenue account (4010). This is what
+  /// splits Court Rental / Open Play / Tournament / Equipment / Retail into
+  /// their own income lines on the GL and the daily Z-report instead of one
+  /// merged "sales" bucket. Set it once per category; every product inherits.
+  revenueAccountCode String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1510,7 +1550,21 @@ model Order {
   /// Null for CASH_SALE. Drives AR aging buckets.
   dueDate         DateTime?
 
+  // ── Platform attribution (headless / multi-app writers) ───────────────────
+  /// Which app created this sale. POS = first-party POS UI (web/Counter),
+  /// API = an ecosystem app via an API key, ONLINE = customer-facing checkout.
+  /// Lets one tenant host several writers and still separate them in reports.
+  channel           OrderChannel @default(POS)
+  /// The API key that created this order (audit stamp, not a FK on purpose —
+  /// revoking a key must never erase the historical attribution).
+  createdByApiKeyId String?
+  /// The consumer app's own identifier for this sale (e.g. a booking id).
+  /// Unique per tenant, so a retrying app cannot create a duplicate sale.
+  externalRef       String?
+
   // ── Audit Trail ────────────────────────────────────────────────────────────
+  /// Null for service (API-key) writes — those are attributed via
+  /// createdByApiKeyId instead of a human user.
   createdById       String?
   /// Last user to modify this record (role change, void, correction)
   updatedById       String?
@@ -1555,12 +1609,17 @@ model Order {
   preOrderAsBalance PreOrder?          @relation("PreOrderBalance")
 
   @@unique([tenantId, orderNumber])
+  /// Retry safety for external writers: a consumer app replaying the same
+  /// externalRef gets the original order back instead of a duplicate sale.
+  /// (Postgres treats NULLs as distinct, so POS orders are unaffected.)
+  @@unique([tenantId, externalRef])
   @@index([tenantId, createdAt])
   @@index([branchId, status])
   @@index([tenantId, deletedAt]) // soft-delete filter: WHERE deleted_at IS NULL
   @@index([branchId, deletedAt]) // branch-scoped active-order queries
   @@index([tenantId, customerId]) // AR: customer ledger queries
   @@index([tenantId, dueDate]) // AR aging: due-date range scans
+  @@index([tenantId, channel, paidAt]) // per-app revenue reporting
   @@map("orders")
 }
 
@@ -5635,6 +5694,10 @@ model ApiKey {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, isActive])
+  /// Key resolution looks up candidates by prefix before the (expensive)
+  /// bcrypt compare. Without this index every request scanned the table and
+  /// hashed against every candidate row — latency + a DoS vector.
+  @@index([keyPrefix])
   @@map("api_keys")
 }
 
@@ -6156,4 +6219,144 @@ model PriceListItem {
   @@index([priceListId])
   @@index([productId])
   @@map("price_list_items")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Courts / sports-facility vertical — equipment rentals + CourtSide ingest
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A tracked, returnable rental unit — a specific paddle, pair of shoes, ball
+/// tube. NOT an anonymous stock quantity: each row is one physical item so the
+/// club can always answer "who has my paddle right now" (join through the
+/// item's active RentalTransaction).
+model RentableItem {
+  id       String @id @default(cuid())
+  tenantId String
+  branchId String?
+  /// Operator-facing name, e.g. "Paddle – Franklin", "Court shoes – M9".
+  name     String
+  /// Free-text class for grouping/reporting (PADDLE / SHOES / BALL / OTHER).
+  category String?
+  /// Optional asset tag / serial the club paints on the item.
+  assetTag String?
+  /// Rent fee charged per rental, in centavos. INCOME on pickup (never refunded).
+  rentFeeCentavos Int @default(0)
+  /// Optional refundable security deposit, in centavos. Held as a LIABILITY
+  /// while out; refunded on good return or forfeited to income on loss/damage.
+  depositCentavos Int @default(0)
+  status   RentableItemStatus @default(AVAILABLE)
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rentalLines RentalLine[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, isActive])
+  @@map("rentable_items")
+}
+
+enum RentableItemStatus {
+  AVAILABLE  // on the shelf, rentable
+  RENTED     // currently out on a rental
+  RETIRED    // lost / written off / decommissioned — not rentable
+}
+
+/// A rental at the counter: who took what, when, the money held, and whether
+/// it has come back. One transaction may cover several items (RentalLine).
+model RentalTransaction {
+  id            String @id @default(cuid())
+  tenantId      String
+  branchId      String?
+  /// Human-readable rental number, per-tenant series.
+  rentalNumber  String
+  /// Who rented — captured as free text at the counter (walk-ins), plus an
+  /// optional link to a Customer master record when they are known.
+  customerName   String
+  customerMobile String?
+  customerId     String?
+  status         EquipmentRentalStatus @default(OUT)
+  /// Rent fee recognised as income for this rental (sum of the lines' fees),
+  /// in centavos.
+  rentFeeCentavos Int @default(0)
+  /// Deposit ledger, all in centavos. held = booked to the deposit liability
+  /// on pickup; refunded = returned to the customer on good return;
+  /// forfeited = moved into income on loss/damage. held == refunded +
+  /// forfeited + (still outstanding) — so nothing lingers as a phantom.
+  depositHeldCentavos      Int @default(0)
+  depositRefundedCentavos  Int @default(0)
+  depositForfeitedCentavos Int @default(0)
+  timeOut  DateTime @default(now())
+  /// When ALL items came back (or the rental was closed). Null while OUT.
+  timeIn   DateTime?
+  /// When the rental is expected back — drives OVERDUE. Null = open-ended.
+  dueAt    DateTime?
+  notes    String?
+  createdById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines    RentalLine[]
+
+  @@unique([tenantId, rentalNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, customerMobile])
+  @@map("rental_transactions")
+}
+
+enum EquipmentRentalStatus {
+  OUT       // at least one item still with the customer
+  RETURNED  // everything back, deposit settled
+  OVERDUE   // past dueAt, still out
+  LOST      // item(s) not returned — deposit forfeited, item retired
+}
+
+/// One item on a rental. Its own return status so a multi-item rental can have
+/// some paddles back and one still out.
+model RentalLine {
+  id        String @id @default(cuid())
+  rentalId  String
+  itemId    String
+  rentFeeCentavos Int @default(0)
+  depositCentavos Int @default(0)
+  /// Per-line return status — the parent RentalTransaction.status is derived
+  /// from the lines (RETURNED only when every line is settled).
+  returned  Boolean @default(false)
+  forfeited Boolean @default(false)
+  returnedAt DateTime?
+
+  rental RentalTransaction @relation(fields: [rentalId], references: [id], onDelete: Cascade)
+  item   RentableItem      @relation(fields: [itemId], references: [id])
+
+  @@index([rentalId])
+  @@index([itemId])
+  @@map("rental_lines")
+}
+
+/// Idempotency inbox for events ingested from ecosystem apps (CourtSide today).
+/// One row per delivered event keyed on the sender's idempotency key; a
+/// re-delivery finds the row and returns the stored result as a no-op, so a
+/// retrying sender can never double-post a sale or a refund.
+model IngestReceipt {
+  id             String @id @default(cuid())
+  tenantId       String
+  /// The sender's key, e.g. "sale:<order_id>" or "refund:<refund_id>".
+  idempotencyKey String
+  /// "courtside", for now — the source app, for auditing and future routing.
+  source         String
+  eventType      String
+  /// The Clerque Order this event produced, when it produced one. Null for
+  /// events that post directly (e.g. a refund that does not create an order).
+  resultOrderId  String?
+  /// The verbatim response returned on first processing, replayed on re-delivery.
+  resultJson     Json?
+  createdAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, source, createdAt])
+  @@map("ingest_receipts")
 }

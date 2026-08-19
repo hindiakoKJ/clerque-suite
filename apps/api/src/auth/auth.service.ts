@@ -14,8 +14,9 @@ import { MailService } from '../mail/mail.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { SubscriptionPaymentsService } from '../subscription-payments/subscription-payments.service';
 import { assertPasswordPolicy } from './password-policy';
-import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, getAiQuotaForTenant, PLAN_FEATURES, PLAN_LIMITS } from '@repo/shared-types';
-import type { TaxStatus, TierId, AiAddonType, PlanCode } from '@repo/shared-types';
+import { resolveAiQuota } from '../ai/ai-availability';
+import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, PLAN_FEATURES, PLAN_LIMITS, DEFAULT_PLAN_CODE, normalizePlanCode, planFeaturesFor, planLimitsFor } from '@repo/shared-types';
+import type { TaxStatus, AiAddonType } from '@repo/shared-types';
 
 // 8h access token = one login covers a full work shift; no mid-shift logouts.
 // Refresh-token rotation still happens silently in the background via the
@@ -97,13 +98,12 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
 
-    // Sprint 23 — default Ledger-only signup lands on SOLO_STANDARD (₱399,
-    // 3 seats). Previously STD_DUO; STD_DUO was deprecated in the Solo tier
-    // redesign. SOLO_STANDARD has same price + same seat count so Ledger-SME
-    // economics are identical, plus more features (unlimited recipes, 10
-    // FEFO inventory slots, customer phone-lookup).
-    const { PLAN_CAPS } = await import('@repo/shared-types');
-    const planCode = 'SOLO_STANDARD' as const;
+    // Ledger-only signup. The tenant lands on the one package with only the
+    // Ledger module switched on — a shape the old plan validator rejected
+    // outright (it demanded POS on every SOLO_* plan), which meant these
+    // tenants could not be edited in the admin console at all.
+    const { PLAN_CAPS, DEFAULT_PLAN_CODE } = await import('@repo/shared-types');
+    const planCode = DEFAULT_PLAN_CODE;
     const cap = PLAN_CAPS[planCode];
 
     const { DEFAULT_APP_ACCESS } = await import('@repo/shared-types');
@@ -116,7 +116,6 @@ export class AuthService {
           slug,
           // SERVICE is the default — owner can change later from Settings.
           businessType: (dto.businessType as 'SERVICE') ?? 'SERVICE',
-          tier:         'TIER_2',
           taxStatus:    (dto.taxStatus ?? 'NON_VAT'),
           contactEmail: ownerEmail,
           status:       'ACTIVE',
@@ -208,7 +207,9 @@ export class AuthService {
     ownerName:     string;
     ownerEmail:    string;
     ownerPassword: string;
-    planCode:      'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO' | 'SOLO_BOOKS';
+    /** Optional and ignored — there is one package. Accepted so existing
+     *  clients that still post a plan keep working. */
+    planCode?:     string;
     taxStatus?:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
     businessType?: string;
   }) {
@@ -218,20 +219,12 @@ export class AuthService {
     if (!businessName) throw new BadRequestException('Business name is required.');
     if (!ownerName)    throw new BadRequestException('Owner name is required.');
     if (!ownerEmail)   throw new BadRequestException('Owner email is required.');
-    if (!dto.planCode) throw new BadRequestException('Plan is required.');
-    if (!['SOLO_LITE', 'SOLO_STANDARD', 'SOLO_PRO', 'SOLO_BOOKS'].includes(dto.planCode)) {
-      throw new BadRequestException('Plan must be SOLO_LITE, SOLO_STANDARD, SOLO_PRO, or SOLO_BOOKS.');
-    }
-
-    // Specialized verticals + service/manufacturing require Solo Standard or higher
-    // (per excludedPlans in verticals.ts — Solo Lite's single-cashier cap is unrealistic
-    // for these business types).
-    const SOLO_LITE_EXCLUDED_BUSINESS_TYPES = ['PHARMACY', 'TRUCKING', 'CONSTRUCTION', 'MANUFACTURING'];
-    if (dto.planCode === 'SOLO_LITE' && SOLO_LITE_EXCLUDED_BUSINESS_TYPES.includes(dto.businessType ?? '')) {
-      throw new BadRequestException(
-        `${dto.businessType?.toLowerCase().replace(/_/g, ' ')} businesses need at least Solo Standard. Please pick a higher tier or choose a different business type.`,
-      );
-    }
+    // Plan selection is gone: every signup lands on the one package. The
+    // old whitelist rejected anything outside four SOLO_* codes, and the
+    // business-type restriction below it existed only to keep specialised
+    // verticals off the single-cashier Solo Lite plan — a cap that no
+    // longer exists.
+    const planCode = DEFAULT_PLAN_CODE;
 
     // Enforce password policy (same as everywhere else)
     assertPasswordPolicy(dto.ownerPassword, { email: ownerEmail, name: ownerName });
@@ -254,7 +247,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
 
     const { PLAN_CAPS, DEFAULT_APP_ACCESS } = await import('@repo/shared-types');
-    const cap = PLAN_CAPS[dto.planCode];
+    const cap = PLAN_CAPS[planCode];
     const appAccess = DEFAULT_APP_ACCESS['BUSINESS_OWNER'] ?? [];
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -264,14 +257,16 @@ export class AuthService {
           slug,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           businessType: (dto.businessType ?? 'RETAIL') as any,
-          tier:         'TIER_2',
           taxStatus:    (dto.taxStatus ?? 'NON_VAT'),
           contactEmail: ownerEmail,
           // GRACE = limited access until payment confirmed.
           status:       'GRACE',
-          planCode:     dto.planCode,
-          modulePos:        true,   // All Solo plans include POS
-          moduleLedger:     dto.planCode === 'SOLO_BOOKS', // SOLO_BOOKS bundles SIMPLE ledger
+          planCode,
+          // The package includes POS and the books. Payroll stays off until
+          // the owner switches it on — it needs its own setup (comp types,
+          // government tables) that a fresh POS tenant has not done.
+          modulePos:        true,
+          moduleLedger:     true,
           modulePayroll:    false,
           staffSeatQuota:   cap.baseSeats,
           staffSeatAddons:  0,
@@ -316,7 +311,7 @@ export class AuthService {
       periodEnd.setMonth(periodEnd.getMonth() + 1);
       const pending = await this.subscriptionPayments.createPendingPayment({
         tenantId:    result.tenant.id,
-        planCode:    dto.planCode,
+        planCode,
         reason:      'NEW_SIGNUP',
         periodStart: now,
         periodEnd,
@@ -562,7 +557,7 @@ export class AuthService {
       try {
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, receiptLogoUrl: true, allowSelfClockIn: true, returnsOwnerOnly: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, receiptLogoUrl: true, allowSelfClockIn: true, returnsOwnerOnly: true, ledgerMode: true, country: true, currency: true, timezone: true },
         });
       } catch (err: any) {
         // PrismaClientValidationError or P2022 (column doesn't exist) means
@@ -618,18 +613,17 @@ export class AuthService {
       // other verticals default false. Frontend uses this to hide the
       // Refund / Void buttons on the order detail page for non-owners.
       returnsOwnerOnly:  tenant?.returnsOwnerOnly ?? false,
-      tier:              (tenant?.tier ?? undefined) as JwtPayload['tier'],
-      // AI quota — resolves tier-included + active addon + SUPER_ADMIN override
-      // (see pricing.ts → getAiQuotaForTenant). Baked into JWT at login so the
-      // frontend can gate UI and show usage warnings without extra fetches.
-      aiQuotaMonthly:    tenant?.tier
-        ? getAiQuotaForTenant(
-            tenant.tier as TierId,
-            tenant.aiAddonType as AiAddonType | null,
-            tenant.aiAddonExpiresAt,
-            tenant.aiQuotaOverride,
-          ).monthlyQuota
-        : 0,
+      // AI quota — plan-included + active addon + SUPER_ADMIN override.
+      // Baked into the JWT at login so the frontend can gate UI and show
+      // usage warnings without extra fetches. This used to read the legacy
+      // Tenant.tier column, which is why a tenant could be SHOWN a 200-prompt
+      // allowance while the guard enforced 0.
+      aiQuotaMonthly:    resolveAiQuota({
+        planIncluded:    planLimitsFor(tenant?.planCode).maxAiPerMonth,
+        addonType:       tenant?.aiAddonType as AiAddonType | null,
+        addonExpiresAt:  tenant?.aiAddonExpiresAt,
+        override:        tenant?.aiQuotaOverride,
+      }).monthlyQuota,
       personaKey:        userRbac?.personaKey ?? null,
       customPermissions: userRbac?.customPermissions ?? [],
       // Modular pricing (2026-05-08) — bake module entitlement into the JWT.
@@ -637,15 +631,34 @@ export class AuthService {
       modulePos:         tenant?.modulePos ?? true,
       moduleLedger:      tenant?.moduleLedger ?? true,
       modulePayroll:     tenant?.modulePayroll ?? true,
-      planCode:          (tenant?.planCode ?? 'SOLO_LITE') as JwtPayload['planCode'],
+      // normalizePlanCode absorbs legacy rows (SUITE_T2, the long-deleted
+      // STD_* codes) so a stale value can never mint a token with undefined
+      // planFeatures — which used to lock every gated feature in the UI.
+      planCode:          normalizePlanCode(tenant?.planCode),
+      // Magnet Books / simple-mode slice (2026-08-17). Owner-toggled ledger
+      // surface + single-currency locale. Defaults keep the PH fleet unchanged.
+      ledgerMode:        (tenant?.ledgerMode ?? 'FULL') as 'FULL' | 'SIMPLE',
+      country:           tenant?.country  ?? 'PH',
+      currency:          tenant?.currency ?? 'PHP',
+      timezone:          tenant?.timezone ?? 'Asia/Manila',
     };
 
     // Bake plan-derived feature flags + limits into the JWT for fast guards.
     // Imports are top-of-file so this runs synchronously without dynamic require()
     // (which fails silently in production NestJS bundles).
-    const pc = (payload.planCode ?? 'SOLO_LITE') as PlanCode;
-    payload.planFeatures = PLAN_FEATURES[pc];
-    payload.planLimits   = PLAN_LIMITS[pc];
+    payload.planFeatures = planFeaturesFor(payload.planCode);
+    payload.planLimits   = planLimitsFor(payload.planCode);
+
+    // THE simple-mode lever. planFeatures is a per-PLAN object (one plan,
+    // everything on), so it cannot express a per-tenant choice — override the
+    // one flag here. Every @RequirePlanFeature('advancedAccounting') guard (48
+    // controllers) and the whole Ledger nav read this flag, so a SIMPLE tenant
+    // is locked out of the advanced suite server-side AND has it hidden, with
+    // zero per-controller edits. Copy the object: planFeaturesFor() returns
+    // the shared PLAN_FEATURES entry and mutating it would flip every tenant.
+    if (payload.ledgerMode === 'SIMPLE') {
+      payload.planFeatures = { ...payload.planFeatures, advancedAccounting: false };
+    }
 
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_EXPIRY });
     const refreshToken = this.jwt.sign(
@@ -983,9 +996,9 @@ export class AuthService {
       modulePos:         true,
       moduleLedger:      true,
       modulePayroll:     true,
-      planCode:          'ENTERPRISE',
-      planFeatures:      PLAN_FEATURES.ENTERPRISE,
-      planLimits:        PLAN_LIMITS.ENTERPRISE,
+      planCode:          DEFAULT_PLAN_CODE,
+      planFeatures:      PLAN_FEATURES[DEFAULT_PLAN_CODE],
+      planLimits:        PLAN_LIMITS[DEFAULT_PLAN_CODE],
     };
     const accessToken = this.jwt.sign(payload, { expiresIn: '2h' });
     const refreshToken = this.jwt.sign(

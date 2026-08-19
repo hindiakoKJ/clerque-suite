@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { SimpleEntriesService } from './simple-entries.service';
 import { CreateSimpleEntryDto } from './dto/simple-entry.dto';
 
@@ -12,6 +13,7 @@ describe('SimpleEntriesService', () => {
 
   const accounts = {
     findByCode: jest.fn((_t: string, code: string) => Promise.resolve({ id: `acct-${code}`, code })),
+    getPLSummary: jest.fn(),
   };
   const journal = {
     create: jest.fn((_t: string, dto: any) => {
@@ -21,7 +23,10 @@ describe('SimpleEntriesService', () => {
     reverse: jest.fn((_t: string, _id: string, _u: string) =>
       Promise.resolve({ id: 'rev1', entryNumber: 'JE-REV-1' })),
   };
-  const prisma = { journalEntry: { findMany: jest.fn(), findFirst: jest.fn() } };
+  const prisma = {
+    journalEntry: { findMany: jest.fn(), findFirst: jest.fn() },
+    tenant: { findUnique: jest.fn() },
+  };
 
   const TID = 'tenant-1';
   const UID = 'user-1';
@@ -127,5 +132,85 @@ describe('SimpleEntriesService', () => {
     prisma.journalEntry.findFirst.mockResolvedValueOnce(null as any);
     await expect(svc.reverse(TID, UID, 'sale-je')).rejects.toThrow(/only reverse entries you recorded/i);
     expect(journal.reverse).not.toHaveBeenCalled();
+  });
+
+  // ── summary (money in / money out / profit) ────────────────────────────────
+
+  /**
+   * summary() delegates to AccountsService.getPLSummary (the real P&L query).
+   * Mock it the way the real one behaves: revenue = credits − debits,
+   * expense = debits − credits, per account, from the posted lines.
+   */
+  const plFromLines = (lines: { type: 'REVENUE' | 'EXPENSE'; debit: number; credit: number }[]) => {
+    let totalRevenue = 0, totalExpenses = 0;
+    for (const l of lines) {
+      if (l.type === 'REVENUE') totalRevenue  += l.credit - l.debit;
+      else                      totalExpenses += l.debit  - l.credit;
+    }
+    return { totalRevenue, totalExpenses, netIncome: totalRevenue - totalExpenses };
+  };
+
+  it('summary: money in = revenue credits (net), money out = expense debits (net)', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ currency: 'PHP', timezone: 'Asia/Manila' });
+    accounts.getPLSummary.mockResolvedValueOnce(plFromLines([
+      { type: 'REVENUE', debit: 0,    credit: 5000 },  // sale
+      { type: 'REVENUE', debit: 500,  credit: 0    },  // refund
+      { type: 'EXPENSE', debit: 1200, credit: 0    },  // rent
+      { type: 'EXPENSE', debit: 0,    credit: 200  },  // reversed expense
+    ]));
+    const out = await svc.summary(TID, '2026-06-01', '2026-06-30');
+    expect(accounts.getPLSummary).toHaveBeenCalledWith(TID, '2026-06-01', '2026-06-30');
+    expect(out.moneyIn).toBe(4500);
+    expect(out.moneyOut).toBe(1000);
+    expect(out.from).toBe('2026-06-01');
+    expect(out.to).toBe('2026-06-30');
+  });
+
+  it('summary: profit = money in − money out (2dp)', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ currency: 'PHP', timezone: 'Asia/Manila' });
+    accounts.getPLSummary.mockResolvedValueOnce(plFromLines([
+      { type: 'REVENUE', debit: 0,      credit: 1000.10 },
+      { type: 'EXPENSE', debit: 1200.35, credit: 0     },
+    ]));
+    const out = await svc.summary(TID, '2026-06-01', '2026-06-30');
+    expect(out.profit).toBe(-200.25);
+    expect(out.profit).toBeCloseTo(out.moneyIn - out.moneyOut, 2);
+  });
+
+  it('summary: from > to → BadRequestException', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ currency: 'PHP', timezone: 'Asia/Manila' });
+    await expect(svc.summary(TID, '2026-06-30', '2026-06-01')).rejects.toBeInstanceOf(BadRequestException);
+    expect(accounts.getPLSummary).not.toHaveBeenCalled();
+  });
+
+  it('summary: malformed date → BadRequestException', async () => {
+    await expect(svc.summary(TID, '2026-6-1', '2026-06-30')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.summary(TID, '2026-02-01', '2026-02-30')).rejects.toBeInstanceOf(BadRequestException);
+    expect(accounts.getPLSummary).not.toHaveBeenCalled();
+  });
+
+  it('summary: currency comes from the tenant', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ currency: 'USD', timezone: 'America/New_York' });
+    accounts.getPLSummary.mockResolvedValueOnce(plFromLines([]));
+    const out = await svc.summary(TID, '2026-06-01', '2026-06-30');
+    expect(out.currency).toBe('USD');
+  });
+
+  it('summary: currency defaults to PHP when the tenant has none', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce(null);
+    accounts.getPLSummary.mockResolvedValueOnce(plFromLines([]));
+    const out = await svc.summary(TID, '2026-06-01', '2026-06-30');
+    expect(out.currency).toBe('PHP');
+    expect(out).toEqual({ from: '2026-06-01', to: '2026-06-30', moneyIn: 0, moneyOut: 0, profit: 0, currency: 'PHP' });
+  });
+
+  it('summary: defaults to the current calendar month when from/to are omitted', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ currency: 'PHP', timezone: 'Asia/Manila' });
+    accounts.getPLSummary.mockResolvedValueOnce(plFromLines([]));
+    const out = await svc.summary(TID);
+    expect(out.from).toMatch(/^\d{4}-\d{2}-01$/);
+    expect(out.to).toMatch(/^\d{4}-\d{2}-(28|29|30|31)$/);
+    expect(out.from.slice(0, 7)).toBe(out.to.slice(0, 7));
+    expect(accounts.getPLSummary).toHaveBeenCalledWith(TID, out.from, out.to);
   });
 });

@@ -29,7 +29,6 @@
 
 import type { UserRole, AppAccessEntry } from './auth';
 import type { PermissionKey } from './permissions';
-import type { TierId } from './tiers';
 
 export type PersonaKey =
   | 'OWNER_OPERATOR'
@@ -75,18 +74,6 @@ export interface PersonaTemplate {
    * touch sensitive data and should only be assignable by the owner).
    */
   requiresOwnerAssignment: boolean;
-  /**
-   * Minimum subscription tier where this persona is offered as a quick-start
-   * template.  The persona's permissions must all be exercisable at this tier
-   * (verifiable via verifyPersonaTierConsistency() helper).
-   *
-   * NOTE: a persona with `minTier=TIER_3` is OFFERED as a template at T3+,
-   * but the template's INTRINSIC capabilities can grow when the tenant
-   * upgrades.  Example: BOOKKEEPER_DEFAULT.minTier=TIER_3 — at T3 the
-   * Bookkeeper sees read-only ledger; at T4 the same persona's user gains
-   * journal-entry posting because the tier feature flag activates.
-   */
-  minTier: TierId;
 }
 
 export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
@@ -102,7 +89,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_1',
   },
 
   // ── Cashier variants ───────────────────────────────────────────────────────
@@ -116,7 +102,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_2',
   },
   CASHIER_COOK: {
     key: 'CASHIER_COOK',
@@ -127,7 +112,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['inventory:view'],
     relevantFor: ['FNB'],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_2',
   },
   CASHIER_INVENTORY: {
     key: 'CASHIER_INVENTORY',
@@ -138,7 +122,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['inventory:view', 'inventory:adjust'],
     relevantFor: ['RETAIL'],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_2',
   },
   SENIOR_CASHIER: {
     key: 'SENIOR_CASHIER',
@@ -149,7 +132,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_2',
   },
 
   // ── Branch Manager ─────────────────────────────────────────────────────────
@@ -163,7 +145,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_3',
   },
 
   // ── Bookkeeper variants ────────────────────────────────────────────────────
@@ -179,7 +160,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['ledger:export'],
     relevantFor: [],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_3',
   },
   BOOKKEEPER_AR_CLERK: {
     key: 'BOOKKEEPER_AR_CLERK',
@@ -193,7 +173,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     ],
     relevantFor: [],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_4',
   },
 
   // ── Inventory Manager ──────────────────────────────────────────────────────
@@ -207,7 +186,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: ['inventory:set_threshold'],
     relevantFor: ['RETAIL', 'MANUFACTURING', 'FNB'],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_4',
   },
 
   // ── Payroll Officer ────────────────────────────────────────────────────────
@@ -221,7 +199,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: true,
-    minTier: 'TIER_5',
   },
 
   // ── General Employee ───────────────────────────────────────────────────────
@@ -235,7 +212,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: false,
-    minTier: 'TIER_2',
   },
 
   // ── External Auditor ───────────────────────────────────────────────────────
@@ -249,7 +225,6 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
     extraPermissions: [],
     relevantFor: [],
     requiresOwnerAssignment: true,
-    minTier: 'TIER_6',
   },
 };
 
@@ -293,65 +268,36 @@ export function computeExtraPermissions(
   return Array.from(merged);
 }
 
-/* ─── Tier-aware persona filtering (Option 6) ──────────────────────────────── */
-
-/** Internal: tier ordering for "is X >= Y" comparisons. */
-const TIER_ORDER: TierId[] = [
-  'TIER_1',
-  'TIER_2',
-  'TIER_3',
-  'TIER_4',
-  'TIER_5',
-  'TIER_6',
-];
+/* ─── Persona listing ─────────────────────────────────────────────────────── */
 
 /**
- * Check if a persona is offered as a quick-start template at the given tier.
+ * Every persona, including OWNER_OPERATOR.
  *
- * A persona is available iff `tenantTier >= persona.minTier`.  Owners on
- * higher tiers see all lower-tier personas plus their own tier's additions.
+ * Personas used to be gated by a `minTier` floor against the TIER_1..TIER_6
+ * ladder. That ladder is retired and there is one package, so every template
+ * is offered to everyone. The gating functions (isPersonaAvailableAtTier,
+ * listAvailablePersonas(tier), listHiringPersonas(tier)) had no callers in
+ * any app — the pickers already listed personas unfiltered.
  */
-export function isPersonaAvailableAtTier(
-  personaKey: PersonaKey,
-  tier: TierId,
-): boolean {
-  const persona = PERSONAS[personaKey];
-  if (!persona) return false;
-  return TIER_ORDER.indexOf(tier) >= TIER_ORDER.indexOf(persona.minTier);
+export function listAvailablePersonas(): PersonaTemplate[] {
+  return Object.values(PERSONAS);
 }
 
 /**
- * List all personas (including OWNER_OPERATOR) available as templates at a
- * given tier.  Used by tier-aware admin views and the onboarding wizard.
- */
-export function listAvailablePersonas(tier: TierId): PersonaTemplate[] {
-  return Object.values(PERSONAS).filter((p) =>
-    isPersonaAvailableAtTier(p.key, tier),
-  );
-}
-
-/**
- * List personas appropriate for HIRING staff at a given tier.
+ * Personas appropriate for HIRING staff.
  *
  * Excludes OWNER_OPERATOR (the owner already exists; you don't "hire" them).
- * Used by the Staff Edit modal's persona dropdown to populate the choices
- * an owner sees when adding a new team member.
+ * Used by the Staff Edit modal's persona dropdown.
  */
-export function listHiringPersonas(tier: TierId): PersonaTemplate[] {
-  return listAvailablePersonas(tier).filter((p) => p.key !== 'OWNER_OPERATOR');
+export function listHiringPersonas(): PersonaTemplate[] {
+  return listAvailablePersonas().filter((p) => p.key !== 'OWNER_OPERATOR');
 }
 
-/**
- * Filter personas BOTH by tier AND by business type.  Type-specific personas
- * appear first, then universal ones.  This is the primary "what should the
- * picker show?" helper for the staff creation flow.
- */
 export function listHiringPersonasForTenant(
-  tier: TierId,
   businessType: 'FNB' | 'RETAIL' | 'SERVICE' | 'MANUFACTURING',
 ): PersonaTemplate[] {
-  const tierFiltered = listHiringPersonas(tier);
-  const specific = tierFiltered.filter((p) => p.relevantFor.includes(businessType));
-  const universal = tierFiltered.filter((p) => p.relevantFor.length === 0);
+  const all = listHiringPersonas();
+  const specific = all.filter((p) => p.relevantFor.includes(businessType));
+  const universal = all.filter((p) => p.relevantFor.length === 0);
   return [...specific, ...universal];
 }

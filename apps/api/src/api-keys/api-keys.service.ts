@@ -2,8 +2,32 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import type { ApiAccessLevel, PlanCode } from '@repo/shared-types';
-import { PLAN_FEATURES } from '@repo/shared-types';
+import type { ApiAccessLevel, PlanCode, TaxStatus } from '@repo/shared-types';
+import { normalizePlanCode, planFeaturesFor } from '@repo/shared-types';
+
+/** How long a successfully-verified key stays cached. Also the worst-case
+ *  delay before a revoke or plan downgrade takes effect. */
+const API_KEY_CACHE_TTL_MS = 60_000;
+const API_KEY_CACHE_MAX    = 500;
+
+/**
+ * Everything a request needs to act on behalf of a tenant without a user.
+ * `ApiKeyStrategy` turns this into a JwtPayload-shaped service principal.
+ */
+export interface ResolvedApiKey {
+  tenantId:    string;
+  keyId:       string;
+  accessLevel: ApiAccessLevel;
+  planCode:    PlanCode;
+  /** Drives VAT math — an external app must never tell us its own tax status. */
+  taxStatus:   TaxStatus;
+  businessName:    string | null;
+  modulePos:       boolean;
+  moduleLedger:    boolean;
+  modulePayroll:   boolean;
+  /** Tenant's first active branch; the fallback when a caller sends none. */
+  defaultBranchId: string | null;
+}
 
 export interface IssuedApiKey {
   /** The plaintext key, only returned ONCE at creation time. */
@@ -105,20 +129,31 @@ export class ApiKeysService {
       where: { id },
       data:  { isActive: false },
     });
+    // Revoke must be immediate, not "immediate in up to 60 seconds".
+    this.invalidateTenantCache(tenantId);
     return { ok: true };
   }
 
   /**
    * Resolve a plaintext API key to a tenant + access level. Returns null on
    * any failure (expired, revoked, mismatch). Updates lastUsedAt async.
+   *
+   * Also returns the tenant context a service principal needs (tax status,
+   * module entitlement, default branch) so `ApiKeyStrategy` can build a
+   * principal that the normal guards understand — see that file.
    */
-  async resolveKey(plaintext: string): Promise<{
-    tenantId:    string;
-    keyId:       string;
-    accessLevel: ApiAccessLevel;
-  } | null> {
+  async resolveKey(plaintext: string): Promise<ResolvedApiKey | null> {
     if (!plaintext || !plaintext.startsWith('clq_live_')) return null;
     const keyPrefix = plaintext.slice(0, 12);
+
+    // Every request re-runs a bcrypt cost-12 compare, which is ~100ms of CPU
+    // by design. That is right for a login form and wrong for a machine
+    // caller hitting us in a loop, so a verified key is cached briefly.
+    // The cache is keyed on the full plaintext (never logged or persisted)
+    // and lives 60s, which bounds how long a revoked key or a plan
+    // downgrade can keep working.
+    const cached = this.keyCache.get(plaintext);
+    if (cached && cached.expiresAtMs > Date.now()) return cached.value;
 
     // Multiple rows can share a prefix (cryptographically unlikely but possible).
     const candidates = await this.prisma.apiKey.findMany({
@@ -139,7 +174,25 @@ export class ApiKeysService {
         // apiAccess on every request. Otherwise a key issued while the
         // tenant was Solo Pro (apiAccess: 'read') keeps working forever
         // after they downgrade to Solo Lite/Standard (apiAccess: 'none').
-        tenant: { select: { planCode: true } },
+        //
+        // The rest of the tenant fields build the service principal: tax
+        // status drives VAT math, the module flags feed AppAccessGuard.
+        tenant: {
+          select: {
+            planCode:      true,
+            taxStatus:     true,
+            businessName:  true,
+            modulePos:     true,
+            moduleLedger:  true,
+            modulePayroll: true,
+            branches: {
+              where:   { isActive: true },
+              orderBy: { createdAt: 'asc' },
+              take:    1,
+              select:  { id: true },
+            },
+          },
+        },
       },
     });
     if (!candidates.length) return null;
@@ -147,11 +200,18 @@ export class ApiKeysService {
     for (const row of candidates) {
       const match = await bcrypt.compare(plaintext, row.keyHash);
       if (match) {
-        // Live tier gate: if the tenant downgraded out of API-eligible
-        // plans, treat the key as revoked. The on-disk key.isActive flag
-        // is the manual revoke; this is the automatic-on-downgrade revoke.
-        const currentPlan = (row.tenant?.planCode ?? 'SOLO_LITE') as PlanCode;
-        const planApi = PLAN_FEATURES[currentPlan]?.apiAccess ?? 'none';
+        // Live plan gate: if the tenant's package no longer grants API
+        // access, treat the key as revoked. The on-disk key.isActive flag is
+        // the manual revoke; this is the automatic one.
+        //
+        // normalizePlanCode matters here more than anywhere else in the
+        // codebase: this lookup used to default an unrecognised stored code
+        // to the lowest plan, whose apiAccess is 'none' — which returned
+        // null and surfaced to the caller as "Invalid or expired API key".
+        // A legacy planCode string silently killed a working integration
+        // with an error that pointed at the key.
+        const currentPlan = normalizePlanCode(row.tenant?.planCode);
+        const planApi = planFeaturesFor(currentPlan).apiAccess;
         if (planApi === 'none') return null;
         // If the stored accessLevel exceeds the current plan's grant
         // (e.g. key was issued at 'readwrite' but plan now only offers
@@ -165,13 +225,63 @@ export class ApiKeysService {
           where: { id: row.id },
           data:  { lastUsedAt: new Date() },
         }).catch(() => undefined);
-        return {
+        const resolved: ResolvedApiKey = {
           tenantId:    row.tenantId,
           keyId:       row.id,
           accessLevel: effective,
+          planCode:    currentPlan,
+          taxStatus:   (row.tenant?.taxStatus ?? 'UNREGISTERED') as TaxStatus,
+          businessName:  row.tenant?.businessName ?? null,
+          // Undefined (legacy rows) means enabled — same convention
+          // AppAccessGuard uses.
+          modulePos:     row.tenant?.modulePos ?? true,
+          moduleLedger:  row.tenant?.moduleLedger ?? true,
+          modulePayroll: row.tenant?.modulePayroll ?? true,
+          defaultBranchId: row.tenant?.branches?.[0]?.id ?? null,
         };
+        this.rememberKey(plaintext, resolved);
+        return resolved;
       }
     }
     return null;
+  }
+
+  /* ─── Resolved-key cache ─────────────────────────────────────────────── */
+
+  private readonly keyCache = new Map<
+    string,
+    { value: ResolvedApiKey; expiresAtMs: number }
+  >();
+
+  private rememberKey(plaintext: string, value: ResolvedApiKey): void {
+    // Bounded so a flood of bogus-but-valid-looking keys cannot grow the map
+    // without limit. Entries are only ever written after a successful bcrypt
+    // match, so this only ever holds real keys.
+    if (this.keyCache.size >= API_KEY_CACHE_MAX) {
+      const now = Date.now();
+      for (const [k, v] of this.keyCache) {
+        if (v.expiresAtMs <= now) this.keyCache.delete(k);
+      }
+      // Still full after expiry sweep — drop the oldest insert (Map preserves
+      // insertion order) rather than refusing to cache.
+      if (this.keyCache.size >= API_KEY_CACHE_MAX) {
+        const oldest = this.keyCache.keys().next().value;
+        if (oldest !== undefined) this.keyCache.delete(oldest);
+      }
+    }
+    this.keyCache.set(plaintext, {
+      value,
+      expiresAtMs: Date.now() + API_KEY_CACHE_TTL_MS,
+    });
+  }
+
+  /**
+   * Drop cached entries for a tenant. Called on revoke so a revoked key stops
+   * working immediately instead of at the end of its 60s cache window.
+   */
+  private invalidateTenantCache(tenantId: string): void {
+    for (const [k, v] of this.keyCache) {
+      if (v.value.tenantId === tenantId) this.keyCache.delete(k);
+    }
   }
 }

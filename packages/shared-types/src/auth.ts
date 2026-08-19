@@ -22,7 +22,22 @@ export type UserRole =
   // Service / Display Accounts — credentials for kiosk hardware (KDS, customer
   // display). NOT real employees. No Payroll, no Ledger, no Terminal access.
   // Excluded from staff cap.
-  | 'KIOSK_DISPLAY';
+  | 'KIOSK_DISPLAY'
+  // Machine principal — another app in the ecosystem calling Clerque with an
+  // API key (a booking app writing its sales, for example). NOT a person and
+  // NOT a User row: there is no login, no seat, no staff-cap slot, and
+  // JwtPayload.sub is empty for it. It appears in NO entry of
+  // PERMISSION_MATRIX, so it holds no permission unless a route names
+  // 'SERVICE' in @Roles(...) explicitly. Never add it to a role picker.
+  | 'SERVICE';
+
+/**
+ * The subset of UserRole a `User` row may actually hold. SERVICE is excluded
+ * because it belongs to an API key, not a person — there is no User row and
+ * the Prisma `UserRole` enum has no such value. Use this anywhere a role is
+ * persisted, assigned, or offered in a picker.
+ */
+export type StaffRole = Exclude<UserRole, 'SERVICE'>;
 
 /* ─── App access ─────────────────────────────────────────────────────────── */
 
@@ -76,6 +91,12 @@ export const DEFAULT_APP_ACCESS: Record<UserRole, AppAccessEntry[]> = {
   // KIOSK_DISPLAY: POS only (read + KDS bump/serve). NO Ledger, NO Payroll —
   // these tablets aren't real employees, they're hardware credentials.
   KIOSK_DISPLAY:     [{ app: 'POS', level: 'OPERATOR' },  { app: 'LEDGER', level: 'NONE' },      { app: 'PAYROLL', level: 'NONE' }],
+  // SERVICE: transact-only. OPERATOR (not FULL) because an ecosystem app
+  // should be able to ring up a sale but never reconfigure the POS. Ledger
+  // and Payroll stay NONE — an external app must never touch the books
+  // directly; it writes sales and Clerque derives the accounting.
+  // ApiKeyStrategy narrows this further to the tenant's enabled modules.
+  SERVICE:           [{ app: 'POS', level: 'OPERATOR' },  { app: 'LEDGER', level: 'NONE' },      { app: 'PAYROLL', level: 'NONE' }],
 };
 
 /* ─── JWT ────────────────────────────────────────────────────────────────── */
@@ -123,8 +144,21 @@ export interface JwtPayload {
    *  BUSINESS_OWNER + SUPER_ADMIN can void or refund. Pharmacy tenants
    *  default to true; other verticals default false. */
   returnsOwnerOnly?:  boolean;
-  /** Tenant subscription tier — drives tier-locked permission gating in the UI. */
-  tier?:              import('./tiers').TierId;
+  /**
+   * Owner-toggled ledger surface (2026-08-17). SIMPLE = the non-accountant
+   * Ledger only (Record Entry, Profit, Reports, Settlement); the advanced
+   * suite is hidden in the nav AND 403'd server-side because the mint
+   * overrides planFeatures.advancedAccounting=false. Default FULL.
+   */
+  ledgerMode?:        'FULL' | 'SIMPLE';
+  /**
+   * Single-currency tenant locale (2026-08-17). NOT an FX engine — the GL
+   * amounts are simply "in this currency". Frontend money formatter reads
+   * these; defaults keep the PH fleet unchanged. ISO 3166-1 / ISO 4217 / IANA.
+   */
+  country?:           string;
+  currency?:          string;
+  timezone?:          string;
   /**
    * Monthly AI prompt quota resolved from tier-included + active addon +
    * SUPER_ADMIN override. Baked into JWT at login. Frontend uses this to

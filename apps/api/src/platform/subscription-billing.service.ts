@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { APBillsService } from '../ap/ap-bills.service';
 import { PlatformService } from './platform.service';
-import { PLAN_CAPS, type PlanCode } from '@repo/shared-types';
+import { planCapsFor } from '@repo/shared-types';
 
 /**
  * Sprint 15 — Cross-tenant subscription billing.
@@ -79,15 +79,15 @@ export class SubscriptionBillingService {
     if (!target.planCode) {
       throw new BadRequestException(`Tenant ${target.name} has no planCode set.`);
     }
-    if (target.planCode === 'ENTERPRISE') {
-      throw new BadRequestException('ENTERPRISE plan is billed manually outside this flow.');
-    }
-
     // Sprint 23 — pricing source-of-truth fix. Previously read from a
     // separate PLAN_MONTHLY_PRICE_PHP_CENTS map that disagreed with the
     // PLAN_CAPS prices shown on the marketing + signup + settings UI. Now
     // PLAN_CAPS is canonical; the duplicate map is deleted in plans.ts.
-    const planPrice = (PLAN_CAPS[target.planCode as PlanCode]?.pricePhpMonthlyCents ?? 0) / 100;
+    // Pricing is deliberately unset while the packaging is redesigned, so
+    // this guard is currently what stops any automated billing run.
+    // Pricing is deliberately unset while the packaging is redesigned, so
+    // this guard is currently what stops any automated billing run.
+    const planPrice = planCapsFor(target.planCode).pricePhpMonthlyCents / 100;
     if (planPrice <= 0) {
       throw new BadRequestException(`No monthly price configured for plan ${target.planCode}.`);
     }
@@ -435,7 +435,9 @@ export class SubscriptionBillingService {
     const tenants = await this.prisma.tenant.findMany({
       where: {
         status:   'ACTIVE',
-        planCode: { notIn: ['ENTERPRISE'] },
+        // The ENTERPRISE carve-out that sat here is gone with the plan that
+        // named it. Tenants on a manual contract are excluded by having no
+        // monthly price configured, which the per-tenant path already rejects.
         // Don't bill HNS itself.
         id:       { not: platform.hnsTenantId },
       },

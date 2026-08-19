@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isAiEnabled, resolveAiQuota } from '../ai/ai-availability';
 import { Prisma } from '@prisma/client';
 import { BusinessType, AccountingMethod } from '@prisma/client';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
 import * as bcrypt from 'bcryptjs';
-import { taxStatusFlags, getAiQuotaForTenant, TIER_PRICING, AI_ADDONS, DEFAULT_APP_ACCESS } from '@repo/shared-types';
-import type { TaxStatus, TierId, AiAddonType, UserRole } from '@repo/shared-types';
+import { taxStatusFlags, AI_ADDONS, DEFAULT_APP_ACCESS, normalizePlanCode, planCapsFor, planLimitsFor, planFeaturesFor } from '@repo/shared-types';
+import type { TaxStatus, AiAddonType, StaffRole } from '@repo/shared-types';
 
 export interface UpdateTenantProfileDto {
   businessType?: BusinessType;
@@ -23,6 +24,8 @@ export interface UpdateTenantProfileDto {
   returnsOwnerOnly?:  boolean;
   /** Sprint 25 — Maker-checker void threshold (peso-cents). 0 = disabled. */
   voidApprovalThresholdCents?: number;
+  /** Magnet Books — owner preference; SIMPLE hides the full accounting surface. */
+  ledgerMode?: 'FULL' | 'SIMPLE';
 }
 
 export interface UpdateTaxSettingsDto {
@@ -62,7 +65,7 @@ export class TenantService {
    * provisioned PLAN_LIMITS[planCode].maxBranches active branches.
    */
   async createBranch(tenantId: string, dto: { name: string; address: string | null }) {
-    const { PLAN_LIMITS } = await import('@repo/shared-types');
+    const { normalizePlanCode, planLimitsFor } = await import('@repo/shared-types');
 
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
@@ -70,8 +73,8 @@ export class TenantService {
     });
     if (!tenant) throw new NotFoundException('Tenant not found.');
 
-    const planCode = (tenant.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_LIMITS;
-    const cap      = PLAN_LIMITS[planCode]?.maxBranches ?? 1;
+    const planCode = normalizePlanCode(tenant.planCode);
+    const cap      = planLimitsFor(planCode).maxBranches;
 
     const activeCount = await this.prisma.branch.count({
       where: { tenantId, isActive: true },
@@ -118,13 +121,13 @@ export class TenantService {
 
     // If reactivating, check the plan cap.
     if (dto.isActive === true) {
-      const { PLAN_LIMITS } = await import('@repo/shared-types');
+      const { normalizePlanCode, planLimitsFor } = await import('@repo/shared-types');
       const tenant = await this.prisma.tenant.findUnique({
         where:  { id: tenantId },
         select: { planCode: true },
       });
-      const planCode = (tenant?.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_LIMITS;
-      const cap      = PLAN_LIMITS[planCode]?.maxBranches ?? 1;
+      const planCode = normalizePlanCode(tenant?.planCode);
+      const cap      = planLimitsFor(planCode).maxBranches;
 
       // Count active branches EXCLUDING the one we're about to flip back on.
       const activeOthers = await this.prisma.branch.count({
@@ -162,7 +165,7 @@ export class TenantService {
    * Used by Settings → Subscription page to render the upgrade CTA.
    */
   async getSubscription(tenantId: string) {
-    const { PLAN_CAPS, PLAN_LIMITS, PLAN_FEATURES, PLAN_SETUP_FEE_PHP_CENTS, effectiveSeatCeiling, planLabel } =
+    const { PLAN_SETUP_FEE_PHP_CENTS, effectiveSeatCeiling, planLabel } =
       await import('@repo/shared-types');
 
     const tenant = await this.prisma.tenant.findUnique({
@@ -176,7 +179,6 @@ export class TenantService {
         staffSeatQuota:   true,
         staffSeatAddons:  true,
         // Legacy / cross-cutting
-        tier:             true,  // legacy display only
         expiresAt:        true,
         branchQuota:      true,
         hasBirForms:      true,
@@ -193,18 +195,23 @@ export class TenantService {
 
     // Plan-based authority. The legacy `tier` field is included in the
     // response only for legacy display; all gating decisions read from planCode.
-    const planCode = (tenant.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_CAPS;
-    const cap      = PLAN_CAPS[planCode];
-    const limits   = PLAN_LIMITS[planCode];
-    const features = PLAN_FEATURES[planCode];
+    const planCode = normalizePlanCode(tenant.planCode);
+    const cap      = planCapsFor(planCode);
+    const limits   = planLimitsFor(planCode);
+    const features = planFeaturesFor(planCode);
 
     // AI quota — base quota comes from PLAN_LIMITS; addon stacks on top;
     // override (set by SUPER_ADMIN) takes precedence over both.
-    const baseQuota = tenant.aiQuotaOverride ?? limits.maxAiPerMonth;
-    const addonNow  = tenant.aiAddonType && tenant.aiAddonExpiresAt && tenant.aiAddonExpiresAt > new Date()
-      ? AI_ADDONS[tenant.aiAddonType as AiAddonType]?.promptsIncluded ?? 0
-      : 0;
-    const aiQuota = baseQuota + addonNow;
+    // Routed through resolveAiQuota so this screen can never advertise a
+    // quota the guard will refuse — the two used to be computed separately,
+    // including a hand-rolled copy of the source ladder below.
+    const aiResolution = resolveAiQuota({
+      planIncluded:   limits.maxAiPerMonth,
+      addonType:      tenant.aiAddonType as AiAddonType | null,
+      addonExpiresAt: tenant.aiAddonExpiresAt,
+      override:       tenant.aiQuotaOverride,
+    });
+    const aiQuota = aiResolution.monthlyQuota;
 
     const startOfMonth = new Date();
     startOfMonth.setUTCDate(1);
@@ -261,13 +268,15 @@ export class TenantService {
       features,
 
       // ─── Legacy fields (kept for backward compat with existing UI) ────
-      tier:              tenant.tier,
       expiresAt:         tenant.expiresAt,
       staffCount,
       branchCount,
       branchQuota:       tenant.branchQuota,
       cashierSeatQuota:  seatCeiling,    // alias for old name
-      hasTimeMonitoring: features.birForms,  // approximation; payroll module is the real gate
+      // Payroll IS the gate for time monitoring. This used to report
+      // features.birForms as an admitted "approximation", so an unrelated
+      // BIR grant silently flipped it.
+      hasTimeMonitoring: tenant.modulePayroll,
       hasBirForms:       features.birForms,
       isDemoTenant:      tenant.isDemoTenant,
       signupSource:      tenant.signupSource,
@@ -286,12 +295,8 @@ export class TenantService {
         monthlyQuota:    aiQuota,
         usedThisMonth:   aiUsedThisMonth,
         remaining:       Math.max(0, aiQuota - aiUsedThisMonth),
-        source:          tenant.aiQuotaOverride != null
-          ? 'override'
-          : addonNow > 0
-            ? (baseQuota > 0 ? 'plan+addon' : 'addon_only')
-            : (baseQuota > 0 ? 'plan_included' : 'plan_locked'),
-        enabled:         aiQuota > 0,
+        source:          aiResolution.source,
+        enabled:         aiResolution.enabled,
         addonType:       tenant.aiAddonType,
         addonExpiresAt:  tenant.aiAddonExpiresAt,
         addonPackage:    aiAddonPackage,
@@ -334,6 +339,19 @@ export class TenantService {
       },
     });
     if (!before) throw new NotFoundException('Tenant not found');
+
+    // While AI is switched off, granting an add-on or a quota override would
+    // sell a tenant something inert — the guard and the provider call both
+    // refuse regardless. Clearing a grant stays allowed.
+    const isGrant =
+      (params.addonType != null) ||
+      (typeof params.quotaOverride === 'number' && params.quotaOverride > 0);
+    if (!isAiEnabled() && isGrant) {
+      throw new BadRequestException(
+        'AI is temporarily unavailable, so an AI add-on or quota cannot be granted. ' +
+        'Set AI_FEATURES_ENABLED=true on the API to re-enable it first.',
+      );
+    }
 
     const data: Record<string, unknown> = {};
     if (params.addonType     !== undefined) data.aiAddonType      = params.addonType;
@@ -407,7 +425,9 @@ export class TenantService {
     const TEST_PIN      = '1234';
 
     interface RoleSeed {
-      role:       UserRole;
+      // StaffRole, not UserRole — SERVICE belongs to an API key and has no
+      // User row, so it must never appear in a seed list.
+      role:       StaffRole;
       name:       string;
       shortDesc:  string;     // user-facing role description
       keyAccess:  string[];   // bullet points of what they can do (for the response)
@@ -433,7 +453,7 @@ export class TenantService {
     const passwordHash = await bcrypt.hash(TEST_PASSWORD, 12);
     const pinHash      = await bcrypt.hash(TEST_PIN, 8);
 
-    const created: { role: UserRole; email: string; alreadyExisted: boolean }[] = [];
+    const created: { role: StaffRole; email: string; alreadyExisted: boolean }[] = [];
     for (const seed of ROLES) {
       const slug  = seed.role.toLowerCase().replace(/_/g, '');
       const email = `${slug}@${tenant.slug}.test`;
@@ -594,6 +614,10 @@ export class TenantService {
         returnsOwnerOnly:  true,
         // Sprint 25 — Maker-checker void threshold (peso-cents).
         voidApprovalThresholdCents: true,
+        // Magnet Books — owner's ledger mode (FULL | SIMPLE). Returned so the
+        // Settings card reflects the *saved* choice on reload; the JWT copy
+        // is what actually gates the ledger until next login.
+        ledgerMode: true,
       },
     });
     if (!tenant) throw new NotFoundException('Tenant not found');
@@ -608,6 +632,8 @@ export class TenantService {
     // tenant settings page guard). Without this strip, a SOLO_LITE owner
     // could PATCH /tenant/profile with `receiptLogoUrl` and bypass the
     // `receiptCustomization === 'full'` gate.
+    // `ledgerMode` (Magnet Books FULL|SIMPLE) is an owner preference, NOT
+    // plan-gated — it stays in `safeDto` and persists when provided.
     const {
       receiptHeaderNote: _h,
       receiptFooterNote: _f,
@@ -860,8 +886,8 @@ export class TenantService {
     });
     if (!tenant) throw new NotFoundException('Tenant not found.');
 
-    const planCode = (tenant.planCode ?? 'SOLO_LITE') as keyof typeof PLAN_FEATURES;
-    const tier     = PLAN_FEATURES[planCode]?.receiptCustomization ?? 'none';
+    const planCode = normalizePlanCode(tenant.planCode);
+    const tier     = planFeaturesFor(planCode).receiptCustomization;
 
     const headerNote = dto.headerNote === undefined ? undefined : (dto.headerNote?.trim() || null);
     const footerNote = dto.footerNote === undefined ? undefined : (dto.footerNote?.trim() || null);

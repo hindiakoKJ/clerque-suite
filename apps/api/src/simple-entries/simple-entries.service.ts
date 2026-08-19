@@ -52,6 +52,34 @@ interface Posting {
   description: string;
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 400 unless `value` is a real YYYY-MM-DD calendar date. */
+function assertIsoDate(value: string, field: 'from' | 'to'): void {
+  const ok = ISO_DATE.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+  if (!ok) throw new BadRequestException(`"${field}" must be a date in YYYY-MM-DD format.`);
+}
+
+/** First and last day (YYYY-MM-DD) of the current month in `timeZone`; UTC if the zone is unknown. */
+function currentMonthRange(timeZone: string): { first: string; last: string } {
+  let ymd: string;
+  try {
+    // en-CA formats as YYYY-MM-DD.
+    ymd = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .format(new Date());
+  } catch {
+    ymd = new Date().toISOString().slice(0, 10);
+  }
+  const [y, m] = ymd.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const mm = String(m).padStart(2, '0');
+  return { first: `${y}-${mm}-01`, last: `${y}-${mm}-${String(lastDay).padStart(2, '0')}` };
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 @Injectable()
 export class SimpleEntriesService {
   constructor(
@@ -138,6 +166,40 @@ export class SimpleEntriesService {
       status:      je.status, // POSTED, or PENDING_APPROVAL if a JE threshold is set
       type:        dto.type as SimpleEntryType,
     };
+  }
+
+  /**
+   * Plain-English profit summary for a date range (inclusive, by posting date).
+   * Reuses AccountsService.getPLSummary — the same numbers the full P&L shows —
+   * so a SIMPLE tenant (who cannot reach the advancedAccounting reports) still
+   * sees their profit. moneyIn = revenue-type accounts, moneyOut = expense-type
+   * accounts (COGS is an EXPENSE-type account here), profit = in − out.
+   *
+   * from/to default to the current calendar month in the tenant's timezone.
+   */
+  async summary(tenantId: string, from?: string, to?: string) {
+    if (from !== undefined) assertIsoDate(from, 'from');
+    if (to   !== undefined) assertIsoDate(to,   'to');
+
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { currency: true, timezone: true },
+    });
+    const currency = tenant?.currency ?? 'PHP';
+
+    if (from === undefined || to === undefined) {
+      const { first, last } = currentMonthRange(tenant?.timezone ?? 'UTC');
+      from ??= first;
+      to   ??= last;
+    }
+    if (from > to) {
+      throw new BadRequestException('"from" date must be on or before "to" date.');
+    }
+
+    const pl = await this.accounts.getPLSummary(tenantId, from, to);
+    const moneyIn  = round2(pl.totalRevenue);
+    const moneyOut = round2(pl.totalExpenses);
+    return { from, to, moneyIn, moneyOut, profit: round2(moneyIn - moneyOut), currency };
   }
 
   /** Recent simple entries for this tenant (newest first). */

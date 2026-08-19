@@ -173,17 +173,51 @@ export class SettlementService {
     const status: SettlementStatus =
       variance.abs().greaterThan(0.01) ? 'DISPUTED' : 'SETTLED';
 
-    return this.prisma.settlementBatch.update({
-      where: { id: batchId },
-      data: {
-        actualAmount: actual,
-        variance,
-        settledAt: new Date(dto.settledAt),
-        bankReference: dto.bankReference,
-        notes: dto.notes ?? batch.notes,
-        status,
-        reconciledById,
-      },
+    const settledAt = new Date(dto.settledAt);
+
+    // Update the batch AND queue the ledger posting atomically. If the event
+    // insert fails, the batch stays PENDING rather than becoming a settled
+    // batch the books never learn about.
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.settlementBatch.update({
+        where: { id: batchId },
+        data: {
+          actualAmount: actual,
+          variance,
+          settledAt,
+          bankReference: dto.bankReference,
+          notes: dto.notes ?? batch.notes,
+          status,
+          reconciledById,
+        },
+      });
+
+      // Post to the GL only for a CLEAN settlement. A DISPUTED batch (bank
+      // credit differs from expected by more than a centavo — e.g. a gateway
+      // fee, or a real discrepancy) is left for the owner to resolve; it is
+      // not auto-posted. The status guard above makes confirmSettlement
+      // single-shot per batch, so this event is emitted at most once.
+      if (status === 'SETTLED') {
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type:    'SETTLEMENT',
+            status:  'PENDING',
+            payload: {
+              batchId,
+              branchId:       batch.branchId,
+              method:         batch.method,
+              expectedAmount: Number(batch.expectedAmount),
+              actualAmount:   Number(actual),
+              bankReference:  dto.bankReference ?? null,
+              // The JE dates to when the bank credit landed.
+              completedAt:    settledAt.toISOString(),
+            },
+          },
+        });
+      }
+
+      return updated;
     });
   }
 

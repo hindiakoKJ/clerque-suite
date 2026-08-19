@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Body, Param, UseGuards, HttpCode, HttpStatus,
+  Controller, Get, Post, Body, Param, Query, UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -39,6 +39,21 @@ export class SimpleEntriesController {
   @HttpCode(HttpStatus.OK)
   reverse(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.svc.reverse(user.tenantId!, user.sub, id);
+  }
+
+  @ApiOperation({ summary: 'Money in / money out / profit for a date range (defaults to this month)' })
+  @Roles(
+    'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'ACCOUNTANT',
+    'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR',
+  )
+  @Get('summary')
+  summary(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to')   to?: string,
+  ) {
+    // Date-format + from<=to validation (400) lives in the service.
+    return this.svc.summary(user.tenantId!, from || undefined, to || undefined);
   }
 
   @ApiOperation({ summary: 'List recent simple entries' })

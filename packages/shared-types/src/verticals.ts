@@ -87,22 +87,16 @@ export type ReceiptFormatId =
   | 'PROJECT_INVOICE'  // OR + project number + scope summary
   | 'APPOINTMENT_SLIP';// future
 
-/** Plan-feature flags from PLAN_FEATURES (kept in sync with plans.ts). */
-type PlanFeatureFlag =
-  | 'birForms'
-  | 'customRoles'
-  | 'auditLog'
-  | 'crossModuleReports'
-  | 'aiAddons'
-  | 'whitelabel'
-  | 'customDomain';
-
-/** Plan codes from plans.ts (subset — vertical may exclude specific plans). */
-type PlanCode =
-  | 'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO' | 'SOLO_BOOKS'
-  | 'PAIR_T1'  | 'PAIR_T2' | 'PAIR_T3'
-  | 'SUITE_T1' | 'SUITE_T2' | 'SUITE_T3'
-  | 'ENTERPRISE';
+/**
+ * Plan-feature flags from PLAN_FEATURES. Imported rather than re-declared —
+ * this list used to be a hand-copied duplicate and had drifted, still naming
+ * four flags (customRoles, crossModuleReports, aiAddons, whitelabel) that
+ * were removed when the plan ladder was retired.
+ *
+ * The local PlanCode duplicate that sat here is gone with the ladder: with a
+ * single package there is nothing for a vertical to exclude.
+ */
+type PlanFeatureFlag = keyof import('./plans').PlanFeatures;
 
 // ── The pack ─────────────────────────────────────────────────────────────
 
@@ -186,7 +180,6 @@ export interface VerticalPack {
 
   // ── Plan compatibility ───────────────────────────────────────────────
   /** Plans that don't make sense for this vertical (signup-blocked). */
-  excludedPlans?: ReadonlyArray<PlanCode>;
   /** Plan features required (vertical can't function without them). */
   requiredFeatures?: ReadonlyArray<PlanFeatureFlag>;
 }
@@ -374,7 +367,6 @@ export const serviceMfgPack: VerticalPack = {
   settings: { extraCards: [] },
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
   // Manufacturing on a single-cashier plan is rarely a real business.
-  excludedPlans: ['SOLO_LITE'],
 };
 
 /**
@@ -533,7 +525,6 @@ export const pharmacyPack: VerticalPack = {
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
   // Solo plan illegal for pharmacy — at minimum needs an active pharmacist on
   // duty (which a single owner cashier may not be) plus back-office reconciliation.
-  excludedPlans: ['SOLO_LITE'],
   requiredFeatures: ['birForms'],
 };
 
@@ -605,7 +596,6 @@ export const truckingPack: VerticalPack = {
   },
 
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
-  excludedPlans: ['SOLO_LITE'], // single-truck operators exist but typically need at least SOLO_STANDARD for accounting
 };
 
 /**
@@ -673,7 +663,6 @@ export const constructionPack: VerticalPack = {
 
   settings: { extraCards: [] },
   help: { sectionsModule: '@/app/pos/(pos)/help/page' },
-  excludedPlans: ['SOLO_LITE'], // construction tenants need multi-staff seat counts
 };
 
 // ──────────────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { JwtPayload, PlanFeatures, ApiAccessLevel, PlanCode } from '@repo/shared-types';
-import { PLAN_FEATURES } from '@repo/shared-types';
+import type { JwtPayload, PlanFeatures, ApiAccessLevel } from '@repo/shared-types';
+import { planFeaturesFor } from '@repo/shared-types';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export const PLAN_FEATURE_KEY = 'planFeature';
@@ -46,14 +46,19 @@ export class PlanFeatureGuard implements CanActivate {
     if (!features && user.tenantId) {
       const tenant = await this.prisma.tenant.findUnique({
         where:  { id: user.tenantId },
-        select: { planCode: true },
+        select: { planCode: true, ledgerMode: true },
       });
-      // Fail closed: a tenant row with a missing/unknown planCode is treated
-      // as the LOWEST tier (SOLO_LITE). Previous default of 'SUITE_T2' was
-      // a tier-bypass — any legacy / partially-signed-up tenant got every
-      // Pro flag turned on server-side.
-      const pc = (tenant?.planCode ?? 'SOLO_LITE') as PlanCode;
-      features = PLAN_FEATURES[pc] ?? PLAN_FEATURES.SOLO_LITE;
+      // There is one package, and planFeaturesFor() resolves any stored
+      // string — legacy code, unknown code, null — onto it. The old
+      // fail-closed-to-SOLO_LITE branch existed because an unrecognised
+      // planCode used to silently strip a tenant down to the lowest tier;
+      // that failure mode no longer exists.
+      features = planFeaturesFor(tenant?.planCode);
+      // Mirror the JWT-mint override (auth.service) so a legacy token from a
+      // SIMPLE-mode tenant can't reach the advanced suite until it expires.
+      if (tenant?.ledgerMode === 'SIMPLE') {
+        features = { ...features, advancedAccounting: false };
+      }
     }
     if (!features) {
       // No tenant context (e.g. registration flow) — deny by default.

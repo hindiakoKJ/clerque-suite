@@ -14,18 +14,27 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { effectiveBranchId } from '../common/branch-scope';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { JwtOrApiKeyGuard } from '../auth/guards/jwt-or-api-key.guard';
+import { RequireApiKeyLevel } from '../auth/decorators/use-api-key.decorator';
+import { actorUserId, isServicePrincipal } from '../auth/strategies/api-key.strategy';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { OrdersService } from './orders.service';
+import { OrderQuoteService, type QuoteRequest } from './order-quote.service';
 import { OfflineOrder } from '@repo/shared-types';
 
 interface CreateOrderBody {
   order: OfflineOrder;
+  /**
+   * The consumer app's own id for this sale (a booking reference, say).
+   * Unique per tenant: replaying it returns the original order instead of
+   * creating a second one, so a retry after a timeout is always safe.
+   */
+  externalRef?: string;
 }
 
 interface VoidOrderBody {
@@ -44,10 +53,42 @@ interface BulkSyncBody {
 
 @ApiTags('Orders')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, RolesGuard)
+// Dual auth: the POS UI signs in with a JWT, an ecosystem app presents an
+// API key, and both reach the SAME handlers — one implementation of the
+// commerce invariants (VAT, period locks, OR numbering, inventory) rather
+// than two that drift apart.
+//
+// Authentication is not authorization: RolesGuard rejects a key on every
+// route that does not name 'SERVICE' in @Roles, including any route added
+// later with no @Roles at all. Today only quote + create are open to keys.
+@UseGuards(JwtOrApiKeyGuard, RolesGuard)
 @Controller('orders')
 export class OrdersController {
-  constructor(private ordersService: OrdersService) {}
+  constructor(
+    private ordersService: OrdersService,
+    private quoteService:  OrderQuoteService,
+  ) {}
+
+  /**
+   * Price a cart. Read-only: nothing is created, nothing is reserved.
+   *
+   * This is how a consumer app is meant to work — it describes what the
+   * customer is buying and Clerque returns the money. The app never
+   * computes VAT or picks a price itself, so a booking app and the till
+   * can never disagree about what a sale is worth.
+   *
+   * Send the result to POST /orders to actually make the sale.
+   */
+  @Roles(
+    'CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM',
+    'SERVICE',
+  )
+  @RequireApiKeyLevel('read')
+  @Post('quote')
+  @HttpCode(HttpStatus.OK)
+  quote(@CurrentUser() user: JwtPayload, @Body() body: QuoteRequest) {
+    return this.quoteService.quote(user.tenantId!, body);
+  }
 
   /**
    * List orders for this tenant's branch.
@@ -111,12 +152,36 @@ export class OrdersController {
     }
   }
 
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  /**
+   * Create a sale. Reachable by a cashier at the till and by an ecosystem
+   * app with a readwrite key — same handler, same invariants.
+   *
+   * The two callers are trusted differently. A cashier is a person acting
+   * inside the business, so the POS keeps its existing behaviour: it sends
+   * the totals it displayed and the server checks them for consistency. An
+   * external app is not, so its totals are recomputed from the catalog and
+   * the sale is rejected on any disagreement — see enforceServerTotals.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SERVICE')
+  @RequireApiKeyLevel('readwrite')
   @RequireIdempotency()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() body: CreateOrderBody) {
-    return this.ordersService.create(user.tenantId!, user.sub, body.order);
+    const service = isServicePrincipal(user);
+    return this.ordersService.create(
+      user.tenantId!,
+      // Null for a service call — there is no cashier. The sale is
+      // attributed by createdByApiKeyId instead.
+      actorUserId(user),
+      body.order,
+      {
+        channel:             service ? 'API' : 'POS',
+        createdByApiKeyId:   service ? user.apiKeyId : null,
+        externalRef:         body.externalRef ?? null,
+        enforceServerTotals: service,
+      },
+    );
   }
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')

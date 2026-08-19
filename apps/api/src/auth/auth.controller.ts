@@ -253,7 +253,8 @@ export class AuthController {
     ownerName:     string;
     ownerEmail:    string;
     ownerPassword: string;
-    planCode:      'SOLO_LITE' | 'SOLO_STANDARD' | 'SOLO_PRO' | 'SOLO_BOOKS';
+    /** Ignored — there is one package. Accepted so older clients still post. */
+    planCode?:     string;
     taxStatus?:    'VAT' | 'NON_VAT' | 'UNREGISTERED';
     businessType?: string;
   }) {

@@ -5,7 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { DEMO_SCENARIOS, type ScenarioKey } from '../admin/demo-scenarios';
-import { DEFAULT_APP_ACCESS } from '@repo/shared-types';
+import { DEFAULT_APP_ACCESS, DEFAULT_PLAN_CODE } from '@repo/shared-types';
 import type { Prisma } from '@prisma/client';
 
 /**
@@ -37,84 +37,84 @@ export class DemoBootstrapService {
     COFFEE_SHOP: {
       slug: 'demo-coffee', tenantName: 'Brew & Co. (Demo)',
       ownerName: 'Cafe Owner',
-      planCode: 'PAIR_T2', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: true, modulePayroll: false,
       staffSeatQuota: 5, branchQuota: 2,
     },
     BAKERY: {
       slug: 'demo-bakery', tenantName: 'The Daily Loaf (Demo)',
       ownerName: 'Bakery Owner',
-      planCode: 'STD_TEAM', taxStatus: 'NON_VAT',
+      taxStatus: 'NON_VAT',
       modulePos: true, moduleLedger: false, modulePayroll: false,
       staffSeatQuota: 5, branchQuota: 2,
     },
     RESTAURANT: {
       slug: 'demo-restaurant', tenantName: 'Tita\'s Kitchen (Demo)',
       ownerName: 'Restaurant Owner',
-      planCode: 'PAIR_T2', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: false, modulePayroll: true,
       staffSeatQuota: 8, branchQuota: 2,
     },
     SARI_SARI: {
       slug: 'demo-sarisari', tenantName: 'Aling Nena\'s Store (Demo)',
       ownerName: 'Tindera Owner',
-      planCode: 'STD_DUO', taxStatus: 'UNREGISTERED',
+      taxStatus: 'UNREGISTERED',
       modulePos: true, moduleLedger: false, modulePayroll: false,
       staffSeatQuota: 2, branchQuota: 1,
     },
     BOUTIQUE: {
       slug: 'demo-boutique', tenantName: 'Manila Linen Boutique (Demo)',
       ownerName: 'Boutique Owner',
-      planCode: 'STD_TEAM', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: false, modulePayroll: false,
       staffSeatQuota: 4, branchQuota: 2,
     },
     HARDWARE: {
       slug: 'demo-hardware', tenantName: 'Roque Hardware (Demo)',
       ownerName: 'Hardware Owner',
-      planCode: 'PAIR_T1', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: true, modulePayroll: false,
       staffSeatQuota: 5, branchQuota: 1,
     },
     LAUNDRY: {
       slug: 'demo-laundry-2', tenantName: 'WashHaven Laundry (Demo)',
       ownerName: 'Laundromat Owner',
-      planCode: 'STD_TEAM', taxStatus: 'NON_VAT',
+      taxStatus: 'NON_VAT',
       modulePos: true, moduleLedger: false, modulePayroll: false,
       staffSeatQuota: 5, branchQuota: 2,
     },
     AUTO_REPAIR: {
       slug: 'demo-autorepair', tenantName: 'Manila Auto Care (Demo)',
       ownerName: 'Shop Owner',
-      planCode: 'PAIR_T2', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: true, modulePayroll: false,
       staffSeatQuota: 6, branchQuota: 2,
     },
     MANUFACTURING: {
       slug: 'demo-mfg', tenantName: 'Pacific Foods Manufacturing (Demo)',
       ownerName: 'Plant Manager',
-      planCode: 'SUITE_T2', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: true, modulePayroll: true,
       staffSeatQuota: 12, branchQuota: 3,
     },
     CONSTRUCTION: {
       slug: 'demo-construction', tenantName: 'Bayanihan Construction (Demo)',
       ownerName: 'Project Director',
-      planCode: 'SUITE_T1', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: true, modulePayroll: true,
       staffSeatQuota: 8, branchQuota: 1,
     },
     PHARMACY: {
       slug: 'demo-pharmacy', tenantName: 'MediCare Drugstore (Demo)',
       ownerName: 'Pharmacy Owner',
-      planCode: 'PAIR_T1', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: true, modulePayroll: false,
       staffSeatQuota: 4, branchQuota: 1,
     },
     TRUCKING: {
       slug: 'demo-trucking', tenantName: 'Cargo Express PH (Demo)',
       ownerName: 'Fleet Manager',
-      planCode: 'SUITE_T1', taxStatus: 'VAT',
+      taxStatus: 'VAT',
       modulePos: true, moduleLedger: true, modulePayroll: true,
       staffSeatQuota: 8, branchQuota: 1,
     },
@@ -150,8 +150,7 @@ export class DemoBootstrapService {
             name:            cfg.tenantName,
             slug:            cfg.slug,
             businessType:    scenario.businessType as Prisma.TenantCreateInput['businessType'],
-            tier:            'TIER_3' as Prisma.TenantCreateInput['tier'],
-            planCode:        cfg.planCode,
+            planCode:        DEFAULT_PLAN_CODE,
             modulePos:       cfg.modulePos,
             moduleLedger:    cfg.moduleLedger,
             modulePayroll:   cfg.modulePayroll,
@@ -209,7 +208,6 @@ export class DemoBootstrapService {
       ownerEmail,
       ownerPassword: generatedPassword,  // null on subsequent calls
       created:     generatedPassword !== null,
-      planCode:    cfg.planCode,
       businessType: scenario.businessType,
     };
   }
@@ -224,7 +222,7 @@ export class DemoBootstrapService {
           key,
           label:        sc.label,
           tenantName:   cfg.tenantName,
-          planCode:     cfg.planCode,
+          planCode:     DEFAULT_PLAN_CODE,
           businessType: sc.businessType,
         };
       });
@@ -241,7 +239,6 @@ interface DemoConfig {
   slug:            string;
   tenantName:      string;
   ownerName:       string;
-  planCode:        string;
   taxStatus:       'VAT' | 'NON_VAT' | 'UNREGISTERED';
   modulePos:       boolean;
   moduleLedger:    boolean;
@@ -257,6 +254,5 @@ export interface ProvisionResult {
   ownerEmail:    string;
   ownerPassword: string | null; // null when tenant already existed
   created:       boolean;
-  planCode:      string;
   businessType:  string;
 }

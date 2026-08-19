@@ -41,8 +41,11 @@ export class AppAccessGuard implements CanActivate {
     // Only block when the flag is explicitly false. Undefined (legacy JWTs
     // pre-modular-pricing) is treated as enabled for backward compat.
     if (moduleEnabled === false) {
+      // Modules are a per-tenant switch, not a plan tier — there is one
+      // package and nothing to upgrade to. The old copy told people to
+      // "upgrade your subscription", which is now a dead end.
       throw new ForbiddenException(
-        `Module not on your plan: ${required.app}. Upgrade your subscription to enable this app.`,
+        `The ${required.app} module is switched off for this business.`,
       );
     }
 

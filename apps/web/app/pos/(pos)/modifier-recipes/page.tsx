@@ -257,7 +257,7 @@ export default function ModifierRecipesPage() {
                 >
                   {isOpen ? <ChevronDown className="w-4 h-4 text-gray-500" /> : <ChevronRight className="w-4 h-4 text-gray-500" />}
                   <div className="flex-1">
-                    <div className="font-semibold">{g.name}</div>
+                    <div className="font-semibold text-gray-900">{g.name}</div>
                     <div className="text-xs text-gray-500 mt-0.5">
                       {g.options.length} {g.options.length === 1 ? 'option' : 'options'}
                       {' · '}
@@ -281,7 +281,7 @@ export default function ModifierRecipesPage() {
                           {/* Top row — option label + multiplier */}
                           <div className="flex flex-wrap items-center gap-3">
                             <div className="flex-1 min-w-[200px]">
-                              <div className="font-medium">
+                              <div className="font-medium text-gray-900">
                                 {opt.name}
                                 {opt.isDefault ? (
                                   <span className="ml-2 text-[10px] uppercase tracking-wide font-bold text-purple-600 bg-purple-100 rounded px-1.5 py-0.5">

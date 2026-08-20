@@ -16,8 +16,13 @@ import { publishCustomerDisplay } from '@/lib/pos/customer-display-channel';
  * and the WELCOME-on-empty-cart state automatically.
  */
 export function useCustomerDisplaySync() {
-  const { hasCustomerDisplay, layout } = useFloorLayout();
-  const businessName = useAuthStore((s) => s.user?.businessName ?? layout?.tenant?.id ?? null);
+  const { hasCustomerDisplay } = useFloorLayout();
+  // NEVER fall back to an identifier here. This string is shown on the
+  // customer-facing screen, and the old `?? layout?.tenant?.id` fallback
+  // printed a raw database id (e.g. "cmofudy340000o201wloxhods") across the
+  // display for any tenant that had not filled in Business Profile yet.
+  // Passing undefined lets the display fall through to its own 'Welcome'.
+  const businessName = useAuthStore((s) => s.user?.businessName ?? null);
   const cashierName = useAuthStore((s) => s.user?.name ?? null);
 
   // Track cart-level fields with selector subscriptions so we re-publish

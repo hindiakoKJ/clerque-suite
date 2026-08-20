@@ -197,6 +197,34 @@ export default function PosTerminal() {
     const disc       = totalDiscount();
     const clientUuid = uuidv4();
 
+    // Cash tendered can exceed the amount due — the customer hands over
+    // ₱500 for a ₱368 sale and takes ₱132 back. The BOOKS must record what
+    // was applied to the sale (₱368): the change handed back is not revenue
+    // and not cash received, and the server rightly rejects a CASH_SALE whose
+    // payments do not equal the total (PAYMENTS_DO_NOT_MATCH_TOTAL) — which
+    // made every over-tendered cash sale fail at the till.
+    // The receipt is built from the untouched `payments` below, so it still
+    // prints the full tender and the change.
+    const bookedPayments = (() => {
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      // Settle non-cash legs first; only cash can be over-tendered.
+      const ordered = [
+        ...payments.filter((p) => p.method !== 'CASH'),
+        ...payments.filter((p) => p.method === 'CASH'),
+      ];
+      let left = r2(total);
+      const out: PaymentEntry[] = [];
+      for (const p of ordered) {
+        if (left <= 0.001) break;
+        const amt = Math.min(r2(p.amount), left);
+        if (amt > 0.001) {
+          out.push({ ...p, amount: amt });
+          left = r2(left - amt);
+        }
+      }
+      return out;
+    })();
+
     const orderPayload = {
       clientUuid,
       branchId: activeBranchId,
@@ -229,7 +257,7 @@ export default function PosTerminal() {
         attestPin:      l.attestPin,
         yellowRxSerial: l.yellowRxSerial,
       })),
-      payments,
+      payments: bookedPayments,
       discounts: [
         // Per-line promo discounts (aggregated for the order-level discount list)
         ...lines

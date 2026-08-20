@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, Min, Max, IsEnum, IsDateString, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsInt, Min, Max, IsEnum, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard }    from '../auth/guards/jwt-auth.guard';
 import { RolesGuard }      from '../auth/guards/roles.guard';

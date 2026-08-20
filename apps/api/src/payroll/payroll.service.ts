@@ -806,7 +806,6 @@ export class PayrollService {
       select: { basicPay: true, overtimePay: true },
     });
     const { sssMonthly, philhealthMonthly, pagibigMonthly, freqFactor, toMonthlyGross } =
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       require('./ph-tax-tables') as typeof import('./ph-tax-tables');
     const freq = run.frequency as PhPayFreq;
 
@@ -1173,7 +1172,7 @@ export class PayrollService {
         data: {
           isActive:         false,
           separatedAt:      effectiveAt,
-          separationType:   dto.separationType as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+          separationType:   dto.separationType as any,
           separationReason: dto.reason?.trim() || null,
         },
         select: {

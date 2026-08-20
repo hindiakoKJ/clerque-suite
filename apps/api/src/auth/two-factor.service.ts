@@ -1,5 +1,5 @@
 import {
-  Injectable, Logger, BadRequestException, UnauthorizedException, ForbiddenException,
+  Injectable, Logger, BadRequestException, UnauthorizedException,
 } from '@nestjs/common';
 import { TOTP, NobleCryptoPlugin, ScureBase32Plugin } from 'otplib';
 import * as QRCode from 'qrcode';
@@ -135,7 +135,6 @@ export class TwoFactorService {
 
     for (let i = 0; i < user.twoFactorBackupCodes.length; i++) {
       const hash = user.twoFactorBackupCodes[i];
-      // eslint-disable-next-line no-await-in-loop
       const match = await bcrypt.compare(upper, hash);
       if (match) {
         // Consume the code — remove this hash atomically.

@@ -860,7 +860,7 @@ export class TenantService {
   /**
    * Update the tenant's receipt template fields with plan-tier enforcement.
    *
-   * PLAN_FEATURES[planCode].receiptCustomization:
+   * planFeaturesFor(planCode).receiptCustomization:
    *   'none'          → rejects any non-empty write
    *   'headerFooter'  → only header + footer text are writable; logoUrl is dropped
    *   'full'          → header, footer, AND logo writable
@@ -874,7 +874,6 @@ export class TenantService {
     dto: { headerNote?: string | null; footerNote?: string | null; logoUrl?: string | null },
     actorId: string,
   ) {
-    const { PLAN_FEATURES } = await import('@repo/shared-types');
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
       select: {

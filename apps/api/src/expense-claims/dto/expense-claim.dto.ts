@@ -6,7 +6,6 @@ import {
   IsArray,
   ValidateNested,
   IsEnum,
-  Min,
   IsPositive,
 } from 'class-validator';
 import { Type } from 'class-transformer';

@@ -147,7 +147,6 @@ export class AuthService {
             // values (NONE | CLOCK_ONLY | READ_ONLY | OPERATOR | FULL) and
             // we don't want a cross-package refactor here. AdminService
             // creates accounts with the same shape via the same pattern.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             create: appAccess.map((a: { app: string; level: string }) => ({
               appCode: a.app as 'POS' | 'LEDGER' | 'PAYROLL',
               level:   a.level as any,
@@ -255,7 +254,6 @@ export class AuthService {
         data: {
           name:         businessName,
           slug,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           businessType: (dto.businessType ?? 'RETAIL') as any,
           taxStatus:    (dto.taxStatus ?? 'NON_VAT'),
           contactEmail: ownerEmail,
@@ -287,7 +285,6 @@ export class AuthService {
           role:         'BUSINESS_OWNER',
           isActive:     true,
           appAccess: {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             create: appAccess.map((a: { app: string; level: string }) => ({
               appCode: a.app as 'POS' | 'LEDGER' | 'PAYROLL',
               level:   a.level as any,
@@ -562,7 +559,6 @@ export class AuthService {
       } catch (err: any) {
         // PrismaClientValidationError or P2022 (column doesn't exist) means
         // schema drift — retry with the legacy field set. Log once for ops.
-        // eslint-disable-next-line no-console
         console.warn('[auth] Tenant select failed for new fields; falling back to legacy fields. Run `prisma db push` to sync. Original error:', err?.message);
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
@@ -1085,7 +1081,6 @@ export class AuthService {
     // error and require typed-email disambiguation (separate endpoint).
     const matches: typeof candidates = [];
     for (const u of candidates) {
-      // eslint-disable-next-line no-await-in-loop
       if (u.supervisorPinHash && await bcrypt.compare(cleaned, u.supervisorPinHash)) {
         matches.push(u);
       }

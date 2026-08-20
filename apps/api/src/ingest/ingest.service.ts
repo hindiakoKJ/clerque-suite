@@ -135,7 +135,7 @@ export class IngestService {
 
     // Ensure the per-stream service products exist (idempotent), so revenue
     // routes to the three distinct income accounts via category.
-    const productByType = await this.ensureCourtProducts(tenantId, resolvedBranchId);
+    const productByType = await this.ensureCourtProducts(tenantId);
 
     const taxStatus = await this.tenantTaxStatus(tenantId);
 
@@ -560,7 +560,6 @@ export class IngestService {
   /** Find-or-create the three court service products + their categories. */
   private async ensureCourtProducts(
     tenantId: string,
-    branchId: string,
   ): Promise<Record<CourtSideLineType, { id: string; name: string }>> {
     const out = {} as Record<CourtSideLineType, { id: string; name: string }>;
 

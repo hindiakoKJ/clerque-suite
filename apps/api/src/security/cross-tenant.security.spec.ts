@@ -461,7 +461,7 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
 
       // Capture the raw SQL call via $transaction mock
       let rawSqlCapture: unknown[] = [];
-      prisma.$transaction.mockImplementationOnce(async (cb: Function) => {
+      prisma.$transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
         const txMock = {
           order:           { findFirst: jest.fn(), create: jest.fn().mockResolvedValue({ id: 'new-order' }), count: jest.fn().mockResolvedValue(0) },
           orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
@@ -815,7 +815,7 @@ describe('SECURITY — tenantId Injection Prevention (General)', () => {
     prisma.order.findUnique.mockResolvedValue(null);
 
     let capturedCreatedById: string | undefined;
-    prisma.$transaction.mockImplementationOnce(async (cb: Function) => {
+    prisma.$transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
       const txMock = {
         order:           { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0), create: jest.fn((args: any) => {
           capturedCreatedById = args.data.createdById;

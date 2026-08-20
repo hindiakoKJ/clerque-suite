@@ -71,7 +71,7 @@ export class PlatformController {
   })
   @Post('bootstrap-hns-corp')
   @HttpCode(HttpStatus.OK)
-  async bootstrapHnsCorp(@Request() req: { user: JwtPayload }) {
+  async bootstrapHnsCorp(@Request() _req: { user: JwtPayload }) {
     const slug      = 'hnscorp';
     const ownerEmail = 'ops@hnscorp.test';
     const tenantName = 'HNS Corp PH';

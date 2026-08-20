@@ -337,7 +337,7 @@ export class OrdersService {
     // clients still send it) but is no longer required at the till; owners
     // backfill it later from /pos/pharmacy/rx if they want to formally tie
     // the sale to a paper Rx record.
-    let attestedByLine = new Map<number, { prc: string; userId: string }>();
+    const attestedByLine = new Map<number, { prc: string; userId: string }>();
     {
       const productIds = Array.from(new Set(payload.items.map((i) => i.productId)));
       if (productIds.length > 0) {
@@ -1026,7 +1026,6 @@ export class OrdersService {
           Number(payload.totalAmount),
         );
       } catch (err: any) {
-        // eslint-disable-next-line no-console
         console.warn(
           `[orders] Loyalty accrual failed for order ${order.id} customer ${payload.customerId}: ${err?.message}`,
         );

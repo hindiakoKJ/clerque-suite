@@ -113,7 +113,7 @@ export class CloseAndPlanService {
 
     // Tomorrow's plan
     const bakeListTomorrow = await this.buildBakeListForDate(tenantId, branchId, tomorrow);
-    const useFirstTomorrow = await this.buildUseFirstForDate(tenantId, branchId, tomorrow);
+    const useFirstTomorrow = await this.buildUseFirstForDate(tenantId, branchId);
     const pickupsTomorrow  = await this.buildPickupsForDate(tenantId, branchId, tomorrow, tomorrowEnd);
 
     return {
@@ -191,7 +191,6 @@ export class CloseAndPlanService {
   private async buildUseFirstForDate(
     tenantId: string,
     branchId: string,
-    targetDate: Date,
   ): Promise<BriefingUseFirstItem[]> {
     const lots = await this.prisma.rawMaterialLot.findMany({
       where: {

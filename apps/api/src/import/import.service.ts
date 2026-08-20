@@ -34,7 +34,6 @@ export class ImportService {
       return result;
     }
     const wb = new ExcelJS.Workbook();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await wb.xlsx.load(file.buffer as any);
     for (const ws of wb.worksheets) {
       const rows: string[][] = [];
@@ -161,7 +160,7 @@ export class ImportService {
     if (!t) return NaN;
     const negated = /^\(.*\)$/.test(t);
     if (negated) t = t.slice(1, -1).trim();
-    t = t.replace(/^(PHP|Php|php)\s*/, '').replace(/^[P\u20B1\$]\s*/, '');
+    t = t.replace(/^(PHP|Php|php)\s*/, '').replace(/^[P\u20B1$]\s*/, '');
     t = t.replace(/[\u00A0\s,]/g, '');
     if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(t)) return NaN;
     const n = parseFloat(t);
@@ -1392,13 +1391,11 @@ export class ImportService {
     // ── Products sheet ──
     const productsBuf = await this.productsTemplate(tenantId);
     const productsWb = new ExcelJS.Workbook();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await productsWb.xlsx.load(productsBuf as any);
     const productsSheet = productsWb.worksheets[0];
     const ws1 = wb.addWorksheet('Products');
     productsSheet.eachRow((row, rowIdx) => {
       const newRow = ws1.getRow(rowIdx);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       newRow.values = row.values as any;
       // copy basic styling
       newRow.font      = row.font;
@@ -1414,13 +1411,11 @@ export class ImportService {
     // ── Inventory sheet ──
     const invBuf = await this.inventoryTemplate();
     const invWb = new ExcelJS.Workbook();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await invWb.xlsx.load(invBuf as any);
     const invSheet = invWb.worksheets[0];
     const ws2 = wb.addWorksheet('Inventory');
     invSheet.eachRow((row, rowIdx) => {
       const newRow = ws2.getRow(rowIdx);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       newRow.values = row.values as any;
       newRow.font      = row.font;
       newRow.fill      = row.fill;
@@ -2147,9 +2142,9 @@ export class ImportService {
     let y: number, m: number, d: number;
     let readAs = '';
     let match: RegExpMatchArray | null;
-    if ((match = t.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})(?:[T\s].*)?$/))) {
+    if ((match = t.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$/))) {
       y = +match[1]; m = +match[2]; d = +match[3];
-    } else if ((match = t.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/))) {
+    } else if ((match = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/))) {
       d = +match[1]; m = +match[2]; y = +match[3];
       readAs = ' (read as DD/MM/YYYY, day first)';
       if (d !== m && d <= 12 && m <= 12) {

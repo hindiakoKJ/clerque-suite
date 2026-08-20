@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength, IsUUID } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 const COFFEE_SHOP_TIERS = ['CS_1', 'CS_2', 'CS_3', 'CS_4', 'CS_5'] as const;
 type CoffeeShopTierLiteral = (typeof COFFEE_SHOP_TIERS)[number];

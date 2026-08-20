@@ -75,6 +75,8 @@ export class DocumentsController {
   @HttpCode(HttpStatus.OK)
   remove(@Param('id') id: string, @Req() req: Request) {
     const user = req.user as JwtPayload;
-    return this.documentsService.delete(user.tenantId!, id, user.sub);
+    return this.documentsService.delete(
+      user.tenantId!, id, user.sub, user.role, user.customPermissions,
+    );
   }
 }

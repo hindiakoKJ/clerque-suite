@@ -25,7 +25,7 @@
  * exits — useful for local dev / staging without leaking data.
  */
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
@@ -97,7 +97,8 @@ export class BackupScheduler {
       return ph.toISOString().slice(0, 10);
     })();
 
-    let uploaded = 0, skipped = 0, failed = 0;
+    let uploaded = 0, failed = 0;
+    const skipped = 0; // kept for the return contract; the loop uploads or fails, never skips
     for (const t of tenants) {
       try {
         const payload = await this.buildPayload(t.id);

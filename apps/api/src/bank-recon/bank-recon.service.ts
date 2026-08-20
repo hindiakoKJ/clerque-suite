@@ -16,12 +16,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
-interface StatementLineInput {
-  date:        string;   // ISO date
-  description: string;
-  amount:      number;   // positive = credit (deposit), negative = debit (withdrawal)
-}
-
 interface SaveItemInput {
   itemType:        'STATEMENT' | 'JE_LINE' | 'MATCHED';
   statementDate?:  string;

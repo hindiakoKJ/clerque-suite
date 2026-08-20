@@ -44,10 +44,6 @@ function inferDrugClass(isRxRequired: boolean | undefined, isControlledDrug: boo
   return 'OTC';
 }
 
-/** Roles that may NOT edit price/cost fields under any circumstances (SOD Price Wall). */
-const PRICE_WALL_BLOCKED = ['CASHIER', 'SALES_LEAD', 'WAREHOUSE_STAFF', 'BOOKKEEPER',
-                            'AR_ACCOUNTANT', 'AP_ACCOUNTANT', 'EXTERNAL_AUDITOR'] as const;
-
 import { CreateProductDto, CreateVariantDto, CreateBomItemDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 export { CreateProductDto, UpdateProductDto, CreateVariantDto, CreateBomItemDto };

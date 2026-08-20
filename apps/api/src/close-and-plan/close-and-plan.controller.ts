@@ -88,7 +88,6 @@ export class CloseAndPlanController {
     // tree-shake is clean. The escpos helpers live in counter/src/receipt
     // which the API repo doesn't directly depend on; instead we use a
     // tiny inline builder that matches the wire format.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { InlineEscPosBuilder } = require('./inline-escpos');
     const bytes = await this.svc.buildBriefingEscPos(
       user.tenantId!,

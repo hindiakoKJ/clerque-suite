@@ -2532,7 +2532,7 @@ export class ExportService {
     const book = wb ?? buildWorkbook();
     // Sheet names: 31-char max + no [ ] : * ? / \
     const safeVendor = (data.payee.registeredName || 'vendor')
-      .replace(/[\\\/\?\*\[\]:]/g, ' ')
+      .replace(/[\\/?*[\]:]/g, ' ')
       .slice(0, 28);
     const ws = book.addWorksheet(`2307 ${safeVendor}`, {
       pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true },

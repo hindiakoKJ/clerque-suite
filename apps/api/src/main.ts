@@ -5,7 +5,6 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import * as path from 'path';
-import Joi from 'joi';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/prisma-exception.filter';
@@ -16,7 +15,6 @@ import { envValidationSchema } from './common/config/env.validation';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { initSentry } from './observability/sentry';
-import { logger as structuredLogger } from './observability/logger';
 
 // Initialize Sentry error tracking before NestFactory.create. Graceful no-op
 // if SENTRY_DSN is unset (dev / local environments).

@@ -5,7 +5,6 @@ import {
   NotFoundException,
   Logger,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   COFFEE_SHOP_LAYOUTS,

@@ -86,7 +86,7 @@ export class NotificationsService {
     // Atomic tenant + recipient scope — single query closes the TOCTOU window
     // between findFirst and update. We match `readAt: null` so a re-read no-ops
     // without a second update; idempotent.
-    const result = await this.prisma.notification.updateMany({
+    await this.prisma.notification.updateMany({
       where: {
         id:        notificationId,
         tenantId,
@@ -95,7 +95,7 @@ export class NotificationsService {
       },
       data:  { readAt: new Date() },
     });
-    // result.count === 0 either means already read OR not found / cross-tenant.
+    // A zero-row update either means already read OR not found / cross-tenant.
     // Re-fetch to distinguish (and return the row for the caller).
     return this.prisma.notification.findFirst({
       where: { id: notificationId, tenantId, OR: [{ userId }, { userId: null }] },

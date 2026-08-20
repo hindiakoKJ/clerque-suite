@@ -2,7 +2,10 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
+  Logger,
 } from '@nestjs/common';
+import { hasPermission } from '@repo/shared-types';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -20,6 +23,8 @@ const ALLOWED_MIMES = new Set([
 
 @Injectable()
 export class DocumentsService {
+  private readonly logger = new Logger('DocumentsService');
+
   constructor(
     private readonly prisma:  PrismaService,
     private readonly storage: StorageService,
@@ -84,8 +89,28 @@ export class DocumentsService {
     });
   }
 
-  /** Delete DB record and remove file from disk. */
-  async delete(tenantId: string, documentId: string, requesterId: string) {
+  /**
+   * Delete DB record and remove file from disk.
+   *
+   * Hard delete of a BIR supporting document — SOD-gated at the service
+   * layer like the other destructive mutations (price wall, voids). Until a
+   * DOCUMENT_DELETED AuditAction exists (schema change, pending sign-off),
+   * attribution is a structured warn log rather than an audit row.
+   */
+  async delete(
+    tenantId: string,
+    documentId: string,
+    requesterId: string,
+    requesterRole: string,
+    customPermissions?: readonly string[] | null,
+  ) {
+    if (!hasPermission(requesterRole, 'document:delete', customPermissions)) {
+      throw new ForbiddenException(
+        `Role '${requesterRole}' is not permitted to delete documents. ` +
+        'Ask your Business Owner or Branch Manager.',
+      );
+    }
+
     const doc = await this.prisma.document.findFirst({
       where: { id: documentId, tenantId },
     });
@@ -95,6 +120,11 @@ export class DocumentsService {
     await this.prisma.document.delete({ where: { id: documentId } });
 
     await this.storage.delete(doc.storagePath).catch(() => undefined);
+
+    this.logger.warn(
+      `[documents] hard delete: doc=${documentId} (${doc.entityType}/${doc.entityId}, "${doc.filename}") ` +
+      `tenant=${tenantId} by=${requesterId} role=${requesterRole}`,
+    );
 
     return { deleted: true, id: documentId };
   }

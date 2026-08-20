@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AccountType, NormalBalance, PostingControl, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 export { CreateAccountDto, UpdateAccountDto };

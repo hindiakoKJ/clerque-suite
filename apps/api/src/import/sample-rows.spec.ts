@@ -59,7 +59,6 @@ const asFile = (buffer: Buffer, name = 'template.xlsx') =>
 /** Append real (non-sample) rows under the template's sample block. */
 async function appendRows(buffer: Buffer, rows: string[][]): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await wb.xlsx.load(buffer as any);
   const ws = wb.worksheets[0];
   for (const r of rows) ws.addRow(r);
@@ -69,7 +68,6 @@ async function appendRows(buffer: Buffer, rows: string[][]): Promise<Buffer> {
 /** Read the generated template back as plain string rows (what the parser sees). */
 async function readRows(buffer: Buffer): Promise<string[][]> {
   const wb = new ExcelJS.Workbook();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await wb.xlsx.load(buffer as any);
   const rows: string[][] = [];
   wb.worksheets[0].eachRow((row) => {
@@ -137,7 +135,6 @@ describe('ImportService — sample rows are ignored on import', () => {
       const svc = new ImportService(makePrisma() as any);
       const buf = await svc.vendorsTemplate();
       const wb = new ExcelJS.Workbook();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await wb.xlsx.load(buf as any);
       const ws = wb.worksheets[0];
       let sampleRow: ExcelJS.Row | undefined;

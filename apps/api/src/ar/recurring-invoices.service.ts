@@ -193,7 +193,7 @@ export class RecurringInvoicesService {
     return this.transition(tenantId, id, userId, 'ACTIVE', 'PAUSED');
   }
 
-  async resume(tenantId: string, id: string, userId: string) {
+  async resume(tenantId: string, id: string, _userId: string) {
     // Advance nextRunAt forward to now-or-later so we don't materialize a
     // flood of back-dated invoices for the paused window.
     const tpl = await this.prisma.recurringInvoiceTemplate.findFirst({
@@ -217,7 +217,7 @@ export class RecurringInvoicesService {
     });
   }
 
-  async cancel(tenantId: string, id: string, userId: string) {
+  async cancel(tenantId: string, id: string, _userId: string) {
     const tpl = await this.prisma.recurringInvoiceTemplate.findFirst({
       where: { id, tenantId },
     });

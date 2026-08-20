@@ -309,7 +309,6 @@ export class JournalService {
       } catch (err) {
         // Log but don't block the approval. The audit log shouldn't be
         // the source of truth for whether the JE posted.
-        // eslint-disable-next-line no-console
         console.warn('[journal] SELF_APPROVAL audit log failed:', err);
       }
     }

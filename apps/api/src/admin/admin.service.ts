@@ -146,7 +146,7 @@ export class AdminService {
       where: {
         superAdminEmail: actor.email,
         createdAt:       { gte: since },
-        action: { in: ['CLEAR_ALL_DATA', 'DEMO_RESET', 'TENANT_FROZEN'] as any[] }, // eslint-disable-line @typescript-eslint/no-explicit-any
+        action: { in: ['CLEAR_ALL_DATA', 'DEMO_RESET', 'TENANT_FROZEN'] as any[] },
       },
     });
     const LIMIT = 5;
@@ -195,7 +195,7 @@ export class AdminService {
       actor,
       tenantId,
       tenantSlug: t.slug,
-      action:     'TENANT_FROZEN' as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      action:     'TENANT_FROZEN' as any,
       detail:     { reason: reason.trim() },
     });
     this.logger.warn(`[freeze] Tenant ${t.slug} (${t.id}) frozen by ${actor.email}: ${reason}`);
@@ -225,7 +225,7 @@ export class AdminService {
       actor,
       tenantId,
       tenantSlug: t.slug,
-      action:     'TENANT_UNFROZEN' as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      action:     'TENANT_UNFROZEN' as any,
     });
     this.logger.log(`[freeze] Tenant ${t.slug} (${t.id}) unfrozen by ${actor.email}`);
     return { id: t.id, slug: t.slug, frozen: false };
@@ -295,7 +295,6 @@ export class AdminService {
         takenById:    null,
         takenByEmail: actor.email ?? null,
         rowCount,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         payload: payload as any,
         expiresAt,
       },
@@ -357,7 +356,6 @@ export class AdminService {
     tenantSlug?: string;
     userId?:     string;
     userEmail?:  string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     action:      any;   // 'any' avoids sync PrismaClientValidationError when enum not yet in DB
     detail?:     object;
   }) {
@@ -433,7 +431,7 @@ export class AdminService {
       this.prisma.consoleLog.count({
         where: {
           createdAt: { gte: day1 },
-          action: { in: ['CLEAR_ALL_DATA', 'DEMO_RESET', 'TENANT_FROZEN'] as any[] }, // eslint-disable-line @typescript-eslint/no-explicit-any
+          action: { in: ['CLEAR_ALL_DATA', 'DEMO_RESET', 'TENANT_FROZEN'] as any[] },
         },
       }).catch(() => 0),
       this.prisma.tenant.count({ where: { readOnlyMode: true } }).catch(() => 0),
@@ -558,7 +556,7 @@ export class AdminService {
     // Sprint 17 — apply plan + module flags atomically within tenant
     // creation. Avoids the half-configured-tenant window where the
     // separate PATCH /plan call could fail after the tenant existed.
-    const { PLAN_CAPS, planCapsFor, normalizePlanCode } = await import('@repo/shared-types');
+    const { planCapsFor, normalizePlanCode } = await import('@repo/shared-types');
     const planCode = normalizePlanCode(dto.planCode);
     const cap      = planCapsFor(planCode);
     if (!cap) {
@@ -587,7 +585,6 @@ export class AdminService {
         data: {
           name:         dto.name.trim(),
           slug,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           businessType: dto.businessType as any,
           contactEmail: dto.contactEmail?.trim() ?? dto.ownerEmail.trim(),
           contactPhone: dto.contactPhone?.trim() ?? null,
@@ -619,9 +616,7 @@ export class AdminService {
           isActive:     true,
           appAccess: {
             create: appAccess.map((a: { app: string; level: string }) => ({
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               appCode: a.app as any,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               level:   a.level as any,
             })),
           },
@@ -730,9 +725,7 @@ export class AdminService {
         isActive:    true,
         appAccess: {
           create: appAccess.map((a: { app: string; level: string }) => ({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             appCode: a.app as any,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             level:   a.level as any,
           })),
         },
@@ -976,7 +969,6 @@ export class AdminService {
     const data: Prisma.TenantUpdateInput = {};
     if (dto.name          !== undefined) data.name          = dto.name?.trim() || undefined;
     if (dto.businessName  !== undefined) data.businessName  = dto.businessName?.trim() ?? null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (dto.businessType  !== undefined) data.businessType  = dto.businessType as any;
     if (dto.taxStatus     !== undefined) data.taxStatus     = dto.taxStatus as Prisma.TenantUpdateInput['taxStatus'];
     if (dto.tinNumber     !== undefined) data.tinNumber     = dto.tinNumber?.trim() ?? null;
@@ -1097,9 +1089,7 @@ export class AdminService {
     await this.prisma.tenant.update({
       where: { id: tenantId },
       data: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         businessType: scenario.businessType as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         taxStatus:    scenario.taxStatus as any,
         isDemoTenant: true,
       },

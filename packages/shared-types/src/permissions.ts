@@ -52,6 +52,8 @@ export type PermissionKey =
   // ── Settings ──────────────────────────────────────────────────────────────
   | 'settings:tax'
   | 'settings:general'
+  // ── Documents ─────────────────────────────────────────────────────────────
+  | 'document:delete'            // SOD: hard delete of BIR supporting docs — managers/owner only
   // ── Audit ─────────────────────────────────────────────────────────────────
   | 'audit:view'
   // ── BIR ───────────────────────────────────────────────────────────────────
@@ -113,6 +115,13 @@ export const PERMISSION_MATRIX: Record<PermissionKey, UserRole[]> = {
   // ── Settings ──────────────────────────────────────────────────────────────
   'settings:tax':            ['BUSINESS_OWNER'],
   'settings:general':        ['BUSINESS_OWNER'],
+
+  // ── Documents ─────────────────────────────────────────────────────────────
+  // 🔴 SOD — documents attached to orders/expenses are BIR supporting records;
+  // a permanent delete destroys the paper trail. Back-office roles that manage
+  // attachments keep delete (fixing a wrong upload); frontline roles
+  // (CASHIER, SALES_LEAD, WAREHOUSE_STAFF, ...) are blocked.
+  'document:delete':         ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'ACCOUNTANT', 'BOOKKEEPER'],
 
   // ── Audit ─────────────────────────────────────────────────────────────────
   'audit:view':              ['BUSINESS_OWNER', 'EXTERNAL_AUDITOR', 'FINANCE_LEAD'],

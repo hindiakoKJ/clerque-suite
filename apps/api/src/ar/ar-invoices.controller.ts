@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Param, Body, Query, Res, UseGuards, HttpCode, HttpStatus,
-  BadRequestException, NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';

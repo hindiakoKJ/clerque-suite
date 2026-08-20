@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, StockTransferStatus, CycleCountStatus } from '@prisma/client';
 
@@ -346,7 +346,6 @@ export class WarehouseService {
         throw new BadRequestException(`Only OPEN counts can be posted (current: ${c.status}).`);
       }
 
-      let postedLines = 0;
       for (const line of c.lines) {
         const counted  = new Prisma.Decimal(line.countedQty);
         const expected = new Prisma.Decimal(line.expectedQty);
@@ -370,7 +369,6 @@ export class WarehouseService {
           where: { id: line.id },
           data:  { varianceQty: variance },
         });
-        postedLines++;
       }
 
       return tx.cycleCount.update({

@@ -32,7 +32,7 @@ export class BulkExportScheduler {
 
   /**
    * Every 15 minutes — flag users exporting >5 reports in a rolling hour.
-   * The cron string '*​/15 * * * *' fires at :00 :15 :30 :45.
+   * The cron below fires at :00 :15 :30 :45.
    */
   @Cron('*/15 * * * *')
   async detectBulkExports(): Promise<void> {

@@ -4,7 +4,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import {
   LaundryServiceType, LaundryPricingMode, LaundryOrderStatus, BusinessType, Prisma,
   LaundryServiceCode, LaundryServiceMode, LaundryMachineKind, LaundryMachineStatus,
-  LaundryMachineLineStatus, LaundryPromoKind, LaundryAddOnKind,
+  LaundryPromoKind, LaundryAddOnKind,
 } from '@prisma/client';
 
 // ─── DTOs ──────────────────────────────────────────────────────────────────────
@@ -390,11 +390,10 @@ export class LaundryService {
    * Used by both payForOrder() (pay-only) and claimAndPay() (pay + mark
    * claimed) so the cash-flow path is identical.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private async _recordSale(
     tx: any,
     tenantId: string,
-    order: { id: string; branchId: string; customerId: string | null; claimNumber: string; totalAmount: any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+    order: { id: string; branchId: string; customerId: string | null; claimNumber: string; totalAmount: any },
     userId: string,
     payment: {
       method:    'CASH' | 'GCASH_PERSONAL' | 'GCASH_BUSINESS' | 'MAYA_PERSONAL' | 'MAYA_BUSINESS' | 'QR_PH';
@@ -959,7 +958,7 @@ export class LaundryService {
           where:  { id: { in: requestedCycleIds }, tenantId, isActive: true },
           select: { id: true, kind: true, durationMinutes: true, autoComplete: true },
         });
-        for (const c of cycles) cyclesById.set(c.id, c as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+        for (const c of cycles) cyclesById.set(c.id, c as any);
         if (cycles.length !== requestedCycleIds.length) {
           throw new BadRequestException('One or more wash cycles not found or inactive.');
         }
@@ -1393,7 +1392,7 @@ export class LaundryService {
       data: {
         tenantId,
         name:            dto.name.trim(),
-        kind:            dto.kind as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+        kind:            dto.kind as any,
         durationMinutes: dto.durationMinutes,
         autoComplete:    dto.autoComplete ?? false,
         surcharge:       dto.surcharge != null ? new Prisma.Decimal(dto.surcharge) : null,
@@ -1432,7 +1431,7 @@ export class LaundryService {
       where: { id },
       data: {
         ...(dto.name             !== undefined ? { name: dto.name.trim() } : {}),
-        ...(dto.kind             !== undefined ? { kind: dto.kind as any } : {}), // eslint-disable-line @typescript-eslint/no-explicit-any
+        ...(dto.kind             !== undefined ? { kind: dto.kind as any } : {}),
         ...(dto.durationMinutes  !== undefined ? { durationMinutes: dto.durationMinutes } : {}),
         ...(dto.autoComplete     !== undefined ? { autoComplete: dto.autoComplete } : {}),
         ...(dto.surcharge        !== undefined

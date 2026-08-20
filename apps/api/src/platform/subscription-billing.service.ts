@@ -137,11 +137,6 @@ export class SubscriptionBillingService {
           'Customer tenant is missing chart-of-accounts row 6280 — re-seed default accounts.',
         );
       }
-      // Optional Input VAT account (1040) — only used when VAT applies.
-      const inputVatAccount = vatApplies
-        ? await tx.account.findFirst({ where: { tenantId: target.id, code: '1040', isActive: true }, select: { id: true } })
-        : null;
-
       // 3. Generate AP bill number.
       const billNumber = await this.nextAPBillNumber(tx, target.id);
 
@@ -202,7 +197,7 @@ export class SubscriptionBillingService {
       // 4. Find a default product in HNS tenant for "Subscription" — or
       //    create one on first run. Service-style line; no inventory.
       const subscriptionProduct = await this.upsertSubscriptionProductInHnsTenant(
-        tx, platform.hnsTenantId!, hnsBranch.id,
+        tx, platform.hnsTenantId!,
       );
 
       // 5. Create the Order with one OrderItem for the plan.
@@ -344,12 +339,22 @@ export class SubscriptionBillingService {
     hnsTenantId: string,
     target: { id: string; name: string; slug: string; tin: string | null; contactEmail: string | null; contactPhone: string | null; address: string | null },
   ) {
-    // Use the customer-tenant's slug as a stable external key.
-    const externalKey = `tenant:${target.slug}`;
-    const existing = await tx.customer.findFirst({
-      where:  { tenantId: hnsTenantId, name: target.name },
-      select: { id: true },
-    });
+    // Use the customer-tenant's slug as a stable external key. The trailing
+    // ';' keeps the contains-match prefix-free (tenant:abc must never match
+    // a row stamped tenant:abc2). Matching by display name alone conflated
+    // same-named tenants and split a renamed tenant's AR history in HNS's
+    // books; the name match remains only as a fallback for Customer rows
+    // created before the key was stamped.
+    const externalKey = `extkey=tenant:${target.slug};`;
+    const existing =
+      (await tx.customer.findFirst({
+        where:  { tenantId: hnsTenantId, notes: { contains: externalKey } },
+        select: { id: true },
+      })) ??
+      (await tx.customer.findFirst({
+        where:  { tenantId: hnsTenantId, name: target.name },
+        select: { id: true },
+      }));
     if (existing) return existing;
 
     return tx.customer.create({
@@ -359,7 +364,7 @@ export class SubscriptionBillingService {
         contactPhone: target.contactPhone,
         contactEmail: target.contactEmail,
         defaultAddress: target.address,
-        // notes:     `External key: ${externalKey}`,  // Customer model may not have notes
+        notes:        externalKey,
       },
       select: { id: true },
     });
@@ -369,7 +374,6 @@ export class SubscriptionBillingService {
   private async upsertSubscriptionProductInHnsTenant(
     tx: Prisma.TransactionClient,
     hnsTenantId: string,
-    branchId: string,
   ) {
     const existing = await tx.product.findFirst({
       where:  { tenantId: hnsTenantId, sku: 'CLERQUE-SUBSCRIPTION' },

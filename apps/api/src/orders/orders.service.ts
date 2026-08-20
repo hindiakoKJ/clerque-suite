@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { TaxCalculatorService } from '../tax/tax.service';
@@ -12,7 +13,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
-import { OfflineOrder, planFeaturesFor } from '@repo/shared-types';
+import { OfflineOrder, planFeaturesFor, hasPermission } from '@repo/shared-types';
 import { OrderQuoteService } from './order-quote.service';
 
 /** Peso tolerance when comparing a caller's totals against our own. One
@@ -35,6 +36,15 @@ export interface CreateOrderOptions {
    * totals are the receipt the customer already saw).
    */
   enforceServerTotals?: boolean;
+  /** The caller's role, for the discount-authority (SOD) check. */
+  callerRole?: string | null;
+  /** The caller's per-user permission grants, if any. */
+  callerCustomPermissions?: readonly string[] | null;
+  /**
+   * Escape hatch for replays of sales that were already authorized at the
+   * till (offline sync), where the approving supervisor is not re-presented.
+   */
+  enforceDiscountAuthority?: boolean;
 }
 
 @Injectable()
@@ -119,6 +129,8 @@ export class OrdersService {
       createdByApiKeyId   = null,
       externalRef         = null,
       enforceServerTotals = false,
+      callerRole              = null,
+      callerCustomPermissions = null,
     } = opts;
 
     // Idempotency: if clientUuid already exists FOR THIS TENANT, return it.
@@ -240,6 +252,73 @@ export class OrdersService {
         throw new BadRequestException(
           'One or more discount authorizers do not belong to your organization.',
         );
+      }
+    }
+
+    // Guard: SOD — discretionary discounts need real authority.
+    //
+    // 'CASHIER cannot self-authorize discounts' (order:apply_discount in the
+    // permission matrix) was enforced ONLY by hiding the button in the web
+    // cart: the service never saw the caller's role, so posting straight to
+    // POST /orders with a discount line was accepted from any till account.
+    //
+    // Statutory discounts are deliberately exempt — PWD and Senior Citizen
+    // are a legal entitlement under RA 9994/RA 10754 that a cashier must be
+    // able to grant at the till (the ID is captured separately), and PROMO
+    // lines come from configured campaigns rather than cashier discretion.
+    // What is gated is the discretionary kind: CASHIER_APPLIED and
+    // MANAGER_OVERRIDE, plus any whole-cart discountAmount with no line to
+    // explain it.
+    if (opts.enforceDiscountAuthority !== false && callerRole) {
+      const DISCRETIONARY = new Set(['CASHIER_APPLIED', 'MANAGER_OVERRIDE']);
+      const discretionary = payload.discounts.filter(
+        (d) => DISCRETIONARY.has(d.discountType) && Number(d.discountAmount) > 0,
+      );
+      const unexplainedCartDiscount =
+        Number(payload.discountAmount) > 0 &&
+        payload.discounts.length === 0 &&
+        !payload.isPwdScDiscount;
+
+      if (discretionary.length > 0 || unexplainedCartDiscount) {
+        const callerMayDiscount = hasPermission(
+          callerRole,
+          'order:apply_discount',
+          callerCustomPermissions,
+        );
+
+        // A cashier may still ring one, but only with a supervisor who
+        // actually holds the authority standing behind it — and never
+        // themselves (that is the self-approval this rule exists to stop).
+        let supervisorApproved = false;
+        if (!callerMayDiscount) {
+          const supervisorIds = [
+            ...new Set(
+              discretionary
+                .map((d) => d.authorizedById)
+                .filter((id): id is string => !!id && id !== cashierId),
+            ),
+          ];
+          if (supervisorIds.length > 0 && discretionary.every((d) => d.authorizedById)) {
+            const supervisors = await this.prisma.user.findMany({
+              where:  { id: { in: supervisorIds }, tenantId, isActive: true },
+              select: { role: true, customPermissions: true },
+            });
+            supervisorApproved =
+              supervisors.length === supervisorIds.length &&
+              supervisors.every((s) =>
+                hasPermission(s.role, 'order:apply_discount', s.customPermissions),
+              );
+          }
+        }
+
+        if (!callerMayDiscount && !supervisorApproved) {
+          throw new ForbiddenException({
+            code:    'DISCOUNT_NOT_AUTHORIZED',
+            message:
+              `Role '${callerRole}' cannot authorize this discount. ` +
+              'Ask a supervisor to approve it.',
+          });
+        }
       }
     }
 
@@ -1052,7 +1131,7 @@ export class OrdersService {
     callerId:     string,
     callerRole:   string,
     reason:       string,
-    supervisorId?: string,
+    supervisorPin?: string,
   ) {
     // Sprint 19 — Returns/refunds owner-only policy. When tenant.returnsOwnerOnly
     // is true (default for pharmacy tenants), only BUSINESS_OWNER + SUPER_ADMIN
@@ -1102,27 +1181,19 @@ export class OrdersService {
       // Supervisor is voiding directly — no co-auth needed
       resolvedManagerId = callerId;
     } else {
-      // CASHIER (or any other sales role) — supervisorId is mandatory
-      if (!supervisorId) {
+      // CASHIER (or any other sales role) — a supervisor must physically
+      // approve with their PIN. This used to accept a bare `supervisorId`
+      // from the request body: the role was validated, but the identity was
+      // not proven, so a cashier could replay a supervisor id read off any
+      // earlier voided order (GET /orders/:id returns voidedBy) and approve
+      // their own void.
+      if (!supervisorPin) {
         throw new BadRequestException(
-          'Cashiers must provide a supervisorId (SALES_LEAD or BUSINESS_OWNER) to authorize a void.',
+          'Cashiers must provide a supervisor PIN (SALES_LEAD, BRANCH_MANAGER or BUSINESS_OWNER) to authorize a void.',
         );
       }
-      // Validate the supervisor exists in this tenant and has the right role
-      const supervisor = await this.prisma.user.findFirst({
-        where: { id: supervisorId, tenantId },
-        select: { id: true, role: true, name: true },
-      });
-      if (!supervisor) {
-        throw new BadRequestException('Supervisor not found in this business.');
-      }
-      if (!VOID_DIRECT_ROLES.includes(supervisor.role)) {
-        throw new ForbiddenException(
-          `'${supervisor.name}' (${supervisor.role}) does not have void authority. ` +
-          'A SALES_LEAD, BRANCH_MANAGER, or BUSINESS_OWNER must authorize.',
-        );
-      }
-      resolvedManagerId = supervisorId;   // supervisor is the authorizer
+      const supervisor = await this.resolveSupervisorByPin(tenantId, supervisorPin, callerId);
+      resolvedManagerId = supervisor.id;  // supervisor is the authorizer
       initiatorId       = callerId;       // cashier is recorded as initiator
     }
 
@@ -1373,15 +1444,30 @@ export class OrdersService {
     reason:        string;
     refundMethod:  string;
     restock:       boolean;
+    /** The user who rang the refund. The approver is derived from the PIN. */
     refundedById:  string;
     /** Sprint 19 — caller's role for the returns-owner-only gate. */
     callerRole?:   string;
+    /** Supervisor's PIN, required when the caller lacks direct void authority. */
+    supervisorPin?: string;
   }) {
-    const { tenantId, orderId, orderItemId, quantity, reason, refundMethod, restock, refundedById, callerRole } = args;
+    const { tenantId, orderId, orderItemId, quantity, reason, refundMethod, restock, callerRole, supervisorPin } = args;
+    let { refundedById } = args;
 
     // Sprint 19 — Returns/refunds owner-only policy. See void() for context.
     if (callerRole) {
       await this.assertReturnsAllowedForRole(tenantId, callerRole);
+    }
+
+    // SOD: a cashier's refund is attributed to the supervisor whose PIN
+    // actually verified — never to an id supplied by the client.
+    const VOID_DIRECT_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD', 'SUPER_ADMIN'];
+    if (callerRole && !VOID_DIRECT_ROLES.includes(callerRole)) {
+      if (!supervisorPin) {
+        throw new ForbiddenException('A supervisor PIN is required to authorise this refund.');
+      }
+      const supervisor = await this.resolveSupervisorByPin(tenantId, supervisorPin, refundedById);
+      refundedById = supervisor.id;
     }
 
     if (quantity <= 0) throw new BadRequestException('Refund quantity must be positive.');
@@ -1538,7 +1624,12 @@ export class OrdersService {
    * processed in submission order so JE numbering / EOD aggregation isn't
    * scrambled.
    */
-  async bulkSync(tenantId: string, cashierId: string, orders: OfflineOrder[]) {
+  async bulkSync(
+    tenantId: string,
+    cashierId: string,
+    orders: OfflineOrder[],
+    caller: { role?: string | null; customPermissions?: readonly string[] | null } = {},
+  ) {
     const results: Array<{
       clientUuid: string;
       orderId?:   string;
@@ -1551,7 +1642,10 @@ export class OrdersService {
     for (let i = 0; i < orders.length; i++) {
       const order = orders[i];
       try {
-        const created = await this.create(tenantId, cashierId, order);
+        const created = await this.create(tenantId, cashierId, order, {
+          callerRole:              caller.role ?? null,
+          callerCustomPermissions: caller.customPermissions ?? null,
+        });
         results.push({ clientUuid: order.clientUuid!, orderId: created.id, ok: true });
       } catch (err: any) {
         if (firstFailureIndex === null) firstFailureIndex = i;
@@ -1577,6 +1671,60 @@ export class OrdersService {
    * Prevents cross-tenant branch injection in OfflineOrder payloads.
    * Called before any write that accepts branchId from the client.
    */
+  /**
+   * Resolve the supervisor standing behind a void/refund from the PIN they
+   * typed on the cashier's screen.
+   *
+   * Approval used to be a bare `supervisorId` in the request body: the till
+   * verified a PIN at /auth/verify-supervisor-pin and then passed back the
+   * id it received, so the mutation trusted an identifier the client chose.
+   * A cashier could skip the PIN step entirely and send their own id — or a
+   * supervisor id harvested from any earlier voided order (voidedBy is
+   * returned by GET /orders/:id) — and self-authorize a cash refund. Binding
+   * the check to the mutation is what makes the approval mean anything.
+   *
+   * Mirrors the attest flow already used for negative inventory adjustments
+   * (inventory.service.ts). Ambiguous PINs are rejected rather than guessed,
+   * so the audit trail never names the wrong approver.
+   */
+  private async resolveSupervisorByPin(
+    tenantId: string,
+    pin: string,
+    requesterId: string | null,
+  ): Promise<{ id: string; name: string; role: string }> {
+    const cleaned = (pin ?? '').trim();
+    if (!/^\d{4,6}$/.test(cleaned)) {
+      throw new ForbiddenException('Supervisor PIN must be 4-6 digits.');
+    }
+    const SUPERVISOR_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'];
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        tenantId,
+        isActive:          true,
+        role:              { in: SUPERVISOR_ROLES as never },
+        supervisorPinHash: { not: null },
+        // A cashier cannot be their own supervisor, even if they somehow
+        // hold a supervisor PIN.
+        ...(requesterId ? { NOT: { id: requesterId } } : {}),
+      },
+      select: { id: true, name: true, role: true, supervisorPinHash: true },
+    });
+
+    const matches: Array<{ id: string; name: string; role: string }> = [];
+    for (const u of candidates) {
+      if (u.supervisorPinHash && (await bcrypt.compare(cleaned, u.supervisorPinHash))) {
+        matches.push({ id: u.id, name: u.name, role: u.role });
+      }
+    }
+    if (matches.length === 0) throw new ForbiddenException('Supervisor PIN not recognised.');
+    if (matches.length > 1) {
+      throw new ForbiddenException(
+        'That PIN matches more than one supervisor. Have them change it, or sign in directly.',
+      );
+    }
+    return matches[0];
+  }
+
   private async assertBranchBelongsToTenant(tenantId: string, branchId: string): Promise<void> {
     const branch = await this.prisma.branch.findFirst({
       where: { id: branchId, tenantId },

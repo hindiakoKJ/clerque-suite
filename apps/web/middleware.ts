@@ -34,7 +34,10 @@ const APP_RULES: Array<{
 // Public paths — accessible without authentication.
 // /legal/* (privacy policy, terms of service) must be reachable from the
 // unauthenticated login page footer for Data Privacy Act compliance.
-const PUBLIC_PATHS = ['/', '/login', '/select'];
+// /offline is the service worker's fallback page. It must be public and
+// redirect-free: the worker precaches it, and a cached auth redirect would
+// send an offline cashier to a login screen that cannot possibly load.
+const PUBLIC_PATHS = ['/', '/login', '/select', '/offline'];
 // /stub/* — laundry public claim ticket. /stamps/* — Sprint 19 public
 // loyalty stamp card pull-up (QR on printed receipts, SMS links).
 // /payroll/kiosk — Sprint 19 shared clock-in tablet (PIN-based punch);
@@ -204,5 +207,10 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
+  // `manifest.webmanifest` and `sw.js` must stay public: the auth redirect
+  // was swallowing both, so the install metadata never loaded and the service
+  // worker could not be fetched (a redirected script fails registration).
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+  ],
 };

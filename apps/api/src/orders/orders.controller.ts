@@ -40,11 +40,12 @@ interface CreateOrderBody {
 interface VoidOrderBody {
   reason: string;
   /**
-   * Required when the caller role is CASHIER.
-   * Must be the UUID of a SALES_LEAD or BUSINESS_OWNER in the same tenant.
-   * Implements the dual-authorization SOD rule: cashiers cannot self-authorize voids.
+   * Required when the caller role is CASHIER: the PIN of a SALES_LEAD,
+   * BRANCH_MANAGER or BUSINESS_OWNER in the same tenant, verified against
+   * that supervisor's hash inside the service. Implements the
+   * dual-authorization SOD rule — cashiers cannot self-authorize voids.
    */
-  supervisorId?: string;
+  supervisorPin?: string;
 }
 
 interface BulkSyncBody {
@@ -180,6 +181,11 @@ export class OrdersController {
         createdByApiKeyId:   service ? user.apiKeyId : null,
         externalRef:         body.externalRef ?? null,
         enforceServerTotals: service,
+        // SOD: the service checks discount authority against the real caller.
+        // Service principals price through the catalog already, so their
+        // totals are authoritative and the role check does not apply.
+        callerRole:              service ? null : user.role,
+        callerCustomPermissions: service ? null : user.customPermissions,
       },
     );
   }
@@ -188,7 +194,10 @@ export class OrdersController {
   @Post('sync')
   @HttpCode(HttpStatus.OK)
   bulkSync(@CurrentUser() user: JwtPayload, @Body() body: BulkSyncBody) {
-    return this.ordersService.bulkSync(user.tenantId!, user.sub, body.orders);
+    return this.ordersService.bulkSync(user.tenantId!, user.sub, body.orders, {
+      role:              user.role,
+      customPermissions: user.customPermissions,
+    });
   }
 
   /**
@@ -196,8 +205,8 @@ export class OrdersController {
    *
    * SOD Rule — Dual Authorization:
    *   SALES_LEAD / BRANCH_MANAGER / BUSINESS_OWNER → void directly (no co-auth needed).
-   *   CASHIER → must provide `supervisorId` (UUID of a SALES_LEAD or OWNER in same tenant).
-   *             Backend validates the supervisor's role before proceeding.
+   *   CASHIER → must provide `supervisorPin`; the service bcrypt-verifies it
+   *             against supervisors in the tenant and records whoever matched.
    */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Post(':id/void')
@@ -208,7 +217,7 @@ export class OrdersController {
     @Body() body: VoidOrderBody,
   ) {
     return this.ordersService.void(
-      user.tenantId!, id, user.sub, user.role, body.reason, body.supervisorId,
+      user.tenantId!, id, user.sub, user.role, body.reason, body.supervisorPin,
     );
   }
 
@@ -227,17 +236,21 @@ export class OrdersController {
     @Param('orderId') orderId: string,
     @Param('itemId')  itemId:  string,
     @Body() body: {
-      quantity:      number;
-      reason:        string;
-      refundMethod:  string;
-      restock?:      boolean;
-      supervisorId?: string;
+      quantity:       number;
+      reason:         string;
+      refundMethod:   string;
+      restock?:       boolean;
+      supervisorPin?: string;
     },
   ) {
-    // Same SOD as void — cashier must provide supervisorId
+    // Same SOD as void — a cashier needs a supervisor's PIN, verified inside
+    // the service against that supervisor's hash. The old contract took a
+    // `supervisorId` from the body and merely checked it was present, so a
+    // cashier could pass their own id (or one harvested from a previous
+    // void) and self-approve a cash refund.
     const VOID_DIRECT_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD', 'SUPER_ADMIN'];
-    if (!VOID_DIRECT_ROLES.includes(user.role) && !body.supervisorId) {
-      throw new BadRequestException('Cashiers must provide a supervisorId to authorise an item refund.');
+    if (!VOID_DIRECT_ROLES.includes(user.role) && !body.supervisorPin) {
+      throw new BadRequestException('Cashiers must provide a supervisor PIN to authorise an item refund.');
     }
     return this.ordersService.refundItem({
       tenantId:     user.tenantId!,
@@ -247,7 +260,8 @@ export class OrdersController {
       reason:       body.reason,
       refundMethod: body.refundMethod,
       restock:      body.restock ?? true,
-      refundedById: body.supervisorId ?? user.sub,
+      refundedById: user.sub,
+      supervisorPin: body.supervisorPin,
       callerRole:   user.role,
     });
   }

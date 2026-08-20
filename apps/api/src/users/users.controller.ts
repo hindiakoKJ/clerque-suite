@@ -62,7 +62,7 @@ export class UsersController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {
-    return this.usersService.create(user.tenantId!, dto);
+    return this.usersService.create(user.tenantId!, dto, user.role);
   }
 
   // Update user — BUSINESS_OWNER and MDM can edit employee details

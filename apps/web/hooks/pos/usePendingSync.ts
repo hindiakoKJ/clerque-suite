@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { toast } from 'sonner';
 import { db } from '@/lib/pos/db';
-import { syncPendingOrders } from '@/lib/pos/sync';
+import { syncPendingOrders, recoverStrandedOrders } from '@/lib/pos/sync';
 import { useOnlineStatus } from './useOnlineStatus';
 
 export function usePendingSync() {
@@ -28,6 +28,13 @@ export function usePendingSync() {
       setIsSyncing(false);
     }
   }, [isSyncing, pendingCount]);
+
+  // Recover anything left mid-flight by a previous session. A tab closed
+  // during a sync leaves rows durably SYNCING, which no query looks at —
+  // those sales became invisible until this sweep put them back in the queue.
+  useEffect(() => {
+    void recoverStrandedOrders();
+  }, []);
 
   // Auto-sync when connection is restored
   useEffect(() => {

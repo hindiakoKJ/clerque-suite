@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -35,7 +36,7 @@ function makePrismaMock() {
     tenant:      { findUniqueOrThrow: jest.fn(), findUnique: jest.fn().mockResolvedValue({ returnsOwnerOnly: false }) },
     product:     { findMany: jest.fn().mockResolvedValue([]) },
     prescription: { findMany: jest.fn().mockResolvedValue([]) },
-    user:        { findFirst: jest.fn() },
+    user:        { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
     branch:      { findFirst: jest.fn().mockResolvedValue({ id: 'branch-1' }) },
     $transaction: jest.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
       return cb({
@@ -133,8 +134,21 @@ describe('OrdersService — void()', () => {
   // ─── SOD: Cashier dual-authorization ─────────────────────────────────────
 
   describe('SOD dual-authorization', () => {
-    it('throws BadRequestException when CASHIER provides no supervisorId', async () => {
-      prisma.user.findFirst.mockResolvedValue(null); // supervisor lookup — not reached
+    /**
+     * Approval is a supervisor PIN verified against that supervisor's hash
+     * inside the service. It used to be a bare `supervisorId` in the request
+     * body — the role was checked but the identity was not proven, so a
+     * cashier could pass an id harvested from any earlier voided order (or
+     * their own) and self-authorize.
+     */
+    const pinUser = async (over: Partial<{ id: string; name: string; role: string; pin: string }> = {}) => ({
+      id:                over.id   ?? 'lead-1',
+      name:              over.name ?? 'Maria Lead',
+      role:              over.role ?? 'SALES_LEAD',
+      supervisorPinHash: await bcrypt.hash(over.pin ?? '4321', 4),
+    });
+
+    it('throws BadRequestException when CASHIER provides no supervisor PIN', async () => {
       prisma.order.findFirst.mockResolvedValue(completedOrderToday());
 
       await expect(
@@ -142,52 +156,71 @@ describe('OrdersService — void()', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when supervisorId not found in tenant', async () => {
-      prisma.user.findFirst.mockResolvedValue(null); // supervisor not found
+    it('rejects a PIN that matches no supervisor in the tenant', async () => {
+      prisma.user.findMany.mockResolvedValue([await pinUser({ pin: '4321' })]);
       await expect(
-        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer cancelled', 'ghost-id'),
-      ).rejects.toThrow(/not found/i);
-    });
-
-    it('throws ForbiddenException when supervisor role lacks void authority (e.g. CASHIER)', async () => {
-      prisma.user.findFirst.mockResolvedValue({
-        id: 'other-cashier',
-        role: 'CASHIER',
-        name: 'Juan dela Cruz',
-      });
-      await expect(
-        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer cancelled', 'other-cashier'),
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer cancelled', '9999'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('throws ForbiddenException when supervisor is GENERAL_EMPLOYEE', async () => {
-      prisma.user.findFirst.mockResolvedValue({
-        id: 'gen-emp', role: 'GENERAL_EMPLOYEE', name: 'Maria',
-      });
+    it('rejects a malformed PIN without querying users', async () => {
       await expect(
-        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Wrong order', 'gen-emp'),
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer cancelled', 'abc'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+
+    it('SOD: a harvested supervisor id is no longer accepted as authorization', async () => {
+      // The old exploit: read voidedBy.id off a previous void, send it as
+      // supervisorId. That value is not a PIN, so it cannot authorize.
+      prisma.user.findMany.mockResolvedValue([await pinUser()]);
+      await expect(
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', 'lead-1'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('proceeds when CASHIER provides a valid SALES_LEAD supervisorId', async () => {
-      prisma.user.findFirst.mockResolvedValue({
-        id: 'lead-1', role: 'SALES_LEAD', name: 'Maria Lead',
-      });
+    it('excludes the requesting cashier from the supervisor lookup (no self-approval)', async () => {
+      prisma.user.findMany.mockResolvedValue([]);
+      await expect(
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '4321'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prisma.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId: 'tenant-1',
+            NOT:      { id: 'cashier-1' },
+          }),
+        }),
+      );
+    });
+
+    it('rejects an ambiguous PIN shared by two supervisors', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        await pinUser({ id: 'lead-1', pin: '4321' }),
+        await pinUser({ id: 'owner-1', role: 'BUSINESS_OWNER', name: 'Owner', pin: '4321' }),
+      ]);
+      await expect(
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '4321'),
+      ).rejects.toThrow(/more than one supervisor/i);
+    });
+
+    it('proceeds when CASHIER supplies a valid SALES_LEAD PIN', async () => {
+      prisma.user.findMany.mockResolvedValue([await pinUser({ pin: '4321' })]);
       prisma.order.findFirst.mockResolvedValue(completedOrderToday());
 
       await expect(
-        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', 'lead-1'),
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '4321'),
       ).resolves.toBeDefined();
     });
 
-    it('proceeds when CASHIER provides a BUSINESS_OWNER supervisorId', async () => {
-      prisma.user.findFirst.mockResolvedValue({
-        id: 'owner-1', role: 'BUSINESS_OWNER', name: 'Owner',
-      });
+    it('proceeds when CASHIER supplies a valid BUSINESS_OWNER PIN', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        await pinUser({ id: 'owner-1', role: 'BUSINESS_OWNER', name: 'Owner', pin: '1357' }),
+      ]);
       prisma.order.findFirst.mockResolvedValue(completedOrderToday());
 
       await expect(
-        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', 'owner-1'),
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '1357'),
       ).resolves.toBeDefined();
     });
   });
@@ -198,7 +231,7 @@ describe('OrdersService — void()', () => {
     const directRoles = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'];
 
     directRoles.forEach((role) => {
-      it(`${role} can void without supervisorId`, async () => {
+      it(`${role} can void without a supervisor PIN`, async () => {
         prisma.order.findFirst.mockResolvedValue(completedOrderToday());
 
         await expect(
@@ -206,7 +239,7 @@ describe('OrdersService — void()', () => {
         ).resolves.toBeDefined();
 
         // Supervisor lookup should NOT be called for direct-void roles
-        expect(prisma.user.findFirst).not.toHaveBeenCalled();
+        expect(prisma.user.findMany).not.toHaveBeenCalled();
       });
     });
   });

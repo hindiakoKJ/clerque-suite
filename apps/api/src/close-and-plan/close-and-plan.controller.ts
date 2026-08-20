@@ -14,6 +14,8 @@ import {
   Body, Controller, Get, Post, Query, UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
@@ -22,10 +24,15 @@ import { CloseAndPlanService, type ReceiveLineInput } from './close-and-plan.ser
 @ApiTags('close-and-plan')
 @ApiBearerAuth()
 @Controller('close-and-plan')
-@UseGuards(JwtAuthGuard)
+// RolesGuard was missing here, so every route below was reachable by ANY
+// authenticated tenant user regardless of role — including batch-receive,
+// which writes raw-material stock and moves weighted-average cost (and so
+// COGS and margins). Receiving is gated everywhere else; match it.
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class CloseAndPlanController {
   constructor(private svc: CloseAndPlanService) {}
 
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
   @Get('summary')
   summary(
     @CurrentUser() user: JwtPayload,
@@ -35,6 +42,7 @@ export class CloseAndPlanController {
     return this.svc.getDaySummary(user.tenantId!, branchId, date);
   }
 
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
   @Post('check-duplicate')
   @HttpCode(HttpStatus.OK)
   checkDuplicate(
@@ -53,6 +61,7 @@ export class CloseAndPlanController {
     });
   }
 
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF')
   @Post('batch-receive')
   @HttpCode(HttpStatus.OK)
   batchReceive(
@@ -62,6 +71,7 @@ export class CloseAndPlanController {
     return this.svc.batchReceive(user.tenantId!, body.branchId, user.sub, body.lines);
   }
 
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
   @Get('briefing/text')
   async briefingText(
     @CurrentUser() user: JwtPayload,
@@ -78,6 +88,7 @@ export class CloseAndPlanController {
    * or a USB ESC/POS bridge from the web). We don't bundle a printer
    * driver in the API; we just produce bytes.
    */
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
   @Post('briefing/print')
   @HttpCode(HttpStatus.OK)
   async briefingPrint(

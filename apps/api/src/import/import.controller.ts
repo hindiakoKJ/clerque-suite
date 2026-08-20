@@ -100,6 +100,11 @@ export class ImportController {
 
   // ── Chart of Accounts ─────────────────────────────────────────────────────
   // Full-accounting only — the chart of accounts is a FULL-tier surface.
+  // Posting double-entry directly (POST /journal) is restricted to
+  // BUSINESS_OWNER + ACCOUNTANT. Importing is the same act in bulk, so it
+  // must not be the wider door: the class-level list would otherwise let a
+  // BRANCH_MANAGER/MDM/FINANCE_LEAD post entries they cannot post by hand.
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT')
   @Post('chart-of-accounts')
   @RequireApp('LEDGER', 'READ_ONLY')
   @RequirePlanFeature('advancedAccounting')
@@ -128,6 +133,11 @@ export class ImportController {
   // Full-accounting only: importing journal entries would otherwise let a
   // SIMPLE-tier (Solo Books) tenant post arbitrary double-entry and bypass the
   // advancedAccounting lock that guards the Journal screens/API.
+  // Posting double-entry directly (POST /journal) is restricted to
+  // BUSINESS_OWNER + ACCOUNTANT. Importing is the same act in bulk, so it
+  // must not be the wider door: the class-level list would otherwise let a
+  // BRANCH_MANAGER/MDM/FINANCE_LEAD post entries they cannot post by hand.
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT')
   @Post('journal-entries')
   @RequireApp('LEDGER', 'READ_ONLY')
   @RequirePlanFeature('advancedAccounting')

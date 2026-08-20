@@ -112,7 +112,20 @@ export class UsersService {
 
   // ─── Create staff user ────────────────────────────────────────────────────
 
-  async create(tenantId: string, dto: CreateUserDto) {
+  async create(tenantId: string, dto: CreateUserDto, callerRole?: string) {
+    // Same wall as update(): POST /users admits MDM, so without this an MDM
+    // could create a second BUSINESS_OWNER account (with a password they
+    // choose) and log straight into it.
+    if (
+      dto.role === 'BUSINESS_OWNER' &&
+      callerRole !== 'BUSINESS_OWNER' &&
+      callerRole !== 'SUPER_ADMIN'
+    ) {
+      throw new ForbiddenException(
+        'Only the Business Owner can create a Business Owner account.',
+      );
+    }
+
     // Check email uniqueness within tenant
     const existing = await this.prisma.user.findFirst({
       where: { tenantId, email: dto.email },
@@ -262,6 +275,51 @@ export class UsersService {
           code:    'DUPLICATE_KIOSK_PIN',
           message: `PIN already used by ${pinTaken.name}. Choose a different PIN.`,
         });
+      }
+    }
+
+    // ── Caller-authority wall ────────────────────────────────────────────
+    // PATCH /users/:id is open to BUSINESS_OWNER *and* MDM (MDM manages staff
+    // records). Without these checks an MDM could simply PATCH their own row
+    // with { role: 'BUSINESS_OWNER' } and take over the tenant: nothing below
+    // compares the caller against what is being granted, and the SOD engine
+    // exempts an owner target outright (detectViolations returns [] for
+    // BUSINESS_OWNER), so it waves the escalation straight through.
+    //
+    // Rules: only an owner may mint another owner, edit an owner, or hand out
+    // custom permissions / SOD overrides; and nobody may edit their own
+    // role or permissions (self-approval).
+    const isOwnerCaller = callerRole === 'BUSINESS_OWNER' || callerRole === 'SUPER_ADMIN';
+
+    if (!isOwnerCaller) {
+      if (dto.role === 'BUSINESS_OWNER') {
+        throw new ForbiddenException(
+          'Only the Business Owner can grant the Business Owner role.',
+        );
+      }
+      if (dto.customPermissions !== undefined || dto.sodOverrides !== undefined) {
+        throw new ForbiddenException(
+          'Only the Business Owner can change permissions or SOD overrides.',
+        );
+      }
+      const target = await this.prisma.user.findFirst({
+        where:  { id, tenantId },
+        select: { role: true },
+      });
+      if (target?.role === 'BUSINESS_OWNER') {
+        throw new ForbiddenException('Only the Business Owner can edit the owner account.');
+      }
+    }
+
+    if (callerId && callerId === id) {
+      const selfEscalating =
+        dto.role !== undefined ||
+        dto.customPermissions !== undefined ||
+        dto.sodOverrides !== undefined;
+      if (selfEscalating) {
+        throw new ForbiddenException(
+          'You cannot change your own role or permissions. Ask another authorized user.',
+        );
       }
     }
 

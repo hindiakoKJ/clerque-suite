@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono, Inter, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
+import { ServiceWorkerRegistrar } from '@/components/shared/ServiceWorkerRegistrar';
 import { DemoBanner } from '@/components/demo/DemoBanner';
 import { DemoErrorBoundary } from '@/components/demo/DemoErrorBoundary';
 
@@ -47,6 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} ${inter.variable} ${jakarta.variable} ${jetbrainsMono.variable} font-sans bg-background text-foreground`}>
         <Providers>
+          <ServiceWorkerRegistrar />
           <DemoBanner />
           <DemoErrorBoundary>{children}</DemoErrorBoundary>
         </Providers>

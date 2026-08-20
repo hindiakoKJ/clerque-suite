@@ -71,7 +71,7 @@ function makePrismaMock() {
       create:     jest.fn(),
     },
     orderItem:   { findMany: jest.fn().mockResolvedValue([]) },
-    user:        { findFirst: jest.fn(), count: jest.fn() },
+    user:        { findFirst: jest.fn(), count: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
     branch:      { findFirst: jest.fn() },
     shift:       {
       findFirst:  shiftFindFirst,
@@ -417,27 +417,25 @@ describe('SECURITY — OrdersService: Cross-Tenant Attack Vectors', () => {
   // ── Cross-tenant supervisor in void ────────────────────────────────────────
 
   describe('ATTACK: Cross-Tenant Supervisor in Void', () => {
-    it('rejects void when supervisorId belongs to a different tenant', async () => {
-      // CASHIER provides USER_B (Tenant B's manager) as supervisor.
-      // Service looks up: findFirst({ where: { id: USER_B, tenantId: TENANT_A } })
-      // → returns null (USER_B is not in Tenant A) → BadRequestException.
-      prisma.user.findFirst.mockResolvedValue(null); // cross-tenant → not found
+    it("rejects void when the PIN belongs to another tenant's supervisor", async () => {
+      // Candidates are queried scoped to TENANT_A, so Tenant B's supervisor
+      // is never a candidate and their PIN cannot authorize here.
+      (prisma.user.findMany as jest.Mock).mockResolvedValue([]);
 
       await expect(
-        ordersService.void(TENANT_A, ORDER_A, USER_A, 'CASHIER', 'refund', USER_B),
-      ).rejects.toThrow(BadRequestException);
+        ordersService.void(TENANT_A, ORDER_A, USER_A, 'CASHIER', 'refund', '4321'),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('supervisor lookup is always scoped to the requesting tenant', async () => {
-      // Verify the WHERE clause contains tenantId (not just userId)
-      const findFirstSpy = prisma.user.findFirst as jest.Mock;
-      findFirstSpy.mockResolvedValue(null);
+      const findManySpy = prisma.user.findMany as jest.Mock;
+      findManySpy.mockResolvedValue([]);
 
       try {
-        await ordersService.void(TENANT_A, ORDER_A, USER_A, 'CASHIER', 'test', USER_B);
+        await ordersService.void(TENANT_A, ORDER_A, USER_A, 'CASHIER', 'test', '4321');
       } catch {}
 
-      expect(findFirstSpy).toHaveBeenCalledWith(
+      expect(findManySpy).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ tenantId: TENANT_A }),
         }),

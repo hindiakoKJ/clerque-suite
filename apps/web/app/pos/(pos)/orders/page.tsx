@@ -131,23 +131,13 @@ export default function OrdersPage() {
     }
     setRefunding(true);
     try {
-      let supervisorId: string | undefined;
-      if (needsSupervisorPin) {
-        try {
-          const { data } = await api.post('/auth/verify-supervisor-pin', { pin: refundPin.trim() });
-          supervisorId = data.userId;
-        } catch (e: unknown) {
-          const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
-          toast.error(msg ?? 'Supervisor PIN rejected.');
-          return;
-        }
-      }
+      // The PIN travels with the refund itself — see handleVoid.
       await api.post(`/orders/${refundCtx.order.id}/items/${refundCtx.item.id}/refund`, {
-        quantity:     qty,
-        reason:       refundReason.trim(),
+        quantity:      qty,
+        reason:        refundReason.trim(),
         refundMethod,
-        restock:      refundRestock,
-        supervisorId,
+        restock:       refundRestock,
+        supervisorPin: needsSupervisorPin ? refundPin.trim() : undefined,
       });
       toast.success(`Refunded ${qty} of ${refundCtx.item.productName}.`);
       qc.invalidateQueries({ queryKey: ['orders'] });
@@ -170,32 +160,15 @@ export default function OrdersPage() {
     }
     setVoiding(true);
     try {
-      let supervisorId: string | undefined;
-      let supervisorName: string | undefined;
-
-      // Cashier path: verify the supervisor's PIN first to get their userId,
-      // then attach to the void call. The backend re-validates everything.
-      if (needsSupervisorPin) {
-        try {
-          const { data } = await api.post('/auth/verify-supervisor-pin', { pin: voidPin.trim() });
-          supervisorId   = data.userId;
-          supervisorName = data.name;
-        } catch (e: unknown) {
-          const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
-          toast.error(msg ?? 'Supervisor PIN rejected.');
-          return;
-        }
-      }
-
+      // Cashier path: send the supervisor's PIN with the void itself. It used
+      // to be exchanged for a userId first, which meant the void endpoint
+      // trusted an id the client chose — a cashier could skip the PIN and
+      // pass a supervisor id read off any earlier voided order.
       await api.post(`/orders/${voidModal.id}/void`, {
-        reason:       voidReason.trim(),
-        supervisorId,
+        reason:        voidReason.trim(),
+        supervisorPin: needsSupervisorPin ? voidPin.trim() : undefined,
       });
-      toast.success(
-        supervisorName
-          ? `Order ${voidModal.orderNumber} voided — authorised by ${supervisorName}.`
-          : `Order ${voidModal.orderNumber} voided.`,
-      );
+      toast.success(`Order ${voidModal.orderNumber} voided.`);
       qc.invalidateQueries({ queryKey: ['orders'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
       qc.invalidateQueries({ queryKey: ['products-pos'] });

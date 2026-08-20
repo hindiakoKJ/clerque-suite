@@ -20,6 +20,10 @@ interface AuditRecord {
   before:      Record<string, unknown> | null;
   after:       Record<string, unknown> | null;
   performedBy: string | null;
+  /** Resolved server-side so the table can name the person, not an id. */
+  performedByName?:  string | null;
+  performedByRole?:  string | null;
+  performedByEmail?: string | null;
   ipAddress:   string | null;
   createdAt:   string;
   /**
@@ -213,6 +217,7 @@ export default function AuditLogPage() {
                       <th className="w-6 px-4 py-3" />
                       <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">When</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Action</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Who</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Entity</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Description</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">IP</th>
@@ -257,6 +262,26 @@ export default function AuditLogPage() {
                                 )}
                               </div>
                             </td>
+                            <td className="px-4 py-3 text-xs whitespace-nowrap">
+                              {isPlatform ? (
+                                <span className="inline-flex items-center gap-1 font-medium text-blue-600 dark:text-blue-400">
+                                  <UserIcon className="h-3 w-3" />
+                                  Platform Admin
+                                </span>
+                              ) : rec.performedByName ? (
+                                <span className="inline-flex items-center gap-1">
+                                  <UserIcon className="h-3 w-3 text-muted-foreground" />
+                                  <span className="font-medium text-foreground">{rec.performedByName}</span>
+                                  {rec.performedByRole && (
+                                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                                      {rec.performedByRole.replace(/_/g, ' ')}
+                                    </span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">System</span>
+                              )}
+                            </td>
                             <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
                               <span className="font-medium text-foreground">{rec.entityType}</span>
                               <span className="ml-1 font-mono text-[10px] opacity-60 truncate max-w-[80px] inline-block align-bottom">
@@ -265,12 +290,6 @@ export default function AuditLogPage() {
                             </td>
                             <td className="px-4 py-3 text-xs text-muted-foreground max-w-[240px] truncate">
                               {rec.description ?? '—'}
-                              {isPlatform && rec.performedBy && (
-                                <span className="ml-1 inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
-                                  <UserIcon className="h-2.5 w-2.5" />
-                                  {rec.performedBy}
-                                </span>
-                              )}
                             </td>
                             <td className="px-4 py-3 text-xs font-mono text-muted-foreground">
                               {rec.ipAddress ?? '—'}

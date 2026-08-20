@@ -24,6 +24,10 @@ export interface NormalisedAuditEntry {
   after:        unknown;
   description:  string | null;
   performedBy:  string | null;
+  /** Display name of the actor, resolved from performedBy at read time. */
+  performedByName?:  string | null;
+  performedByRole?:  string | null;
+  performedByEmail?: string | null;
   ipAddress:    string | null;
   createdAt:    Date;
   /** Distinguishes tenant-staff actions ('TENANT') from platform-side actions ('PLATFORM'). */
@@ -188,21 +192,34 @@ export class AuditService {
     // action enum values.
     const includePlatform = !action && !entityType;
 
-    const [tenantRecords, platformRecords] = await Promise.all([
+    // Two sources have to be interleaved by time, so an exact SQL OFFSET is
+    // not possible. Previously this pulled a fixed 150 rows and paginated
+    // THAT — so `total` was capped at 150 and no page past the third existed,
+    // silently hiding the entire older history from the owner (and from the
+    // xlsx export, which pages through this same method).
+    //
+    // Instead: take enough from each source to cover the requested page, and
+    // count each source for a true total. Cost grows with page depth, which
+    // is fine for an audit log people read from the top and filter.
+    const need = skip + take;
+
+    const [tenantRecords, platformRecords, tenantTotal, platformTotal] = await Promise.all([
       this.prisma.auditLog.findMany({
         where: tenantWhere,
         orderBy: { createdAt: 'desc' },
-        // Pull a generous batch then merge + paginate; we don't know yet
-        // how many ConsoleLog entries to interleave.
-        take: take * 3,
+        take: need,
       }),
       includePlatform
         ? this.prisma.consoleLog.findMany({
             where: { tenantId },
             orderBy: { createdAt: 'desc' },
-            take: take * 3,
+            take: need,
           })
         : Promise.resolve([] as Array<unknown>),
+      this.prisma.auditLog.count({ where: tenantWhere }),
+      includePlatform
+        ? this.prisma.consoleLog.count({ where: { tenantId } })
+        : Promise.resolve(0),
     ]);
 
     const normalised: NormalisedAuditEntry[] = [
@@ -247,8 +264,41 @@ export class AuditService {
       }))),
     ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
-    const total = normalised.length;
+    const total = tenantTotal + platformTotal;
     const paginated = normalised.slice(skip, skip + take);
+
+    // Resolve the actor id into a name the owner can recognise. Without this
+    // the log answers "an order was voided at 2:14 PM" but never "by whom" —
+    // the id was returned raw and the screen simply did not render it, which
+    // made the audit log useless as a staff-accountability tool. Only the ids
+    // on this page are looked up, so paging stays cheap.
+    const actorIds = [
+      ...new Set(
+        paginated
+          .filter((e) => e.source === 'TENANT' && e.performedBy)
+          .map((e) => e.performedBy as string),
+      ),
+    ];
+    if (actorIds.length) {
+      const actors = await this.prisma.user.findMany({
+        where:  { id: { in: actorIds }, tenantId },
+        select: { id: true, name: true, email: true, role: true },
+      });
+      const byId = new Map(actors.map((u) => [u.id, u]));
+      for (const e of paginated) {
+        if (e.source !== 'TENANT' || !e.performedBy) continue;
+        const u = byId.get(e.performedBy);
+        if (u) {
+          e.performedByName  = u.name || u.email;
+          e.performedByRole  = u.role;
+          e.performedByEmail = u.email;
+        } else {
+          // Deleted staff, or a system-generated row. Say so rather than
+          // showing a bare id the owner cannot interpret.
+          e.performedByName = 'Removed user';
+        }
+      }
+    }
 
     return {
       data:  paginated,

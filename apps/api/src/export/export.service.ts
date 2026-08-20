@@ -41,6 +41,25 @@ const ROW_FILL_A: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: {
 const HEADER_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F5F3' } };
 
 function applyHeaderStyle(row: ExcelJS.Row) {
+  const ws = row.worksheet;
+  // exceljs's `ws.columns = [{header,...}]` setter writes every header into
+  // ROW 1 — which writeReportHeader has already merged into the title cell —
+  // so the title gets overwritten by the last header and the intended header
+  // row stays empty. Write the headers into this row and restore the title.
+  // Sheets that write their header cells by hand (BIR 2307) already have
+  // values here and are left untouched.
+  if (row.actualCellCount === 0) {
+    const headers = (ws.columns ?? []).map((c) => (c?.header as string) ?? '');
+    if (headers.some(Boolean)) row.values = headers;
+  }
+  const title = (ws as { __reportTitle?: string }).__reportTitle;
+  if (title) {
+    ws.getCell('A1').value = title;
+    // Clear stray header values that landed in row 1 beyond the merged title.
+    ws.getRow(1).eachCell({ includeEmpty: false }, (cell, col) => {
+      if (col > 1 && cell.master === cell) cell.value = null;
+    });
+  }
   row.font = { bold: true };
   row.fill = HEADER_FILL;
   row.border = {
@@ -85,6 +104,9 @@ function writeReportHeader(
   ws.mergeCells(`A1:${lastCol}1`);
   const titleCell = ws.getCell('A1');
   titleCell.value = `${tenantName} — ${title}`;
+  // Stash for applyHeaderStyle, which restores the title after the
+  // `ws.columns` setter has stomped on row 1 (see applyHeaderStyle).
+  (ws as { __reportTitle?: string }).__reportTitle = `${tenantName} — ${title}`;
   titleCell.font  = { bold: true, size: 14 };
   titleCell.alignment = { horizontal: 'center' };
 

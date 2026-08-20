@@ -596,6 +596,46 @@ export class ProductsService {
       orderBy: [{ category: { sortOrder: 'asc' } }, { name: 'asc' }],
     });
 
+    // Merge CATEGORY-BOUND modifier groups into each product's modifierGroups.
+    // A group with categoryId set "auto-applies to every product in the
+    // category" (see ModifierGroup.categoryId doc) — the management modal's
+    // merged endpoint (/modifiers/products/:id/groups) honoured that, but this
+    // catalog payload only carried the per-product junction rows, so the till
+    // never opened the Customize dialog for category-managed groups (e.g. a
+    // Size group bound to "Hot Coffee"). Found in live end-to-end testing.
+    const categoryIds = [...new Set(products.map((p) => p.categoryId).filter((x): x is string => !!x))];
+    const catGroups = categoryIds.length
+      ? await this.prisma.modifierGroup.findMany({
+          where:   { tenantId, isActive: true, categoryId: { in: categoryIds } },
+          include: { options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' } } },
+          orderBy: { sortOrder: 'asc' },
+        })
+      : [];
+    const catGroupsByCategory = new Map<string, typeof catGroups>();
+    for (const g of catGroups) {
+      const list = catGroupsByCategory.get(g.categoryId!) ?? [];
+      list.push(g);
+      catGroupsByCategory.set(g.categoryId!, list);
+    }
+    for (const p of products) {
+      const extra = p.categoryId ? (catGroupsByCategory.get(p.categoryId) ?? []) : [];
+      if (!extra.length) continue;
+      const attached = new Set(p.modifierGroups.map((mg) => mg.modifierGroupId));
+      for (const g of extra) {
+        if (attached.has(g.id)) continue;  // product-attached wins, no dupes
+        p.modifierGroups.push({
+          // Pseudo-junction row in the exact shape the include produces —
+          // the web ProductGrid and the Counter read { modifierGroupId,
+          // sortOrder, modifierGroup: { ...group, options } }.
+          id:              `cat-${g.id}-${p.id}`,
+          productId:       p.id,
+          modifierGroupId: g.id,
+          sortOrder:       g.sortOrder ?? 0,
+          modifierGroup:   g,
+        } as (typeof p.modifierGroups)[number]);
+      }
+    }
+
     // Collect every raw-material id referenced by any recipe in one query
     const allRawMaterialIds = new Set<string>();
     for (const p of products) {

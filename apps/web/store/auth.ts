@@ -56,9 +56,15 @@ export const useAuthStore = create<AuthState>()(
         user: state.user,
       }),
       // On reload the user is restored from localStorage without going through
-      // setUser, so re-apply the tenant display currency here too.
+      // setUser, so re-apply everything setUser derives. The tax flags are the
+      // critical one: without this the cart store kept its safe default
+      // 'UNREGISTERED' after ANY page refresh, so a VAT tenant's terminal
+      // showed "Unregistered", computed vatAmount 0 on every line, and posted
+      // sales with NO output VAT (assertVatConsistency only rejects the
+      // opposite direction). Found in live end-to-end testing 2026-08-20.
       onRehydrateStorage: () => (state) => {
         setDisplayCurrency(state?.user?.currency ?? 'PHP');
+        useCartStore.getState().setTenantFlags(state?.user?.taxStatus ?? 'UNREGISTERED');
       },
     },
   ),

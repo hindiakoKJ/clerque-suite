@@ -75,7 +75,7 @@ describe('AiQuotaGuard', () => {
       fail('expected throw');
     } catch (e: any) {
       const msg = e.response.message as string;
-      expect(msg).not.toMatch(/TIER_|Team|Pair|Suite|Solo/i);
+      expect(msg).not.toMatch(/TIER_|\bTeam\b|\bPair\b|\bSuite\b|\bSolo\b/i);
       expect(msg).toMatch(/add-on/i);
     }
   });

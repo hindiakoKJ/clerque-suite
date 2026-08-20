@@ -17,6 +17,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Download, Package, Boxes, Users as UsersIcon, Truck,
   FileSpreadsheet, Loader2, BookOpen, Scroll, Box, Info, Sprout, ChefHat,
+  Upload, CheckCircle2, AlertTriangle, ArrowRightLeft,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -51,6 +52,21 @@ interface TemplateInfo {
   filename:  string;
   Icon:      typeof Package;
   highlight?: boolean;
+  /**
+   * POST route that accepts the filled-in workbook. Templates whose data is
+   * seeded elsewhere (the bundled Setup Pack) leave this unset and stay
+   * download-only.
+   */
+  upload?:   string;
+}
+
+/** Shape every importer returns. Fields it doesn't use simply stay 0. */
+interface ImportResult {
+  created?:  number;
+  updated?:  number;
+  skipped?:  number;
+  imported?: number;
+  errors?:   Array<{ row?: number; message?: string } | string>;
 }
 
 export default function ImportTemplatesPage() {
@@ -82,6 +98,40 @@ export default function ImportTemplatesPage() {
     : false;
 
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [uploading, setUploading]     = useState<string | null>(null);
+  const [results, setResults]         = useState<Record<string, ImportResult | { failed: string }>>({});
+
+  /**
+   * Upload a filled-in template straight from this page.
+   *
+   * Ingredients and Recipes have importer endpoints but no module screen of
+   * their own, so before this there was nowhere in the product to actually
+   * send them — the page told you to "use the Import button on each module's
+   * page" and for those two no such button existed. Recipe COGS was therefore
+   * effectively unreachable without API access.
+   */
+  async function uploadFilled(t: TemplateInfo, file: File) {
+    if (!t.upload) return;
+    setUploading(t.id);
+    setResults((r) => ({ ...r, [t.id]: undefined as unknown as ImportResult }));
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const { data } = await api.post<ImportResult>(t.upload, form);
+      setResults((r) => ({ ...r, [t.id]: data ?? {} }));
+      const created = data?.created ?? data?.imported ?? 0;
+      const updated = data?.updated ?? 0;
+      const errs    = data?.errors?.length ?? 0;
+      if (errs > 0) toast.warning(`${t.name}: ${created} added, ${updated} updated, ${errs} row(s) need attention.`);
+      else toast.success(`${t.name}: ${created} added, ${updated} updated.`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.message ?? 'Upload failed.';
+      setResults((r) => ({ ...r, [t.id]: { failed: Array.isArray(msg) ? msg.join(' ') : String(msg) } }));
+      toast.error(Array.isArray(msg) ? msg.join(' ') : String(msg));
+    } finally {
+      setUploading(null);
+    }
+  }
 
   async function downloadTemplate(t: TemplateInfo) {
     setDownloading(t.id);
@@ -108,6 +158,19 @@ export default function ImportTemplatesPage() {
 
   const templates: TemplateInfo[] = [
     {
+      id: 'loyverse',
+      name: 'Coming from Loyverse? Migrate your catalog',
+      desc:
+        'Upload the "Item list" export straight from Loyverse (Back office → Items → Export) — no retyping and no reformatting. ' +
+        'Columns are matched automatically, size/variant items become separate products, and stock on hand is carried over. ' +
+        'Download gives you a sample export showing the columns we read.',
+      endpoint: '/import/template/loyverse',
+      filename: 'clerque-loyverse-sample.xlsx',
+      upload:   '/import/loyverse',
+      Icon: ArrowRightLeft,
+      highlight: true,
+    },
+    {
       id: 'setup-pack',
       name: 'Business Setup Pack (all-in-one)',
       desc: 'Bundled workbook with Products + Inventory + Customers + Vendors + Chart of Accounts in one file. Best for first-time setup.',
@@ -125,6 +188,7 @@ export default function ImportTemplatesPage() {
           ? `Menu items / SKUs tailored to ${verticalLabel}. For recipe-based COGS (drinks, dishes, fabricated goods), use the Ingredients + Recipes templates AFTER this — Cost Price here is a fallback used only when no recipe exists.`
           : `7-column lean template tailored to ${verticalLabel}. Sample rows show the kind of items in your catalog.`,
       endpoint: '/import/template/products',
+      upload:   '/import/products',
       filename: `clerque-products-${(businessType ?? 'general').toLowerCase()}.xlsx`,
       Icon: Package,
     },
@@ -134,6 +198,7 @@ export default function ImportTemplatesPage() {
         name: 'Ingredients (Raw Materials)',
         desc: `For recipe-based COGS. Define every raw material your products are made from (espresso beans, milk, rice, sauce…) with cost per unit. Required before importing Recipes.`,
         endpoint: '/import/template/ingredients',
+      upload:   '/import/ingredients',
         filename: 'clerque-ingredients.xlsx',
         Icon: Sprout,
       },
@@ -142,6 +207,7 @@ export default function ImportTemplatesPage() {
         name: 'Recipes (BOM)',
         desc: `One row per ingredient × product. Maps your menu items to ingredients with quantities — Iced Latte 16oz = 18g beans + 200ml milk + 1 cup + 1 lid + 1 stirrer. Auto-flips matched products to RECIPE_BASED so COGS is derived live from ingredients × WAC.`,
         endpoint: '/import/template/recipes',
+      upload:   '/import/recipes',
         filename: 'clerque-recipes.xlsx',
         Icon: ChefHat,
       },
@@ -151,6 +217,7 @@ export default function ImportTemplatesPage() {
       name: 'Inventory (opening stock)',
       desc: 'Per-branch opening stock for each product. Use after the Products import to seed the first stock count at every branch.',
       endpoint: '/import/template/inventory',
+      upload:   '/import/inventory',
       filename: 'clerque-inventory.xlsx',
       Icon: Boxes,
     },
@@ -159,6 +226,7 @@ export default function ImportTemplatesPage() {
       name: 'Customers',
       desc: 'Customer master (AR sub-ledger). Includes credit terms, credit limits, and contact details for B2B / charge-account billing.',
       endpoint: '/import/template/customers',
+      upload:   '/import/customers',
       filename: 'clerque-customers.xlsx',
       Icon: UsersIcon,
     },
@@ -167,6 +235,7 @@ export default function ImportTemplatesPage() {
       name: 'Vendors / Suppliers',
       desc: 'Vendor master (AP). Captures BIR TIN, default WHT rate, ATC code, and credit terms — drives input VAT + 2306 workflows.',
       endpoint: '/import/template/vendors',
+      upload:   '/import/vendors',
       filename: 'clerque-vendors.xlsx',
       Icon: Truck,
     },
@@ -175,6 +244,7 @@ export default function ImportTemplatesPage() {
       name: 'Stock Receipts (incoming deliveries)',
       desc: 'Bulk-load past supplier deliveries with lot + expiry. Posts to inventory + creates lots. Useful when migrating from another system.',
       endpoint: '/import/template/stock-receipts',
+      upload:   '/import/stock-receipts',
       filename: 'clerque-stock-receipts.xlsx',
       Icon: FileSpreadsheet,
     },
@@ -183,6 +253,7 @@ export default function ImportTemplatesPage() {
       name: 'Chart of Accounts',
       desc: 'GL account list (PFRS-for-SMEs aligned). Customize the default chart for your business — most owners can skip this one.',
       endpoint: '/import/template/chart-of-accounts',
+      upload:   '/import/chart-of-accounts',
       filename: 'clerque-coa.xlsx',
       Icon: BookOpen,
     },
@@ -191,6 +262,7 @@ export default function ImportTemplatesPage() {
       name: 'Journal Entries',
       desc: 'Bulk-load opening balances or migration entries. Each row is one debit or credit line; entries are matched by reference number.',
       endpoint: '/import/template/journal-entries',
+      upload:   '/import/journal-entries',
       filename: 'clerque-journal-entries.xlsx',
       Icon: Scroll,
     },
@@ -255,16 +327,76 @@ export default function ImportTemplatesPage() {
                 <div className="text-xs text-muted-foreground mt-1">{t.desc}</div>
               </div>
             </div>
-            <button
-              onClick={() => downloadTemplate(t)}
-              disabled={downloading === t.id}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50 shrink-0"
-            >
-              {downloading === t.id
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <Download className="h-4 w-4" />}
-              {downloading === t.id ? 'Downloading…' : '.xlsx'}
-            </button>
+            <div className="flex flex-col items-end gap-2 shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => downloadTemplate(t)}
+                  disabled={downloading === t.id}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
+                >
+                  {downloading === t.id
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <Download className="h-4 w-4" />}
+                  {downloading === t.id ? 'Downloading…' : '.xlsx'}
+                </button>
+
+                {t.upload && (
+                  <label
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm cursor-pointer ${
+                      uploading === t.id
+                        ? 'opacity-50 cursor-wait border-border'
+                        : 'border-[var(--accent)]/50 text-[var(--accent)] hover:bg-[var(--accent-soft)]'
+                    }`}
+                  >
+                    {uploading === t.id
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Upload className="h-4 w-4" />}
+                    {uploading === t.id ? 'Importing…' : 'Import'}
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      className="hidden"
+                      disabled={uploading === t.id}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        // Reset so re-picking the same file still fires onChange.
+                        e.target.value = '';
+                        if (f) void uploadFilled(t, f);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+
+              {results[t.id] && (
+                'failed' in (results[t.id] as { failed?: string })
+                  ? (
+                    <div className="flex items-start gap-1.5 text-xs text-red-600 max-w-[16rem] text-right">
+                      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>{(results[t.id] as { failed: string }).failed}</span>
+                    </div>
+                  )
+                  : (() => {
+                    const r = results[t.id] as ImportResult;
+                    const created = r.created ?? r.imported ?? 0;
+                    const updated = r.updated ?? 0;
+                    const skipped = r.skipped ?? 0;
+                    const errs    = r.errors?.length ?? 0;
+                    return (
+                      <div className={`flex items-start gap-1.5 text-xs ${errs ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {errs
+                          ? <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          : <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />}
+                        <span>
+                          {created} added · {updated} updated
+                          {skipped ? ` · ${skipped} skipped` : ''}
+                          {errs ? ` · ${errs} error${errs === 1 ? '' : 's'}` : ''}
+                        </span>
+                      </div>
+                    );
+                  })()
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -278,8 +410,10 @@ export default function ImportTemplatesPage() {
         </p>
         <p>
           Each template has a Read Me / Instructions section at the top of the sheet. Open the
-          .xlsx in Excel or Google Sheets, fill the rows below the headers, and upload via the
-          matching Import button on each module&apos;s page.
+          .xlsx in Excel or Google Sheets, fill the rows below the headers, then press
+          <strong className="text-foreground"> Import</strong> on the same row to upload it back
+          here. Sample rows (prefixed <code>SAMPLE -</code>) are skipped automatically, so you can
+          leave them in place.
         </p>
         <p>
           <strong className="text-foreground">Existing products / customers / vendors / ingredients are updated, not duplicated</strong> — the importer

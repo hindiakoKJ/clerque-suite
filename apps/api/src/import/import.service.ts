@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { mapLoyverseItems, looksLikeLoyverse } from './loyverse.mapper';
 
 export interface ImportResult {
   imported: number;
@@ -813,6 +814,68 @@ export class ImportService {
 
   // ── Inventory Import ────────────────────────────────────────────────────────
   // Expected columns: Product Name* OR Barcode*, Quantity*, Low Stock Alert
+  /**
+   * Migrate a Loyverse "Item list" export straight into Clerque.
+   *
+   * The export is translated into our own template row shapes and then run
+   * through the SAME importers the templates use, so a migrated catalog gets
+   * identical validation, category upsert and name/barcode matching. Nothing
+   * about the Loyverse file is trusted beyond its column headers.
+   *
+   * Products are always imported. Opening stock is imported too when the
+   * export carried per-store stock columns and the caller named a branch.
+   */
+  async importLoyverse(
+    file: Express.Multer.File,
+    tenantId: string,
+    branchId?: string,
+  ): Promise<
+    ImportResult & {
+      inventory?: ImportResult;
+      storesDetected: string[];
+      unmappedHeaders: string[];
+      variantsExpanded: number;
+    }
+  > {
+    const rows = await this.parseFile(file);
+
+    let mapped;
+    try {
+      mapped = mapLoyverseItems(rows);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'Could not read this Loyverse export.',
+      );
+    }
+
+    if (mapped.productRows.length <= 1) {
+      throw new BadRequestException(
+        looksLikeLoyverse(rows)
+          ? 'This looks like a Loyverse export but no item rows were found below the header.'
+          : 'No items found. Export "Item list" from Loyverse (Back office > Items > Export) and upload that file unchanged.',
+      );
+    }
+
+    const productResult = await this.importProductsFromRows(mapped.productRows, tenantId);
+
+    let inventory: ImportResult | undefined;
+    if (branchId && mapped.inventoryRows.length > 1) {
+      inventory = await this.importInventoryFromRows(
+        mapped.inventoryRows,
+        tenantId,
+        branchId,
+      );
+    }
+
+    return {
+      ...productResult,
+      inventory,
+      storesDetected:   mapped.storesDetected,
+      unmappedHeaders:  mapped.unmappedHeaders,
+      variantsExpanded: mapped.variantsExpanded,
+    };
+  }
+
   async importInventory(
     file: Express.Multer.File,
     tenantId: string,
@@ -1746,6 +1809,53 @@ export class ImportService {
     return result;
   }
 
+  /**
+   * A worked example of the Loyverse "Item list" export, showing exactly which
+   * columns we read. Owners who still have their Loyverse account should
+   * upload their REAL export rather than filling this in — this exists so they
+   * can see the expected shape, and so a shop without Loyverse access can hand
+   * the same columns over by typing them.
+   *
+   * Sample rows are prefixed and skipped on import like every other template.
+   */
+  async loyverseTemplate(): Promise<Buffer> {
+    return this.makeTemplate(
+      'Loyverse Item List',
+      [
+        'Item Name', 'Category', 'SKU', 'Barcode', 'Description',
+        'Option1 Name', 'Option1 Value', 'Track stock',
+        'Cost', 'Price', 'Price Main Store', 'In stock Main Store',
+      ],
+      [
+        ['Cafe Latte', 'Hot Coffee', '10001', '4801234567890', 'House blend', 'Size', 'Small', 'Y', '18.50', '', '120', '25'],
+        ['Cafe Latte', 'Hot Coffee', '10002', '4801234567891', 'House blend', 'Size', 'Large', 'Y', '24.00', '', '150', '12'],
+        ['Hot Chocolate', 'Hot Coffee', '10003', '', '', '', '', 'Y', '20.00', '130', '', '8'],
+        ['Blueberry Muffin', 'Pastries', '10004', '', '', '', '', 'N', '15.00', '75', '', ''],
+      ],
+      {
+        title: 'Clerque — Loyverse Migration (sample of the Loyverse export)',
+        instructions: [
+          'Moving from Loyverse? Do NOT retype your catalog.',
+          '',
+          'How to use:',
+          '  1. In Loyverse: Back office > Items > Export. Save the Item list file.',
+          '  2. Upload THAT file unchanged via Settings > Import Templates > Import on the Loyverse row.',
+          '  3. Column order does not matter and extra Loyverse columns are ignored — we match by column name.',
+          '',
+          'What happens to your data:',
+          '  - Items with sizes/variants (Option columns) become one Clerque product each, e.g. "Cafe Latte - Large".',
+          '  - Price is taken from the Price column; if it is blank we use your store price column.',
+          '  - Stock on hand is carried over for items where Track stock = Y, summed across all your stores.',
+          '  - Categories are created automatically as they appear.',
+          '  - Barcode is used when present, otherwise the SKU.',
+          '',
+          'After migrating: check prices, then set up Ingredients and Recipes if you want true ingredient-level',
+          'stock and COGS — Loyverse does not export recipes, so those are entered once in Clerque.',
+        ],
+      },
+    );
+  }
+
   async ingredientsTemplate(tenantId?: string): Promise<Buffer> {
     let businessType: string = 'RETAIL';
     if (tenantId) {
@@ -1823,7 +1933,7 @@ export class ImportService {
           '  2. Unit is the smallest unit you measure in (g, ml, pc, kg, L, oz). Recipes will reference this unit.',
           '  3. Cost per Unit is the COST per unit (₱). Drives recipe-based COGS at sale time.',
           '  4. Low Stock Alert (optional): system flags the ingredient when any branch quantity falls below this number.',
-          '  5. Save as .xlsx (or .csv). Upload via POS → Inventory → Ingredients → Import.',
+          '  5. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',
           '',
           'Tip: To convert bulk pricing, divide the bulk cost by the bulk unit. Example: 1L milk at ₱85 → 0.085 per ml.',
           'Next: Once ingredients are loaded, use the Recipes template to map menu items (Products) to ingredient quantities.',
@@ -2049,6 +2159,7 @@ export class ImportService {
           '  4. Quantity is in the ingredient\'s native unit (g / ml / pc / etc.) — see the Ingredients sheet.',
           '  5. Importing a recipe FLIPS the product to RECIPE_BASED — its COGS now derives from ingredients × WAC at sale time.',
           '  6. Re-importing a row UPDATES the existing recipe line (matched by Product + Ingredient), not duplicates it.',
+          '  7. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',
           '',
           'Order:  Ingredients → Products → Recipes  (in that order, every time).',
           '',

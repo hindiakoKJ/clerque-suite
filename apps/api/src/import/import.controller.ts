@@ -68,6 +68,43 @@ export class ImportController {
     res.send(buf);
   }
 
+  // ── Migration: Loyverse ────────────────────────────────────────────────────
+  /**
+   * Accepts a Loyverse "Item list" export as-is and migrates the catalog.
+   * Column names are matched dynamically (per-store price/stock columns are
+   * discovered at run time), then the rows are handed to the same importers
+   * the Clerque templates use.
+   *
+   * `branchId` is optional: supply it to also seed opening stock from the
+   * export's per-store stock columns.
+   */
+  @Post('loyverse')
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
+  importLoyverse(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: AuthRequest,
+    @Query('branchId') branchId?: string,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importLoyverse(
+      file,
+      req.user.tenantId!,
+      branchId ?? req.user.branchId ?? undefined,
+    );
+  }
+
+  @Get('template/loyverse')
+  async loyverseTemplate(@Res() res: Response) {
+    const buf = await this.importService.loyverseTemplate();
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition':
+        'attachment; filename="clerque-loyverse-sample.xlsx"',
+    });
+    res.send(buf);
+  }
+
   // ── Inventory ──────────────────────────────────────────────────────────────
   @Post('inventory')
   @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))

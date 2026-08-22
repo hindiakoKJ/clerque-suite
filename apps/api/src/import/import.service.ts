@@ -1486,9 +1486,29 @@ export class ImportService {
    *   Sheet 2: "Inventory" — same as the standalone Inventory template
    * Plus a leading "Read Me" sheet explaining the two-step flow.
    */
+  /**
+   * Business types whose products are MADE, not bought finished. Only these
+   * get the Ingredients + Recipes sheets in the pack — putting them in front
+   * of a retail store or a service business would be two sheets of noise.
+   */
+  private static readonly RECIPE_VERTICALS = new Set([
+    'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL',
+    'BAR_LOUNGE', 'CATERING', 'MANUFACTURING',
+  ]);
+
   async setupPackTemplate(tenantId?: string): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Clerque';
+
+    let packBusinessType = 'RETAIL';
+    if (tenantId) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { businessType: true },
+      });
+      packBusinessType = tenant?.businessType ?? 'RETAIL';
+    }
+    const recipeVertical = ImportService.RECIPE_VERTICALS.has(packBusinessType);
 
     // ── Read Me sheet ──
     const readme = wb.addWorksheet('Read Me');
@@ -1497,26 +1517,58 @@ export class ImportService {
     t.value = 'Clerque — Business Setup Pack';
     t.font  = { bold: true, size: 16, color: { argb: 'FF8B5E3C' } };
     readme.getRow(1).height = 26;
-    const lines = [
+    const recipeSteps = [
+      'Step 2 — "Ingredients": everything you BUY to make your menu — beans, milk, syrup, cups, lids.',
+      '         Unit is how you measure it (g / ml / pc). Cost per Unit is what one of those costs you.',
+      '         Tip: divide bulk pricing. 1L milk at P85 = 0.085 per ml.',
+      '         This sheet sets COST only. Quantities come later, from the Stock Receipts template.',
       '',
-      'One file, four sheets. Fill only the sheets you are ready for — anything you leave',
-      'untouched is simply skipped, and you can upload the file again later.',
+      'Step 3 — "Recipes": what goes INTO each menu item. One row per ingredient, per product.',
+      '         An Iced Latte with 5 ingredients = 5 rows. Names must match Products and Ingredients exactly.',
+      '         This is what makes your true cost and gross margin correct.',
       '',
-      'Step 1 — "Products": every item you sell.',
-      '         Required: Name, Selling Price, Cost Price. Cost Price drives gross profit — do not leave it blank.',
-      '         Opening Stock: fill it for things you buy READY TO SELL (bottled water, chips) and you are done.',
-      '         Leave Opening Stock blank for anything you MAKE TO ORDER (drinks, meals) — those are stocked',
-      '         by their ingredients instead, using the separate Ingredients + Recipes templates.',
-      '',
+    ];
+    const plainSteps = [
       'Step 2 — "Customers": only if you invoice on credit / on account. Skip it for a walk-in shop.',
       '',
       'Step 3 — "Vendors": your suppliers, for recording bills and expenses. Optional at first.',
       '',
-      'Step 4 — "Chart of Accounts": ONLY if your accountant wants their own account codes.',
-      '         Clerque already sets up a full PH-standard chart for you, so most shops skip this entirely.',
+    ];
+
+    const lines = [
       '',
-      'Step 5 — Save, then upload this file at Settings -> Import Templates -> Import (Setup Pack row).',
-      '         Sheets are imported in the right order automatically.',
+      'One file, several sheets. Fill only the sheets you are ready for — anything you leave',
+      'untouched is simply skipped, and you can upload the file again later.',
+      '',
+      'Fill the sheets IN ORDER. Recipes link to Products and Ingredients by name, so those must',
+      'be filled in first.',
+      '',
+      'Step 1 — "Products": every item you sell.',
+      '         Required: Name, Selling Price, Cost Price. Cost Price drives gross profit — do not leave it blank.',
+      '         Opening Stock: fill it for things you buy READY TO SELL (bottled water, chips) and you are done.',
+      ...(recipeVertical
+        ? ['         Leave Opening Stock blank for anything you MAKE TO ORDER — those are stocked by their',
+           '         ingredients, on the next two sheets.']
+        : []),
+      '',
+      ...(recipeVertical ? recipeSteps : plainSteps),
+      ...(recipeVertical
+        ? ['Step 4 — "Customers": only if you invoice on credit / on account. Skip it for a walk-in shop.',
+           '',
+           'Step 5 — "Vendors": your suppliers, for recording bills and expenses. Optional at first.',
+           '']
+        : []),
+      'Last sheet — "Chart of Accounts": ONLY if your accountant wants their own account codes.',
+      '         Clerque already installs a full PH-standard chart automatically, so most shops skip this entirely.',
+      '',
+      'Then — Save, and upload this file at Settings -> Import Templates -> Import (Setup Pack row).',
+      '       Sheets are imported in the correct order automatically.',
+      ...(recipeVertical
+        ? ['',
+           'AFTER this file: use the Stock Receipts template to record your opening delivery of',
+           'ingredients. That is what puts real quantities on the beans, milk and cups, and it is what',
+           'lets Clerque deduct them automatically on every sale.']
+        : []),
       '',
       'Notes:',
       '  • Categories are auto-created if they do not exist.',
@@ -1546,7 +1598,16 @@ export class ImportService {
     // Inventory template still exists for later stock takes and for setting
     // counts at a second branch.
     const bundled: Array<{ name: string; buf: Buffer }> = [
-      { name: 'Products',          buf: await this.productsTemplate(tenantId) },
+      { name: 'Products', buf: await this.productsTemplate(tenantId) },
+      // Ingredients + Recipes only for businesses that MAKE what they sell.
+      // Sheet order mirrors the import order: a recipe links a product to an
+      // ingredient BY NAME, so both must be filled in before it.
+      ...(recipeVertical
+        ? [
+            { name: 'Ingredients', buf: await this.ingredientsTemplate(tenantId) },
+            { name: 'Recipes',     buf: await this.recipesTemplate(tenantId) },
+          ]
+        : []),
       { name: 'Customers',         buf: await this.customersTemplate() },
       { name: 'Vendors',           buf: await this.vendorsTemplate() },
       { name: 'Chart of Accounts', buf: await this.coaTemplate() },
@@ -1622,6 +1683,19 @@ export class ImportService {
         run:  (r) => this.importProductsFromRows(r, tenantId),
       },
       {
+        key:  'ingredients',
+        rows: pick('Ingredients', 'Raw Materials'),
+        run:  (r) => this.importIngredientsFromRows(r, tenantId),
+      },
+      {
+        // Must run after BOTH products and ingredients: a recipe line links
+        // the two by name, and importing one flips its product to
+        // RECIPE_BASED so COGS is derived from ingredients at sale time.
+        key:  'recipes',
+        rows: pick('Recipes', 'Recipe', 'BOM'),
+        run:  (r) => this.importRecipesFromRows(r, tenantId),
+      },
+      {
         key:  'customers',
         rows: pick('Customers'),
         run:  (r) => this.importCustomersFromRows(r, tenantId),
@@ -1640,7 +1714,7 @@ export class ImportService {
 
     if (plan.every((p) => !p.rows)) {
       throw new BadRequestException(
-        'This file has none of the Setup Pack sheets (Products, Customers, Vendors, Chart of Accounts). ' +
+        'This file has none of the Setup Pack sheets (Products, Ingredients, Recipes, Customers, Vendors, Chart of Accounts). ' +
         'Download the Setup Pack and fill the sheets inside it.',
       );
     }
@@ -1875,7 +1949,10 @@ export class ImportService {
   // Columns: Name*, Unit*, Cost per Unit (₱)*, Low Stock Alert, Notes
 
   async importIngredients(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    const rows = await this.parseFile(file);
+    return this.importIngredientsFromRows(await this.parseFile(file), tenantId);
+  }
+
+  private async importIngredientsFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
     const headerIdx = this.findHeaderRow(rows, ['Name*', 'Name']);
     const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
     if (rows.length <= dataStart) {
@@ -2093,7 +2170,10 @@ export class ImportService {
   // Columns: Product Name*, Ingredient Name*, Quantity*
 
   async importRecipes(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    const rows = await this.parseFile(file);
+    return this.importRecipesFromRows(await this.parseFile(file), tenantId);
+  }
+
+  private async importRecipesFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
     const headerIdx = this.findHeaderRow(rows, ['Product Name*', 'Product Name']);
     const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
     if (rows.length <= dataStart) {

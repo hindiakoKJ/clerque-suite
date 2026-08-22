@@ -227,6 +227,25 @@ describe('ImportService — sample rows are ignored on import', () => {
       expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
     });
 
+    it('bundles Ingredients + Recipes for a business that MAKES what it sells', async () => {
+      const prisma = makePrisma('COFFEE_SHOP');
+      const svc = new ImportService(prisma as any);
+      const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
+      expect(r.ingredients.notIncluded).toBe(false);
+      expect(r.recipes.notIncluded).toBe(false);
+      // Shipped untouched, they still import nothing.
+      expect(prisma.rawMaterial.create).not.toHaveBeenCalled();
+    });
+
+    it('leaves Ingredients + Recipes out for a shop that buys everything finished', async () => {
+      const prisma = makePrisma('RETAIL');
+      const svc = new ImportService(prisma as any);
+      const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
+      expect(r.ingredients.notIncluded).toBe(true);
+      expect(r.recipes.notIncluded).toBe(true);
+      expect(r.products.notIncluded).toBe(false);
+    });
+
     it('no longer ships an Inventory sheet — opening stock lives on Products', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
       const svc = new ImportService(prisma as any);

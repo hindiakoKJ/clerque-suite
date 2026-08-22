@@ -173,7 +173,9 @@ export default function ImportTemplatesPage() {
     {
       id: 'setup-pack',
       name: 'Business Setup Pack (all-in-one)',
-      desc: 'One workbook with Products (including opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — untouched sheets are skipped. Best for first-time setup.',
+      desc: isRecipeFriendly
+        ? 'One workbook for the whole setup: Products (with opening stock), Ingredients, Recipes, Customers, Vendors and Chart of Accounts. Fill the sheets in order — Recipes link to Products and Ingredients by name. Untouched sheets are skipped.'
+        : 'One workbook with Products (including opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — untouched sheets are skipped. Best for first-time setup.',
       endpoint: '/import/template/setup-pack',
       filename: 'clerque-setup-pack.xlsx',
       Icon: Box,

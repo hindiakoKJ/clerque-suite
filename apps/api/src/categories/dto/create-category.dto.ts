@@ -26,4 +26,10 @@ export class CreateCategoryDto {
   @IsInt()
   @Min(0)
   sortOrder?: number;
+
+  /** Prep station this category routes to (Bar, Kitchen…). See UpdateCategoryDto. */
+  @ApiPropertyOptional({ example: 'ckstation123', nullable: true })
+  @IsOptional()
+  @IsString()
+  stationId?: string | null;
 }

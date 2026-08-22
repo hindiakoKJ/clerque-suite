@@ -24,7 +24,23 @@ export class CategoriesService {
     return category;
   }
 
-  create(tenantId: string, dto: CreateCategoryDto) {
+  /**
+   * A stationId arriving from the client must be proven to belong to this
+   * tenant. Category.stationId drives which kitchen/bar screen an item shows
+   * on, so an unchecked id would let one tenant queue their tickets onto
+   * another tenant's display.
+   */
+  private async assertStationBelongsToTenant(tenantId: string, stationId?: string | null) {
+    if (!stationId) return;
+    const station = await this.prisma.station.findFirst({
+      where:  { id: stationId, tenantId },
+      select: { id: true },
+    });
+    if (!station) throw new NotFoundException('Station not found in this business.');
+  }
+
+  async create(tenantId: string, dto: CreateCategoryDto) {
+    await this.assertStationBelongsToTenant(tenantId, dto.stationId);
     return this.prisma.category.create({
       data: { tenantId, ...dto },
     });
@@ -32,6 +48,7 @@ export class CategoriesService {
 
   async update(tenantId: string, id: string, dto: UpdateCategoryDto) {
     await this.findOne(tenantId, id);
+    await this.assertStationBelongsToTenant(tenantId, dto.stationId);
     return this.prisma.category.update({ where: { id }, data: dto });
   }
 

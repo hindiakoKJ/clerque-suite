@@ -889,7 +889,40 @@ export class OrdersService {
           quantity:      new Prisma.Decimal(Number(b.quantity) * recipeMultiplier),
           rawMaterial:   b.rawMaterial,
         }));
-        const consumptionLines = [...baseScaled, ...modifierBomLines];
+        // Net the base recipe against the modifier lines PER INGREDIENT before
+        // anything is deducted or costed.
+        //
+        // This is what makes substitution real. "Oat milk" is expressed as two
+        // modifier lines — minus the dairy the base recipe calls for, plus the
+        // oat milk actually poured — so an oat latte must consume NO whole
+        // milk and cost oat-milk money. Deducting the lines separately (as
+        // before) would drain dairy that was never poured and bill the drink
+        // for both milks.
+        //
+        // Netting also fixes a quieter case: an "extra shot" add-on naming the
+        // same beans as the base recipe used to walk the lot/FEFO path twice
+        // for one ingredient.
+        const nettedByRm = new Map<string, { rawMaterialId: string; quantity: number; rawMaterial: (typeof baseScaled)[number]['rawMaterial'] }>();
+        for (const line of [...baseScaled, ...modifierBomLines]) {
+          const existing = nettedByRm.get(line.rawMaterialId);
+          if (existing) {
+            existing.quantity += Number(line.quantity);
+          } else {
+            nettedByRm.set(line.rawMaterialId, {
+              rawMaterialId: line.rawMaterialId,
+              quantity:      Number(line.quantity),
+              rawMaterial:   line.rawMaterial,
+            });
+          }
+        }
+
+        // Floor every net at zero. A substitution may CANCEL a base ingredient
+        // but must never credit stock back or subtract cost — over-cancelling
+        // (say -500ml against a 200ml base) settles at "none used" rather than
+        // inventing 300ml of milk and a negative COGS.
+        const consumptionLines = [...nettedByRm.values()]
+          .map((l) => ({ ...l, quantity: new Prisma.Decimal(Math.max(l.quantity, 0)) }))
+          .filter((l) => Number(l.quantity) > 0);
 
         if (consumptionLines.length === 0) continue; // not a recipe product, no add-ons
 

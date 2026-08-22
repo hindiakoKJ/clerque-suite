@@ -208,8 +208,17 @@ export class ModifiersService {
             `Unit mismatch on ${i.rawMaterialId}: raw material uses ${unitByRm.get(i.rawMaterialId)}, request sent ${i.unit}.`,
           );
         }
-        if (!Number.isFinite(i.quantity) || i.quantity <= 0) {
-          throw new ConflictException(`Quantity must be a positive number (got ${i.quantity}).`);
+        // A NEGATIVE quantity is a substitution: it cancels what the product's
+        // base recipe calls for, so "Oat milk" is -200ml dairy + 200ml oat and
+        // the dairy is neither poured nor charged. At sale time the base and
+        // modifier lines are netted per ingredient and floored at zero, so a
+        // negative can only ever cancel — never credit stock or reduce COGS
+        // below the ingredients actually used. Zero is still meaningless.
+        if (!Number.isFinite(i.quantity) || i.quantity === 0) {
+          throw new ConflictException(
+            `Quantity must be a non-zero number (got ${i.quantity}). ` +
+            'Use a negative amount to replace an ingredient from the base recipe.',
+          );
         }
       }
     }

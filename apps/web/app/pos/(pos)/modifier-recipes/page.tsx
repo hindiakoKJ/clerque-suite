@@ -224,8 +224,14 @@ export default function ModifierRecipesPage() {
             Venti = 1.5). Scales the product's base recipe up or down at sale time.
           </li>
           <li>
-            <b>Ingredients</b> — anything the option <i>adds</i> on top of the base
-            recipe. "Extra shot" = +5g coffee beans; "Oat milk" = +240ml oat milk.
+            <b>Add an ingredient</b> — a positive amount is used <i>on top of</i> the
+            base recipe. &quot;Extra shot&quot; = +5g coffee beans.
+          </li>
+          <li>
+            <b>Replace an ingredient</b> — a <b>negative</b> amount cancels what the
+            base recipe calls for, so it is never poured and never charged. Oat milk
+            on a latte is two rows: <b>-200ml</b> fresh milk and <b>+200ml</b> oat milk.
+            The drink then costs oat-milk money, not both milks.
           </li>
           <li>
             COGS is captured automatically from <code className="bg-amber-100 px-1 rounded">RawMaterial.costPrice</code> (WAC).
@@ -319,7 +325,7 @@ export default function ModifierRecipesPage() {
                           <div className="bg-gray-50 rounded p-3 space-y-2">
                             <div className="flex items-center justify-between">
                               <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                                Adds on top of base recipe
+                                Changes to the base recipe
                               </div>
                               <div className="text-xs text-gray-500">
                                 Est. COGS{' '}
@@ -329,7 +335,7 @@ export default function ModifierRecipesPage() {
 
                             {draft.ingredients.length === 0 ? (
                               <div className="text-xs text-gray-500 italic py-2">
-                                No add-on ingredients. (Use the multiplier above for size scaling.)
+                                No ingredient changes. (Use the multiplier above for size scaling.)
                               </div>
                             ) : (
                               <div className="space-y-1.5">
@@ -359,7 +365,6 @@ export default function ModifierRecipesPage() {
                                       <input
                                         type="number"
                                         step="0.01"
-                                        min="0"
                                         value={row.quantity}
                                         onChange={(e) => {
                                           const next = [...draft.ingredients];

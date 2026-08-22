@@ -23,6 +23,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { api, resolveAssetUrl } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { isRecipeBusinessType } from '@repo/shared-types';
 
 interface TenantProfile {
   businessType?: string | null;
@@ -91,11 +92,9 @@ export default function ImportTemplatesPage() {
   const businessType = profile?.businessType ?? null;
   const verticalLabel = businessType ? (VERTICAL_NAME[businessType] ?? businessType) : '—';
   const isPharmacy = businessType === 'PHARMACY';
-  // F&B + manufacturing benefit from Ingredients + Recipes (recipe-based COGS).
-  // Other verticals can technically use them too, but most don't need them.
-  const isRecipeFriendly = businessType
-    ? ['COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL', 'BAR_LOUNGE', 'CATERING', 'MANUFACTURING'].includes(businessType)
-    : false;
+  // Same predicate the Setup Pack builder uses on the server, so the sheets
+  // this page offers and describes always match the file that is generated.
+  const isRecipeFriendly = isRecipeBusinessType(businessType);
 
   const [downloading, setDownloading] = useState<string | null>(null);
   const [uploading, setUploading]     = useState<string | null>(null);

@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { ModifierGroupModal } from '@/components/pos/ModifierGroupModal';
 import { StockAdjustModal } from '@/components/pos/StockAdjustModal';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
-import { isFnbType, isLaundryType, getVerticalPack } from '@repo/shared-types';
+import { isFnbType, isLaundryType, getVerticalPack, isRecipeBusinessType } from '@repo/shared-types';
 import { ImportModal } from '@/components/ui/ImportModal';
 
 interface Category { id: string; name: string; }
@@ -92,6 +92,9 @@ export default function ProductsPage() {
 
   const { data: tenantProfile } = useBusinessSetup(true);
   const isFnb      = isFnbType(tenantProfile?.businessType);
+  // Same predicate the Setup Pack builder uses, so this description can
+  // never claim a different set of sheets than the file actually holds.
+  const isRecipeBiz = isRecipeBusinessType(tenantProfile?.businessType);
   const isLaundry  = isLaundryType(tenantProfile?.businessType);
   const isPharmacy = tenantProfile?.businessType === 'PHARMACY';
 
@@ -787,7 +790,11 @@ export default function ProductsPage() {
         open={showSetupPack}
         onClose={() => setShowSetupPack(false)}
         title="Business Setup Pack"
-        description="One workbook: Products (with opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — anything left untouched is skipped. Download, fill, then upload here."
+        description={
+          isRecipeBiz
+            ? 'One workbook for the whole setup: Products (with opening stock), Ingredients, Recipes, Customers, Vendors and Chart of Accounts. Fill the sheets in order — Recipes link to Products and Ingredients by name. Anything left untouched is skipped.'
+            : 'One workbook: Products (with opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — anything left untouched is skipped. Download, fill, then upload here.'
+        }
         templateUrl="/import/template/setup-pack"
         uploadUrl="/import/setup-pack"
         extraParams={userBranchId ? { branchId: userBranchId } : undefined}

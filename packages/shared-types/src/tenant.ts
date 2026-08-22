@@ -47,6 +47,29 @@ export const FNB_BUSINESS_TYPES = [
 export type FnbBusinessType = (typeof FNB_BUSINESS_TYPES)[number];
 
 /**
+ * Businesses that MAKE what they sell, so a product's cost comes from a
+ * recipe (ingredients x weighted-average cost) rather than a flat cost field.
+ *
+ * Drives anything that should only appear for them — the Ingredients and
+ * Recipes sheets in the Setup Pack, recipe-aware copy, modifier substitution
+ * guidance. Manufacturing joins the F&B verticals here: it has a bill of
+ * materials for the same reason a latte has a recipe.
+ *
+ * Keep this the single source of truth. The Setup Pack contents and the UI
+ * text describing those contents were briefly derived from two separate
+ * lists, and a coffee shop was told its workbook held four sheets while it
+ * actually shipped six.
+ */
+export const RECIPE_BUSINESS_TYPES = [
+  ...FNB_BUSINESS_TYPES,
+  'MANUFACTURING',
+] as const;
+
+export function isRecipeBusinessType(businessType: string | null | undefined): boolean {
+  return (RECIPE_BUSINESS_TYPES as readonly string[]).includes(businessType ?? '');
+}
+
+/**
  * Returns true when the given business type is a Food & Beverage operation.
  * Use this everywhere instead of `businessType === 'COFFEE_SHOP'`.
  */

@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { mapLoyverseItems, looksLikeLoyverse } from './loyverse.mapper';
+import { isRecipeBusinessType } from '@repo/shared-types';
 
 export interface ImportResult {
   imported: number;
@@ -1486,16 +1487,6 @@ export class ImportService {
    *   Sheet 2: "Inventory" — same as the standalone Inventory template
    * Plus a leading "Read Me" sheet explaining the two-step flow.
    */
-  /**
-   * Business types whose products are MADE, not bought finished. Only these
-   * get the Ingredients + Recipes sheets in the pack — putting them in front
-   * of a retail store or a service business would be two sheets of noise.
-   */
-  private static readonly RECIPE_VERTICALS = new Set([
-    'COFFEE_SHOP', 'RESTAURANT', 'BAKERY', 'FOOD_STALL',
-    'BAR_LOUNGE', 'CATERING', 'MANUFACTURING',
-  ]);
-
   async setupPackTemplate(tenantId?: string): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Clerque';
@@ -1508,7 +1499,9 @@ export class ImportService {
       });
       packBusinessType = tenant?.businessType ?? 'RETAIL';
     }
-    const recipeVertical = ImportService.RECIPE_VERTICALS.has(packBusinessType);
+    // Shared with the UI so the pack's contents and the text describing
+    // them can never disagree again.
+    const recipeVertical = isRecipeBusinessType(packBusinessType);
 
     // ── Read Me sheet ──
     const readme = wb.addWorksheet('Read Me');

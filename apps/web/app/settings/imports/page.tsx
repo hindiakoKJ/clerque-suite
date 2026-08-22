@@ -173,7 +173,7 @@ export default function ImportTemplatesPage() {
     {
       id: 'setup-pack',
       name: 'Business Setup Pack (all-in-one)',
-      desc: 'Bundled workbook with Products + Inventory + Customers + Vendors + Chart of Accounts in one file. Best for first-time setup.',
+      desc: 'One workbook with Products (including opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — untouched sheets are skipped. Best for first-time setup.',
       endpoint: '/import/template/setup-pack',
       filename: 'clerque-setup-pack.xlsx',
       Icon: Box,

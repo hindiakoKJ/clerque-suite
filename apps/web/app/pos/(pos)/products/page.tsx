@@ -786,8 +786,8 @@ export default function ProductsPage() {
       <ImportModal
         open={showSetupPack}
         onClose={() => setShowSetupPack(false)}
-        title="Setup Pack — Products + Opening Stock"
-        description="One workbook, two sheets. Stand up your full catalog and starting inventory in a single upload. Download the template, fill both sheets, then upload here."
+        title="Business Setup Pack"
+        description="One workbook: Products (with opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — anything left untouched is skipped. Download, fill, then upload here."
         templateUrl="/import/template/setup-pack"
         uploadUrl="/import/setup-pack"
         extraParams={userBranchId ? { branchId: userBranchId } : undefined}

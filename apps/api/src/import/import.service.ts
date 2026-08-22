@@ -1266,7 +1266,10 @@ export class ImportService {
     file: Express.Multer.File,
     tenantId: string,
   ): Promise<ImportResult> {
-    const rows = await this.parseFile(file);
+    return this.importChartOfAccountsFromRows(await this.parseFile(file), tenantId);
+  }
+
+  private async importChartOfAccountsFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
     if (rows.length < 2)
       throw new BadRequestException('File must have a header row and at least one data row.');
 
@@ -1496,23 +1499,33 @@ export class ImportService {
     readme.getRow(1).height = 26;
     const lines = [
       '',
-      'This single file lets you stand up your product catalog and opening stock in one upload.',
+      'One file, four sheets. Fill only the sheets you are ready for — anything you leave',
+      'untouched is simply skipped, and you can upload the file again later.',
       '',
-      'Step 1 — Fill the "Products" sheet with every SKU you sell.',
-      '         Required: Name, Selling Price, Cost Price.',
-      '         Cost Price drives gross profit reporting — DO NOT leave it blank.',
+      'Step 1 — "Products": every item you sell.',
+      '         Required: Name, Selling Price, Cost Price. Cost Price drives gross profit — do not leave it blank.',
+      '         Opening Stock: fill it for things you buy READY TO SELL (bottled water, chips) and you are done.',
+      '         Leave Opening Stock blank for anything you MAKE TO ORDER (drinks, meals) — those are stocked',
+      '         by their ingredients instead, using the separate Ingredients + Recipes templates.',
       '',
-      'Step 2 — Fill the "Inventory" sheet with the on-hand quantity for each product at this branch.',
-      '         Match by Product Name or Barcode. The quantity overwrites whatever is currently recorded.',
+      'Step 2 — "Customers": only if you invoice on credit / on account. Skip it for a walk-in shop.',
       '',
-      'Step 3 — Save. Go to POS → Inventory → "Import Setup Pack" → upload this file.',
-      '         Clerque will (a) create/update your products from sheet 1, then (b) set opening stock from sheet 2.',
+      'Step 3 — "Vendors": your suppliers, for recording bills and expenses. Optional at first.',
+      '',
+      'Step 4 — "Chart of Accounts": ONLY if your accountant wants their own account codes.',
+      '         Clerque already sets up a full PH-standard chart for you, so most shops skip this entirely.',
+      '',
+      'Step 5 — Save, then upload this file at Settings -> Import Templates -> Import (Setup Pack row).',
+      '         Sheets are imported in the right order automatically.',
       '',
       'Notes:',
-      '  • Categories are auto-created if they don\'t exist.',
+      '  • Categories are auto-created if they do not exist.',
       '  • VAT column is Y/N. Most retail items in PH = Y (VAT-able).',
-      '  • If you have multiple branches, run this for each branch (switch branch in POS first).',
-      '  • Errors per row are reported back so you can fix and re-upload — safe to re-run.',
+      '  • Grey SAMPLE rows are examples and are always ignored — delete them or leave them.',
+      '  • Safe to re-run: rows are matched by name and updated, not duplicated. Opening Stock REPLACES',
+      '    the count rather than adding to it, so correcting a number and re-uploading works.',
+      '  • Opening Stock applies to the branch you are signed into. For a second branch, use the',
+      '    standalone Inventory template after switching branch.',
     ];
     for (const line of lines) {
       readme.addRow([line]);
@@ -1523,44 +1536,40 @@ export class ImportService {
       readme.getRow(i).alignment = { wrapText: true };
     }
 
-    // ── Products sheet ──
-    const productsBuf = await this.productsTemplate(tenantId);
-    const productsWb = new ExcelJS.Workbook();
-    await productsWb.xlsx.load(productsBuf as any);
-    const productsSheet = productsWb.worksheets[0];
-    const ws1 = wb.addWorksheet('Products');
-    productsSheet.eachRow((row, rowIdx) => {
-      const newRow = ws1.getRow(rowIdx);
-      newRow.values = row.values as any;
-      // copy basic styling
-      newRow.font      = row.font;
-      newRow.fill      = row.fill;
-      newRow.alignment = row.alignment;
-      newRow.height    = row.height;
-    });
-    productsSheet.columns.forEach((col, i) => {
-      ws1.getColumn(i + 1).width = col.width ?? 20;
-    });
-    ws1.views = productsSheet.views;
+    // Copy each standalone template in as its own sheet. Doing it by loop
+    // keeps the pack honest: whatever is listed here is what the file
+    // actually contains, and the importer below reads the same list.
+    //
+    // Inventory is deliberately NOT bundled. Products now carries an
+    // "Opening Stock" column, so a second stock sheet in the first-time pack
+    // just re-creates the "which one do I fill?" confusion. The standalone
+    // Inventory template still exists for later stock takes and for setting
+    // counts at a second branch.
+    const bundled: Array<{ name: string; buf: Buffer }> = [
+      { name: 'Products',          buf: await this.productsTemplate(tenantId) },
+      { name: 'Customers',         buf: await this.customersTemplate() },
+      { name: 'Vendors',           buf: await this.vendorsTemplate() },
+      { name: 'Chart of Accounts', buf: await this.coaTemplate() },
+    ];
 
-    // ── Inventory sheet ──
-    const invBuf = await this.inventoryTemplate();
-    const invWb = new ExcelJS.Workbook();
-    await invWb.xlsx.load(invBuf as any);
-    const invSheet = invWb.worksheets[0];
-    const ws2 = wb.addWorksheet('Inventory');
-    invSheet.eachRow((row, rowIdx) => {
-      const newRow = ws2.getRow(rowIdx);
-      newRow.values = row.values as any;
-      newRow.font      = row.font;
-      newRow.fill      = row.fill;
-      newRow.alignment = row.alignment;
-      newRow.height    = row.height;
-    });
-    invSheet.columns.forEach((col, i) => {
-      ws2.getColumn(i + 1).width = col.width ?? 20;
-    });
-    ws2.views = invSheet.views;
+    for (const { name, buf } of bundled) {
+      const srcWb = new ExcelJS.Workbook();
+      await srcWb.xlsx.load(buf as any);
+      const src = srcWb.worksheets[0];
+      const dest = wb.addWorksheet(name);
+      src.eachRow((row, rowIdx) => {
+        const newRow = dest.getRow(rowIdx);
+        newRow.values    = row.values as any;
+        newRow.font      = row.font;
+        newRow.fill      = row.fill;
+        newRow.alignment = row.alignment;
+        newRow.height    = row.height;
+      });
+      src.columns.forEach((col, i) => {
+        dest.getColumn(i + 1).width = col.width ?? 20;
+      });
+      dest.views = src.views;
+    }
 
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
@@ -1570,48 +1579,99 @@ export class ImportService {
    * importers in order (Products first so the SKUs exist before Inventory
    * tries to look them up). Returns a combined report.
    */
+  /**
+   * Import every sheet the Setup Pack carries, in dependency order.
+   *
+   * Order matters: the chart of accounts underpins the ledger, products must
+   * exist before any stock references them, and customers/vendors are
+   * independent masters. A sheet that is absent (or left untouched) is
+   * reported as notIncluded rather than treated as an error, so an owner can
+   * fill in only the parts they are ready for.
+   *
+   * Inventory is no longer bundled — Products carries Opening Stock — but a
+   * pack downloaded before that change still has the sheet, so it is still
+   * honoured when present.
+   */
   async importSetupPack(
     file: Express.Multer.File,
     tenantId: string,
     branchId: string,
-  ): Promise<{
-    products:  ImportResult & { notIncluded: boolean };
-    inventory: ImportResult & { notIncluded: boolean };
-  }> {
+  ): Promise<Record<string, ImportResult & { notIncluded: boolean }>> {
     const sheets = await this.parseAllSheets(file);
-    const productsRows  = sheets.get('Products')  ?? sheets.get('products')  ?? null;
-    const inventoryRows = sheets.get('Inventory') ?? sheets.get('inventory') ?? null;
+    const pick = (...names: string[]): string[][] | null => {
+      for (const n of names) {
+        const hit = sheets.get(n) ?? sheets.get(n.toLowerCase());
+        if (hit) return hit;
+      }
+      return null;
+    };
 
-    if (!productsRows && !inventoryRows) {
+    const plan: Array<{
+      key:  string;
+      rows: string[][] | null;
+      run:  (rows: string[][]) => Promise<ImportResult>;
+    }> = [
+      {
+        key:  'chartOfAccounts',
+        rows: pick('Chart of Accounts', 'ChartOfAccounts', 'COA'),
+        run:  (r) => this.importChartOfAccountsFromRows(r, tenantId),
+      },
+      {
+        key:  'products',
+        rows: pick('Products'),
+        run:  (r) => this.importProductsFromRows(r, tenantId),
+      },
+      {
+        key:  'customers',
+        rows: pick('Customers'),
+        run:  (r) => this.importCustomersFromRows(r, tenantId),
+      },
+      {
+        key:  'vendors',
+        rows: pick('Vendors', 'Suppliers'),
+        run:  (r) => this.importVendorsFromRows(r, tenantId),
+      },
+      {
+        key:  'inventory',
+        rows: pick('Inventory'),
+        run:  (r) => this.importInventoryFromRows(r, tenantId, branchId),
+      },
+    ];
+
+    if (plan.every((p) => !p.rows)) {
       throw new BadRequestException(
-        'Setup Pack must contain at least a "Products" or "Inventory" sheet.',
+        'This file has none of the Setup Pack sheets (Products, Customers, Vendors, Chart of Accounts). ' +
+        'Download the Setup Pack and fill the sheets inside it.',
       );
     }
 
-    let products: ImportResult & { notIncluded: boolean } = {
-      imported: 0, updated: 0, skipped: 0, errors: [], notIncluded: true,
-    };
-    let inventory: ImportResult & { notIncluded: boolean } = {
-      imported: 0, updated: 0, skipped: 0, errors: [], notIncluded: true,
-    };
-
-    if (productsRows) {
-      const r = await this.importProductsFromRows(productsRows, tenantId);
-      products = { ...r, notIncluded: false };
+    const out: Record<string, ImportResult & { notIncluded: boolean }> = {};
+    for (const step of plan) {
+      if (!step.rows) {
+        out[step.key] = { imported: 0, updated: 0, skipped: 0, errors: [], notIncluded: true };
+        continue;
+      }
+      try {
+        out[step.key] = { ...(await step.run(step.rows)), notIncluded: false };
+      } catch (err: any) {
+        // One bad sheet must not discard the sheets that imported cleanly.
+        out[step.key] = {
+          imported: 0, updated: 0, skipped: 0, notIncluded: false,
+          errors: [{ row: 0, message: err?.message ?? 'Sheet could not be imported.' }],
+        };
+      }
     }
-    if (inventoryRows) {
-      const r = await this.importInventoryFromRows(inventoryRows, tenantId, branchId);
-      inventory = { ...r, notIncluded: false };
-    }
-
-    return { products, inventory };
+    return out;
   }
 
   // ── Customers Import (AR master) ────────────────────────────────────────
   // Columns: Name*, TIN, Address, Email, Phone, Credit Term Days, Credit Limit, Notes
 
   async importCustomers(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    const rows = await this.parseFile(file);
+    return this.importCustomersFromRows(await this.parseFile(file), tenantId);
+  }
+
+  private async importCustomersFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
     const headerIdx = this.findHeaderRow(rows, ['Name*', 'Name']);
     const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
     if (rows.length <= dataStart)
@@ -1709,7 +1769,10 @@ export class ImportService {
   // Columns: Name*, TIN, Address, Email, Phone, Default ATC Code, Default WHT Rate, Notes
 
   async importVendors(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    const rows = await this.parseFile(file);
+    return this.importVendorsFromRows(await this.parseFile(file), tenantId);
+  }
+
+  private async importVendorsFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
     const headerIdx = this.findHeaderRow(rows, ['Name*', 'Name']);
     const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
     if (rows.length <= dataStart)

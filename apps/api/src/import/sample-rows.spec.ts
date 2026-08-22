@@ -211,16 +211,46 @@ describe('ImportService — sample rows are ignored on import', () => {
     });
   });
 
-  describe('setup pack (Products + Inventory sheets)', () => {
+  describe('setup pack (Products + Customers + Vendors + Chart of Accounts)', () => {
     it('imports nothing from the pack as shipped', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
       const svc = new ImportService(prisma as any);
       const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
-      expect(r.products.notIncluded).toBe(false);
-      expect(r.inventory.notIncluded).toBe(false);
+
+      // Every bundled sheet is read...
+      for (const key of ['products', 'customers', 'vendors', 'chartOfAccounts']) {
+        expect(r[key].notIncluded).toBe(false);
+      }
+      // ...and every one of them imports nothing but sample rows.
       expectSamplesIgnored(r.products, 8);
-      expectSamplesIgnored(r.inventory, 4);
       expect(prisma.product.create).not.toHaveBeenCalled();
+      expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
+    });
+
+    it('no longer ships an Inventory sheet — opening stock lives on Products', async () => {
+      const prisma = makePrisma('COFFEE_SHOP');
+      const svc = new ImportService(prisma as any);
+      const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
+      expect(r.inventory.notIncluded).toBe(true);
+    });
+
+    it('still honours an Inventory sheet in a previously downloaded pack', async () => {
+      const prisma = makePrisma('COFFEE_SHOP');
+      const svc = new ImportService(prisma as any);
+      // Rebuild an older-style pack: the standalone Inventory template as a
+      // sheet named "Inventory" alongside Products.
+      const ExcelJS = (await import('exceljs')).default;
+      const packWb = new ExcelJS.Workbook();
+      await packWb.xlsx.load((await svc.setupPackTemplate('t1')) as any);
+      const invWb = new ExcelJS.Workbook();
+      await invWb.xlsx.load((await svc.inventoryTemplate()) as any);
+      const src = invWb.worksheets[0];
+      const dest = packWb.addWorksheet('Inventory');
+      src.eachRow((row, i) => { dest.getRow(i).values = row.values as any; });
+      const buf = Buffer.from(await packWb.xlsx.writeBuffer());
+
+      const r = await svc.importSetupPack(asFile(buf, 'legacy-pack.xlsx'), 't1', 'br-1');
+      expect(r.inventory.notIncluded).toBe(false);
       expect(prisma.inventoryItem.create).not.toHaveBeenCalled();
     });
   });

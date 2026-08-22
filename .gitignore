@@ -30,3 +30,8 @@ packages/db/prisma/migrations/dev.db-journal
 
 # Vercel
 .vercel
+
+# Local backup dumps written by the backup scheduler at runtime.
+# These contain real tenant data and must never enter the repo.
+apps/api/backups/
+apps/api/uploads/

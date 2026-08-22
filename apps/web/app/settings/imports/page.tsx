@@ -185,8 +185,8 @@ export default function ImportTemplatesPage() {
       desc: isPharmacy
         ? '15 columns including Generic Name, Brand, Dosage Form, Strength, Drug Class, Initial Lot # + Expiry, and Initial Stock. Drug-class drives the till workflow at sale.'
         : isRecipeFriendly
-          ? `Menu items / SKUs tailored to ${verticalLabel}. For recipe-based COGS (drinks, dishes, fabricated goods), use the Ingredients + Recipes templates AFTER this — Cost Price here is a fallback used only when no recipe exists.`
-          : `7-column lean template tailored to ${verticalLabel}. Sample rows show the kind of items in your catalog.`,
+          ? `Your menu, tailored to ${verticalLabel}. Fill Opening Stock for anything you buy ready to sell (bottled drinks, chips) — that stocks it here, no second file needed. Leave it blank for made-to-order items; those are stocked by their ingredients via the Ingredients + Recipes templates below.`
+          : `Your catalog, tailored to ${verticalLabel}. Fill Opening Stock with what you have on hand and you are done — no separate inventory file needed.`,
       endpoint: '/import/template/products',
       upload:   '/import/products',
       filename: `clerque-products-${(businessType ?? 'general').toLowerCase()}.xlsx`,
@@ -214,8 +214,8 @@ export default function ImportTemplatesPage() {
     ] as TemplateInfo[] : []),
     {
       id: 'inventory',
-      name: 'Inventory (opening stock)',
-      desc: 'Per-branch opening stock for each product. Use after the Products import to seed the first stock count at every branch.',
+      name: 'Inventory (stock count)',
+      desc: 'Only needed for a later stock take, or to set counts at a SECOND branch. First-time setup does not need this — put the count in the Products sheet’s Opening Stock column instead.',
       endpoint: '/import/template/inventory',
       upload:   '/import/inventory',
       filename: 'clerque-inventory.xlsx',
@@ -405,7 +405,7 @@ export default function ImportTemplatesPage() {
         <p className="flex items-start gap-1.5">
           <span className="font-semibold text-foreground">Order matters.</span>
           {isRecipeFriendly
-            ? <>For recipe-based businesses (coffee shops, restaurants, bakeries, manufacturing), the right order is: <strong>Ingredients → Products → Recipes → Inventory</strong>. The Setup Pack only covers the basics; for full recipe COGS, use the Ingredients + Recipes templates separately.</>
+            ? <>Two kinds of item, two ways to stock them. Things you buy <strong>ready to sell</strong> (bottled water, chips) just need the Products sheet — fill its <strong>Opening Stock</strong> column. Things you <strong>make to order</strong> (drinks, meals) are stocked by their ingredients: <strong>Products → Ingredients → Recipes → Stock Receipts</strong>, and you leave Opening Stock blank for them.</>
             : <>For first-time setup, use the <strong>Setup Pack</strong> — it bundles everything with a Read Me sheet that walks you through the order (Products → Inventory → Customers → Vendors).</>}
         </p>
         <p>

@@ -359,6 +359,16 @@ export class ImportService {
       'VACCINE', 'DEVICE', 'SUPPLEMENT', 'COSMETIC', 'OTHER',
     ]);
 
+    // Opening stock is resolved BY HEADER rather than by position. The lean
+    // template carries it right after Description, while the pharmacy layout
+    // keeps it in column 15 after the lot fields — a fixed index cannot serve
+    // both, and matching the header also lets an owner move the column.
+    const headerCells = headerIdx >= 0 ? (rows[headerIdx] ?? []) : [];
+    const findCol = (re: RegExp): number =>
+      headerCells.findIndex((h) => re.test(String(h ?? '').trim()));
+    const stockCol = findCol(/^(opening|initial)\s*stock|stock\s*on\s*hand|qty\s*on\s*hand|quantity\s*on\s*hand$/i);
+    const alertCol = findCol(/^low\s*stock\s*alert$/i);
+
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = i + 2;
       if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
@@ -366,8 +376,10 @@ export class ImportService {
         name, categoryName, priceStr, costStr, vatStr, barcode, description,
         // Sprint 19 — pharmacy-specific (all optional)
         genericName, brandName, dosageForm, strength, drugClassRaw,
-        lotNumber, lotExpiryStr, initialStockStr,
+        lotNumber, lotExpiryStr,
       ] = dataRows[i];
+      const initialStockStr = stockCol >= 0 ? dataRows[i][stockCol] : dataRows[i][14];
+      const lowAlertStr     = alertCol >= 0 ? dataRows[i][alertCol] : undefined;
 
       if (!name?.trim()) {
         result.skipped++;
@@ -529,6 +541,57 @@ export class ImportService {
           result.imported++;
         }
 
+        // Opening stock for ready-to-sell goods (bottled drinks, packaged
+        // snacks) straight from the Products sheet, so a shop that buys
+        // everything finished never has to touch a second file. Lot-tracked
+        // rows are handled by the pharmacy block below, which seeds the same
+        // InventoryItem — running both would double the count.
+        //
+        // The quantity is SET, not incremented: this is a declared opening
+        // count, so re-importing a corrected sheet fixes the number instead
+        // of stacking on top of it (matching the Inventory template).
+        if (initialStockStr?.trim() && !lotNumber?.trim()) {
+          const branch = await this.prisma.branch.findFirst({
+            where:   { tenantId, isActive: true },
+            select:  { id: true },
+            orderBy: { createdAt: 'asc' },
+          });
+          if (!branch) {
+            result.errors.push({
+              row: rowNum,
+              message: 'Opening Stock given but this business has no active branch yet.',
+            });
+          } else {
+            // lowStockAlert is an Int column, not Decimal.
+            const parsedAlert = lowAlertStr?.trim() ? this.num(lowAlertStr) : NaN;
+            const lowAlert = Number.isFinite(parsedAlert) && parsedAlert >= 0
+              ? Math.round(parsedAlert)
+              : null;
+            const qty = new Prisma.Decimal(Math.max(initialStock, 0));
+            try {
+              await this.prisma.inventoryItem.upsert({
+                where:  { branchId_productId: { branchId: branch.id, productId } },
+                update: {
+                  quantity: qty,
+                  ...(lowAlert != null ? { lowStockAlert: lowAlert } : {}),
+                },
+                create: {
+                  tenantId,
+                  branchId:  branch.id,
+                  productId,
+                  quantity:  qty,
+                  ...(lowAlert != null ? { lowStockAlert: lowAlert } : {}),
+                },
+              });
+            } catch (err: any) {
+              result.errors.push({
+                row: rowNum,
+                message: `Opening stock failed: ${err?.message ?? 'unknown'}`,
+              });
+            }
+          }
+        }
+
         // Sprint 19 — If an initial lot is provided, create the ProductLot
         // row at the tenant's first branch. Pharmacy import shorthand —
         // for full lot management, owners use /pos/pharmacy/lots after.
@@ -684,6 +747,10 @@ export class ImportService {
       'VAT (Y/N)',
       'Barcode',
       'Description',
+      // Ready-to-sell goods can be stocked from this one sheet instead of a
+      // second Inventory file — see the instructions block below.
+      'Opening Stock',
+      'Low Stock Alert',
     ];
     const HINTS = [
       'Required. Unique within tenant.',
@@ -693,6 +760,8 @@ export class ImportService {
       'Y or N. Default N.',
       'Optional. EAN-13 / UPC etc.',
       'Optional. Free text.',
+      'Optional. How many you have NOW. Leave blank for made-to-order items.',
+      'Optional. Warn when stock falls below this.',
     ];
 
     let title = 'Clerque — Product Master Import Template';
@@ -803,9 +872,12 @@ export class ImportService {
           '  3. Cost Price is REQUIRED. It drives COGS posting on every sale. Enter 0 for services or complimentary items.',
           '  4. VAT column accepts Y / Yes / 1 / true (case-insensitive) for VAT-able items; anything else means no VAT.',
           '  5. Category — if it doesn\'t exist yet, Clerque creates it. Use consistent spelling across rows.',
-          '  6. Save as .xlsx (or .csv). Upload via POS → Products → Import.',
+          '  6. Opening Stock — how many you have on hand RIGHT NOW. Fill this for ready-to-sell goods you buy finished (bottled water, chips, canned drinks) and you never need a second file.',
+          '  7. Leave Opening Stock BLANK for anything you make to order (drinks, meals). Those are stocked by their ingredients instead — see the Ingredients and Recipes templates.',
+          '  8. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',
           ...(helperLine ? [helperLine] : []),
-          'Tip: After import, head to Inventory and import opening stock for each branch using the Inventory template.',
+          'Re-importing is safe: Opening Stock REPLACES the count (it is a stock take, not a delivery), so you can correct a number and upload again.',
+          'To record a delivery that adds to stock instead, use the Stock Receipts template.',
         ],
         columnHints: HINTS,
       },

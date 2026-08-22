@@ -108,12 +108,44 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
     const activeGroups = (p.modifierGroups ?? []).filter(
       (g) => g.modifierGroup.options.some((o) => o.isActive),
     );
-    if (activeGroups.length > 0) {
+    // Only interrupt the cashier when the picker is actually needed.
+    //
+    // Binding a milk group to a whole drinks category is the efficient way to
+    // set a menu up, but it used to make EVERY drink in that category open a
+    // dialog on every sale — and because the picker is single-item, the
+    // x2/x3 quantity shortcut was silently thrown away with it. Three iced
+    // lattes meant three trips through the modal during a rush.
+    //
+    // A group only has to be asked about if it is REQUIRED, or if it is
+    // optional with no default to fall back on. An optional group that
+    // already has a default (e.g. Milk = Fresh) resolves silently, and the
+    // cashier taps "Customise" on the line when someone actually wants oat.
+    const mustAsk = activeGroups.some(
+      (g) =>
+        g.modifierGroup.required ||
+        !g.modifierGroup.options.some((o) => o.isActive && o.isDefault),
+    );
+
+    if (mustAsk) {
       // Modifier picker handles a single item at a time — multiplier doesn't apply.
       setPickerProduct(p);
       return;
     }
-    commitAdd(p, [], multiplier);
+
+    // Apply each group's default so the line still carries its real
+    // composition — the recipe and the receipt depend on it.
+    const defaults: CartItemModifier[] = activeGroups.flatMap((g) =>
+      g.modifierGroup.options
+        .filter((o) => o.isActive && o.isDefault)
+        .map((o) => ({
+          modifierGroupId:  g.modifierGroup.id,
+          modifierOptionId: o.id,
+          groupName:        g.modifierGroup.name,
+          optionName:       o.name,
+          priceAdjustment:  Number(o.priceAdjustment),
+        })),
+    );
+    commitAdd(p, defaults, multiplier);
   }
 
   function commitAdd(p: Product, modifiers: CartItemModifier[], qty = 1) {

@@ -120,8 +120,14 @@ export default function ModifierRecipesPage() {
         });
       }
       // 2. Replace ingredients (server handles diff in a single tx)
+      // Keep NEGATIVE rows: a negative amount is a substitution (it cancels
+      // what the base recipe calls for, e.g. -200ml fresh milk for an oat
+      // latte). Filtering on `> 0` silently dropped exactly those rows while
+      // still reporting a successful save — so the substitution the help
+      // panel above tells you to enter could never actually be stored, and
+      // re-saving a seeded option would quietly delete its cancel row.
       const items = draft.ingredients
-        .filter((i) => i.rawMaterialId && Number(i.quantity) > 0)
+        .filter((i) => i.rawMaterialId && Number.isFinite(Number(i.quantity)) && Number(i.quantity) !== 0)
         .map((i) => ({
           rawMaterialId: i.rawMaterialId,
           quantity:      Number(i.quantity),
@@ -177,7 +183,9 @@ export default function ModifierRecipesPage() {
       const rm = rmQ.data!.find((r) => r.id === i.rawMaterialId);
       if (!rm?.costPrice) return acc;
       const qty = Number(i.quantity);
-      if (!Number.isFinite(qty) || qty <= 0) return acc;
+      // Negative rows lower the estimate: cancelling the dairy is what makes
+      // an oat swap cost oat money rather than both milks.
+      if (!Number.isFinite(qty) || qty === 0) return acc;
       return acc + qty * Number(rm.costPrice);
     }, 0);
   };

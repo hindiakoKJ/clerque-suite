@@ -57,6 +57,7 @@ interface TenantProfile {
   voidApprovalThresholdCents?: number | null;
   // Magnet Books — owner's saved ledger mode (JWT copy is what gates the ledger).
   ledgerMode?: 'FULL' | 'SIMPLE' | null;
+  inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED' | null;
 }
 
 interface StaffUser {
@@ -709,6 +710,11 @@ export default function SettingsPage() {
             {/* ── Ledger mode (Magnet Books — Simple books vs Full accounting) ── */}
             {isOwner && profile && (
               <LedgerModeCard profile={profile} active={user?.ledgerMode ?? 'FULL'} qc={qc} />
+            )}
+
+            {/* ── How sales are costed (product cost price vs recipe cost) ────── */}
+            {isOwner && profile && (
+              <CostingModeCard profile={profile} qc={qc} />
             )}
 
             {/* Read-only system info — driven by modular pricing (planCode + module flags).
@@ -1766,6 +1772,98 @@ const LEDGER_MODE_OPTIONS: { value: LedgerMode; title: string; desc: string }[] 
   { value: 'SIMPLE', title: 'Simple books',    desc: 'Record money in and out, see your profit. No accounting jargon.' },
   { value: 'FULL',   title: 'Full accounting', desc: 'Journal, chart of accounts, statements, AR/AP, tax, periods.' },
 ];
+
+/**
+ * House costing switch.
+ *
+ * Recipes always deduct ingredients from stock; this only decides where the
+ * COST of a sale comes from. A shop still pricing its ingredients keeps this
+ * on "Product cost price" so its books stay honest, while ingredient tracking
+ * runs from day one — then moves products across as real costs arrive.
+ */
+function CostingModeCard({
+  profile, qc,
+}: {
+  profile: { inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED' | null };
+  qc: ReturnType<typeof useQueryClient>;
+}) {
+  const saved = profile.inventoryMode ?? 'UNIT_BASED';
+  const [mode, setMode] = useState<'UNIT_BASED' | 'RECIPE_BASED'>(saved);
+
+  const updateMut = useMutation({
+    mutationFn: (next: 'UNIT_BASED' | 'RECIPE_BASED') =>
+      api.patch('/tenant/profile', { inventoryMode: next }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      toast.success('Costing method saved. It applies to sales from now on.');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Failed to save costing method.');
+      setMode(saved);
+    },
+  });
+
+  const OPTIONS = [
+    {
+      value: 'UNIT_BASED' as const,
+      title: 'Product cost price',
+      desc: "Each product's own Cost Price is the cost of a sale. Use this while you are still pricing your ingredients.",
+    },
+    {
+      value: 'RECIPE_BASED' as const,
+      title: 'Recipe cost',
+      desc: 'Cost is worked out from ingredients x their average cost, for everything that has a recipe.',
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">How sales are costed</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          Ingredients are always deducted from stock when a product has a recipe — this only changes
+          where the <strong>cost</strong> comes from. Any single product can be set to cost from its
+          recipe on its own product page, whichever option you pick here.
+        </p>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {OPTIONS.map((opt) => {
+          const selected = mode === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={updateMut.isPending}
+              onClick={() => {
+                if (selected) return;
+                setMode(opt.value);
+                updateMut.mutate(opt.value);
+              }}
+              className={`text-left rounded-lg border px-3 py-2.5 transition-colors disabled:opacity-60 ${
+                selected
+                  ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                  : 'border-border bg-muted/30 hover:bg-muted/50'
+              }`}
+            >
+              <div className="text-sm font-medium text-foreground">{opt.title}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{opt.desc}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === 'RECIPE_BASED' && (
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          Any product whose ingredients have no cost yet will report ₱0 cost and 100% profit while
+          this is on.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function LedgerModeCard({
   profile, active, qc,

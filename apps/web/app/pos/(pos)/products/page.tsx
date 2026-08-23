@@ -333,8 +333,20 @@ export default function ProductsPage() {
         return;
       } else if (editing) {
         await api.patch(`/products/${editing.id}`, payload);
-        // On edit: replace BOM via dedicated endpoint
-        if (isRecipeBased || editing.inventoryMode === 'RECIPE_BASED') {
+        // On edit: replace BOM via the dedicated endpoint — but ONLY while
+        // recipe mode is on.
+        //
+        // This used to also fire when the product had merely BEEN
+        // recipe-based, and `bomItems` is [] whenever the toggle is off, so
+        // switching a product back to unit-based silently PUT an empty BOM
+        // and destroyed the recipe. An owner moving to product-based costing
+        // — the normal thing to do before ingredients are priced — lost every
+        // recipe they had entered, with no warning and no undo.
+        //
+        // Recipes now drive ingredient deduction regardless of the costing
+        // mode, so there is no reason to clear one on the way out. To empty a
+        // recipe deliberately, remove its lines while the toggle is on.
+        if (isRecipeBased) {
           setBomSaving(true);
           await api.put(`/products/${editing.id}/bom`, { items: bomItems });
           setBomSaving(false);

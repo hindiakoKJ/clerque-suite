@@ -978,22 +978,41 @@ export class InventoryService {
           select: { productId: true },
           distinct: ['productId'],
         });
-        for (const { productId } of affectedProducts) {
-          const allBom = await tx.bomItem.findMany({
-            where:  { productId },
+        const affectedIds = affectedProducts.map((a) => a.productId);
+
+        if (affectedIds.length > 0) {
+          // Pull EVERY affected product's recipe lines in one query.
+          //
+          // This used to read each product's BOM inside the loop, so a common
+          // ingredient — the milk in forty drinks — meant forty extra round
+          // trips inside a single interactive transaction. Prisma's default
+          // transaction budget is 5s, so on a hosted database receiving stock
+          // for a widely-used ingredient failed outright with P2028 while the
+          // same action worked fine for a rarely-used one.
+          const allLines = await tx.bomItem.findMany({
+            where:  { productId: { in: affectedIds } },
             select: {
+              productId:   true,
               quantity:    true,
               rawMaterial: { select: { costPrice: true } },
             },
           });
-          const newProductCost = allBom.reduce(
-            (sum, b) => sum + (b.rawMaterial?.costPrice != null ? Number(b.rawMaterial.costPrice) : 0) * Number(b.quantity),
-            0,
-          );
-          await tx.product.update({
-            where: { id: productId },
-            data:  { costPrice: new Prisma.Decimal(newProductCost.toFixed(4)) },
-          });
+
+          const costByProduct = new Map<string, number>();
+          for (const line of allLines) {
+            const unit = line.rawMaterial?.costPrice != null ? Number(line.rawMaterial.costPrice) : 0;
+            costByProduct.set(
+              line.productId,
+              (costByProduct.get(line.productId) ?? 0) + unit * Number(line.quantity),
+            );
+          }
+
+          for (const [productId, newProductCost] of costByProduct) {
+            await tx.product.update({
+              where: { id: productId },
+              data:  { costPrice: new Prisma.Decimal(newProductCost.toFixed(4)) },
+            });
+          }
         }
       }
 
@@ -1115,6 +1134,16 @@ export class InventoryService {
         paymentMethod,
         totalValue,
       };
+    },
+    {
+      // One receipt legitimately touches a lot of rows: the stock row, the
+      // weighted-average cost, one product update per drink that uses this
+      // ingredient, the lot, the accounting event and possibly an AP bill.
+      // Prisma's 5s default is measured against a hosted database over the
+      // network, and a staple ingredient used across a whole menu exceeded it
+      // — the receipt then failed with P2028 and no stock was recorded.
+      timeout: 30_000,
+      maxWait: 10_000,
     });
   }
 

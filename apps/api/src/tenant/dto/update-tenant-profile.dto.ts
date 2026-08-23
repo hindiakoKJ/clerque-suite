@@ -96,4 +96,22 @@ export class UpdateTenantProfileDto {
   @IsOptional()
   @IsIn(LEDGER_MODES)
   ledgerMode?: LedgerModeValue;
+
+  /**
+   * House costing switch.
+   *
+   * UNIT_BASED  — cost of sales comes from each product's own Cost Price.
+   *               Recipes still deduct ingredients from stock; they just do
+   *               not drive the money. This is the right setting while a
+   *               shop is still pricing its ingredients.
+   * RECIPE_BASED — cost of sales is computed from ingredients x weighted
+   *               average cost for everything that has a recipe.
+   *
+   * A product marked RECIPE_BASED uses its recipe either way, so a shop can
+   * move products across one at a time before flipping the house switch.
+   */
+  @ApiPropertyOptional({ enum: ['UNIT_BASED', 'RECIPE_BASED'] })
+  @IsOptional()
+  @IsIn(['UNIT_BASED', 'RECIPE_BASED'])
+  inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
 }

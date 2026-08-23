@@ -820,8 +820,39 @@ export class OrdersService {
       void drainProductLots; // explicit reference for readability
 
       // productId -> per-unit recipe cost (₱ per single finished unit).
-      // Populated only for products that have a BOM (i.e., RECIPE_BASED).
+      // Populated only where recipe costing is actually switched on — see
+      // `costFromRecipe` below.
       const recipeUnitCostByProduct = new Map<string, number>();
+
+      // ── Which costing does this sale use? ────────────────────────────────
+      // Two independent things used to be conflated: DEDUCTING ingredients
+      // and COSTING with them. Both keyed off "does a BOM exist", so a shop
+      // that had entered recipes but not yet priced its ingredients silently
+      // posted ₱0 COGS — the recipe cost outranks Product.costPrice — and
+      // toggling the product back to UNIT_BASED changed nothing, because the
+      // flag was never consulted here.
+      //
+      // They are now separate:
+      //   • Ingredients are ALWAYS deducted when a recipe exists, so
+      //     ingredient-level stock works from day one, uncosted.
+      //   • Costing follows the switch: Tenant.inventoryMode is the house
+      //     default, and a product marked RECIPE_BASED overrides it. So a
+      //     shop can run product-based costing today, track ingredients
+      //     already, and flip products over one at a time as their real
+      //     ingredient costs land — no re-import, no lost recipes.
+      const tenantCostingMode = await tx.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { inventoryMode: true },
+      });
+      const houseUsesRecipes = tenantCostingMode?.inventoryMode === 'RECIPE_BASED';
+      const productModes = new Map(
+        (await tx.product.findMany({
+          where:  { id: { in: payload.items.map((i) => i.productId) }, tenantId },
+          select: { id: true, inventoryMode: true },
+        })).map((p) => [p.id, p.inventoryMode]),
+      );
+      const costFromRecipe = (productId: string): boolean =>
+        productModes.get(productId) === 'RECIPE_BASED' || houseUsesRecipes;
 
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
@@ -999,7 +1030,12 @@ export class OrdersService {
           }
         }
 
-        recipeUnitCostByProduct.set(item.productId, perUnitCost);
+        // Ingredients were deducted above regardless; only REGISTER the cost
+        // when recipe costing is on for this product, otherwise the flat
+        // Product.costPrice stays in charge.
+        if (costFromRecipe(item.productId)) {
+          recipeUnitCostByProduct.set(item.productId, perUnitCost);
+        }
       }
 
       // Queue AccountingEvents

@@ -26,6 +26,8 @@ export interface UpdateTenantProfileDto {
   voidApprovalThresholdCents?: number;
   /** Magnet Books — owner preference; SIMPLE hides the full accounting surface. */
   ledgerMode?: 'FULL' | 'SIMPLE';
+  /** House costing switch — see UpdateTenantProfileDto.inventoryMode. */
+  inventoryMode?: 'UNIT_BASED' | 'RECIPE_BASED';
 }
 
 export interface UpdateTaxSettingsDto {

@@ -290,7 +290,13 @@ export default function ProductsPage() {
           return sum + (rm?.costPrice ?? 0) * b.quantity;
         }, 0);
       }
-      if (Number.isNaN(resolvedCost)) resolvedCost = 0;
+      if (!Number.isFinite(resolvedCost)) resolvedCost = 0;
+      // Round to the 4 decimals the API accepts (@IsNumber maxDecimalPlaces: 4).
+      // Summing floats gives 0.09*200 + 0.65*18 = 18.700000000000003, which
+      // renders as ₱18.70 but was rejected outright as "costPrice must be a
+      // number conforming to the specified constraints" — so a recipe product
+      // could not be saved at all once its ingredients had real prices.
+      resolvedCost = Math.round(resolvedCost * 10_000) / 10_000;
 
       const payload: Record<string, unknown> = {
         name: form.name.trim(),

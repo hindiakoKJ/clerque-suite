@@ -10,6 +10,13 @@ export interface ImportResult {
   updated: number;
   skipped: number;
   errors: { row: number; message: string }[];
+  /**
+   * Rows imported with no Cost Price. Not an error — a shop can open before
+   * it has costed everything, and recipe-based items get their cost from the
+   * recipe anyway — but those products report 100% margin until a cost or a
+   * recipe exists, so the number is surfaced instead of passing silently.
+   */
+  missingCost?: number;
 }
 
 @Injectable()
@@ -394,16 +401,15 @@ export class ImportService {
         });
         continue;
       }
-      // Cost Price is REQUIRED — drives COGS posting.
-      // Empty / non-numeric is rejected. Explicit 0 is allowed (free items).
-      if (costStr == null || costStr === '' || costStr.trim?.() === '') {
-        result.errors.push({
-          row: rowNum,
-          message: 'Cost Price is required (column 4). Enter 0 only if the item is genuinely free.',
-        });
-        continue;
-      }
-      const costPrice = this.num(costStr);
+      // Cost Price drives COGS on every sale, but a blank one must not block
+      // the import. A shop is usually still costing its menu when it needs to
+      // start selling, and for anything that later gets a recipe the cost is
+      // derived from ingredients and this column is never read. Blank imports
+      // as 0 and is counted into result.missingCost so it stays visible;
+      // a non-numeric value is still a real mistake and is rejected below.
+      const costBlank = costStr == null || String(costStr).trim() === '';
+      if (costBlank) result.missingCost = (result.missingCost ?? 0) + 1;
+      const costPrice = costBlank ? 0 : this.num(costStr);
       if (isNaN(costPrice) || costPrice < 0) {
         result.errors.push({
           row: rowNum,

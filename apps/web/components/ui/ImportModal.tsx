@@ -28,6 +28,8 @@ interface ImportResult {
   updated: number;
   skipped: number;
   errors: ImportError[];
+  /** Rows that came in with no Cost Price — see the notice below the summary. */
+  missingCost?: number;
 }
 
 interface ImportModalProps {
@@ -257,6 +259,15 @@ export function ImportModal({
                     {result.skipped > 0 && `, ${result.skipped} skipped`}
                     {result.errors.length > 0 && `, ${result.errors.length} error${result.errors.length !== 1 ? 's' : ''}`}
                   </p>
+                  {!!result.missingCost && result.missingCost > 0 && (
+                    // Imported fine, but these will report 100% margin until a
+                    // cost or a recipe exists — worth saying out loud rather
+                    // than letting the profit figures look better than they are.
+                    <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+                      {result.missingCost} item{result.missingCost !== 1 ? 's' : ''} imported with no cost price yet —
+                      their profit will show as 100% until you add a cost or a recipe.
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={() => { resetState(); }}

@@ -68,6 +68,8 @@ interface ImportResult {
   skipped?:  number;
   imported?: number;
   errors?:   Array<{ row?: number; message?: string } | string>;
+  /** Rows imported with no Cost Price — surfaced so margins are not trusted blindly. */
+  missingCost?: number;
 }
 
 export default function ImportTemplatesPage() {
@@ -392,6 +394,9 @@ export default function ImportTemplatesPage() {
                           {created} added · {updated} updated
                           {skipped ? ` · ${skipped} skipped` : ''}
                           {errs ? ` · ${errs} error${errs === 1 ? '' : 's'}` : ''}
+                          {r.missingCost
+                            ? ` · ${r.missingCost} without a cost price yet`
+                            : ''}
                         </span>
                       </div>
                     );

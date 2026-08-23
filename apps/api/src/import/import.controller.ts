@@ -209,15 +209,18 @@ export class ImportController {
   importSetupPack(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: AuthRequest,
-    @Query('branchId') branchId: string,
+    @Query('branchId') branchId?: string,
   ) {
     if (!file) throw new BadRequestException('No file uploaded.');
-    if (!branchId)
-      throw new BadRequestException('branchId query param is required.');
+    // Fall back to the branch the caller is signed into. Requiring the query
+    // param meant the pack could only be uploaded from a screen that knew how
+    // to supply it, which is why the Setup Pack card had no Import button.
+    // The branch only matters for a legacy Inventory sheet — Opening Stock on
+    // the Products sheet resolves the branch itself.
     return this.importService.importSetupPack(
       file,
       req.user.tenantId!,
-      branchId,
+      branchId ?? req.user.branchId ?? '',
     );
   }
 

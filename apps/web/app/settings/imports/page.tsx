@@ -118,11 +118,39 @@ export default function ImportTemplatesPage() {
     try {
       const form = new FormData();
       form.append('file', file);
-      const { data } = await api.post<ImportResult>(t.upload, form);
-      setResults((r) => ({ ...r, [t.id]: data ?? {} }));
-      const created = data?.created ?? data?.imported ?? 0;
-      const updated = data?.updated ?? 0;
-      const errs    = data?.errors?.length ?? 0;
+      const { data } = await api.post<ImportResult | Record<string, ImportResult>>(t.upload, form);
+
+      // The Setup Pack answers per SHEET ({ products: {...}, customers: {...} })
+      // rather than with one flat tally, so add the sheets up — otherwise a
+      // successful multi-sheet import reports "0 added".
+      const isPerSheet =
+        !!data &&
+        typeof data === 'object' &&
+        (data as ImportResult).created === undefined &&
+        (data as ImportResult).imported === undefined &&
+        Object.values(data as Record<string, unknown>).some(
+          (v) => !!v && typeof v === 'object' && 'imported' in (v as object),
+        );
+
+      const totals: ImportResult = isPerSheet
+        ? Object.values(data as Record<string, ImportResult>)
+            .filter((v) => !!v && typeof v === 'object')
+            .reduce<ImportResult>(
+              (acc, sheet) => ({
+                created:     (acc.created ?? 0) + (sheet.created ?? sheet.imported ?? 0),
+                updated:     (acc.updated ?? 0) + (sheet.updated ?? 0),
+                skipped:     (acc.skipped ?? 0) + (sheet.skipped ?? 0),
+                missingCost: (acc.missingCost ?? 0) + (sheet.missingCost ?? 0),
+                errors:      [...(acc.errors ?? []), ...(sheet.errors ?? [])],
+              }),
+              { created: 0, updated: 0, skipped: 0, missingCost: 0, errors: [] },
+            )
+        : ((data as ImportResult) ?? {});
+
+      setResults((r) => ({ ...r, [t.id]: totals }));
+      const created = totals.created ?? totals.imported ?? 0;
+      const updated = totals.updated ?? 0;
+      const errs    = totals.errors?.length ?? 0;
       if (errs > 0) toast.warning(`${t.name}: ${created} added, ${updated} updated, ${errs} row(s) need attention.`);
       else toast.success(`${t.name}: ${created} added, ${updated} updated.`);
     } catch (err: any) {
@@ -178,6 +206,7 @@ export default function ImportTemplatesPage() {
         ? 'One workbook for the whole setup: Products (with opening stock), Ingredients, Recipes, Customers, Vendors and Chart of Accounts. Fill the sheets in order — Recipes link to Products and Ingredients by name. Untouched sheets are skipped.'
         : 'One workbook with Products (including opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — untouched sheets are skipped. Best for first-time setup.',
       endpoint: '/import/template/setup-pack',
+      upload:   '/import/setup-pack',
       filename: 'clerque-setup-pack.xlsx',
       Icon: Box,
       highlight: true,

@@ -1976,11 +1976,16 @@ export class ImportService {
         result.errors.push({ row: rowNum, message: 'Unit is required (e.g. g, ml, kg, L, pc).' });
         continue;
       }
-      if (costStr == null || costStr.trim() === '') {
-        result.errors.push({ row: rowNum, message: 'Cost per Unit is required for COGS calculation.' });
-        continue;
-      }
-      const costPrice = this.num(costStr);
+      // Cost per Unit drives recipe COGS, but a blank one must not reject the
+      // row. A shop typically knows WHAT goes into a drink long before it has
+      // priced every carton and cup, and rejecting here cascades: with no
+      // ingredients created, every Recipes row then fails with "ingredient not
+      // found" and the whole recipe structure is lost for a missing number.
+      // Blank imports as 0 and is counted, so it stays visible; a non-numeric
+      // value is still a real mistake and is rejected.
+      const ingCostBlank = costStr == null || String(costStr).trim() === '';
+      if (ingCostBlank) result.missingCost = (result.missingCost ?? 0) + 1;
+      const costPrice = ingCostBlank ? 0 : this.num(costStr);
       if (isNaN(costPrice) || costPrice < 0) {
         result.errors.push({ row: rowNum, message: `Invalid Cost per Unit: "${costStr}".` });
         continue;

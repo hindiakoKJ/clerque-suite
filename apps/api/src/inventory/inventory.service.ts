@@ -830,6 +830,59 @@ export class InventoryService {
     });
   }
 
+  /**
+   * Re-cost every product whose recipe uses this ingredient.
+   *
+   * Called whenever an ingredient's cost moves — a delivery, or a manual
+   * edit — so product costs and the ledger stay aligned.
+   *
+   * Deliberately does ONE read for all affected recipes. Reading each
+   * product's lines inside a loop meant a staple ingredient (the milk in a
+   * whole drinks menu) fired one extra round trip per product inside a single
+   * interactive transaction, blowing Prisma's 5s budget against a hosted
+   * database and failing the whole operation with P2028 — so the ingredient
+   * could not be edited or received at all, and nothing was saved.
+   */
+  private async recostProductsUsing(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    rawMaterialId: string,
+  ): Promise<number> {
+    const affected = await tx.bomItem.findMany({
+      where:    { rawMaterialId, product: { tenantId } },
+      select:   { productId: true },
+      distinct: ['productId'],
+    });
+    const ids = affected.map((a) => a.productId);
+    if (ids.length === 0) return 0;
+
+    const allLines = await tx.bomItem.findMany({
+      where:  { productId: { in: ids } },
+      select: {
+        productId:   true,
+        quantity:    true,
+        rawMaterial: { select: { costPrice: true } },
+      },
+    });
+
+    const costByProduct = new Map<string, number>();
+    for (const line of allLines) {
+      const unit = line.rawMaterial?.costPrice != null ? Number(line.rawMaterial.costPrice) : 0;
+      costByProduct.set(
+        line.productId,
+        (costByProduct.get(line.productId) ?? 0) + unit * Number(line.quantity),
+      );
+    }
+
+    for (const [productId, cost] of costByProduct) {
+      await tx.product.update({
+        where: { id: productId },
+        data:  { costPrice: new Prisma.Decimal(cost.toFixed(4)) },
+      });
+    }
+    return costByProduct.size;
+  }
+
   async updateRawMaterial(tenantId: string, id: string, dto: Partial<CreateRawMaterialDto> & { isActive?: boolean; lowStockAlert?: number | null }) {
     const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Raw material not found');
@@ -853,25 +906,7 @@ export class InventoryService {
       // change into every product that uses it. Same logic as the receipt
       // path so display + ledger stay aligned.
       if (dto.costPrice != null) {
-        const affectedProducts = await tx.bomItem.findMany({
-          where:    { rawMaterialId: id, product: { tenantId } },
-          select:   { productId: true },
-          distinct: ['productId'],
-        });
-        for (const { productId } of affectedProducts) {
-          const allBom = await tx.bomItem.findMany({
-            where:  { productId },
-            select: { quantity: true, rawMaterial: { select: { costPrice: true } } },
-          });
-          const newProductCost = allBom.reduce(
-            (sum, b) => sum + (b.rawMaterial?.costPrice != null ? Number(b.rawMaterial.costPrice) : 0) * Number(b.quantity),
-            0,
-          );
-          await tx.product.update({
-            where: { id: productId },
-            data:  { costPrice: new Prisma.Decimal(newProductCost.toFixed(4)) },
-          });
-        }
+        await this.recostProductsUsing(tx, tenantId, id);
       }
 
       return {
@@ -879,6 +914,13 @@ export class InventoryService {
         costPrice:     updated.costPrice     != null ? Number(updated.costPrice)     : null,
         lowStockAlert: updated.lowStockAlert != null ? Number(updated.lowStockAlert) : null,
       };
+    },
+    {
+      // Editing one ingredient's cost rewrites the cost of every product that
+      // uses it, so this transaction is as heavy as a stock receipt and needs
+      // the same headroom over a hosted database.
+      timeout: 30_000,
+      maxWait: 10_000,
     });
   }
 
@@ -973,47 +1015,7 @@ export class InventoryService {
         // every recipe that uses it must shift too. Without this, the
         // dashboard's gross-margin numbers and the "missing cost" warnings
         // drift away from reality between receipts.
-        const affectedProducts = await tx.bomItem.findMany({
-          where:  { rawMaterialId, product: { tenantId } },
-          select: { productId: true },
-          distinct: ['productId'],
-        });
-        const affectedIds = affectedProducts.map((a) => a.productId);
-
-        if (affectedIds.length > 0) {
-          // Pull EVERY affected product's recipe lines in one query.
-          //
-          // This used to read each product's BOM inside the loop, so a common
-          // ingredient — the milk in forty drinks — meant forty extra round
-          // trips inside a single interactive transaction. Prisma's default
-          // transaction budget is 5s, so on a hosted database receiving stock
-          // for a widely-used ingredient failed outright with P2028 while the
-          // same action worked fine for a rarely-used one.
-          const allLines = await tx.bomItem.findMany({
-            where:  { productId: { in: affectedIds } },
-            select: {
-              productId:   true,
-              quantity:    true,
-              rawMaterial: { select: { costPrice: true } },
-            },
-          });
-
-          const costByProduct = new Map<string, number>();
-          for (const line of allLines) {
-            const unit = line.rawMaterial?.costPrice != null ? Number(line.rawMaterial.costPrice) : 0;
-            costByProduct.set(
-              line.productId,
-              (costByProduct.get(line.productId) ?? 0) + unit * Number(line.quantity),
-            );
-          }
-
-          for (const [productId, newProductCost] of costByProduct) {
-            await tx.product.update({
-              where: { id: productId },
-              data:  { costPrice: new Prisma.Decimal(newProductCost.toFixed(4)) },
-            });
-          }
-        }
+        await this.recostProductsUsing(tx, tenantId, rawMaterialId);
       }
 
       // Total value for the journal entry = (this delivery's qty) × (unit cost).

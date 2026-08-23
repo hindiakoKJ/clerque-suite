@@ -24,8 +24,26 @@ export class ImportService {
   constructor(private readonly prisma: PrismaService) {}
 
   // ── Helper: parse xlsx or csv buffer into row arrays (first sheet only) ──
-  private async parseFile(file: Express.Multer.File): Promise<string[][]> {
+  /**
+   * Rows for a single-sheet importer.
+   *
+   * `preferred` names the tab this importer actually wants. Without it a
+   * workbook that carries several tabs — say Ingredients + Recipes exported
+   * together — silently handed EVERY importer its first sheet, so uploading
+   * such a file to the Recipes importer parsed the Ingredients tab and failed
+   * for reasons that made no sense to the person doing it. Falls back to the
+   * first sheet, which is what a normal one-tab template is.
+   */
+  private async parseFile(
+    file: Express.Multer.File,
+    preferred: string[] = [],
+  ): Promise<string[][]> {
     const all = await this.parseAllSheets(file);
+    for (const want of preferred) {
+      for (const [name, rows] of all) {
+        if (name.trim().toLowerCase() === want.toLowerCase()) return rows;
+      }
+    }
     const first = all.values().next().value;
     return first ?? [];
   }
@@ -315,7 +333,7 @@ export class ImportService {
     file: Express.Multer.File,
     tenantId: string,
   ): Promise<ImportResult> {
-    const rows = await this.parseFile(file);
+    const rows = await this.parseFile(file, ['Products']);
     return this.importProductsFromRows(rows, tenantId);
   }
 
@@ -1741,7 +1759,7 @@ export class ImportService {
   // Columns: Name*, TIN, Address, Email, Phone, Credit Term Days, Credit Limit, Notes
 
   async importCustomers(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    return this.importCustomersFromRows(await this.parseFile(file), tenantId);
+    return this.importCustomersFromRows(await this.parseFile(file, ['Customers']), tenantId);
   }
 
   private async importCustomersFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
@@ -1842,7 +1860,7 @@ export class ImportService {
   // Columns: Name*, TIN, Address, Email, Phone, Default ATC Code, Default WHT Rate, Notes
 
   async importVendors(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    return this.importVendorsFromRows(await this.parseFile(file), tenantId);
+    return this.importVendorsFromRows(await this.parseFile(file, ['Vendors', 'Suppliers']), tenantId);
   }
 
   private async importVendorsFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
@@ -1948,7 +1966,7 @@ export class ImportService {
   // Columns: Name*, Unit*, Cost per Unit (₱)*, Low Stock Alert, Notes
 
   async importIngredients(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    return this.importIngredientsFromRows(await this.parseFile(file), tenantId);
+    return this.importIngredientsFromRows(await this.parseFile(file, ['Ingredients', 'Raw Materials']), tenantId);
   }
 
   private async importIngredientsFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {
@@ -2174,7 +2192,7 @@ export class ImportService {
   // Columns: Product Name*, Ingredient Name*, Quantity*
 
   async importRecipes(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
-    return this.importRecipesFromRows(await this.parseFile(file), tenantId);
+    return this.importRecipesFromRows(await this.parseFile(file, ['Recipes', 'Recipe', 'BOM']), tenantId);
   }
 
   private async importRecipesFromRows(rows: string[][], tenantId: string): Promise<ImportResult> {

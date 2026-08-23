@@ -7,11 +7,43 @@ import { api } from '@/lib/api';
 
 type AdjustType = 'STOCK_IN' | 'STOCK_OUT' | 'ADJUSTMENT';
 
-const REASONS: Record<AdjustType, string[]> = {
-  STOCK_IN:  ['Delivery received', 'Transfer in', 'Returned to stock', 'Initial count', 'Other'],
-  STOCK_OUT: ['Damaged / spoiled', 'Transfer out', 'Theft / loss', 'Sample / tasting', 'Other'],
-  ADJUSTMENT: ['Physical count correction', 'System error correction', 'Other'],
+/**
+ * Each reason carries the code the API actually validates.
+ *
+ * The modal used to send only the human label, so every STOCK_OUT was
+ * rejected: the service requires a reasonCode from a fixed enum on any
+ * negative adjustment. Spoilage, breakage and theft could not be recorded at
+ * all, which quietly inflates on-hand counts and understates COGS.
+ */
+const REASONS: Record<AdjustType, Array<{ code: string; label: string }>> = {
+  STOCK_IN: [
+    { code: 'OTHER',            label: 'Delivery received' },
+    { code: 'OTHER',            label: 'Transfer in' },
+    { code: 'OTHER',            label: 'Returned to stock' },
+    { code: 'COUNT_CORRECTION', label: 'Initial count' },
+    { code: 'OTHER',            label: 'Other' },
+  ],
+  STOCK_OUT: [
+    { code: 'DAMAGE',        label: 'Damaged / spoiled' },
+    { code: 'EXPIRY',        label: 'Expired' },
+    { code: 'OTHER',         label: 'Transfer out' },
+    { code: 'THEFT',         label: 'Theft / loss' },
+    { code: 'SAMPLE',        label: 'Sample / tasting' },
+    { code: 'INTERNAL_USE',  label: 'Staff / internal use' },
+    { code: 'PROMO_GIVEAWAY', label: 'Giveaway / promo' },
+    { code: 'OTHER',         label: 'Other' },
+  ],
+  ADJUSTMENT: [
+    { code: 'COUNT_CORRECTION', label: 'Physical count correction' },
+    { code: 'OTHER',            label: 'System error correction' },
+    { code: 'OTHER',            label: 'Other' },
+  ],
 };
+
+/** The label shown in the dropdown -> the enum the API expects. */
+function reasonCodeFor(direction: AdjustType, label: string): string {
+  return REASONS[direction].find((r) => r.label === label)?.code ?? 'OTHER';
+}
 
 interface StockAdjustModalProps {
   open: boolean;
@@ -38,16 +70,23 @@ export function StockAdjustModal({
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'OWNER_FUNDED'>('CASH');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
+  const [supervisorPin, setSupervisorPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const qty = parseFloat(qtyStr) || 0;
   const delta = direction === 'STOCK_OUT' ? -qty : qty;
   const newQty = currentQty + delta;
-  const canSubmit = qty > 0 && reason;
+  // Removing stock is a write-off and needs a supervisor to stand behind it.
+  const isNegative = direction === 'STOCK_OUT' || delta < 0;
+  const canSubmit = qty > 0 && !!reason && (!isNegative || /^\d{4,6}$/.test(supervisorPin.trim()));
 
   async function handleSubmit() {
-    if (!canSubmit) { setError('Enter a quantity and select a reason.'); return; }
+    if (qty <= 0 || !reason) { setError('Enter a quantity and select a reason.'); return; }
+    if (isNegative && !/^\d{4,6}$/.test(supervisorPin.trim())) {
+      setError('A supervisor PIN (4-6 digits) is required to remove stock.');
+      return;
+    }
     if (newQty < 0) { setError('Stock cannot go below zero.'); return; }
     setLoading(true);
     try {
@@ -58,6 +97,12 @@ export function StockAdjustModal({
         quantity: delta,
         type: direction,
         reason,
+        // The API validates the CODE, not the label — a negative adjustment
+        // without one is rejected outright.
+        reasonCode: reasonCodeFor(direction, reason),
+        // Removing stock is a write-off, so it needs a supervisor's PIN. The
+        // service bcrypt-verifies it against an authorised attester.
+        supervisorPin: isNegative ? supervisorPin.trim() : undefined,
         note: note || undefined,
         // Only send unitCost on positive-qty receipts (STOCK_IN)
         unitCost: direction === 'STOCK_IN' && qty > 0 && !isNaN(unitCost) && unitCost >= 0
@@ -191,25 +236,47 @@ export function StockAdjustModal({
             <div className="mt-1 flex flex-wrap gap-1.5">
               {REASONS[direction].map((r) => (
                 <button
-                  key={r}
+                  key={r.label}
                   onClick={() => {
-                    setReason(r); setError('');
+                    setReason(r.label); setError('');
                     // Smart default for the ledger: opening stock ("Initial
                     // count") is owner-funded, not a cash purchase; every
                     // other stock-in reason defaults to cash. The operator
                     // can still override via the "Paid with" picker.
-                    if (direction === 'STOCK_IN') setPaymentMethod(r === 'Initial count' ? 'OWNER_FUNDED' : 'CASH');
+                    if (direction === 'STOCK_IN') setPaymentMethod(r.label === 'Initial count' ? 'OWNER_FUNDED' : 'CASH');
                   }}
                   className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                    reason === r ? 'text-white' : 'bg-muted text-muted-foreground hover:bg-secondary'
+                    reason === r.label ? 'text-white' : 'bg-muted text-muted-foreground hover:bg-secondary'
                   }`}
-                  style={reason === r ? { background: 'var(--accent)' } : undefined}
+                  style={reason === r.label ? { background: 'var(--accent)' } : undefined}
                 >
-                  {r}
+                  {r.label}
                 </button>
               ))}
             </div>
           </div>
+
+          {/* Supervisor PIN — required for write-offs */}
+          {isNegative && (
+            <div>
+              <label className="text-xs text-muted-foreground font-medium">
+                Supervisor PIN <span className="text-red-400">*</span>
+              </label>
+              <input
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={6}
+                value={supervisorPin}
+                onChange={(e) => { setSupervisorPin(e.target.value.replace(/\D/g, '')); setError(''); }}
+                placeholder="4-6 digits"
+                className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Removing stock is a write-off, so a supervisor has to approve it.
+              </p>
+            </div>
+          )}
 
           {/* Note (optional) */}
           <div>

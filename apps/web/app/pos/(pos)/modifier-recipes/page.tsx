@@ -151,9 +151,16 @@ export default function ModifierRecipesPage() {
     }
   };
 
-  const addIngredientRow = (optId: string) => {
-    const cur = draftFor({ id: optId, ingredients: [], recipeMultiplier: '1' } as never);
-    const baseDraft = drafts[optId] ?? cur;
+  const addIngredientRow = (opt: ModifierOption) => {
+    const optId = opt.id;
+    // Seed from the REAL option, not an empty stand-in.
+    //
+    // This used to build its base from `{ ingredients: [], recipeMultiplier: '1' }`,
+    // so pressing "Add ingredient" on an option that already had rows started
+    // from nothing: saving then deleted those rows and reset a size option's
+    // multiplier to 1. An oat-milk swap would go back to draining dairy, and a
+    // Grande would stop scaling its recipe — with a success toast either way.
+    const baseDraft = draftFor(opt);
     const firstRm = rmQ.data?.[0];
     patchDraft(optId, {
       ingredients: [
@@ -399,7 +406,7 @@ export default function ModifierRecipesPage() {
 
                             <button
                               type="button"
-                              onClick={() => addIngredientRow(opt.id)}
+                              onClick={() => addIngredientRow(opt)}
                               className="text-xs flex items-center gap-1 text-purple-600 hover:text-purple-800 font-semibold pt-1"
                             >
                               <Plus className="w-3 h-3" /> Add ingredient

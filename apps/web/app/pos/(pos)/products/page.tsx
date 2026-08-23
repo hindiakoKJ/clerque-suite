@@ -17,7 +17,10 @@ interface Category { id: string; name: string; }
 interface Uom { id: string; name: string; abbreviation: string; isActive: boolean; }
 interface Branch { id: string; name: string; }
 interface RawMaterial { id: string; name: string; unit: string; costPrice: number | null; }
-interface BomItem { rawMaterialId: string; quantity: string; }
+/** `search` holds what the user is TYPING. Without it the input's value was
+ *  derived purely from the resolved id, so every keystroke that did not yet
+ *  match an ingredient exactly was discarded as it was typed. */
+interface BomItem { rawMaterialId: string; quantity: string; search?: string; }
 interface Product {
   id: string;
   name: string;
@@ -1253,7 +1256,7 @@ export default function ProductsPage() {
                               <div key={idx} className="grid grid-cols-[1fr_90px_28px] gap-2 items-center">
                                 <input
                                   list="recipe-ingredient-options"
-                                  value={displayValue}
+                                  value={row.search ?? displayValue}
                                   onChange={(e) => {
                                     const typed = e.target.value;
                                     // Resolve the typed display string back to an id.
@@ -1264,7 +1267,14 @@ export default function ProductsPage() {
                                       (m) => `${m.name} (${m.unit})` === typed
                                         || m.name.toLowerCase() === nameOnly,
                                     );
-                                    updateRecipeRow(idx, 'rawMaterialId', match ? match.id : '');
+                                    // Keep the typed text AND the resolved id in one
+                                    // update — storing only the id threw the keystrokes
+                                    // away and made the box impossible to type into.
+                                    setRecipe((prev) => prev.map((r, i) => (
+                                      i === idx
+                                        ? { ...r, search: typed, rawMaterialId: match ? match.id : '' }
+                                        : r
+                                    )));
                                   }}
                                   placeholder="Type to search ingredients…"
                                   className={INPUT_CLS + ' text-xs py-1.5'}

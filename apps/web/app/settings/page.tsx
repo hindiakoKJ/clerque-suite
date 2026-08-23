@@ -249,7 +249,18 @@ export default function SettingsPage() {
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const updateProfileMut = useMutation({
-    mutationFn: (body: typeof profileForm) => api.patch('/tenant/profile', body).then((r) => r.data),
+    // Send only fields the user actually filled in. The form hydrates null
+    // columns as '' for the inputs, and posting that '' straight back made a
+    // blank TIN fail the BIR-format @Matches — so on a new tenant, saving the
+    // shop address failed with "tin must be in BIR format" for a box the
+    // owner never touched, and nothing saved. Blank now means "leave it".
+    mutationFn: (body: typeof profileForm) => api.patch('/tenant/profile', {
+      name:         body.name.trim(),
+      tin:          body.tin.trim()          || undefined,
+      address:      body.address.trim()      || undefined,
+      contactEmail: body.contactEmail.trim() || undefined,
+      contactPhone: body.contactPhone.trim() || undefined,
+    }).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tenant-profile'] });
       setProfileDirty(false);

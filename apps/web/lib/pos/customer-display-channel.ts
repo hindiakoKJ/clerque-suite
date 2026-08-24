@@ -1,7 +1,6 @@
 'use client';
 
 import { api } from '@/lib/api';
-import { readDeviceToken } from '@/lib/pos/device-token';
 
 /**
  * Customer Display channel — multi-topology cart mirror.
@@ -295,10 +294,6 @@ export function subscribeCustomerDisplay(
     const cashierId = opts.cashierId ?? null;
     const tick = async () => {
       try {
-        // A paired display has no JWT — its device token IS its identity.
-        // The poll always failed silently in paired mode before this header
-        // existed; only same-browser BroadcastChannel made it look alive.
-        const device = readDeviceToken();
         const { data } = await api.get<{
           exists: boolean;
           seq?: number;
@@ -315,10 +310,11 @@ export function subscribeCustomerDisplay(
           branchName?: string;
           businessName?: string;
         }>(
+          // The shared api client attaches the paired-device token (and/or
+          // JWT) itself — one mechanism for every display surface.
           cashierId
             ? `/customer-display/state?cashierId=${encodeURIComponent(cashierId)}`
             : '/customer-display/state',
-          device?.deviceToken ? { headers: { 'X-Device-Token': device.deviceToken } } : undefined,
         );
         if (!data.exists) return;
         const seq = data.seq ?? 0;

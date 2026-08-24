@@ -1,5 +1,6 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { isDeviceTokenSurface } from './device-surfaces';
+import { DEVICE_TOKEN_STORAGE_KEY } from './pos/device-token';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { isDemoMode } from './demo/config';
@@ -121,6 +122,27 @@ realApi.interceptors.request.use((config) => {
       }
     } catch {
       // ignore parse errors
+    }
+
+    // Paired-device identity. A tablet paired via /pair (customer display,
+    // KDS) has NO user session — its stored device token IS its credential,
+    // and JwtOrDeviceTokenAuthGuard accepts it in this header. Nothing ever
+    // sent it, so every api.* call from a paired tablet 401'd: the KDS queue
+    // polled forever-empty while the same screen worked on a logged-in
+    // laptop. One token, attached once here, covers queue/bump/serve and
+    // anything a display surface calls. When a JWT is also present it simply
+    // wins — the guard tries it first.
+    try {
+      const rawDevice = localStorage.getItem(DEVICE_TOKEN_STORAGE_KEY);
+      if (rawDevice) {
+        const parsed = JSON.parse(rawDevice) as { deviceToken?: string };
+        if (parsed?.deviceToken && !config.headers['X-Device-Token']) {
+          config.headers['X-Device-Token'] = parsed.deviceToken;
+        }
+      }
+    } catch {
+      // unreadable token — the request proceeds unauthenticated and the
+      // surface's own pair-check handles the redirect.
     }
 
     // Sprint 21 — D5-06: attach a fresh uuid Idempotency-Key on financial

@@ -304,6 +304,40 @@ export class AuthController {
     return tokens;
   }
 
+  /**
+   * POST /auth/switch-cashier — quick relief handover on an open till.
+   *
+   * Swaps the till's session to whichever staff member owns the entered PIN,
+   * WITHOUT touching the open shift: drawer accountability stays with the
+   * cashier who opened it, while every sale rung from here on carries the
+   * relief cashier's id. This is what makes a restroom break a ten-second
+   * lock-and-PIN instead of a full count-close-signout-signin cycle, twice.
+   *
+   * JWT-guarded on purpose: it switches between staff on an ALREADY
+   * authenticated till. From a cold screen, PIN login (with email + company
+   * code) or full login are the only doors in.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ short: { ttl: 60_000, limit: 5 } })
+  @Post('switch-cashier')
+  @HttpCode(HttpStatus.OK)
+  async switchCashier(
+    @Request() req: any,
+    @CurrentUser() current: JwtPayload,
+    @Body() body: { pin: string },
+    @Response({ passthrough: true }) res: ExpressResponse,
+  ) {
+    const user = await this.authService.switchCashierByPin(current.tenantId!, body?.pin ?? '');
+    // Full session issuance — UserSession row + login log, so the switch is
+    // as traceable as any sign-in.
+    const tokens = await this.authService.login(
+      user.id, user.tenantId, user.branchId, user.role, user.name ?? '',
+      req.headers['user-agent'], req.ip,
+    );
+    setSessionCookie(res, tokens.accessToken, this.isProd);
+    return { ...tokens, switchedTo: { id: user.id, name: user.name, role: user.role } };
+  }
+
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Body() dto: RefreshDto, @Response({ passthrough: true }) res: ExpressResponse) {

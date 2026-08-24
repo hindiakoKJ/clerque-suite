@@ -8,7 +8,7 @@ import {
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
   Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity, ChartBar,
   Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
-  FlaskConical, Fuel, Sun, Maximize,
+  FlaskConical, Fuel, Sun, Maximize, Lock,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType, isFnbType } from '@repo/shared-types';
@@ -21,6 +21,8 @@ import { ShiftEodReport, type ShiftReportData } from '@/components/pos/ShiftEodR
 import { CashOutModal } from '@/components/pos/CashOutModal';
 import { PrinterButton } from '@/components/pos/PrinterButton';
 import { useKioskMode } from '@/hooks/pos/useKioskMode';
+import { TillLockOverlay } from '@/components/pos/TillLockOverlay';
+import { useTillLockStore } from '@/store/pos/tillLock';
 import { useAuthStore } from '@/store/auth';
 import { useShiftStore } from '@/store/pos/shift';
 import { useShiftGuard } from '@/hooks/pos/useShiftGuard';
@@ -109,6 +111,11 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // blocked: a cashier dragging the product grid down must not reload the
   // terminal mid-sale.
   const kiosk = useKioskMode({ lockTouch: false });
+
+  // Till lock — one tap before a restroom break. Any staff PIN unlocks;
+  // a different cashier's PIN switches the session to her without touching
+  // the open shift. See TillLockOverlay for the full story.
+  const lockTill = useTillLockStore((s) => s.lock);
   // Customer-facing display flag — drives the "Open Display" header button.
   // `layout` carries the full station list so we can also expose Bar / Kitchen
   // KDS buttons in the header (they open in a new window for second-screen use).
@@ -784,6 +791,15 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         </button>
       )}
 
+      <button
+        onClick={() => lockTill(user?.name ?? null)}
+        title="Lock the till for a quick break — the shift stays open"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-2.5 py-1.5 transition-colors"
+      >
+        <Lock className="h-3.5 w-3.5" />
+        <span className="hidden md:inline">Lock</span>
+      </button>
+
       <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary rounded-md px-2.5 py-1.5">
         <User className="h-3.5 w-3.5" />
         <span className="max-w-[80px] truncate">{user?.name || 'Cashier'}</span>
@@ -821,6 +837,8 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         '--accent-soft': POS_ACCENT_SOFT,
       } as React.CSSProperties}
     >
+      {/* Break lock — covers everything in the POS while locked. */}
+      <TillLockOverlay />
       <AppShell
         navItems={navItems}
         logoIcon={ShoppingCart}

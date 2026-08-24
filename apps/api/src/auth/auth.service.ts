@@ -522,6 +522,72 @@ export class AuthService {
     return DEFAULT_APP_ACCESS[role as keyof typeof DEFAULT_APP_ACCESS] ?? [];
   }
 
+  /**
+   * Quick cashier switch — the restroom-break handover.
+   *
+   * A till has one drawer and, on a small shop's roster, two cashiers. The
+   * full handover (count the drawer, close the shift, sign out, sign in, open
+   * a shift, count again — twice, because the on-duty cashier comes back)
+   * exists to move DRAWER ACCOUNTABILITY between people. A five-minute break
+   * does not move the drawer: the shift, its opening float and its variance
+   * stay with the cashier who opened it. What must change is WHO the orders
+   * say rang them — and that is `Order.createdById`, which follows the JWT.
+   *
+   * So the switch swaps the JWT and nothing else. The relief cashier enters
+   * her PIN on the locked till, gets her own session (recorded in UserSession
+   * and the login log, so the trail is complete), and every sale she rings
+   * carries her id while attaching to the still-open shift. When the on-duty
+   * cashier returns she switches back the same way. No counting, no closing.
+   *
+   * Guard rails:
+   *   - Requires a LIVE authenticated session on the till (JWT guard at the
+   *     controller): this switches between staff on an open till, it is not a
+   *     login path from nothing.
+   *   - Same tenant only, active POS-capable roles only, kiosk-only accounts
+   *     refused (they are never issued JWTs anywhere).
+   *   - The PIN must be unique among the tenant's staff — ambiguity is
+   *     refused outright rather than guessed at, same as supervisor PINs.
+   *   - 2FA-enrolled accounts are refused: a 4-8 digit PIN must never stand
+   *     in for a second factor. They sign in fully instead.
+   */
+  async switchCashierByPin(tenantId: string, pin: string) {
+    const trimmed = (pin ?? '').trim();
+    if (!/^\d{4,8}$/.test(trimmed)) {
+      throw new UnauthorizedException('Enter the 4-8 digit PIN.');
+    }
+
+    const matches = await this.prisma.user.findMany({
+      where: {
+        tenantId,
+        isActive: true,
+        kioskOnly: false,
+        kioskPin: trimmed,   // plaintext, same storage validateUserByPin reads
+        role: { in: ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER'] },
+      },
+      select: {
+        id: true, tenantId: true, branchId: true, role: true, name: true, enable2fa: true,
+      },
+    });
+
+    if (matches.length === 0) {
+      throw new UnauthorizedException('No staff member has that PIN.');
+    }
+    if (matches.length > 1) {
+      throw new ForbiddenException(
+        'Two staff members share this PIN — PINs must be unique. Ask the owner to change one in Staff settings.',
+      );
+    }
+
+    const user = matches[0];
+    if (user.enable2fa) {
+      throw new ForbiddenException(
+        'This account uses two-factor authentication. Sign in fully instead of switching by PIN.',
+      );
+    }
+
+    return user;
+  }
+
   async login(
     userId: string,
     tenantId: string,

@@ -291,11 +291,14 @@ function ManualForm({
         Pair this device
       </h1>
       <p className="text-slate-400 text-sm text-center mb-7">
-        Enter the 4-digit code from your cashier&apos;s tablet.
+        On the cashier&apos;s screen: Settings &rarr; Displays &rarr; Pair a device.
+        Then type the company code and 4-digit number it shows here.
       </p>
 
+      {/* Same identifier the login screen calls "Company Code" — the label
+          must match what the owner already knows, not the schema. */}
       <label className="block text-xs uppercase tracking-wider text-slate-400 mb-2">
-        Tenant slug
+        Company code
       </label>
       <input
         type="text"

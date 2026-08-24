@@ -351,12 +351,21 @@ function PairingCodeModal({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Pair your device</DialogTitle>
+          {/* Typing-first. Mounted tablets cannot be picked up to scan a QR,
+              and the long query-string URL is hopeless to copy by hand — so
+              lead with the two things a person can actually type on a fixed
+              screen, and keep the QR as a shortcut for devices that can scan. */}
           <DialogDescription>
-            Open the URL below on the secondary device, or scan the QR.
+            On the other device, open <span className="font-mono font-semibold text-foreground">{origin.replace(/^https?:\/\//, '')}/pair</span>,
+            then enter your company code and the number below.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-5 py-2">
+          <div className="w-full rounded-lg bg-muted/40 border border-border px-3 py-2 text-center">
+            <p className="text-xs text-muted-foreground">Company code</p>
+            <p className="font-mono font-semibold text-foreground text-lg">{tenantSlug}</p>
+          </div>
           <p
             className="tabular-nums text-foreground tracking-tight leading-none"
             style={{
@@ -389,8 +398,7 @@ function PairingCodeModal({
           </div>
 
           <p className="text-sm text-muted-foreground text-center">
-            Tap <span className="font-mono font-semibold text-foreground">{code.code}</span>{' '}
-            on the secondary device after visiting the URL.
+            Scanning the QR or opening the copied link skips the typing — the code fills itself in.
           </p>
 
           <p className="text-xs text-muted-foreground">

@@ -447,6 +447,11 @@ export class ThermalPrinterService {
     } catch { /* ignore */ }
   }
 
+  /** Raw ESC/POS sender for registry-routed jobs (receipt printer via USB). */
+  async sendRaw(data: Uint8Array): Promise<void> {
+    return this.send(data);
+  }
+
   private async send(data: Uint8Array): Promise<void> {
     if (!this.writer) throw new Error('Printer not connected');
     await this.writer.write(data);

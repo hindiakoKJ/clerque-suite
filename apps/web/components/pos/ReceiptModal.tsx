@@ -2,7 +2,8 @@
 import { useRef, useState } from 'react';
 import { Printer, WifiOff, Zap, Ban } from 'lucide-react';
 import { printer, buildReceipt, type PrintReceiptData } from '@/lib/pos/printer';
-import { isLikelyAndroid, sendViaRawBt } from '@/lib/pos/printer-dispatch';
+import { isLikelyAndroid, sendViaRawBt, dispatchPrintJob } from '@/lib/pos/printer-dispatch';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { usePrinterStore } from '@/store/pos/printer';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
@@ -224,6 +225,14 @@ function TaxFooter({
 export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const printRef      = useRef<HTMLDivElement>(null);
   const printerConnected = usePrinterStore((s) => s.connected);
+
+  // The tenant's designated RECEIPT printer, from the printer registry. The
+  // tier setup creates one ("Receipt Printer", printsReceipts: true) — but
+  // until now nothing on this screen ever looked at it, so the only print
+  // path a till tablet saw was whatever its RawBT happened to point at,
+  // which at the shop was the BAR's ticket printer.
+  const { printers: floorPrinters } = useFloorLayout();
+  const receiptPrinter = floorPrinters.find((p) => p.isActive && p.printsReceipts);
   const user          = useAuthStore((s) => s.user);
   const playSound     = useSound();
   const taxStatus: TaxStatus = user?.taxStatus ?? 'UNREGISTERED';
@@ -325,6 +334,20 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
     }
   }
 
+  /** Registry route: print on the tenant's designated receipt printer,
+   *  whatever its transport (RawBT / USB / network when it lands). */
+  async function handleRegistryPrint() {
+    const printData = assemblePrintData();
+    if (!printData || !receiptPrinter) return;
+    const result = await dispatchPrintJob(
+      receiptPrinter,
+      buildReceipt(printData),
+      { send: (b) => printer.sendRaw(b), connected: printerConnected },
+    );
+    if (result.ok) toast.success(`Receipt sent to ${receiptPrinter.name}.`);
+    else toast.error(result.reason ?? `Could not print on ${receiptPrinter.name}.`);
+  }
+
   /** Android path: same ESC/POS bytes, delivered through the RawBT app to the
    *  paired Bluetooth printer. No connection state to manage — RawBT owns it. */
   function handleBluetoothPrint() {
@@ -400,7 +423,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
               </div>
             </div>
             <div className="ml-auto flex items-center gap-2">
-              {isLikelyAndroid() && (
+              {receiptPrinter ? (
+                <button onClick={() => void handleRegistryPrint()} title={`Print receipt — ${receiptPrinter.name}`} className="text-blue-500 hover:text-blue-700 transition-colors p-2">
+                  <Zap className="h-4 w-4" />
+                </button>
+              ) : isLikelyAndroid() && (
                 <button onClick={handleBluetoothPrint} title="Print via Bluetooth (RawBT)" className="text-blue-500 hover:text-blue-700 transition-colors p-2">
                   <Zap className="h-4 w-4" />
                 </button>
@@ -633,7 +660,15 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 Receipt for customer
               </div>
               <div className="flex flex-col gap-2.5">
-                {isLikelyAndroid() && (
+                {receiptPrinter ? (
+                  <button
+                    onClick={() => void handleRegistryPrint()}
+                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-secondary text-secondary-foreground px-4 text-sm font-semibold hover:bg-secondary/80 transition-colors"
+                    style={{ minHeight: 48 }}
+                  >
+                    <Zap className="h-4 w-4 text-blue-500" /> Print receipt — {receiptPrinter.name}
+                  </button>
+                ) : isLikelyAndroid() && (
                   <button
                     onClick={handleBluetoothPrint}
                     className="font-display flex items-center gap-3 rounded-xl border border-border bg-secondary text-secondary-foreground px-4 text-sm font-semibold hover:bg-secondary/80 transition-colors"

@@ -2,10 +2,11 @@
 import { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff, Maximize } from 'lucide-react';
+import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff, Maximize, Printer } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useKitchenChime } from '@/hooks/pos/useKitchenChime';
 import { useKioskMode } from '@/hooks/pos/useKioskMode';
+import { buildStationTicket, sendViaRawBt, isLikelyAndroid } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { useAuthStore } from '@/store/auth';
 import {
@@ -125,6 +126,30 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   // Kiosk: fullscreen (a kitchen tablet has no business showing a URL bar),
   // wake lock so it never sleeps mid-service, pinned against pinch/pull.
   const kiosk = useKioskMode();
+
+  /**
+   * Print one order's ticket FROM THIS TABLET, through its own paired RawBT
+   * printer. This is what makes two physical printers work without a print
+   * server: the bar tablet pairs with the bar printer, the kitchen tablet
+   * with the kitchen printer, the till with the receipt printer — each
+   * device's RawBT drives exactly one machine, and every ticket prints where
+   * the person who needs it is standing.
+   */
+  const canPrintHere = isLikelyAndroid();
+  function printTicket(orderNumber: string, orderItems: QueueItem[]) {
+    const escpos = buildStationTicket({
+      orderNumber,
+      stationName,
+      completedAt: orderItems[0]?.orderedAt ?? new Date().toISOString(),
+      items: orderItems.map((i) => ({
+        productName: i.productName,
+        quantity:    i.quantity,
+        modifiers:   (i.modifiers ?? []).map((m) => ({ optionName: m })),
+        notes:       i.notes ?? undefined,
+      })),
+    });
+    sendViaRawBt(escpos);
+  }
 
   const { data: items = [], isFetching } = useQuery<QueueItem[]>({
     queryKey: ['kds-queue', stationId],
@@ -340,9 +365,20 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
                 >
                   <div className="flex items-baseline justify-between mb-2">
                     <span className="text-3xl font-bold tracking-tight">#{orderNumber.replace(/^ORD-/, '')}</span>
-                    <span className="flex items-center gap-1 text-sm font-semibold tabular-nums">
-                      <Clock className="h-3.5 w-3.5" />
-                      {fmtElapsed(oldestWait)}
+                    <span className="flex items-center gap-2">
+                      {canPrintHere && (
+                        <button
+                          onClick={() => printTicket(orderNumber, orderItems)}
+                          title="Print this ticket on this station's printer"
+                          className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-700 transition-colors"
+                        >
+                          <Printer className="h-4 w-4" />
+                        </button>
+                      )}
+                      <span className="flex items-center gap-1 text-sm font-semibold tabular-nums">
+                        <Clock className="h-3.5 w-3.5" />
+                        {fmtElapsed(oldestWait)}
+                      </span>
                     </span>
                   </div>
 

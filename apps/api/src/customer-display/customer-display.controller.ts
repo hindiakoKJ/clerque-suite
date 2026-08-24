@@ -86,13 +86,23 @@ export class CustomerDisplayController {
     @CurrentUser() user: JwtPayload,
     @Query('cashierId') cashierId?: string,
   ) {
-    const id = cashierId ?? user.sub;
-    const stored = this.svc.read(user.tenantId!, id);
+    // Universal by default: the freshest snapshot for the tenant, whoever
+    // published it. `cashierId` remains as an explicit narrowing for shops
+    // running one display per till. The old default — falling back to the
+    // CALLER's user id — quietly bound the screen to whichever account
+    // happened to be signed in on it, which is never the account ringing
+    // the sale.
+    const stored = cashierId
+      ? this.svc.read(user.tenantId!, cashierId)
+      : this.svc.readLatestForTenant(user.tenantId!);
     if (!stored) return { exists: false };
     return { exists: true, ...stored };
   }
 
-  /** Clear the cashier's snapshot — called on shift close. */
+  /** Clear the cashier's snapshot — called on shift close. Guard was
+   *  missing entirely — the only unauthenticated route on the controller,
+   *  which meant any caller produced a 500 off the absent user object. */
+  @UseGuards(JwtAuthGuard)
   @Post('clear')
   @HttpCode(HttpStatus.OK)
   clear(@CurrentUser() user: JwtPayload) {

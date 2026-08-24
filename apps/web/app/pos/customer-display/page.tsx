@@ -113,17 +113,24 @@ export default function CustomerDisplayPage() {
   }, [tokenChecked, cashierId, router]);
 
   useEffect(() => {
-    if (!cashierId) return;
+    if (!cashierId) return;   // gate only — poll is tenant-wide below
+    // UNIVERSAL: no cashier key. The relay returns the tenant's freshest
+    // snapshot whoever published it, so this screen mirrors whichever till is
+    // ringing — regardless of which account (owner, cashier, paired token)
+    // this tablet happens to hold. `?cashier=` in the URL narrows to one
+    // till's feed for multi-till shops.
+    //
     // 300ms keeps the worst case (a SEPARATE paired tablet, where polling is
     // the only transport) inside the sub-half-second the counter needs. Two
     // tabs on one browser never wait for this — BroadcastChannel delivers in
     // single-digit milliseconds and the poll is just a safety net.
     const unsubscribe = subscribeCustomerDisplay(setState, {
-      cashierId,
+      cashierId: urlOverride,
+      pollServer: true,
       pollIntervalMs: 300,
     });
     return unsubscribe;
-  }, [cashierId]);
+  }, [cashierId, urlOverride]);
 
   // ── Heartbeat: ping /whoami every 30 s so lastSeenAt stays fresh in the
   // cashier's Settings → Displays table. Skipped when not in paired mode.

@@ -1,6 +1,7 @@
 'use client';
 
 import { api } from '@/lib/api';
+import { readDeviceToken } from '@/lib/pos/device-token';
 
 /**
  * Customer Display channel — multi-topology cart mirror.
@@ -188,17 +189,22 @@ export function publishCustomerDisplay(state: Omit<CustomerDisplayState, 'seq' |
  * subscription (from localStorage cache) so the screen never starts blank.
  *
  * @param onUpdate Called with each new state.
- * @param opts.cashierId  When set, polls the server relay for THIS cashier's
- *                         feed (used when cashier and customer are on different
- *                         devices/profiles). When null, the customer screen
- *                         only receives same-browser updates via BroadcastChannel
- *                         + localStorage.
+ * @param opts.pollServer When true, polls the server relay. WITHOUT a
+ *                         cashierId the relay returns the tenant's freshest
+ *                         snapshot, whoever published it — the universal
+ *                         behaviour a shop's wall display wants. The screen
+ *                         must never care which ACCOUNT is signed in on it;
+ *                         keying the poll to the viewer's account meant a
+ *                         display signed in as the owner watched the owner's
+ *                         empty feed while the cashier rang sales into hers.
+ * @param opts.cashierId  Optional narrowing to one till's feed, for shops
+ *                         running one display per till.
  *
  * Returns an unsubscribe function.
  */
 export function subscribeCustomerDisplay(
   onUpdate: (state: CustomerDisplayState) => void,
-  opts: { cashierId?: string | null; pollIntervalMs?: number } = {},
+  opts: { cashierId?: string | null; pollServer?: boolean; pollIntervalMs?: number } = {},
 ): () => void {
   if (typeof window === 'undefined') return () => {};
 
@@ -229,6 +235,7 @@ export function subscribeCustomerDisplay(
   let lastSeq = 0;
   let lastTs = 0;
   let lastServerSeq = 0;
+  let lastStoredAt = 0;
 
   /**
    * Accept a message if its sequence advanced, OR if it is plainly newer by
@@ -284,13 +291,18 @@ export function subscribeCustomerDisplay(
   // connection. Chaining from completion keeps at most one request open.
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
-  if (opts.cashierId) {
-    const cashierId = opts.cashierId;
+  if (opts.pollServer || opts.cashierId) {
+    const cashierId = opts.cashierId ?? null;
     const tick = async () => {
       try {
+        // A paired display has no JWT — its device token IS its identity.
+        // The poll always failed silently in paired mode before this header
+        // existed; only same-browser BroadcastChannel made it look alive.
+        const device = readDeviceToken();
         const { data } = await api.get<{
           exists: boolean;
           seq?: number;
+          storedAt?: number;
           type?: CustomerDisplayState['type'];
           lines?: CustomerDisplayState['lines'];
           subtotal?: number;
@@ -302,11 +314,20 @@ export function subscribeCustomerDisplay(
           cashierName?: string;
           branchName?: string;
           businessName?: string;
-        }>(`/customer-display/state?cashierId=${encodeURIComponent(cashierId)}`);
+        }>(
+          cashierId
+            ? `/customer-display/state?cashierId=${encodeURIComponent(cashierId)}`
+            : '/customer-display/state',
+          device?.deviceToken ? { headers: { 'X-Device-Token': device.deviceToken } } : undefined,
+        );
         if (!data.exists) return;
         const seq = data.seq ?? 0;
-        if (seq <= lastServerSeq) return;
-        lastServerSeq = seq;
+        // storedAt is the primary freshness signal: the relay's seq counter
+        // resets when the API restarts, its clock does not.
+        const at = data.storedAt ?? 0;
+        if (at <= lastStoredAt && seq <= lastServerSeq) return;
+        lastServerSeq = Math.max(lastServerSeq, seq);
+        lastStoredAt = Math.max(lastStoredAt, at);
         const state: CustomerDisplayState = {
           type:        data.type ?? 'WELCOME',
           lines:       data.lines ?? [],

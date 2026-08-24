@@ -100,6 +100,30 @@ export class CustomerDisplayService {
     return stored;
   }
 
+  /**
+   * Read the FRESHEST snapshot for the tenant, whoever published it.
+   *
+   * This is the universal default a one-or-two-till shop actually wants: the
+   * wall-mounted customer screen mirrors whichever till is ringing. The
+   * per-cashier keying above still exists for narrowing — a multi-till shop
+   * mounts one display per till and passes ?cashierId= — but keying the READ
+   * to an account by default meant a display signed in as the owner polled
+   * the owner's (empty) feed forever while the cashier rang sales into hers,
+   * and the screen never moved.
+   *
+   * Freshness is storedAt (wall clock), not seq — seq resets when the server
+   * restarts, storedAt does not.
+   */
+  readLatestForTenant(tenantId: string): StoredSnapshot | null {
+    this.evictExpired();
+    let latest: StoredSnapshot | null = null;
+    for (const v of this.store.values()) {
+      if (v.tenantId !== tenantId) continue;
+      if (!latest || v.storedAt > latest.storedAt) latest = v;
+    }
+    return latest;
+  }
+
   /** Clear a cashier's snapshot — called on shift close / explicit clear. */
   clear(tenantId: string, cashierId: string): void {
     this.store.delete(this.key(tenantId, cashierId));

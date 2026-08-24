@@ -8,7 +8,7 @@ import {
   Monitor, Coffee, ChefHat, Snowflake, Cake, Store,
   Shirt, Sparkles, Truck, ClipboardCheck, Hammer, Activity, ChartBar,
   Pill, FileBadge, ShieldAlert, Wrench, Receipt as ReceiptIcon, Briefcase,
-  FlaskConical, Fuel, Sun,
+  FlaskConical, Fuel, Sun, Maximize,
 } from 'lucide-react';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isLaundryType, isFnbType } from '@repo/shared-types';
@@ -20,6 +20,7 @@ import { CloseShiftModal } from '@/components/pos/CloseShiftModal';
 import { ShiftEodReport, type ShiftReportData } from '@/components/pos/ShiftEodReport';
 import { CashOutModal } from '@/components/pos/CashOutModal';
 import { PrinterButton } from '@/components/pos/PrinterButton';
+import { useKioskMode } from '@/hooks/pos/useKioskMode';
 import { useAuthStore } from '@/store/auth';
 import { useShiftStore } from '@/store/pos/shift';
 import { useShiftGuard } from '@/hooks/pos/useShiftGuard';
@@ -101,6 +102,13 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   const { user, accessToken, clear } = useAuthStore();
   const { activeShift, clearShift } = useShiftStore();
   const { pendingCount, isSyncing, triggerSync } = usePendingSync();
+
+  // Fullscreen + wake lock for the till tablet. lockTouch stays OFF here —
+  // this layout also serves the owner's desktop management screens, where
+  // text selection and zooming are legitimate. Pull-to-refresh is still
+  // blocked: a cashier dragging the product grid down must not reload the
+  // terminal mid-sale.
+  const kiosk = useKioskMode({ lockTouch: false });
   // Customer-facing display flag — drives the "Open Display" header button.
   // `layout` carries the full station list so we can also expose Bar / Kitchen
   // KDS buttons in the header (they open in a new window for second-screen use).
@@ -324,7 +332,11 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     // tenant-settings page (/settings). Future entries: printers, station
     // mapping, hardware diagnostics.
     ...withSection('Devices', [
-      makeNavItem('/pos/settings/displays', 'Displays', Monitor, MGMT_POS, role),
+      // ALL_POS, deliberately: the person who has to re-pair a rebooted
+      // customer display mid-shift is the cashier standing at it, and the API
+      // has always allowed every role to create pairing codes — only this nav
+      // gate hid the page. Revoking a device stays manager-only server-side.
+      makeNavItem('/pos/settings/displays', 'Displays', Monitor, ALL_POS, role),
     ]),
   ];
 
@@ -760,6 +772,17 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       <div>
         <PrinterButton />
       </div>
+
+      {kiosk.isSupported && !kiosk.isFullscreen && (
+        <button
+          onClick={() => void kiosk.enter()}
+          title="Hide the browser bar — full screen"
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground bg-secondary hover:bg-secondary/80 rounded-md px-2.5 py-1.5 transition-colors"
+        >
+          <Maximize className="h-3.5 w-3.5" />
+          <span className="hidden md:inline">Full screen</span>
+        </button>
+      )}
 
       <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary rounded-md px-2.5 py-1.5">
         <User className="h-3.5 w-3.5" />

@@ -30,8 +30,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * the UI surfaces that hint, since "fixed and not movable" is ultimately an
  * OS decision.
  */
-export function useKioskMode(opts: { lockTouch?: boolean } = {}) {
+export function useKioskMode(opts: { lockTouch?: boolean; blockPullToRefresh?: boolean } = {}) {
   const lockTouch = opts.lockTouch ?? true;
+  const blockPullToRefresh = opts.blockPullToRefresh ?? true;
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSupported, setIsSupported] = useState(false);
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
@@ -79,7 +80,16 @@ export function useKioskMode(opts: { lockTouch?: boolean } = {}) {
     };
   }, [acquireWakeLock]);
 
-  // ── Pin the surface: no zoom, no pull-to-refresh, no selection ───────
+  // ── Pull-to-refresh block — safe everywhere, wanted on tills too ─────
+  useEffect(() => {
+    if (!blockPullToRefresh || typeof document === 'undefined') return;
+    const html = document.documentElement.style;
+    const prevHtml = html.overscrollBehavior;
+    html.overscrollBehavior = 'none';        // kills pull-to-refresh chaining
+    return () => { html.overscrollBehavior = prevHtml; };
+  }, [blockPullToRefresh]);
+
+  // ── Pin the surface: no zoom, no selection (display appliances only) ──
   useEffect(() => {
     if (!lockTouch || typeof document === 'undefined') return;
 
@@ -91,22 +101,19 @@ export function useKioskMode(opts: { lockTouch?: boolean } = {}) {
       touchAction: body.touchAction,
       userSelect: body.userSelect,
     };
-    html.overscrollBehavior = 'none';        // kills pull-to-refresh chaining
+    html.overscrollBehavior = 'none';
     body.overscrollBehavior = 'none';
-    body.touchAction = 'pan-x pan-y';        // scroll ok, pinch-zoom not
+    body.touchAction = 'pan-x pan-y';        // scroll ok, pinch + double-tap zoom not
     body.userSelect = 'none';                // no long-press text selection
 
     // iOS Safari ignores user-scalable=no; it needs the gesture events killed.
+    // Double-tap zoom needs NO handler: `touch-action: pan-x pan-y` disables
+    // it (only 'auto'/'manipulation' keep it). An earlier draft preventDefault-
+    // ed any touchend within 300ms of the last one — which would have eaten
+    // every second tap from a cashier ringing items fast. Never do that on a
+    // surface with buttons.
     const stop = (e: Event) => e.preventDefault();
     document.addEventListener('gesturestart', stop);
-    // Block the double-tap-to-zoom fallback some Android browsers keep.
-    let lastTouch = 0;
-    const onTouchEnd = (e: TouchEvent) => {
-      const now = Date.now();
-      if (now - lastTouch < 300) e.preventDefault();
-      lastTouch = now;
-    };
-    document.addEventListener('touchend', onTouchEnd, { passive: false });
     const onContext = (e: Event) => e.preventDefault();  // long-press menu
     document.addEventListener('contextmenu', onContext);
 
@@ -116,7 +123,6 @@ export function useKioskMode(opts: { lockTouch?: boolean } = {}) {
       body.touchAction = prev.touchAction;
       body.userSelect = prev.userSelect;
       document.removeEventListener('gesturestart', stop);
-      document.removeEventListener('touchend', onTouchEnd);
       document.removeEventListener('contextmenu', onContext);
     };
   }, [lockTouch]);

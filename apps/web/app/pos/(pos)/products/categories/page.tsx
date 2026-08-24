@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { ArrowLeft, Plus, X, Trash2, ChevronDown, ChevronUp, MonitorSpeaker } from 'lucide-react';
+import { ArrowLeft, Plus, X, Trash2, ChevronDown, ChevronUp, MonitorSpeaker, CheckSquare, Square } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { toast } from 'sonner';
@@ -84,6 +84,8 @@ export default function CategoriesPage() {
         </div>
       </div>
 
+      <PrepScreensPanel stations={stations} categories={categories} onChange={invalidate} />
+
       {categories.length === 0 ? (
         <div className="border border-border rounded-2xl p-8 text-center text-sm text-muted-foreground">
           No categories yet. Create one from the Products page.
@@ -112,6 +114,113 @@ export default function CategoriesPage() {
   );
 }
 
+
+/* ─── Prep Screens panel — tick which categories each screen makes ────────── */
+
+/**
+ * Station-centric routing, the way an owner thinks about it: "Kitchen makes
+ * the meals and pasta; Bar makes the drinks." One card per prep screen, tick
+ * the categories that belong to it.
+ *
+ * A category can only feed ONE screen (it is a single pointer on the
+ * category), so ticking it on Kitchen moves it off Bar rather than duplicating
+ * the ticket — moving, not copying, is almost always what a shop means.
+ * Unticking sends it nowhere, which is right for grab-and-go items nobody has
+ * to make.
+ */
+function PrepScreensPanel({
+  stations,
+  categories,
+  onChange,
+}: {
+  stations: Array<{ id: string; name: string }>;
+  categories: Category[];
+  onChange: () => void;
+}) {
+  const { mutate: route, isPending } = useMutation({
+    mutationFn: ({ categoryId, stationId }: { categoryId: string; stationId: string | null }) =>
+      api.patch(`/categories/${categoryId}`, { stationId }),
+    onSuccess: (_d, v) => {
+      onChange();
+      const cat = categories.find((c) => c.id === v.categoryId);
+      const st = stations.find((s) => s.id === v.stationId);
+      toast.success(
+        st
+          ? `"${cat?.name}" orders now appear on the ${st.name} screen.`
+          : `"${cat?.name}" no longer goes to a prep screen.`,
+      );
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed to update routing.'),
+  });
+
+  if (stations.length === 0) {
+    return (
+      <div className="border border-border rounded-2xl p-5 text-sm text-muted-foreground">
+        No prep screens yet.{' '}
+        <Link href="/settings/floor-layout" className="text-primary hover:underline">
+          Set up your Bar / Kitchen screens
+        </Link>{' '}
+        first, then come back here to choose what each one makes.
+      </div>
+    );
+  }
+
+  const unrouted = categories.filter((c) => !c.stationId);
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <MonitorSpeaker className="h-4 w-4 text-muted-foreground" />
+          Prep screens
+        </h2>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Tick the categories each screen makes. Orders only appear on a Kitchen or Bar display
+          when their category is ticked here. A category can feed one screen — ticking it on
+          another moves it.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {stations.map((st) => (
+          <div key={st.id} className="border border-border rounded-2xl p-4">
+            <p className="font-medium text-foreground mb-2.5">{st.name}</p>
+            <div className="flex flex-wrap gap-2">
+              {categories.map((c) => {
+                const here = c.stationId === st.id;
+                return (
+                  <button
+                    key={c.id}
+                    disabled={isPending}
+                    onClick={() =>
+                      route({ categoryId: c.id, stationId: here ? null : st.id })
+                    }
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium border transition-colors disabled:opacity-60 ${
+                      here
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-background border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
+                    }`}
+                  >
+                    {here ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {unrouted.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Not on any screen (nobody has to make them):{' '}
+          {unrouted.map((c) => c.name).join(', ')}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface CardProps {
   category: Category;
   stations: Array<{ id: string; name: string }>;
@@ -129,24 +238,6 @@ function CategoryCard({ category, stations, boundGroups, tenantGroups, isOpen, o
   const [required, setRequired] = useState(false);
   const [multi, setMulti] = useState(false);
   const [pickGroupId, setPickGroupId] = useState('');
-
-  // Route this category to a prep station. null = not sent to any screen —
-  // right for grab-and-go items (bottled water), wrong for anything a barista
-  // or cook has to make.
-  const { mutate: setStation, isPending: stationPending } = useMutation({
-    mutationFn: (stationId: string | null) =>
-      api.patch(`/categories/${category.id}`, { stationId }),
-    onSuccess: (_d, stationId) => {
-      onChange();
-      const st = stations.find((s) => s.id === stationId);
-      toast.success(
-        st
-          ? `"${category.name}" orders now appear on the ${st.name} screen.`
-          : `"${category.name}" no longer routes to a prep screen.`,
-      );
-    },
-    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed to set the station.'),
-  });
 
   const { mutate: createGroup, isPending: createPending } = useMutation({
     mutationFn: () =>
@@ -208,31 +299,16 @@ function CategoryCard({ category, stations, boundGroups, tenantGroups, isOpen, o
 
         {/* Prep-station route. Outside the toggle button so changing it does
             not expand/collapse the card. */}
-        {stations.length === 0 ? (
-          // No stations exist until a Coffee Shop tier is picked — an empty
-          // dropdown here would be one more dead end. Point at the fix.
-          <Link
-            href="/settings/floor-layout"
-            className="shrink-0 text-xs text-primary hover:underline"
-          >
-            Set up prep screens
-          </Link>
-        ) : (
-          <label className="flex items-center gap-2 shrink-0 text-xs text-muted-foreground">
-            <MonitorSpeaker className="h-3.5 w-3.5" />
-            <select
-              value={category.stationId ?? ''}
-              disabled={stationPending}
-              onChange={(e) => setStation(e.target.value || null)}
-              className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground disabled:opacity-60"
-            >
-              <option value="">No prep screen</option>
-              {stations.map((st) => (
-                <option key={st.id} value={st.id}>{st.name}</option>
-              ))}
-            </select>
-          </label>
-        )}
+        {/* Routing is edited in the Prep Screens panel above; this is just
+            the at-a-glance answer to "where do these orders go?". */}
+        <span className={`shrink-0 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full ${
+          category.stationId
+            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+            : 'bg-muted text-muted-foreground'
+        }`}>
+          <MonitorSpeaker className="h-3 w-3" />
+          {stations.find((st) => st.id === category.stationId)?.name ?? 'No prep screen'}
+        </span>
       </div>
 
       {isOpen && (

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, Plus, Pencil, FlaskConical, History, BarChart3, ChevronRight,
+  AlertTriangle, Plus, Pencil, FlaskConical, History, BarChart3, ChevronRight, RotateCcw,
 } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -258,6 +258,14 @@ export default function InventoryPage() {
           >
             <History className="h-3.5 w-3.5" />
             Movement Log
+          </Link>
+          <Link
+            href="/pos/inventory/recipe-catchup"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title="Replay ingredient usage for orders that sold before their recipe existed"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Recipe Catch-Up
           </Link>
           <button
             onClick={() => setFilterLow(!filterLow)}

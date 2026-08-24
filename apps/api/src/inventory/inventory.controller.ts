@@ -22,13 +22,18 @@ import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
+import { RecipeCatchupService } from './recipe-catchup.service';
+import { RecipeCatchupApplyDto, RecipeCatchupPreviewDto } from './dto/recipe-catchup.dto';
 
 @ApiTags('Inventory')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('inventory')
 export class InventoryController {
-  constructor(private inventoryService: InventoryService) {}
+  constructor(
+    private inventoryService: InventoryService,
+    private recipeCatchup: RecipeCatchupService,
+  ) {}
 
   /** List inventory items for a branch — paginated, searchable */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
@@ -218,5 +223,40 @@ export class InventoryController {
     @Body() dto: ReceiveRawMaterialDto,
   ) {
     return this.inventoryService.receiveRawMaterial(user.tenantId!, id, dto);
+  }
+
+  /**
+   * Recipe catch-up — dry run.
+   *
+   * Reconstructs the ingredient usage that historical orders never deducted
+   * because their recipe did not exist yet, and reports it without writing
+   * anything. Always call this before `apply`: the order count it returns is
+   * the confirmation token `apply` demands.
+   */
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'SUPER_ADMIN')
+  @Post('recipe-catchup/preview')
+  @HttpCode(HttpStatus.OK)
+  previewRecipeCatchup(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: RecipeCatchupPreviewDto,
+  ) {
+    return this.recipeCatchup.preview(user.tenantId!, dto);
+  }
+
+  /**
+   * Recipe catch-up — apply.
+   *
+   * Deducts the reconstructed usage from ingredient stock. Owner-level only:
+   * it rewrites balances across the whole ingredient list in one shot.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Post('recipe-catchup/apply')
+  @RequireIdempotency()
+  @HttpCode(HttpStatus.OK)
+  applyRecipeCatchup(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: RecipeCatchupApplyDto,
+  ) {
+    return this.recipeCatchup.apply(user.tenantId!, user.sub, dto);
   }
 }

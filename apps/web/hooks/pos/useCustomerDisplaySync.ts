@@ -2,21 +2,31 @@
 import { useEffect, useRef } from 'react';
 import { useCartStore } from '@/store/pos/cart';
 import { useAuthStore } from '@/store/auth';
-import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { publishCustomerDisplay } from '@/lib/pos/customer-display-channel';
 
 /**
  * Cashier-side hook that mirrors the cart to the customer display.
  * Subscribes to cart changes and publishes a fresh state on every update.
  *
- * No-op when the tenant doesn't have a customer display configured
- * (CS_1 with toggle off, or no CS tier set).
+ * Deliberately NOT gated on Tenant.hasCustomerDisplay.
  *
- * Mount this once on the terminal page. The hook handles publish-throttling
- * and the WELCOME-on-empty-cart state automatically.
+ * That flag defaults false and is only ever set by the floor-layout wizard or
+ * an admin, so a shop that simply opened /pos/customer-display in a second tab
+ * — which is all the feature actually requires — got no cart updates at all.
+ * Worse, it half-worked: the payment-complete publish on the terminal page
+ * ignores the flag, so the display sat on WELCOME through the entire sale and
+ * then suddenly showed the receipt. That reads as "the customer screen needs a
+ * refresh", because refreshing rehydrates it from the last persisted state.
+ *
+ * Publishing is cheap — BroadcastChannel and localStorage cost nothing, and
+ * the server relay is fire-and-forget at a few writes per sale — so there is
+ * nothing to save by gating it. If nobody has a display open, the messages go
+ * nowhere and that is fine.
+ *
+ * Mount this once on the terminal page. The hook handles publish-deduping and
+ * the WELCOME-on-empty-cart state automatically.
  */
 export function useCustomerDisplaySync() {
-  const { hasCustomerDisplay } = useFloorLayout();
   // NEVER fall back to an identifier here. This string is shown on the
   // customer-facing screen, and the old `?? layout?.tenant?.id` fallback
   // printed a raw database id (e.g. "cmofudy340000o201wloxhods") across the
@@ -38,8 +48,6 @@ export function useCustomerDisplaySync() {
   const lastPublishedSig = useRef<string>('');
 
   useEffect(() => {
-    if (!hasCustomerDisplay) return;
-
     // Build a deterministic signature so we don't publish identical states.
     const sig = JSON.stringify({
       n: lines.length,
@@ -81,7 +89,6 @@ export function useCustomerDisplaySync() {
       cashierName: cashierName ?? undefined,
     });
   }, [
-    hasCustomerDisplay,
     lines,
     orderDiscount,
     additionalPwdScEntries,

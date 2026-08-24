@@ -286,14 +286,14 @@ export async function dispatchOrderToStations(
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function uint8ToBase64(bytes: Uint8Array): string {
+export function uint8ToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
   // btoa handles binary strings; the input is already characters in 0-255 range.
   return typeof window !== 'undefined' ? window.btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
 }
 
-function isLikelyAndroid(): boolean {
+export function isLikelyAndroid(): boolean {
   if (typeof navigator === 'undefined') return false;
   return /android/i.test(navigator.userAgent);
 }

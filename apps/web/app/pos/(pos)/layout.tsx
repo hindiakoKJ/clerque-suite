@@ -754,7 +754,10 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         </button>
       )}
 
-      <div className="hidden sm:block">
+      {/* Visible at every width. It used to be `hidden sm:block`, which put the
+          printer control out of reach on exactly the tablet a cashier stands
+          at — the one device where they most often need to reconnect. */}
+      <div>
         <PrinterButton />
       </div>
 

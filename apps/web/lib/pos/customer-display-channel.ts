@@ -101,7 +101,36 @@ function getChannel(): BroadcastChannel | null {
   return channel;
 }
 
+/**
+ * Sequence counter. Receivers drop anything whose seq is not greater than the
+ * last one they accepted, so this MUST keep climbing across page loads.
+ *
+ * It used to start at 0 in every tab. Reload the cashier terminal mid-shift
+ * and it republished from seq 1 while the customer screen was still holding
+ * lastSeq at, say, 47 — so every subsequent update was silently discarded and
+ * the display froze until someone refreshed it. Seeding from the persisted
+ * state closes that hole.
+ */
 let localSeq = 0;
+let seqSeeded = false;
+
+function nextSeq(): number {
+  if (!seqSeeded) {
+    seqSeeded = true;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw) as Partial<CustomerDisplayState>;
+        if (typeof cached.seq === 'number' && Number.isFinite(cached.seq)) {
+          localSeq = Math.max(localSeq, cached.seq);
+        }
+      }
+    } catch {
+      // Unreadable cache — start from zero and let the ts guard cover us.
+    }
+  }
+  return ++localSeq;
+}
 
 /**
  * Post a state update from the cashier-side terminal.
@@ -118,7 +147,7 @@ export function publishCustomerDisplay(state: Omit<CustomerDisplayState, 'seq' |
   if (typeof window === 'undefined') return;
   const payload: CustomerDisplayState = {
     ...state,
-    seq: ++localSeq,
+    seq: nextSeq(),
     ts:  Date.now(),
   };
 
@@ -173,6 +202,10 @@ export function subscribeCustomerDisplay(
 ): () => void {
   if (typeof window === 'undefined') return () => {};
 
+  // Carries the hydrated snapshot forward so the live guards below start from
+  // what was already rendered rather than from zero.
+  let hydrated: CustomerDisplayState | null = null;
+
   // Immediate hydration from localStorage cache (same-browser case)
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -180,6 +213,7 @@ export function subscribeCustomerDisplay(
       const cached = JSON.parse(raw) as CustomerDisplayState;
       // Don't replay PAYMENT_COMPLETE on reconnect — the receipt is gone
       if (cached.type !== 'PAYMENT_COMPLETE') {
+        hydrated = cached;
         onUpdate(cached);
       } else {
         onUpdate({ ...EMPTY_STATE, ts: Date.now() });
@@ -193,13 +227,36 @@ export function subscribeCustomerDisplay(
 
   // Live updates via BroadcastChannel (same browser instant path)
   let lastSeq = 0;
+  let lastTs = 0;
   let lastServerSeq = 0;
+
+  /**
+   * Accept a message if its sequence advanced, OR if it is plainly newer by
+   * wall clock. The second clause is the self-heal: should a publisher ever
+   * restart its counter (a reload, a cleared cache, a second cashier tab),
+   * a stale lastSeq would otherwise discard every future update and freeze
+   * this screen until a human refreshed it. Both publisher and subscriber run
+   * on the same machine in the same-browser topology, so ts is comparable.
+   */
+  const isFresher = (next: CustomerDisplayState): boolean =>
+    next.seq > lastSeq || next.ts > lastTs;
+
+  if (hydrated) {
+    lastSeq = hydrated.seq ?? 0;
+    lastTs  = hydrated.ts ?? 0;
+  }
+
+  const accept = (next: CustomerDisplayState) => {
+    lastSeq = Math.max(lastSeq, next.seq);
+    lastTs  = Math.max(lastTs, next.ts);
+    onUpdate(next);
+  };
+
   const ch = getChannel();
   const onMessage = (e: MessageEvent<CustomerDisplayState>) => {
     const next = e.data;
-    if (next.seq <= lastSeq) return;
-    lastSeq = next.seq;
-    onUpdate(next);
+    if (!isFresher(next)) return;
+    accept(next);
   };
   ch?.addEventListener('message', onMessage);
 
@@ -208,9 +265,8 @@ export function subscribeCustomerDisplay(
     if (e.key !== STORAGE_KEY || !e.newValue) return;
     try {
       const next = JSON.parse(e.newValue) as CustomerDisplayState;
-      if (next.seq <= lastSeq) return;
-      lastSeq = next.seq;
-      onUpdate(next);
+      if (!isFresher(next)) return;
+      accept(next);
     } catch {
       // ignore parse errors
     }
@@ -262,8 +318,7 @@ export function subscribeCustomerDisplay(
         };
         // Bump local seq so BroadcastChannel updates from this point on
         // continue to win when both paths deliver the same payload.
-        if (state.seq > lastSeq) lastSeq = state.seq;
-        onUpdate(state);
+        accept(state);
       } catch {
         // Network blip — ignore, next tick will retry.
       }

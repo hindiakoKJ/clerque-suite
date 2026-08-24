@@ -26,3 +26,10 @@ ALTER TABLE "order_items"
 CREATE INDEX IF NOT EXISTS "order_items_pending_deduction_idx"
   ON "order_items" ("orderId")
   WHERE "ingredientsDeductedAt" IS NULL;
+
+-- Let cashiers sell a product the system believes has no stock. The POS grid
+-- disables any tile whose maxProducible is 0, which greys out the entire menu
+-- of a shop that has entered its recipes but not yet its ingredient counts.
+-- Defaults false, so settled shops keep the guard they have today.
+ALTER TABLE "tenants"
+  ADD COLUMN IF NOT EXISTS "allowSaleWhenOutOfStock" BOOLEAN NOT NULL DEFAULT false;

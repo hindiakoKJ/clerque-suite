@@ -557,6 +557,18 @@ model Tenant {
   /// an inventory setting must never silently move the books.
   recipeDeductionPausedAt DateTime?
 
+  /// Let cashiers ring up a product the system believes has no stock.
+  ///
+  /// The POS grid greys out and disables any tile whose maxProducible is 0.
+  /// That is right for a settled shop, and wrong for one still setting up:
+  /// a cafe whose recipes are entered but whose ingredient counts are not
+  /// sees its whole menu greyed out, and cashiers cannot train or trade.
+  ///
+  /// When true the tile stays sellable and is badged rather than disabled.
+  /// Stock still moves and still goes to zero — nothing is hidden — the sale
+  /// simply is not blocked. Owner toggles it in Settings.
+  allowSaleWhenOutOfStock Boolean @default(false)
+
   /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
   /// endpoints for this tenant return 423 Locked. Use case: detect
   /// compromise (e.g. unusual destructive activity), flip flag, freeze

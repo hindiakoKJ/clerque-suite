@@ -541,6 +541,14 @@ export class ProductsService {
    * struck-through "was ₱X" hint.
    */
   async findForPos(tenantId: string, branchId: string, customerId?: string) {
+    // Owner override: sell even when the system believes stock is zero. Read
+    // once here rather than per product.
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { allowSaleWhenOutOfStock: true },
+    });
+    const allowSaleWhenOutOfStock = tenant?.allowSaleWhenOutOfStock === true;
+
     // Step 1: resolve the customer's price list (if any). One DB hit; no-op
     // when customerId is missing or the customer has no list assigned.
     let overrides = new Map<string, { unitPrice: number; minQuantity: number | null }>();
@@ -682,7 +690,12 @@ export class ProductsService {
         maxProducible != null &&
         ((lowStockAlert != null && maxProducible <= lowStockAlert) ||
          (lowStockAlert == null && maxProducible <= 5)); // sensible default for recipes
-      const isOutOfStock = maxProducible === 0;
+      // `isOutOfStock` drives a DISABLED tile in the POS grid. A shop still
+      // setting up — recipes entered, ingredient counts not yet — would see
+      // its whole menu greyed out and could neither train nor trade. The
+      // owner can opt out of the block; the number itself is unchanged, so
+      // low-stock badges and reporting still tell the truth.
+      const isOutOfStock = maxProducible === 0 && !allowSaleWhenOutOfStock;
 
       // Apply wholesale override if one exists for this product. minQuantity
       // gating happens client-side: we surface BOTH prices so Counter can

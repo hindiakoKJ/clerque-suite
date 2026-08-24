@@ -55,6 +55,8 @@ interface TenantProfile {
   returnsOwnerOnly?:    boolean | null;
   // Master switch for ingredient deduction. Non-null = paused since then.
   recipeDeductionPausedAt?: string | null;
+  // Sell even when the system believes stock is zero.
+  allowSaleWhenOutOfStock?: boolean | null;
   // Sprint 25 — maker-checker void threshold (peso-cents). 0 = disabled.
   voidApprovalThresholdCents?: number | null;
   // Magnet Books — owner's saved ledger mode (JWT copy is what gates the ledger).
@@ -718,6 +720,11 @@ export default function SettingsPage() {
             {/* ── Ingredient deduction master switch ────────────────────────── */}
             {isOwner && profile && (
               <IngredientDeductionCard profile={profile} qc={qc} />
+            )}
+
+            {/* ── Sell when the system believes stock is zero ───────────────── */}
+            {isOwner && profile && (
+              <SellWhenOutOfStockCard profile={profile} qc={qc} />
             )}
 
             {/* ── Maker-checker void threshold (Sprint 25, Solo Pro) ────────── */}
@@ -1635,6 +1642,82 @@ function CostingCard({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Sell when out of stock ────────────────────────────────────────────────
+
+/**
+ * Let cashiers ring up a product the system believes has no stock.
+ *
+ * The POS grid greys out and disables any tile whose producible quantity is
+ * zero. That is right for a settled shop and wrong for one still setting up:
+ * a cafe whose recipes are entered but whose ingredient counts are not sees
+ * its whole menu greyed out, and cashiers can neither train nor trade.
+ *
+ * The stock number itself is untouched — low-stock badges and reports still
+ * tell the truth. Only the block on selling is lifted.
+ */
+function SellWhenOutOfStockCard({
+  profile, qc,
+}: { profile: { allowSaleWhenOutOfStock?: boolean | null }; qc: ReturnType<typeof useQueryClient> }) {
+  const initial = profile.allowSaleWhenOutOfStock === true;
+  const [enabled, setEnabled] = useState(initial);
+
+  const updateMut = useMutation({
+    mutationFn: (next: boolean) =>
+      api.patch('/tenant/profile', { allowSaleWhenOutOfStock: next }).then((r) => r.data),
+    onSuccess: (_d, next) => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      toast.success(
+        next
+          ? 'Every product is now sellable, even at zero stock.'
+          : 'Out-of-stock products are blocked at the till again.',
+      );
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Failed to update.');
+      setEnabled(initial);
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Sell When Out of Stock</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          Normally the till greys out any product it thinks you have run out of. Turn this ON while you are
+          still entering ingredient counts, so the whole menu stays sellable and cashiers can train on it.
+          Stock is still tracked and still falls to zero — only the block on ringing it up is lifted.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2.5">
+        <div className="text-sm">
+          <div className="font-medium text-foreground">Keep every product sellable</div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {enabled
+              ? 'Cashiers can ring up anything on the menu, stocked or not.'
+              : 'Products at zero stock are greyed out and cannot be rung up.'}
+          </div>
+        </div>
+        <button
+          onClick={() => {
+            const next = !enabled;
+            setEnabled(next);
+            updateMut.mutate(next);
+          }}
+          disabled={updateMut.isPending}
+          className="w-11 h-6 rounded-full transition-colors shrink-0"
+          style={{ background: enabled ? 'var(--accent)' : 'hsl(var(--muted-foreground) / 0.3)' }}
+          aria-label="Toggle selling when out of stock"
+        >
+          <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+            enabled ? 'translate-x-5' : 'translate-x-0'
+          }`} />
+        </button>
+      </div>
     </div>
   );
 }

@@ -88,6 +88,13 @@ export class UpdateTenantProfileDto {
   @IsBoolean()
   recipeDeductionEnabled?: boolean;
 
+  /** Let cashiers ring up a product the system believes has no stock.
+   *  The POS grid disables an out-of-stock tile; this un-disables it for a
+   *  shop still entering its counts. Stock still moves and still hits zero. */
+  @IsOptional()
+  @IsBoolean()
+  allowSaleWhenOutOfStock?: boolean;
+
   /** Sprint 25 — Maker-checker void/refund threshold in peso-cents.
    *  0 = disabled. Only meaningful when the tenant's plan has
    *  PLAN_FEATURES[planCode].makerCheckerVoids === true. */

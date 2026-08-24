@@ -24,6 +24,8 @@ export interface UpdateTenantProfileDto {
   returnsOwnerOnly?:  boolean;
   /** Master switch for ingredient deduction at sale time. false = paused. */
   recipeDeductionEnabled?: boolean;
+  /** Let cashiers sell a product the system believes has no stock. */
+  allowSaleWhenOutOfStock?: boolean;
   /** Sprint 25 — Maker-checker void threshold (peso-cents). 0 = disabled. */
   voidApprovalThresholdCents?: number;
   /** Magnet Books — owner preference; SIMPLE hides the full accounting surface. */
@@ -618,6 +620,8 @@ export class TenantService {
         returnsOwnerOnly:  true,
         // Master switch for ingredient deduction. Non-null = paused since then.
         recipeDeductionPausedAt: true,
+        // Sell even when the system believes stock is zero.
+        allowSaleWhenOutOfStock: true,
         // Sprint 25 — Maker-checker void threshold (peso-cents).
         voidApprovalThresholdCents: true,
         // Magnet Books — owner's ledger mode (FULL | SIMPLE). Returned so the

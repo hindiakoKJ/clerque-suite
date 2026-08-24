@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { DEVICE_TOKEN_SURFACES } from './lib/device-surfaces';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { levelValue } from '@repo/shared-types';
@@ -56,9 +57,9 @@ const PUBLIC_PREFIXES = [
   // in localStorage (verified against the API on every poll), not JWT.
   // Lets a TV / second tablet show the customer screen or KDS without
   // ever logging into a tenant account.
-  '/pair',
-  '/pos/customer-display',
-  '/pos/station',
+  // Paired display surfaces — see lib/device-surfaces.ts. Spread rather than
+  // restated so the edge guard and the 401 handler cannot drift apart.
+  ...DEVICE_TOKEN_SURFACES,
 ];
 
 function getToken(req: NextRequest): string | null {

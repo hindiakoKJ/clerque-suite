@@ -1,4 +1,5 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
+import { isDeviceTokenSurface } from './device-surfaces';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { isDemoMode } from './demo/config';
@@ -270,7 +271,17 @@ realApi.interceptors.response.use(
       // component), don't force-reload the page — that creates an infinite
       // refresh loop. Just bubble the error and let the page render its
       // login form normally.
-      if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      // Sprint 25 — never bounce a PAIRED DEVICE to the login screen. A TV
+      // showing the customer display has no user session by design; it runs on
+      // a device token. Any globally-mounted component firing a request through
+      // this client 401s there quite correctly, and forcing /login puts a login
+      // form on a screen the customer is looking at, with nobody to fill it in.
+      // Those surfaces handle their own auth (they redirect to /pair instead).
+      if (
+        typeof window !== 'undefined' &&
+        !window.location.pathname.startsWith('/login') &&
+        !isDeviceTokenSurface(window.location.pathname)
+      ) {
         window.location.href = '/login';
       }
       return Promise.reject(err);

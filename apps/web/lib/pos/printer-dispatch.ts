@@ -301,13 +301,24 @@ export function uint8ToBase64(bytes: Uint8Array): string {
  */
 export function sendViaRawBt(escpos: Uint8Array): void {
   if (typeof window === 'undefined') return;
-  const iframe = document.createElement('iframe');
-  iframe.style.display = 'none';
-  iframe.src = `rawbt:base64,${uint8ToBase64(escpos)}`;
-  document.body.appendChild(iframe);
-  setTimeout(() => {
-    if (iframe.parentNode) document.body.removeChild(iframe);
-  }, 1000);
+  const url = `rawbt:base64,${uint8ToBase64(escpos)}`;
+
+  // Anchor click, not a hidden iframe. Newer Android Chrome silently refuses
+  // custom-scheme navigations inside iframes ("Navigation to rawbt: was
+  // blocked"), which presents as "the print button does nothing" with no
+  // error anywhere. A synthesized click on a real <a> runs inside the user's
+  // gesture and reliably raises the Android intent chooser / RawBT.
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  try {
+    a.click();
+  } finally {
+    setTimeout(() => {
+      if (a.parentNode) document.body.removeChild(a);
+    }, 1000);
+  }
 }
 
 export function isLikelyAndroid(): boolean {

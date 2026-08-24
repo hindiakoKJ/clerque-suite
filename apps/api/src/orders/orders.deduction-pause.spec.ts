@@ -59,12 +59,14 @@ describe('OrdersService — ingredient deduction pause', () => {
       bomItem: {
         findMany: jest.fn().mockResolvedValue([
           // 10g of beans per cup, lot-tracked so the FIFO/FEFO path runs.
-          { rawMaterialId: BEANS, quantity: 10, rawMaterial: { costPrice: 99, lotsTracked: true } },
+          { productId: LATTE, rawMaterialId: BEANS, quantity: 10, rawMaterial: { costPrice: 99, lotsTracked: true } },
         ]),
       },
       modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
-        findUnique: jest.fn().mockResolvedValue({ quantity: 1000 }),
+        findMany: jest.fn(({ where }: any) =>
+          Promise.resolve(where.rawMaterialId.in.map((id: string) => ({ rawMaterialId: id, quantity: 1000 }))),
+        ),
         update: jest.fn(() => { invWrites++; return Promise.resolve({}); }),
       },
       // Stateful, so the live path really sees its own writes. Without this

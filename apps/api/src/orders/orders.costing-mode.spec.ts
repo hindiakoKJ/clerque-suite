@@ -45,13 +45,15 @@ describe('OrdersService — costing mode vs inventory deduction', () => {
       // Recipe exists: 150ml milk per cup.
       bomItem: {
         findMany: jest.fn().mockResolvedValue([
-          { rawMaterialId: MILK.id, quantity: 150, rawMaterial: MILK },
+          { productId: PRODUCT, rawMaterialId: MILK.id, quantity: 150, rawMaterial: MILK },
         ]),
       },
       modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
-        findUnique: jest.fn(({ where }: any) =>
-          Promise.resolve({ quantity: stock[where.branchId_rawMaterialId.rawMaterialId] ?? 0 }),
+        findMany: jest.fn(({ where }: any) =>
+          Promise.resolve(
+            where.rawMaterialId.in.map((id: string) => ({ rawMaterialId: id, quantity: stock[id] ?? 0 })),
+          ),
         ),
         update: jest.fn(({ where, data }: any) => {
           const id = where.branchId_rawMaterialId.rawMaterialId;

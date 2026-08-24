@@ -42,9 +42,11 @@ describe('OrdersService — ingredient substitution', () => {
       },
       // Base recipe: 18g beans + 200ml dairy.
       bomItem: {
+        // Fetched once for ALL products now — rows carry productId so the
+        // service can group them per line.
         findMany: jest.fn().mockResolvedValue([
-          { rawMaterialId: BEANS.id, quantity: 18,  rawMaterial: BEANS },
-          { rawMaterialId: DAIRY.id, quantity: 200, rawMaterial: DAIRY },
+          { productId: PRODUCT, rawMaterialId: BEANS.id, quantity: 18,  rawMaterial: BEANS },
+          { productId: PRODUCT, rawMaterialId: DAIRY.id, quantity: 200, rawMaterial: DAIRY },
         ]),
       },
       modifierOption: {
@@ -61,10 +63,12 @@ describe('OrdersService — ingredient substitution', () => {
         ]),
       },
       rawMaterialInventory: {
-        findUnique: jest.fn(({ where }: any) => {
-          const id = where.branchId_rawMaterialId.rawMaterialId;
-          return Promise.resolve({ id: 'inv-' + id, quantity: stock[id] ?? 0 });
-        }),
+        // One batched read for every ingredient the order could touch.
+        findMany: jest.fn(({ where }: any) =>
+          Promise.resolve(
+            where.rawMaterialId.in.map((id: string) => ({ rawMaterialId: id, quantity: stock[id] ?? 0 })),
+          ),
+        ),
         update: jest.fn(({ where, data }: any) => {
           const id = where.branchId_rawMaterialId.rawMaterialId;
           consumed[id] = (stock[id] ?? 0) - Number(data.quantity);

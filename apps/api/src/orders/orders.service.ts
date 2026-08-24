@@ -883,6 +883,67 @@ export class OrdersService {
       const costFromRecipe = (productId: string): boolean =>
         productModes.get(productId) === 'RECIPE_BASED' || houseUsesRecipes;
 
+      // ── Batched reads: one round trip each, not one per item ────────────
+      // This loop used to fetch modifier options and BOM lines PER ITEM, and
+      // the stock row PER INGREDIENT PER LINE — 40-60 sequential round trips
+      // for an ordinary three-drink order. On a hosted Postgres link that was
+      // the entire 10-15 seconds a cashier stood waiting between "confirm"
+      // and the receipt. Same rows, same math, fetched once up front.
+      const allOptionIds = [...new Set(
+        payload.items.flatMap((i) =>
+          (i.modifiers ?? []).map((m: { modifierOptionId: string }) => m.modifierOptionId).filter(Boolean),
+        ),
+      )];
+      const hoistedOptions = allOptionIds.length > 0
+        ? await tx.modifierOption.findMany({
+            where: { id: { in: allOptionIds } },
+            select: {
+              id: true,
+              recipeMultiplier: true,
+              ingredients: {
+                select: {
+                  rawMaterialId: true,
+                  quantity:      true,
+                  rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
+                },
+              },
+            },
+          })
+        : [];
+      const optionsById = new Map(hoistedOptions.map((o) => [o.id, o]));
+
+      const allBomLines = await tx.bomItem.findMany({
+        where:  { productId: { in: payload.items.map((i) => i.productId) }, product: { tenantId } },
+        select: {
+          productId:     true,
+          rawMaterialId: true,
+          quantity:      true,
+          rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
+        },
+      });
+      const bomsByProduct = new Map<string, typeof allBomLines>();
+      for (const b of allBomLines) {
+        const list = bomsByProduct.get(b.productId) ?? [];
+        list.push(b);
+        bomsByProduct.set(b.productId, list);
+      }
+
+      // Every ingredient this order could touch, with its current stock. The
+      // in-memory map mirrors what the sequential read-then-write saw: each
+      // line reads the level AFTER earlier lines' deductions, floored at zero.
+      const allRmIds = [...new Set([
+        ...allBomLines.map((b) => b.rawMaterialId),
+        ...hoistedOptions.flatMap((o) => o.ingredients.map((ing) => ing.rawMaterialId)),
+      ])];
+      const stockRows = allRmIds.length > 0
+        ? await tx.rawMaterialInventory.findMany({
+            where:  { branchId: payload.branchId, rawMaterialId: { in: allRmIds } },
+            select: { rawMaterialId: true, quantity: true },
+          })
+        : [];
+      const stockNow = new Map(stockRows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+      const rmTouched = new Set<string>();
+
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
 
@@ -899,22 +960,9 @@ export class OrdersService {
         const selectedOptionIds: string[] = (item.modifiers ?? [])
           .map((m: { modifierOptionId: string }) => m.modifierOptionId)
           .filter(Boolean);
-        const modifierOptions = selectedOptionIds.length > 0
-          ? await tx.modifierOption.findMany({
-              where: { id: { in: selectedOptionIds } },
-              select: {
-                id: true,
-                recipeMultiplier: true,
-                ingredients: {
-                  select: {
-                    rawMaterialId: true,
-                    quantity:      true,
-                    rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
-                  },
-                },
-              },
-            })
-          : [];
+        const modifierOptions = selectedOptionIds
+          .map((id) => optionsById.get(id))
+          .filter((o): o is NonNullable<typeof o> => o != null);
 
         const recipeMultiplier = modifierOptions.reduce((max, o) => {
           const m = Number(o.recipeMultiplier);
@@ -925,14 +973,7 @@ export class OrdersService {
         // The productId guard above already rejects cross-tenant productIds,
         // but scoping the bomItem query by product.tenantId makes this
         // resilient to any future code path that bypasses the upstream guard.
-        const bomItems = await tx.bomItem.findMany({
-          where:  { productId: item.productId, product: { tenantId } },
-          select: {
-            rawMaterialId: true,
-            quantity:      true,
-            rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
-          },
-        });
+        const bomItems = bomsByProduct.get(item.productId) ?? [];
 
         // Build the unified consumption list: scaled base BOM + modifier
         // add-ons. Both shapes match `{ rawMaterialId, quantity, rawMaterial }`
@@ -993,19 +1034,15 @@ export class OrdersService {
           const perUnitQty = Number(bom.quantity);    // ingredient qty per 1 finished unit
           const consumeQty = perUnitQty * soldQty;     // total qty drained for this order line
 
-          // Always update the aggregate inventory pool (used by max-producible
-          // computation and low-stock alerts).
-          const rmInv = await tx.rawMaterialInventory.findUnique({
-            where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
-          });
-          if (!rmInv) continue;
-          const before = Number(rmInv.quantity);
+          // Aggregate pool, tracked in memory and flushed once per ingredient
+          // after the loop. A missing stock row skips the line exactly as the
+          // old per-line read did.
+          if (!stockNow.has(bom.rawMaterialId)) continue;
+          const before = stockNow.get(bom.rawMaterialId)!;
           const after  = Math.max(before - consumeQty, 0);
+          stockNow.set(bom.rawMaterialId, after);
           if (!deductionPaused) {
-            await tx.rawMaterialInventory.update({
-              where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
-              data:  { quantity: new Prisma.Decimal(after) },
-            });
+            rmTouched.add(bom.rawMaterialId);
             deductedProductIds.add(item.productId);
           }
 
@@ -1067,6 +1104,19 @@ export class OrdersService {
         // Product.costPrice stays in charge.
         if (costFromRecipe(item.productId)) {
           recipeUnitCostByProduct.set(item.productId, perUnitCost);
+        }
+      }
+
+      // Flush the aggregate pool: ONE write per distinct ingredient. The
+      // sequential read-subtract-floor-write per line lands on the identical
+      // final value (floors only ever pin at zero), so this changes the
+      // round-trip count, not the arithmetic.
+      if (!deductionPaused) {
+        for (const rmId of rmTouched) {
+          await tx.rawMaterialInventory.update({
+            where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: rmId } },
+            data:  { quantity: new Prisma.Decimal(stockNow.get(rmId)!) },
+          });
         }
       }
 

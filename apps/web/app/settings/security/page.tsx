@@ -37,6 +37,85 @@ interface VerifyResp {
   backupCodes: string[];
 }
 
+
+/* ─── Till & login PIN — self-service ──────────────────────────────────────── */
+
+/**
+ * A staff member sets their OWN PIN here. One PIN, three uses: the fast PIN
+ * option on the login screen, unlocking or taking over a locked till, and
+ * kiosk clock-in. Password confirmation is mandatory — the PIN is a
+ * credential, and an unattended signed-in till must not be enough to change
+ * someone's door key.
+ */
+function TillPinCard() {
+  const [pin, setPin] = useState('');
+  const [password, setPassword] = useState('');
+
+  const save = useMutation({
+    mutationFn: () => api.post('/auth/my-pin', { pin: pin.trim(), password }).then((r) => r.data),
+    onSuccess: () => {
+      setPin('');
+      setPassword('');
+      toast.success('PIN saved. Use it on the login screen and the till lock.');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Could not save the PIN.'),
+  });
+
+  const ready = /^\d{4,8}$/.test(pin.trim()) && password.length > 0;
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+      <div>
+        <h2 className="font-semibold text-foreground">Till &amp; login PIN</h2>
+        <p className="text-xs text-muted-foreground mt-1">
+          Your personal 4&ndash;8 digit PIN. It signs you in fast on the login screen (choose
+          &ldquo;PIN&rdquo;), unlocks the till after a break, and lets you take over a locked till
+          under your own name. It must be different from everyone else&rsquo;s at your shop.
+        </p>
+      </div>
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (ready && !save.isPending) save.mutate(); }}
+        className="grid gap-3 sm:grid-cols-2"
+      >
+        <label className="text-xs text-muted-foreground">
+          <span className="block mb-1.5">New PIN (4&ndash;8 digits)</span>
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={8}
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+            autoComplete="off"
+            placeholder="••••"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-lg tracking-[0.35em] tabular-nums text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/40"
+          />
+        </label>
+        <label className="text-xs text-muted-foreground">
+          <span className="block mb-1.5">Confirm with your password</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            placeholder="Account password"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/40"
+          />
+        </label>
+        <div className="sm:col-span-2">
+          <button
+            type="submit"
+            disabled={!ready || save.isPending}
+            className="px-4 py-2 rounded-lg text-white font-semibold text-sm disabled:opacity-50"
+            style={{ background: 'var(--accent)' }}
+          >
+            {save.isPending ? 'Saving…' : 'Save PIN'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export default function SecuritySettingsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
@@ -143,6 +222,9 @@ export default function SecuritySettingsPage() {
       </div>
 
       <div className="flex-1 p-4 sm:p-6 max-w-2xl space-y-6">
+        {/* Every staff member manages their own till/login PIN here. */}
+        <TillPinCard />
+
         {/* Status banner */}
         {isLoading ? (
           <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">

@@ -523,6 +523,56 @@ export class AuthService {
   }
 
   /**
+   * Self-service PIN. One PIN, three uses: fast PIN login on the till,
+   * unlocking/taking over a locked till, and kiosk clock-in. The owner can
+   * still set it from the Staff page, but staff should not need the owner to
+   * pick — or know — their PIN.
+   *
+   * Password confirmation is required because the PIN IS a login credential:
+   * on a shared till an unattended session must not be enough to quietly
+   * change someone's door key.
+   *
+   * Uniqueness within the shop is enforced HERE, at write time, because the
+   * till switch refuses ambiguous PINs at use time — better to reject the
+   * collision when it is created than to strand two cashiers mid-shift.
+   */
+  async setMyPin(userId: string, tenantId: string, pin: string, password: string) {
+    const trimmed = (pin ?? '').trim();
+    if (!/^\d{4,8}$/.test(trimmed)) {
+      throw new BadRequestException('The PIN must be 4 to 8 digits.');
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where:  { id: userId, tenantId },
+      select: { id: true, passwordHash: true },
+    });
+    if (!user) throw new UnauthorizedException();
+
+    const ok = await bcrypt.compare(password ?? '', user.passwordHash);
+    if (!ok) throw new UnauthorizedException('Wrong password.');
+
+    const clash = await this.prisma.user.findFirst({
+      where: {
+        tenantId,
+        isActive: true,
+        kioskPin: trimmed,
+        id: { not: userId },
+      },
+      select: { id: true },
+    });
+    if (clash) {
+      // Deliberately does not say whose — that would let anyone map PINs to people.
+      throw new ForbiddenException('That PIN is already used by someone else here. Pick a different one.');
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data:  { kioskPin: trimmed },
+    });
+    return { ok: true };
+  }
+
+  /**
    * Quick cashier switch — the restroom-break handover.
    *
    * A till has one drawer and, on a small shop's roster, two cashiers. The

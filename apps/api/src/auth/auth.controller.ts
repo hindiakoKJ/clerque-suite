@@ -338,6 +338,25 @@ export class AuthController {
     return { ...tokens, switchedTo: { id: user.id, name: user.name, role: user.role } };
   }
 
+  /**
+   * POST /auth/my-pin — a staff member sets their OWN till PIN.
+   *
+   * The same kioskPin drives PIN login, the till lock/switch, and kiosk
+   * clock-in, so this is the one place a cashier manages all three. Password
+   * confirmation is mandatory: the PIN is a credential, and an unattended
+   * signed-in till must not be enough to change someone's door key.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ short: { ttl: 60_000, limit: 5 } })
+  @Post('my-pin')
+  @HttpCode(HttpStatus.OK)
+  async setMyPin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { pin: string; password: string },
+  ) {
+    return this.authService.setMyPin(user.sub, user.tenantId!, body?.pin ?? '', body?.password ?? '');
+  }
+
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(@Body() dto: RefreshDto, @Response({ passthrough: true }) res: ExpressResponse) {

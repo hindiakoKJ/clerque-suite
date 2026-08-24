@@ -13,6 +13,8 @@ import {
   verifyDeviceToken,
   clearDeviceToken,
 } from '@/lib/pos/device-token';
+import { useKioskMode } from '@/hooks/pos/useKioskMode';
+import { Maximize } from 'lucide-react';
 
 const EMPTY: CustomerDisplayState = {
   type: 'WELCOME',
@@ -96,6 +98,11 @@ export default function CustomerDisplayPage() {
 
   const cashierId = urlOverride ?? pairedCashierId ?? userId;
 
+  // Kiosk: fullscreen (hides the URL bar the customer should never see),
+  // screen wake-lock, and a pinned surface — no pinch-zoom, no pull-to-
+  // refresh, no long-press selection.
+  const kiosk = useKioskMode();
+
   // If we've checked the token and STILL have no source, bounce to /pair.
   // Wait for tokenChecked so we don't redirect during the brief whoami round-trip.
   useEffect(() => {
@@ -131,6 +138,21 @@ export default function CustomerDisplayPage() {
 
   const businessName = state.businessName ?? tenantBusinessName ?? 'Welcome';
 
+  // One small unobtrusive pill, only while browser chrome is visible.
+  // Browsers grant fullscreen exclusively from a tap, so it cannot be
+  // automatic — but a single tap during setup is all it takes, and the pill
+  // vanishes the moment fullscreen is on.
+  const fullscreenPrompt =
+    kiosk.isSupported && !kiosk.isFullscreen ? (
+      <button
+        onClick={() => void kiosk.enter()}
+        className="fixed bottom-3 right-3 z-50 flex items-center gap-1.5 px-3 py-2 rounded-full bg-black/35 text-white/90 text-xs backdrop-blur-sm hover:bg-black/50 transition-colors"
+      >
+        <Maximize className="h-3.5 w-3.5" />
+        Full screen
+      </button>
+    ) : null;
+
   // Welcome screen — no active cart
   if (state.type === 'WELCOME' || (state.lines.length === 0 && state.type !== 'PAYMENT_PENDING')) {
     return (
@@ -138,6 +160,7 @@ export default function CustomerDisplayPage() {
         className="min-h-screen flex flex-col items-center justify-center p-12 text-center"
         style={{ background: 'linear-gradient(135deg, #6b3f1d 0%, #8b5e3c 100%)' }}
       >
+        {fullscreenPrompt}
         <Coffee className="h-24 w-24 text-amber-100 mb-6 opacity-90" />
         <h1 className="text-5xl sm:text-6xl font-bold text-white mb-3 tracking-tight">
           {businessName}
@@ -164,6 +187,7 @@ export default function CustomerDisplayPage() {
         className="min-h-screen flex flex-col items-center justify-center p-12 text-center text-white"
         style={{ background: brand.bg }}
       >
+        {fullscreenPrompt}
         <p className="text-white/70 text-xl uppercase tracking-widest mb-3">Amount due</p>
         <h1 className="text-7xl sm:text-8xl font-bold tracking-tight tabular-nums mb-10">
           {formatPeso(state.total)}
@@ -203,6 +227,7 @@ export default function CustomerDisplayPage() {
         className="min-h-screen flex flex-col items-center justify-center p-12 text-center"
         style={{ background: 'linear-gradient(135deg, #047857 0%, #10b981 100%)' }}
       >
+        {fullscreenPrompt}
         <Sparkles className="h-20 w-20 text-white mb-6" />
         <h1 className="text-5xl sm:text-6xl font-bold text-white mb-2">Salamat!</h1>
         <p className="text-emerald-50 text-2xl mb-10">Thank you for your order</p>
@@ -240,6 +265,7 @@ export default function CustomerDisplayPage() {
         className="min-h-screen flex flex-col items-center justify-center p-12 text-center"
         style={{ background: 'linear-gradient(135deg, #b45309 0%, #f59e0b 100%)' }}
       >
+        {fullscreenPrompt}
         <ChefHat className="h-20 w-20 text-white mb-6 animate-pulse" />
         <h1 className="text-5xl sm:text-6xl font-bold text-white mb-3">Preparing your order</h1>
         <p className="text-amber-50 text-2xl mb-12">Please wait at the counter</p>
@@ -259,6 +285,7 @@ export default function CustomerDisplayPage() {
   // Active cart — show items + total
   return (
     <div className="min-h-screen flex flex-col bg-stone-900 text-white">
+      {fullscreenPrompt}
       {/* Header */}
       <header
         className="px-12 py-6 flex items-center justify-between border-b-4"

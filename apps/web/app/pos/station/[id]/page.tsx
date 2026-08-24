@@ -2,9 +2,10 @@
 import { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff } from 'lucide-react';
+import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff, Maximize } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useKitchenChime } from '@/hooks/pos/useKitchenChime';
+import { useKioskMode } from '@/hooks/pos/useKioskMode';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { useAuthStore } from '@/store/auth';
 import {
@@ -120,6 +121,10 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   // Kitchen bell. The hook owns the browser-audio awkwardness: one reused
   // AudioContext, unlocked on first touch, resumed before every ring.
   const chime = useKitchenChime();
+
+  // Kiosk: fullscreen (a kitchen tablet has no business showing a URL bar),
+  // wake lock so it never sleeps mid-service, pinned against pinch/pull.
+  const kiosk = useKioskMode();
 
   const { data: items = [], isFetching } = useQuery<QueueItem[]>({
     queryKey: ['kds-queue', stationId],
@@ -274,6 +279,16 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
                 className="px-2.5 py-2 rounded-xl bg-stone-800 text-stone-300 hover:bg-stone-700 text-xs transition-colors"
               >
                 Test
+              </button>
+            )}
+            {kiosk.isSupported && !kiosk.isFullscreen && (
+              <button
+                onClick={() => void kiosk.enter()}
+                title="Hide the browser bar — full screen"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-stone-800 text-stone-300 hover:bg-stone-700 text-xs font-semibold transition-colors"
+              >
+                <Maximize className="h-4 w-4" />
+                <span className="hidden sm:inline">Full screen</span>
               </button>
             )}
           </div>

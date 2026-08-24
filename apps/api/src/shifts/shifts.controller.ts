@@ -81,6 +81,25 @@ export class ShiftsController {
    * Paid-outs >₱500 require an approvedById of a manager+ role.
    * Cash drops always require a manager confirmation.
    */
+  /**
+   * Handover drawer count — recorded by the RELIEF cashier when taking over a
+   * locked till. Declares the physical cash against the expected figure at
+   * that instant, so a later shortage can be placed before or after the
+   * handover. Optional; skipping leaves variance with the drawer owner.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BUSINESS_OWNER', 'BRANCH_MANAGER')
+  @Post(':id/handover')
+  @HttpCode(HttpStatus.CREATED)
+  recordHandover(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') shiftId: string,
+    @Body() body: { declaredCash: number },
+  ) {
+    return this.shiftsService.recordHandover(
+      user.tenantId!, shiftId, user.sub, user.name ?? '', Number(body?.declaredCash),
+    );
+  }
+
   @Roles('CASHIER', 'SALES_LEAD', 'BUSINESS_OWNER', 'BRANCH_MANAGER')
   @Post(':id/cash-out')
   @HttpCode(HttpStatus.CREATED)

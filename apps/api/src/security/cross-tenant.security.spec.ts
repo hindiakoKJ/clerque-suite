@@ -657,6 +657,9 @@ describe('SECURITY — ShiftsService: Cross-Tenant Attack Vectors', () => {
       providers: [
         ShiftsService,
         { provide: PrismaService, useValue: prisma },
+        // Handover drawer counts write to the audit trail; irrelevant to
+        // these attack vectors, so a stub suffices.
+        { provide: AuditService, useValue: { log: jest.fn() } },
       ],
     }).compile();
 

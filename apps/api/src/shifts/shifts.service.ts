@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { Prisma } from '@prisma/client';
 
 /**
@@ -37,7 +38,10 @@ export interface ShiftSummary {
 
 @Injectable()
 export class ShiftsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private audit:  AuditService,
+  ) {}
 
   // ─── Branch ownership guard ───────────────────────────────────────────────
 
@@ -215,6 +219,83 @@ export class ShiftsService {
    * The approver must belong to this tenant and have a role permitted to
    * approve (BUSINESS_OWNER / BRANCH_MANAGER / SALES_LEAD).
    */
+  /**
+   * Handover drawer count — the shortage firewall between two cashiers.
+   *
+   * The quick till switch deliberately leaves the shift (and its eventual
+   * variance) with the cashier who opened the drawer. That is right for
+   * accountability but leaves one dispute unanswerable: if the drawer closes
+   * short, was it short BEFORE the relief cashier took over, or after?
+   *
+   * This records the answer at the moment it can still be known: the person
+   * taking over counts the drawer, and the declared amount is stored against
+   * the system's expected cash AT THAT INSTANT. A shortage that predates the
+   * handover shows up here, on the record, before the relief cashier has rung
+   * a single sale — protecting both of them.
+   *
+   * Optional by design. Skipping it just means the variance question stays
+   * with the drawer owner, exactly as it is today.
+   *
+   * Stored twice, deliberately:
+   *   - the immutable audit log (Who column, no-update/no-delete triggers)
+   *   - appended to Shift.notes, so it surfaces on the Z-read where variances
+   *     are actually reviewed.
+   */
+  async recordHandover(
+    tenantId: string,
+    shiftId: string,
+    countedById: string,
+    countedByName: string,
+    declaredCash: number,
+  ) {
+    if (!Number.isFinite(declaredCash) || declaredCash < 0) {
+      throw new BadRequestException('Enter the amount counted in the drawer.');
+    }
+
+    const shift = await this.prisma.shift.findFirst({
+      where: { id: shiftId, tenantId },
+    });
+    if (!shift) throw new NotFoundException('Shift not found.');
+    if (shift.closedAt) throw new BadRequestException('This shift is already closed.');
+
+    const summary = await this.buildSummary(shift);
+    const expected = summary.expectedCash;
+    const variance = Math.round((declaredCash - expected) * 100) / 100;
+
+    const stamp = new Date().toLocaleTimeString('en-PH', {
+      hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila',
+    });
+    const line =
+      `[handover ${stamp}] ${countedByName || 'Relief'} counted ` +
+      `${declaredCash.toFixed(2)} vs expected ${expected.toFixed(2)} ` +
+      `(${variance >= 0 ? '+' : ''}${variance.toFixed(2)})`;
+
+    await this.prisma.shift.update({
+      where: { id: shift.id },
+      data:  { notes: shift.notes ? `${shift.notes}
+${line}` : line },
+    });
+
+    await this.audit.log({
+      tenantId,
+      action:      'SETTING_CHANGED',
+      entityType:  'SHIFT_HANDOVER',
+      entityId:    shift.id,
+      description: line,
+      after: {
+        shiftId:      shift.id,
+        drawerOwner:  shift.cashierId,
+        countedBy:    countedById,
+        declaredCash,
+        expectedCash: expected,
+        variance,
+      },
+      performedBy: countedById,
+    });
+
+    return { declaredCash, expectedCash: expected, variance };
+  }
+
   async recordCashOut(
     tenantId: string,
     shiftId: string,

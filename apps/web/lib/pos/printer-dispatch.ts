@@ -293,6 +293,23 @@ export function uint8ToBase64(bytes: Uint8Array): string {
   return typeof window !== 'undefined' ? window.btoa(binary) : Buffer.from(binary, 'binary').toString('base64');
 }
 
+/**
+ * Hand an ESC/POS payload to the RawBT app via its intent URL. RawBT owns the
+ * Bluetooth pairing (classic SPP printers are unreachable from Web Bluetooth)
+ * and forwards the bytes to the paired printer. The hidden iframe keeps the
+ * intent navigation from replacing the page.
+ */
+export function sendViaRawBt(escpos: Uint8Array): void {
+  if (typeof window === 'undefined') return;
+  const iframe = document.createElement('iframe');
+  iframe.style.display = 'none';
+  iframe.src = `rawbt:base64,${uint8ToBase64(escpos)}`;
+  document.body.appendChild(iframe);
+  setTimeout(() => {
+    if (iframe.parentNode) document.body.removeChild(iframe);
+  }, 1000);
+}
+
 export function isLikelyAndroid(): boolean {
   if (typeof navigator === 'undefined') return false;
   return /android/i.test(navigator.userAgent);

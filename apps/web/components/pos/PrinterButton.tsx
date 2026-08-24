@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { Printer, Unplug, Plug, TestTube, Bluetooth, ExternalLink } from 'lucide-react';
 import { usePrinter } from '@/hooks/pos/usePrinter';
-import { isLikelyAndroid, uint8ToBase64 } from '@/lib/pos/printer-dispatch';
+import { isLikelyAndroid, sendViaRawBt } from '@/lib/pos/printer-dispatch';
 import { toast } from 'sonner';
 
 /**
@@ -43,16 +43,6 @@ function buildTestSlip(): Uint8Array {
   return new Uint8Array(parts);
 }
 
-/** Hand an ESC/POS payload to the RawBT app via its intent URL. */
-function sendViaRawBt(bytes: Uint8Array): void {
-  const iframe = document.createElement('iframe');
-  iframe.style.display = 'none';
-  iframe.src = `rawbt:base64,${uint8ToBase64(bytes)}`;
-  document.body.appendChild(iframe);
-  setTimeout(() => {
-    if (iframe.parentNode) document.body.removeChild(iframe);
-  }, 1000);
-}
 
 export function PrinterButton() {
   const { isSupported, connected, connecting, connect, disconnect, printTest } = usePrinter();

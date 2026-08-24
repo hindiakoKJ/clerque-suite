@@ -1,7 +1,8 @@
 'use client';
 import { useRef, useState } from 'react';
 import { Printer, WifiOff, Zap, Ban } from 'lucide-react';
-import { printer, type PrintReceiptData } from '@/lib/pos/printer';
+import { printer, buildReceipt, type PrintReceiptData } from '@/lib/pos/printer';
+import { isLikelyAndroid, sendViaRawBt } from '@/lib/pos/printer-dispatch';
 import { usePrinterStore } from '@/store/pos/printer';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
@@ -273,10 +274,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
     }
   }
 
-  async function handleThermalPrint() {
-    if (!data) return;
-    try {
-      const printData: PrintReceiptData = {
+  /** One source of truth for the receipt payload — USB and Bluetooth must
+   *  print byte-identical output, BIR fields included. */
+  function assemblePrintData(): PrintReceiptData | null {
+    if (!data) return null;
+    return {
         orderNumber:      data.orderNumber,
         branchName:       data.branchName,
         completedAt:      data.completedAt,
@@ -310,10 +312,29 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
         customerTin:     data.customerTin,
         customerAddress: data.customerAddress,
       };
+  }
+
+  async function handleThermalPrint() {
+    const printData = assemblePrintData();
+    if (!printData) return;
+    try {
       await printer.printReceipt(printData);
       toast.success('Receipt sent to thermal printer.');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Thermal print failed. Try browser print instead.');
+    }
+  }
+
+  /** Android path: same ESC/POS bytes, delivered through the RawBT app to the
+   *  paired Bluetooth printer. No connection state to manage — RawBT owns it. */
+  function handleBluetoothPrint() {
+    const printData = assemblePrintData();
+    if (!printData) return;
+    try {
+      sendViaRawBt(buildReceipt(printData));
+      toast.success('Receipt sent to the Bluetooth printer via RawBT.');
+    } catch {
+      toast.error('Could not hand the receipt to RawBT. Is the app installed?');
     }
   }
 
@@ -379,6 +400,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
               </div>
             </div>
             <div className="ml-auto flex items-center gap-2">
+              {isLikelyAndroid() && (
+                <button onClick={handleBluetoothPrint} title="Print via Bluetooth (RawBT)" className="text-blue-500 hover:text-blue-700 transition-colors p-2">
+                  <Zap className="h-4 w-4" />
+                </button>
+              )}
               {printerConnected && (
                 <button onClick={handleThermalPrint} title="Send to thermal printer" className="text-green-500 hover:text-green-700 transition-colors p-2">
                   <Zap className="h-4 w-4" />
@@ -607,6 +633,15 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 Receipt for customer
               </div>
               <div className="flex flex-col gap-2.5">
+                {isLikelyAndroid() && (
+                  <button
+                    onClick={handleBluetoothPrint}
+                    className="font-display flex items-center gap-3 rounded-xl border border-border bg-secondary text-secondary-foreground px-4 text-sm font-semibold hover:bg-secondary/80 transition-colors"
+                    style={{ minHeight: 48 }}
+                  >
+                    <Zap className="h-4 w-4 text-blue-500" /> Print via Bluetooth
+                  </button>
+                )}
                 {printerConnected ? (
                   <button
                     onClick={handleThermalPrint}

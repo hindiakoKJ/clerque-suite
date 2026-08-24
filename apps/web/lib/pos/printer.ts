@@ -175,7 +175,9 @@ function fmtDate(iso: string) {
 
 // ── ESC/POS document builders ───────────────────────────────────────────────────
 
-function buildReceipt(data: PrintReceiptData): Uint8Array {
+// Exported so the RawBT (Android Bluetooth) path can print the IDENTICAL
+// receipt — same ESC/POS bytes, different transport.
+export function buildReceipt(data: PrintReceiptData): Uint8Array {
   const parts: Uint8Array[] = [];
   const p = (...c: Uint8Array[]) => parts.push(...c, C.lf);
 

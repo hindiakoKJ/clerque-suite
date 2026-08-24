@@ -12,11 +12,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { ArrowLeft, Plus, X, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, Plus, X, Trash2, ChevronDown, ChevronUp, MonitorSpeaker } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { toast } from 'sonner';
 
-interface Category { id: string; name: string; }
+interface Category { id: string; name: string; stationId?: string | null; }
 interface ModifierOption {
   id: string;
   name: string;
@@ -53,9 +54,15 @@ export default function CategoriesPage() {
     staleTime: 30_000,
   });
 
+  // Prep stations (Bar, Kitchen, ...) from the floor layout. An item only
+  // reaches a Kitchen/Bar display when its category routes to that station,
+  // so this page is where an imported menu comes alive on the screens.
+  const { stations } = useFloorLayout();
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['modifier-groups'] });
     qc.invalidateQueries({ queryKey: ['products-pos'] });
+    qc.invalidateQueries({ queryKey: ['categories'] });
   };
 
   return (
@@ -71,7 +78,8 @@ export default function CategoriesPage() {
           <h1 className="font-display text-2xl font-bold">Categories</h1>
           <p className="text-sm text-muted-foreground">
             Bind modifier groups to a category so every product in it gets them
-            automatically (Size, Milk type, Temperature, etc.).
+            automatically — and route each category to a prep station. Orders only
+            appear on the Kitchen or Bar screen when their category is routed there.
           </p>
         </div>
       </div>
@@ -89,6 +97,7 @@ export default function CategoriesPage() {
               <CategoryCard
                 key={c.id}
                 category={c}
+                stations={stations}
                 boundGroups={bound}
                 tenantGroups={allGroups.filter((g) => !g.categoryId)}
                 isOpen={isOpen}
@@ -105,6 +114,7 @@ export default function CategoriesPage() {
 
 interface CardProps {
   category: Category;
+  stations: Array<{ id: string; name: string }>;
   boundGroups: ModifierGroup[];
   tenantGroups: ModifierGroup[];
   isOpen: boolean;
@@ -112,13 +122,31 @@ interface CardProps {
   onChange: () => void;
 }
 
-function CategoryCard({ category, boundGroups, tenantGroups, isOpen, onToggle, onChange }: CardProps) {
+function CategoryCard({ category, stations, boundGroups, tenantGroups, isOpen, onToggle, onChange }: CardProps) {
   const [creating, setCreating] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [name, setName] = useState('');
   const [required, setRequired] = useState(false);
   const [multi, setMulti] = useState(false);
   const [pickGroupId, setPickGroupId] = useState('');
+
+  // Route this category to a prep station. null = not sent to any screen —
+  // right for grab-and-go items (bottled water), wrong for anything a barista
+  // or cook has to make.
+  const { mutate: setStation, isPending: stationPending } = useMutation({
+    mutationFn: (stationId: string | null) =>
+      api.patch(`/categories/${category.id}`, { stationId }),
+    onSuccess: (_d, stationId) => {
+      onChange();
+      const st = stations.find((s) => s.id === stationId);
+      toast.success(
+        st
+          ? `"${category.name}" orders now appear on the ${st.name} screen.`
+          : `"${category.name}" no longer routes to a prep screen.`,
+      );
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed to set the station.'),
+  });
 
   const { mutate: createGroup, isPending: createPending } = useMutation({
     mutationFn: () =>
@@ -165,20 +193,47 @@ function CategoryCard({ category, boundGroups, tenantGroups, isOpen, onToggle, o
 
   return (
     <div className="border border-border rounded-2xl overflow-hidden">
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-5 py-4 hover:bg-muted/30 transition-colors"
-      >
-        <div className="text-left">
-          <p className="font-medium text-foreground">{category.name}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {boundGroups.length === 0
-              ? 'No modifier groups'
-              : `${boundGroups.length} modifier group${boundGroups.length > 1 ? 's' : ''}`}
-          </p>
-        </div>
-        {isOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-      </button>
+      <div className="w-full flex items-center gap-3 px-5 py-4">
+        <button onClick={onToggle} className="flex-1 flex items-center justify-between text-left hover:opacity-80 transition-opacity">
+          <div>
+            <p className="font-medium text-foreground">{category.name}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {boundGroups.length === 0
+                ? 'No modifier groups'
+                : `${boundGroups.length} modifier group${boundGroups.length > 1 ? 's' : ''}`}
+            </p>
+          </div>
+          {isOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </button>
+
+        {/* Prep-station route. Outside the toggle button so changing it does
+            not expand/collapse the card. */}
+        {stations.length === 0 ? (
+          // No stations exist until a Coffee Shop tier is picked — an empty
+          // dropdown here would be one more dead end. Point at the fix.
+          <Link
+            href="/settings/floor-layout"
+            className="shrink-0 text-xs text-primary hover:underline"
+          >
+            Set up prep screens
+          </Link>
+        ) : (
+          <label className="flex items-center gap-2 shrink-0 text-xs text-muted-foreground">
+            <MonitorSpeaker className="h-3.5 w-3.5" />
+            <select
+              value={category.stationId ?? ''}
+              disabled={stationPending}
+              onChange={(e) => setStation(e.target.value || null)}
+              className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground disabled:opacity-60"
+            >
+              <option value="">No prep screen</option>
+              {stations.map((st) => (
+                <option key={st.id} value={st.id}>{st.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
 
       {isOpen && (
         <div className="border-t border-border p-5 space-y-4 bg-muted/10">

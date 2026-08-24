@@ -80,6 +80,14 @@ export class UpdateTenantProfileDto {
   @IsBoolean()
   returnsOwnerOnly?: boolean;
 
+  /** Master switch for ingredient deduction at sale time.
+   *  false = PAUSE (sales stop deducting ingredients; COGS is unaffected).
+   *  true  = resume. Stored as Tenant.recipeDeductionPausedAt, so the instant
+   *  the pause began is preserved for the Recipe Catch-Up. */
+  @IsOptional()
+  @IsBoolean()
+  recipeDeductionEnabled?: boolean;
+
   /** Sprint 25 — Maker-checker void/refund threshold in peso-cents.
    *  0 = disabled. Only meaningful when the tenant's plan has
    *  PLAN_FEATURES[planCode].makerCheckerVoids === true. */

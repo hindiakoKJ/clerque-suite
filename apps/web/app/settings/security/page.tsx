@@ -18,6 +18,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ShieldCheck, ShieldAlert, Loader2, Copy, ChevronLeft, KeyRound, X } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -37,6 +38,7 @@ interface VerifyResp {
 }
 
 export default function SecuritySettingsPage() {
+  const router = useRouter();
   const { user } = useAuthStore();
   const qc = useQueryClient();
   const [enrolling, setEnrolling] = useState<EnrolResp | null>(null);
@@ -117,9 +119,20 @@ export default function SecuritySettingsPage() {
   return (
     <div className="flex flex-col h-full overflow-auto">
       <div className="bg-background border-b border-border px-4 sm:px-6 py-5 shrink-0">
-        <Link href="/settings" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-1">
+        {/* router.back() (history POP), never <Link href="/settings"> (history
+            PUSH). Pushing /settings on top of /settings/security traps Back in a
+            two-page loop the user cannot escape — the same defect already fixed
+            in the kiosk and branches sub-pages. */}
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+            else router.push('/settings');
+          }}
+          className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-1"
+        >
           <ChevronLeft className="h-3 w-3" /> Settings
-        </Link>
+        </button>
         <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
           <KeyRound className="h-5 w-5" style={{ color: 'var(--accent)' }} />
           Security &amp; Two-Factor Authentication

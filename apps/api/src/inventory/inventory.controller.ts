@@ -228,10 +228,10 @@ export class InventoryController {
   /**
    * Recipe catch-up — dry run.
    *
-   * Reconstructs the ingredient usage that historical orders never deducted
-   * because their recipe did not exist yet, and reports it without writing
-   * anything. Always call this before `apply`: the order count it returns is
-   * the confirmation token `apply` demands.
+   * Reconstructs the ingredient usage that historical sale lines never
+   * deducted because their recipe did not exist yet, and reports it without
+   * writing anything. Always call this before `apply`: the line count it
+   * returns is the confirmation token `apply` demands.
    */
   @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'SUPER_ADMIN')
   @Post('recipe-catchup/preview')

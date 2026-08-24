@@ -26,6 +26,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Database, Download, Eye, AlertTriangle, ShieldCheck, Loader2, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
@@ -68,6 +69,7 @@ function formatLastModified(iso: string | null): string {
 }
 
 export default function BackupDataPage() {
+  const router = useRouter();
   const { user } = useAuthStore();
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
@@ -129,12 +131,19 @@ export default function BackupDataPage() {
       <div className="bg-background border-b border-border px-4 sm:px-6 py-5 shrink-0">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <Link
-              href="/settings"
+            {/* router.back() (history POP), never <Link href="/settings"> (history PUSH).
+                Pushing /settings on top of a sub-page traps Back in a two-page loop
+                the user cannot escape. */}
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+                else router.push('/settings');
+              }}
               className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-1"
             >
               <ChevronLeft className="h-3 w-3" /> Settings
-            </Link>
+            </button>
             <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
               <Database className="h-5 w-5" style={{ color: 'var(--accent)' }} />
               Data Backups

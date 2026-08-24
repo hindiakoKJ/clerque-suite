@@ -53,6 +53,8 @@ interface TenantProfile {
   receiptLogoUrl?:      string | null;
   // Sprint 19 — returns/refunds owner-only policy.
   returnsOwnerOnly?:    boolean | null;
+  // Master switch for ingredient deduction. Non-null = paused since then.
+  recipeDeductionPausedAt?: string | null;
   // Sprint 25 — maker-checker void threshold (peso-cents). 0 = disabled.
   voidApprovalThresholdCents?: number | null;
   // Magnet Books — owner's saved ledger mode (JWT copy is what gates the ledger).
@@ -711,6 +713,11 @@ export default function SettingsPage() {
             {/* ── Returns/refunds owner-only policy (Sprint 19) ────────────── */}
             {isOwner && profile && (
               <ReturnsPolicyCard profile={profile} qc={qc} />
+            )}
+
+            {/* ── Ingredient deduction master switch ────────────────────────── */}
+            {isOwner && profile && (
+              <IngredientDeductionCard profile={profile} qc={qc} />
             )}
 
             {/* ── Maker-checker void threshold (Sprint 25, Solo Pro) ────────── */}
@@ -1625,6 +1632,101 @@ function CostingCard({
             SMEs §13.10, F&B and retail businesses record utilities and rent as Operating Expenses,
             not Cost of Goods Sold. Including them would distort your gross margin in either direction
             depending on month-to-month usage. They appear under OpEx in your Income Statement.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Ingredient deduction master switch ────────────────────────────────────
+
+/**
+ * Pause or resume ingredient deduction shop-wide.
+ *
+ * A shop rings sales for weeks before its recipe book is finished. With
+ * recipes half-entered, letting sales deduct produces a stock picture that is
+ * wrong in both directions — a few products drain, most do not. Pausing makes
+ * it uniformly "nothing deducted", and every order records that, so the whole
+ * backlog can be replayed in one pass from Inventory -> Recipe Catch-Up once
+ * the recipes are done.
+ *
+ * Costing is untouched either way: COGS is identical whether this is on or off.
+ */
+function IngredientDeductionCard({
+  profile, qc,
+}: { profile: { recipeDeductionPausedAt?: string | null }; qc: ReturnType<typeof useQueryClient> }) {
+  const pausedAt = profile.recipeDeductionPausedAt ?? null;
+  const initial  = pausedAt === null;               // enabled when NOT paused
+  const [enabled, setEnabled] = useState(initial);
+
+  const updateMut = useMutation({
+    mutationFn: (next: boolean) =>
+      api.patch('/tenant/profile', { recipeDeductionEnabled: next }).then((r) => r.data),
+    onSuccess: (_d, next) => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      toast.success(
+        next
+          ? 'Ingredient deduction resumed. Sales now deduct recipe ingredients again.'
+          : 'Ingredient deduction paused. Sales will not touch ingredient stock until you resume.',
+      );
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Failed to update ingredient deduction.');
+      setEnabled(initial); // roll back local state
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Ingredient Deduction</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          When ON, every sale of a product with a recipe deducts its ingredients from stock. Pause it while
+          you are still entering recipes — sales keep working, ingredient stock simply holds still, and
+          every order is recorded so you can replay the whole backlog later in one safe pass.
+          This does not change your costs: COGS is identical either way.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2.5">
+        <div className="text-sm">
+          <div className="font-medium text-foreground">Deduct ingredients on every sale</div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {enabled
+              ? 'Sales deduct recipe ingredients as they are rung up.'
+              : 'Paused — sales are not touching ingredient stock.'}
+          </div>
+        </div>
+        <button
+          onClick={() => {
+            const next = !enabled;
+            setEnabled(next);
+            updateMut.mutate(next);
+          }}
+          disabled={updateMut.isPending}
+          className="w-11 h-6 rounded-full transition-colors shrink-0"
+          style={{ background: enabled ? 'var(--accent)' : 'hsl(var(--muted-foreground) / 0.3)' }}
+          aria-label="Toggle ingredient deduction"
+        >
+          <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+            enabled ? 'translate-x-5' : 'translate-x-0'
+          }`} />
+        </button>
+      </div>
+
+      {!enabled && pausedAt && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
+          <p className="text-xs text-foreground">
+            Paused since <strong>{new Date(pausedAt).toLocaleString('en-PH')}</strong>. Nothing rung up since
+            then has deducted ingredients.
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            When your recipes are complete: switch this back ON first, then run{' '}
+            <Link href="/pos/inventory/recipe-catchup" className="text-primary hover:underline">
+              Inventory &rarr; Recipe Catch-Up
+            </Link>{' '}
+            to replay everything sold while it was paused.
           </p>
         </div>
       )}

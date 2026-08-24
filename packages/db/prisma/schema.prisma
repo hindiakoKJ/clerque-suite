@@ -541,6 +541,22 @@ model Tenant {
   /// pressure); other verticals default off. Owner toggles in Settings.
   returnsOwnerOnly Boolean @default(false)
 
+  /// Master switch for ingredient deduction at sale time. Non-null = PAUSED
+  /// since that instant; null = deducting normally.
+  ///
+  /// A shop goes live on the POS long before its recipe book is finished.
+  /// While the recipes are half-entered, letting sales deduct produces a
+  /// stock picture that is wrong in both directions — some products drain
+  /// ingredients, most do not. Pausing makes it uniformly "nothing deducted",
+  /// which OrderItem.ingredientsDeductedAt then records per line, so the whole
+  /// backlog can be replayed in one safe pass from Inventory -> Recipe
+  /// Catch-Up once the recipes are complete.
+  ///
+  /// This gates the INVENTORY WRITES ONLY. The BOM walk and all cost
+  /// arithmetic still run, so COGS is byte-identical whether paused or not —
+  /// an inventory setting must never silently move the books.
+  recipeDeductionPausedAt DateTime?
+
   /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
   /// endpoints for this tenant return 423 Locked. Use case: detect
   /// compromise (e.g. unusual destructive activity), flip flag, freeze
@@ -1643,6 +1659,24 @@ model OrderItem {
   /// Running total of refunded quantity. 0 = no refund; equal to quantity = fully refunded.
   /// Source of truth: increment via OrderItemRefund event creation.
   refundedQty    Decimal  @default(0) @db.Decimal(12, 4)
+
+  /// When THIS line's recipe ingredients were actually deducted from stock.
+  /// Null = they never were: the product had no recipe when it was sold, or
+  /// deduction was paused tenant-wide (Tenant.recipeDeductionPausedAt).
+  ///
+  /// This is what makes Recipe Catch-Up safe — it replays only lines that
+  /// provably did not deduct, and stamps exactly the lines it replays, so the
+  /// set it deducts and the set it closes are the same set by construction.
+  ///
+  /// It lives on the LINE, not the order, because a single order routinely
+  /// mixes a latte (recipe entered, deducted) with a slice of cake (no recipe
+  /// yet, did not). An order-level flag would either lose the cake forever or
+  /// replay the latte twice.
+  ///
+  /// Lines written before this column existed are null and indistinguishable
+  /// from "never deducted"; the catch-up surfaces that cut-off rather than
+  /// guessing.
+  ingredientsDeductedAt DateTime?
 
   /// Sprint 5 — KDS state machine for kitchen/bar stations.
   /// PENDING (default) → READY (bumped by chef/barista) → SERVED (delivered).

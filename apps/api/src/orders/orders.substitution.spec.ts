@@ -35,7 +35,11 @@ describe('OrdersService — ingredient substitution', () => {
         count: jest.fn().mockResolvedValue(0),
         update: jest.fn(),
       },
-      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
+      orderItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        // Per-line deduction marker stamped after the BOM walk.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       // Base recipe: 18g beans + 200ml dairy.
       bomItem: {
         findMany: jest.fn().mockResolvedValue([

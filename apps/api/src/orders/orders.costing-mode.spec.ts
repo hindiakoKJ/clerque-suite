@@ -37,7 +37,11 @@ describe('OrdersService — costing mode vs inventory deduction', () => {
         count: jest.fn().mockResolvedValue(0),
         update: jest.fn(),
       },
-      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
+      orderItem: {
+        findMany: jest.fn().mockResolvedValue([]),
+        // Per-line deduction marker stamped after the BOM walk.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       // Recipe exists: 150ml milk per cup.
       bomItem: {
         findMany: jest.fn().mockResolvedValue([

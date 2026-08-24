@@ -274,6 +274,26 @@ export class AuthController {
   async pinLogin(@Request() req: any, @Body() dto: PinLoginDto, @Response({ passthrough: true }) res: ExpressResponse) {
     const user = await this.authService.validateUserByPin(dto.email, dto.pin, dto.companyCode);
     if (!user) throw new UnauthorizedException('Invalid PIN, email, or company code.');
+
+    // 2FA gate — the same one /auth/login applies. Without it this route is an
+    // outright bypass: an account with 2FA enabled could skip the second factor
+    // simply by signing in with its 4-8 digit PIN instead of its password,
+    // which is strictly weaker than the password 2FA was there to protect.
+    const u2fa = await this.prisma.user.findUnique({
+      where:  { id: user.id },
+      select: { enable2fa: true },
+    });
+    if (u2fa?.enable2fa) {
+      const challengeToken = this.jwt.sign(
+        {
+          sub: user.id, kind: '2fa-challenge', tenantId: user.tenantId,
+          branchId: user.branchId, role: user.role, name: user.name ?? '',
+        },
+        { expiresIn: '5m' },
+      );
+      return { requires2fa: true, challengeToken };
+    }
+
     const deviceInfo = req.headers['user-agent'];
     const ipAddress = req.ip;
     const tokens = await this.authService.login(

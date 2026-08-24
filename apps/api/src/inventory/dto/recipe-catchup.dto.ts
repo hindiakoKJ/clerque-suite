@@ -17,9 +17,9 @@ export class RecipeCatchupPreviewDto {
 
   @ApiPropertyOptional({
     description:
-      'Products to catch up — the ones whose recipes were added after these sales. ' +
-      'Omit to include every product that has a recipe today, which risks deducting twice ' +
-      'for products that were already deducting at sale time.',
+      'Optional. Narrows the run to specific products. Only needed for sales predating the ' +
+      'deduction marker, where "never deducted" cannot be distinguished from "already deducted". ' +
+      'Omit to catch up everything the marker shows as outstanding.',
     type: [String],
   })
   @IsOptional()
@@ -32,11 +32,11 @@ export class RecipeCatchupPreviewDto {
 export class RecipeCatchupApplyDto extends RecipeCatchupPreviewDto {
   @ApiProperty({
     description:
-      'The orderCount returned by the preview. Apply refuses if it no longer matches, so ' +
-      'nothing is deducted that the operator did not review.',
+      'The lineCount returned by the preview. Apply recomputes inside its transaction and ' +
+      'refuses if this no longer matches, so nothing is deducted that the operator did not review.',
     example: 412,
   })
   @IsInt()
   @Min(0)
-  expectedOrderCount!: number;
+  expectedLineCount!: number;
 }

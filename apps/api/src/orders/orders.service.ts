@@ -842,9 +842,38 @@ export class OrdersService {
       //     ingredient costs land — no re-import, no lost recipes.
       const tenantCostingMode = await tx.tenant.findUnique({
         where:  { id: tenantId },
-        select: { inventoryMode: true },
+        select: { inventoryMode: true, recipeDeductionPausedAt: true },
       });
       const houseUsesRecipes = tenantCostingMode?.inventoryMode === 'RECIPE_BASED';
+
+      // ── Master pause for ingredient deduction ───────────────────────────
+      // A shop rings sales for weeks before its recipe book is finished. With
+      // recipes half-entered, deducting produces a stock picture that is wrong
+      // in both directions — a few products drain, most do not. Pausing makes
+      // it uniformly "nothing deducted", and Order.ingredientsDeductedAt
+      // records that per order so the backlog can be replayed in one safe pass.
+      //
+      // This gates the two inventory WRITES ONLY. Every read, the BOM walk and
+      // all cost arithmetic still run, so the COGS event is byte-identical
+      // whether paused or not. An inventory setting must never move the books.
+      const deductionPaused = tenantCostingMode?.recipeDeductionPausedAt != null;
+
+      // Lot-level costing and the pause cannot both be honoured. FIFO/FEFO
+      // cost comes from draining lots, and a drain that is never written is
+      // invisible to the next order — every sale in the window would re-drain
+      // the same cheap layer and understate COGS for as long as the pause
+      // lasts. Simulating it in memory only papers over one order.
+      //
+      // So while paused, recipe costing uses the ingredient's running average
+      // (RawMaterial.costPrice) instead of lot layers. That is stable, has no
+      // drift, and is explainable. Lot layers are then drained for real by
+      // Recipe Catch-Up when the backlog is replayed, which is the only point
+      // at which the true consumption order is known.
+      //
+      // Tenants costing by Product.costPrice — the common case, and every
+      // tenant with Tenant.inventoryMode = UNIT_BASED — see no COGS change at
+      // all, because recipe cost never reaches their books.
+      const deductedProductIds = new Set<string>();
       const productModes = new Map(
         (await tx.product.findMany({
           where:  { id: { in: payload.items.map((i) => i.productId) }, tenantId },
@@ -972,10 +1001,13 @@ export class OrdersService {
           if (!rmInv) continue;
           const before = Number(rmInv.quantity);
           const after  = Math.max(before - consumeQty, 0);
-          await tx.rawMaterialInventory.update({
-            where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
-            data:  { quantity: new Prisma.Decimal(after) },
-          });
+          if (!deductionPaused) {
+            await tx.rawMaterialInventory.update({
+              where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId } },
+              data:  { quantity: new Prisma.Decimal(after) },
+            });
+            deductedProductIds.add(item.productId);
+          }
 
           // Sprint 25 — FEFO when the ingredient is `lotsTracked` on Solo
           // Standard / Pro (perishables: milk, syrups, beans, pastries). The
@@ -984,7 +1016,7 @@ export class OrdersService {
           // so the soonest-to-expire batch drains first; lots with no expiry
           // sort to the end and behave like classic FIFO.
           const lotsTracked = bom.rawMaterial?.lotsTracked === true;
-          if (useFifo || lotsTracked) {
+          if ((useFifo || lotsTracked) && !deductionPaused) {
             let remaining = consumeQty;
             let drainedCost = 0;        // total ₱ drained from lots for this BOM line
             let drainedQty  = 0;        // total qty actually drained (may be < consumeQty if under-stocked)
@@ -1036,6 +1068,20 @@ export class OrdersService {
         if (costFromRecipe(item.productId)) {
           recipeUnitCostByProduct.set(item.productId, perUnitCost);
         }
+      }
+
+      // Stamp the lines whose ingredients actually left the building. Lines
+      // left null are exactly what Recipe Catch-Up replays later, so the
+      // record is what makes replaying safe.
+      //
+      // Keying on productId is exact rather than approximate: the loop above
+      // runs once per LINE, so if the same product appears on two lines both
+      // were deducted, and both must be stamped.
+      if (deductedProductIds.size > 0) {
+        await tx.orderItem.updateMany({
+          where: { orderId: order.id, productId: { in: [...deductedProductIds] } },
+          data:  { ingredientsDeductedAt: new Date() },
+        });
       }
 
       // Queue AccountingEvents

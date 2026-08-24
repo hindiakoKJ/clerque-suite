@@ -1,7 +1,9 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { AlertTriangle, ChevronLeft, History, Loader2, PlayCircle, Search } from 'lucide-react';
+import {
+  AlertTriangle, CheckCircle2, ChevronLeft, History, Info, Loader2, PlayCircle, Search, SlidersHorizontal,
+} from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -18,6 +20,12 @@ interface CatchupLine {
   shortfall:     boolean;
 }
 
+interface CatchupWarning {
+  level:   'info' | 'warn' | 'danger';
+  code:    string;
+  message: string;
+}
+
 interface CatchupProduct {
   productId: string;
   name:      string;
@@ -26,22 +34,32 @@ interface CatchupProduct {
 }
 
 interface CatchupPreview {
-  from:            string;
-  to:              string;
-  branchId:        string;
-  orderCount:      number;
-  products:        CatchupProduct[];
-  lines:           CatchupLine[];
-  skippedNoRecipe: Array<{ productId: string; name: string; unitsSold: number }>;
-  priorRuns:       Array<{ at: string; from: string; to: string; orderCount: number }>;
-  warnings:        string[];
-  applied?:        boolean;
+  from:                  string;
+  to:                    string;
+  branchId:              string;
+  lineCount:             number;
+  orderCount:            number;
+  alreadyDeductedCount:  number;
+  deductionPausedAt:     string | null;
+  products:              CatchupProduct[];
+  lines:                 CatchupLine[];
+  skippedNoRecipe:       Array<{ productId: string; name: string; unitsSold: number }>;
+  priorRuns:             Array<{ at: string; from: string; to: string; orderCount: number }>;
+  warnings:              CatchupWarning[];
+  applied?:              boolean;
+  stampedLineCount?:     number;
 }
 
 const fmt = (n: number) =>
   n.toLocaleString('en-PH', { maximumFractionDigits: 4, minimumFractionDigits: 0 });
 
-const dateOnly = (iso: string) => iso.slice(0, 10);
+const dateOnly = (iso: string) => new Date(iso).toLocaleDateString('en-PH');
+
+const WARN_STYLE: Record<CatchupWarning['level'], { box: string; icon: typeof Info; tint: string }> = {
+  info:   { box: 'border-border bg-muted/30',              icon: Info,          tint: 'text-muted-foreground' },
+  warn:   { box: 'border-amber-500/40 bg-amber-500/5',     icon: AlertTriangle, tint: 'text-amber-600' },
+  danger: { box: 'border-red-500/40 bg-red-500/5',         icon: AlertTriangle, tint: 'text-red-600' },
+};
 
 // ─── Page ───────────────────────────────────────────────────────────────────
 
@@ -50,12 +68,13 @@ const dateOnly = (iso: string) => iso.slice(0, 10);
  *
  * The shop sold for weeks before its recipe book was finished. Those sales
  * deducted nothing from ingredient stock, because the products had no recipe
- * at the time. This screen replays them: it applies today's recipes to those
- * historical orders and writes the ingredient usage that was never recorded.
+ * at the time. This screen replays them.
  *
- * The flow is deliberately two-step — preview, review, then apply — because
- * there is no way to undo it, and because including a product whose recipe
- * ALREADY existed at sale time would drain its ingredients a second time.
+ * Safety comes from a per-line marker, not from the operator: every sale line
+ * records whether its ingredients were actually deducted, only lines that
+ * never deducted are considered, and the ones replayed here are stamped inside
+ * the same transaction that deducts them. Picking individual products is
+ * therefore an optional refinement, not a precaution.
  */
 export default function RecipeCatchupPage() {
   const today = new Date().toISOString().slice(0, 10);
@@ -63,6 +82,7 @@ export default function RecipeCatchupPage() {
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [preview, setPreview] = useState<CatchupPreview | null>(null);
+  const [narrow, setNarrow] = useState(false);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [confirmText, setConfirmText] = useState('');
 
@@ -71,40 +91,31 @@ export default function RecipeCatchupPage() {
     to:   new Date(`${to}T23:59:59.999`).toISOString(),
   });
 
-  // Step 1 — scan the window with no product filter, so every product that
-  // sold in it is listed and the owner can tick the late-recipe ones.
+  /** Product filter is sent only when the operator explicitly narrowed the run. */
+  const scopeBody = () => (narrow && chosen.size > 0 ? { productIds: [...chosen] } : {});
+
   const scan = useMutation({
     mutationFn: async () => {
-      const { data } = await api.post<CatchupPreview>('/inventory/recipe-catchup/preview', bounds());
+      const { data } = await api.post<CatchupPreview>('/inventory/recipe-catchup/preview', {
+        ...bounds(),
+        ...scopeBody(),
+      });
       return data;
     },
     onSuccess: (data) => {
       setPreview(data);
-      setChosen(new Set(data.products.map((p) => p.productId)));
+      if (!narrow) setChosen(new Set(data.products.map((p) => p.productId)));
       setConfirmText('');
     },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Could not read that date range.'),
-  });
-
-  // Step 2 — recompute against only the ticked products.
-  const recompute = useMutation({
-    mutationFn: async () => {
-      const { data } = await api.post<CatchupPreview>('/inventory/recipe-catchup/preview', {
-        ...bounds(),
-        productIds: [...chosen],
-      });
-      return data;
-    },
-    onSuccess: (data) => setPreview((prev) => ({ ...data, products: prev?.products ?? data.products })),
-    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Could not recompute.'),
   });
 
   const apply = useMutation({
     mutationFn: async () => {
       const { data } = await api.post<CatchupPreview>('/inventory/recipe-catchup/apply', {
         ...bounds(),
-        productIds: [...chosen],
-        expectedOrderCount: preview!.orderCount,
+        ...scopeBody(),
+        expectedLineCount: preview!.lineCount,
       });
       return data;
     },
@@ -112,17 +123,14 @@ export default function RecipeCatchupPage() {
       toast.success(`Ingredient stock updated — ${data.lines.length} ingredient(s) adjusted.`);
       setPreview({ ...data, applied: true });
     },
-    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Could not apply the catch-up.', { duration: 10_000 }),
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.message ?? 'Could not apply the catch-up.', { duration: 10_000 }),
   });
 
-  const busy = scan.isPending || recompute.isPending || apply.isPending;
+  const busy = scan.isPending || apply.isPending;
   const applied = preview?.applied === true;
-
-  // Lines shown always reflect the current tick-list, so the owner never
-  // applies numbers that differ from what is on screen.
-  const linesInScope = useMemo(() => preview?.lines ?? [], [preview]);
   const canApply =
-    !!preview && !applied && chosen.size > 0 && linesInScope.length > 0 && confirmText.trim().toUpperCase() === 'CATCH UP';
+    !!preview && !applied && preview.lines.length > 0 && confirmText.trim().toUpperCase() === 'CATCH UP';
 
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
@@ -150,7 +158,8 @@ export default function RecipeCatchupPage() {
         <section className="rounded-xl border border-border bg-card p-4">
           <h2 className="text-sm font-semibold text-foreground mb-1">1. Which dates were missed?</h2>
           <p className="text-xs text-muted-foreground mb-3">
-            From the day you started selling on Clerque, up to the day the recipes went in.
+            From the day you started selling on Clerque, up to today. Orders that already deducted their
+            ingredients are skipped automatically, so a generous range is safe.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <label className="text-xs text-muted-foreground">
@@ -180,13 +189,13 @@ export default function RecipeCatchupPage() {
 
         {preview && (
           <>
-            {/* ─── Prior runs ────────────────────────────────────────── */}
+            {/* ─── Prior runs (informational only) ───────────────────── */}
             {preview.priorRuns.length > 0 && (
-              <section className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
+              <section className="rounded-xl border border-border bg-muted/20 p-4">
                 <div className="flex items-start gap-2">
-                  <History className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                  <History className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                   <div className="text-xs text-foreground">
-                    <p className="font-semibold mb-1">These dates were already caught up.</p>
+                    <p className="font-medium mb-1">Earlier catch-ups covering these dates</p>
                     <ul className="space-y-0.5 text-muted-foreground">
                       {preview.priorRuns.map((r, i) => (
                         <li key={i}>
@@ -194,101 +203,36 @@ export default function RecipeCatchupPage() {
                         </li>
                       ))}
                     </ul>
-                    <p className="mt-1.5">Applying again over the same days would deduct the same ingredients twice, so it will be refused. Narrow the dates above.</p>
+                    <p className="mt-1.5 text-muted-foreground">
+                      Running again is safe — orders already caught up are excluded automatically.
+                    </p>
                   </div>
                 </div>
               </section>
             )}
 
-            {/* ─── Step 2: choose products ───────────────────────────── */}
+            {/* ─── Step 2: review ────────────────────────────────────── */}
             <section className="rounded-xl border border-border bg-card p-4">
-              <h2 className="text-sm font-semibold text-foreground mb-1">
-                2. Which products had their recipe added late?
-              </h2>
+              <h2 className="text-sm font-semibold text-foreground mb-1">2. Ingredient usage to be recorded</h2>
               <p className="text-xs text-muted-foreground mb-3">
-                Untick anything whose recipe already existed when it was sold — those already deducted their
-                ingredients, and including them here would drain that stock a second time.
+                <strong className="text-foreground">{preview.lineCount}</strong> sale line(s) across{' '}
+                <strong className="text-foreground">{preview.orderCount}</strong> order(s) never deducted their
+                ingredients. Nothing is written until you apply below.
               </p>
 
-              {preview.products.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No products with recipes sold in this range.</p>
-              ) : (
-                <>
-                  <div className="flex items-center gap-3 mb-2">
-                    <button
-                      onClick={() => setChosen(new Set(preview.products.map((p) => p.productId)))}
-                      className="text-xs text-primary hover:underline"
-                    >
-                      Select all
-                    </button>
-                    <button onClick={() => setChosen(new Set())} className="text-xs text-primary hover:underline">
-                      Clear
-                    </button>
-                    <span className="text-xs text-muted-foreground ml-auto">
-                      {chosen.size} of {preview.products.length} selected
-                    </span>
+              {preview.warnings.map((w, i) => {
+                const style = WARN_STYLE[w.level] ?? WARN_STYLE.info;
+                const Icon = style.icon;
+                return (
+                  <div key={i} className={`flex items-start gap-2 mb-2 rounded-lg border p-2.5 ${style.box}`}>
+                    <Icon className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${style.tint}`} />
+                    <p className="text-xs text-foreground">{w.message}</p>
                   </div>
-                  <div className="max-h-56 overflow-y-auto rounded-lg border border-border divide-y divide-border">
-                    {preview.products.map((p) => (
-                      <label
-                        key={p.productId}
-                        className="flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-muted/50 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={chosen.has(p.productId)}
-                          onChange={(e) => {
-                            const next = new Set(chosen);
-                            if (e.target.checked) next.add(p.productId);
-                            else next.delete(p.productId);
-                            setChosen(next);
-                            setConfirmText('');
-                          }}
-                          className="rounded border-border"
-                        />
-                        <span className="flex-1 text-foreground">{p.name}</span>
-                        <span className="text-muted-foreground">{fmt(p.unitsSold)} sold</span>
-                      </label>
-                    ))}
-                  </div>
-                  <button
-                    onClick={() => recompute.mutate()}
-                    disabled={busy || chosen.size === 0}
-                    className="mt-3 flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-border text-foreground hover:bg-muted transition-colors disabled:opacity-60"
-                  >
-                    {recompute.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
-                    Recalculate for the ticked products
-                  </button>
-                </>
-              )}
+                );
+              })}
 
-              {preview.skippedNoRecipe.length > 0 && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">{preview.skippedNoRecipe.length} product(s)</span> sold in
-                  this range still have no recipe ({preview.skippedNoRecipe.slice(0, 4).map((s) => s.name).join(', ')}
-                  {preview.skippedNoRecipe.length > 4 ? ', …' : ''}). Add their recipes, then run this again for them.
-                </p>
-              )}
-            </section>
-
-            {/* ─── Step 3: review the numbers ────────────────────────── */}
-            <section className="rounded-xl border border-border bg-card p-4">
-              <h2 className="text-sm font-semibold text-foreground mb-1">
-                3. Ingredient usage to be recorded
-              </h2>
-              <p className="text-xs text-muted-foreground mb-3">
-                {preview.orderCount} order(s) in range. Nothing is written until you apply below.
-              </p>
-
-              {preview.warnings.map((w, i) => (
-                <div key={i} className="flex items-start gap-2 mb-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
-                  <p className="text-xs text-foreground">{w}</p>
-                </div>
-              ))}
-
-              {linesInScope.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Nothing to record for the current selection.</p>
+              {preview.lines.length === 0 ? (
+                <p className="text-xs text-muted-foreground">Nothing to record for this range.</p>
               ) : (
                 <div className="overflow-x-auto rounded-lg border border-border">
                   <table className="w-full text-xs">
@@ -301,7 +245,7 @@ export default function RecipeCatchupPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {linesInScope.map((l) => (
+                      {preview.lines.map((l) => (
                         <tr key={l.rawMaterialId} className={l.shortfall ? 'bg-amber-500/5' : undefined}>
                           <td className="px-3 py-2 text-foreground">
                             {l.name}
@@ -320,20 +264,93 @@ export default function RecipeCatchupPage() {
                   </table>
                 </div>
               )}
+
+              {/* Optional narrowing — no longer a safety step */}
+              {preview.products.length > 0 && !applied && (
+                <div className="mt-3">
+                  <button
+                    onClick={() => setNarrow((v) => !v)}
+                    className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    {narrow ? 'Catch up everything instead' : 'Narrow this run to specific products'}
+                  </button>
+
+                  {narrow && (
+                    <div className="mt-2">
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Optional. Only needed for orders that predate the deduction record — for anything
+                        rung up since, the app already knows what did and did not deduct.
+                      </p>
+                      <div className="flex items-center gap-3 mb-2">
+                        <button
+                          onClick={() => setChosen(new Set(preview.products.map((p) => p.productId)))}
+                          className="text-xs text-primary hover:underline"
+                        >
+                          Select all
+                        </button>
+                        <button onClick={() => setChosen(new Set())} className="text-xs text-primary hover:underline">
+                          Clear
+                        </button>
+                        <span className="text-xs text-muted-foreground ml-auto">
+                          {chosen.size} of {preview.products.length} selected
+                        </span>
+                      </div>
+                      <div className="max-h-56 overflow-y-auto rounded-lg border border-border divide-y divide-border">
+                        {preview.products.map((p) => (
+                          <label
+                            key={p.productId}
+                            className="flex items-center gap-2.5 px-3 py-2 text-xs hover:bg-muted/50 cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={chosen.has(p.productId)}
+                              onChange={(e) => {
+                                const next = new Set(chosen);
+                                if (e.target.checked) next.add(p.productId);
+                                else next.delete(p.productId);
+                                setChosen(next);
+                                setConfirmText('');
+                              }}
+                              className="rounded border-border"
+                            />
+                            <span className="flex-1 text-foreground">{p.name}</span>
+                            <span className="text-muted-foreground">{fmt(p.unitsSold)} sold</span>
+                          </label>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => scan.mutate()}
+                        disabled={busy || chosen.size === 0}
+                        className="mt-2 flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-border text-foreground hover:bg-muted transition-colors disabled:opacity-60"
+                      >
+                        {scan.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+                        Recalculate for the ticked products
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
 
-            {/* ─── Step 4: apply ─────────────────────────────────────── */}
+            {/* ─── Step 3: apply ─────────────────────────────────────── */}
             {applied ? (
               <section className="rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-4">
-                <p className="text-sm font-semibold text-foreground">Catch-up applied.</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Ingredient stock now reflects those {preview.orderCount} order(s). From here on, every sale of a
-                  product with a recipe deducts its ingredients automatically — this screen is only for the backlog.
-                </p>
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Catch-up applied.</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Ingredient stock now reflects those sales, and {preview.stampedLineCount ?? 0} sale
+                      line(s) are marked as settled so they can never be deducted again. Any line whose
+                      product still has no recipe stays open — run this again once those recipes land.
+                    </p>
+                  </div>
+                </div>
               </section>
             ) : (
               <section className="rounded-xl border border-border bg-card p-4">
-                <h2 className="text-sm font-semibold text-foreground mb-1">4. Apply</h2>
+                <h2 className="text-sm font-semibold text-foreground mb-1">3. Apply</h2>
                 <p className="text-xs text-muted-foreground mb-3">
                   This rewrites ingredient balances and cannot be undone. Type <strong>CATCH UP</strong> to confirm.
                 </p>

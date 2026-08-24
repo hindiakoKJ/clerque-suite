@@ -22,6 +22,8 @@ export interface UpdateTenantProfileDto {
   receiptLogoUrl?:    string;
   /** Sprint 19 — returns/refunds owner-only policy. */
   returnsOwnerOnly?:  boolean;
+  /** Master switch for ingredient deduction at sale time. false = paused. */
+  recipeDeductionEnabled?: boolean;
   /** Sprint 25 — Maker-checker void threshold (peso-cents). 0 = disabled. */
   voidApprovalThresholdCents?: number;
   /** Magnet Books — owner preference; SIMPLE hides the full accounting surface. */
@@ -614,6 +616,8 @@ export class TenantService {
         receiptLogoUrl:    true,
         // Sprint 19 — returns/refunds owner-only policy.
         returnsOwnerOnly:  true,
+        // Master switch for ingredient deduction. Non-null = paused since then.
+        recipeDeductionPausedAt: true,
         // Sprint 25 — Maker-checker void threshold (peso-cents).
         voidApprovalThresholdCents: true,
         // Magnet Books — owner's ledger mode (FULL | SIMPLE). Returned so the
@@ -641,16 +645,37 @@ export class TenantService {
       receiptFooterNote: _f,
       receiptLogoUrl:    _l,
       voidApprovalThresholdCents: _v,
+      recipeDeductionEnabled: _rd,
       ...safeDto
     } = dto as UpdateTenantProfileDto & {
       receiptHeaderNote?: unknown;
       receiptFooterNote?: unknown;
       receiptLogoUrl?:    unknown;
       voidApprovalThresholdCents?: unknown;
+      recipeDeductionEnabled?: unknown;
     };
-    return this.prisma.tenant.update({
+
+    // Ingredient deduction is exposed as a boolean but stored as the instant
+    // the pause began, because Recipe Catch-Up needs to know since when. An
+    // already-paused tenant keeps its original timestamp, so re-sending
+    // `false` never moves the start of the window.
+    let deductionPatch: { recipeDeductionPausedAt?: Date | null } = {};
+    if (typeof dto.recipeDeductionEnabled === 'boolean') {
+      const current = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { recipeDeductionPausedAt: true },
+      });
+      const isPaused = current?.recipeDeductionPausedAt != null;
+      if (dto.recipeDeductionEnabled && isPaused) {
+        deductionPatch = { recipeDeductionPausedAt: null };
+      } else if (!dto.recipeDeductionEnabled && !isPaused) {
+        deductionPatch = { recipeDeductionPausedAt: new Date() };
+      }
+    }
+
+    const saved = await this.prisma.tenant.update({
       where: { id: tenantId },
-      data: safeDto,
+      data: { ...safeDto, ...deductionPatch },
       select: {
         id: true,
         name: true,
@@ -659,8 +684,28 @@ export class TenantService {
         address: true,
         contactEmail: true,
         contactPhone: true,
+        recipeDeductionPausedAt: true,
       },
     });
+
+    // Pausing deduction makes ingredient stock deliberately stop moving. That
+    // is an inventory-integrity decision, so it is recorded rather than left
+    // to memory — the catch-up later reports against this window.
+    if (deductionPatch.recipeDeductionPausedAt !== undefined) {
+      const paused = deductionPatch.recipeDeductionPausedAt !== null;
+      await this.audit.log({
+        tenantId,
+        action:      'SETTING_CHANGED',
+        entityType:  'RECIPE_DEDUCTION',
+        entityId:    tenantId,
+        description: paused
+          ? 'Ingredient deduction PAUSED — sales stop deducting recipe ingredients until resumed.'
+          : 'Ingredient deduction RESUMED — sales deduct recipe ingredients again.',
+        after: { paused, at: (deductionPatch.recipeDeductionPausedAt ?? new Date()).toISOString() },
+      });
+    }
+
+    return saved;
   }
 
   /**

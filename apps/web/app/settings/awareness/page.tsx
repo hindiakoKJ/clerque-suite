@@ -9,10 +9,12 @@
  */
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ChevronLeft, ShieldCheck, AlertTriangle, KeyRound, Smartphone, Wifi, Eye, BookOpen } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 
 export default function SecurityAwarenessPage() {
+  const router = useRouter();
   const { user } = useAuthStore();
   const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
 
@@ -29,12 +31,19 @@ export default function SecurityAwarenessPage() {
   return (
     <div className="flex flex-col h-full overflow-auto">
       <div className="bg-background border-b border-border px-4 sm:px-6 py-5 shrink-0">
-        <Link
-          href="/settings"
+        {/* router.back() (history POP), never <Link href="/settings"> (history PUSH).
+            Pushing /settings on top of a sub-page traps Back in a two-page loop
+            the user cannot escape. */}
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== 'undefined' && window.history.length > 1) router.back();
+            else router.push('/settings');
+          }}
           className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-1"
         >
           <ChevronLeft className="h-3 w-3" /> Settings
-        </Link>
+        </button>
         <h1 className="text-xl font-bold text-foreground flex items-center gap-2">
           <BookOpen className="h-5 w-5" style={{ color: 'var(--accent)' }} />
           Security Awareness — Staff Handbook

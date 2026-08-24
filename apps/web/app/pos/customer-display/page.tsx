@@ -107,9 +107,13 @@ export default function CustomerDisplayPage() {
 
   useEffect(() => {
     if (!cashierId) return;
+    // 300ms keeps the worst case (a SEPARATE paired tablet, where polling is
+    // the only transport) inside the sub-half-second the counter needs. Two
+    // tabs on one browser never wait for this — BroadcastChannel delivers in
+    // single-digit milliseconds and the poll is just a safety net.
     const unsubscribe = subscribeCustomerDisplay(setState, {
       cashierId,
-      pollIntervalMs: 1000,
+      pollIntervalMs: 300,
     });
     return unsubscribe;
   }, [cashierId]);

@@ -2,8 +2,9 @@
 import { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle } from 'lucide-react';
+import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff } from 'lucide-react';
 import { api } from '@/lib/api';
+import { useKitchenChime } from '@/hooks/pos/useKitchenChime';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { useAuthStore } from '@/store/auth';
 import {
@@ -116,31 +117,9 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
     return () => clearInterval(id);
   }, [pairState]);
 
-  // Audio chime on new order — accumulated count drives the playback decision.
-  const lastCountRef = useRef(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      // Inline beep via WebAudio (no asset required) — hosted in a small data URL
-      // would be cleaner; using a synth fallback in playChime() for portability.
-    }
-  }, []);
-
-  function playChime() {
-    try {
-      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.001, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.4);
-    } catch { /* no-op — audio context might not be available */ }
-  }
+  // Kitchen bell. The hook owns the browser-audio awkwardness: one reused
+  // AudioContext, unlocked on first touch, resumed before every ring.
+  const chime = useKitchenChime();
 
   const { data: items = [], isFetching } = useQuery<QueueItem[]>({
     queryKey: ['kds-queue', stationId],
@@ -153,14 +132,31 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
     refetchIntervalInBackground: true,
   });
 
-  // Chime when the pending count grows — fresh ticket arrived.
+  // Ring for genuinely NEW tickets.
+  //
+  // This used to compare pending COUNTS, which silently missed the most common
+  // case in a busy kitchen: a chef bumps one ticket in the same three-second
+  // poll window that another arrives. Count unchanged, no bell, order missed.
+  // Tracking ids is exact.
+  //
+  // The first load seeds the set without ringing, so opening the screen on a
+  // full rail does not set off a fanfare.
+  const seenTicketIds = useRef<Set<string> | null>(null);
   useEffect(() => {
-    const pendingCount = items.filter((i) => i.prepStatus === 'PENDING').length;
-    if (pendingCount > lastCountRef.current) {
-      playChime();
+    const pendingIds = items.filter((i) => i.prepStatus === 'PENDING').map((i) => i.id);
+
+    if (seenTicketIds.current === null) {
+      seenTicketIds.current = new Set(pendingIds);
+      return;
     }
-    lastCountRef.current = pendingCount;
-  }, [items]);
+
+    const seen = seenTicketIds.current;
+    const isNew = pendingIds.some((id) => !seen.has(id));
+    // Rebuild rather than only adding, so bumped tickets are forgotten and a
+    // re-opened (un-bumped) ticket rings again.
+    seenTicketIds.current = new Set(pendingIds);
+    if (isNew) chime.ring();
+  }, [items, chime]);
 
   async function bump(orderItemId: string) {
     try {
@@ -250,17 +246,59 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
             </p>
           </div>
         </div>
-        <div className="text-right">
-          <p className="text-2xl tabular-nums font-semibold">
-            {new Date().toLocaleTimeString('en-PH', {
-              hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila',
-            })}
-          </p>
-          <p className="text-[10px] text-stone-500 uppercase tracking-wider mt-0.5">
-            {isFetching ? 'Refreshing…' : `Updates every 3s`}
-          </p>
+        <div className="flex items-center gap-4">
+          {/* Kitchen bell. Browsers refuse to start audio without a gesture, so
+              when it is still locked we say so plainly rather than letting the
+              chef believe the bell is on when it is silent. */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const next = !chime.enabled;
+                chime.setEnabled(next);
+                if (next) chime.test();      // doubles as the unlock gesture
+              }}
+              title={chime.enabled ? 'Bell is on — tap to mute' : 'Bell is off — tap to turn on'}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
+                chime.enabled
+                  ? 'bg-amber-500 text-stone-950 hover:bg-amber-400'
+                  : 'bg-stone-800 text-stone-400 hover:bg-stone-700'
+              }`}
+            >
+              {chime.enabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+              <span className="hidden sm:inline">{chime.enabled ? 'Bell on' : 'Bell off'}</span>
+            </button>
+            {chime.enabled && (
+              <button
+                onClick={() => chime.test()}
+                title="Play the bell now"
+                className="px-2.5 py-2 rounded-xl bg-stone-800 text-stone-300 hover:bg-stone-700 text-xs transition-colors"
+              >
+                Test
+              </button>
+            )}
+          </div>
+
+          <div className="text-right">
+            <p className="text-2xl tabular-nums font-semibold">
+              {new Date().toLocaleTimeString('en-PH', {
+                hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila',
+              })}
+            </p>
+            <p className="text-[10px] text-stone-500 uppercase tracking-wider mt-0.5">
+              {isFetching ? 'Refreshing…' : `Updates every 3s`}
+            </p>
+          </div>
         </div>
       </header>
+
+      {/* Audio stays blocked until the browser sees a touch. Say so, because a
+          silent bell that looks switched on is worse than no bell. */}
+      {chime.enabled && !chime.unlocked && (
+        <div className="px-6 py-2 bg-amber-500/15 border-b border-amber-500/30 text-amber-200 text-xs flex items-center gap-2">
+          <Bell className="h-3.5 w-3.5 shrink-0" />
+          <span>Tap anywhere on this screen once to let the bell ring — your tablet blocks sound until then.</span>
+        </div>
+      )}
 
       {/* Queue grid */}
       <main className="flex-1 overflow-y-auto p-6">

@@ -214,6 +214,24 @@ export class ImportService {
   private static readonly SAMPLE_INSTRUCTION =
     'Rows starting with "SAMPLE - " are examples. They are IGNORED on import. Delete them or leave them — either is safe. Add your real rows below them.';
 
+
+  /**
+   * Strip null/undefined entries so a blank spreadsheet cell leaves the stored
+   * value alone instead of nulling it.
+   *
+   * Customers and vendors were rebuilt wholesale on every re-import: a file
+   * carrying only names wiped the TIN, address, email, phone, terms and credit
+   * limit the owner had since filled in. `name` is always present (it is the
+   * match key) so the record can never be left empty.
+   */
+  private onlySupplied<T extends Record<string, unknown>>(data: T): Partial<T> {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== null && v !== undefined) out[k] = v;
+    }
+    return out as Partial<T>;
+  }
+
   private isSampleRow(r?: string[]): boolean {
     if (!r) return false;
     const first = r.find((c) => String(c ?? '').trim() !== '');
@@ -407,6 +425,24 @@ export class ImportService {
       const initialStockStr = stockCol >= 0 ? dataRows[i][stockCol] : dataRows[i][14];
       const lowAlertStr     = alertCol >= 0 ? dataRows[i][alertCol] : undefined;
 
+      // The pharmacy columns are ALSO resolved by header. Positional
+      // destructuring above assumes the 15-column pharmacy layout, so on the
+      // lean 9-column template columns 8 and 9 (Opening Stock, Low Stock
+      // Alert) fell into genericName and brandName — a cafe ended up with
+      // products whose "generic name" was the number 50. When the header has
+      // no such column we pass undefined, and the conditional spread below
+      // leaves the field untouched.
+      const hasPharmacyCols = findCol(/^generic\s*name$/i) >= 0;
+      const pharmCell = (re: RegExp, positional: string | undefined): string | undefined => {
+        const c = findCol(re);
+        if (c >= 0) return dataRows[i][c];
+        return hasPharmacyCols ? positional : undefined;
+      };
+      const genericNameCell = pharmCell(/^generic\s*name$/i, genericName);
+      const brandNameCell   = pharmCell(/^brand\s*name$/i,   brandName);
+      const dosageFormCell  = pharmCell(/^dosage\s*form$/i,  dosageForm);
+      const strengthCell    = pharmCell(/^strength$/i,        strength);
+
       if (!name?.trim()) {
         result.skipped++;
         continue;
@@ -520,14 +556,25 @@ export class ImportService {
 
         // Sprint 19 — pharmacy field set, applied uniformly to create + update.
         const pharmacyFields = {
-          ...(genericName?.trim() && { genericName: genericName.trim() }),
-          ...(brandName?.trim()   && { brandName:   brandName.trim() }),
-          ...(dosageForm?.trim()  && { dosageForm:  dosageForm.trim() }),
-          ...(strength?.trim()    && { strength:    strength.trim() }),
+          ...(genericNameCell?.trim() && { genericName: genericNameCell.trim() }),
+          ...(brandNameCell?.trim()   && { brandName:   brandNameCell.trim() }),
+          ...(dosageFormCell?.trim()  && { dosageForm:  dosageFormCell.trim() }),
+          ...(strengthCell?.trim()    && { strength:    strengthCell.trim() }),
           drugClass,
           isRxRequired,
           isControlledDrug,
         };
+
+        // A blank cell means "I did not supply this", never "set it to zero".
+        //
+        // Re-importing a sheet with the Cost Price column left empty used to
+        // write 0 over whatever the owner had since typed into the app, and a
+        // sheet with no VAT column at all silently un-VATed the entire
+        // catalogue — a BIR problem, not just a data one. On UPDATE both are
+        // now only written when the sheet actually says something. On CREATE
+        // they still fall through to their defaults.
+        const vatColPresent = findCol(/^vat(\s*\(y\/n\))?$|^vatable$|^is\s*vatable$/i) >= 0;
+        const vatSupplied   = vatColPresent && String(vatStr ?? '').trim() !== '';
 
         let productId: string;
         if (existing) {
@@ -535,8 +582,8 @@ export class ImportService {
             where: { id: existing.id },
             data: {
               price,
-              costPrice,
-              isVatable,
+              ...(costBlank ? {} : { costPrice }),
+              ...(vatSupplied ? { isVatable } : {}),
               ...(categoryId && { categoryId }),
               ...(description?.trim() && { description: description.trim() }),
               ...(barcode?.trim() && { barcode: barcode.trim() }),
@@ -1591,10 +1638,16 @@ export class ImportService {
       '  • Categories are auto-created if they do not exist.',
       '  • VAT column is Y/N. Most retail items in PH = Y (VAT-able).',
       '  • Grey SAMPLE rows are examples and are always ignored — delete them or leave them.',
-      '  • Safe to re-run: rows are matched by name and updated, not duplicated. Opening Stock REPLACES',
-      '    the count rather than adding to it, so correcting a number and re-uploading works.',
-      '  • Opening Stock applies to the branch you are signed into. For a second branch, use the',
-      '    standalone Inventory template after switching branch.',
+      '  • Safe to re-run. Rows are matched by NAME and updated, never duplicated, and a blank cell',
+      '    means "leave this as it is" — it will not wipe a value you typed into the app.',
+      '  • Opening Stock REPLACES the count rather than adding to it, so correcting a number and',
+      '    re-uploading gives you that number, not double.',
+      '  • Two things a re-run will NOT do, because it matches on name:',
+      '      - Renaming a product in this file creates a SECOND product. Rename it in the app instead.',
+      '      - Deleting a Recipes line here does not remove that ingredient from the recipe. Remove it',
+      '        on the product page.',
+      '  • Opening Stock applies to your main branch. For a second branch, use the standalone',
+      '    Inventory template after switching branch.',
     ];
     for (const line of lines) {
       readme.addRow([line]);
@@ -1809,7 +1862,7 @@ export class ImportService {
           isActive:       true,
         };
         if (existing) {
-          await this.prisma.customer.update({ where: { id: existing.id }, data });
+          await this.prisma.customer.update({ where: { id: existing.id }, data: this.onlySupplied(data) });
           result.updated++;
         } else {
           await this.prisma.customer.create({ data });
@@ -1908,7 +1961,7 @@ export class ImportService {
           isActive:       true,
         };
         if (existing) {
-          await this.prisma.vendor.update({ where: { id: existing.id }, data });
+          await this.prisma.vendor.update({ where: { id: existing.id }, data: this.onlySupplied(data) });
           result.updated++;
         } else {
           await this.prisma.vendor.create({ data });
@@ -2030,7 +2083,19 @@ export class ImportService {
           isActive:      true,
         };
         if (existing) {
-          await this.prisma.rawMaterial.update({ where: { id: existing.id }, data });
+          // Same rule as products: a blank cell is "not supplied", not zero.
+          // Blanking Cost per Unit used to write 0 over a cost the owner had
+          // entered in the app, which silently zeroes recipe COGS for every
+          // product using that ingredient.
+          const { costPrice: _c, lowStockAlert: _l, ...rest } = data;
+          await this.prisma.rawMaterial.update({
+            where: { id: existing.id },
+            data: {
+              ...rest,
+              ...(ingCostBlank ? {} : { costPrice: data.costPrice }),
+              ...(lowStockAlert != null ? { lowStockAlert: data.lowStockAlert } : {}),
+            },
+          });
           result.updated++;
         } else {
           await this.prisma.rawMaterial.create({ data });

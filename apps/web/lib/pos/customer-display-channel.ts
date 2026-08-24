@@ -276,8 +276,14 @@ export function subscribeCustomerDisplay(
   // Server-mediated polling — cross-device / cross-profile path.
   // When cashierId is provided, poll GET /customer-display/state every 1s.
   // The server returns the latest snapshot keyed by tenantId+cashierId.
-  const pollIntervalMs = opts.pollIntervalMs ?? 1000;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  // Default sized for a customer-facing screen: a shopper watching their order
+  // appear notices a full second. 300ms reads as immediate.
+  const pollIntervalMs = opts.pollIntervalMs ?? 300;
+  // Self-scheduling rather than setInterval: at 300ms a slow response would
+  // otherwise let ticks overlap and pile up in-flight requests on a weak shop
+  // connection. Chaining from completion keeps at most one request open.
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
   if (opts.cashierId) {
     const cashierId = opts.cashierId;
     const tick = async () => {
@@ -323,14 +329,21 @@ export function subscribeCustomerDisplay(
         // Network blip — ignore, next tick will retry.
       }
     };
-    void tick();                               // immediate first tick
-    pollTimer = setInterval(tick, pollIntervalMs);
+
+    const loop = async () => {
+      if (stopped) return;
+      await tick();
+      if (stopped) return;
+      pollTimer = setTimeout(loop, pollIntervalMs);
+    };
+    void loop();                               // immediate first tick
   }
 
   return () => {
     ch?.removeEventListener('message', onMessage);
     window.removeEventListener('storage', onStorage);
-    if (pollTimer) clearInterval(pollTimer);
+    stopped = true;
+    if (pollTimer) clearTimeout(pollTimer);
   };
 }
 

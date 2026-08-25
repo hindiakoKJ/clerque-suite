@@ -1369,6 +1369,43 @@ export default function ProductsPage() {
  * product row so every device — admin, cashier, customer display — renders
  * the same image without auth (public static asset).
  */
+/**
+ * Shrink a photo to menu-tile size before upload. GIFs pass through (canvas
+ * would flatten the animation); everything else re-encodes as JPEG at up to
+ * 1280px on the long edge — a 10 MB camera shot lands around 200 KB.
+ */
+async function downscaleImage(file: File): Promise<File> {
+  if (file.type === 'image/gif') return file;
+  if (file.size < 400 * 1024) return file;   // already small — don't touch it
+
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('undecodable image'));
+      el.src = url;
+    });
+    const MAX = 1280;
+    const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+    ctx.drawImage(img, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.82),
+    );
+    if (!blob) return file;
+    return new File([blob.slice()], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function ProductImagePicker({
   value, onChange,
 }: { value: string; onChange: (url: string) => void }) {
@@ -1382,14 +1419,19 @@ function ProductImagePicker({
       toast.error('Please pick an image file (JPEG, PNG, WEBP, GIF).');
       return;
     }
-    if (f.size > 5 * 1024 * 1024) {
-      toast.error('Image must be 5 MB or smaller.');
-      return;
-    }
     setUploading(true);
     try {
+      // Tablet camera shots run 6-12 MB — over the server's 5 MB cap, and
+      // absurd for a menu tile anyway. Downscale to 1280px JPEG before
+      // uploading; a photo that cannot be decoded (rare) goes up as-is and
+      // the server-side cap still has the final word.
+      const toUpload = await downscaleImage(f).catch(() => f);
+      if (toUpload.size > 5 * 1024 * 1024) {
+        toast.error('Image must be 5 MB or smaller.');
+        return;
+      }
       const fd = new FormData();
-      fd.append('file', f);
+      fd.append('file', toUpload);
       const { data } = await api.post<{ url: string }>(
         '/products/upload-image', fd,
         { headers: { 'Content-Type': 'multipart/form-data' } },

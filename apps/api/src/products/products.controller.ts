@@ -16,8 +16,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { Response } from 'express';
-import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -128,18 +128,23 @@ export class ProductsController {
   @ApiOperation({ summary: 'Upload a product image (camera/gallery), returns public URL' })
   @Roles('BUSINESS_OWNER', 'MDM')
   @Post('upload-image')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMAGE_BYTES } }))
+  // Memory storage, EXPLICITLY. This module registers no MulterModule, so the
+  // interceptor already ran on multer's memory default — where `file.path`
+  // does not exist. The handler below used to read `file.path` anyway, so
+  // every upload died on readFile(undefined) with a 500 the UI could only
+  // report as a server error. The file lives in `file.buffer`; say so in the
+  // interceptor config so the contract is visible, and hand the buffer to
+  // storage directly — no temp files, works on Railway's read-only disk.
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } }))
   async uploadImage(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: Express.Multer.File,
   ): Promise<{ url: string }> {
-    if (!file) throw new BadRequestException('No file received.');
+    if (!file?.buffer?.length) throw new BadRequestException('No file received.');
     if (!ALLOWED_IMAGE_MIMES.has(file.mimetype)) {
-      await fs.promises.unlink(file.path).catch(() => undefined);
       throw new BadRequestException(`Unsupported image type: ${file.mimetype}. Use JPEG/PNG/WEBP/GIF.`);
     }
     if (file.size > MAX_IMAGE_BYTES) {
-      await fs.promises.unlink(file.path).catch(() => undefined);
       throw new BadRequestException('Image exceeds the 5 MB size limit.');
     }
 
@@ -150,7 +155,7 @@ export class ProductsController {
     // is just part of the object key and getPublicUrl() returns the CDN URL.
     const storageKey = path.posix.join('public', 'products', user.tenantId!, `${id}${ext}`);
 
-    await this.storage.putFromTempPath(file.path, storageKey, {
+    await this.storage.putBuffer(file.buffer, storageKey, {
       contentType:  file.mimetype,
       publicRead:   true, // for AWS S3; ignored on R2 (uses bucket-level public access)
       tenantId:     user.tenantId!,

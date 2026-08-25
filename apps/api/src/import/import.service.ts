@@ -2256,6 +2256,99 @@ export class ImportService {
   //
   // Columns: Product Name*, Ingredient Name*, Quantity*
 
+
+  /**
+   * Unit reconciliation for recipe rows.
+   *
+   * A recipe source says "200 ml milk". The Ingredients sheet may define Milk
+   * in `ml` — or in `L`, because that is how the shop buys it. Writing 200
+   * against an ingredient measured in litres puts 200 LITRES of milk in one
+   * latte, and nothing downstream questions it: stock drains to zero, COGS
+   * explodes, and the only clue is a wrong number in a report.
+   *
+   * The Recipes template therefore carries an optional Unit column, and this
+   * reconciles it against the ingredient's own unit:
+   *   - same unit (or blank)      -> use the quantity as written
+   *   - convertible (ml -> L)     -> convert, silently and exactly
+   *   - different families        -> reject the row, naming both units
+   *
+   * Deliberately conservative: only unambiguous units are listed. "oz" is
+   * weight, "fl oz" is volume, and anything unrecognised (shot, scoop, pump,
+   * sachet) is treated as a bare count that must match exactly — guessing a
+   * shop's idea of a "scoop" would be worse than asking.
+   */
+  private static readonly UNIT_FACTORS: Record<string, { family: 'mass' | 'volume'; perBase: number }> = {
+    mg: { family: 'mass', perBase: 0.001 },
+    g:  { family: 'mass', perBase: 1 },
+    gram: { family: 'mass', perBase: 1 },
+    grams: { family: 'mass', perBase: 1 },
+    kg: { family: 'mass', perBase: 1000 },
+    kilo: { family: 'mass', perBase: 1000 },
+    kilogram: { family: 'mass', perBase: 1000 },
+    oz: { family: 'mass', perBase: 28.349523125 },
+    lb: { family: 'mass', perBase: 453.59237 },
+    ml: { family: 'volume', perBase: 1 },
+    milliliter: { family: 'volume', perBase: 1 },
+    millilitre: { family: 'volume', perBase: 1 },
+    cl: { family: 'volume', perBase: 10 },
+    l:  { family: 'volume', perBase: 1000 },
+    li: { family: 'volume', perBase: 1000 },
+    liter: { family: 'volume', perBase: 1000 },
+    litre: { family: 'volume', perBase: 1000 },
+    tsp: { family: 'volume', perBase: 4.92892159375 },
+    tbsp: { family: 'volume', perBase: 14.78676478125 },
+    cup: { family: 'volume', perBase: 240 },
+    floz: { family: 'volume', perBase: 29.5735295625 },
+  };
+
+  /** Lowercase, strip punctuation/plurals so "Grams." and "gram" agree. */
+  private normUnit(raw: string): string {
+    return String(raw ?? '')
+      .toLowerCase()
+      .replace(/[.\s]/g, '')
+      .replace(/^(fluid|fl)ounces?$/, 'floz')
+      .replace(/^floz(es)?$/, 'floz')
+      .replace(/s$/, '');
+  }
+
+  /**
+   * Convert `quantity` from `fromUnit` into `toUnit`.
+   * Returns the converted number, or an error string the caller reports.
+   */
+  private convertRecipeQuantity(
+    quantity: number,
+    fromUnit: string | undefined,
+    toUnit: string,
+  ): { value: number } | { error: string } {
+    const from = this.normUnit(fromUnit ?? '');
+    const to   = this.normUnit(toUnit);
+
+    // No unit given — trust the ingredient's own unit, as before.
+    if (!from) return { value: quantity };
+    if (from === to) return { value: quantity };
+
+    const f = ImportService.UNIT_FACTORS[from];
+    const t = ImportService.UNIT_FACTORS[to];
+
+    if (!f || !t) {
+      return {
+        error:
+          `Unit "${fromUnit}" does not match the ingredient's unit "${toUnit}". ` +
+          "Use the ingredient's unit, or a convertible one (g/kg, ml/L).",
+      };
+    }
+    if (f.family !== t.family) {
+      return {
+        error:
+          `Cannot convert ${f.family} ("${fromUnit}") into ${t.family} ("${toUnit}"). ` +
+          'Weigh it or measure it — pick one and match the ingredient.',
+      };
+    }
+    // Exact ratio, then trimmed to the 4 decimals BomItem.quantity stores.
+    const converted = (quantity * f.perBase) / t.perBase;
+    return { value: Math.round(converted * 10_000) / 10_000 };
+  }
+
   async importRecipes(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
     return this.importRecipesFromRows(await this.parseFile(file, ['Recipes', 'Recipe', 'BOM']), tenantId);
   }
@@ -2280,6 +2373,13 @@ export class ImportService {
     // authority (Product.costPrice ignored from then on) with no warning.
     // If a row imports but the product is missing, we skip the row (no
     // auto-create — products must be loaded first).
+    // Unit column is optional and header-resolved. When present it is
+    // reconciled against the ingredient's own unit, so "200 ml" written
+    // against an ingredient stored in litres converts to 0.2 instead of
+    // silently becoming 200 LITRES of milk in one drink.
+    const headerCells = headerIdx >= 0 ? (rows[headerIdx] ?? []) : [];
+    const unitCol = headerCells.findIndex((h) => /^unit/i.test(String(h ?? '').trim()));
+
     const touched = new Map<string, { id?: string; name: string; firstRow: number; ok: number; failed: number }>();
     // Names are matched case-insensitively with whitespace collapsed --
     // "Whole Milk" vs "whole milk" failing to link is the #1 support call.
@@ -2294,6 +2394,8 @@ export class ImportService {
       const rowNum = dataStart + i + 2;
       if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [productName, ingredientName, qtyStr] = dataRows[i];
+      // Optional Unit column, resolved by header so it can sit anywhere.
+      const unitStr = unitCol >= 0 ? dataRows[i][unitCol] : undefined;
 
       if (!productName?.trim() || !ingredientName?.trim()) { result.skipped++; continue; }
       const prodName = normName(productName);
@@ -2324,10 +2426,27 @@ export class ImportService {
         tracked.id = product.id;
         const rm = await this.prisma.rawMaterial.findFirst({
           where:  { tenantId, name: { equals: ingName, mode: 'insensitive' } },
-          select: { id: true },
+          select: { id: true, unit: true },
         });
         if (!rm) {
           result.errors.push({ row: rowNum, message: `Ingredient "${ingredientName}" not found. Run the Ingredients import first.` });
+          tracked.failed++;
+          continue;
+        }
+
+        // Reconcile the written unit against the ingredient's own.
+        const reconciled = this.convertRecipeQuantity(quantity, unitStr, rm.unit);
+        if ('error' in reconciled) {
+          result.errors.push({ row: rowNum, message: reconciled.error });
+          tracked.failed++;
+          continue;
+        }
+        const finalQty = reconciled.value;
+        if (finalQty <= 0) {
+          result.errors.push({
+            row: rowNum,
+            message: `Quantity converts to ${finalQty} ${rm.unit} — too small to record. Use a smaller unit for this ingredient.`,
+          });
           tracked.failed++;
           continue;
         }
@@ -2340,7 +2459,7 @@ export class ImportService {
         if (existing) {
           await this.prisma.bomItem.update({
             where: { id: existing.id },
-            data:  { quantity: new Prisma.Decimal(quantity) },
+            data:  { quantity: new Prisma.Decimal(finalQty) },
           });
           result.updated++;
         } else {
@@ -2348,7 +2467,7 @@ export class ImportService {
             data: {
               productId:     product.id,
               rawMaterialId: rm.id,
-              quantity:      new Prisma.Decimal(quantity),
+              quantity:      new Prisma.Decimal(finalQty),
             },
           });
           result.imported++;
@@ -2408,13 +2527,13 @@ export class ImportService {
           ['Iced Latte 16oz',   'Cold Cup 16oz',                  '1'],
           ['Iced Latte 16oz',   'Lid (universal)',                '1'],
           ['Iced Latte 16oz',   'Stirrer',                        '1'],
-          ['Cappuccino 12oz',   'Espresso Beans (Single-Origin)', '18'],
-          ['Cappuccino 12oz',   'Whole Milk',                     '150'],
-          ['Cappuccino 12oz',   'Hot Cup 16oz',                   '1'],
-          ['Cappuccino 12oz',   'Lid (universal)',                '1'],
-          ['Matcha Latte 16oz', 'Whole Milk',                     '200'],
-          ['Matcha Latte 16oz', 'Cold Cup 16oz',                  '1'],
-          ['Matcha Latte 16oz', 'Lid (universal)',                '1'],
+          ['Cappuccino 12oz',   'Espresso Beans (Single-Origin)', '18',  'g'],
+          ['Cappuccino 12oz',   'Whole Milk',                     '150', 'ml'],
+          ['Cappuccino 12oz',   'Hot Cup 16oz',                   '1',   'pc'],
+          ['Cappuccino 12oz',   'Lid (universal)',                '1',   'pc'],
+          ['Matcha Latte 16oz', 'Whole Milk',                     '200', 'ml'],
+          ['Matcha Latte 16oz', 'Cold Cup 16oz',                  '1',   'pc'],
+          ['Matcha Latte 16oz', 'Lid (universal)',                '1',   'pc'],
         ];
         break;
       case 'RESTAURANT':
@@ -2458,7 +2577,10 @@ export class ImportService {
           '  1. One row per ingredient PER product. A drink with 5 ingredients = 5 rows for that product.',
           '  2. Product Name must match an existing Product (run the Products template first).',
           '  3. Ingredient Name must match an existing Ingredient (run the Ingredients template first).',
-          '  4. Quantity is in the ingredient\'s native unit (g / ml / pc / etc.) — see the Ingredients sheet.',
+          '  4. Unit is OPTIONAL but recommended — write the unit your recipe actually uses (200 + ml).',
+          "     If it differs from the ingredient's unit, Clerque converts it (200 ml -> 0.2 L).",
+          "     Blank means the number is already in the ingredient's own unit.",
+          '     Mismatched families are REFUSED, never guessed: you cannot pour 200 g of milk.',
           '  5. Importing a recipe FLIPS the product to RECIPE_BASED — its COGS now derives from ingredients × WAC at sale time.',
           '  6. Re-importing a row UPDATES the existing recipe line (matched by Product + Ingredient), not duplicates it.',
           '  7. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',

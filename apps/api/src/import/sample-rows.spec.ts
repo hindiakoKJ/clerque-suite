@@ -76,6 +76,12 @@ async function readRows(buffer: Buffer): Promise<string[][]> {
   return rows;
 }
 
+/** How many rows the shipped template marks as samples. */
+async function countSampleRows(buf: Buffer): Promise<number> {
+  const rows = await readRows(buf);
+  return rows.filter((r) => /^\s*sample\s*[-–—:]/i.test(String(r[0] ?? ''))).length;
+}
+
 const expectSamplesIgnored = (r: { imported: number; updated: number; skipped: number; errors: unknown[] }, sampleCount: number) => {
   expect(r.errors).toEqual([]);
   expect(r.imported).toBe(0);
@@ -374,20 +380,26 @@ describe('ImportService — sample rows are ignored on import', () => {
     it('imports nothing from the coffee-shop template as shipped', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
       const svc = new ImportService(prisma as any);
-      const r = await svc.importIngredients(asFile(await svc.ingredientsTemplate('t1')), 't1');
-      expectSamplesIgnored(r, 10);
+      const tpl = await svc.ingredientsTemplate('t1');
+      const r = await svc.importIngredients(asFile(tpl), 't1');
+      // Count the samples out of the template itself rather than hard-coding
+      // it — the number changes whenever a worked example is added, and a
+      // constant here just fails the build for the wrong reason.
+      expectSamplesIgnored(r, await countSampleRows(tpl));
       expect(prisma.rawMaterial.create).not.toHaveBeenCalled();
     });
 
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
       const svc = new ImportService(prisma as any);
-      const buf = await appendRows(await svc.ingredientsTemplate('t1'), [
+      const tpl = await svc.ingredientsTemplate('t1');
+      const samples = await countSampleRows(tpl);
+      const buf = await appendRows(tpl, [
         ['Oat Milk', 'ml', '0.20', '1000', ''],
       ]);
       const r = await svc.importIngredients(asFile(buf), 't1');
       expect(r.errors).toEqual([]);
-      expect(r.skipped).toBe(10);
+      expect(r.skipped).toBe(samples);
       expect(r.imported).toBe(1);
       expect((prisma.rawMaterial.create as AnyFn).mock.calls[0][0].data.name).toBe('Oat Milk');
     });

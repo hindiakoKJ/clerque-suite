@@ -2017,6 +2017,26 @@ export class ImportService {
   // recipe-based businesses.
   //
   // Columns: Name*, Unit*, Cost per Unit (₱)*, Low Stock Alert, Notes
+  //   ... plus two OPTIONAL columns: Recipe Unit, Pack Size.
+  //
+  // WHY THE SECOND UNIT EXISTS
+  // A shop does not think in one unit. It BUYS milk by the litre and POURS it
+  // by the millilitre; it buys beans by the kilo and pulls shots in grams.
+  // Asking for a single unit forces the owner to do that conversion in his
+  // head before he types, and when he gets it wrong nothing downstream
+  // questions it — the cost is simply 1000x out and every recipe built on it
+  // inherits the error silently.
+  //
+  // So the sheet accepts both, plus the pack size that bridges them, and the
+  // importer does the arithmetic:
+  //
+  //   Name        Unit   Recipe Unit  Pack Size  Cost per Unit
+  //   Fresh Milk  L      ml           -          88.00      -> 0.088 per ml
+  //   Fresh Milk  carton ml           1000       88.00      -> 0.088 per ml
+  //   Beans       kg     g            -          1100.00    -> 1.10  per g
+  //
+  // Both columns are optional and the old three-column sheet still imports
+  // exactly as before, so no existing file breaks.
 
   async importIngredients(file: Express.Multer.File, tenantId: string): Promise<ImportResult> {
     return this.importIngredientsFromRows(await this.parseFile(file, ['Ingredients', 'Raw Materials']), tenantId);
@@ -2039,7 +2059,7 @@ export class ImportService {
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
       if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
-      const [name, unit, costStr, lowStockStr, notes] = dataRows[i];
+      const [name, unit, costStr, lowStockStr, notes, recipeUnitRaw, packSizeRaw] = dataRows[i];
       void notes; // currently unused — RawMaterial has no notes column
 
       if (!name?.trim()) { result.skipped++; continue; }
@@ -2061,6 +2081,49 @@ export class ImportService {
         result.errors.push({ row: rowNum, message: `Invalid Cost per Unit: "${costStr}".` });
         continue;
       }
+      // ── Resolve buy-unit vs use-unit ───────────────────────────────────
+      // Everything downstream — recipe COGS, stock deduction, low-stock
+      // alerts — speaks ONE unit per ingredient. That unit is the one recipes
+      // use, because that is the fine-grained one. The cost is converted into
+      // it here, once, where the sheet still says plainly what was meant.
+      let storedUnit = unit.trim();
+      let storedCost = costPrice;
+
+      const recipeUnit = (recipeUnitRaw ?? '').trim();
+      const packSize = packSizeRaw != null && String(packSizeRaw).trim() !== ''
+        ? this.num(packSizeRaw) : null;
+      if (packSize != null && (isNaN(packSize) || packSize <= 0)) {
+        result.errors.push({ row: rowNum, message: `Invalid Pack Size: "${packSizeRaw}". Leave it blank if the unit already says the size.` });
+        continue;
+      }
+
+      if (recipeUnit && recipeUnit.toLowerCase() !== storedUnit.toLowerCase()) {
+        const factor = this.unitFactor(storedUnit, recipeUnit);
+        if (factor != null) {
+          // Convertible outright: L -> ml is 1000, kg -> g is 1000.
+          // A pack size here would double-count, so it is refused rather than
+          // silently ignored — a shop that wrote both meant something.
+          if (packSize != null) {
+            result.errors.push({ row: rowNum, message:
+              `"${storedUnit}" already converts to "${recipeUnit}", so Pack Size must be blank. ` +
+              `Use Pack Size only when the buying unit is a container (pc, pack, carton, bottle).` });
+            continue;
+          }
+          storedCost = ingCostBlank ? 0 : costPrice / factor;
+          storedUnit = recipeUnit;
+        } else if (packSize != null) {
+          // A countable container: 1 carton holds 1000 ml, and the cost given
+          // is per carton.
+          storedCost = ingCostBlank ? 0 : costPrice / packSize;
+          storedUnit = recipeUnit;
+        } else {
+          result.errors.push({ row: rowNum, message:
+            `Cannot get from "${unit.trim()}" to "${recipeUnit}". ` +
+            `Add a Pack Size saying how many ${recipeUnit} are in one ${unit.trim()}.` });
+          continue;
+        }
+      }
+
       let lowStockAlert: number | null = null;
       if (lowStockStr && lowStockStr.trim()) {
         lowStockAlert = this.num(lowStockStr);
@@ -2077,8 +2140,11 @@ export class ImportService {
         const data = {
           tenantId,
           name:          name.trim(),
-          unit:          unit.trim(),
-          costPrice:     new Prisma.Decimal(costPrice),
+          // The RECIPE unit is what gets stored — it is the fine-grained one
+          // every downstream calculation speaks. The buying unit did its job
+          // above, converting the cost.
+          unit:          storedUnit,
+          costPrice:     new Prisma.Decimal(storedCost),
           lowStockAlert: lowStockAlert != null ? new Prisma.Decimal(lowStockAlert) : null,
           isActive:      true,
         };
@@ -2215,34 +2281,66 @@ export class ImportService {
       default:
         title = 'Clerque — Ingredients / Raw Materials Import Template';
         sampleRows = [
-          ['Sample Ingredient', 'g',  '0.50', '500',  'Cost = ₱0.50 per gram'],
+          ['Sample Ingredient', 'g',  '0.50', '500',  'Cost = ₱0.50 per gram', '', ''],
         ];
         break;
     }
 
+    // Two units, because a shop buys in one and cooks in another. Asking for
+    // a single unit makes the OWNER do the conversion in his head before he
+    // types — and when he gets it wrong the cost is 1000x out with nothing to
+    // catch it. Let him write what he actually knows ("I buy milk by the
+    // litre, I pour it by the millilitre") and do the arithmetic here.
+    // Worked examples of the two-unit idea. They MUST carry the "Sample -"
+    // prefix that isSampleRow() looks for, or the template ships three
+    // phantom ingredients into every new shop that uploads it untouched.
+    sampleRows = [
+      ...sampleRows,
+      ['Sample - Fresh Milk',   'L',      '88',   '5', 'Buy by the litre, pour by the ml', 'ml', ''],
+      ['Sample - Coffee Beans', 'kg',     '1100', '2', 'Buy by the kilo, dose in grams',   'g',  ''],
+      ['Sample - Oat Milk',     'carton', '95',   '6', 'A carton holds 1000 ml',           'ml', '1000'],
+    ];
+
     return this.makeTemplate(
       'Ingredients',
-      ['Name*', 'Unit*', 'Cost per Unit (₱)*', 'Low Stock Alert', 'Notes'],
+      ['Name*', 'Unit*', 'Cost per Unit (₱)*', 'Low Stock Alert', 'Notes',
+       'Recipe Unit', 'Pack Size'],
       sampleRows,
       {
         title,
         instructions: [
           'How to use:',
-          '  1. List every ingredient / raw material your products are made from. Name must be unique within your tenant.',
-          '  2. Unit is the smallest unit you measure in (g, ml, pc, kg, L, oz). Recipes will reference this unit.',
-          '  3. Cost per Unit is the COST per unit (₱). Drives recipe-based COGS at sale time.',
-          '  4. Low Stock Alert (optional): system flags the ingredient when any branch quantity falls below this number.',
-          '  5. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',
+          '  1. List every ingredient / raw material your products are made from. Name must be unique.',
           '',
-          'Tip: To convert bulk pricing, divide the bulk cost by the bulk unit. Example: 1L milk at ₱85 → 0.085 per ml.',
-          'Next: Once ingredients are loaded, use the Recipes template to map menu items (Products) to ingredient quantities.',
+          '  2. THE TWO UNITS — this is the part worth getting right.',
+          '     Unit*       = how you BUY it and count it on the shelf (L, kg, carton, pc, bottle).',
+          '     Recipe Unit = how a RECIPE uses it (ml, g, pc). Leave blank if it is the same as Unit*.',
+          '     Pack Size   = only when the buying unit is a container. How many Recipe Units are in one?',
+          '',
+          '     You buy milk by the litre and pour it by the millilitre:',
+          '         Fresh Milk | L | 88.00 | Recipe Unit ml            -> we work out ₱0.088 per ml',
+          '     You buy oat milk by the carton and a carton holds 1000 ml:',
+          '         Oat Milk | carton | 95.00 | Recipe Unit ml | Pack Size 1000  -> ₱0.095 per ml',
+          '     Salt is measured in grams and used in grams:',
+          '         Salt | g | 0.06 | Recipe Unit blank',
+          '',
+          '     Write the cost as the price of ONE Unit* — one litre, one carton, one kilo.',
+          '     Do NOT pre-divide it yourself. That is what this sheet is for.',
+          '',
+          '  3. Low Stock Alert (optional): flagged when any branch falls below this, in Recipe Units.',
+          '  4. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',
+          '',
+          'Next: once ingredients are loaded, the Recipes template maps menu items to ingredient quantities.',
+          'Recipes may use any convertible unit — write "200 ml" even if the ingredient is stored in litres.',
         ],
         columnHints: [
           'Required. Unique within tenant.',
-          'Required. g / ml / kg / L / pc / oz.',
-          'REQUIRED. Cost per unit (₱), drives recipe COGS.',
-          'Optional. Stock-low threshold.',
+          'Required. How you BUY it: L / kg / carton / pc / bottle.',
+          'REQUIRED. Price of ONE of the unit above. Do not pre-divide.',
+          'Optional. Stock-low threshold, in Recipe Units.',
           'Optional. Free text.',
+          'Optional. How a RECIPE uses it: ml / g / pc. Blank = same as Unit.',
+          'Only for containers. How many Recipe Units in one Unit.',
         ],
       },
     );
@@ -2277,6 +2375,20 @@ export class ImportService {
    * sachet) is treated as a bare count that must match exactly — guessing a
    * shop's idea of a "scoop" would be worse than asking.
    */
+  /**
+   * How many `to` units fit in one `from` unit — 1000 for L to ml.
+   *
+   * Returns null when the two are not convertible (a "carton" is not a
+   * quantity of anything until the sheet says how big it is), which is the
+   * caller's cue to look for a Pack Size instead of guessing one.
+   */
+  private unitFactor(from: string, to: string): number | null {
+    const f = ImportService.UNIT_FACTORS[this.normUnit(from)];
+    const t = ImportService.UNIT_FACTORS[this.normUnit(to)];
+    if (!f || !t || f.family !== t.family) return null;
+    return f.perBase / t.perBase;
+  }
+
   private static readonly UNIT_FACTORS: Record<string, { family: 'mass' | 'volume'; perBase: number }> = {
     mg: { family: 'mass', perBase: 0.001 },
     g:  { family: 'mass', perBase: 1 },

@@ -11,7 +11,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
-import { StickerTier, Prisma } from '@prisma/client';
+import { StickerTier } from '@prisma/client';
 import { detectDuplicateLot, type DuplicateCandidate } from './duplicate-detection';
 import { recomputeStickerTiersForItem } from './sticker-tier';
 import {

@@ -59,6 +59,17 @@ interface TemplateInfo {
    * download-only.
    */
   upload?:   string;
+  /**
+   * GET route returning the shop's OWN data in this template's columns.
+   *
+   * The blank template answers "what do I have to fill in?". This answers
+   * "what do I already have?", which is the only question a shop past day one
+   * is asking — and the reason ingredient files kept being rebuilt by hand
+   * outside the app, in whatever shape the person rebuilding them chose.
+   * Same columns either way, so what comes out is what Import takes back.
+   */
+  exportEndpoint?: string;
+  exportFilename?: string;
 }
 
 /** Shape every importer returns. Fields it doesn't use simply stay 0. */
@@ -162,22 +173,24 @@ export default function ImportTemplatesPage() {
     }
   }
 
-  async function downloadTemplate(t: TemplateInfo) {
-    setDownloading(t.id);
+  async function downloadTemplate(t: TemplateInfo, mode: 'blank' | 'mine' = 'blank') {
+    const endpoint = mode === 'mine' ? t.exportEndpoint! : t.endpoint;
+    const filename = mode === 'mine' ? t.exportFilename! : t.filename;
+    setDownloading(mode === 'mine' ? `${t.id}:mine` : t.id);
     try {
-      const res = await api.get(t.endpoint, { responseType: 'blob' });
+      const res = await api.get(endpoint, { responseType: 'blob' });
       const blob = new Blob([res.data as any], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       });
       const url  = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = t.filename;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      toast.success(`Downloaded ${t.filename}`);
+      toast.success(`Downloaded ${filename}`);
     } catch (err: any) {
       toast.error(err?.response?.data?.message ?? 'Download failed.');
     } finally {
@@ -206,6 +219,8 @@ export default function ImportTemplatesPage() {
         ? 'One workbook for the whole setup: Products (with opening stock), Ingredients, Recipes, Customers, Vendors and Chart of Accounts. Fill the sheets in order — Recipes link to Products and Ingredients by name. Untouched sheets are skipped.'
         : 'One workbook with Products (including opening stock), Customers, Vendors and Chart of Accounts. Fill only the sheets you need — untouched sheets are skipped. Best for first-time setup.',
       endpoint: '/import/template/setup-pack',
+      exportEndpoint: '/import/export/setup-pack',
+      exportFilename: 'clerque-my-setup.xlsx',
       upload:   '/import/setup-pack',
       filename: 'clerque-setup-pack.xlsx',
       Icon: Box,
@@ -230,6 +245,8 @@ export default function ImportTemplatesPage() {
         name: 'Ingredients (Raw Materials)',
         desc: `For recipe-based COGS. Define every raw material your products are made from (espresso beans, milk, rice, sauce…) with cost per unit. Required before importing Recipes.`,
         endpoint: '/import/template/ingredients',
+        exportEndpoint: '/import/export/ingredients',
+        exportFilename: 'clerque-ingredients.xlsx',
       upload:   '/import/ingredients',
         filename: 'clerque-ingredients.xlsx',
         Icon: Sprout,
@@ -239,6 +256,8 @@ export default function ImportTemplatesPage() {
         name: 'Recipes (BOM)',
         desc: `One row per ingredient × product. Maps your menu items to ingredients with quantities — Iced Latte 16oz = 18g beans + 200ml milk + 1 cup + 1 lid + 1 stirrer. Auto-flips matched products to RECIPE_BASED so COGS is derived live from ingredients × WAC.`,
         endpoint: '/import/template/recipes',
+        exportEndpoint: '/import/export/recipes',
+        exportFilename: 'clerque-recipes.xlsx',
       upload:   '/import/recipes',
         filename: 'clerque-recipes.xlsx',
         Icon: ChefHat,
@@ -371,6 +390,24 @@ export default function ImportTemplatesPage() {
                     : <Download className="h-4 w-4" />}
                   {downloading === t.id ? 'Downloading…' : '.xlsx'}
                 </button>
+
+                {t.exportEndpoint && (
+                  // "My data" sits BEFORE Import, because after day one that is
+                  // the button people actually want: download what you already
+                  // have, change a price, upload the same file back. The blank
+                  // template beside it is only useful once.
+                  <button
+                    onClick={() => downloadTemplate(t, 'mine')}
+                    disabled={downloading === `${t.id}:mine`}
+                    title="Download YOUR data in these columns — edit it and upload it back"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/50 text-emerald-600 dark:text-emerald-400 px-3 py-2 text-sm hover:bg-emerald-500/10 disabled:opacity-50"
+                  >
+                    {downloading === `${t.id}:mine`
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Download className="h-4 w-4" />}
+                    {downloading === `${t.id}:mine` ? 'Exporting…' : 'My data'}
+                  </button>
+                )}
 
                 {t.upload && (
                   <label

@@ -2415,6 +2415,14 @@ export class ImportService {
     );
   }
 
+  /** Enum -> the words the import template asks for, so the file round-trips. */
+  private static readonly CATEGORY_LABEL: Record<string, string> = {
+    INGREDIENT:     'Ingredient',
+    KITCHEN_SUPPLY: 'Kitchen Supply',
+    BAR_SUPPLY:     'Bar Supply',
+    OFFICE_SUPPLY:  'Office Supply',
+  };
+
   /**
    * Export the tenant's ingredients as the Ingredients import file.
    *
@@ -2440,7 +2448,7 @@ export class ImportService {
     const materials = await this.prisma.rawMaterial.findMany({
       where:   { tenantId, isActive: true },
       orderBy: { name: 'asc' },
-      select:  { name: true, unit: true, costPrice: true, lowStockAlert: true },
+      select:  { name: true, unit: true, costPrice: true, lowStockAlert: true, category: true },
     });
 
     const rows: string[][] = materials.map((m) => [
@@ -2451,6 +2459,12 @@ export class ImportService {
       '',            // Notes — RawMaterial has no notes column to export
       m.unit,        // same as Unit*, so re-importing converts nothing
       '',            // Pack Size — for the same reason, must stay blank
+      // Written in the words the template offers rather than the enum, so the
+      // file reads the way the sheet asks for it. Omitting it entirely would
+      // not destroy anything — a blank cell is "not supplied" on import — but
+      // it would mean the one place you can see and change every category at
+      // once could not show them.
+      ImportService.CATEGORY_LABEL[m.category] ?? 'Ingredient',
     ]);
 
     const priced = materials.filter((m) => m.costPrice != null

@@ -17,10 +17,11 @@ describe('ImportService — ingredient export round-trips', () => {
   const TENANT = 't1';
 
   const LIVE = [
-    { name: 'Coffee Beans',           unit: 'g',  costPrice: '1.1',   lowStockAlert: '2000' },
-    { name: 'Emborg Fresh Milk',      unit: 'ml', costPrice: '0.09',  lowStockAlert: null   },
-    { name: 'Strawless Lid ( Cold )', unit: 'pc', costPrice: '1.6429', lowStockAlert: null  },
-    { name: 'Agave Syrup',            unit: 'g',  costPrice: null,    lowStockAlert: null   },
+    { name: 'Coffee Beans',           unit: 'g',  costPrice: '1.1',   lowStockAlert: '2000', category: 'INGREDIENT' },
+    { name: 'Emborg Fresh Milk',      unit: 'ml', costPrice: '0.09',  lowStockAlert: null,   category: 'INGREDIENT' },
+    { name: 'Strawless Lid ( Cold )', unit: 'pc', costPrice: '1.6429', lowStockAlert: null,  category: 'INGREDIENT' },
+    { name: 'Agave Syrup',            unit: 'g',  costPrice: null,    lowStockAlert: null,   category: 'INGREDIENT' },
+    { name: 'Zonrox Bleach',          unit: 'ml', costPrice: '0.062', lowStockAlert: null,   category: 'KITCHEN_SUPPLY' },
   ];
 
   function build(live = LIVE) {
@@ -129,5 +130,29 @@ describe('ImportService — ingredient export round-trips', () => {
     const { svc } = build([]);
     const buf = await svc.ingredientsExport(TENANT);
     expect(buf.length).toBeGreaterThan(0);
+  });
+
+  it('carries the category out in the words the template asks for', async () => {
+    // Omitting it would not destroy anything — a blank cell reads as "not
+    // supplied" on import — but the one file where you can see and change
+    // every category at once could not show them.
+    const { svc } = build();
+    const rows = await rowsFromBuffer(await svc.ingredientsExport(TENANT));
+
+    const bleach = rows.find((r) => r[0] === 'Zonrox Bleach')!;
+    const beans  = rows.find((r) => r[0] === 'Coffee Beans')!;
+    expect(bleach[7]).toBe('Kitchen Supply');
+    expect(beans[7]).toBe('Ingredient');
+  });
+
+  it('round-trips the category back to the same enum value', async () => {
+    const { svc, updated } = build();
+    const rows = await rowsFromBuffer(await svc.ingredientsExport(TENANT));
+    await (svc as unknown as {
+      importIngredientsFromRows(r: string[][], t: string): Promise<any>;
+    }).importIngredientsFromRows(rows, TENANT);
+
+    const bleach = updated.find((u) => u.id === 'id-Zonrox Bleach')!;
+    expect(bleach.data.category).toBe('KITCHEN_SUPPLY');
   });
 });

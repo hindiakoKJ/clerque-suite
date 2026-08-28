@@ -1310,12 +1310,32 @@ model ProductVariant {
 
 // ─── Raw Materials & BOM ──────────────────────────────────────────────────────
 
+/// What a stocked item IS, which decides whether it can cost a menu item.
+///
+/// Only an INGREDIENT may appear in a recipe, so only an INGREDIENT can reach
+/// COGS. The rest are things a kitchen needs to run — bleach, detergent, a
+/// burner brush, till roll — which are bought, counted and run out exactly
+/// like food, but are an operating expense, not the cost of a drink.
+///
+/// Without this, a cafe's ingredient list quietly fills with supplies: 17 of
+/// Cafe Carolina's 283 rows were bleach, tissue, trash bags and batteries,
+/// indistinguishable from coffee because nothing in the model said otherwise.
+enum RawMaterialCategory {
+  INGREDIENT
+  KITCHEN_SUPPLY
+  BAR_SUPPLY
+  OFFICE_SUPPLY
+}
+
 model RawMaterial {
   id            String   @id @default(cuid())
   tenantId      String
   name          String
   /// Unit of measure for this ingredient (g, ml, pc, kg, etc.)
   unit          String   @default("g")
+  /// Ingredient or supply. Defaults to INGREDIENT so every row that existed
+  /// before this field keeps behaving exactly as it did.
+  category      RawMaterialCategory @default(INGREDIENT)
   costPrice     Decimal? @db.Decimal(12, 4)
   /// Minimum stock level — system flags the ingredient as low when any branch
   /// falls below this quantity (same unit as the ingredient itself).

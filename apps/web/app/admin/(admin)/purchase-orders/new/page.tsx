@@ -6,10 +6,21 @@
  * status and can be edited/submitted from the detail page.
  */
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Trash2, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
+
+/**
+ * These screens are mounted twice: at /admin for platform staff and at /pos for
+ * the shop owner, who cannot reach /admin at all. Links must therefore point at
+ * whichever mount the reader is already on — a hardcoded /admin link sends an
+ * owner to a layout that redirects them straight back out.
+ */
+function usePoBase() {
+  const pathname = usePathname();
+  return pathname?.startsWith('/admin') ? '/admin/purchase-orders' : '/pos/purchase-orders';
+}
 
 interface RawMaterial { id: string; name: string; unit: string }
 interface Branch      { id: string; name: string }
@@ -23,6 +34,7 @@ interface LineDraft {
 }
 
 export default function NewPurchaseOrderPage() {
+  const base = usePoBase();
   const router = useRouter();
   const [branchId, setBranchId] = useState('');
   const [vendorId, setVendorId] = useState('');
@@ -65,7 +77,7 @@ export default function NewPurchaseOrderPage() {
       };
       return api.post<{ id: string }>('/purchase-orders', payload).then((r) => r.data);
     },
-    onSuccess: (po) => router.push(`/admin/purchase-orders/${po.id}`),
+    onSuccess: (po) => router.push(`${base}/${po.id}`),
   });
 
   const updateLine = (idx: number, patch: Partial<LineDraft>) => {

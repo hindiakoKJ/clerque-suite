@@ -8,8 +8,20 @@
 import { useState, use as usePromise } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { ArrowLeft, Send, Inbox } from 'lucide-react';
 import { api } from '@/lib/api';
+
+/**
+ * These screens are mounted twice: at /admin for platform staff and at /pos for
+ * the shop owner, who cannot reach /admin at all. Links must therefore point at
+ * whichever mount the reader is already on — a hardcoded /admin link sends an
+ * owner to a layout that redirects them straight back out.
+ */
+function usePoBase() {
+  const pathname = usePathname();
+  return pathname?.startsWith('/admin') ? '/admin/purchase-orders' : '/pos/purchase-orders';
+}
 
 type POStatus = 'DRAFT' | 'ORDERED' | 'PARTIAL' | 'RECEIVED' | 'CANCELLED';
 
@@ -41,6 +53,7 @@ interface PO {
 }
 
 export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const base = usePoBase();
   const { id } = usePromise(params);
   const queryClient = useQueryClient();
   const [receiveQty, setReceiveQty] = useState<Record<string, string>>({});
@@ -75,7 +88,7 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="p-6 max-w-5xl">
-      <Link href="/admin/purchase-orders" className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 mb-4">
+      <Link href={base} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 mb-4">
         <ArrowLeft className="h-4 w-4" /> Back to list
       </Link>
 

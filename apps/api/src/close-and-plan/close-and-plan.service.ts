@@ -10,6 +10,7 @@
  */
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { InventoryService } from '../inventory/inventory.service';
 import { StickerTier, Prisma } from '@prisma/client';
 import { detectDuplicateLot, type DuplicateCandidate } from './duplicate-detection';
 import { recomputeStickerTiersForItem } from './sticker-tier';
@@ -48,16 +49,31 @@ export interface ReceiveLineInput {
   referenceNumber?: string;
   /** When true, save even if duplicate detection flags it. */
   dupeOverride?:    boolean;
+  /** Invoice date. Defaults to now — but a delivery entered the next morning
+   *  belongs to the day it arrived, and the period lock is checked against it. */
+  receivedAt?:      string | null;
+  /** CASH / CREDIT / OWNER_FUNDED — carried through to the journal entry. */
+  paymentMethod?:   'CASH' | 'CREDIT' | 'OWNER_FUNDED';
+  vendorId?:        string;
 }
 
 export interface ReceiveResult {
   saved:            { lotId: string; rawMaterialId: string; stickerTier: StickerTier }[];
   duplicates:       { rawMaterialId: string; candidates: DuplicateCandidate[] }[];
+  /** Lines that could not be received — a locked period, a CREDIT line with no
+   *  vendor. Reported per line so the rest of the delivery still lands. */
+  failed?:          { rawMaterialId: string; reason: string }[];
 }
 
 @Injectable()
 export class CloseAndPlanService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    // batchReceive delegates every line here rather than writing lots itself —
+    // this is the only path that also moves stock, blends WAC, re-costs the
+    // recipes, queues the journal entry and honours the period lock.
+    private inventory: InventoryService,
+  ) {}
 
   // ─── Day summary ──────────────────────────────────────────────────────
 
@@ -315,37 +331,72 @@ export class CloseAndPlanService {
       return { saved: [], duplicates };
     }
 
-    // Create the surviving lots in a single transaction. WAC recompute
-    // and stocked-in event go through the existing InventoryService
-    // pathway (not duplicated here).
+    // Receive each surviving line through InventoryService.
+    //
+    // This used to create RawMaterialLot rows directly, with a comment saying
+    // "WAC recompute and stocked-in event go through the existing
+    // InventoryService pathway (not duplicated here)" — which was the opposite
+    // of what the code did. It called nothing. A batch receive therefore wrote
+    // a lot and left everything else untouched:
+    //
+    //   * RawMaterialInventory.quantity never rose, so stock did not go up
+    //   * RawMaterial.costPrice (WAC) never moved
+    //   * recostProductsUsing never ran, so every recipe kept its old cost
+    //   * no AccountingEvent, so the purchase never reached the books
+    //   * no period-lock check, so it could write into a closed month
+    //
+    // receiveRawMaterial does all five (inventory.service.ts:1240+), and
+    // creates the lot itself, so delegating is both the fix and less code.
+    // Lines are received one at a time rather than in one transaction because
+    // each carries its own date, and a period lock is per-date: a batch
+    // spanning a close boundary must reject only the lines that are locked.
     const saved: ReceiveResult['saved'] = [];
-    await this.prisma.$transaction(async (tx) => {
-      for (const line of linesToSave) {
-        const lot = await tx.rawMaterialLot.create({
-          data: {
-            tenantId,
-            branchId,
-            rawMaterialId:    line.rawMaterialId,
-            qtyReceived:      new Prisma.Decimal(line.qtyReceived),
-            qtyRemaining:     new Prisma.Decimal(line.qtyReceived),
-            unitCost:         new Prisma.Decimal(line.unitCost),
-            receivedAt:       new Date(),
-            expirationDate:   line.expirationDate ? new Date(line.expirationDate) : null,
-            referenceNumber:  line.referenceNumber,
-            dupeOverride:     !!line.dupeOverride,
-            stickerTier:      StickerTier.NORMAL, // recomputed below
-          },
+    const failed: ReceiveResult['failed'] = [];
+    for (const line of linesToSave) {
+      try {
+        await this.inventory.receiveRawMaterial(tenantId, line.rawMaterialId, {
+          branchId:        branchId,
+          quantity:        line.qtyReceived,
+          costPrice:       line.unitCost,
+          receivedAt:      line.receivedAt ?? undefined,
+          referenceNumber: line.referenceNumber,
+          expirationDate:  line.expirationDate ?? undefined,
+          paymentMethod:   line.paymentMethod ?? 'CASH',
+          vendorId:        line.vendorId,
         });
-        saved.push({
-          lotId:         lot.id,
+      } catch (err) {
+        // A locked period or a missing vendor on a CREDIT line fails ONE line.
+        // Losing the whole delivery because the last row was backdated would
+        // send someone back to re-key the rest by hand.
+        failed.push({
           rawMaterialId: line.rawMaterialId,
-          stickerTier:   StickerTier.NORMAL,
+          reason: err instanceof Error ? err.message : 'Could not receive this line.',
         });
       }
-    });
+    }
+
+    // The lot rows we just caused, so the caller still gets its ids back.
+    const receivedIds = linesToSave
+      .filter((l) => !failed.some((f) => f.rawMaterialId === l.rawMaterialId))
+      .map((l) => l.rawMaterialId);
+    if (receivedIds.length > 0) {
+      const lots = await this.prisma.rawMaterialLot.findMany({
+        where:   { tenantId, branchId, rawMaterialId: { in: receivedIds } },
+        orderBy: { createdAt: 'desc' },
+        take:    receivedIds.length,
+        select:  { id: true, rawMaterialId: true, stickerTier: true },
+      });
+      for (const lot of lots) {
+        saved.push({
+          lotId:         lot.id,
+          rawMaterialId: lot.rawMaterialId,
+          stickerTier:   lot.stickerTier ?? StickerTier.NORMAL,
+        });
+      }
+    }
 
     // Recompute sticker tiers per affected (rawMaterialId, branchId).
-    const affectedItems = Array.from(new Set(linesToSave.map((l) => l.rawMaterialId)));
+    const affectedItems = Array.from(new Set(receivedIds));
     for (const rmId of affectedItems) {
       const changes = await recomputeStickerTiersForItem(this.prisma, rmId, branchId);
       for (const change of changes) {
@@ -354,7 +405,7 @@ export class CloseAndPlanService {
       }
     }
 
-    return { saved, duplicates };
+    return { saved, duplicates, failed: failed.length ? failed : undefined };
   }
 
   // ─── Briefing builder ─────────────────────────────────────────────────

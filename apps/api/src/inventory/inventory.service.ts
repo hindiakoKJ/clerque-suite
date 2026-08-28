@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
+import ExcelJS from 'exceljs';   // already a dependency — see import.service.ts
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
@@ -351,20 +352,320 @@ export class InventoryService {
 
   // ─── Low-stock items ──────────────────────────────────────────────────────
 
+  /**
+   * Everything at or below its low-stock threshold — products AND ingredients.
+   *
+   * This used to query `inventoryItem` alone, which meant a café asking "what
+   * am I running out of?" got bottled water and packaged snacks back and not
+   * one ingredient, because ingredient stock lives in `rawMaterialInventory`
+   * against `RawMaterial.lowStockAlert`. For a recipe-based shop that is every
+   * row that matters.
+   *
+   * The shape is an explicit allow-list rather than a spread. The previous
+   * `...i` handed the whole InventoryItem row to the caller including
+   * `avgCost`, and CASHIER is on this endpoint's role list — so every cashier
+   * could read the shop's buying prices from a stock screen.
+   *
+   * `shortBy` is here because a cashier cannot act on "12 ≤ 20"; what they act
+   * on is "8 short".
+   */
   async getLowStock(tenantId: string, branchId: string) {
-    const items = await this.prisma.inventoryItem.findMany({
-      where: { tenantId, branchId },
-      include: {
-        product: { select: { id: true, name: true, sku: true } },
-      },
+    const [products, ingredients] = await Promise.all([
+      this.prisma.inventoryItem.findMany({
+        where:  { tenantId, branchId },
+        select: {
+          quantity: true, lowStockAlert: true,
+          product: { select: { id: true, name: true, sku: true } },
+        },
+      }),
+      this.prisma.rawMaterialInventory.findMany({
+        where:  { branchId, rawMaterial: { tenantId, isActive: true } },
+        select: {
+          quantity: true,
+          rawMaterial: { select: { id: true, name: true, unit: true, lowStockAlert: true } },
+        },
+      }),
+    ]);
+
+    const low = [
+      ...products
+        .filter((i) => i.lowStockAlert != null
+                    && Number(i.quantity) <= Number(i.lowStockAlert))
+        .map((i) => ({
+          kind:          'PRODUCT' as const,
+          id:            i.product.id,
+          name:          i.product.name,
+          sku:           i.product.sku,
+          unit:          'pc',
+          quantity:      Number(i.quantity),
+          lowStockAlert: Number(i.lowStockAlert),
+          shortBy:       Number(i.lowStockAlert) - Number(i.quantity),
+          isLowStock:    true,
+        })),
+      ...ingredients
+        .filter((r) => r.rawMaterial.lowStockAlert != null
+                    && Number(r.quantity) <= Number(r.rawMaterial.lowStockAlert))
+        .map((r) => ({
+          kind:          'INGREDIENT' as const,
+          id:            r.rawMaterial.id,
+          name:          r.rawMaterial.name,
+          sku:           null,
+          unit:          r.rawMaterial.unit,
+          quantity:      Number(r.quantity),
+          lowStockAlert: Number(r.rawMaterial.lowStockAlert),
+          shortBy:       Number(r.rawMaterial.lowStockAlert) - Number(r.quantity),
+          isLowStock:    true,
+        })),
+    ];
+
+    // Worst first: whoever opens this is deciding what to buy, and the thing
+    // furthest below its line is the thing that runs out first.
+    return low.sort((a, b) => b.shortBy - a.shortBy);
+  }
+
+  /**
+   * The buy-now list as lines, once.
+   *
+   * The popup on screen and the slip that comes out of the thermal printer are
+   * the same thing seen twice, so they are built here and rendered twice
+   * rather than written twice — otherwise the paper and the screen drift apart
+   * and the cashier has to decide which one to believe.
+   *
+   * 32 characters is the usable width of an 80mm thermal roll.
+   */
+  private async lowStockSlipLines(tenantId: string, branchId: string) {
+    const [low, branch] = await Promise.all([
+      this.getLowStock(tenantId, branchId),
+      this.prisma.branch.findUnique({ where: { id: branchId }, select: { name: true } }),
+    ]);
+
+    const W = 32;
+    const out    = low.filter((r) => r.quantity <= 0);
+    const short  = low.filter((r) => r.quantity > 0);
+    const lines: Array<{ text: string; bold?: boolean; center?: boolean; rule?: string }> = [];
+
+    lines.push({ text: 'BUY NOW', bold: true, center: true });
+    lines.push({ text: branch?.name ?? '', center: true });
+    lines.push({
+      text: new Date().toLocaleString('en-PH', {
+        timeZone: 'Asia/Manila', day: 'numeric', month: 'short',
+        year: 'numeric', hour: 'numeric', minute: '2-digit',
+      }),
+      center: true,
     });
-    return items
-      .filter((i) => i.lowStockAlert != null && Number(i.quantity) <= i.lowStockAlert)
-      .map((i) => ({
-        ...i,
-        quantity: Number(i.quantity),
-        isLowStock: true,
-      }));
+    lines.push({ text: '', rule: '=' });
+
+    if (!low.length) {
+      lines.push({ text: 'Nothing is below its alert', center: true });
+      lines.push({ text: 'level right now.', center: true });
+      return { lines, count: 0, outCount: 0, width: W };
+    }
+
+    // A quantity is not a decision. "short 6000 g" is the sentence that tells
+    // whoever reads this how much to actually put in the basket.
+    const body = (r: (typeof low)[number]) => [
+      { text: r.name, bold: true },
+      { text: `   have ${fmtQty(r.quantity)} ${r.unit}`.padEnd(W - 0) },
+      { text: `   SHORT ${fmtQty(r.shortBy)} ${r.unit}` },
+    ];
+
+    if (out.length) {
+      lines.push({ text: `OUT OF STOCK (${out.length})`, bold: true });
+      lines.push({ text: '', rule: '-' });
+      for (const r of out) lines.push(...body(r));
+      if (short.length) lines.push({ text: '', rule: '=' });
+    }
+    if (short.length) {
+      lines.push({ text: `RUNNING LOW (${short.length})`, bold: true });
+      lines.push({ text: '', rule: '-' });
+      for (const r of short) lines.push(...body(r));
+    }
+
+    lines.push({ text: '', rule: '=' });
+    lines.push({ text: `${low.length} item${low.length === 1 ? '' : 's'} to buy`, center: true });
+
+    return { lines, count: low.length, outCount: out.length, width: W };
+
+    function fmtQty(n: number): string {
+      // whole numbers read cleanly on paper; fractions of a gram do not
+      return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, '');
+    }
+  }
+
+  /** The slip as plain text — what the on-screen popup shows. */
+  async lowStockSlip(tenantId: string, branchId: string) {
+    const { lines, count, outCount, width } = await this.lowStockSlipLines(tenantId, branchId);
+    const text = lines
+      .map((l) => (l.rule
+        ? l.rule.repeat(width)
+        : l.center
+          ? l.text.padStart(Math.floor((width + l.text.length) / 2))
+          : l.text))
+      .join('\n');
+    return { text, count, outCount };
+  }
+
+  /** The same slip as ESC/POS bytes, for the receipt printer. */
+  async lowStockEscPos(
+    tenantId: string, branchId: string, EscPosBuilder: new () => any,
+  ): Promise<Uint8Array> {
+    const { lines, width } = await this.lowStockSlipLines(tenantId, branchId);
+    const b = new EscPosBuilder().init();
+    for (const l of lines) {
+      if (l.rule) { b.align('L').divider(l.rule, width); continue; }
+      b.align(l.center ? 'C' : 'L').bold(!!l.bold).line(l.text).bold(false);
+    }
+    b.feed(3).cut();
+    return b.build();
+  }
+
+  /**
+   * The low-stock list as a sheet the cashier can print and take shopping.
+   *
+   * It is deliberately the SAME shape as the expense report the shop already
+   * keeps — Date, Store, Area, Item, Pack size, Pack unit, Qty, Unit price,
+   * Amount — so the file starts life as "what to buy" and ends it as the
+   * record of what was bought. Nobody retypes anything into a second form.
+   *
+   * The rows are whatever is at or below its own alert level, worst first, so
+   * what gets bought is decided by the thresholds the owner set rather than by
+   * whoever happens to be looking at the shelf.
+   */
+  async lowStockExport(tenantId: string, branchId: string): Promise<Buffer> {
+    const [low, vendors, branch, allMaterials] = await Promise.all([
+      this.getLowStock(tenantId, branchId),
+      this.prisma.vendor.findMany({
+        where: { tenantId }, select: { name: true }, orderBy: { name: 'asc' }, take: 100,
+      }).catch(() => [] as { name: string }[]),
+      this.prisma.branch.findUnique({ where: { id: branchId }, select: { name: true } }),
+      this.prisma.rawMaterial.findMany({
+        where: { tenantId, isActive: true }, select: { name: true },
+        orderBy: { name: 'asc' }, take: 500,
+      }),
+    ]);
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+    const ws = wb.addWorksheet('Buy Now');
+
+    const HDRS = [
+      ['Item', 30], ['Unit', 8], ['On hand', 10], ['Alert at', 10], ['SHORT BY', 11],
+      ['Date bought', 13], ['Store', 22], ['Area', 11], ['Pack size', 10],
+      ['Pack unit', 11], ['Qty (packs)', 11], ['Unit price (₱)', 13],
+      ['Amount (₱)', 12],
+    ] as const;
+
+    ws.mergeCells(1, 1, 1, HDRS.length);
+    const title = ws.getCell(1, 1);
+    title.value = `BUY NOW — ${branch?.name ?? 'this branch'}`;
+    title.font = { bold: true, size: 15 };
+
+    ws.getCell(2, 1).value = low.length
+      ? `${low.length} item${low.length === 1 ? '' : 's'} at or below their alert level, most urgent first.`
+      : 'Nothing is below its alert level right now.';
+    ws.getCell(3, 1).value =
+      'Columns A-E come from the system. Fill in F onwards as you buy, then hand '
+      + 'this to whoever keeps the expense report — it is already in that shape.';
+    ws.getCell(3, 1).font = { italic: true, size: 9, color: { argb: 'FF777777' } };
+
+    const HEAD_ROW = 5;
+    HDRS.forEach(([label, width], i) => {
+      const c = ws.getCell(HEAD_ROW, i + 1);
+      c.value = label;
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4B7A' } };
+      c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      ws.getColumn(i + 1).width = width;
+    });
+    ws.getRow(HEAD_ROW).height = 26;
+
+    // Blank rows beyond the flagged ones: something runs out that nobody set a
+    // threshold for, and a list you cannot add to gets abandoned for paper.
+    const SPARE = 25;
+    const lastRow = HEAD_ROW + low.length + SPARE;
+
+    low.forEach((item, i) => {
+      const r = HEAD_ROW + 1 + i;
+      ws.getCell(r, 1).value = item.name;
+      ws.getCell(r, 2).value = item.unit;
+      ws.getCell(r, 3).value = item.quantity;
+      ws.getCell(r, 4).value = item.lowStockAlert;
+      ws.getCell(r, 5).value = item.shortBy;
+      ws.getCell(r, 5).font = { bold: true };
+      // out completely reads differently from merely low, and is worth seeing
+      const out = item.quantity <= 0;
+      for (let c = 1; c <= 5; c++) {
+        ws.getCell(r, c).fill = {
+          type: 'pattern', pattern: 'solid',
+          fgColor: { argb: out ? 'FFF6D9D6' : 'FFFDF1DC' },
+        };
+      }
+      if (out) ws.getCell(r, 1).font = { bold: true };
+    });
+
+    for (let r = HEAD_ROW + 1; r <= lastRow; r++) {
+      ws.getCell(r, 13).value = {
+        formula: `IF(OR(K${r}="",L${r}=""),"",ROUND(K${r}*L${r},2))`,
+      } as never;
+      ws.getCell(r, 6).numFmt = 'yyyy-mm-dd';
+      ws.getCell(r, 12).numFmt = '#,##0.00';
+      ws.getCell(r, 13).numFmt = '#,##0.00';
+      for (let c = 1; c <= HDRS.length; c++) {
+        ws.getCell(r, c).border = {
+          top:    { style: 'thin', color: { argb: 'FFD6D9DE' } },
+          left:   { style: 'thin', color: { argb: 'FFD6D9DE' } },
+          bottom: { style: 'thin', color: { argb: 'FFD6D9DE' } },
+          right:  { style: 'thin', color: { argb: 'FFD6D9DE' } },
+        };
+      }
+    }
+
+    const total = ws.getCell(lastRow + 2, 12);
+    total.value = 'TOTAL SPENT';
+    total.font = { bold: true };
+    const totalVal = ws.getCell(lastRow + 2, 13);
+    totalVal.value = { formula: `ROUND(SUM(M${HEAD_ROW + 1}:M${lastRow}),2)` } as never;
+    totalVal.font = { bold: true, size: 12 };
+    totalVal.numFmt = '₱#,##0.00';
+
+    const list = (values: string[]) => {
+      // Excel refuses an inline list over ~255 chars; fall back to free text
+      // rather than shipping a file that opens with a repair prompt.
+      const joined = values.map((v) => v.replace(/[",]/g, ' ')).join(',');
+      return joined.length <= 250 ? [`"${joined}"`] : null;
+    };
+    const apply = (col: number, values: string[]) => {
+      const f = list(values);
+      if (!f) return;
+      for (let r = HEAD_ROW + 1; r <= lastRow; r++) {
+        ws.getCell(r, col).dataValidation = {
+          type: 'list', allowBlank: true, formulae: f,
+        } as never;
+      }
+    };
+    if (vendors.length) apply(7, vendors.map((v) => v.name));
+    apply(8, ['Kitchen', 'Bar', 'Stockroom', 'Packaging']);
+    apply(10, ['g', 'kg', 'ml', 'L', 'pc', 'pack', 'box', 'can', 'bottle', 'sack', 'tray']);
+    // Item is a dropdown on the SPARE rows only — the flagged ones are already
+    // named, and re-listing 500 ingredients over them invites a mis-tap.
+    const names = allMaterials.map((m) => m.name);
+    const itemList = list(names);
+    if (itemList) {
+      for (let r = HEAD_ROW + 1 + low.length; r <= lastRow; r++) {
+        ws.getCell(r, 1).dataValidation = {
+          type: 'list', allowBlank: true, formulae: itemList,
+        } as never;
+      }
+    }
+
+    ws.views = [{ state: 'frozen', ySplit: HEAD_ROW }];
+    ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+    ws.autoFilter = {
+      from: { row: HEAD_ROW, column: 1 },
+      to:   { row: lastRow,  column: HDRS.length },
+    };
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
   // ─── Branch ownership guard ───────────────────────────────────────────────

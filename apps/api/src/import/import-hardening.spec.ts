@@ -2,6 +2,14 @@ import ExcelJS from 'exceljs';
 import { ImportService } from './import.service';
 
 /**
+ * These tests exercise parsing, not the period lock, so every date is open.
+ * importStockReceipts now REFUSES to run without a period service — failing
+ * closed rather than silently skipping the lock — so the stub is required.
+ */
+const OPEN_PERIODS = { assertDateIsOpen: async () => undefined } as never;
+
+
+/**
  * Go-live hardening for the importers (coffee-shop client, Friday cut-over):
  *  1. ExcelJS cell unwrapping (Date / richText / formula / hyperlink / error)
  *  2. Stock-receipt dates: real Excel Date, YYYY-MM-DD, DD/MM/YYYY, blank
@@ -22,7 +30,7 @@ const xlsxFile = async (fill: (ws: ExcelJS.Worksheet) => void): Promise<Express.
 
 // ── 1. Cell unwrapping ─────────────────────────────────────────────────────
 describe('ImportService — ExcelJS cell unwrapping', () => {
-  const svc = new ImportService({} as any);
+  const svc = new ImportService({} as any, OPEN_PERIODS);
   const cell = (v: unknown): string =>
     (svc as unknown as { cellToString(v: unknown): string }).cellToString(v);
 
@@ -97,7 +105,7 @@ describe('ImportService — importStockReceipts dates', () => {
   const receivedYmd = (d: Date) => d.toISOString().slice(0, 10);
 
   it('accepts YYYY-MM-DD and unambiguous DD/MM/YYYY (also 06/06 where the order cannot matter)', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importStockReceipts(csvFile([
       HEADER,
       '2026-08-19,Whole Milk,10,89.5',
@@ -114,7 +122,7 @@ describe('ImportService — importStockReceipts dates', () => {
   it('REJECTS an ambiguous slash date (05/06/2026) instead of silently guessing day- or month-first', async () => {
     // Windows en-PH / fil-PH and PH Excel default to M/d/yyyy, so a PH CSV export writes 6 May as
     // "5/6/2026". Guessing either way back-dates a real receipt + GL line with no visible error.
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importStockReceipts(csvFile([
       HEADER,
       '05/06/2026,Whole Milk,10,89.5',
@@ -132,7 +140,7 @@ describe('ImportService — importStockReceipts dates', () => {
   });
 
   it('blank date is a row-level "Date is required." error (never a throw), other rows still import', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importStockReceipts(csvFile([
       HEADER,
       ',Whole Milk,10,89.5',
@@ -143,7 +151,7 @@ describe('ImportService — importStockReceipts dates', () => {
   });
 
   it('a short row (only Date + Name) does not throw on the missing cells', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     // CSV parser keeps only 2 cells for this row -> qtyStr/costStr are undefined
     const res = await svc.importStockReceipts(csvFile([HEADER, '2026-08-19,Whole Milk'].join('\n')), 't1', 'u1');
     expect(res.imported).toBe(0);
@@ -152,7 +160,7 @@ describe('ImportService — importStockReceipts dates', () => {
   });
 
   it('rejects an impossible DD/MM date and SAYS it was read day-first', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importStockReceipts(csvFile([
       HEADER,
       '13/25/2026,Whole Milk,10,89.5',
@@ -167,7 +175,7 @@ describe('ImportService — importStockReceipts dates', () => {
   });
 
   it('accepts a real Excel Date cell (typed into Excel, stored as a Date)', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const file = await xlsxFile((ws) => {
       ws.addRow(HEADER.split(','));
       ws.addRow([new Date(Date.UTC(2026, 7, 19)), 'Whole Milk', 10, 89.5]);
@@ -203,7 +211,7 @@ describe('ImportService — importRecipes', () => {
   });
 
   it('matches product + ingredient names case-insensitively with whitespace collapsed', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importRecipes(csvFile([
       'Product Name*,Ingredient Name*,Quantity*',
       '  ESPRESSO   solo ,beans,18',
@@ -223,7 +231,7 @@ describe('ImportService — importRecipes', () => {
   });
 
   it('flips ONLY products whose rows all imported; a product with an errored row is NOT flipped and gets a note', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importRecipes(csvFile([
       'Product Name*,Ingredient Name*,Quantity*',
       'Latte,whole milk,200',      // ok
@@ -244,7 +252,7 @@ describe('ImportService — importRecipes', () => {
   });
 
   it('an invalid quantity on one row also blocks that product\'s flip', async () => {
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importRecipes(csvFile([
       'Product Name*,Ingredient Name*,Quantity*',
       'Latte,Whole Milk,200',
@@ -267,7 +275,7 @@ describe('ImportService — importProducts number parsing', () => {
         create:    jest.fn(async (args: any) => { creates.push(args.data); return { id: 'p-1' }; }),
       },
     };
-    const svc = new ImportService(prisma);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importProducts(csvFile([
       'Name*,Category,Price*,Cost Price*,VAT (Y/N),Barcode,Description',
       'Espresso Machine,,"1,250.50","P 89,500",Y,,',

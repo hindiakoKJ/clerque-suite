@@ -79,3 +79,153 @@ with: `ALTER TABLE login_logs DISABLE TRIGGER ALL; DELETE FROM login_logs WHERE
 tenants WHERE slug LIKE 'magnet-smoke-%'; ALTER TABLE login_logs ENABLE TRIGGER ALL;`
 Lesson: smoke scripts should mint JWTs via JwtService.sign() with a hand-built
 payload, not auth.login(), to avoid writing audit rows.
+
+---
+
+## Carolina — features buildable without schema changes (2026-08-27)
+
+Requested: "do everything what you can do now". The three below need no
+migration. Preps, the oat-milk swap column and the raw-material movement log
+all require schema changes and are NOT started — they need explicit approval.
+
+- [x] 1. Export ingredients as xlsx
+      `ingredientsExport(tenantId)` + `GET /import/export/ingredients`.
+      Fills the SAME seven columns the importer reads, from live RawMaterial
+      rows, so export -> edit -> import is a round trip. This is what stops
+      every ingredient file having to be hand-built outside the app.
+      Property to prove: exporting and re-importing changes nothing.
+
+- [x] 2. Fix `getLowStock` (inventory.service.ts:354)
+      Today it queries `inventoryItem` joined to Product only, so a cafe gets
+      zero ingredients back. It also spreads `...i`, leaking `avgCost` to
+      cashiers. Add raw materials; drop the leak.
+
+- [x] 3. Expose purchase orders to the owner
+      The module is built (create/submit/receive) with screens, but only under
+      /admin, so a BUSINESS_OWNER cannot reach it.
+
+### Review
+
+All three shipped. 834 tests / 74 suites pass; both apps typecheck clean.
+
+**1. Ingredient export** — `ingredientsExport()` + `GET /import/export/ingredients`,
+inheriting the controller's owner/manager/finance roles (costs, so not cashiers).
+Two things the build turned up:
+  * `makeTemplate` stamps every row it is handed with the SAMPLE marker, and
+    `isSampleRow` skips those on import — so passing real data through it would
+    have produced a file that uploads as nothing. Added a `realData` opt that
+    turns off the stamping, the grey italics, and the "rows starting with
+    SAMPLE are ignored" instruction, which is the wrong thing to tell someone
+    about their own data.
+  * Writing `Recipe Unit` equal to `Unit*` and leaving `Pack Size` blank is what
+    makes the round trip exact: the importer only converts when the two differ,
+    so the cost comes back as it went out. Proved in
+    `ingredients-export.spec.ts` — export, re-import, nothing created, every
+    unit and cost unchanged, including the "Strawless Lid ( Cold )" spacing.
+
+**2. getLowStock** — now unions products with `rawMaterialInventory` against
+`RawMaterial.lowStockAlert`, so a cafe actually gets ingredients back instead of
+bottled water. Replaced the `...i` spread with an explicit allow-list: it was
+handing `avgCost` to every CASHIER on the endpoint's role list. Added `shortBy`
+and sorted worst-first, because "8 short" is actionable and "12 <= 20" is not.
+
+**3. Purchase orders** — the API always allowed BUSINESS_OWNER; only the screens
+were unreachable, sitting under an /admin layout that redirects non-SUPER_ADMIN.
+Added /pos/purchase-orders routes that re-export the same components (they never
+reference a tenant — the API scopes by JWT) and a Purchasing nav section
+appended to every vertical, since the default nav branch a coffee shop takes
+does not include the Warehouse section. The pages had four hardcoded
+/admin/purchase-orders links that would have bounced an owner to /select; those
+now resolve against whichever mount the reader is on.
+
+**4. Buy Now — cashier-facing (added after the first three)**
+  * `GET /inventory/low-stock/slip` — the list as 32-column text for the popup
+  * `POST /inventory/low-stock/print` — same content as ESC/POS, reusing the
+    Close & Plan `InlineEscPosBuilder`, so whatever prints receipts prints this
+  * `GET /inventory/low-stock/export` — the xlsx shopping sheet, laid out in the
+    shop's OWN expense-report columns (Date/Store/Area/Item/Pack size/Pack unit/
+    Qty/Unit price/Amount) so one sheet is both the list and the record
+  * `components/pos/BuyNowButton.tsx` in the POS header next to Cash Out —
+    cashiers cannot open /pos/inventory, so the answer comes to them
+  All four are CASHIER-open and carry NO costs; a test asserts the buffer never
+  contains a price. Screen and paper are rendered from one line-list on the
+  server so they cannot drift.
+
+  Depends on `RawMaterial.lowStockAlert` being set — with no thresholds the
+  list is correctly empty. That is column J of the Setup Workbook.
+
+**Not started — these need schema changes and explicit approval:**
+  * `ModifierOptionIngredient.replacesRawMaterialId` — the oat-milk swap
+  * prep tracking (`batchYield`, prep recipe, `qtyReserve`)
+  * `RawMaterialMovement` — the ingredient half of InventoryLog, which the
+    cashier usage report depends on
+
+---
+
+## Ingredient categories + one file for everything (2026-08-28)
+
+Explicit go-ahead given for the migration. Three pieces, one slice.
+
+- [x] 1. `RawMaterialCategory` enum + `RawMaterial.category`
+      INGREDIENT / KITCHEN_SUPPLY / BAR_SUPPLY / OFFICE_SUPPLY, defaulting to
+      INGREDIENT so every existing row keeps behaving exactly as it does now.
+      Nothing distinguishes coffee beans from bleach today, which is why 17
+      supplies sit in Carolina's 283-row ingredient list looking like food.
+
+- [x] 2. Category flows through the templates
+      Add the column to the Ingredients import template and read it. Then the
+      rule the owner asked for becomes enforceable: only an INGREDIENT may
+      appear in a recipe, so only ingredients reach COGS. Supplies still get
+      stocked and counted; they simply cannot be an ingredient of anything.
+
+- [x] 3. Setup-pack EXPORT
+      `template/setup-pack` already returns ONE file with seven sheets in
+      dependency order — but only blank. Filling it is the real answer to
+      "too many templates": after day one nobody opens a blank template again,
+      they export their setup, edit it, and upload the same file back.
+
+NOT in this slice: routing supply purchases to expenses instead of inventory.
+That touches AP and is a separate decision — flagged, not started.
+
+### Review
+
+Shipped. 873 tests / 79 suites pass; both apps typecheck.
+
+**1. `RawMaterialCategory`** — enum + `raw_materials.category`, NOT NULL DEFAULT
+'INGREDIENT', plus a `(tenantId, category)` index. Migration
+20260828000000_raw_material_category. Deliberately NOT backfilled by name:
+guessing "Zonrox Bleach" is a supply is right, guessing "Food Keeper" is a coin
+flip, and a wrong category silently removes an item from recipe costing.
+
+**2. Category in the templates, and the rule it makes enforceable.** The column
+is resolved by HEADER, not position, so every seven-column sheet already in the
+wild keeps importing and lands on the default. Input is normalised the way a
+person writes it ("Kitchen Supplies", "kitchen supply", "KITCHEN_SUPPLY") and an
+unrecognised value is REFUSED by name rather than filed as food. A blank cell is
+"not supplied", so re-importing never re-files something categorised in the app.
+Then the owner's rule holds at the point it matters: importRecipesFromRows
+refuses a non-INGREDIENT with a message naming the category, because bleach in a
+recipe is a mistake worth seeing rather than a row to skip.
+
+**3. Recipe UOM — a live accuracy bug, not a missing feature.** The recipes
+template documented a Unit column in its instructions AND wrote 'g'/'ml'/'pc'
+into its sample rows, but shipped only three headers. importRecipesFromRows
+locates that column by matching /^unit/i against the HEADER row, so it always
+returned -1 and the unit was silently dropped. Anyone who followed the
+template's own instructions and wrote "200 ml" against milk stored in litres got
+200 LITRES in one drink, with nothing erroring. Header added, every sample row
+now states its unit, and cups/lids read 'pc' rather than 'g' — a template
+teaches by example before anyone reads the instructions. Still optional, so
+existing sheets keep working.
+
+**4. Setup-pack export.** `GET /import/export/setup-pack` returns ONE file whose
+sheets are the same seven the blank pack ships, with Ingredients and Recipes
+filled from live data. Also `GET /import/export/recipes` on its own. The blank
+pack answers "what must I fill in?"; this answers "what do I already have?",
+which is the question every shop past day one is actually asking. Products,
+Customers, Vendors and the Chart of Accounts ship blank and the Read Me says so
+— Products vary by business type and the rest are rarely bulk-edited.
+
+**Flagged, not started:** routing supply PURCHASES to expenses rather than
+inventory. Categorising them is done; changing where their money lands touches
+AP and is a separate decision.

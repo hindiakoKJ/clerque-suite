@@ -7,8 +7,20 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { Plus, FileText } from 'lucide-react';
 import { api } from '@/lib/api';
+
+/**
+ * These screens are mounted twice: at /admin for platform staff and at /pos for
+ * the shop owner, who cannot reach /admin at all. Links must therefore point at
+ * whichever mount the reader is already on — a hardcoded /admin link sends an
+ * owner to a layout that redirects them straight back out.
+ */
+function usePoBase() {
+  const pathname = usePathname();
+  return pathname?.startsWith('/admin') ? '/admin/purchase-orders' : '/pos/purchase-orders';
+}
 
 type POStatus = 'DRAFT' | 'ORDERED' | 'PARTIAL' | 'RECEIVED' | 'CANCELLED';
 
@@ -39,6 +51,7 @@ const STATUS_COLOR: Record<POStatus, string> = {
 };
 
 export default function PurchaseOrdersPage() {
+  const base = usePoBase();
   const [status, setStatus] = useState<POStatus | ''>('');
 
   const { data: pos, isLoading } = useQuery<PurchaseOrderRow[]>({
@@ -55,7 +68,7 @@ export default function PurchaseOrdersPage() {
           <FileText className="h-6 w-6" /> Purchase Orders
         </h1>
         <Link
-          href="/admin/purchase-orders/new"
+          href={`${base}/new`}
           className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
         >
           <Plus className="h-4 w-4" /> New PO
@@ -98,7 +111,7 @@ export default function PurchaseOrdersPage() {
               {pos.map((p) => (
                 <tr key={p.id} className="border-t hover:bg-slate-50">
                   <td className="px-4 py-2">
-                    <Link href={`/admin/purchase-orders/${p.id}`} className="text-blue-600 hover:underline">
+                    <Link href={`${base}/${p.id}`} className="text-blue-600 hover:underline">
                       {p.poNumber}
                     </Link>
                   </td>

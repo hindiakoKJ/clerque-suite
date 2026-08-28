@@ -307,6 +307,53 @@ export class ImportController {
     res.send(buf);
   }
 
+  /**
+   * The whole setup in ONE file, filled in.
+   *
+   * The blank setup pack answers "what do I have to fill in?"; this answers
+   * "what do I already have?", which is what a shop past day one is asking.
+   * Same sheets, same columns, so what comes out is what the importer takes
+   * back — and there is no template to choose between any more.
+   */
+  @Get('export/setup-pack')
+  async setupPackExport(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.setupPackExport(req.user.tenantId!);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-my-setup.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  /** Download the shop's OWN recipes, in the Recipes import shape. */
+  @Get('export/recipes')
+  async recipesExport(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.recipesExport(req.user.tenantId!);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-recipes.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  /**
+   * Download the shop's OWN ingredients, in the import file's own shape.
+   *
+   * The blank template above tells a shop what the columns mean; this hands
+   * back what it already has, so a price change is an edit-and-upload rather
+   * than a spreadsheet rebuilt by hand outside the app. Same columns, so the
+   * file it produces is the file this controller accepts.
+   */
+  @Get('export/ingredients')
+  async ingredientsExport(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.ingredientsExport(req.user.tenantId!);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-ingredients.xlsx"',
+    });
+    res.send(buf);
+  }
+
   // ── Recipes / BOM (Sprint 19) ──────────────────────────────────────────
   @Post('recipes')
   @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))

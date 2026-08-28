@@ -192,6 +192,22 @@ export class APBillsService {
     // tier). This blocks the lone-wolf embezzlement loop where one AP clerk
     // fabricates a vendor bill in DRAFT, posts it themselves, and then
     // records the cash-out payment — all under one identity.
+    // A machine identity can never satisfy the check below: a service
+    // principal carries role 'SERVICE' and an EMPTY sub (api-key.strategy.ts),
+    // so `callerRole === 'AP_ACCOUNTANT'` is false and `createdById === userId`
+    // compares against ''. The separation-of-duties rule is therefore
+    // structurally unreachable for an API key — it is not enforced and not
+    // deliberately waived, it simply falls through.
+    //
+    // No posting route names 'SERVICE' in @Roles today, so nothing can reach
+    // here yet. Refusing explicitly is what keeps that true: adding 'SERVICE'
+    // to this route later would otherwise silently hand a single API key both
+    // sides of the control this check exists to enforce.
+    if (callerRole === 'SERVICE') {
+      throw new ForbiddenException(
+        'An API key cannot post a bill. Posting is an approval, and an approval needs a person.',
+      );
+    }
     if (callerRole === 'AP_ACCOUNTANT' && bill.createdById === userId) {
       throw new ForbiddenException(
         'You cannot post a bill that you created. Ask the owner or accountant to post it.',

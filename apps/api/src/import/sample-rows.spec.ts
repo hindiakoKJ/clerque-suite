@@ -2,6 +2,14 @@ import ExcelJS from 'exceljs';
 import { ImportService } from './import.service';
 
 /**
+ * These tests exercise parsing, not the period lock, so every date is open.
+ * importStockReceipts now REFUSES to run without a period service — failing
+ * closed rather than silently skipping the lock — so the stub is required.
+ */
+const OPEN_PERIODS = { assertDateIsOpen: async () => undefined } as never;
+
+
+/**
  * Every template ships realistic sample rows. A first-time owner who forgets
  * to delete them must NOT end up with 'Espresso Solo', 'Globe Telecom' or two
  * fake journal entries in their books. These tests generate each template
@@ -91,7 +99,7 @@ const expectSamplesIgnored = (r: { imported: number; updated: number; skipped: n
 
 describe('ImportService — sample rows are ignored on import', () => {
   describe('isSampleRow()', () => {
-    const svc = new ImportService({} as any);
+    const svc = new ImportService({} as any, OPEN_PERIODS);
     const isSample = (r?: string[]) =>
       (svc as unknown as { isSampleRow(r?: string[]): boolean }).isSampleRow(r);
 
@@ -123,7 +131,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('makeTemplate()', () => {
     it('stamps every sample row with "SAMPLE - " and carries the instruction line', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const rows = await readRows(await svc.productsTemplate('t1'));
       const headerIdx = rows.findIndex((r) => r[0] === 'Name*');
       expect(headerIdx).toBeGreaterThan(0);
@@ -138,7 +146,7 @@ describe('ImportService — sample rows are ignored on import', () => {
     });
 
     it('styles sample rows light-grey italic', async () => {
-      const svc = new ImportService(makePrisma() as any);
+      const svc = new ImportService(makePrisma() as any, OPEN_PERIODS);
       const buf = await svc.vendorsTemplate();
       const wb = new ExcelJS.Workbook();
       await wb.xlsx.load(buf as any);
@@ -153,7 +161,7 @@ describe('ImportService — sample rows are ignored on import', () => {
     });
 
     it('Bottled Water sample in the coffee-shop template is VAT-able (Y)', async () => {
-      const svc = new ImportService(makePrisma('COFFEE_SHOP') as any);
+      const svc = new ImportService(makePrisma('COFFEE_SHOP') as any, OPEN_PERIODS);
       const rows = await readRows(await svc.productsTemplate('t1'));
       const water = rows.find((r) => r[0] === 'SAMPLE - Bottled Water');
       expect(water).toBeDefined();
@@ -164,7 +172,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('products', () => {
     it('imports nothing from the coffee-shop template as shipped', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importProducts(asFile(await svc.productsTemplate('t1')), 't1');
       expectSamplesIgnored(r, 8);
       expect(prisma.product.create).not.toHaveBeenCalled();
@@ -173,7 +181,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('imports nothing from the pharmacy template as shipped', async () => {
       const prisma = makePrisma('PHARMACY');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importProducts(asFile(await svc.productsTemplate('t1')), 't1');
       expectSamplesIgnored(r, 8);
       expect(prisma.product.create).not.toHaveBeenCalled();
@@ -182,7 +190,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.productsTemplate('t1'), [
         ['Americano 12oz', 'Beverages', '110', '25', 'Y', '', 'Espresso + hot water'],
       ]);
@@ -198,7 +206,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('inventory', () => {
     it('imports nothing from the template as shipped', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importInventory(asFile(await svc.inventoryTemplate()), 't1', 'br-1');
       expectSamplesIgnored(r, 4);
       expect(prisma.product.findFirst).not.toHaveBeenCalled();
@@ -207,7 +215,7 @@ describe('ImportService — sample rows are ignored on import', () => {
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma();
       prisma.product.findFirst.mockResolvedValue({ id: 'p-1' });
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.inventoryTemplate(), [['Americano 12oz', '25', '5']]);
       const r = await svc.importInventory(asFile(buf), 't1', 'br-1');
       expect(r.errors).toEqual([]);
@@ -220,7 +228,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('setup pack (Products + Customers + Vendors + Chart of Accounts)', () => {
     it('imports nothing from the pack as shipped', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
 
       // Every bundled sheet is read...
@@ -235,7 +243,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('bundles Ingredients + Recipes for a business that MAKES what it sells', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
       expect(r.ingredients.notIncluded).toBe(false);
       expect(r.recipes.notIncluded).toBe(false);
@@ -245,7 +253,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('leaves Ingredients + Recipes out for a shop that buys everything finished', async () => {
       const prisma = makePrisma('RETAIL');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
       expect(r.ingredients.notIncluded).toBe(true);
       expect(r.recipes.notIncluded).toBe(true);
@@ -254,14 +262,14 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('no longer ships an Inventory sheet — opening stock lives on Products', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importSetupPack(asFile(await svc.setupPackTemplate('t1'), 'pack.xlsx'), 't1', 'br-1');
       expect(r.inventory.notIncluded).toBe(true);
     });
 
     it('still honours an Inventory sheet in a previously downloaded pack', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       // Rebuild an older-style pack: the standalone Inventory template as a
       // sheet named "Inventory" alongside Products.
       const ExcelJS = (await import('exceljs')).default;
@@ -283,7 +291,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('chart of accounts', () => {
     it('imports nothing from the template as shipped', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importChartOfAccounts(asFile(await svc.coaTemplate()), 't1');
       expectSamplesIgnored(r, 5);
       expect(prisma.account.create).not.toHaveBeenCalled();
@@ -291,7 +299,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.coaTemplate(), [
         ['1025', 'Cash in Bank – BDO', 'ASSET', 'DEBIT', 'BDO checking', ''],
       ]);
@@ -306,7 +314,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('journal entries', () => {
     it('imports nothing from the template as shipped (both sample JEs are whole-sample groups)', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importJournalEntries(asFile(await svc.journalTemplate()), 't1', 'u1');
       expectSamplesIgnored(r, 4);
       expect(prisma.journalEntry.create).not.toHaveBeenCalled();
@@ -316,7 +324,7 @@ describe('ImportService — sample rows are ignored on import', () => {
     it('still posts a real balanced entry added under the samples', async () => {
       const prisma = makePrisma();
       prisma.account.findFirst.mockResolvedValue({ id: 'acct-1' });
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.journalTemplate(), [
         ['JE-2026-003', '2026-08-01', 'Opening cash', '1010', '25000', '', ''],
         ['JE-2026-003', '2026-08-01', 'Opening cash', '3010', '', '25000', ''],
@@ -333,7 +341,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('customers', () => {
     it('imports nothing from the template as shipped', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importCustomers(asFile(await svc.customersTemplate()), 't1');
       expectSamplesIgnored(r, 3);
       expect(prisma.customer.create).not.toHaveBeenCalled();
@@ -341,7 +349,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.customersTemplate(), [
         ['Davao City Hall Canteen', '', 'Davao City', '', '', '30', '20000', ''],
       ]);
@@ -356,7 +364,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('vendors', () => {
     it('imports nothing from the template as shipped (no fabricated TINs land in AP)', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importVendors(asFile(await svc.vendorsTemplate()), 't1');
       expectSamplesIgnored(r, 3);
       expect(prisma.vendor.create).not.toHaveBeenCalled();
@@ -364,7 +372,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.vendorsTemplate(), [
         ['Davao Coffee Beans', '', 'Davao City', '', '', 'WC158', '0.01', 'Green beans supplier'],
       ]);
@@ -379,7 +387,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('ingredients', () => {
     it('imports nothing from the coffee-shop template as shipped', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const tpl = await svc.ingredientsTemplate('t1');
       const r = await svc.importIngredients(asFile(tpl), 't1');
       // Count the samples out of the template itself rather than hard-coding
@@ -391,7 +399,7 @@ describe('ImportService — sample rows are ignored on import', () => {
 
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const tpl = await svc.ingredientsTemplate('t1');
       const samples = await countSampleRows(tpl);
       const buf = await appendRows(tpl, [
@@ -408,7 +416,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('recipes', () => {
     it('imports nothing from the coffee-shop template as shipped', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importRecipes(asFile(await svc.recipesTemplate('t1')), 't1');
       expectSamplesIgnored(r, 15);
       expect(prisma.bomItem.create).not.toHaveBeenCalled();
@@ -419,7 +427,7 @@ describe('ImportService — sample rows are ignored on import', () => {
       const prisma = makePrisma('COFFEE_SHOP');
       prisma.product.findFirst.mockResolvedValue({ id: 'p-1' });
       prisma.rawMaterial.findFirst.mockResolvedValue({ id: 'rm-1' });
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.recipesTemplate('t1'), [
         ['Americano 12oz', 'Espresso Beans (Single-Origin)', '18'],
       ]);
@@ -434,7 +442,7 @@ describe('ImportService — sample rows are ignored on import', () => {
   describe('stock receipts', () => {
     it('imports nothing from the template as shipped', async () => {
       const prisma = makePrisma();
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const r = await svc.importStockReceipts(asFile(await svc.stockReceiptsTemplate()), 't1', 'u1');
       expectSamplesIgnored(r, 4);
       expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -444,7 +452,7 @@ describe('ImportService — sample rows are ignored on import', () => {
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma();
       prisma.rawMaterial.findFirst.mockResolvedValue({ id: 'rm-1', name: 'Oat Milk', costPrice: 0.2 });
-      const svc = new ImportService(prisma as any);
+      const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.stockReceiptsTemplate(), [
         ['2026-08-18', 'Oat Milk', '2000', '0.20', '', 'CASH', '', 'DR-0001'],
       ]);

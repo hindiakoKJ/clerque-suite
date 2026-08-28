@@ -24,6 +24,7 @@ import { useKioskMode } from '@/hooks/pos/useKioskMode';
 import { TillLockOverlay } from '@/components/pos/TillLockOverlay';
 import { useTillLockStore } from '@/store/pos/tillLock';
 import { useAuthStore } from '@/store/auth';
+import { BuyNowButton } from '@/components/pos/BuyNowButton';
 import { useShiftStore } from '@/store/pos/shift';
 import { useShiftGuard } from '@/hooks/pos/useShiftGuard';
 import { usePendingSync } from '@/hooks/pos/usePendingSync';
@@ -604,11 +605,23 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     ];
   }
 
+  // Purchasing — appended to every vertical, like Reports.
+  //
+  // The purchase-order module has existed for a while (create / submit /
+  // receive) and the API has always allowed BUSINESS_OWNER. Its only screens,
+  // though, live under /admin, which redirects anyone who is not SUPER_ADMIN —
+  // so the feature was built, permitted, and unreachable for the people it was
+  // for. It hangs here rather than off the Warehouse section because that
+  // section is only spread into some verticals, and every business buys stock.
+  const purchasingSection = withSection('Purchasing', [
+    makeNavItem('/pos/purchase-orders', 'Purchase Orders', ReceiptIcon, MGMT_POS, role),
+  ]);
+
   // Sprint 19 — Reports section appended to every vertical's nav.
   // Cashiers don't see it (MGMT_POS gated); makeNavItem still emits the
   // disabled+grayed entry for transparency, then the filter pass below
   // removes it from cashier nav since the role check fails.
-  verticalNav = [...verticalNav, ...reportsSection];
+  verticalNav = [...verticalNav, ...purchasingSection, ...reportsSection];
 
   // Filter disabled items, hoisting any orphaned sectionStart label onto the
   // next visible item in that section. Without this, hiding the first item
@@ -703,6 +716,11 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
           {pendingCount} pending
         </button>
       )}
+
+      {/* Buy Now — the cashier's route to "what are we running out of?".
+          They cannot open /pos/inventory (manager-only), so the answer comes
+          to them here, next to the other till actions. */}
+      <BuyNowButton branchId={user?.branchId ?? undefined} />
 
       {activeShift && (
         <button

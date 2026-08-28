@@ -9,7 +9,9 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -93,6 +95,65 @@ export class InventoryController {
   @Get('low-stock')
   getLowStock(@CurrentUser() user: JwtPayload, @Query('branchId') branchId: string) {
     return this.inventoryService.getLowStock(user.tenantId!, branchId ?? user.branchId!);
+  }
+
+  /**
+   * The same list as a sheet the cashier can print and take to the market.
+   *
+   * Cashiers are the first to notice something running out, so this is on
+   * their role list alongside the JSON above. It carries no costs — only what
+   * is on hand, the alert level, and how far under it sits — and it is laid
+   * out like the shop's own expense report so the same sheet records what was
+   * actually bought.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+  @Get('low-stock/export')
+  async lowStockExport(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId: string,
+    @Res() res: Response,
+  ) {
+    const buf = await this.inventoryService.lowStockExport(
+      user.tenantId!, branchId ?? user.branchId!,
+    );
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-buy-now.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  /**
+   * The same list as a short slip — what the on-screen popup shows.
+   *
+   * Separate from the xlsx because the two answer different questions: the
+   * sheet is for the trip to the market, this is for "do I need to tell
+   * someone right now?" mid-shift, and it has to fit a 32-character roll.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+  @Get('low-stock/slip')
+  lowStockSlip(@CurrentUser() user: JwtPayload, @Query('branchId') branchId: string) {
+    return this.inventoryService.lowStockSlip(user.tenantId!, branchId ?? user.branchId!);
+  }
+
+  /**
+   * The slip as ESC/POS bytes for the thermal printer.
+   *
+   * Same wire format as the Close & Plan briefing, so whatever already prints
+   * receipts prints this with no extra setup on the tablet.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+  @Post('low-stock/print')
+  @HttpCode(HttpStatus.OK)
+  async lowStockPrint(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { branchId?: string },
+  ) {
+    const { InlineEscPosBuilder } = require('../close-and-plan/inline-escpos');
+    const bytes = await this.inventoryService.lowStockEscPos(
+      user.tenantId!, body.branchId ?? user.branchId!, InlineEscPosBuilder,
+    );
+    return { base64: Buffer.from(bytes).toString('base64'), length: bytes.byteLength };
   }
 
   /** Movement log for one product — WAREHOUSE_STAFF can view their own adjustments */

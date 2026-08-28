@@ -1,7 +1,8 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Optional } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { mapLoyverseItems, looksLikeLoyverse } from './loyverse.mapper';
 import { isRecipeBusinessType } from '@repo/shared-types';
 
@@ -21,7 +22,17 @@ export interface ImportResult {
 
 @Injectable()
 export class ImportService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /**
+     * Optional ONLY so the many unit tests that construct this service with a
+     * bare prisma stub keep working. It is always provided in the module, and
+     * importStockReceipts REFUSES to write without it (see below) rather than
+     * quietly skipping the period lock — a bypass that is invisible is worse
+     * than a missing feature.
+     */
+    @Optional() private readonly periods?: AccountingPeriodsService,
+  ) {}
 
   // ── Helper: parse xlsx or csv buffer into row arrays (first sheet only) ──
   /**
@@ -262,6 +273,8 @@ export class ImportService {
       title?:           string;
       instructions?:    string[];
       columnHints?:     string[];   // same length as headers
+      /** Rows are the shop's own data, not examples — do not stamp or grey them. */
+      realData?:        boolean;
     } = {},
   ): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
@@ -285,7 +298,9 @@ export class ImportService {
 
     // ── Instructions ───────────────────────────────────────────────────────
     // Every template that ships sample rows tells the owner they are ignored.
-    const instructions = sampleRows.length
+    // An export has rows but no samples, and telling someone their own data
+    // will be ignored on import is exactly the wrong thing to say.
+    const instructions = sampleRows.length && !opts.realData
       ? [ImportService.SAMPLE_INSTRUCTION, ...(opts.instructions ?? [])]
       : (opts.instructions ?? []);
     if (instructions.length) {
@@ -325,13 +340,20 @@ export class ImportService {
     // ── Sample data rows ───────────────────────────────────────────────────
     // Stamp the first cell with the SAMPLE marker (see isSampleRow) and style
     // the row light-grey italic so it is visibly "not yours".
+    //
+    // `realData` turns both off. An EXPORT reuses this same builder so the file
+    // a shop downloads is laid out exactly like the blank template it already
+    // knows — but its rows are the shop's own, and stamping them would make
+    // re-importing the file a no-op, since isSampleRow skips them.
     for (const r of sampleRows) {
       const [first, ...rest] = r;
-      const marked = this.isSampleRow(r)
+      const marked = opts.realData || this.isSampleRow(r)
         ? r
         : [`${ImportService.SAMPLE_MARKER}${first ?? ''}`, ...rest];
       ws.getRow(cursor).values = marked;
-      ws.getRow(cursor).font = { italic: true, color: { argb: 'FF9E9E9E' } };
+      if (!opts.realData) {
+        ws.getRow(cursor).font = { italic: true, color: { argb: 'FF9E9E9E' } };
+      }
       cursor++;
     }
 
@@ -2049,6 +2071,12 @@ export class ImportService {
       throw new BadRequestException('File must have a header row and at least one data row.');
     }
 
+    // Resolved by HEADER, not position, so the seven-column sheets already in
+    // the wild keep importing — they land as INGREDIENT, which is how they are
+    // being treated today anyway.
+    const headerRow = headerIdx >= 0 ? (rows[headerIdx] ?? []) : [];
+    const catCol = headerRow.findIndex((h) => /^categor/i.test(String(h ?? '').trim()));
+
     const result: ImportResult = { imported: 0, updated: 0, skipped: 0, errors: [] };
     let dataRows = rows.slice(dataStart);
     if (dataRows.length > 0) {
@@ -2060,6 +2088,34 @@ export class ImportService {
       const rowNum = dataStart + i + 2;
       if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
       const [name, unit, costStr, lowStockStr, notes, recipeUnitRaw, packSizeRaw] = dataRows[i];
+      // Category is resolved by header rather than by position, so the
+      // thousands of seven-column sheets already in the wild keep importing —
+      // they simply land as INGREDIENT, which is what they are being treated
+      // as today anyway.
+      const categoryRaw = catCol >= 0 ? dataRows[i][catCol] : undefined;
+      let category: 'INGREDIENT' | 'KITCHEN_SUPPLY' | 'BAR_SUPPLY' | 'OFFICE_SUPPLY' | undefined;
+      if (categoryRaw != null && String(categoryRaw).trim() !== '') {
+        // Accept what a person would actually type — "kitchen supply",
+        // "Kitchen Supplies", "KITCHEN_SUPPLY" — and reject anything else by
+        // name rather than silently filing it as food.
+        const key = String(categoryRaw).trim().toUpperCase()
+          .replace(/[\s-]+/g, '_').replace(/IES$/, 'Y').replace(/S$/, '');
+        const map: Record<string, typeof category> = {
+          INGREDIENT: 'INGREDIENT', INGREDIENTS: 'INGREDIENT', FOOD: 'INGREDIENT',
+          KITCHEN_SUPPLY: 'KITCHEN_SUPPLY', KITCHEN: 'KITCHEN_SUPPLY',
+          BAR_SUPPLY: 'BAR_SUPPLY', BAR: 'BAR_SUPPLY',
+          OFFICE_SUPPLY: 'OFFICE_SUPPLY', OFFICE: 'OFFICE_SUPPLY',
+        };
+        category = map[key];
+        if (!category) {
+          result.errors.push({
+            row: rowNum,
+            message: `Category "${categoryRaw}" is not one of: Ingredient, `
+              + 'Kitchen Supply, Bar Supply, Office Supply.',
+          });
+          continue;
+        }
+      }
       void notes; // currently unused — RawMaterial has no notes column
 
       if (!name?.trim()) { result.skipped++; continue; }
@@ -2140,6 +2196,9 @@ export class ImportService {
         const data = {
           tenantId,
           name:          name.trim(),
+          // Only supplied when the sheet says so. A blank cell must not
+          // re-file an item the owner has already categorised in the app.
+          ...(category ? { category } : {}),
           // The RECIPE unit is what gets stored — it is the fine-grained one
           // every downstream calculation speaks. The buying unit did its job
           // above, converting the cost.
@@ -2304,7 +2363,7 @@ export class ImportService {
     return this.makeTemplate(
       'Ingredients',
       ['Name*', 'Unit*', 'Cost per Unit (₱)*', 'Low Stock Alert', 'Notes',
-       'Recipe Unit', 'Pack Size'],
+       'Recipe Unit', 'Pack Size', 'Category'],
       sampleRows,
       {
         title,
@@ -2344,6 +2403,216 @@ export class ImportService {
         ],
       },
     );
+  }
+
+  /**
+   * Export the tenant's ingredients as the Ingredients import file.
+   *
+   * The columns are the ones importIngredientsFromRows reads, in that order, so
+   * the file round-trips: download it, change a price, upload it back. Nothing
+   * else about the ingredient moves.
+   *
+   * Two details make that true rather than nearly-true:
+   *
+   *   Recipe Unit is written as the SAME unit the ingredient is stored in, and
+   *   Pack Size is left blank. The importer only converts when the recipe unit
+   *   DIFFERS from the buying unit, so writing them equal means the conversion
+   *   branch never runs — the cost comes back exactly as it went out. Writing
+   *   Recipe Unit blank would work too, but then a shop editing the file has
+   *   no reminder of what the ingredient is actually measured in.
+   *
+   *   Names are written verbatim. The importer matches on an exact,
+   *   case-sensitive name, so a name that survives the round trip is the whole
+   *   point: it is what makes the downloaded file safe to re-upload instead of
+   *   a way to accidentally create a second copy of every ingredient.
+   */
+  async ingredientsExport(tenantId: string): Promise<Buffer> {
+    const materials = await this.prisma.rawMaterial.findMany({
+      where:   { tenantId, isActive: true },
+      orderBy: { name: 'asc' },
+      select:  { name: true, unit: true, costPrice: true, lowStockAlert: true },
+    });
+
+    const rows: string[][] = materials.map((m) => [
+      m.name,
+      m.unit,
+      m.costPrice     != null ? String(m.costPrice)     : '',
+      m.lowStockAlert != null ? String(m.lowStockAlert) : '',
+      '',            // Notes — RawMaterial has no notes column to export
+      m.unit,        // same as Unit*, so re-importing converts nothing
+      '',            // Pack Size — for the same reason, must stay blank
+    ]);
+
+    const priced = materials.filter((m) => m.costPrice != null
+                                        && Number(m.costPrice) > 0).length;
+
+    return this.makeTemplate(
+      'Ingredients',
+      ['Name*', 'Unit*', 'Cost per Unit (₱)*', 'Low Stock Alert', 'Notes',
+       'Recipe Unit', 'Pack Size', 'Category'],
+      rows,
+      {
+        realData: true,
+        title: 'Clerque — Your Ingredients (exported)',
+        instructions: [
+          `${materials.length} ingredients, ${priced} of them costed.`,
+          '',
+          'This is YOUR data, not a sample. Edit it and upload it back at',
+          'Settings > Import > Ingredients — every row updates the ingredient it',
+          'came from rather than creating a new one.',
+          '',
+          'Do NOT change anything in the Name column. Clerque finds an ingredient',
+          'by its exact name, so an edited name creates a SECOND ingredient and',
+          'leaves the original behind, with your recipes still pointing at it.',
+          'To rename something, do it in the app instead.',
+          '',
+          'Leaving a cost blank is safe — the row is skipped, not zeroed. So you',
+          'can fill in a few prices at a time and upload as often as you like.',
+          '',
+          'Buying in a bigger unit than the recipe uses? Put the buying unit in',
+          'Unit*, the price of ONE of those in Cost per Unit, and the recipe unit',
+          'in Recipe Unit — e.g. kg / 250 / g gives ₱0.25 per gram. For a carton',
+          'or can, add the Pack Size saying how many recipe units are inside one.',
+        ],
+      },
+    );
+  }
+
+  /**
+   * Export the tenant's recipes as the Recipes import file.
+   *
+   * Same four columns the importer reads, Unit included, so it round-trips:
+   * download, change a quantity, upload it back. The unit written is the
+   * ingredient's OWN unit, which makes the number unambiguous and means
+   * re-importing converts nothing.
+   */
+  async recipesExport(tenantId: string): Promise<Buffer> {
+    const lines = await this.prisma.bomItem.findMany({
+      where:   { product: { tenantId } },
+      select:  {
+        quantity:    true,
+        product:     { select: { name: true } },
+        rawMaterial: { select: { name: true, unit: true } },
+      },
+    });
+    lines.sort((a, b) =>
+      a.product.name.localeCompare(b.product.name)
+      || a.rawMaterial.name.localeCompare(b.rawMaterial.name));
+
+    const rows = lines.map((l) => [
+      l.product.name,
+      l.rawMaterial.name,
+      String(l.quantity),
+      l.rawMaterial.unit,
+    ]);
+
+    const products = new Set(lines.map((l) => l.product.name)).size;
+    return this.makeTemplate(
+      'Recipes',
+      ['Product Name*', 'Ingredient Name*', 'Quantity*', 'Unit'],
+      rows,
+      {
+        realData: true,
+        title: 'Clerque — Your Recipes (exported)',
+        instructions: [
+          `${lines.length} recipe lines across ${products} products.`,
+          '',
+          'This is YOUR data, not a sample. Edit it and upload it back at',
+          'Settings > Import > Recipes — each row updates the recipe line it came',
+          'from, matched on Product + Ingredient.',
+          '',
+          'Unit is the unit the ingredient is stored in, so the quantities read',
+          'unambiguously. Change it only if you want to write a quantity in a',
+          'different unit — 0.2 with L instead of 200 with ml, say. Clerque',
+          'converts, and refuses to cross weight and volume rather than guess.',
+          '',
+          'Do NOT edit the Product or Ingredient columns. Both are matched by',
+          'name; an edited one either fails to find its target or attaches the',
+          'line to the wrong thing.',
+        ],
+      },
+    );
+  }
+
+  /**
+   * The whole setup as ONE file — the same seven sheets the blank pack ships,
+   * but filled in where the data exists.
+   *
+   * The blank pack answers "what do I have to fill in?". This answers "what do
+   * I already have?", which is the question every shop after day one is
+   * actually asking. Same sheet names, same columns, so the file that comes out
+   * is the file the importer takes back.
+   *
+   * Ingredients and Recipes carry real rows. The rest ship as blank templates,
+   * labelled as such on the Read Me: Products vary by business type and
+   * Customers, Vendors and the Chart of Accounts are rarely bulk-edited, so
+   * pretending to export them would cost more than it returns.
+   */
+  async setupPackExport(tenantId: string): Promise<Buffer> {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+
+    const [ingredientCount, recipeCount] = await Promise.all([
+      this.prisma.rawMaterial.count({ where: { tenantId, isActive: true } }),
+      this.prisma.bomItem.count({ where: { product: { tenantId } } }),
+    ]);
+
+    const readme = wb.addWorksheet('Read Me');
+    readme.getColumn(1).width = 96;
+    const say = (text: string, bold = false, size = 11) => {
+      const r = readme.addRow([text]);
+      r.font = { bold, size };
+    };
+    say('Clerque — your setup, in one file', true, 16);
+    say('');
+    say('Edit any sheet and upload this SAME file at Settings > Import > Setup Pack.');
+    say('Every sheet is read in order, so a recipe can reference an ingredient the');
+    say('same upload just created.');
+    say('');
+    say('WHAT IS FILLED IN', true, 12);
+    say(`  Ingredients   ${ingredientCount} rows — your own, with costs and units.`);
+    say(`  Recipes       ${recipeCount} rows — your own, with the unit each quantity is in.`);
+    say('');
+    say('WHAT IS BLANK', true, 12);
+    say('  Products, Customers, Vendors, Chart of Accounts ship as empty templates.');
+    say('  Fill them only if you are adding to them; leaving a sheet blank changes');
+    say('  nothing, it is simply skipped.');
+    say('');
+    say('THE ONE RULE', true, 12);
+    say('Do not edit a Name column. Clerque matches ingredients, products and');
+    say('recipes by name, so an edited name creates a second record and leaves the');
+    say('original behind — with your recipes still pointing at it. Rename in the');
+    say('app instead, then export again.', true);
+
+    const bundled: Array<{ name: string; buf: Buffer }> = [
+      { name: 'Ingredients',       buf: await this.ingredientsExport(tenantId) },
+      { name: 'Recipes',           buf: await this.recipesExport(tenantId) },
+      { name: 'Products',          buf: await this.productsTemplate(tenantId) },
+      { name: 'Customers',         buf: await this.customersTemplate() },
+      { name: 'Vendors',           buf: await this.vendorsTemplate() },
+      { name: 'Chart of Accounts', buf: await this.coaTemplate() },
+    ];
+
+    for (const { name, buf } of bundled) {
+      const srcWb = new ExcelJS.Workbook();
+      await srcWb.xlsx.load(buf as any);
+      const src = srcWb.worksheets[0];
+      const dest = wb.addWorksheet(name);
+      src.eachRow((row, rowIdx) => {
+        const newRow = dest.getRow(rowIdx);
+        newRow.values    = row.values as any;
+        newRow.font      = row.font;
+        newRow.fill      = row.fill;
+        newRow.alignment = row.alignment;
+        newRow.height    = row.height;
+      });
+      src.columns.forEach((col, i) => {
+        dest.getColumn(i + 1).width = col.width ?? 20;
+      });
+      dest.views = src.views;
+    }
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
   // ── Recipes (BOM) Import — Sprint 19 ─────────────────────────────────────
@@ -2538,10 +2807,33 @@ export class ImportService {
         tracked.id = product.id;
         const rm = await this.prisma.rawMaterial.findFirst({
           where:  { tenantId, name: { equals: ingName, mode: 'insensitive' } },
-          select: { id: true, unit: true },
+          select: { id: true, unit: true, category: true },
         });
         if (!rm) {
           result.errors.push({ row: rowNum, message: `Ingredient "${ingredientName}" not found. Run the Ingredients import first.` });
+          tracked.failed++;
+          continue;
+        }
+
+        // Only an INGREDIENT may cost a menu item.
+        //
+        // Bleach, till roll and a burner brush are stocked, counted and run
+        // out exactly like food, so nothing stopped one being written into a
+        // recipe — and once there it lands in COGS, where an operating expense
+        // does not belong. Refused by name rather than skipped, because a
+        // recipe line naming detergent is a mistake worth seeing.
+        // The column is NOT NULL DEFAULT 'INGREDIENT', so a missing value here
+        // cannot mean "uncategorised" — it can only mean a caller did not
+        // select it. This query does select it, so an absent value is read as
+        // the default rather than as a reason to refuse a real recipe line.
+        if (rm.category != null && rm.category !== 'INGREDIENT') {
+          const label = String(rm.category).toLowerCase().replace(/_/g, ' ');
+          result.errors.push({
+            row: rowNum,
+            message: `"${ingredientName}" is a ${label}, not an ingredient, so it `
+              + 'cannot be part of a recipe. Supplies are an expense, not a cost of sale. '
+              + 'Change its Category on the Ingredients sheet if that is wrong.',
+          });
           tracked.failed++;
           continue;
         }
@@ -2631,21 +2923,21 @@ export class ImportService {
       case 'COFFEE_SHOP':
         title = 'Clerque — Coffee Shop Recipes Import Template';
         sampleRows = [
-          ['Espresso Solo',     'Espresso Beans (Single-Origin)', '18'],
-          ['Espresso Solo',     'Hot Cup 16oz',                   '1'],
-          ['Espresso Solo',     'Lid (universal)',                '1'],
-          ['Iced Latte 16oz',   'Espresso Beans (Single-Origin)', '18'],
-          ['Iced Latte 16oz',   'Whole Milk',                     '180'],
-          ['Iced Latte 16oz',   'Cold Cup 16oz',                  '1'],
-          ['Iced Latte 16oz',   'Lid (universal)',                '1'],
-          ['Iced Latte 16oz',   'Stirrer',                        '1'],
-          ['Cappuccino 12oz',   'Espresso Beans (Single-Origin)', '18',  'g'],
+          ['Espresso Solo',     'Espresso Beans (Single-Origin)', '18', 'g'],
+          ['Espresso Solo',     'Hot Cup 16oz',                   '1', 'pc'],
+          ['Espresso Solo',     'Lid (universal)',                '1', 'pc'],
+          ['Iced Latte 16oz',   'Espresso Beans (Single-Origin)', '18', 'g'],
+          ['Iced Latte 16oz',   'Whole Milk',                     '180', 'ml'],
+          ['Iced Latte 16oz',   'Cold Cup 16oz',                  '1', 'pc'],
+          ['Iced Latte 16oz',   'Lid (universal)',                '1', 'pc'],
+          ['Iced Latte 16oz',   'Stirrer',                        '1', 'pc'],
+          ['Cappuccino 12oz',   'Espresso Beans (Single-Origin)', '18', 'g'],
           ['Cappuccino 12oz',   'Whole Milk',                     '150', 'ml'],
-          ['Cappuccino 12oz',   'Hot Cup 16oz',                   '1',   'pc'],
-          ['Cappuccino 12oz',   'Lid (universal)',                '1',   'pc'],
+          ['Cappuccino 12oz',   'Hot Cup 16oz',                   '1', 'pc'],
+          ['Cappuccino 12oz',   'Lid (universal)',                '1', 'pc'],
           ['Matcha Latte 16oz', 'Whole Milk',                     '200', 'ml'],
-          ['Matcha Latte 16oz', 'Cold Cup 16oz',                  '1',   'pc'],
-          ['Matcha Latte 16oz', 'Lid (universal)',                '1',   'pc'],
+          ['Matcha Latte 16oz', 'Cold Cup 16oz',                  '1', 'pc'],
+          ['Matcha Latte 16oz', 'Lid (universal)',                '1', 'pc'],
         ];
         break;
       case 'RESTAURANT':
@@ -2655,32 +2947,42 @@ export class ImportService {
       case 'CATERING':
         title = 'Clerque — Restaurant Recipes Import Template';
         sampleRows = [
-          ['Garlic Rice',     'Jasmine Rice',     '180'],
-          ['Garlic Rice',     'Garlic',           '8'],
-          ['Garlic Rice',     'Cooking Oil',      '15'],
-          ['Garlic Rice',     'Iodized Salt',     '2'],
-          ['Tapsilog',        'Pork Belly',       '180'],
-          ['Tapsilog',        'Jasmine Rice',     '180'],
-          ['Tapsilog',        'Soy Sauce',        '15'],
-          ['Tapsilog',        'Garlic',           '5'],
-          ['Adobong Manok',   'Chicken Thigh',    '250'],
-          ['Adobong Manok',   'Soy Sauce',        '30'],
-          ['Adobong Manok',   'Vinegar',          '20'],
-          ['Adobong Manok',   'Garlic',           '10'],
-          ['Adobong Manok',   'Onion',            '50'],
+          ['Garlic Rice',     'Jasmine Rice',     '180', 'g'],
+          ['Garlic Rice',     'Garlic',           '8', 'g'],
+          ['Garlic Rice',     'Cooking Oil',      '15', 'ml'],
+          ['Garlic Rice',     'Iodized Salt',     '2', 'g'],
+          ['Tapsilog',        'Pork Belly',       '180', 'g'],
+          ['Tapsilog',        'Jasmine Rice',     '180', 'g'],
+          ['Tapsilog',        'Soy Sauce',        '15', 'ml'],
+          ['Tapsilog',        'Garlic',           '5', 'g'],
+          ['Adobong Manok',   'Chicken Thigh',    '250', 'g'],
+          ['Adobong Manok',   'Soy Sauce',        '30', 'ml'],
+          ['Adobong Manok',   'Vinegar',          '20', 'ml'],
+          ['Adobong Manok',   'Garlic',           '10', 'g'],
+          ['Adobong Manok',   'Onion',            '50', 'g'],
         ];
         break;
       default:
         title = 'Clerque — Recipes (BOM) Import Template';
         sampleRows = [
-          ['Sample Product', 'Sample Ingredient', '10'],
+          ['Sample Product', 'Sample Ingredient', '10', 'g'],
         ];
         break;
     }
 
     return this.makeTemplate(
       'Recipes',
-      ['Product Name*', 'Ingredient Name*', 'Quantity*'],
+      // Unit is the fourth column and MUST be here.
+      //
+      // importRecipesFromRows locates it by matching /^unit/i against the
+      // HEADER row (see unitCol). With only three headers shipped, that search
+      // returned -1 and the unit was never read — while these instructions
+      // promised conversion and the sample rows below already wrote 'g' / 'ml'
+      // / 'pc' into a column that had no header. Anyone who followed the
+      // instructions and wrote "200 ml" against milk stored in litres got 200
+      // LITRES in one drink, silently, which is the exact failure the comment
+      // above convertRecipeQuantity was written to prevent.
+      ['Product Name*', 'Ingredient Name*', 'Quantity*', 'Unit'],
       sampleRows,
       {
         title,
@@ -2705,6 +3007,7 @@ export class ImportService {
           'Required. Existing Product name.',
           'Required. Existing Ingredient name.',
           'REQUIRED. Qty per finished item.',
+          "Optional. The unit the RECIPE uses (g / ml / pc). Blank = the ingredient's own unit.",
         ],
       },
     );
@@ -2853,6 +3156,28 @@ export class ImportService {
         continue;
       }
       const { date } = parsedDate;
+
+      // Period lock. The single-receipt path checks this before any write
+      // (inventory.service.ts:1256); this bulk path did not, so a spreadsheet
+      // could post stock into a month that was already closed and reconciled.
+      //
+      // Checked PER ROW, not once per file, because a receipt sheet routinely
+      // spans a close boundary — only the locked rows should be refused.
+      if (!this.periods) {
+        throw new BadRequestException(
+          'Stock receipt import is unavailable: the accounting-period service is not wired up.',
+        );
+      }
+      try {
+        await this.periods.assertDateIsOpen(tenantId, date);
+      } catch (err) {
+        result.errors.push({
+          row: rowNum,
+          message: err instanceof Error ? err.message
+            : `The accounting period covering ${dateStr} is closed.`,
+        });
+        continue;
+      }
       const qty = this.num(qtyStr);
       const cost = this.num(costStr);
       if (isNaN(qty) || qty <= 0) {

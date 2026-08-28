@@ -361,9 +361,28 @@ export class WarehouseService {
           );
         }
 
-        await tx.rawMaterialInventory.update({
-          where: { branchId_rawMaterialId: { branchId: c.branchId, rawMaterialId: line.rawMaterialId } },
-          data:  { quantity: counted },
+        // upsert, not update.
+        //
+        // A shop that has never received an ingredient has no
+        // RawMaterialInventory row for it, and `update` on a compound key
+        // throws P2025 when the row is absent. That is precisely the shop
+        // doing its FIRST count: Cafe Carolina has 53 ingredients and zero
+        // inventory rows, so posting their opening count failed on line one.
+        //
+        // Counting is also the only way an ingredient's quantity can be
+        // corrected — `adjust` takes a productId and validates against
+        // Product, so it does not reach raw materials at all. Refusing to
+        // create the row therefore left no path to opening stock except
+        // recording purchases that never happened.
+        await tx.rawMaterialInventory.upsert({
+          where:  { branchId_rawMaterialId: { branchId: c.branchId, rawMaterialId: line.rawMaterialId } },
+          update: { quantity: counted },
+          create: {
+            tenantId,
+            branchId:      c.branchId,
+            rawMaterialId: line.rawMaterialId,
+            quantity:      counted,
+          },
         });
         await tx.cycleCountLine.update({
           where: { id: line.id },

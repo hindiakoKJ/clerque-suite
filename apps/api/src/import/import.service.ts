@@ -2358,6 +2358,7 @@ export class ImportService {
       ['Sample - Fresh Milk',   'L',      '88',   '5', 'Buy by the litre, pour by the ml', 'ml', ''],
       ['Sample - Coffee Beans', 'kg',     '1100', '2', 'Buy by the kilo, dose in grams',   'g',  ''],
       ['Sample - Oat Milk',     'carton', '95',   '6', 'A carton holds 1000 ml',           'ml', '1000'],
+      ['Sample - Zonrox Bleach', 'L',      '62',   '',  'Not food — kept out of recipe costing', 'ml', '', 'Kitchen Supply'],
     ];
 
     return this.makeTemplate(
@@ -2386,8 +2387,16 @@ export class ImportService {
           '     Write the cost as the price of ONE Unit* — one litre, one carton, one kilo.',
           '     Do NOT pre-divide it yourself. That is what this sheet is for.',
           '',
-          '  3. Low Stock Alert (optional): flagged when any branch falls below this, in Recipe Units.',
-          '  4. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',
+          '  3. Category (optional): Ingredient / Kitchen Supply / Bar Supply / Office Supply.',
+          '     Blank means Ingredient, so leave it alone unless the row is NOT food.',
+          '     Only an Ingredient can go into a recipe, so only an Ingredient reaches the',
+          '     cost of a drink. Bleach, tissue, trash bags and a burner brush get bought,',
+          '     counted and run out exactly like food — they are simply an expense, not a',
+          '     cost of sale. Marking them keeps them out of your menu costing, and out of',
+          '     the low-stock list you take shopping.',
+          '',
+          '  4. Low Stock Alert (optional): flagged when any branch falls below this, in Recipe Units.',
+          '  5. Save as .xlsx (or .csv). Upload via Settings → Import Templates → Import.',
           '',
           'Next: once ingredients are loaded, the Recipes template maps menu items to ingredient quantities.',
           'Recipes may use any convertible unit — write "200 ml" even if the ingredient is stored in litres.',
@@ -2400,6 +2409,7 @@ export class ImportService {
           'Optional. Free text.',
           'Optional. How a RECIPE uses it: ml / g / pc. Blank = same as Unit.',
           'Only for containers. How many Recipe Units in one Unit.',
+          'Optional. Ingredient / Kitchen Supply / Bar Supply / Office Supply. Blank = Ingredient.',
         ],
       },
     );

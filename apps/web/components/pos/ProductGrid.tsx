@@ -78,6 +78,11 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   const [search, setSearch] = useState('');
   const [activeCat, setActiveCat] = useState<string | null>(null);
   const [pickerProduct, setPickerProduct] = useState<Product | null>(null);
+  // Products whose image failed to load. A broken photo used to hide the <img>
+  // and leave a blank square — indistinguishable from a tile that is still
+  // loading, and worse than the emoji it replaced. Track them so the fallback
+  // renders instead.
+  const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
   const addItem = useCartStore((s) => s.addItem);
 
   // Quantity multiplier: leading "3x ", "3* ", or "3 " is parsed off the search
@@ -270,15 +275,21 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                       ? 'bg-amber-500/10 group-hover:bg-amber-500/15'
                       : 'bg-[var(--accent-soft)] group-hover:bg-[var(--accent-soft)]/80',
                   )}>
-                    {p.imageUrl ? (
+                    {p.imageUrl && !brokenImages.has(p.id) ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={resolveAssetUrl(p.imageUrl)}
                         alt={p.name}
+                        loading="lazy"
                         className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display = 'none';
-                        }}
+                        onError={() =>
+                          setBrokenImages((prev) => {
+                            if (prev.has(p.id)) return prev;
+                            const next = new Set(prev);
+                            next.add(p.id);
+                            return next;
+                          })
+                        }
                       />
                     ) : (
                       <span className="text-3xl sm:text-4xl">

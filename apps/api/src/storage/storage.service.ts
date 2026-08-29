@@ -98,6 +98,18 @@ export class StorageService {
     } else if (driverOverride === 'DB') {
       this.driver = 'DB';
       this.logger.log('Storage driver: DB (Postgres BYTEA, ProductPhoto table) — set via STORAGE_DRIVER=DB.');
+    } else if (this.isEphemeralHost()) {
+      // Writable is not the same as durable. Railway, Render and Vercel all
+      // hand you a writable working directory that is thrown away on the next
+      // deploy, so the LOCAL driver "worked" — files uploaded, URLs resolved,
+      // photos rendered — right up until the next push, which silently erased
+      // every product image. Prefer Postgres on those hosts; ProductPhoto is
+      // already there and needs no configuration.
+      this.driver = 'DB';
+      this.logger.log(
+        'Storage driver: DB (Postgres BYTEA) — ephemeral host detected, so ./uploads would ' +
+        'not survive a redeploy. Set S3_BUCKET + keys to use Cloudflare R2 / AWS S3 instead.',
+      );
     } else if (this.isLocalWritable()) {
       this.driver = 'LOCAL';
       this.logger.log(
@@ -118,6 +130,22 @@ export class StorageService {
 
   /** Probe ./uploads at boot. We can't `await` in a constructor cleanly, so
    *  use sync fs APIs — boot is a one-time cost. */
+  /**
+   * True on hosts whose filesystem is writable but wiped on every deploy.
+   * These are the ones where LOCAL looks fine in testing and loses the data
+   * later, which is worse than failing outright.
+   */
+  private isEphemeralHost(): boolean {
+    return Boolean(
+      process.env.RAILWAY_GIT_COMMIT_SHA ||
+      process.env.RAILWAY_ENVIRONMENT ||
+      process.env.RAILWAY_PROJECT_ID ||
+      process.env.RENDER ||
+      process.env.VERCEL ||
+      process.env.DYNO,          // Heroku
+    );
+  }
+
   private isLocalWritable(): boolean {
     try {
       fs.mkdirSync(this.localRoot, { recursive: true });

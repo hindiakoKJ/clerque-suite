@@ -43,7 +43,7 @@ const STATUS_LABEL: Record<POStatus, string> = {
   CANCELLED:'Cancelled',
 };
 const STATUS_COLOR: Record<POStatus, string> = {
-  DRAFT:    'bg-slate-100 text-slate-700',
+  DRAFT:    'bg-muted text-muted-foreground border border-border',
   ORDERED:  'bg-blue-100 text-blue-700',
   PARTIAL:  'bg-amber-100 text-amber-700',
   RECEIVED: 'bg-emerald-100 text-emerald-700',
@@ -62,14 +62,14 @@ export default function PurchaseOrdersPage() {
   });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-semibold flex items-center gap-2">
           <FileText className="h-6 w-6" /> Purchase Orders
         </h1>
         <Link
           href={`${base}/new`}
-          className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
+          className="inline-flex items-center gap-2 rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:opacity-90 transition-opacity"
         >
           <Plus className="h-4 w-4" /> New PO
         </Link>
@@ -89,15 +89,15 @@ export default function PurchaseOrdersPage() {
       </div>
 
       {isLoading ? (
-        <div className="text-sm text-slate-500">Loading…</div>
+        <div className="text-sm text-muted-foreground">Loading…</div>
       ) : !pos?.length ? (
-        <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-500">
+        <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
           No purchase orders match these filters.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+        <div className="overflow-x-auto rounded-xl border border-border bg-card">
+          <table className="w-full min-w-[620px] text-sm">
+            <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
               <tr>
                 <th className="px-4 py-2">PO #</th>
                 <th className="px-4 py-2">Date</th>
@@ -109,7 +109,7 @@ export default function PurchaseOrdersPage() {
             </thead>
             <tbody>
               {pos.map((p) => (
-                <tr key={p.id} className="border-t hover:bg-slate-50">
+                <tr key={p.id} className="border-t border-border hover:bg-muted/40 transition-colors">
                   <td className="px-4 py-2">
                     <Link href={`${base}/${p.id}`} className="text-blue-600 hover:underline">
                       {p.poNumber}

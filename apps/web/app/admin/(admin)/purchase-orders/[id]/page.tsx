@@ -81,21 +81,21 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
     },
   });
 
-  if (isLoading || !po) return <div className="p-6 text-sm text-slate-500">Loading…</div>;
+  if (isLoading || !po) return <div className="p-4 sm:p-6 text-sm text-muted-foreground">Loading…</div>;
 
   const canSubmit  = po.status === 'DRAFT' && po.items.length > 0;
   const canReceive = po.status === 'ORDERED' || po.status === 'PARTIAL';
 
   return (
-    <div className="p-6 max-w-5xl">
-      <Link href={base} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 mb-4">
+    <div className="p-4 sm:p-6 max-w-5xl">
+      <Link href={base} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4">
         <ArrowLeft className="h-4 w-4" /> Back to list
       </Link>
 
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold">{po.poNumber}</h1>
-          <div className="text-sm text-slate-500 mt-1">
+          <div className="text-sm text-muted-foreground mt-1">
             {new Date(po.orderDate).toLocaleDateString()} · {po.vendor?.name ?? 'No vendor'} · {po.branch?.name ?? 'No branch'}
           </div>
         </div>
@@ -104,19 +104,20 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
             <button
               onClick={() => submitMut.mutate()}
               disabled={submitMut.isPending}
-              className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
               <Send className="h-4 w-4" /> {submitMut.isPending ? 'Submitting…' : 'Submit to Vendor'}
             </button>
           )}
-          <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs">{po.status}</span>
+          <span className="inline-flex items-center rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground">{po.status}</span>
         </div>
       </div>
 
-      <div className="rounded-lg border bg-white p-6 mb-6">
+      <div className="rounded-xl border border-border bg-card p-4 sm:p-6 mb-6">
         <h2 className="text-lg font-semibold mb-4">Line Items</h2>
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs uppercase text-slate-500">
+        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+        <table className="w-full min-w-[640px] text-sm">
+          <thead className="text-left text-xs uppercase text-muted-foreground">
             <tr>
               <th className="py-2">Material</th>
               <th className="py-2">Description</th>
@@ -158,18 +159,19 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
             })}
           </tbody>
         </table>
+        </div>
 
         <div className="mt-4 flex justify-end">
           <div className="text-right">
-            <div className="text-sm text-slate-500">Subtotal</div>
+            <div className="text-sm text-muted-foreground">Subtotal</div>
             <div className="text-xl">₱{(po.subtotalCents / 100).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
             {po.taxCents > 0 && (
               <>
-                <div className="mt-1 text-sm text-slate-500">Tax</div>
+                <div className="mt-1 text-sm text-muted-foreground">Tax</div>
                 <div>₱{(po.taxCents / 100).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
               </>
             )}
-            <div className="mt-2 text-sm text-slate-500">Total</div>
+            <div className="mt-2 text-sm text-muted-foreground">Total</div>
             <div className="text-2xl font-semibold">₱{(po.totalCents / 100).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
           </div>
         </div>
@@ -188,9 +190,9 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
       </div>
 
       {po.notes && (
-        <div className="rounded-lg border bg-white p-4 text-sm">
+        <div className="rounded-xl border border-border bg-card p-4 text-sm">
           <div className="font-medium mb-1">Notes</div>
-          <div className="whitespace-pre-wrap text-slate-700">{po.notes}</div>
+          <div className="whitespace-pre-wrap text-foreground">{po.notes}</div>
         </div>
       )}
     </div>

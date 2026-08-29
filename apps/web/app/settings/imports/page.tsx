@@ -129,7 +129,16 @@ export default function ImportTemplatesPage() {
     try {
       const form = new FormData();
       form.append('file', file);
-      const { data } = await api.post<ImportResult | Record<string, ImportResult>>(t.upload, form);
+      // The api instance defaults to Content-Type: application/json, and axios
+      // serialises FormData to JSON whenever that header is set — the file
+      // arrived at the server as {"file":{}} and every upload from this page
+      // failed with "No file uploaded." Naming multipart here is what the
+      // other upload screens do, and it lets the browser write the boundary.
+      const { data } = await api.post<ImportResult | Record<string, ImportResult>>(
+        t.upload,
+        form,
+        { headers: { 'Content-Type': 'multipart/form-data' } },
+      );
 
       // The Setup Pack answers per SHEET ({ products: {...}, customers: {...} })
       // rather than with one flat tally, so add the sheets up — otherwise a

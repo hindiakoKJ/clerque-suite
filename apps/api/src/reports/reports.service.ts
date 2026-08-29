@@ -875,4 +875,67 @@ export class ReportsService {
     out.sort((a, b) => b.recommendedQty - a.recommendedQty);
     return out;
   }
+
+  /**
+   * Recipe costing — every menu item that has a recipe, priced from its BOM.
+   *
+   * Cost is derived here rather than read from Product.costPrice, for the same
+   * reason products.service derives it: the stored value goes stale the moment
+   * an ingredient's WAC moves, and nothing rewrites it until the next receipt.
+   *
+   * An ingredient with no cost is NOT treated as free. Folding a zero into the
+   * total makes the item look cheaper to produce and its margin higher, which
+   * is exactly backwards -- the drinks missing a price would sort to the top of
+   * a "most profitable" list. Those items carry margin: null and name what is
+   * missing, so the report can say so instead of quietly lying.
+   */
+  async recipeCostingReport(tenantId: string) {
+    const products = await this.prisma.product.findMany({
+      where: { tenantId, isActive: true, bomItems: { some: {} } },
+      select: {
+        name:  true,
+        price: true,
+        category: { select: { name: true } },
+        bomItems: {
+          select: {
+            quantity: true,
+            rawMaterial: { select: { name: true, unit: true, costPrice: true } },
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return products.map((p) => {
+      const lines = p.bomItems.map((b) => {
+        const rm   = b.rawMaterial;
+        const raw  = rm?.costPrice != null ? Number(rm.costPrice) : 0;
+        // Zero on the record and no record at all are the same thing here:
+        // there is no price to cost this line with.
+        const unitCost = raw > 0 ? raw : null;
+        const qty      = Number(b.quantity);
+        return {
+          ingredient: rm?.name ?? 'unknown',
+          quantity:   qty,
+          unit:       rm?.unit ?? '',
+          unitCost,
+          lineCost:   unitCost == null ? 0 : qty * unitCost,
+        };
+      });
+
+      const unpriced = lines.filter((l) => l.unitCost == null).map((l) => l.ingredient);
+      const cost     = lines.reduce((sum, l) => sum + l.lineCost, 0);
+      const price    = Number(p.price);
+
+      return {
+        product:  p.name,
+        category: p.category?.name ?? null,
+        price,
+        cost,
+        margin:   unpriced.length > 0 || price <= 0 ? null : (price - cost) / price,
+        unpriced,
+        lines,
+      };
+    });
+  }
 }

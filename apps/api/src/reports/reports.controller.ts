@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Param, Query, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, Res, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -7,6 +8,8 @@ import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
 import { OperationsService } from './operations.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { generateRecipeCostingPdf } from './recipe-costing-pdf';
 
 @ApiTags('Reports')
 @ApiBearerAuth('access-token')
@@ -16,6 +19,7 @@ export class ReportsController {
   constructor(
     private reportsService: ReportsService,
     private operationsService: OperationsService,
+    private prisma: PrismaService,
   ) {}
 
   /**
@@ -195,5 +199,45 @@ export class ReportsController {
     // Offset to UTC+8
     const ph = new Date(now.getTime() + 8 * 60 * 60 * 1000);
     return ph.toISOString().slice(0, 10);
+  }
+
+  /**
+   * Recipe costing PDF — every menu item with a recipe, its ingredient lines,
+   * what each line costs and the margin that leaves.
+   *
+   * Owner-only on purpose. This puts every ingredient cost and every menu
+   * margin on one page, which is the shop's whole pricing position; a cashier
+   * or barista has no reason to hold it. SUPER_ADMIN is Clerque's own operator
+   * role, not the shop's staff.
+   */
+  @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
+  @Get('recipe-costing.pdf')
+  async recipeCostingPdf(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const tenantId = user.tenantId!;
+    const [tenant, items] = await Promise.all([
+      this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { name: true, businessName: true },
+      }),
+      this.reportsService.recipeCostingReport(tenantId),
+    ]);
+
+    const generatedAt = new Date().toLocaleString('en-PH', {
+      timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short',
+    });
+    const buf = await generateRecipeCostingPdf({
+      tenant: { name: tenant?.name ?? 'Clerque', businessName: tenant?.businessName ?? null },
+      generatedAt,
+      generatedBy: user.name,
+      items,
+    });
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="recipe-costing-${stamp}.pdf"`,
+      'Content-Length':      buf.length.toString(),
+    });
+    res.send(buf);
   }
 }

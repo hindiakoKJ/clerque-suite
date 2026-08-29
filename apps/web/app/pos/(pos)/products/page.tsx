@@ -2,7 +2,7 @@
 import { useState, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload, AlertTriangle, FolderTree } from 'lucide-react';
+import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehouse, ChefHat, Trash2, FlaskConical, Upload, AlertTriangle, FolderTree, FileText } from 'lucide-react';
 import { api, resolveAssetUrl } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
@@ -372,6 +372,34 @@ export default function ProductsPage() {
     }
   }
 
+  const [costingPdf, setCostingPdf] = useState(false);
+
+  /**
+   * Recipe costing PDF. Owner-only at the API too — the button is a
+   * convenience, not the access control.
+   */
+  async function downloadCostingPdf() {
+    setCostingPdf(true);
+    try {
+      const res  = await api.get('/reports/recipe-costing.pdf', { responseType: 'blob' });
+      const blob = new Blob([res.data as BlobPart], { type: 'application/pdf' });
+      const url  = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `recipe-costing-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('Costing report downloaded.');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg ?? 'Could not build the costing report.');
+    } finally {
+      setCostingPdf(false);
+    }
+  }
+
   async function handleToggleActive(p: Product) {
     if (!isOwner) return;
     try {
@@ -443,6 +471,17 @@ export default function ProductsPage() {
               className="pl-8 pr-3 py-1.5 text-sm border border-border bg-background text-foreground placeholder:text-muted-foreground rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent w-full sm:w-52 transition-shadow"
             />
           </div>
+          {isOwner && (
+            <button
+              onClick={() => void downloadCostingPdf()}
+              disabled={costingPdf}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-wait"
+              title="Every recipe item with its ingredient costs and margin. Owner only."
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {costingPdf ? 'Building…' : 'Costing PDF'}
+            </button>
+          )}
           {isOwner && (
             <button
               onClick={() => setShowInactive((v) => !v)}

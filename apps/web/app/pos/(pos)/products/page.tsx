@@ -1476,7 +1476,11 @@ function ProductImagePicker({
         { headers: { 'Content-Type': 'multipart/form-data' } },
       );
       onChange(data.url);
-      toast.success('Photo uploaded.');
+      // "Uploaded" reads as finished, and it is not: the file is on the server
+      // but nothing points at it until the product itself is saved. Owners
+      // uploaded photos, closed the dialog, and wondered why the tiles stayed
+      // blank. Say what is still required.
+      toast.success('Photo attached — press Save to keep it.');
     } catch (e: any) {
       toast.error(e?.response?.data?.message ?? 'Upload failed.');
     } finally {

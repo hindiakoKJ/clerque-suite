@@ -1499,8 +1499,19 @@ function ProductImagePicker({
               src={resolveAssetUrl(value)}
               alt="Product"
               className="w-full h-full object-cover"
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              // Hiding a broken image left an empty square that reads as
+              // "nothing happened" -- which is how a photo that uploaded fine
+              // but will not load became indistinguishable from a failed
+              // upload. Say which it is.
+              onError={(e) => {
+                const img = e.currentTarget as HTMLImageElement;
+                img.style.display = 'none';
+                img.parentElement?.setAttribute('data-broken', 'true');
+              }}
             />
+            <span className="pointer-events-none absolute inset-0 hidden items-center justify-center px-1 text-center text-[9px] leading-tight text-red-500 [div[data-broken]>&]:flex">
+              Uploaded, but won&apos;t load
+            </span>
             <button
               type="button"
               onClick={() => onChange('')}

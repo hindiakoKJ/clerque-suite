@@ -410,6 +410,11 @@ export class StorageService {
    * presigned URL; on LOCAL this is the /uploads static-served path; on DB
    * this is the API route that streams bytes back from Postgres.
    */
+  /** Which driver won at boot. Readable so a blank photo can be diagnosed. */
+  get driverName(): StorageDriver {
+    return this.driver;
+  }
+
   getPublicUrl(storageKey: string): string {
     if (this.driver === 'S3' && this.publicUrlBase) {
       // e.g. https://<bucket>.<account>.r2.dev/<key>

@@ -206,7 +206,48 @@ export class ProductsController {
 @ApiTags('Products')
 @Controller('products/photos')
 export class ProductPhotosController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
+
+  /**
+   * Why a photo is not showing.
+   *
+   * Product images have now failed twice for reasons that were invisible from
+   * the outside: the storage driver silently chose ephemeral disk, and then the
+   * check meant to prevent that matched environment variables Railway does not
+   * set. Both times the only symptom was a blank square, and both times the fix
+   * was guessed rather than observed. This makes the state readable instead:
+   * which driver is live, whether photos are actually in the database, and the
+   * exact URL that would be produced.
+   *
+   * Declared BEFORE `:id` so Express does not match "_diagnostics" as an id.
+   * Public, like the route it sits beside -- it exposes no photo bytes, no
+   * tenant data and no credentials, only how storage is configured.
+   */
+  @Get('_diagnostics')
+  async diagnostics(): Promise<Record<string, unknown>> {
+    const recent = await this.prisma.productPhoto.findMany({
+      orderBy: { createdAt: 'desc' },
+      take:    3,
+      select:  { id: true, mimeType: true, byteSize: true, createdAt: true },
+    });
+    const sampleKey = 'public/products/TENANT/deadbeefcafe1234.jpg';
+    return {
+      driver:          this.storage.driverName,
+      photosInDatabase: await this.prisma.productPhoto.count(),
+      recent,
+      // What an upload would hand the browser right now.
+      urlThatWouldBeReturned: this.storage.getPublicUrl(sampleKey),
+      hint:
+        this.storage.driverName === 'LOCAL'
+          ? 'LOCAL writes to disk. On Railway that disk is wiped by every deploy, so photos vanish without an error.'
+          : this.storage.driverName === 'DB'
+            ? 'DB keeps photos in Postgres. If a photo still will not load, open urlThatWouldBeReturned directly and see what comes back.'
+            : 'S3/R2. Check the bucket is public-read and S3_PUBLIC_URL is set.',
+    };
+  }
 
   @Get(':id')
   async getPhoto(@Param('id') id: string, @Res() res: Response): Promise<void> {

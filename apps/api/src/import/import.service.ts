@@ -3141,7 +3141,11 @@ export class ImportService {
   }
 
   async importStockReceipts(file: Express.Multer.File, tenantId: string, userId: string): Promise<ImportResult> {
-    const rows = await this.parseFile(file);
+    // Name the tab, like every other importer does. Without it a multi-sheet
+    // workbook handed this endpoint its FIRST sheet — so an opening-stock file
+    // that leads with a review tab parsed the review tab and failed with row
+    // errors that pointed at nothing the owner recognised.
+    const rows = await this.parseFile(file, ['Stock Receipts', 'Receipts', 'Stock Receipt']);
     const headerIdx = this.findHeaderRow(rows, ['Date*', 'Date* (YYYY-MM-DD)', 'Date']);
     const dataStart = headerIdx >= 0 ? headerIdx + 1 : 1;
     if (rows.length <= dataStart) {

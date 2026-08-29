@@ -1275,6 +1275,48 @@ export class InventoryService {
       }
     }
 
+    // Idempotency, same rule the bulk importer already enforces: a reference
+    // number identifies one physical delivery of one ingredient, so receiving
+    // it twice is always a mistake. Until now only the spreadsheet path checked
+    // — the app path wrote the reference onto the lot and never looked at it,
+    // so a double-clicked Receive doubled the stock AND posted the inventory
+    // journal entry twice, with nothing to show the second one was spurious.
+    //
+    // Returning the original receipt rather than throwing keeps a retry after a
+    // dropped connection safe: the caller gets the same answer it would have
+    // got the first time, and `duplicate` tells the UI to say so.
+    if (dto.referenceNumber?.trim()) {
+      const dup = await this.prisma.rawMaterialLot.findFirst({
+        where: {
+          tenantId,
+          rawMaterialId,
+          referenceNumber: dto.referenceNumber.trim(),
+        },
+        select: { id: true, qtyReceived: true, unitCost: true, receivedAt: true, branchId: true },
+      });
+      if (dup) {
+        const stock = await this.prisma.rawMaterialInventory.findUnique({
+          where: { branchId_rawMaterialId: { branchId: dup.branchId, rawMaterialId } },
+          select: { quantity: true },
+        });
+        const qty = Number(dup.qtyReceived);
+        return {
+          rawMaterialId,
+          branchId:       dup.branchId,
+          quantityBefore: Number(stock?.quantity ?? 0) - qty,
+          quantityAfter:  Number(stock?.quantity ?? 0),
+          quantity:       qty,
+          receivedAt:     dup.receivedAt.toISOString(),
+          paymentMethod,
+          totalValue:     qty * Number(dup.unitCost),
+          duplicate:      true,
+          message:
+            `Reference "${dto.referenceNumber.trim()}" was already received for this ingredient. ` +
+            'Nothing was added.',
+        };
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.rawMaterialInventory.findUnique({
         where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },

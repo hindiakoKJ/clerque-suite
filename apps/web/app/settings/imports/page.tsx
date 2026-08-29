@@ -170,13 +170,33 @@ export default function ImportTemplatesPage() {
       setResults((r) => ({ ...r, [t.id]: totals }));
       const created = totals.created ?? totals.imported ?? 0;
       const updated = totals.updated ?? 0;
+      const skipped = totals.skipped ?? 0;
       const errs    = totals.errors?.length ?? 0;
-      if (errs > 0) toast.warning(`${t.name}: ${created} added, ${updated} updated, ${errs} row(s) need attention.`);
-      else toast.success(`${t.name}: ${created} added, ${updated} updated.`);
+      // Skipped has to be said out loud. Rows carrying a reference number that
+      // has already been taken in are refused on purpose -- that is what stops
+      // a delivery being received twice. Reporting only "0 added, 0 updated"
+      // makes a working safeguard look like a failed upload, and the natural
+      // response to a failed upload is to try again.
+      const skipNote = skipped ? `, ${skipped} already imported (skipped)` : '';
+      if (errs > 0) toast.warning(`${t.name}: ${created} added, ${updated} updated${skipNote}, ${errs} row(s) need attention.`);
+      else if (created === 0 && updated === 0 && skipped > 0)
+        toast.success(`${t.name}: nothing new — all ${skipped} row(s) were already imported.`);
+      else toast.success(`${t.name}: ${created} added, ${updated} updated${skipNote}.`);
     } catch (err: any) {
-      const msg = err?.response?.data?.message ?? 'Upload failed.';
-      setResults((r) => ({ ...r, [t.id]: { failed: Array.isArray(msg) ? msg.join(' ') : String(msg) } }));
-      toast.error(Array.isArray(msg) ? msg.join(' ') : String(msg));
+      // A timeout or dropped connection is NOT proof that nothing happened.
+      // A big import runs for a while server-side; the browser giving up first
+      // showed a bare "Upload failed", and the obvious response to that is to
+      // upload again. Say what is actually known, and point at the safeguard.
+      const status  = err?.response?.status;
+      const noReply = !err?.response || err?.code === 'ECONNABORTED';
+      const raw     = err?.response?.data?.message;
+      const msg = noReply || status === 504 || status === 502
+        ? 'The server did not answer in time. It may still have finished — reload this page and check '
+          + 'before uploading again. Rows carrying a Reference Number that is already in are skipped, '
+          + 'so a second upload cannot double anything.'
+        : (Array.isArray(raw) ? raw.join(' ') : String(raw ?? 'Upload failed.'));
+      setResults((r) => ({ ...r, [t.id]: { failed: msg } }));
+      toast.error(msg);
     } finally {
       setUploading(null);
     }

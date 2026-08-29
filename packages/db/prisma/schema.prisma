@@ -691,6 +691,7 @@ model Tenant {
   officialReceipts           OfficialReceipt[]
   // Sprint 25 — Solo tier feature delivery
   purchaseOrders             PurchaseOrder[]
+  purchaseRequests           PurchaseRequest[]
   apiKeys                    ApiKey[]
   voidApprovals              VoidApproval[]
   displayPairings            DisplayPairing[]
@@ -942,6 +943,7 @@ model Branch {
   recurringBillTemplates    RecurringBillTemplate[]
   // Sprint 25 — Solo Pro purchase orders
   purchaseOrders            PurchaseOrder[]
+  purchaseRequests          PurchaseRequest[]
   laundryOrders             LaundryOrder[]
   laundryMachines           LaundryMachine[]
   transfersOut              StockTransfer[]            @relation("TransferFromBranch")
@@ -1163,23 +1165,23 @@ model LoginLog {
 // ─── Product Catalog ──────────────────────────────────────────────────────────
 
 model Category {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String
-  description String?
-  sortOrder   Int      @default(0)
-  isActive    Boolean  @default(true)
+  id                 String   @id @default(cuid())
+  tenantId           String
+  name               String
+  description        String?
+  sortOrder          Int      @default(0)
+  isActive           Boolean  @default(true)
   /// Sprint 3 — which station prepares this category's items.
   /// Null = goes to receipt printer only (no separate station ticket).
-  stationId   String?
+  stationId          String?
   /// Chart-of-accounts code that revenue for this category's products credits
   /// on a sale. Null = the default POS revenue account (4010). This is what
   /// splits Court Rental / Open Play / Tournament / Equipment / Retail into
   /// their own income lines on the GL and the daily Z-report instead of one
   /// merged "sales" bucket. Set it once per category; every product inherits.
   revenueAccountCode String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   products       Product[]
@@ -1328,29 +1330,40 @@ enum RawMaterialCategory {
 }
 
 model RawMaterial {
-  id            String   @id @default(cuid())
+  id            String              @id @default(cuid())
   tenantId      String
   name          String
   /// Unit of measure for this ingredient (g, ml, pc, kg, etc.)
-  unit          String   @default("g")
+  unit          String              @default("g")
   /// Ingredient or supply. Defaults to INGREDIENT so every row that existed
   /// before this field keeps behaving exactly as it did.
   category      RawMaterialCategory @default(INGREDIENT)
-  costPrice     Decimal? @db.Decimal(12, 4)
+  costPrice     Decimal?            @db.Decimal(12, 4)
   /// Minimum stock level — system flags the ingredient as low when any branch
   /// falls below this quantity (same unit as the ingredient itself).
-  lowStockAlert Decimal? @db.Decimal(12, 4)
+  lowStockAlert Decimal?            @db.Decimal(12, 4)
   /// Sprint 25 — when true, this raw material uses lot tracking (FEFO/FIFO).
   /// When false, falls back to simple `RawMaterialInventory.quantity` count.
   /// Counts against PLAN_FEATURES.maxAdvancedInventoryItems for the tenant.
-  lotsTracked   Boolean  @default(false)
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  lotsTracked   Boolean             @default(false)
+  /// How much ONE batch of this yields, in this material's own unit. Set only
+  /// on sub-recipes — an ingredient with subRecipeItems is one, and the yield
+  /// is what makes its cost checkable: value of the inputs must equal
+  /// batchYield x costPrice, or making a batch invents or destroys stock value.
+  /// 1 kg of sugar + 500 ml water gives batchYield 1130 on White Sugar Syrup.
+  batchYield    Decimal?            @db.Decimal(12, 4)
+  isActive      Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   tenant                  Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   bomItems                BomItem[]
   variantBomItems         VariantBomItem[]
+  /// What this sub-recipe is MADE FROM. Empty on an ordinary ingredient.
+  subRecipeItems          SubRecipeItem[]            @relation("SubRecipeParent")
+  purchaseRequestLines    PurchaseRequestLine[]
+  /// The sub-recipes this ingredient goes INTO. Blocks deleting it while used.
+  usedInSubRecipes        SubRecipeItem[]            @relation("SubRecipeComponent")
   inventory               RawMaterialInventory[]
   lots                    RawMaterialLot[]
   transferLines           StockTransferLine[]
@@ -1365,6 +1378,37 @@ model RawMaterial {
 /// Variant-level BOM — maps a specific product size/variant to ingredient quantities.
 /// Example: ProductVariant "Large Iced Americano" → espresso beans 25g, water 180ml.
 /// Overrides or supplements the product-level BomItem for that variant.
+/// A sub-recipe's own recipe: what one batch of a prepared ingredient is made
+/// from. White Sugar Syrup is 1000 g White Sugar + 500 ml Water.
+///
+/// A separate table rather than a nullable parent on BomItem. BomItem is read
+/// in 15 services across 21 query sites — making productId optional would put
+/// every one of them in the blast radius of a change none of them care about.
+/// The codebase already solves this the same way three times: BomItem,
+/// VariantBomItem and ModifierOptionIngredient are parallel tables with the
+/// same shape and different parents. This is the fourth.
+///
+/// The drink recipe is untouched: a latte still calls for `30 ml White Sugar
+/// Syrup`, one line, the thing the barista actually pours.
+model SubRecipeItem {
+  id                  String  @id @default(cuid())
+  /// The prepared ingredient being made.
+  parentRawMaterialId String
+  /// One of the things it is made from. May itself be a sub-recipe.
+  rawMaterialId       String
+  /// Consumed per ONE batch, not per unit of yield — so a recipe reads the way
+  /// the cook says it ("1 kg sugar to 500 g water"), not as a ratio.
+  quantity            Decimal @db.Decimal(12, 4)
+
+  parent      RawMaterial @relation("SubRecipeParent", fields: [parentRawMaterialId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation("SubRecipeComponent", fields: [rawMaterialId], references: [id], onDelete: Restrict)
+
+  @@unique([parentRawMaterialId, rawMaterialId])
+  @@index([parentRawMaterialId])
+  @@index([rawMaterialId])
+  @@map("sub_recipe_items")
+}
+
 model VariantBomItem {
   id            String  @id @default(cuid())
   variantId     String
@@ -2038,14 +2082,14 @@ model JournalEntry {
   customerAdvance  CustomerAdvance?  @relation("CustomerAdvanceJE")
   vendorAdvance    VendorAdvance?    @relation("VendorAdvanceJE")
 
-  @@index([tenantId, postingDate])
-  @@index([tenantId, date])
-  @@index([tenantId, status])
   /// SecAudit 2026-05 A1 (Critical) — gapless JE numbering per BIR. Comment
   /// in journal.service.ts:41 has long claimed this constraint exists; it
   /// only existed as @@index before — NumberingService races could silently
   /// double-issue. Now enforced at the DB level.
   @@unique([tenantId, entryNumber])
+  @@index([tenantId, postingDate])
+  @@index([tenantId, date])
+  @@index([tenantId, status])
   @@map("journal_entries")
 }
 
@@ -4265,39 +4309,39 @@ model Terminal {
  * during FIFO traversal.
  */
 model RawMaterialLot {
-  id                  String    @id @default(cuid())
-  tenantId            String
-  branchId            String
-  rawMaterialId       String
+  id                   String       @id @default(cuid())
+  tenantId             String
+  branchId             String
+  rawMaterialId        String
   /// Original delivery quantity in the ingredient's unit (g, ml, pc, ...)
-  qtyReceived         Decimal   @db.Decimal(12, 4)
+  qtyReceived          Decimal      @db.Decimal(12, 4)
   /// Remaining quantity — drained by FEFO/FIFO consumption.
-  qtyRemaining        Decimal   @db.Decimal(12, 4)
+  qtyRemaining         Decimal      @db.Decimal(12, 4)
   /// Unit cost AT THE TIME of this delivery — frozen per lot.
-  unitCost            Decimal   @db.Decimal(12, 4)
+  unitCost             Decimal      @db.Decimal(12, 4)
   /// Business-date of receipt (cashier-provided; respects period lock).
-  receivedAt          DateTime
+  receivedAt           DateTime
   /// Sprint 25 — expiration date for perishables. When set, consumption
   /// follows FEFO (oldest expiry first); when null, FIFO (oldest receivedAt
   /// first). Drives 7/3/0-day expiry alerts.
-  expirationDate      DateTime?
+  expirationDate       DateTime?
   /// Supplier reference (PO/DR/invoice no.) — purely audit metadata.
-  referenceNumber     String?
+  referenceNumber      String?
   /// CASH / CREDIT / OWNER_FUNDED — mirrored from the receipt for reporting.
-  paymentMethod       String?
+  paymentMethod        String?
   /// Sprint 25 — link to PurchaseOrder when received against one.
-  purchaseOrderItemId String?
-  createdAt           DateTime  @default(now())
+  purchaseOrderItemId  String?
+  createdAt            DateTime     @default(now())
   /// Sprint 26 — Close & Plan: sticker tier driven by FEFO position +
   /// days-to-expiry. USE_FIRST = soonest-expiring active lot of this
   /// raw material in this branch. EXPIRING_SOON = ≤ 3 days to expiry.
   /// EXPIRED = past expiry. NORMAL = everything else.
   /// Recomputed by the daily cron and by batchReceive().
-  stickerTier         StickerTier?       @default(NORMAL)
+  stickerTier          StickerTier? @default(NORMAL)
   /// True when the owner clicked "It's real — save anyway" past a
   /// duplicate-detection warning. Lets us audit how often the heuristic
   /// produces false positives and improve thresholds.
-  dupeOverride        Boolean            @default(false)
+  dupeOverride         Boolean      @default(false)
   /// Last time a sticker was printed for this lot. Drives the
   /// "needs reprint" banner when tier changes.
   stickerLastPrintedAt DateTime?
@@ -5678,6 +5722,91 @@ model OfficialReceipt {
 
 // ─── Sprint 25 — Solo tier delivery (batch inventory, PO, maker-checker, API) ─
 
+/// Clerque Procure — the shop asking the owner to buy something.
+///
+/// Deliberately NOT a PurchaseOrder. A PO presumes a vendor, terms and an
+/// accrual; an MSME cafe buys at the grocery and on Shopee, pays cash or card,
+/// and owes nobody. Forcing a vendor onto that adds a step nobody will do.
+///
+/// The problem it removes: today a shortage is found while someone is already
+/// standing in the grocery, so a message goes to the owners and somebody makes
+/// a second trip -- purely to keep "nothing unavailable on the menu" true.
+enum PurchaseRequestStatus {
+  OPEN // being added to through the day
+  SENT // cutoff passed, owners have it
+  BOUGHT // shopping done, prices filled in
+  RECEIVED // stock posted, request closed
+  CANCELLED
+}
+
+model PurchaseRequest {
+  id            String                @id @default(cuid())
+  tenantId      String
+  branchId      String
+  /// Control number, e.g. REQ-20260830-001. Set once at creation, never
+  /// edited -- it is what stops the same request being bought twice.
+  requestNumber String
+  status        PurchaseRequestStatus @default(OPEN)
+  /// When this request stops accepting lines. Null while a shop is still
+  /// deciding its cutoff times.
+  cutoffAt      DateTime?
+  sentAt        DateTime?
+  boughtAt      DateTime?
+  receivedAt    DateTime?
+  notes         String?
+  createdById   String
+  sentById      String?
+  receivedById  String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  tenant Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch                @relation(fields: [branchId], references: [id])
+  lines  PurchaseRequestLine[]
+
+  @@unique([tenantId, requestNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, branchId, createdAt])
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestLine {
+  id                String   @id @default(cuid())
+  purchaseRequestId String
+  /// Line control number, e.g. REQ-20260830-001-04. Passed through as the
+  /// receive referenceNumber, so "do not receive the same line twice" is
+  /// enforced by the database rather than by someone remembering.
+  lineNumber        String
+  /// Always the standard generic ingredient -- what WAC blends against.
+  rawMaterialId     String
+  /// Wanted, in the ingredient's own unit.
+  qtyRequested      Decimal  @db.Decimal(12, 4)
+  /// Why it is on the list: how far below its reorder level it was.
+  shortBy           Decimal? @db.Decimal(12, 4)
+
+  /// --- filled in by whoever actually shopped ---
+  /// How many CONTAINERS were bought (3 bottles), not the converted quantity.
+  packsBought Decimal?  @db.Decimal(12, 4)
+  /// What one container holds, in the ingredient's unit. Doing the packs-to-
+  /// grams maths here is what lets the spreadsheet be a backup rather than the
+  /// only place the conversion can happen.
+  packSize    Decimal?  @db.Decimal(12, 4)
+  /// Price of ONE container, as printed on the receipt.
+  packCost    Decimal?  @db.Decimal(12, 4)
+  /// Free text: "Monin", "Kirkland Organic Blue Agave". Never affects matching.
+  brandNote   String?
+  /// Set once the line has been posted to stock, so a re-post is a no-op.
+  receivedAt  DateTime?
+
+  purchaseRequest PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  rawMaterial     RawMaterial     @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
+
+  @@unique([purchaseRequestId, rawMaterialId])
+  @@index([purchaseRequestId])
+  @@index([rawMaterialId])
+  @@map("purchase_request_lines")
+}
+
 enum PurchaseOrderStatus {
   DRAFT
   ORDERED // Sent to vendor
@@ -6144,27 +6273,27 @@ enum FuelDispenseStatus {
 /// dedicated to one fuel grade (no multi-product nozzle splitting at MSME
 /// level — that's branded territory).
 model FuelPump {
-  id           String    @id @default(cuid())
-  tenantId     String
-  branchId     String
-  label        String /// "Pump 1", "Pump 2 — Diesel side"
-  fuelGrade    FuelGrade
+  id                 String    @id @default(cuid())
+  tenantId           String
+  branchId           String
+  label              String /// "Pump 1", "Pump 2 — Diesel side"
+  fuelGrade          FuelGrade
   /// Product representing this fuel grade. Price-per-liter comes from
   /// Product.price; updating the price posts in real-time.
-  productId    String
+  productId          String
   /// Cumulative liters dispensed since pump install — used as default
   /// opening reading for the next dispense. Mechanical pumps typically
   /// have a physical totalizer; software-tracked here for digital pumps.
-  currentMeter Decimal   @db.Decimal(14, 3)
+  currentMeter       Decimal   @db.Decimal(14, 3)
   /// DOE-mandated price ceiling per liter (₱). DOE doesn't publish a real-
   /// time API today; the owner enters this manually whenever the agency
   /// issues a price freeze. Counter shows a warning when Product.price
   /// exceeds this value.
-  doeCeilingPricePhp Decimal? @db.Decimal(8, 2)
-  isActive     Boolean   @default(true)
-  sortOrder    Int       @default(0)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  doeCeilingPricePhp Decimal?  @db.Decimal(8, 2)
+  isActive           Boolean   @default(true)
+  sortOrder          Int       @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   branch    Branch         @relation(fields: [branchId], references: [id])
@@ -6296,26 +6425,26 @@ model PriceListItem {
 /// club can always answer "who has my paddle right now" (join through the
 /// item's active RentalTransaction).
 model RentableItem {
-  id       String @id @default(cuid())
-  tenantId String
-  branchId String?
+  id              String             @id @default(cuid())
+  tenantId        String
+  branchId        String?
   /// Operator-facing name, e.g. "Paddle – Franklin", "Court shoes – M9".
-  name     String
+  name            String
   /// Free-text class for grouping/reporting (PADDLE / SHOES / BALL / OTHER).
-  category String?
+  category        String?
   /// Optional asset tag / serial the club paints on the item.
-  assetTag String?
+  assetTag        String?
   /// Rent fee charged per rental, in centavos. INCOME on pickup (never refunded).
-  rentFeeCentavos Int @default(0)
+  rentFeeCentavos Int                @default(0)
   /// Optional refundable security deposit, in centavos. Held as a LIABILITY
   /// while out; refunded on good return or forfeited to income on loss/damage.
-  depositCentavos Int @default(0)
-  status   RentableItemStatus @default(AVAILABLE)
-  isActive Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  depositCentavos Int                @default(0)
+  status          RentableItemStatus @default(AVAILABLE)
+  isActive        Boolean            @default(true)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
-  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rentalLines RentalLine[]
 
   @@index([tenantId, status])
@@ -6324,47 +6453,47 @@ model RentableItem {
 }
 
 enum RentableItemStatus {
-  AVAILABLE  // on the shelf, rentable
-  RENTED     // currently out on a rental
-  RETIRED    // lost / written off / decommissioned — not rentable
+  AVAILABLE // on the shelf, rentable
+  RENTED // currently out on a rental
+  RETIRED // lost / written off / decommissioned — not rentable
 }
 
 /// A rental at the counter: who took what, when, the money held, and whether
 /// it has come back. One transaction may cover several items (RentalLine).
 model RentalTransaction {
-  id            String @id @default(cuid())
-  tenantId      String
-  branchId      String?
+  id                       String                @id @default(cuid())
+  tenantId                 String
+  branchId                 String?
   /// Human-readable rental number, per-tenant series.
-  rentalNumber  String
+  rentalNumber             String
   /// Who rented — captured as free text at the counter (walk-ins), plus an
   /// optional link to a Customer master record when they are known.
-  customerName   String
-  customerMobile String?
-  customerId     String?
-  status         EquipmentRentalStatus @default(OUT)
+  customerName             String
+  customerMobile           String?
+  customerId               String?
+  status                   EquipmentRentalStatus @default(OUT)
   /// Rent fee recognised as income for this rental (sum of the lines' fees),
   /// in centavos.
-  rentFeeCentavos Int @default(0)
+  rentFeeCentavos          Int                   @default(0)
   /// Deposit ledger, all in centavos. held = booked to the deposit liability
   /// on pickup; refunded = returned to the customer on good return;
   /// forfeited = moved into income on loss/damage. held == refunded +
   /// forfeited + (still outstanding) — so nothing lingers as a phantom.
-  depositHeldCentavos      Int @default(0)
-  depositRefundedCentavos  Int @default(0)
-  depositForfeitedCentavos Int @default(0)
-  timeOut  DateTime @default(now())
+  depositHeldCentavos      Int                   @default(0)
+  depositRefundedCentavos  Int                   @default(0)
+  depositForfeitedCentavos Int                   @default(0)
+  timeOut                  DateTime              @default(now())
   /// When ALL items came back (or the rental was closed). Null while OUT.
-  timeIn   DateTime?
+  timeIn                   DateTime?
   /// When the rental is expected back — drives OVERDUE. Null = open-ended.
-  dueAt    DateTime?
-  notes    String?
-  createdById String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  dueAt                    DateTime?
+  notes                    String?
+  createdById              String?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
 
-  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  lines    RentalLine[]
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lines  RentalLine[]
 
   @@unique([tenantId, rentalNumber])
   @@index([tenantId, status])
@@ -6373,25 +6502,25 @@ model RentalTransaction {
 }
 
 enum EquipmentRentalStatus {
-  OUT       // at least one item still with the customer
-  RETURNED  // everything back, deposit settled
-  OVERDUE   // past dueAt, still out
-  LOST      // item(s) not returned — deposit forfeited, item retired
+  OUT // at least one item still with the customer
+  RETURNED // everything back, deposit settled
+  OVERDUE // past dueAt, still out
+  LOST // item(s) not returned — deposit forfeited, item retired
 }
 
 /// One item on a rental. Its own return status so a multi-item rental can have
 /// some paddles back and one still out.
 model RentalLine {
-  id        String @id @default(cuid())
-  rentalId  String
-  itemId    String
-  rentFeeCentavos Int @default(0)
-  depositCentavos Int @default(0)
+  id              String    @id @default(cuid())
+  rentalId        String
+  itemId          String
+  rentFeeCentavos Int       @default(0)
+  depositCentavos Int       @default(0)
   /// Per-line return status — the parent RentalTransaction.status is derived
   /// from the lines (RETURNED only when every line is settled).
-  returned  Boolean @default(false)
-  forfeited Boolean @default(false)
-  returnedAt DateTime?
+  returned        Boolean   @default(false)
+  forfeited       Boolean   @default(false)
+  returnedAt      DateTime?
 
   rental RentalTransaction @relation(fields: [rentalId], references: [id], onDelete: Cascade)
   item   RentableItem      @relation(fields: [itemId], references: [id])
@@ -6406,7 +6535,7 @@ model RentalLine {
 /// re-delivery finds the row and returns the stored result as a no-op, so a
 /// retrying sender can never double-post a sale or a refund.
 model IngestReceipt {
-  id             String @id @default(cuid())
+  id             String   @id @default(cuid())
   tenantId       String
   /// The sender's key, e.g. "sale:<order_id>" or "refund:<refund_id>".
   idempotencyKey String

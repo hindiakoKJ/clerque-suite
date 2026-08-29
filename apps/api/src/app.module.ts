@@ -13,6 +13,8 @@ import { IngestModule } from './ingest/ingest.module';
 import { EquipmentRentalsModule } from './equipment-rentals/equipment-rentals.module';
 import { ShiftsModule } from './shifts/shifts.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { SubRecipesModule } from './sub-recipes/sub-recipes.module';
+import { ProcureModule } from './procure/procure.module';
 import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { AccountingModule } from './accounting/accounting.module';
@@ -103,6 +105,8 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     EquipmentRentalsModule,
     ShiftsModule,
     InventoryModule,
+    SubRecipesModule,
+    ProcureModule,
     ReportsModule,
     UsersModule,
     AccountingModule,

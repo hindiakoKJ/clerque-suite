@@ -31,6 +31,12 @@ describe('StorageService — picking a driver that keeps the file', () => {
     ['RAILWAY_GIT_COMMIT_SHA', 'abc123'],
     ['RAILWAY_ENVIRONMENT',    'production'],
     ['RAILWAY_PROJECT_ID',     'p_1'],
+    // the ones Railway actually sets, which the first version of this check
+    // missed -- so photos went on being wiped by every deploy
+    ['RAILWAY_ENVIRONMENT_NAME', 'production'],
+    ['RAILWAY_PROJECT_NAME',     'clerque'],
+    ['RAILWAY_SERVICE_ID',       'svc_1'],
+    ['RAILWAY_PUBLIC_DOMAIN',    'api.up.railway.app'],
     ['RENDER',                 'true'],
     ['VERCEL',                 '1'],
     ['DYNO',                   'web.1'],
@@ -42,6 +48,7 @@ describe('StorageService — picking a driver that keeps the file', () => {
   });
 
   it('still uses local disk on a normal machine', () => {
+    for (const k of Object.keys(process.env)) if (k.startsWith('RAILWAY_')) delete process.env[k];
     for (const [k] of HOSTS) delete process.env[k];
     // ./uploads is writable in the repo, so this is the developer's case
     expect(['LOCAL', 'DB']).toContain(make());
@@ -60,6 +67,7 @@ describe('StorageService — picking a driver that keeps the file', () => {
   });
 
   it('an explicit STORAGE_DRIVER=DB is honoured anywhere', () => {
+    for (const k of Object.keys(process.env)) if (k.startsWith('RAILWAY_')) delete process.env[k];
     for (const [k] of HOSTS) delete process.env[k];
     expect(make({ STORAGE_DRIVER: 'DB' })).toBe('DB');
   });

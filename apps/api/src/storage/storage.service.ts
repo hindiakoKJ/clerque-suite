@@ -136,12 +136,19 @@ export class StorageService {
    * later, which is worse than failing outright.
    */
   private isEphemeralHost(): boolean {
+    // Match on the PREFIX, not on named variables. Railway sets a different
+    // set depending on how the service was created -- RAILWAY_ENVIRONMENT_NAME,
+    // RAILWAY_PROJECT_NAME, RAILWAY_SERVICE_ID -- and RAILWAY_GIT_COMMIT_SHA
+    // only exists for GitHub-triggered deploys. Naming three of them meant the
+    // check silently missed, the LOCAL driver was chosen anyway, and product
+    // photos went on being erased by every deploy. Any RAILWAY_* variable at
+    // all is proof enough of where we are.
+    if (Object.keys(process.env).some((k) => k.startsWith('RAILWAY_'))) return true;
     return Boolean(
-      process.env.RAILWAY_GIT_COMMIT_SHA ||
-      process.env.RAILWAY_ENVIRONMENT ||
-      process.env.RAILWAY_PROJECT_ID ||
       process.env.RENDER ||
+      process.env.RENDER_SERVICE_ID ||
       process.env.VERCEL ||
+      process.env.FLY_APP_NAME ||
       process.env.DYNO,          // Heroku
     );
   }

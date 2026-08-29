@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShoppingCart, BookOpen, Users, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
+import { ShoppingCart, BookOpen, Users, Lock, ArrowRight, ShieldCheck, ShoppingBasket } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
@@ -12,7 +12,7 @@ import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/Busin
 /* ─── App card registry ──────────────────────────────────────────────────── */
 
 interface AppCard {
-  id: 'pos' | 'ledger' | 'payroll';
+  id: 'pos' | 'ledger' | 'payroll' | 'procure';
   name: string;
   description: string;
   Icon: React.ElementType;
@@ -21,6 +21,17 @@ interface AppCard {
   route: string;
   minLevel: AccessLevel;
 }
+
+/**
+ * Who gets Procure. Anyone who already touches stock: the cashier who notices
+ * the shortage, the staff who receive and move it, and the owner who buys it.
+ * Matches the roles the Procure API accepts, so the card never appears for
+ * someone who would be refused on arrival.
+ */
+const PROCURE_ROLES = new Set([
+  'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM',
+  'WAREHOUSE_STAFF', 'CASHIER', 'SALES_LEAD',
+]);
 
 const APPS: AppCard[] = [
   {
@@ -42,6 +53,18 @@ const APPS: AppCard[] = [
     accentDark: 'hsl(173 70% 45%)',
     route: '/ledger',
     minLevel: 'READ_ONLY',
+  },
+  {
+    id: 'procure',
+    name: 'Procure',
+    description: 'Stock, ingredient requests, receiving, and transfers between rooms.',
+    Icon: ShoppingBasket,
+    accent: 'hsl(28 80% 48%)',
+    accentDark: 'hsl(28 80% 58%)',
+    route: '/procure',
+    // Unused for Procure -- it is gated on role, not on an AppAccess row. See
+    // the filter below.
+    minLevel: 'NONE',
   },
   {
     id: 'payroll',
@@ -132,6 +155,11 @@ export default function SelectPage() {
         .filter((app) => {
           // Console card always visible to super admins
           if (app.name === 'Console') return isSuper;
+          // Procure is gated on ROLE rather than on an AppAccess row. Copying
+          // the other three would have hidden it from everyone: no user has a
+          // PROCURE row, and there is no tenant flag for it, so both gates
+          // would fail for a card that should simply be there.
+          if (app.id === 'procure') return PROCURE_ROLES.has(user.role);
           const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
           // First gate: tenant plan must include the module.
           if (!moduleEnabled(code)) return false;
@@ -140,6 +168,7 @@ export default function SelectPage() {
         })
         .map((app) => {
           if (app.name === 'Console') return { ...app, resolvedRoute: app.route };
+          if (app.id === 'procure')   return { ...app, resolvedRoute: app.route };
           const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
           const level = user.appAccess.find((a) => a.app === code)?.level;
           return { ...app, resolvedRoute: routeForApp(app, level, user.role) };

@@ -22,11 +22,13 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
-          <ShoppingBasket className="h-5 w-5 text-[var(--accent)]" />
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold leading-tight">Procure</h1>
-            <p className="truncate text-xs text-muted-foreground">What to buy, before anyone leaves</p>
-          </div>
+          <Link href="/procure" className="flex min-w-0 items-center gap-3">
+            <ShoppingBasket className="h-5 w-5 shrink-0 text-[var(--accent)]" />
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-semibold leading-tight">Procure</h1>
+              <p className="truncate text-xs text-muted-foreground">Stock, requests, and receiving</p>
+            </div>
+          </Link>
         </div>
       </header>
       <main className="mx-auto max-w-3xl px-4 pb-24 pt-5 sm:px-6">{children}</main>

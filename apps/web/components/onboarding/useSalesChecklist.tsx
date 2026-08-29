@@ -24,6 +24,7 @@ interface CountResponse {
   count: number;
 }
 interface ProductsList { count: number; products: Array<{ id: string }> }
+interface OrdersList  { total?: number; data?: Array<unknown> }
 interface BranchesList { length: number }
 
 export function useSalesChecklist(tenant: BusinessTypeAware): ChecklistItem[] {
@@ -42,7 +43,11 @@ export function useSalesChecklist(tenant: BusinessTypeAware): ChecklistItem[] {
   });
 
   // Recent orders — any sale at all means "first order taken".
-  const { data: recentOrders = [] } = useQuery<Array<unknown>>({
+  // The endpoint returns { data, total, take, skip }; older deploys returned a
+  // bare array. Reading `.length` straight off the envelope gives undefined, so
+  // this step read as "not done" for every tenant forever and the checklist
+  // could never auto-hide — even for a shop with sales on the books.
+  const { data: recentOrders } = useQuery<OrdersList | Array<unknown>>({
     queryKey: ['recent-orders', { take: 1 }],
     queryFn:  () => api.get('/orders', { params: { take: 1 } }).then((r) => r.data),
     staleTime: 60_000,
@@ -61,7 +66,15 @@ export function useSalesChecklist(tenant: BusinessTypeAware): ChecklistItem[] {
       ? (products as ProductsList).count
       : Array.isArray(products) ? (products as unknown as Array<unknown>).length : 0;
   const hasProducts  = productCount > 0;
-  const hasOrders    = recentOrders.length > 0;
+  const orderCount =
+    Array.isArray(recentOrders)
+      ? recentOrders.length
+      : typeof (recentOrders as OrdersList | undefined)?.total === 'number'
+        ? (recentOrders as OrdersList).total!
+        : Array.isArray((recentOrders as OrdersList | undefined)?.data)
+          ? (recentOrders as OrdersList).data!.length
+          : 0;
+  const hasOrders    = orderCount > 0;
   const hasStaff     = users.length > 1;   // owner + at least one extra
 
   const isFnb = isFnbType(tenant.businessType ?? null);

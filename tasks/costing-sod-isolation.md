@@ -51,10 +51,10 @@ never touches COGS.
 
 ### Sequencing
 
-- [ ] **Before go-live.** Supplies stop debiting 1050 and start debiting
-      6210/6070 — one branch on `RawMaterialCategory` in the event handler.
-      Split `1040` Input VAT out of every receipt. This is a real P&L and tax
-      misstatement, not presentation.
+- [x] **Before go-live.** ~~Supplies stop debiting 1050 and start debiting
+      6210/6070. Split `1040` Input VAT out of every receipt.~~ **DONE**
+      (25ee77a). Verified on real data: bleach `Dr 6070 500.00 / Dr 1040 60.00
+      / Cr 1010 560.00`; sugar `Dr 1051 100.00 / Dr 1040 12.00 / Cr 1010 112.00`.
 - [ ] **After go-live.** Ingredient receipts move `1050` → `1051`, and the COGS
       relief leg must credit 1051 for recipe-costed lines. Both are current
       assets, so no total moves — only the inventory note and the RMC 57-2015
@@ -70,16 +70,15 @@ never touches COGS.
 
 ### The value-flow defects behind all this
 
-- [ ] **Cycle counts post NOTHING to the books.** `postCycleCount` applies the
-      counted quantity and records the variance but creates no AccountingEvent
-      and no JournalEntry. Counting the shelf is supposed to be what makes
-      stock and the ledger agree; today it makes them diverge permanently.
-- [ ] **There is no way to write off a raw material.** `adjust()` resolves
-      against `Product` only. Spoiled milk cannot be recorded anywhere.
-- [ ] `5060` Inventory Write-off and `5070` Spoilage & Waste are seeded and
-      dead — every negative adjustment goes to `5010` COGS regardless of reason,
-      even though the reason code and supervisor attestation are already
-      collected.
+- [x] ~~**Cycle counts post NOTHING to the books.**~~ **DONE** (0c35fbc). Emits
+      an ordinary INVENTORY_ADJUSTMENT per line, so it inherits the category
+      routing. A count GAIN reverses into 5060 rather than crediting Owner's
+      Capital, and claims no input VAT — no supplier, no invoice.
+- [x] ~~**There is no way to write off a raw material.**~~ **DONE** (0c35fbc +
+      ba4b484). `POST /inventory/raw-materials/:id/write-off` plus a screen.
+      Refusing to over-write-off points at the cycle count instead.
+- [x] ~~`5060` and `5070` are seeded and dead~~ **DONE**. Reason now routes:
+      expiry/damage → 5070, theft/count correction → 5060, otherwise 5010.
 - [ ] Purchase-order receipt posts no journal entry, no WAC blend, no recost.
 - [ ] Sub-recipe batches never reduce the components' lot quantities, yet
       create a lot for the output.
@@ -141,3 +140,42 @@ unauthenticated endpoint, the other an ordering bug.
 **Fixed already** (commit 2d3cc9f): the unauthenticated `_diagnostics`
 endpoint, and the Z-Read/X-Read idempotency-before-tenant-check that let one
 tenant read another's figures and permanently squat on their Z-Read slot.
+
+---
+
+## AI receipt capture — decided, not yet built
+
+**Provider: Gemini**, funded by the $2,000 Google-for-Startups credit.
+
+⚠ **It must be a PAID key, not the free tier.** The free Gemini tier trains on
+submitted data. These documents are supplier receipts carrying vendor names,
+prices and volumes — for the shop, and for every shop once this is sold on. The
+GFS credit exists precisely to cover this, so the paid tier costs nothing extra
+in practice.
+
+**Pattern: copy Sangguni** (`E:\AI Projects\Sangguni`), which already does this
+well:
+- `pdf-parse` for PDFs, `tesseract.js` for image OCR, both on a BullMQ queue
+- a worker (`ocr.processor.ts`) that extracts text, then hands it to the model
+  for structured extraction
+- Sangguni uses `claude-haiku-4-5` for that step; swap the provider, keep the shape
+
+**Telegram is dropped.** Procure with camera + upload keeps the receipt attached
+to the request line it belongs to. A photo in a chat thread is attached to
+nothing, and "show me the receipt for REQ-20260830-001-04" has to be one click
+three weeks later. Telegram remains fine as a *notification* channel later —
+a webhook, not an ingress.
+
+**Meantime notification (KJ):** email to an assigned list, plus a generated PDF
+that can be dropped into a group chat.
+
+### The one part that is not like Sangguni
+
+Sangguni parses a document into a **summary**, where being approximately right
+is acceptable. Receiving has to resolve "MILK 1L x3" to a specific
+`rawMaterialId` and move stock, where being approximately right corrupts
+inventory. This project has already been bitten once by fuzzy ingredient
+matching — `Ice` matched "Iced 16oz" and would have booked 2,375 cups.
+
+So: **AI proposes, the control number anchors, a person confirms.** Never
+auto-post a receive from an extraction.

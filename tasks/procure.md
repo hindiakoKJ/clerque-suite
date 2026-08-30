@@ -54,3 +54,92 @@ second vertical, then look at what two real clients actually share.
 - [ ] **Name the limiting ingredient** in `maxProducible`. It is already
       computed and thrown away. Naming it is what routes "we are out of X" to
       the person who can fix it.
+
+---
+
+## Counter PIN — audit findings (2026-08-30)
+
+The owner reported guessing PINs and getting in. Audited adversarially, then
+re-checked by a defender pass so the report is not overstated.
+
+**Not true:** you cannot PIN into the POS from a cold screen (`/auth/pin-login`
+needs company code + email + PIN); rate limiting exists on every route;
+supervisor PINs (void/refund co-auth) are bcrypt, not plaintext; `/auth/pin-login`
+has a real per-account lockout (5 fails / 15 min).
+
+**True, and fixed:** there was no PIN strength policy at all — `/^\d{4,8}$/` was
+the only rule. Now `apps/api/src/auth/pin-policy.ts`, wired into all three
+write paths.
+
+**True, still open:**
+
+- [ ] **Existing weak PINs are grandfathered.** The policy runs at write time.
+      Anyone already holding `1234` keeps it. Needs a one-off sweep: find them,
+      clear them, make the owner re-issue.
+      `SELECT id, name, role FROM users WHERE "tenantId" = '<t>' AND "kioskPin" IS NOT NULL;`
+- [ ] **`User.kioskPin` is stored plaintext.** Deliberate (migration
+      `20260528000000`) because bcrypt broke kiosk lookups and defeated the
+      uniqueness index. The stated threat model in `users.service.ts:228` —
+      "worst case is one staff member punching another's clock" — is wrong:
+      the same value opens a till session and attests Rx dispensing. Fix is a
+      keyed HMAC (deterministic, so lookup and uniqueness still work) rather
+      than bcrypt.
+- [ ] **`/auth/switch-cashier` includes `BUSINESS_OWNER` in its role set** and
+      mints a full session, with no per-account failure counter. A guessed PIN
+      grants whoever owns it. Decide: drop the owner from the switchable set,
+      or require a step-up.
+- [ ] **Five PIN-verifying endpoints sit behind only the global 600/min/IP** —
+      `/pharmacy/verify-attest`, `POST /orders` (attestPin), order void, item
+      refund, `/inventory/adjust`. Only the three auth routes carry the tight
+      5/min.
+- [ ] **`/auth/pin-login` leaks account existence** — the `KIOSK_ONLY_ACCOUNT`
+      403 is thrown at `auth.service.ts:473`, before the PIN compare at `:492`.
+      A garbage PIN plus a guessed email is an email-existence oracle.
+- [ ] **Demo seeding writes a bcrypt hash into the plaintext column**
+      (`tenant.service.ts:487`) — the last un-converted site. Those rows read as
+      "PIN set" but can never authenticate, and each burns a slot in the
+      uniqueness index.
+
+## Stock-write audit — defects found while mapping (2026-08-30)
+
+Twelve paths increase raw-material stock. Three have real defects:
+
+- [ ] **`POST /purchase-orders/:id/receive` posts NO journal entry.** Stock and
+      lots rise; inventory value and AP never reach the books. Also no WAC
+      blend, no `recostProductsUsing`, no period lock, and its
+      `referenceNumber` is written but never queried — so a double receive
+      doubles stock. This is the Purchase Orders item still in the POS sidebar.
+- [ ] **`POST /inventory/sub-recipes/:id/batches` has no working idempotency.**
+      Its auto-reference is `BATCH-<date>-<last6 of id>`, identical for two
+      batches of the same syrup on the same day, and never checked. A
+      double-submit silently doubles the yield. Reachable by CASHIER, freely
+      backdatable, and has no UI in front of it.
+- [ ] **`POST /admin/tenants/:id/seed-coffee-shop-ingredients`** materialises
+      opening stock with real cost prices and posts nothing — and it runs
+      against live tenants, not just demo ones.
+
+## Google Play app for Procure — the facts
+
+`apps/counter` (Clerque Counter) is Expo SDK 54 / RN 0.81, React Navigation v7,
+`com.clerque.counter`, EAS project `63627b26…`, versionCode 1.
+
+The blocker is not the store listing, it is that **Counter shares nothing with
+the monorepo** — zero workspace dependencies, no `metro.config.js`. Only ~17%
+of it (4,222 of 25,545 lines) is reusable shell.
+
+- **Separate app (`apps/procure`)** — what was asked for. New EAS project, new
+  Play listing, new branding. Then either extract ~4,200 lines of shell into
+  packages (which touches Counter's auth and login path — that is the
+  regression surface, not the new app) or copy-paste it and fix every auth bug
+  twice. Plus port ~3,700 lines of web Procure UI to React Native.
+- **Feature inside Counter** — same UI porting, zero extraction. But a
+  procurement-only user boots into the POS tree: device-mode choice, then
+  sign-in, then the cashier-PIN gate. Routing around that means editing the
+  login path.
+- **PWA install of `/procure`** — no porting at all, but no Play presence, and
+  `app/manifest.ts` is one global manifest starting at `/`, so it installs
+  "Clerque" pointing at the app selector.
+
+**Recommendation:** not before Carolina is live. The web `/procure` already
+works on a phone, and the porting work competes directly with making Procure
+the only door stock walks through.

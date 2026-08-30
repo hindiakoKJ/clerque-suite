@@ -44,7 +44,9 @@ const ACCOUNT_IDS: Record<string, string> = {
   '1031': 'acct-1031-digital',
   '1034': 'acct-1034-driver-advance',
   '1037': 'acct-1037-retention',
+  '1040': 'acct-1040-input-vat',
   '1050': 'acct-1050-inventory',
+  '1051': 'acct-1051-raw-materials',
   '2010': 'acct-2010-ap',
   '2020': 'acct-2020-vat',
   '3010': 'acct-3010-equity',
@@ -53,10 +55,14 @@ const ACCOUNT_IDS: Record<string, string> = {
   '4111': 'acct-4111-openplay',
   '4112': 'acct-4112-tournament',
   '5010': 'acct-5010-cogs',
+  '5060': 'acct-5060-writeoff',
+  '5070': 'acct-5070-spoilage',
   '6100': 'acct-6100-transport',
   '6101': 'acct-6101-fuel',
   '6102': 'acct-6102-vehicle-mtc',
+  '6070': 'acct-6070-office-supplies',
   '6140': 'acct-6140-misc',
+  '6210': 'acct-6210-tools-supplies',
 };
 
 const ID_TO_CODE: Record<string, string> = Object.fromEntries(
@@ -757,7 +763,15 @@ describe('JournalService — accounting correctness across business types', () =
   // ── 5. INVENTORY_ADJUSTMENT handler ────────────────────────────────────────
 
   describe('INVENTORY_ADJUSTMENT event', () => {
-    it('cash receipt — Dr Inventory / Cr Cash', async () => {
+    /*
+      These three now assert 1051 Raw Materials, not 1050 Merchandise, and a
+      VAT split. Merchandise Inventory is for goods bought to resell as-is;
+      beans that get MADE into a drink are raw materials. And a VAT-registered
+      buyer holding a VAT invoice claims the 12% as input tax (NIRC Sec 110) —
+      capitalising the gross forfeited it on every delivery.
+      The suite's default tenant is taxStatus VAT.
+    */
+    it('cash receipt — Dr Raw Materials + Input VAT / Cr Cash', async () => {
       const lines = await runProcessEvent({
         kind:           'RAW_MATERIAL_RECEIPT',
         productName:    'Espresso Beans',
@@ -769,12 +783,15 @@ describe('JournalService — accounting correctness across business types', () =
       }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
 
       const s = summarise(lines);
-      expect(s.debits.get('1050')).toBeCloseTo(2500, 2);
-      expect(s.credits.get('1010')).toBeCloseTo(2500, 2);
+      // 2500 gross = 2232.14 net + 267.86 input VAT
+      expect(s.debits.get('1051')).toBeCloseTo(2232.14, 2);
+      expect(s.debits.get('1040')).toBeCloseTo(267.86, 2);
+      expect(s.debits.get('1050')).toBeUndefined();      // never merchandise
+      expect(s.credits.get('1010')).toBeCloseTo(2500, 2); // the money is the gross
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 
-    it('credit receipt — Dr Inventory / Cr Accounts Payable', async () => {
+    it('credit receipt — Dr Raw Materials + Input VAT / Cr Accounts Payable', async () => {
       const lines = await runProcessEvent({
         kind:           'RAW_MATERIAL_RECEIPT',
         productName:    'Milk',
@@ -785,8 +802,9 @@ describe('JournalService — accounting correctness across business types', () =
       }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
 
       const s = summarise(lines);
-      expect(s.debits.get('1050')).toBeCloseTo(1500, 2);
-      expect(s.credits.get('2010')).toBeCloseTo(1500, 2);  // AP accrual
+      expect(s.debits.get('1051')).toBeCloseTo(1339.29, 2);
+      expect(s.debits.get('1040')).toBeCloseTo(160.71, 2);
+      expect(s.credits.get('2010')).toBeCloseTo(1500, 2);  // AP accrual on the gross
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 
@@ -801,8 +819,9 @@ describe('JournalService — accounting correctness across business types', () =
       }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
 
       const s = summarise(lines);
-      expect(s.debits.get('1050')).toBeCloseTo(5000, 2);
-      expect(s.credits.get('3010')).toBeCloseTo(5000, 2); // Owner's capital
+      expect(s.debits.get('1051')).toBeCloseTo(4464.29, 2);
+      expect(s.debits.get('1040')).toBeCloseTo(535.71, 2);
+      expect(s.credits.get('3010')).toBeCloseTo(5000, 2); // Owner's capital, gross
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 

@@ -1438,6 +1438,10 @@ export class InventoryService {
               kind:           'RAW_MATERIAL_RECEIPT',
               rawMaterialId,
               rawMaterialName: material.name,
+              // What the thing IS. The whole row was already loaded and this
+              // field was sitting unread in memory while the journal debited
+              // 1050 for bleach and coffee beans alike.
+              category:       material.category,
               unit:           material.unit,
               quantity:       dto.quantity,        // positive — stock IN
               unitCost,

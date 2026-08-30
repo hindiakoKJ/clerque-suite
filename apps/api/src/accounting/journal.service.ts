@@ -7,6 +7,7 @@ import { AccountingPeriodsService } from '../accounting-periods/accounting-perio
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Prisma, JournalSource } from '@prisma/client';
+import { accountsForMaterial, PRODUCT_INVENTORY_ACCOUNT } from './material-accounts';
 
 type LineInput = { accountId: string; debit?: number; credit?: number; description?: string };
 
@@ -702,6 +703,21 @@ export class JournalService {
         }
 
       } else if (event.type === 'INVENTORY_ADJUSTMENT') {
+        /*
+          Is this a raw material or a finished product?
+
+          The signal has lived in different fields across versions of this
+          payload — `kind`, `adjustmentType`, and the presence of
+          `rawMaterialName` — so checking only one silently misroutes older
+          events to merchandise. Any of the three is enough; none of them can
+          be true for a product receipt.
+        */
+        const isRawMaterialEvent = (pl: Record<string, unknown>, adjType: string): boolean =>
+          String(pl['kind'] ?? '') === 'RAW_MATERIAL_RECEIPT'
+          || adjType === 'RAW_MATERIAL_RECEIPT'
+          || String(pl['rawMaterialName'] ?? '') !== ''
+          || pl['rawMaterialId'] != null;
+
         const totalValue     = Number(payload['totalValue']     ?? 0);
         const quantity       = Number(payload['quantity']       ?? 0);
         const adjustmentType = String(payload['adjustmentType'] ?? '');
@@ -727,7 +743,6 @@ export class JournalService {
         description = `Inventory ${adjustmentType.toLowerCase().replace(/_/g, ' ')}: ${productName}${reason ? ` — ${reason}` : ''}${refSuffix}`;
 
         if (quantity > 0) {
-          // Stock increase: DR Merchandise Inventory / CR (Cash | AP | Owner's Capital).
           const creditAccount =
             paymentMethod === 'CASH'   ? '1010' :  // Cash on Hand — supplier paid in cash today
             paymentMethod === 'CREDIT' ? '2010' :  // Accounts Payable — Net-30 / accrual
@@ -737,13 +752,98 @@ export class JournalService {
             paymentMethod === 'CREDIT' ? `Supplier credit — ${productName}` :
                                          'Owner equity — inventory funded';
 
-          lines.push({ accountId: await getAccount('1050'), debit:  totalValue, description: `Stock received: ${productName}` });
+          /*
+            WHERE the debit goes is decided by what the item IS, not by a
+            literal here. A raw-material receipt carries its category; a
+            product receipt does not, and stays merchandise.
+
+            Before this, every receipt debited 1050 — so bleach and coffee
+            beans produced identical entries, supply cost never reached the
+            P&L, and 1050 held a balance nothing could ever relieve because a
+            supply cannot be in a recipe.
+          */
+          const isRawMaterial = isRawMaterialEvent(payload, adjustmentType);
+          const rule = accountsForMaterial(
+            payload['category'] ? String(payload['category']) : null,
+          );
+          const debitAccount = isRawMaterial ? rule.onReceipt : PRODUCT_INVENTORY_ACCOUNT;
+          const debitDescription = isRawMaterial && !rule.capitalised
+            ? `${rule.label} — ${productName}`
+            : `Stock received: ${productName}`;
+
+          /*
+            Input VAT is split out of the gross.
+
+            A VAT-registered buyer holding a VAT invoice may credit the 12%
+            against output VAT (NIRC Sec 110) — but only where it is invoiced
+            AND RECORDED. This path capitalised the gross and never touched
+            1040, while bills and expense claims handled it correctly, so
+            every delivery quietly forfeited the credit.
+
+            Only for a VAT-registered tenant. NON_VAT / EXEMPT / PERCENTAGE_TAX
+            has no input tax to claim, so the whole gross is the cost.
+          */
+          const tenantTax = await this.prisma.tenant.findUnique({
+            where:  { id: tenantId },
+            select: { taxStatus: true },
+          });
+          const claimsInputVat = tenantTax?.taxStatus === 'VAT';
+          const inputVat = claimsInputVat
+            ? +(totalValue - totalValue / 1.12).toFixed(2)
+            : 0;
+          const netCost = +(totalValue - inputVat).toFixed(2);
+
+          lines.push({ accountId: await getAccount(debitAccount), debit: netCost, description: debitDescription });
+          if (inputVat > 0) {
+            lines.push({ accountId: await getAccount('1040'), debit: inputVat, description: `Input VAT — ${productName}` });
+          }
           lines.push({ accountId: await getAccount(creditAccount), credit: totalValue, description: creditDescription });
         } else {
-          // Stock reduction / write-off: DR COGS / CR Merchandise Inventory
           const absValue = Math.abs(totalValue);
-          lines.push({ accountId: await getAccount('5010'), debit:  absValue, description: `Inventory write-off: ${productName}` });
-          lines.push({ accountId: await getAccount('1050'), credit: absValue, description: `Stock removed: ${productName}` });
+          const isRawMaterial = isRawMaterialEvent(payload, adjustmentType);
+          const rule = accountsForMaterial(
+            payload['category'] ? String(payload['category']) : null,
+          );
+
+          /*
+            An item that was EXPENSED on receipt has nothing left to relieve.
+
+            Its cost already sits in the P&L, so posting a reduction would
+            charge the shop a second time for the same bleach and credit an
+            asset account that never held it. The quantity still moves — the
+            count is a stock-control fact — but the books have already said
+            everything they have to say.
+          */
+          if (isRawMaterial && !rule.capitalised) {
+            await this.prisma.accountingEvent.update({
+              where: { id: eventId },
+              data:  { status: 'SYNCED', syncedAt: new Date() },
+            });
+            return { skipped: true };   // cost already in the P&L — see above
+          }
+
+          /*
+            WHY the stock left decides which expense it lands in. Spoiled milk
+            is not cost of sale — it is waste, and a shop that cannot tell the
+            two apart cannot see it getting worse. 5060 and 5070 were seeded
+            for exactly this and had never been posted to; everything went to
+            5010 regardless of reason, including theft.
+          */
+          const reasonCode = String(payload['reasonCode'] ?? '').toUpperCase();
+          const debitAccount =
+            reasonCode === 'EXPIRY' || reasonCode === 'DAMAGE' ? '5070' :  // Spoilage & Waste
+            reasonCode === 'THEFT'                             ? '5060' :  // Inventory Write-off
+            reasonCode === 'COUNT_CORRECTION'                  ? '5060' :
+                                                                 '5010';   // consumed / sold
+          const debitLabel =
+            debitAccount === '5070' ? 'Spoilage & waste' :
+            debitAccount === '5060' ? 'Inventory write-off' :
+                                      'Cost of goods sold';
+
+          const creditAccount = isRawMaterial ? rule.onReceipt : PRODUCT_INVENTORY_ACCOUNT;
+
+          lines.push({ accountId: await getAccount(debitAccount), debit:  absValue, description: `${debitLabel}: ${productName}${reasonCode ? ` (${reasonCode.toLowerCase().replace(/_/g, ' ')})` : ''}` });
+          lines.push({ accountId: await getAccount(creditAccount), credit: absValue, description: `Stock removed: ${productName}` });
         }
 
       } else if (event.type === 'PAID_OUT') {

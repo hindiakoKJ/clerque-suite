@@ -40,6 +40,10 @@ describe('InventoryService — receiving the same reference twice', () => {
         findFirst: jest.fn().mockResolvedValue({ id: RM, tenantId: TENANT, name: 'Coffee Beans', unit: 'g', costPrice: 1.1 }),
       },
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH, tenantId: TENANT }) },
+      // receiveRawMaterial reads taxStatus to decide whether the input VAT is
+      // recoverable, and therefore whether the shelf is valued net or gross.
+      // NON_VAT keeps these cases on the gross basis they were written for.
+      tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: 'NON_VAT' }) },
       vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'v1' }) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(existingLot) },
       rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue({ quantity: 1000 }) },

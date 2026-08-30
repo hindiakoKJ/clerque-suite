@@ -29,6 +29,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProductsService, CreateProductDto, UpdateProductDto } from './products.service';
+import { SuperAdminGuard } from '../admin/admin.guard';
 
 const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -223,9 +224,22 @@ export class ProductPhotosController {
    * exact URL that would be produced.
    *
    * Declared BEFORE `:id` so Express does not match "_diagnostics" as an id.
-   * Public, like the route it sits beside -- it exposes no photo bytes, no
-   * tenant data and no credentials, only how storage is configured.
+   *
+   * SUPER_ADMIN ONLY. It was originally left public "because it exposes no
+   * photo bytes, no tenant data and no credentials" -- which was wrong on the
+   * second count and dangerous on the third. It returned a platform-wide photo
+   * count and the ids of the three most recently uploaded photos ACROSS EVERY
+   * TENANT. Those ids are precisely the tokens the sibling route trusts: the
+   * public GET :id is safe only because the id is unguessable, and this handed
+   * three of them out to anyone with curl and no account at all. A diagnostic
+   * that defeats the control protecting the thing it diagnoses is not a
+   * diagnostic.
+   *
+   * The part that is actually useful for debugging -- which storage driver is
+   * live and what URL an upload would produce -- is configuration, not tenant
+   * data, and it stays.
    */
+  @UseGuards(JwtAuthGuard, SuperAdminGuard)
   @Get('_diagnostics')
   async diagnostics(): Promise<Record<string, unknown>> {
     const recent = await this.prisma.productPhoto.findMany({

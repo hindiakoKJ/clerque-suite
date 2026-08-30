@@ -325,6 +325,29 @@ export class ReportsService {
     const startOfDay = new Date(`${dateStr}T00:00:00+08:00`);
     const endOfDay   = new Date(`${dateStr}T23:59:59.999+08:00`);
 
+    /*
+      Prove the branch is ours BEFORE anything else touches it.
+
+      The idempotency lookup used to run first, keyed on (branchId, date) with
+      no tenant in the predicate. Two consequences, and the second is worse
+      than the first:
+
+        1. Passing another tenant's branchId returned THEIR Z-Read — gross
+           sales, VAT, void counts for a shop you do not own.
+        2. On a date they had not closed yet, it fell through and CREATED a
+           ZReadLog carrying OUR tenantId against THEIR branchId. The unique
+           constraint on (branchId, date) means that row then permanently
+           occupies their slot: the victim can never generate their real
+           Z-Read for that day, and a Z-Read is a BIR record.
+
+      A tenant-scoped branch lookup costs one query and closes both.
+    */
+    const branch = await this.prisma.branch.findFirst({
+      where:  { id: branchId, tenantId },
+      select: { id: true },
+    });
+    if (!branch) throw new NotFoundException('Branch not found');
+
     // Idempotency: return existing record if already generated
     const existing = await this.prisma.zReadLog.findUnique({
       where: { branchId_date: { branchId, date: startOfDay } },
@@ -390,14 +413,19 @@ export class ReportsService {
   // The unique constraint on shiftId prevents double-generation.
 
   async generateXRead(tenantId: string, shiftId: string, generatedById?: string) {
-    // Idempotency
-    const existing = await this.prisma.xReadLog.findUnique({ where: { shiftId } });
-    if (existing) return existing;
-
+    /*
+      Same bug as generateZRead, same file: the idempotency read ran before the
+      tenant check, so passing another tenant's shiftId returned THEIR shift
+      totals. Ownership is established first now; the idempotency check follows.
+    */
     const shift = await this.prisma.shift.findFirst({
       where: { id: shiftId, tenantId },
     });
     if (!shift) throw new NotFoundException('Shift not found');
+
+    // Idempotency
+    const existing = await this.prisma.xReadLog.findUnique({ where: { shiftId } });
+    if (existing) return existing;
     if (!shift.closedAt) throw new ConflictException('Cannot generate X-Read for an open shift.');
 
     const orders = await this.prisma.order.findMany({

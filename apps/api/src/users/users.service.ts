@@ -12,6 +12,7 @@ import { AuditService } from '../audit/audit.service';
 import { DEFAULT_APP_ACCESS, hasPermission, hasBlockingViolation, detectViolations } from '@repo/shared-types';
 import { CreateUserDto, StaffRole } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { assertPinPolicy } from '../auth/pin-policy';
 import { assertPasswordPolicy } from '../auth/password-policy';
 
 export { CreateUserDto, UpdateUserDto, StaffRole };
@@ -228,7 +229,7 @@ export class UsersService {
         // (every bcrypt hash is salted). Threat model: worst case for a
         // leaked PIN is one staff member punching another's clock — already
         // audit-logged on the TimeEntry row.
-        kioskPin: dto.kioskPin ?? null,
+        kioskPin: dto.kioskPin ? assertPinPolicy(dto.kioskPin) : null,
         appAccess: {
           create: defaultAccess.map((a) => ({
             appCode: a.app,
@@ -365,7 +366,12 @@ export class UsersService {
         // bcrypt-hashed previously — see migration 20260528000000 for why
         // we switched to plaintext. Uniqueness is enforced both here and
         // by the partial unique index users_tenant_kiosk_pin_unique.)
-        ...(dto.kioskPin !== undefined ? { kioskPin: dto.kioskPin } : {}),
+        // Strength-checked on the way in: an owner or MDM setting someone
+        // else's PIN is the same credential as the staff member setting their
+        // own, and "1234" is no safer for being assigned.
+        ...(dto.kioskPin !== undefined
+          ? { kioskPin: dto.kioskPin === null ? null : assertPinPolicy(dto.kioskPin) }
+          : {}),
         ...(dto.personaKey        !== undefined ? { personaKey:        dto.personaKey }                       : {}),
         ...(dto.customPermissions !== undefined ? { customPermissions: dto.customPermissions }                : {}),
         ...(dto.sodOverrides      !== undefined ? { sodOverrides:      dto.sodOverrides as Prisma.InputJsonValue } : {}),

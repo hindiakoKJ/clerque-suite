@@ -13,6 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { SubscriptionPaymentsService } from '../subscription-payments/subscription-payments.service';
+import { assertPinPolicy } from './pin-policy';
 import { assertPasswordPolicy } from './password-policy';
 import { resolveAiQuota } from '../ai/ai-availability';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, PLAN_FEATURES, PLAN_LIMITS, DEFAULT_PLAN_CODE, normalizePlanCode, planFeaturesFor, planLimitsFor } from '@repo/shared-types';
@@ -537,10 +538,10 @@ export class AuthService {
    * collision when it is created than to strand two cashiers mid-shift.
    */
   async setMyPin(userId: string, tenantId: string, pin: string, password: string) {
-    const trimmed = (pin ?? '').trim();
-    if (!/^\d{4,8}$/.test(trimmed)) {
-      throw new BadRequestException('The PIN must be 4 to 8 digits.');
-    }
+    // Shape AND strength. This PIN mints a full session at /auth/pin-login and
+    // resolves tenant-wide at /auth/switch-cashier, so "1234" is not a weak
+    // convenience code -- it is a weak password.
+    const trimmed = assertPinPolicy(pin);
 
     const user = await this.prisma.user.findFirst({
       where:  { id: userId, tenantId },

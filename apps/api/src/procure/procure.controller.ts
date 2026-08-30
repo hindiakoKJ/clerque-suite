@@ -14,9 +14,13 @@ import { ProcureService, AddLineDto, BoughtLineDto } from './procure.service';
  * Clerque Procure.
  *
  * The roles split along who can actually know the thing being recorded.
- * A cashier sees the shortage and adds to the list; only an owner or manager
- * closes the request, records what was paid, and posts it to stock — those
- * three move money and inventory.
+ * A cashier, cook or barista sees the shortage and adds to the list; only an
+ * owner or manager closes the request, records what was paid, and posts it to
+ * stock — those three move money and inventory.
+ *
+ * GENERAL_EMPLOYEE is the kitchen account. It appears on the list-building
+ * routes and nowhere else in this file, which is the whole separation: the
+ * person who notices is not the person who spends.
  */
 @ApiTags('Procure')
 @ApiBearerAuth('access-token')
@@ -25,7 +29,7 @@ import { ProcureService, AddLineDto, BoughtLineDto } from './procure.service';
 export class ProcureController {
   constructor(private readonly procure: ProcureService) {}
 
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get()
   @ApiOperation({ summary: 'List purchase requests' })
   list(
@@ -37,7 +41,7 @@ export class ProcureController {
   }
 
   /** The list being added to right now. Creates one if there is none. */
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Post('open')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Today's open request for this branch" })
@@ -45,7 +49,7 @@ export class ProcureController {
     return this.procure.openRequest(user.tenantId!, body.branchId ?? user.branchId!, user.sub);
   }
 
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.procure.get(user.tenantId!, id);
@@ -55,7 +59,7 @@ export class ProcureController {
    * The list assembles itself from what the shop already knows, rather than
    * from whoever happens to notice.
    */
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Post('pull-low-stock')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Add everything below its reorder level to the open request' })
@@ -63,7 +67,7 @@ export class ProcureController {
     return this.procure.pullLowStock(user.tenantId!, body.branchId ?? user.branchId!, user.sub);
   }
 
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Post(':id/lines')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Add an ingredient to the request' })
@@ -71,7 +75,7 @@ export class ProcureController {
     return this.procure.addLine(user.tenantId!, id, body);
   }
 
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Delete(':id/lines/:lineId')
   @HttpCode(HttpStatus.OK)
   removeLine(

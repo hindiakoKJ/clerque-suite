@@ -31,6 +31,10 @@ interface AppCard {
 const PROCURE_ROLES = new Set([
   'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM',
   'WAREHOUSE_STAFF', 'CASHIER', 'SALES_LEAD',
+  // Cooks and baristas. They hold GENERAL_EMPLOYEE, which is already NONE on
+  // both POS and Ledger, so Procure is the only app they get -- and they are
+  // the people who notice the sugar is nearly out.
+  'GENERAL_EMPLOYEE',
 ]);
 
 const APPS: AppCard[] = [

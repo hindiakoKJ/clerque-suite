@@ -30,7 +30,11 @@ import { useAuthStore } from '@/store/auth';
  * rather than guessed at.
  */
 export const STOCK_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF'];
-export const REQUEST_ROLES = [...STOCK_ROLES, 'CASHIER', 'SALES_LEAD'];
+// GENERAL_EMPLOYEE is the cook/barista account: it can put something on the
+// buy list and nothing else. Read access to the stock screens is deliberately
+// NOT granted here -- those screens carry Create / Edit / Receive controls with
+// no read-only mode, so "let them look" currently means "let them receive".
+export const REQUEST_ROLES = [...STOCK_ROLES, 'CASHIER', 'SALES_LEAD', 'GENERAL_EMPLOYEE'];
 
 function rolesFor(pathname: string): string[] {
   if (pathname.startsWith('/procure/requests')) return REQUEST_ROLES;

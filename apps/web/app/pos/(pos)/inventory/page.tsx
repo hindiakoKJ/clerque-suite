@@ -57,7 +57,16 @@ export default function InventoryPage() {
   const isSupply = (m: RawMaterial) => !!m.category && m.category !== 'INGREDIENT';
 
   // Modal state
-  const [matModal,   setMatModal]   = useState<'create' | 'edit' | 'receive' | null>(null);
+  const [matModal,   setMatModal]   = useState<'create' | 'edit' | 'receive' | 'writeoff' | null>(null);
+  /*
+    Taking stock OFF the shelf for a reason that is not a sale. Until now this
+    could not be done at all — the adjust endpoint only reaches products — so
+    spoiled milk stayed on the books, the recipe kept believing it was there,
+    and the POS kept offering drinks nobody could make.
+  */
+  const [writeOffForm, setWriteOffForm] = useState({
+    branchId: '', quantity: '', reasonCode: 'DAMAGE', note: '',
+  });
   const [editingMat, setEditingMat] = useState<RawMaterial | null>(null);
   const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '' });
   const [receiveForm,setReceiveForm]= useState({
@@ -93,7 +102,10 @@ export default function InventoryPage() {
   const { data: branches = [] } = useQuery<Branch[]>({
     queryKey: ['branches'],
     queryFn: () => api.get('/tenant/branches').then((r) => r.data),
-    enabled: !!matModal && matModal === 'receive',
+    // Both stock-moving modals need it. Gating on 'receive' alone left the
+    // write-off branch picker holding nothing but its placeholder, so the
+    // form could never be submitted.
+    enabled: matModal === 'receive' || matModal === 'writeoff',
     staleTime: 120_000,
   });
 
@@ -151,6 +163,12 @@ export default function InventoryPage() {
     setMatModal('edit');
   }
 
+  function openWriteOffMat(m: RawMaterial) {
+    setEditingMat(m);
+    setWriteOffForm({ branchId: branchId || '', quantity: '', reasonCode: 'DAMAGE', note: '' });
+    setMatModal('writeoff');
+  }
+
   function openReceiveMat(m: RawMaterial) {
     setEditingMat(m);
     setReceiveForm({
@@ -190,6 +208,46 @@ export default function InventoryPage() {
       setMatModal(null);
     } catch (err: unknown) {
       toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to save.');
+    } finally {
+      setMatSaving(false);
+    }
+  }
+
+  async function handleWriteOffMat() {
+    if (!editingMat) return;
+    if (!writeOffForm.branchId) { toast.error('Please select a branch.'); return; }
+    const qty = parseFloat(writeOffForm.quantity);
+    if (!writeOffForm.quantity || isNaN(qty) || qty <= 0) {
+      toast.error('Enter how much is being written off.'); return;
+    }
+    setMatSaving(true);
+    try {
+      const res = await api.post(
+        `/inventory/raw-materials/${editingMat.id}/write-off`,
+        {
+          branchId:   writeOffForm.branchId,
+          quantity:   qty,
+          reasonCode: writeOffForm.reasonCode,
+          note:       writeOffForm.note.trim() || undefined,
+        },
+        // The server requires this: a double-tap on a tablet must not write
+        // the milk off twice, and a write-off is not visible while it happens.
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+      );
+      const d = res.data as { duplicate?: boolean; quantityAfter?: number };
+      if (d.duplicate) {
+        toast.info('That write-off was already recorded.');
+      } else {
+        toast.success(
+          `${qty} ${editingMat.unit} written off — ${d.quantityAfter ?? '?'} ${editingMat.unit} left.`,
+        );
+      }
+      setMatModal(null);
+      qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string | string[] } } })
+        ?.response?.data?.message;
+      toast.error(Array.isArray(msg) ? msg[0] : msg ?? 'Could not record the write-off.');
     } finally {
       setMatSaving(false);
     }
@@ -463,6 +521,13 @@ export default function InventoryPage() {
                             Receive stock
                           </button>
                           <button
+                            onClick={() => openWriteOffMat(m)}
+                            className="text-xs font-medium px-2 py-1 rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            title="Spoiled, damaged or missing"
+                          >
+                            Write off
+                          </button>
+                          <button
                             onClick={() => openEditMat(m)}
                             className="text-muted-foreground hover:text-[var(--accent)] transition-colors"
                             title="Edit"
@@ -590,6 +655,98 @@ export default function InventoryPage() {
       )}
 
       {/* ── Receive Stock Modal ───────────────────────────────────────────────── */}
+      {matModal === 'writeoff' && editingMat && (
+        <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="px-6 py-4 border-b border-border">
+              <h2 className="font-semibold text-foreground">Write off stock</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Removing <span className="font-medium text-foreground">{editingMat.name}</span> for a
+                reason that is not a sale.
+              </p>
+            </div>
+            <div className="space-y-4 p-6">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Branch</label>
+                <select
+                  value={writeOffForm.branchId}
+                  onChange={(e) => setWriteOffForm((f) => ({ ...f, branchId: e.target.value }))}
+                  className={INPUT_CLS}
+                >
+                  <option value="">— select —</option>
+                  {branches.map((br) => <option key={br.id} value={br.id}>{br.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  How much? ({editingMat.unit}) <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="number" min="0" step="0.0001" inputMode="decimal"
+                  value={writeOffForm.quantity}
+                  onChange={(e) => setWriteOffForm((f) => ({ ...f, quantity: e.target.value }))}
+                  className={INPUT_CLS}
+                  placeholder="0"
+                  autoFocus
+                />
+                {editingMat.stockQty != null && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {editingMat.stockQty.toLocaleString()} {editingMat.unit} on hand.
+                  </p>
+                )}
+              </div>
+              <div>
+                {/*
+                  Required, and not free text. The reason decides which expense
+                  account the loss lands in -- spoilage is not cost of sale, and
+                  a shop that cannot tell them apart cannot see waste getting
+                  worse.
+                */}
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  What happened? <span className="text-red-400">*</span>
+                </label>
+                <select
+                  value={writeOffForm.reasonCode}
+                  onChange={(e) => setWriteOffForm((f) => ({ ...f, reasonCode: e.target.value }))}
+                  className={INPUT_CLS}
+                >
+                  <option value="DAMAGE">Spoiled or damaged</option>
+                  <option value="EXPIRY">Past its date</option>
+                  <option value="THEFT">Missing</option>
+                  <option value="SAMPLE">Given away / sampled</option>
+                  <option value="INTERNAL_USE">Staff or training use</option>
+                  <option value="OTHER">Something else</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Note</label>
+                <input
+                  value={writeOffForm.note}
+                  onChange={(e) => setWriteOffForm((f) => ({ ...f, note: e.target.value }))}
+                  className={INPUT_CLS}
+                  placeholder="Bag split in storage"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-6 py-4">
+              <button
+                onClick={() => setMatModal(null)}
+                className="rounded-lg px-4 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleWriteOffMat}
+                disabled={matSaving}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+              >
+                {matSaving ? 'Recording…' : 'Write it off'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {matModal === 'receive' && editingMat && (
         <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4">
           <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm">

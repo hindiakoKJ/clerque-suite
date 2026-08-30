@@ -23,7 +23,10 @@ export default function ProcureHome() {
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? undefined;
 
-  const { data: low = [], isLoading: lowLoading } = useQuery<LowRow[]>({
+  // isError matters as much as the count here: a failed read used to fall back
+  // to [] and render the all-clear, which is the one message that stops someone
+  // going to look at the shelf.
+  const { data: low = [], isLoading: lowLoading, isError: lowError } = useQuery<LowRow[]>({
     queryKey: ['procure-low', branchId],
     queryFn:  () => api.get('/inventory/low-stock', { params: { branchId } }).then((r) => r.data),
     enabled:  !!user,
@@ -115,6 +118,8 @@ export default function ProcureHome() {
         <div className="flex items-center gap-3">
           {lowLoading ? (
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          ) : lowError ? (
+            <AlertTriangle className="h-5 w-5 shrink-0 text-muted-foreground" />
           ) : shortages > 0 ? (
             <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
           ) : (
@@ -124,12 +129,16 @@ export default function ProcureHome() {
             <div className="text-sm font-semibold">
               {lowLoading
                 ? 'Checking stock…'
+                : lowError
+                ? 'Could not check stock levels'
                 : shortages > 0
                   ? `${shortages} item${shortages === 1 ? '' : 's'} below the reorder level`
                   : 'Nothing is below its reorder level'}
             </div>
             <div className="mt-0.5 text-xs text-muted-foreground">
-              {shortages > 0
+              {lowError
+                ? 'Open the request and check by hand before anyone leaves for the market.'
+                : shortages > 0
                 ? 'Add them to the request before anyone leaves for the market.'
                 : 'Reorder levels are set per ingredient under Stock on hand.'}
             </div>

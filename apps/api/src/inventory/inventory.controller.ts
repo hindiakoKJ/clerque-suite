@@ -90,8 +90,17 @@ export class InventoryController {
     );
   }
 
-  /** Items at or below their low-stock threshold */
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+  /**
+   * Items at or below their low-stock threshold.
+   *
+   * GENERAL_EMPLOYEE included: this drives the shortage banner on the Procure
+   * home, and without it the 403 fell back to an empty array, so a cook was
+   * told "Nothing is below its reorder level" when the app had in fact read
+   * nothing at all. A wrong all-clear is worse than an error -- it is the one
+   * message that stops someone looking.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF',
+         'FINANCE_LEAD', 'GENERAL_EMPLOYEE')
   @Get('low-stock')
   getLowStock(@CurrentUser() user: JwtPayload, @Query('branchId') branchId: string) {
     return this.inventoryService.getLowStock(user.tenantId!, branchId ?? user.branchId!);

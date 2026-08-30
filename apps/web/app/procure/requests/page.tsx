@@ -80,6 +80,15 @@ export default function ProcurePage() {
     and nobody could find it. Asked, not assumed.
   */
   const [paidBy, setPaidBy] = useState<'CASH' | 'OWNER_FUNDED'>('OWNER_FUNDED');
+
+  /*
+    Sending, recording the shopping and posting to stock are owner/manager
+    actions at the API (procure.controller.ts). The buttons were shown to
+    everyone, so a barista's ONLY primary action was one that always came back
+    "Insufficient permissions" in a red toast. Saying who does it next is more
+    useful than a button that cannot work.
+  */
+  const canDecide = !!user && ['BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'].includes(user.role);
   const [bought, setBought]     = useState<Record<string, { packs: string; size: string; cost: string; brand: string }>>({});
 
   /*
@@ -581,7 +590,16 @@ export default function ProcurePage() {
 
       {/* whatever this request wants next */}
       <div className="sticky bottom-4">
-        {req.status === 'OPEN' && (
+        {!canDecide && req.status !== 'RECEIVED' && req.status !== 'CANCELLED' && (
+          <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
+            {req.status === 'OPEN'
+              ? 'Keep adding what you need. The owner or manager sends this list when the shift cuts off.'
+              : req.status === 'SENT'
+                ? 'Sent — waiting for whoever shops to record what they bought.'
+                : 'Bought — waiting for the owner or manager to add it to stock.'}
+          </p>
+        )}
+        {req.status === 'OPEN' && canDecide && (
           <button
             onClick={() => send.mutate()}
             disabled={send.isPending}
@@ -591,7 +609,7 @@ export default function ProcurePage() {
             Send to the owners
           </button>
         )}
-        {req.status === 'SENT' && (
+        {req.status === 'SENT' && canDecide && (
           <button
             onClick={() => saveBought.mutate()}
             disabled={saveBought.isPending}
@@ -601,7 +619,7 @@ export default function ProcurePage() {
             Save what was bought
           </button>
         )}
-        {req.status === 'BOUGHT' && (
+        {req.status === 'BOUGHT' && canDecide && (
           <div className="mb-3 rounded-xl border border-border bg-card p-3">
             <p className="text-xs font-medium">Who paid for this?</p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -629,7 +647,7 @@ export default function ProcurePage() {
             </div>
           </div>
         )}
-        {req.status === 'BOUGHT' && (
+        {req.status === 'BOUGHT' && canDecide && (
           <button
             onClick={() => receive.mutate()}
             disabled={receive.isPending}

@@ -379,11 +379,23 @@ export class InventoryService {
           product: { select: { id: true, name: true, sku: true } },
         },
       }),
-      this.prisma.rawMaterialInventory.findMany({
-        where:  { branchId, rawMaterial: { tenantId, isActive: true } },
+      /*
+        Every ingredient the shop stocks, not just the ones that already have
+        a row at this branch.
+
+        Reading RawMaterialInventory meant an ingredient never yet received
+        here was invisible to the low-stock check — so a shop with an EMPTY
+        stockroom was told "Nothing is below its reorder level", and Check
+        stock pulled nothing onto the buy list. A missing row is not "does not
+        exist", it is zero, and zero is as low as it gets.
+
+        Supplies count too: bleach running out stops the shop the same way.
+      */
+      this.prisma.rawMaterial.findMany({
+        where:  { tenantId, isActive: true },
         select: {
-          quantity: true,
-          rawMaterial: { select: { id: true, name: true, unit: true, lowStockAlert: true } },
+          id: true, name: true, unit: true, lowStockAlert: true,
+          inventory: { where: { branchId }, select: { quantity: true } },
         },
       }),
     ]);
@@ -404,17 +416,18 @@ export class InventoryService {
           isLowStock:    true,
         })),
       ...ingredients
-        .filter((r) => r.rawMaterial.lowStockAlert != null
-                    && Number(r.quantity) <= Number(r.rawMaterial.lowStockAlert))
+        .map((r) => ({ ...r, onHand: Number(r.inventory[0]?.quantity ?? 0) }))
+        .filter((r) => r.lowStockAlert != null
+                    && r.onHand <= Number(r.lowStockAlert))
         .map((r) => ({
           kind:          'INGREDIENT' as const,
-          id:            r.rawMaterial.id,
-          name:          r.rawMaterial.name,
+          id:            r.id,
+          name:          r.name,
           sku:           null,
-          unit:          r.rawMaterial.unit,
-          quantity:      Number(r.quantity),
-          lowStockAlert: Number(r.rawMaterial.lowStockAlert),
-          shortBy:       Number(r.rawMaterial.lowStockAlert) - Number(r.quantity),
+          unit:          r.unit,
+          quantity:      r.onHand,
+          lowStockAlert: Number(r.lowStockAlert),
+          shortBy:       Number(r.lowStockAlert) - r.onHand,
           isLowStock:    true,
         })),
     ];

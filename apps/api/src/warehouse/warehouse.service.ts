@@ -261,13 +261,41 @@ export class WarehouseService {
       const branch = await tx.branch.findFirst({ where: { id: branchId, tenantId } });
       if (!branch) throw new BadRequestException('Branch not found.');
 
-      const inv = await tx.rawMaterialInventory.findMany({
-        where:  { tenantId, branchId },
-        select: { rawMaterialId: true, quantity: true },
+      /*
+        Count what the shop STOCKS, not what the system already has a row for.
+
+        Seeding from RawMaterialInventory meant a shop that had never received
+        an ingredient had no line for it, and a shop that had never received
+        ANYTHING got "No raw materials in inventory at this branch" and could
+        not open a count at all. That is precisely the shop doing its first
+        count: 53 ingredients on the shelf, zero inventory rows, and the
+        documented route to opening stock refusing to start. The upsert added
+        inside postCycleCount to handle exactly that case was unreachable.
+
+        An ingredient with no row is not "does not exist", it is zero — which
+        is also the honest expected figure for a first count.
+
+        Supplies are included deliberately. They are expensed on receipt so a
+        variance posts nothing to the books, but a shop still needs to know how
+        much bleach is on the shelf.
+      */
+      const materials = await tx.rawMaterial.findMany({
+        where:  { tenantId, isActive: true },
+        select: { id: true },
+        orderBy: { name: 'asc' },
       });
-      if (!inv.length) {
-        throw new BadRequestException('No raw materials in inventory at this branch.');
+      if (!materials.length) {
+        throw new BadRequestException(
+          'There are no ingredients to count yet. Add them under Stock on hand first.',
+        );
       }
+
+      const onHand = new Map(
+        (await tx.rawMaterialInventory.findMany({
+          where:  { tenantId, branchId },
+          select: { rawMaterialId: true, quantity: true },
+        })).map((i) => [i.rawMaterialId, i.quantity]),
+      );
 
       const countNumber = await this.nextCountNumber(tx, tenantId);
       return tx.cycleCount.create({
@@ -275,11 +303,14 @@ export class WarehouseService {
           tenantId, branchId, countNumber,
           status: 'OPEN', notes: notes ?? null, startedById: userId,
           lines: {
-            create: inv.map((i) => ({
-              rawMaterialId: i.rawMaterialId,
-              expectedQty:   i.quantity,
-              countedQty:    i.quantity, // operator updates this
-            })),
+            create: materials.map((m) => {
+              const qty = onHand.get(m.id) ?? new Prisma.Decimal(0);
+              return {
+                rawMaterialId: m.id,
+                expectedQty:   qty,
+                countedQty:    qty, // operator updates this
+              };
+            }),
           },
         },
         include: { lines: { include: { rawMaterial: { select: { name: true, unit: true } } } } },

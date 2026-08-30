@@ -26,9 +26,19 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
       },
       vendor: { findMany: jest.fn().mockResolvedValue(opts.vendors ?? []) },
       branch: { findUnique: jest.fn().mockResolvedValue({ name: 'Main Branch' }) },
+      /*
+        getLowStock reads RAW MATERIALS with their branch stock attached, not
+        inventory rows — an ingredient never yet received at this branch has no
+        inventory row, and reading only rows that exist told an empty stockroom
+        it was fine. The fixtures below stay in the old shape because they read
+        well; this reshapes them into what the query returns.
+      */
       rawMaterial: {
         findMany: jest.fn().mockResolvedValue(
-          (opts.ingredients ?? []).map((r: any) => ({ name: r.rawMaterial.name }))),
+          (opts.ingredients ?? []).map((r: any) => ({
+            ...r.rawMaterial,
+            inventory: r.quantity == null ? [] : [{ quantity: r.quantity }],
+          }))),
       },
     };
     // getLowStock is a pure read and never reaches the period service
@@ -109,16 +119,35 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
     expect(JSON.stringify(out)).not.toContain('42.50');
   });
 
-  it('scopes ingredients to the branch and the tenant', async () => {
-    // rawMaterialInventory has no tenantId of its own — it must be reached
-    // through the raw material, or one shop reads another's stock.
+  it('scopes ingredients to the tenant, and their stock to the branch', async () => {
     const { svc, prisma } = build({ ingredients: [] });
     await svc.getLowStock(TENANT, BRANCH);
 
-    const where = prisma.rawMaterialInventory.findMany.mock.calls[0][0].where;
-    expect(where.branchId).toBe(BRANCH);
-    expect(where.rawMaterial.tenantId).toBe(TENANT);
-    expect(where.rawMaterial.isActive).toBe(true);
+    const call = prisma.rawMaterial.findMany.mock.calls[0][0];
+    expect(call.where.tenantId).toBe(TENANT);
+    expect(call.where.isActive).toBe(true);
+    // The stock join is what carries the branch — without it one shop would
+    // read another branch's quantities.
+    expect(call.select.inventory.where.branchId).toBe(BRANCH);
+  });
+
+  it('treats an ingredient with no stock row at all as zero, not as absent', async () => {
+    /*
+      The go-live case. A shop that has never received an ingredient has no
+      RawMaterialInventory row for it, and reading only existing rows reported
+      "nothing is below its reorder level" on an empty stockroom — while Check
+      stock pulled nothing onto the buy list.
+    */
+    const neverReceived = {
+      quantity: null,
+      rawMaterial: { id: 'rm9', name: 'Vanilla Syrup', unit: 'ml', lowStockAlert: '500' },
+    };
+    const { svc } = build({ ingredients: [neverReceived] });
+    const out = await svc.getLowStock(TENANT, BRANCH);
+
+    expect(out.map((r: any) => r.name)).toEqual(['Vanilla Syrup']);
+    expect(out[0].quantity).toBe(0);
+    expect(out[0].shortBy).toBe(500);
   });
 
   // ── the printable version ────────────────────────────────────────────────

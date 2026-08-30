@@ -40,7 +40,15 @@ interface PayrollSummary {
   recentRuns: {
     id: string;
     label: string;
-    status: 'COMPLETED' | 'PROCESSING' | 'DRAFT' | 'FAILED';
+    /*
+      The real PayRunStatus (schema.prisma) is DRAFT | COMPLETED | LOCKED |
+      CANCELLED, and the API hands the raw Prisma value straight through
+      (payroll.service.ts: `status: r.status as string`). This type claimed
+      PROCESSING and FAILED -- which do not exist -- while omitting LOCKED and
+      CANCELLED, which do. Typed as a plain string because the server is the
+      authority here and a narrower lie is what caused the crash.
+    */
+    status: string;
     periodEnd: string;
     totalNet: number;
     employeeCount: number;
@@ -48,14 +56,27 @@ interface PayrollSummary {
 }
 
 const RUN_STATUS_STYLES: Record<
-  PayrollSummary['recentRuns'][number]['status'],
+  string,
   { tone: 'success' | 'warn' | 'default' | 'danger'; label: string }
 > = {
-  COMPLETED:  { tone: 'success', label: 'Completed'  },
-  PROCESSING: { tone: 'warn',    label: 'Processing' },
+  // PayRunStatus is DRAFT | COMPLETED | LOCKED | CANCELLED (schema.prisma).
+  // LOCKED and CANCELLED were missing, so RUN_STATUS_STYLES[run.status] came
+  // back undefined and reading .tone off it threw -- locking a pay run, the
+  // documented final step that posts the salary GL, white-screened this whole
+  // dashboard on the next visit. PROCESSING and FAILED are not statuses the
+  // API can return; kept only so an older payload cannot reintroduce the crash.
   DRAFT:      { tone: 'default', label: 'Draft'      },
+  COMPLETED:  { tone: 'success', label: 'Completed'  },
+  LOCKED:     { tone: 'success', label: 'Locked'     },
+  CANCELLED:  { tone: 'danger',  label: 'Cancelled'  },
+  PROCESSING: { tone: 'warn',    label: 'Processing' },
   FAILED:     { tone: 'danger',  label: 'Failed'     },
 };
+
+/** Never let an unknown status take the page down again. */
+const runStyle = (status: string) =>
+  RUN_STATUS_STYLES[status]
+  ?? { tone: 'default' as const, label: status.charAt(0) + status.slice(1).toLowerCase() };
 
 function Skeleton({ className = '' }: { className?: string }) {
   return <div className={`bg-muted animate-pulse rounded ${className}`} />;
@@ -265,7 +286,7 @@ export default function PayrollDashboard() {
             ) : (
               <div className="divide-y divide-border">
                 {data.recentRuns.map((run) => {
-                  const s = RUN_STATUS_STYLES[run.status];
+                  const s = runStyle(run.status);
                   return (
                     <div key={run.id} className="px-5 py-3.5 flex items-center justify-between gap-3">
                       <div className="min-w-0">

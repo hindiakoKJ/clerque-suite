@@ -20,6 +20,7 @@ interface Employee {
   status: 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
   startDate: string;
   basicRate: number;
+  salaryType?: string | null;
   shiftStart?: string | null;
   shiftEnd?:   string | null;
 }
@@ -100,7 +101,14 @@ export default function PayrollStaffPage() {
   function openEdit(emp: Employee) {
     setEditingEmp(emp);
     setEditRate(emp.basicRate ? String(emp.basicRate) : '');
-    setEditType('MONTHLY');
+    /*
+      Was hard-coded to 'MONTHLY'. The modal always opened showing Monthly no
+      matter what the employee actually was, and the save always sent that
+      value -- so editing an hourly barista's shift times quietly converted
+      them to monthly and their pay was computed on the wrong basis from then
+      on. Nothing on screen said it had happened.
+    */
+    setEditType((emp.salaryType as SalaryType) ?? 'MONTHLY');
     setEditHired(emp.startDate ? emp.startDate.slice(0, 10) : '');
     setEditShiftStart(emp.shiftStart ?? '');
     setEditShiftEnd(emp.shiftEnd ?? '');

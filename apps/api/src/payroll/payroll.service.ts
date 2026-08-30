@@ -29,6 +29,10 @@ export interface EmployeeDto {
   status:      'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
   startDate:   string | null; // ISO date string
   basicRate:   number | null;
+  /// How basicRate is expressed. The staff editor needs this: without it the
+  /// modal could only guess, and it guessed MONTHLY for everyone -- silently
+  /// converting hourly and daily staff every time someone edited a shift time.
+  salaryType:  string | null;
   shiftStart:  string | null; // "HH:mm" 24h, set on hire
   shiftEnd:    string | null;
 }
@@ -307,6 +311,7 @@ export class PayrollService {
         isActive:       true,
         hiredAt:        true,
         salaryRate:     true,
+        salaryType:     true,
         shiftStart:     true,
         shiftEnd:       true,
         branch:         { select: { name: true } },
@@ -324,6 +329,7 @@ export class PayrollService {
       status:     u.isActive ? 'ACTIVE' : 'INACTIVE',
       startDate:  u.hiredAt ? u.hiredAt.toISOString().slice(0, 10) : null,
       basicRate:  u.salaryRate !== null ? Number(u.salaryRate) : null,
+      salaryType: u.salaryType ?? null,
       shiftStart: u.shiftStart ?? null,
       shiftEnd:   u.shiftEnd   ?? null,
     }));

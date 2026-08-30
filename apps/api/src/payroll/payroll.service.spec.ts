@@ -86,6 +86,49 @@ describe('PayrollService — Sprint 3 endpoints', () => {
     svc = module.get(PayrollService);
   });
 
+  // ── getEmployees ──────────────────────────────────────────────────────────
+  describe('getEmployees', () => {
+    /**
+     * The staff editor needs to know how someone is paid before it offers to
+     * change it. Without salaryType on the payload the modal could only guess,
+     * and it guessed MONTHLY for everybody — so editing an hourly barista's
+     * shift times silently converted them to monthly and every payslip after
+     * that was computed on the wrong basis, with nothing on screen to say so.
+     */
+    it('returns the salaryType for each employee, not just the rate', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        {
+          id: 'u1', name: 'Anna', email: 'anna@cafe.ph', phone: null,
+          position: 'Barista', isActive: true, hiredAt: new Date('2026-01-15'),
+          salaryRate: 85, salaryType: 'HOURLY',
+          shiftStart: '07:00', shiftEnd: '16:00', branch: { name: 'Main' },
+        },
+      ]);
+
+      const [anna] = await svc.getEmployees('t1');
+
+      expect(anna.salaryType).toBe('HOURLY');
+      expect(anna.basicRate).toBe(85);
+    });
+
+    it('reports a missing salaryType as null rather than inventing one', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        {
+          id: 'u2', name: 'Ben', email: 'ben@cafe.ph', phone: null,
+          position: 'Cook', isActive: true, hiredAt: null,
+          salaryRate: null, salaryType: null,
+          shiftStart: null, shiftEnd: null, branch: null,
+        },
+      ]);
+
+      const [ben] = await svc.getEmployees('t1');
+
+      // The client falls back to MONTHLY for display, but the server must not
+      // pretend to know — otherwise the guess becomes the stored truth on save.
+      expect(ben.salaryType).toBeNull();
+    });
+  });
+
   // ── editEmployeeSalary ────────────────────────────────────────────────────
   describe('editEmployeeSalary', () => {
     it('updates the user with provided fields', async () => {

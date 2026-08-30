@@ -90,8 +90,15 @@ export default function PayrollReportsPage() {
   });
 
   // ── Derived analytics ─────────────────────────────────────────────────
+  /*
+    LOCKED is what a run becomes AFTER it is finished and its salary GL is
+    posted -- it is more final than COMPLETED, not less. Counting only
+    COMPLETED meant every YTD figure on this page fell to zero as soon as the
+    owner did the thing the checklist tells them to do, and the year's payroll
+    looked like it had never happened.
+  */
   const completedRuns = useMemo(
-    () => allRuns.filter((r) => r.status === 'COMPLETED'),
+    () => allRuns.filter((r) => r.status === 'COMPLETED' || r.status === 'LOCKED'),
     [allRuns],
   );
 

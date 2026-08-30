@@ -366,7 +366,7 @@ export class WarehouseService {
    * Post the count: applies variances to RawMaterialInventory and writes
    * InventoryLog rows. Skips lines with zero variance.
    */
-  async postCycleCount(tenantId: string, id: string, userId: string) {
+  async postCycleCount(tenantId: string, id: string, userId: string, isOpeningBalance = false) {
     return this.prisma.$transaction(async (tx) => {
       const c = await tx.cycleCount.findFirst({
         where:   { id, tenantId },
@@ -458,12 +458,20 @@ export class WarehouseService {
                 unitCost,
                 totalValue:      Math.abs(varianceQty) * unitCost * (varianceQty < 0 ? -1 : 1),
                 branchId:        c.branchId,
-                reasonCode:      'COUNT_CORRECTION',
+                /*
+                  An opening count is not a correction — nothing was wrong.
+                  It is the owner putting goods into the business, so it
+                  credits Owner's Capital rather than reversing a write-off
+                  that never happened.
+                */
+                reasonCode:      isOpeningBalance ? 'OPENING_BALANCE' : 'COUNT_CORRECTION',
                 referenceNumber: c.countNumber ?? null,
                 // Legacy fields the journal handler reads
                 productName:     line.rawMaterial?.name ?? 'Ingredient',
-                adjustmentType:  'COUNT_CORRECTION',
-                reason:          `Physical count${c.countNumber ? ` ${c.countNumber}` : ''}`,
+                adjustmentType:  isOpeningBalance ? 'OPENING_BALANCE' : 'COUNT_CORRECTION',
+                reason:          isOpeningBalance
+                  ? `Opening stock${c.countNumber ? ` ${c.countNumber}` : ''}`
+                  : `Physical count${c.countNumber ? ` ${c.countNumber}` : ''}`,
               } as unknown as Prisma.JsonObject,
             },
           });

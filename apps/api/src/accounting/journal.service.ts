@@ -790,16 +790,28 @@ export class JournalService {
           to, so a shop that miscounts one month and corrects the next nets
           out to nothing rather than accumulating phantom equity.
         */
-        const isCountCorrection =
-          String(payload['reasonCode'] ?? '').toUpperCase() === 'COUNT_CORRECTION';
+        const reasonUpper = String(payload['reasonCode'] ?? '').toUpperCase();
+        const isCountCorrection = reasonUpper === 'COUNT_CORRECTION';
+        /*
+          Opening stock is an owner contribution, not a correction.
+
+          A shop establishing its first figures is not fixing an error --
+          nothing was ever wrong. Routed as a correction it credits 5060
+          Inventory Write-off, which is a NEGATIVE expense: a shop opening with
+          PHP 48,000 of stock books PHP 48,000 of invented profit into the
+          first income statement the BIR ever sees.
+        */
+        const isOpeningBalance = reasonUpper === 'OPENING_BALANCE';
 
         if (quantity > 0) {
           const creditAccount =
+            isOpeningBalance           ? '3010' :  // Owner's Capital — the owner put stock in
             isCountCorrection          ? '5060' :  // Inventory Write-off — reverses a shortage
             paymentMethod === 'CASH'   ? '1010' :  // Cash on Hand — supplier paid in cash today
             paymentMethod === 'CREDIT' ? '2010' :  // Accounts Payable — Net-30 / accrual
                                          '3010';   // Owner's Capital — owner funded the stock
           const creditDescription =
+            isOpeningBalance           ? `Opening stock — ${productName}` :
             isCountCorrection          ? `Count correction — ${productName} found` :
             paymentMethod === 'CASH'   ? `Cash purchase — ${productName}` :
             paymentMethod === 'CREDIT' ? `Supplier credit — ${productName}` :

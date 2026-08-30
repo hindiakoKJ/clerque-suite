@@ -74,7 +74,10 @@ export class InventoryReportsService {
 
     // Receipts in window (lot rows with receivedAt between from/to).
     const lots = await this.prisma.rawMaterialLot.findMany({
-      where:  { tenantId, branchId, receivedAt: { gte: fromD, lte: toD } },
+      // Purchases only. A write-off's sentinel lot carries a negative
+      // qtyReceived to hold its idempotency reference; netting it against
+      // receipts understates what the shop actually bought in the period.
+      where:  { tenantId, branchId, qtyReceived: { gt: 0 }, receivedAt: { gte: fromD, lte: toD } },
       select: { rawMaterialId: true, qtyReceived: true },
     });
     const receiptsByMat = new Map<string, number>();

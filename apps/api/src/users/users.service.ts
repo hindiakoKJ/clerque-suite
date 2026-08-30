@@ -9,7 +9,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
-import { DEFAULT_APP_ACCESS, hasPermission, hasBlockingViolation, detectViolations } from '@repo/shared-types';
+import { DEFAULT_APP_ACCESS, hasPermission, hasBlockingViolation, detectViolations, effectivePermissions } from '@repo/shared-types';
 import { CreateUserDto, StaffRole } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { assertPinPolicy } from '../auth/pin-policy';
@@ -339,8 +339,21 @@ export class UsersService {
         // shared-types side); detectViolations validates against its own list.
         const finalRole   = (dto.role ?? target.role) as unknown as Parameters<typeof hasBlockingViolation>[0];
         const finalCustom = (dto.customPermissions ?? target.customPermissions) as Parameters<typeof hasBlockingViolation>[1];
-        if (hasBlockingViolation(finalRole, finalCustom)) {
-          const violations = detectViolations(finalRole, finalCustom).filter((v) => v.rule.severity === 'BLOCK');
+        /*
+          Judge what the user can ACTUALLY do: the role's own permissions plus
+          the extras granted on top.
+
+          This passed only the override array. Every SOD rule fires when ALL of
+          its conflicting permissions are present together, so granting a
+          CASHIER a permission that conflicts with one the CASHIER role already
+          carries was evaluated against a one-element set, matched nothing, and
+          saved clean. The staff editor built the correct union and warned in
+          the browser — so the two disagreed, and the lenient one was the
+          server, which is the one that decides.
+        */
+        const finalPerms = effectivePermissions(finalRole, finalCustom);
+        if (hasBlockingViolation(finalRole, finalPerms)) {
+          const violations = detectViolations(finalRole, finalPerms).filter((v) => v.rule.severity === 'BLOCK');
           throw new BadRequestException({
             code: 'SOD_BLOCK',
             message: `Permission change rejected — Segregation of Duties violation: ${violations.map((v) => v.rule.key).join(', ')}`,

@@ -111,7 +111,24 @@ export class ProcureService {
     return this.prisma.purchaseRequestLine.create({
       data: {
         purchaseRequestId: requestId,
-        lineNumber:        `${req.requestNumber}-${String(req.lines.length + 1).padStart(2, '0')}`,
+        /*
+          Derive the suffix from the highest one used, not from how many lines
+          there are. Removing line 02 of three left a count of 2, so the next
+          add produced -03 again -- a duplicate control number on a request,
+          and that number is the idempotency key the receive relies on to know
+          a line has already been posted.
+        */
+        lineNumber:        `${req.requestNumber}-${String(
+          // Never below the line count either: a row whose number cannot be
+          // parsed must not let the next one collide with an existing suffix.
+          Math.max(
+            req.lines.length,
+            req.lines.reduce((max, l) => {
+              const n = parseInt(String(l.lineNumber ?? '').slice(-2), 10);
+              return Number.isFinite(n) && n > max ? n : max;
+            }, 0),
+          ) + 1,
+        ).padStart(2, '0')}`,
         rawMaterialId:     dto.rawMaterialId,
         qtyRequested:      new Prisma.Decimal(dto.qtyRequested),
         shortBy:           dto.shortBy != null ? new Prisma.Decimal(dto.shortBy) : null,
@@ -152,7 +169,21 @@ export class ProcureService {
       const shortBy = Number(row['shortBy'] ?? 0);
       if (!(shortBy > 0)) continue;
       if (req.lines.some((l) => l.rawMaterialId === rawMaterialId)) continue;
-      await this.addLine(tenantId, req.id, { rawMaterialId, qtyRequested: shortBy, shortBy });
+      /*
+        Buy PAST the line, not exactly to it.
+
+        The low-stock test is `quantity <= lowStockAlert`, so restoring stock to
+        exactly the reorder level leaves the item still flagged: it reappears on
+        the next Check stock, gets bought again, and never clears. A reorder
+        level is the point at which you buy, not the amount you want on the
+        shelf — so ask for enough to get above it and leave some cover.
+
+        Doubling the shortfall is a deliberately simple rule. A real
+        reorder-quantity per ingredient is worth having, but guessing one is
+        worse than a rule the owner can see and override on the line.
+      */
+      const qtyRequested = shortBy * 2;
+      await this.addLine(tenantId, req.id, { rawMaterialId, qtyRequested, shortBy });
       added++;
     }
     return { requestId: req.id, requestNumber: req.requestNumber, added };
@@ -299,6 +330,21 @@ export class ProcureService {
     if (req.status === 'RECEIVED') {
       throw new BadRequestException('This request is already in stock and cannot be cancelled.');
     }
+    /*
+      A request can be PARTLY received -- some lines post, one fails on a closed
+      period -- and its status stays BOUGHT rather than RECEIVED so the failures
+      stay visible. Cancelling then hid lines whose stock was already on the
+      shelf and whose journal entries were already posted, leaving a CANCELLED
+      request that had genuinely moved inventory.
+    */
+    const received = req.lines.filter((l) => l.receivedAt != null);
+    if (received.length > 0) {
+      throw new BadRequestException(
+        `${received.length} line${received.length === 1 ? ' is' : 's are'} already in stock `
+        + `(${received.map((l) => l.rawMaterial?.name ?? l.lineNumber).join(', ')}), so this `
+        + 'request cannot be cancelled. Post the rest, or write off what was received.',
+      );
+    }
     return this.prisma.purchaseRequest.update({
       where: { id: requestId }, data: { status: 'CANCELLED' }, include: this.lineInclude(),
     });
@@ -407,7 +453,15 @@ export class ProcureService {
 
   /** REQ-YYYYMMDD-NNN, sequential within the day so it reads as a date. */
   private async nextNumber(tenantId: string): Promise<string> {
-    const today  = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    /*
+      The shop's date, not UTC. Manila is UTC+8, so toISOString() before 08:00
+      local stamps YESTERDAY -- and the morning shift is exactly when someone
+      opens the day's buy list. A request numbered for the previous day is
+      confusing on its own and wrong when it is used to reconcile a delivery.
+    */
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date()).replace(/-/g, '');
     const prefix = `REQ-${today}-`;
     const last = await this.prisma.purchaseRequest.findFirst({
       where:   { tenantId, requestNumber: { startsWith: prefix } },

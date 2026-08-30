@@ -120,9 +120,23 @@ export class WarehouseController {
 
   @ApiOperation({ summary: 'Post the count — applies variances to inventory' })
   @Roles(...WarehouseController.WAREHOUSE_OPS)
+  /**
+   * `isOpeningBalance` changes where the value goes, not what the count says.
+   *
+   * A shop establishing its FIRST stock figures is not correcting an error —
+   * nothing was ever wrong. The stock is the owner putting goods into the
+   * business, so it credits Owner's Capital. Treating it as a correction
+   * credits 5060 Inventory Write-off, which is a NEGATIVE expense: on a shop
+   * opening with PHP 48,000 of stock that is PHP 48,000 of invented profit
+   * flowing straight into the first BIR-facing income statement.
+   */
   @Post('cycle-counts/:id/post')
   @HttpCode(HttpStatus.OK)
-  postCycleCount(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.svc.postCycleCount(user.tenantId!, id, user.sub);
+  postCycleCount(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body?: { isOpeningBalance?: boolean },
+  ) {
+    return this.svc.postCycleCount(user.tenantId!, id, user.sub, body?.isOpeningBalance === true);
   }
 }

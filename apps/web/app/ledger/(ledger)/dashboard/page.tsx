@@ -422,14 +422,26 @@ export default function LedgerDashboardPage() {
                 icon={Inbox}
                 onClick={() => router.push('/ledger/expense-approvals')}
               />
-              <MetricCard
-                label="SOD Overrides (30d)"
-                value={String(data.control.sodOverridesLast30d)}
-                sub="Times an owner overrode a Segregation-of-Duties warning."
-                severity={sev.sodOverride}
-                icon={ShieldAlert}
-                onClick={() => router.push('/settings/sod-violations')}
-              />
+              {/*
+                REMOVED: the SOD Overrides tile.
+
+                It read zero and showed green because nothing is instrumented,
+                not because the shop was clean. User.sodOverrides is written at
+                user creation and read nowhere; the staff form never sends it;
+                the permission editor evaluates its warning entirely in the
+                browser. So the counter could only ever be 0, and a control
+                tile that can only say "fine" is worse than no tile — it is an
+                assurance nobody earned, on the one screen an owner checks to
+                see whether anything needs attention.
+
+                Not "fixed" by wiring it up, because there is no override
+                mechanism to instrument. If preventive SOD is ever built, the
+                tile comes back with something behind it. Until then the honest
+                display is nothing.
+
+                The counter still exists in the API and the export, so no data
+                is lost — only the false green.
+              */}
               <PosOnly enabled={posEnabled}>
                 <MetricCard
                   label="Products Missing Cost"

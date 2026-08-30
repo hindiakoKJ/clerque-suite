@@ -66,7 +66,7 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
 
   // ── Tax Assets ──────────────────────────────────────────────────────────────
   // Input VAT: creditable against Output VAT; BIR Form 2550Q Schedule 4
-  { code: '1040', name: 'Input VAT',                                 type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '1040', name: 'Input VAT',                                 type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY',        isSystem: true  },
   // CWT Receivable: tax withheld BY CUSTOMERS (BIR Form 2307) — your tax credit
   { code: '1045', name: 'CWT Receivable (BIR Form 2307)',            type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '1046', name: 'Prepaid Income Tax',                        type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
@@ -75,8 +75,14 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   // 1050 SYSTEM_ONLY: all movements (sale COGS, adjustments, stock-take) are
   // posted by the inventory scheduler with source='SYSTEM'. Prevents manual
   // overrides that would desync physical and accounting stock counts.
+  // ── Accounts the posting code DEPENDS ON ──────────────────────────────────
+  // 1040, 1051, 5060, 5070, 6070 and 6210 are SYSTEM_ONLY / isSystem for the
+  // same reason 1050 always was: a receipt, a write-off or a cycle count
+  // resolves them by code at posting time, and a tenant who deleted or
+  // deactivated one would break every stock movement from that moment with an
+  // error that names an account number rather than anything they did.
   { code: '1050', name: 'Merchandise Inventory',                     type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY', isSystem: true  },
-  { code: '1051', name: 'Raw Materials Inventory',                   type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '1051', name: 'Raw Materials Inventory',                   type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY',        isSystem: true  },
   { code: '1052', name: 'Work in Process',                           type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '1053', name: 'Finished Goods Inventory',                  type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '1054', name: 'Supplies Inventory',                        type: 'ASSET',     normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
@@ -266,8 +272,8 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   // Contra-expense accounts — credit normal balance reduces net COGS
   { code: '5040', name: 'Purchase Returns & Allowances',             type: 'EXPENSE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
   { code: '5050', name: 'Purchase Discounts',                        type: 'EXPENSE',   normalBalance: 'CREDIT', postingControl: 'OPEN',        isSystem: false },
-  { code: '5060', name: 'Inventory Write-off Expense',               type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
-  { code: '5070', name: 'Spoilage & Waste',                          type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '5060', name: 'Inventory Write-off Expense',               type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY',        isSystem: true  },
+  { code: '5070', name: 'Spoilage & Waste',                          type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY',        isSystem: true  },
   { code: '5080', name: 'Direct Labor – Production',                 type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '5090', name: 'Manufacturing Overhead',                    type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
 
@@ -298,7 +304,7 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
   { code: '6061', name: 'Electricity Expense',                       type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6062', name: 'Water Expense',                             type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6063', name: 'Gas & Fuel Expense',                        type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
-  { code: '6070', name: 'Office Supplies Expense',                   type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6070', name: 'Office Supplies Expense',                   type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY',        isSystem: true  },
   { code: '6080', name: 'Depreciation Expense',                      type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6081', name: 'Amortization Expense',                      type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
   { code: '6090', name: 'Repairs and Maintenance',                   type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
@@ -357,7 +363,7 @@ export const DEFAULT_ACCOUNTS: Omit<CreateAccountDto & { isSystem: boolean }, 'p
 
   // ── Equipment & Tools ────────────────────────────────────────────────────────
   { code: '6200', name: 'Equipment Expense',                         type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
-  { code: '6210', name: 'Tools and Supplies Expense',                type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
+  { code: '6210', name: 'Tools and Supplies Expense',                type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'SYSTEM_ONLY',        isSystem: true  },
   { code: '6211', name: 'IT Supplies & Peripherals',                 type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN',        isSystem: false },
 
 

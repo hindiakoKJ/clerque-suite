@@ -87,9 +87,44 @@ describe('ProcureService', () => {
   // ── building the list ─────────────────────────────────────────────────────
 
   it('numbers each line off the request, so it can carry through to the receipt', async () => {
-    const { svc, created } = build({ lines: [{ id: 'l1', rawMaterialId: 'rm-x' }] });
+    const { svc, created } = build({
+      lines: [{ id: 'l1', rawMaterialId: 'rm-x', lineNumber: 'REQ-20260830-001-01' }],
+    });
     await svc.addLine(TENANT, 'req1', { rawMaterialId: 'rm-sugar', qtyRequested: 5000 });
     expect(created[0].lineNumber).toBe('REQ-20260830-001-02');
+  });
+
+  it('does not reuse a control number after a line is removed', async () => {
+    /*
+      The suffix used to come from the line COUNT. Remove line 02 of three and
+      the count is 2, so the next add produces -03 again -- a duplicate control
+      number on one request. That number is the idempotency key the receive
+      uses to know a line has already been posted to stock, so a duplicate
+      means one of the two can never be received.
+    */
+    const { svc, created } = build({
+      lines: [
+        { id: 'l1', rawMaterialId: 'rm-a', lineNumber: 'REQ-20260830-001-01' },
+        { id: 'l3', rawMaterialId: 'rm-c', lineNumber: 'REQ-20260830-001-03' },
+      ],
+    });
+    await svc.addLine(TENANT, 'req1', { rawMaterialId: 'rm-new', qtyRequested: 1 });
+    expect(created[0].lineNumber).toBe('REQ-20260830-001-04');
+  });
+
+  it('buys past the reorder level, not exactly to it', async () => {
+    /*
+      Low stock is `quantity <= lowStockAlert`, so restoring to exactly the
+      reorder level leaves the item still flagged: it reappears on the next
+      Check stock and never clears. A reorder level is when to buy, not how
+      much to have.
+    */
+    const { svc, created } = build({
+      lowStock: [{ rawMaterialId: 'rm-sugar', shortBy: 4000, kind: 'INGREDIENT' }],
+    });
+    await svc.pullLowStock(TENANT, BRANCH, USER);
+    expect(Number(created[0].shortBy)).toBe(4000);        // why it is on the list
+    expect(Number(created[0].qtyRequested)).toBe(8000);   // what to actually buy
   });
 
   it('raises an existing line rather than asking for the same thing twice', async () => {

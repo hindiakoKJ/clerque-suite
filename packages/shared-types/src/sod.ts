@@ -24,7 +24,7 @@
  */
 
 import type { UserRole } from './auth';
-import type { PermissionKey } from './permissions';
+import { PERMISSION_MATRIX, type PermissionKey } from './permissions';
 
 export type SODSeverity = 'BLOCK' | 'WARN';
 
@@ -261,4 +261,28 @@ export function listWarnings(
   return detectViolations(role, permissions).filter(
     (v) => v.rule.severity === 'WARN',
   );
+}
+
+/**
+ * What a user can ACTUALLY do: the role's own permissions plus any extras
+ * granted on top.
+ *
+ * This exists because the two sides disagreed. The staff editor built exactly
+ * this union before calling detectViolations, while the API passed only the
+ * custom-override array — and every SOD rule fires only when ALL of its
+ * conflicting permissions are present together. So granting a CASHIER a
+ * permission that conflicts with one the CASHIER role already carries was
+ * evaluated against a one-element set, found nothing, and saved clean. The
+ * browser warned; the server, which is the one that decides, did not.
+ *
+ * Both sides call this now, so they cannot drift apart again.
+ */
+export function effectivePermissions(
+  role: UserRole,
+  custom: readonly PermissionKey[] | null | undefined,
+): PermissionKey[] {
+  const fromRole = (Object.keys(PERMISSION_MATRIX) as PermissionKey[]).filter((p) =>
+    (PERMISSION_MATRIX[p] as readonly string[]).includes(role),
+  );
+  return [...new Set<PermissionKey>([...fromRole, ...(custom ?? [])])];
 }

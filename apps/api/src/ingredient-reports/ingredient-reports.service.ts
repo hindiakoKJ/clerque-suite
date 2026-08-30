@@ -59,6 +59,10 @@ export class IngredientReportsService {
       where: {
         tenantId,
         rawMaterialId,
+        // Purchases only — a write-off's sentinel lot carries a negative
+        // qtyReceived so it can hold the idempotency reference, and counting
+        // it here would net removals against what was bought.
+        qtyReceived: { gt: 0 },
         ...(opts.branchId ? { branchId: opts.branchId } : {}),
         ...(fromDate || toDate
           ? { receivedAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
@@ -183,7 +187,9 @@ export class IngredientReportsService {
     if (!rm) throw new NotFoundException('Ingredient not found');
 
     const lots = await this.prisma.rawMaterialLot.findMany({
-      where: { tenantId, rawMaterialId, ...(branchId ? { branchId } : {}) },
+      // Sentinels excluded: a lot with negative qtyReceived is a write-off
+      // marker, not a layer of stock that can be drained.
+      where: { tenantId, rawMaterialId, qtyReceived: { gt: 0 }, ...(branchId ? { branchId } : {}) },
       orderBy: { receivedAt: 'asc' }, // FIFO order — oldest first
     });
 
@@ -257,6 +263,7 @@ export class IngredientReportsService {
     const lotsInRange = await this.prisma.rawMaterialLot.findMany({
       where: {
         tenantId,
+        qtyReceived: { gt: 0 },   // purchases, not write-off sentinels
         ...(opts.branchId ? { branchId: opts.branchId } : {}),
         receivedAt: { gte: fromDate, lte: toDate },
       },

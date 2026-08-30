@@ -22,6 +22,7 @@ import {
   PERSONAS,
   PERMISSION_MATRIX,
   detectViolations,
+  effectivePermissions,
   isPermissionAvailableUnderPlan,
   getRequiredPlanForPermission,
   planLabel,
@@ -92,11 +93,16 @@ export function StaffPermissionEditor({
   }, [role]);
 
   const customSet = useMemo(() => new Set(customPermissions), [customPermissions]);
-  const finalSet  = useMemo(() => {
-    const s = new Set<PermissionKey>(rolePermissions);
-    customPermissions.forEach((p) => s.add(p as PermissionKey));
-    return s;
-  }, [rolePermissions, customPermissions]);
+  /*
+    The same union the API judges against — one function, so the warning shown
+    here and the rule enforced there cannot drift. They had: this screen built
+    the union correctly while the server passed only the overrides, so the
+    browser warned about a combination the server then saved clean.
+  */
+  const finalSet  = useMemo(
+    () => new Set<PermissionKey>(effectivePermissions(role, customPermissions as PermissionKey[])),
+    [role, customPermissions],
+  );
 
   const violations = useMemo(
     () => detectViolations(role, [...finalSet]),

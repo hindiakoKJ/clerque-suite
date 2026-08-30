@@ -163,10 +163,19 @@ export function middleware(req: NextRequest) {
   //   POS     = till floor — Owner + Manager + Cashier only
   //   LEDGER  = back-office accounting — Owner, accounting roles, auditor
   //   PAYROLL = HR + employee self-service — anyone with a tenant
+  //   PROCURE = stock — the roles that own inventory, plus the till roles
+  //             who notice a shortage first and put it on the buy list
   //
   // These hard gates run BEFORE the appAccess check below so a stale
   // legacy appAccess record can't smuggle a wrong-role user past.
   const POS_ROLES     = new Set(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER']);
+  // MDM and WAREHOUSE_STAFF deliberately sit here and NOT in POS_ROLES: they
+  // own stock without ever touching a till. They are the reason a /pos/* link
+  // inside a Procure screen is a hard ejection rather than a detour.
+  const PROCURE_ROLES = new Set([
+    'BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF',
+    'CASHIER', 'SALES_LEAD', 'GENERAL_EMPLOYEE',
+  ]);
   const LEDGER_ROLES  = new Set([
     'BUSINESS_OWNER', 'BRANCH_MANAGER',
     'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD',
@@ -178,6 +187,9 @@ export function middleware(req: NextRequest) {
 
   if (pathname.startsWith('/pos') && !POS_ROLES.has(user.role)) {
     return NextResponse.redirect(new URL('/select?reason=pos-restricted', req.url));
+  }
+  if (pathname.startsWith('/procure') && !PROCURE_ROLES.has(user.role)) {
+    return NextResponse.redirect(new URL('/select?reason=procure-restricted', req.url));
   }
   if (pathname.startsWith('/ledger') && !LEDGER_ROLES.has(user.role)) {
     return NextResponse.redirect(new URL('/select?reason=ledger-restricted', req.url));

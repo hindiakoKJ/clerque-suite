@@ -99,6 +99,7 @@ export default function IngredientDrilldownPage({
   const { id } = use(params);
   const user = useAuthStore((s) => s.user);
   const base = useInventoryBase();   // /pos/inventory or /procure/stock
+  const inPos = base === '/pos/inventory';
   const init = defaultRange();
   const [from, setFrom] = useState(init.from);
   const [to,   setTo]   = useState(init.to);
@@ -347,15 +348,30 @@ export default function IngredientDrilldownPage({
                               <>
                                 −{qty(-m.quantity, unit)} (cost {peso(-m.totalValue)})
                                 {m.orderNumber && (
+                                  /*
+                                    The order lives in POS, and this page also
+                                    renders inside Procure. MDM and warehouse
+                                    staff hold Procure without POS, so for them
+                                    this link is not a detour — middleware ejects
+                                    them to /select and the Procure session is
+                                    gone. They still need to READ which order
+                                    consumed the stock, so the number stays;
+                                    only the link is withheld where it would
+                                    throw them out.
+                                  */
                                   <> · order{' '}
-                                    <Link
-                                      href={`/pos/orders?focus=${m.orderId ?? ''}`}
-                                      className="hover:underline inline-flex items-center gap-0.5"
-                                      style={{ color: 'var(--accent)' }}
-                                    >
-                                      {m.orderNumber}
-                                      <ExternalLink className="h-2.5 w-2.5" />
-                                    </Link>
+                                    {inPos ? (
+                                      <Link
+                                        href={`/pos/orders?focus=${m.orderId ?? ''}`}
+                                        className="hover:underline inline-flex items-center gap-0.5"
+                                        style={{ color: 'var(--accent)' }}
+                                      >
+                                        {m.orderNumber}
+                                        <ExternalLink className="h-2.5 w-2.5" />
+                                      </Link>
+                                    ) : (
+                                      <span className="font-medium">{m.orderNumber}</span>
+                                    )}
                                   </>
                                 )}
                                 {m.reference && <div className="text-[10px] mt-0.5 italic">{m.reference}</div>}

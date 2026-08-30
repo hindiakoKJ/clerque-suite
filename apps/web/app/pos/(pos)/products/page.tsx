@@ -1360,7 +1360,7 @@ export default function ProductsPage() {
 
                       {rawMaterials.length === 0 && (
                         <p className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2">
-                          No ingredients found. Go to <strong>Inventory → Ingredients</strong> to add your raw materials first.
+                          No ingredients found. Open the <strong>Procure</strong> app → <strong>Stock on hand</strong> to add your raw materials first.
                         </p>
                       )}
                     </div>

@@ -2,10 +2,11 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, ChevronRight, Loader2, AlertTriangle,
+  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, ChevronRight, Loader2, AlertTriangle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { STOCK_ROLES } from './layout';
 
 /**
  * Procure's home.
@@ -29,6 +30,15 @@ export default function ProcureHome() {
     staleTime: 30_000,
   });
 
+  // Only to decide whether the all-branches tile is worth showing. Owners
+  // only, so a cashier never fires it.
+  const { data: branches = [] } = useQuery<{ id: string }[]>({
+    queryKey: ['branches'],
+    queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
+    enabled:  user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN',
+    staleTime: 300_000,
+  });
+
   const { data: req } = useQuery<Request>({
     queryKey: ['procure-open', branchId],
     queryFn:  () => api.post('/procure/requests/open', { branchId }).then((r) => r.data),
@@ -37,6 +47,14 @@ export default function ProcureHome() {
 
   const shortages = low.filter((r) => Number(r.shortBy ?? 0) > 0).length;
 
+  // A barista is in REQUEST_ROLES but not STOCK_ROLES. Rendering all four
+  // tiles to them meant three of these snapped straight back to this page with
+  // no explanation -- the layout redirect firing silently. Show what the role
+  // can actually open.
+  const canStock    = !!user && STOCK_ROLES.includes(user.role);
+  const isOwner     = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
+  const multiBranch = branches.length > 1;
+
   const tiles = [
     {
       href:  '/procure/requests',
@@ -44,6 +62,7 @@ export default function ProcureHome() {
       title: 'Purchase request',
       desc:  'Build the buy list, send it, record what was bought.',
       note:  req ? `${req.requestNumber} · ${req.lines.length} item${req.lines.length === 1 ? '' : 's'}` : null,
+      show:  true,
     },
     {
       href:  '/procure/stock',
@@ -51,6 +70,7 @@ export default function ProcureHome() {
       title: 'Stock on hand',
       desc:  'Every ingredient, what it costs, what is left. Receiving happens here.',
       note:  null,
+      show:  canStock,
     },
     {
       href:  '/procure/cycle-counts',
@@ -58,6 +78,7 @@ export default function ProcureHome() {
       title: 'Cycle counts',
       desc:  'Count the shelf and correct what the system believes.',
       note:  null,
+      show:  canStock,
     },
     {
       href:  '/procure/transfers',
@@ -65,8 +86,20 @@ export default function ProcureHome() {
       title: 'Transfers',
       desc:  'Move stock between locations.',
       note:  'Between branches today — see below',
+      show:  canStock,
     },
-  ];
+    {
+      // Owner-only at the API, and meaningless with one branch. It lost its
+      // only entry point when the POS Warehouse section went away, so without
+      // this tile it is reachable by typing the URL and nothing else.
+      href:  '/procure/cross-branch',
+      Icon:  Building2,
+      title: 'All branches',
+      desc:  'What you have, where, in one table.',
+      note:  null,
+      show:  canStock && isOwner && multiBranch,
+    },
+  ].filter((t) => t.show);
 
   return (
     <div className="space-y-5">

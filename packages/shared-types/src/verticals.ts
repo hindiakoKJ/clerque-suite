@@ -187,6 +187,12 @@ export interface VerticalPack {
 // ──────────────────────────────────────────────────────────────────────────
 // PACKS — one definition per vertical. Adding a new vertical = add a pack
 // here + map its BusinessTypes in VERTICAL_PACKS below. That's it.
+//
+// No pack lists Ingredients / Inventory / Transfers / Cycle Counts any more.
+// Everything that ADDS stock moved to the Procure app, so a cashier account
+// stops being an inventory account by accident — see tasks/procure.md. The
+// routes still resolve and Procure re-exports the same screens; do not put
+// them back in a POS sidebar.
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
@@ -210,12 +216,7 @@ export const fnbPack: VerticalPack = {
       ]},
       { label: 'Catalog',  items: [
         { label: 'Products',     href: '/pos/products',     iconName: 'Package'       },
-        { label: 'Ingredients',  href: '/pos/inventory',    iconName: 'ClipboardList' },
         { label: 'Units (UoM)',  href: '/pos/settings/uom', iconName: 'Ruler'         },
-      ]},
-      { label: 'Warehouse', items: [
-        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
-        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
       ]},
     ],
     receiptFormat: 'STANDARD_OR',
@@ -268,12 +269,7 @@ export const retailPack: VerticalPack = {
       ]},
       { label: 'Catalog',  items: [
         { label: 'Products',    href: '/pos/products',     iconName: 'Package'       },
-        { label: 'Inventory',   href: '/pos/inventory',    iconName: 'ClipboardList' },
         { label: 'Units (UoM)', href: '/pos/settings/uom', iconName: 'Ruler'         },
-      ]},
-      { label: 'Warehouse', items: [
-        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
-        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
       ]},
     ],
     receiptFormat: 'STANDARD_OR',
@@ -328,15 +324,10 @@ export const serviceMfgPack: VerticalPack = {
       ]},
       { label: 'Catalog',  items: [
         { label: 'Products',    href: '/pos/products',     iconName: 'Package'       },
-        { label: 'Inventory',   href: '/pos/inventory',    iconName: 'ClipboardList' },
         { label: 'Units (UoM)', href: '/pos/settings/uom', iconName: 'Ruler'         },
       ]},
       { label: 'Projects', items: [
         { label: 'Projects', href: '/pos/projects', iconName: 'Hammer' },
-      ]},
-      { label: 'Warehouse', items: [
-        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
-        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
       ]},
     ],
     receiptFormat: 'PROJECT_INVOICE',
@@ -481,14 +472,9 @@ export const pharmacyPack: VerticalPack = {
       { label: 'Catalog', items: [
         { label: 'Products / Drugs', href: '/pos/products',     iconName: 'Pill' },
         { label: 'Lots & Expiry',    href: '/pos/pharmacy/lots',iconName: 'Calendar' },
-        { label: 'Inventory',        href: '/pos/inventory',    iconName: 'ClipboardList' },
       ]},
       { label: 'Compliance', items: [
         { label: 'DDB Register',     href: '/pos/pharmacy/ddb', iconName: 'Shield' },
-      ]},
-      { label: 'Warehouse', items: [
-        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
-        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
       ]},
     ],
     receiptFormat: 'PHARMACY_RX',
@@ -626,16 +612,11 @@ export const constructionPack: VerticalPack = {
       ]},
       { label: 'Catalog', items: [
         { label: 'Products / Materials', href: '/pos/products',         iconName: 'Package' },
-        { label: 'Inventory',            href: '/pos/inventory',        iconName: 'ClipboardList' },
         { label: 'Units (UoM)',          href: '/pos/settings/uom',     iconName: 'Ruler' },
       ]},
       { label: 'Sell', items: [
         { label: 'Terminal',  href: '/pos/terminal',  iconName: 'ShoppingCart' },
         { label: 'Orders',    href: '/pos/orders',    iconName: 'ShoppingBag' },
-      ]},
-      { label: 'Warehouse', items: [
-        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
-        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
       ]},
     ],
     receiptFormat: 'PROJECT_INVOICE',
@@ -765,13 +746,8 @@ export const medicalEquipmentPack: VerticalPack = {
       ]},
       { label: 'Catalog',  items: [
         { label: 'Products',          href: '/pos/products',          iconName: 'Package' },
-        { label: 'Inventory',         href: '/pos/inventory',         iconName: 'ClipboardList' },
         { label: 'Serialized units',  href: '/pos/serialized-units',  iconName: 'FileBadge' },
         { label: 'Units (UoM)',       href: '/pos/settings/uom',      iconName: 'Ruler' },
-      ]},
-      { label: 'Warehouse', items: [
-        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
-        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
       ]},
     ],
     receiptFormat: 'STANDARD_OR',
@@ -827,11 +803,6 @@ export const gasStationPack: VerticalPack = {
         { label: 'Terminal',  href: '/pos/terminal',  iconName: 'ShoppingCart' },
         { label: 'Orders',    href: '/pos/orders',    iconName: 'ShoppingBag' },
         { label: 'Products',  href: '/pos/products',  iconName: 'Package' },
-        { label: 'Inventory', href: '/pos/inventory', iconName: 'ClipboardList' },
-      ]},
-      { label: 'Warehouse', items: [
-        { label: 'Transfers',    href: '/pos/warehouse/transfers',    iconName: 'Truck',          multiBranchOnly: true },
-        { label: 'Cycle Counts', href: '/pos/warehouse/cycle-counts', iconName: 'ClipboardCheck', multiBranchOnly: true },
       ]},
     ],
     receiptFormat: 'STANDARD_OR',

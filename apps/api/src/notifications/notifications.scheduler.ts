@@ -82,7 +82,11 @@ export class NotificationsScheduler {
         kind:      'WARNING',
         title:     `Low stock alert — ${flagged.length} item${flagged.length === 1 ? '' : 's'}`,
         body:      `${productList}${more} at or below the re-order threshold. Reorder soon.`,
-        link:      '/pos/inventory',
+        // Procure, not POS: this broadcasts to every user in the tenant, and
+        // MDM / warehouse staff have no POS access at all -- the alert would
+        // land on a page middleware bounces them off. The requests screen is
+        // also where a shortage is actionable rather than merely visible.
+        link:      '/procure/requests',
         dedupeKey: `low-stock-${flagged.length}`,
       });
     } catch (err) {

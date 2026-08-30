@@ -29,8 +29,8 @@ import { useAuthStore } from '@/store/auth';
  * closest is CASHIER, which is a till, not a kitchen. Left as a decision
  * rather than guessed at.
  */
-const STOCK_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF'];
-const REQUEST_ROLES = [...STOCK_ROLES, 'CASHIER', 'SALES_LEAD'];
+export const STOCK_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF'];
+export const REQUEST_ROLES = [...STOCK_ROLES, 'CASHIER', 'SALES_LEAD'];
 
 function rolesFor(pathname: string): string[] {
   if (pathname.startsWith('/procure/requests')) return REQUEST_ROLES;
@@ -49,11 +49,19 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => { setHydrated(true); }, []);
 
+  // Redirect only where there is somewhere to go. Sending a role that cannot
+  // open ANY Procure page to /procure/requests just moved it to a page it also
+  // cannot open, where the same check failed and pathname stopped changing --
+  // so the effect stopped firing and the page rendered anyway. A refusal has
+  // to be a render, not a redirect, or it is not a refusal.
+  const allowedHere  = !user || rolesFor(pathname).includes(user.role);
+  const allowedAtAll = !user || REQUEST_ROLES.includes(user.role);
+
   useEffect(() => {
     if (!hydrated) return;
     if (!accessToken) { router.replace('/login'); return; }
-    if (user && !rolesFor(pathname).includes(user.role)) router.replace('/procure/requests');
-  }, [hydrated, accessToken, user, pathname, router]);
+    if (!allowedHere && allowedAtAll) router.replace('/procure/requests');
+  }, [hydrated, accessToken, allowedHere, allowedAtAll, router]);
 
   if (!hydrated) return null;
 
@@ -89,7 +97,23 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
             : 'max-w-6xl'
         }`}
       >
-        {children}
+        {allowedAtAll ? (
+          allowedHere ? children : null   /* in-flight redirect to the requests screen */
+        ) : (
+          <div className="mx-auto max-w-md rounded-xl border border-border bg-card p-6 text-center">
+            <h2 className="text-base font-semibold">Procure is not part of your role</h2>
+            <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+              Stock, requests and receiving belong to the people who handle inventory. Ask the
+              owner if you need access.
+            </p>
+            <Link
+              href="/select"
+              className="mt-4 inline-block rounded-lg border border-border px-3 py-1.5 text-sm transition-colors hover:bg-muted"
+            >
+              Back to your apps
+            </Link>
+          </div>
+        )}
       </main>
     </div>
   );

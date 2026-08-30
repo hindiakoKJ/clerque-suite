@@ -52,7 +52,7 @@ export default function CrossBranchInventoryPage() {
   const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
 
   useEffect(() => {
-    if (user && !isOwner) router.replace('/pos/dashboard');
+    if (user && !isOwner) router.replace(home);
   }, [user, isOwner, router]);
 
   const [search, setSearch] = useState('');

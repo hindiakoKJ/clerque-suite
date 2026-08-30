@@ -1806,8 +1806,8 @@ function IngredientDeductionCard({
           </p>
           <p className="text-xs text-muted-foreground mt-1">
             When your recipes are complete: switch this back ON first, then run{' '}
-            <Link href="/pos/inventory/recipe-catchup" className="text-primary hover:underline">
-              Inventory &rarr; Recipe Catch-Up
+            <Link href="/procure/stock/recipe-catchup" className="text-primary hover:underline">
+              Procure &rarr; Stock on hand &rarr; Recipe Catch-Up
             </Link>{' '}
             to replay everything sold while it was paused.
           </p>

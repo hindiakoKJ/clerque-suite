@@ -334,7 +334,7 @@ const SECTIONS: HelpSection[] = [
         q: 'How do I bulk-import products?',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
-            <li>Sidebar → <strong>Inventory</strong> → <strong>Setup Pack</strong> (or Products → Import).</li>
+            <li>Settings → <strong>Imports</strong> → <strong>Setup Pack</strong> (or Products → Import).</li>
             <li>Download the template. It has instruction blocks at the top — read them.</li>
             <li>Fill in your products (one per row). Cost Price column is required.</li>
             <li>Save as .xlsx (or .csv) and upload back.</li>
@@ -349,7 +349,7 @@ const SECTIONS: HelpSection[] = [
           <ul className="list-disc pl-5 space-y-1">
             <li><strong>Unit-Based</strong> — each sale deducts 1 unit from inventory. For finished goods (bottled water, packaged snacks).</li>
             <li><strong>Recipe-Based</strong> — each sale subtracts the recipe (the list of ingredients) from your ingredient stock. For food &amp; drink (one ensaymada = flour + butter + sugar + cheese).</li>
-            <li>You add your ingredients in the Ingredients page, then attach a recipe (the list of ingredients and how much of each) to a Recipe-Based product.</li>
+            <li>You add your ingredients in <strong>Procure &rarr; Stock on hand</strong>, then attach a recipe (the list of ingredients and how much of each) to a Recipe-Based product.</li>
           </ul>
         ),
       },
@@ -381,13 +381,13 @@ const SECTIONS: HelpSection[] = [
     id: 'inventory',
     title: 'Inventory',
     icon: 'how-to',
-    description: 'On-hand quantities, low-stock alerts, raw materials.',
+    description: 'On-hand quantities, low-stock alerts, raw materials — now in the Procure app.',
     items: [
       {
         q: 'How do I set opening stock for a new branch?',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
-            <li>Sidebar → <strong>Inventory</strong> → switch to the branch.</li>
+            <li>Open the <strong>Procure</strong> app → <strong>Stock on hand</strong> → switch to the branch.</li>
             <li>Either tap a product&apos;s <strong>Adjust</strong> button (one-by-one), or use <strong>Setup Pack</strong> import for bulk.</li>
             <li>For each item, enter the quantity on hand. This <em>replaces</em> the current quantity (not added to).</li>
             <li>Optionally set a Low Stock Alert threshold — the dashboard flags items below this number for re-ordering.</li>
@@ -408,7 +408,7 @@ const SECTIONS: HelpSection[] = [
         q: 'How do raw materials work for F&B?',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
-            <li>Inventory → <strong>Ingredients</strong> tab → New Ingredient (e.g. &ldquo;Espresso shot, 30ml&rdquo;).</li>
+            <li>Procure → <strong>Stock on hand</strong> → New Ingredient (e.g. &ldquo;Espresso shot, 30ml&rdquo;).</li>
             <li>Set its unit, cost, and on-hand quantity per branch.</li>
             <li>When you create a Recipe-Based product, attach a BOM linking it to ingredients with quantities.</li>
             <li>Selling that product deducts the recipe from raw material stock automatically.</li>
@@ -420,7 +420,7 @@ const SECTIONS: HelpSection[] = [
         q: 'How do I record a stock adjustment that\'s not a sale?',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
-            <li>Inventory → tap the product → <strong>Adjust</strong>.</li>
+            <li>Procure → <strong>Stock on hand</strong> → tap the item → <strong>Adjust</strong>.</li>
             <li>Choose the type:
               <ul className="list-disc pl-6 mt-1">
                 <li><strong>RECEIVE</strong> — new stock arrived from supplier.</li>

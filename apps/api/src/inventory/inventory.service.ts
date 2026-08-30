@@ -1431,6 +1431,40 @@ export class InventoryService {
     // Period-lock check before doing any writes.
     await this.periods.assertDateIsOpen(tenantId, receivedAt);
 
+    /*
+      Is the input VAT recoverable for THIS tenant?
+
+      A VAT-registered buyer holding a VAT invoice may credit the 12% against
+      output VAT (NIRC Sec 110), so that portion is a receivable from the BIR,
+      not part of what the goods cost. PAS 2 says the same thing: inventory is
+      carried at cost EXCLUDING recoverable taxes. A NON_VAT, EXEMPT or
+      PERCENTAGE_TAX shop cannot claim it, so for them the whole invoice IS the
+      cost.
+
+      This is resolved ONCE, here, and the net figure is what the shelf and the
+      ledger both use. A previous attempt split the VAT in the journal alone
+      and left the sub-ledger at gross: the asset was debited net and relieved
+      gross, draining 1051 by 12% of every peso, and the trial balance footed
+      the whole time because each entry balanced on its own.
+
+      An owner-funded receipt is excluded on purpose. There is no supplier and
+      no VAT invoice behind an owner's contribution or a spreadsheet opening
+      balance, and the credit exists only where the purchase is invoiced.
+    */
+    const tenantTax = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { taxStatus: true },
+    });
+    const paymentMethodForVat = dto.paymentMethod ?? 'OWNER_FUNDED';
+    const recoversInputVat =
+      tenantTax?.taxStatus === 'VAT' && paymentMethodForVat !== 'OWNER_FUNDED';
+    const vatDivisor = recoversInputVat ? 1.12 : 1;
+
+    // What the owner typed is what the supplier charged. What the shelf is
+    // worth is that minus anything the BIR will give back.
+    const enteredCost = dto.costPrice;
+    const netCostPrice = enteredCost != null ? enteredCost / vatDivisor : null;
+
     const paymentMethod = dto.paymentMethod ?? 'CASH';
 
     // Sprint 4B — CREDIT receipts require a vendor so the resulting AP Bill
@@ -1514,19 +1548,19 @@ export class InventoryService {
 
       // WAC cost update: if new cost price provided, update material cost
       let unitCost = material.costPrice ? Number(material.costPrice) : 0;
-      if (dto.costPrice != null) {
+      if (netCostPrice != null) {
         const oldCost    = unitCost;
         const totalOldValue  = qtyBefore * oldCost;
-        const totalNewValue  = dto.quantity * dto.costPrice;
+        const totalNewValue  = dto.quantity * netCostPrice;
         const newWac = qtyAfter > 0
           ? (totalOldValue + totalNewValue) / qtyAfter
-          : dto.costPrice;
+          : netCostPrice;
 
         await tx.rawMaterial.update({
           where: { id: rawMaterialId },
           data: { costPrice: new Prisma.Decimal(newWac) },
         });
-        unitCost = dto.costPrice; // value this delivery at its own cost
+        unitCost = netCostPrice; // this delivery, at what the shelf is worth
 
         // Sprint 8: ripple the new WAC into every product that uses this
         // ingredient. RECIPE_BASED products' Product.costPrice is derived
@@ -1585,7 +1619,14 @@ export class InventoryService {
               unit:           material.unit,
               quantity:       dto.quantity,        // positive — stock IN
               unitCost,
+              // NET of recoverable VAT: what the shelf is worth, and therefore
+              // what the asset is debited. Every relief reads this same basis.
               totalValue,
+              // The 12% the BIR will give back, and the money that actually
+              // left. The journal credits the gross, because that is what was
+              // paid; the difference is the input-tax receivable.
+              inputVat:       +(dto.quantity * ((enteredCost ?? unitCost) - unitCost)).toFixed(2),
+              grossValue:     +(dto.quantity * (enteredCost ?? unitCost)).toFixed(2),
               paymentMethod,
               receivedAt:     receivedAt.toISOString(),
               referenceNumber: dto.referenceNumber ?? null,

@@ -868,6 +868,52 @@ describe('JournalService — accounting correctness across business types', () =
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 
+    it('a VAT tenant claims the input tax and still debits only the shelf value', async () => {
+      /*
+        The shape inventory.service now emits: totalValue is NET (what the
+        shelf is worth and what every relief reads), grossValue is what left
+        the till, inputVat is the difference. All three come from the same
+        netting, so the debit can never disagree with the sub-ledger.
+      */
+      const lines = await runProcessEvent({
+        kind:           'RAW_MATERIAL_RECEIPT',
+        productName:    'Espresso Beans',
+        adjustmentType: 'STOCK_IN',
+        quantity:       1000,
+        totalValue:     100,    // net — 112 / 1.12
+        inputVat:       12,
+        grossValue:     112,
+        paymentMethod:  'CASH',
+      }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1051')).toBeCloseTo(100, 2);   // the shelf
+      expect(s.debits.get('1040')).toBeCloseTo(12, 2);    // the BIR receivable
+      expect(s.credits.get('1010')).toBeCloseTo(112, 2);  // the money
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('a NON-VAT tenant recovers nothing, so gross is the cost', async () => {
+      // No branch in the handler — the service sends inputVat 0 and
+      // grossValue == totalValue, and the same code path does the right thing.
+      const lines = await runProcessEvent({
+        kind:           'RAW_MATERIAL_RECEIPT',
+        productName:    'Espresso Beans',
+        adjustmentType: 'STOCK_IN',
+        quantity:       1000,
+        totalValue:     112,
+        inputVat:       0,
+        grossValue:     112,
+        paymentMethod:  'CASH',
+      }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1051')).toBeCloseTo(112, 2);
+      expect(s.debits.get('1040')).toBeUndefined();
+      expect(s.credits.get('1010')).toBeCloseTo(112, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
     it('the shelf value and the GL debit are the SAME number', async () => {
       /*
         The invariant the split broke. receiveRawMaterial writes the delivery

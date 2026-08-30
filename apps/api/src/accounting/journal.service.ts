@@ -825,40 +825,38 @@ export class JournalService {
             : `Stock received: ${productName}`;
 
           /*
-            The stock receipt capitalises the GROSS, deliberately.
+            Debit what the shelf is worth, credit what was paid, and put the
+            difference where it belongs.
 
-            An input-VAT split was added here and then removed, because it
-            broke the thing that matters more: the sub-ledger and the GL have
-            to value the same shelf at the same number.
+            inventory.service resolves the basis ONCE, before any write: for a
+            VAT-registered tenant buying from a supplier it nets the 12% out of
+            the entered price, because that portion is recoverable from the BIR
+            and so is not part of the cost of the goods (PAS 2; NIRC Sec 110).
+            The netted figure is what goes into RawMaterial.costPrice, the lot
+            and the WAC blend -- so `totalValue` here IS the shelf value, and
+            every relief reads the same basis.
 
-            receiveRawMaterial stores the delivery's cost as entered — gross —
-            into RawMaterial.costPrice, RawMaterialLot.unitCost and the WAC
-            blend, and every relief (a sale's recipe walk, a write-off, a count)
-            reads that. Debiting the asset NET while relieving it GROSS drains
-            1051 by 12% of every peso: proven on real data, where a 1,000 g
-            delivery valued the shelf at 112.00 and capitalised 100.00. The
-            trial balance still foots, because each entry is internally
-            balanced — so nothing flags it and the asset just goes negative on
-            an empty stockroom.
+            That equality is the thing to protect. An earlier attempt split the
+            VAT in the journal alone and left the sub-ledger at gross: the asset
+            was debited net and relieved gross, draining 1051 by 12% of every
+            peso, while the trial balance footed the entire time because each
+            entry balanced on its own. `inputVat` is now computed from the same
+            numbers the shelf was written with, not recomputed from a gross the
+            ledger never sees.
 
-            It was wrong in a second way too: claimsInputVat did not consider
-            paymentMethod, so an OWNER_FUNDED receipt — the DEFAULT when the
-            payload omits one, and what the bulk opening-stock importer sends —
-            fabricated a VAT credit with no supplier, no invoice and no OR
-            behind it. NIRC Sec 110 allows the credit only where the purchase
-            is invoiced by a VAT-registered supplier.
-
-            The right fix is to carry inventory NET of recoverable VAT on BOTH
-            sides (PAS 2: cost excludes recoverable taxes) — but that changes
-            every recipe cost and every reported margin by about 11%, which is
-            the owner's call to make with his eyes open, not a side effect of
-            a bug fix. Recorded in tasks/costing-sod-isolation.md.
-
-            Input VAT on purchases is still captured correctly on the AP bill
-            and expense-claim paths, which is where an invoice actually exists.
+            A NON_VAT, EXEMPT or PERCENTAGE_TAX tenant recovers nothing, and an
+            owner-funded receipt has no supplier invoice behind it. Both come
+            through with inputVat 0 and gross == net, so this is one code path,
+            not a branch.
           */
+          const inputVat   = Number(payload['inputVat']   ?? 0);
+          const grossValue = Number(payload['grossValue'] ?? 0) || totalValue;
+
           lines.push({ accountId: await getAccount(debitAccount), debit: totalValue, description: debitDescription });
-          lines.push({ accountId: await getAccount(creditAccount), credit: totalValue, description: creditDescription });
+          if (inputVat > 0) {
+            lines.push({ accountId: await getAccount('1040'), debit: inputVat, description: `Input VAT — ${productName}` });
+          }
+          lines.push({ accountId: await getAccount(creditAccount), credit: grossValue, description: creditDescription });
         } else {
           const absValue = Math.abs(totalValue);
           const isRawMaterial = isRawMaterialEvent(payload, adjustmentType);

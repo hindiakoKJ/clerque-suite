@@ -404,10 +404,12 @@ export class ProductsService {
         const list = offenders
           .map((o) => `"${o.name}" (${String(o.category).toLowerCase().replace(/_/g, ' ')})`)
           .join(', ');
+        const one = offenders.length === 1;
         throw new BadRequestException(
-          `${list} ${offenders.length === 1 ? 'is a supply' : 'are supplies'}, not an ingredient, `
-          + 'so they cannot be part of a recipe. Supplies are an expense of running the shop, '
-          + 'not a cost of the drink. Change the category under Stock on hand if that is wrong.',
+          `${list} ${one ? 'is a supply, not an ingredient' : 'are supplies, not ingredients'}, `
+          + `so ${one ? 'it cannot' : 'they cannot'} be part of a recipe. Supplies are an expense `
+          + 'of running the shop, not a cost of the drink. Change the category under Stock on '
+          + 'hand if that is wrong.',
         );
       }
     }

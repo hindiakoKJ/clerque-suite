@@ -47,7 +47,7 @@ describe('ProductsService.saveBom — supplies stay out of recipes', () => {
     // A bare rejection on a 12-line recipe sends someone hunting.
     const { svc } = build([{ name: 'Zonrox Bleach', category: 'OFFICE_SUPPLY' }]);
     await expect(svc.saveBom(TENANT, PRODUCT, LINES))
-      .rejects.toThrow(/Zonrox Bleach.*office supply.*Stock on hand/s);
+      .rejects.toThrow(/Zonrox Bleach.*office supply.*is a supply, not an ingredient.*Stock on hand/s);
   });
 
   it('lists every offender at once rather than one per save', async () => {

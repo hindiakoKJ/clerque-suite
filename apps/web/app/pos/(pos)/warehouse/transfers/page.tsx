@@ -121,8 +121,26 @@ export default function StockTransfersPage() {
                         <Inbox className="h-4 w-4" />
                       </button>
                     )}
+                    {/*
+                      Cancelling an in-transit transfer moves the stock back to
+                      the source branch. No undo, and the only trace was a toast
+                      reading "Cancelled." -- from an unlabelled red icon
+                      sitting next to Receive.
+                    */}
                     {(t.status === 'DRAFT' || t.status === 'IN_TRANSIT') && (
-                      <button onClick={() => cancel.mutate(t.id)} disabled={cancel.isPending} className="p-1.5 rounded text-red-600 hover:bg-red-500/15 ml-1" title="Cancel">
+                      <button
+                        onClick={() => {
+                          if (!window.confirm(
+                            t.status === 'IN_TRANSIT'
+                              ? 'Cancel this transfer?\n\nThe stock goes back to the sending branch. This cannot be undone.'
+                              : 'Cancel this draft transfer?'
+                          )) return;
+                          cancel.mutate(t.id);
+                        }}
+                        disabled={cancel.isPending}
+                        className="p-1.5 rounded text-red-600 hover:bg-red-500/15 ml-1"
+                        title="Cancel"
+                      >
                         <X className="h-4 w-4" />
                       </button>
                     )}

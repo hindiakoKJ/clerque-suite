@@ -90,8 +90,21 @@ export default function CycleCountsPage() {
                         >
                           Count
                         </button>
+                        {/*
+                          Posting rewrites stock to the counted figures and
+                          books the adjustment. There is no unpost -- the only
+                          statuses are OPEN / POSTED / CANCELLED -- and this was
+                          an unlabelled icon a thumb could catch while
+                          scrolling. Confirm first.
+                        */}
                         <button
-                          onClick={() => post.mutate(c.id)}
+                          onClick={() => {
+                            if (!window.confirm(
+                              'Post this count?\n\nStock will be rewritten to the counted figures and the '
+                              + 'difference booked to the ledger. This cannot be undone.'
+                            )) return;
+                            post.mutate(c.id);
+                          }}
                           disabled={post.isPending}
                           className="p-1.5 rounded text-emerald-700 hover:bg-emerald-500/15"
                           title="Post variances"

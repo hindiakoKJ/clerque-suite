@@ -46,11 +46,49 @@ second vertical, then look at what two real clients actually share.
 
 ## Open decisions
 
-- [ ] **Room-to-room transfers** (stockroom → bar → kitchen). Stock is held per
-      BRANCH today, so a stockroom and a bar have nowhere to move between.
-      Either those rooms become branches, or `RawMaterialInventory` gains a
-      location. The second changes how every stock read works — worth deciding
-      before it is built, not after.
+## Room-to-room transfers — RESOLVED (KJ, 2026-08-30)
+
+The shop has **three locations today — stockroom, bar, kitchen** — and is
+already sending "trans in" reports by hand. A fourth (a pickleball court bar)
+is coming.
+
+### Rooms cannot be branches. One fact decides it.
+
+**An order consumes from more than one room.** A customer orders a latte and a
+rice bowl on one ticket: the latte's ingredients live in the bar, the rice
+bowl's in the kitchen. A sale deducts from ONE branch and `maxProducible` is
+computed per branch — so with bar and kitchen as separate branches, that order
+could not be costed or deducted at all, and every POS tile would read 0 for
+whichever room the till was not assigned to.
+
+Making rooms branches also drags in everything else a branch means: its own
+Z-read, its own shifts, its own staff assignment, its own line in every report.
+A three-room cafe would look like three shops to the BIR.
+
+### The shape: Tenant → Branch (venue) → Location (room)
+
+A **branch is a venue** — the accounting and BIR unit, one till, one Z-read.
+A **location is a room inside it**, and rooms exist only for *where the stock
+physically is*.
+
+  - Valuation, COGS and `maxProducible` keep rolling up to the BRANCH. Selling
+    does not change at all, which is what makes this safe to add.
+  - **Counting** becomes per location — you count the bar fridge, not "the
+    branch", which is what a person actually does.
+  - **Transfers** become room-to-room within a branch: quantity moves, and
+    **no journal entry is posted**, because no value leaves the business. That
+    is the difference from a branch transfer and the reason this is cheap.
+
+- [ ] `StockLocation` model (tenantId, branchId, name, isDefault) and a
+      nullable `locationId` on `RawMaterialInventory`. **Needs a migration**,
+      plus a backfill giving every existing row a "Main" location per branch so
+      nothing changes on deploy.
+- [ ] Transfers UI switches from branch→branch to location→location, with
+      branch→branch kept for the multi-venue case.
+- [ ] **DECISION — the pickleball court bar.** Is it a separate VENUE (its own
+      till, its own Z-read, its own BIR registration) or another ROOM in this
+      one? If it needs its own Z-read it is a branch, and it gets its own
+      rooms underneath. That is a BIR question, not a software one.
 - [ ] **Name the limiting ingredient** in `maxProducible`. It is already
       computed and thrown away. Naming it is what routes "we are out of X" to
       the person who can fix it.

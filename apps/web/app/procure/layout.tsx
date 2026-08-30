@@ -83,6 +83,7 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
   // cannot open, where the same check failed and pathname stopped changing --
   // so the effect stopped firing and the page rendered anyway. A refusal has
   // to be a render, not a redirect, or it is not a refusal.
+  const atHome       = pathname === '/procure';
   const allowedHere  = !user || rolesFor(pathname).includes(user.role);
   const allowedAtAll = !user || REQUEST_ROLES.includes(user.role);
 
@@ -98,10 +99,18 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-20 border-b border-border bg-card/95 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
+          {/*
+            Back goes UP one level, not out of the app. From a sub-screen it
+            returns to the Procure home; only from the home itself does it
+            leave for the app selector. Sending someone from the buy list all
+            the way out to /select is not "back" -- it throws away where they
+            were, and the app switcher already covers leaving.
+          */}
           <Link
-            href="/select"
+            href={atHome ? '/select' : '/procure'}
             className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            aria-label="Back to apps"
+            aria-label={atHome ? 'Back to apps' : 'Back to Procure'}
+            title={atHome ? 'Back to apps' : 'Back to Procure'}
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>

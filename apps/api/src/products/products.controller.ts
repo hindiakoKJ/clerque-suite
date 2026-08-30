@@ -271,6 +271,22 @@ export class ProductPhotosController {
     res.setHeader('Content-Length', row.byteSize);
     // Bytes are immutable per id (we never overwrite a photo row in place),
     // so it's safe to cache for a year. New uploads get new ids.
+    /*
+      Let another origin EMBED this image.
+
+      Helmet sets Cross-Origin-Resource-Policy: same-origin on every response,
+      which is right for JSON and wrong for a picture the web app is supposed
+      to render. The web app is a different origin from the API
+      (clerque.cc vs api.clerque.cc, localhost:3000 vs :3001), so the browser
+      fetched these bytes, saw same-origin, and refused to hand them to the
+      <img> -- ERR_BLOCKED_BY_RESPONSE.NotSameOrigin.
+
+      This is why the photo bug survived three fixes: every check asked
+      "are the bytes there?" and "is the URL right?", and both were always
+      yes. curl does not enforce CORP, so curl said 200 and the browser
+      still showed a broken square.
+    */
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.send(row.data);
   }

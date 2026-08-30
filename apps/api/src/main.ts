@@ -190,6 +190,13 @@ async function bootstrap() {
   // which IS auth-gated.
   app.useStaticAssets(path.join(process.cwd(), 'uploads', 'public'), {
     prefix: '/uploads/public/',
+    // Same reason as the DB-backed photo route: Helmet's global
+    // Cross-Origin-Resource-Policy: same-origin stops the web app, which is a
+    // different origin, from embedding these files at all. Correct for JSON,
+    // wrong for an image meant to be rendered.
+    setHeaders: (res) => {
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    },
     maxAge: '7d',
   });
 

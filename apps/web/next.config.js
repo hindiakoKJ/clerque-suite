@@ -63,7 +63,14 @@ const nextConfig = {
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https:",
+      // The API origin is listed EXPLICITLY, exactly as connect-src does.
+      // "https:" alone covers a production API on https but not a dev one on
+      // http://localhost:3001 -- so every product photo was blocked by CSP in
+      // local development, and the only symptom was a broken image. Upload
+      // worked (that is connect-src, which was parameterised correctly);
+      // rendering did not. The asymmetry between the two directives was the
+      // whole bug.
+      `img-src 'self' data: blob: https: ${apiOrigin}`,
       "font-src 'self' data:",
       `connect-src 'self' ${apiOrigin} https://*.up.railway.app https://api.posthog.com`,
       "frame-ancestors 'none'",

@@ -9,6 +9,7 @@ import { SetThresholdDto } from './dto/set-threshold.dto';
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
+import { resolveBuyUnit } from './unit-conversion';
 
 export { AdjustStockDto, SetThresholdDto, CreateRawMaterialDto, ReceiveRawMaterialDto };
 
@@ -1092,14 +1093,42 @@ export class InventoryService {
   }
 
   async createRawMaterial(tenantId: string, dto: CreateRawMaterialDto) {
+    /*
+      Reconcile the buying unit with the recipe unit BEFORE anything is stored.
+
+      `unit` is a label — no code converts it — so an ingredient bought in kg
+      and portioned in grams costs a thousand times too much in every recipe
+      that uses it. Drinks never hit this because beans and milk are bought and
+      used in the same unit; a kitchen hits it on the first sack of rice.
+
+      The spreadsheet importer has always done this. Doing it here too is what
+      stops the same ingredient existing twice under two units depending on
+      which door it came through.
+    */
+    const resolved = resolveBuyUnit({
+      unit: dto.unit,
+      costPrice: dto.costPrice,
+      recipeUnit: dto.recipeUnit,
+      packSize: dto.packSize,
+    });
+    if (resolved.error) throw new BadRequestException(resolved.error);
+
     const item = await this.prisma.rawMaterial.create({
       data: {
         tenantId,
         name: dto.name,
-        unit: dto.unit,
+        unit: resolved.unit,
         // Defaults to INGREDIENT at the database level when omitted.
         ...(dto.category ? { category: dto.category } : {}),
-        costPrice: dto.costPrice != null ? new Prisma.Decimal(dto.costPrice) : undefined,
+        costPrice: dto.costPrice != null ? new Prisma.Decimal(resolved.costPrice) : undefined,
+        /*
+          The form has always had a reorder-level field and it was never
+          written — the DTO carried it and the create dropped it on the floor.
+          So EVERY ingredient added in the app was unmonitored, and Procure's
+          Check stock, which only ever looks at items that have a reorder
+          level, could not see any of them.
+        */
+        lowStockAlert: dto.lowStockAlert != null ? new Prisma.Decimal(dto.lowStockAlert) : undefined,
       },
     });
     return { ...item, costPrice: item.costPrice != null ? Number(item.costPrice) : null };
@@ -1589,6 +1618,15 @@ export class InventoryService {
       // post-WAC blended cost — so the journal value matches the actual money
       // changing hands today.
       const totalValue = dto.quantity * unitCost;
+      /*
+        The same delivery seen three ways, computed once so they cannot drift:
+        what the shelf is worth (net), the 12% the BIR gives back, and the
+        money that actually left the till. The journal debits the net and
+        credits the gross; the AP bill has to agree with the gross, because
+        that is the number printed on the supplier's invoice.
+      */
+      const inputVat   = +(dto.quantity * ((enteredCost ?? unitCost) - unitCost)).toFixed(2);
+      const grossValue = +(dto.quantity * (enteredCost ?? unitCost)).toFixed(2);
 
       // Sprint 4A — always create a Lot record on receive, regardless of the
       // tenant's valuation method. WAC tenants ignore lots (their COGS still
@@ -1638,8 +1676,8 @@ export class InventoryService {
               // The 12% the BIR will give back, and the money that actually
               // left. The journal credits the gross, because that is what was
               // paid; the difference is the input-tax receivable.
-              inputVat:       +(dto.quantity * ((enteredCost ?? unitCost) - unitCost)).toFixed(2),
-              grossValue:     +(dto.quantity * (enteredCost ?? unitCost)).toFixed(2),
+              inputVat,
+              grossValue,
               paymentMethod,
               receivedAt:     receivedAt.toISOString(),
               referenceNumber: dto.referenceNumber ?? null,
@@ -1689,12 +1727,20 @@ export class InventoryService {
             postingDate:   receivedAt,
             dueDate,
             termsDays,
+            /*
+              The bill is what the SUPPLIER will collect, not what the shelf is
+              worth. `totalValue` is net of recoverable VAT, so billing it as
+              the total understated every credit purchase by the 12% — a ₱112
+              delivery became a ₱100 payable, the shop paid ₱112 against it,
+              and the AP sub-ledger disagreed with the 2010 balance the journal
+              credits (which has always used the gross) by exactly the VAT.
+            */
             subtotal:      new Prisma.Decimal(totalValue),
-            vatAmount:     new Prisma.Decimal(0),
+            vatAmount:     new Prisma.Decimal(inputVat),
             whtAmount:     new Prisma.Decimal(0),
-            totalAmount:   new Prisma.Decimal(totalValue),
+            totalAmount:   new Prisma.Decimal(grossValue),
             paidAmount:    new Prisma.Decimal(0),
-            balanceAmount: new Prisma.Decimal(totalValue),
+            balanceAmount: new Prisma.Decimal(grossValue),
             status:        'OPEN',
             description:   `Stock receipt: ${dto.quantity} ${material.unit} ${material.name}`,
             notes:         dto.note ?? null,

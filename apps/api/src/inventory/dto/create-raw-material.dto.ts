@@ -45,4 +45,33 @@ export class CreateRawMaterialDto {
   @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
   lowStockAlert?: number | null;
+
+  /**
+   * The unit RECIPES use, when it differs from the unit the shop BUYS in.
+   *
+   * Rice is bought by the sack and portioned by the gram. Everything
+   * downstream speaks one unit per ingredient, so the two have to be
+   * reconciled once, here, while the person still remembers which was which —
+   * `unit` above is only a label and nothing converts it later.
+   *
+   * Omitted, or the same as `unit`, means there is nothing to reconcile, which
+   * is every drink ingredient and every item created before this existed.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  recipeUnit?: string;
+
+  /**
+   * How many `recipeUnit` are in one `unit`, when no conversion exists.
+   *
+   * kg → g is arithmetic. "1 bottle → ml" is not: only the person holding the
+   * bottle knows it is 750. Required for a countable container, and refused
+   * when the units already convert, because giving both means one of them is
+   * being ignored.
+   */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0.0001)
+  packSize?: number | null;
 }

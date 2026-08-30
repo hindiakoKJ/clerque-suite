@@ -95,6 +95,11 @@ describe('ImportService — importStockReceipts dates', () => {
     };
     prisma = {
       branch:         { findFirst: jest.fn().mockResolvedValue({ id: 'br-1', name: 'Main' }) },
+      // The importer nets input VAT for a VAT-registered shop, exactly as
+      // receiveRawMaterial does, so opening stock and later deliveries are
+      // valued on the same basis. UNREGISTERED keeps these fixtures on the
+      // gross figures they were written against.
+      tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: 'UNREGISTERED' }) },
       rawMaterial:    { findFirst: jest.fn().mockResolvedValue({ id: RM_ID, name: 'Whole Milk', costPrice: 0 }) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction:   jest.fn(async (fn: AnyFn) => fn(tx)),

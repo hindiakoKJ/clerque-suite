@@ -2,6 +2,11 @@ import { Injectable, BadRequestException, Optional } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  UNIT_FACTORS as SHARED_UNIT_FACTORS,
+  normUnit as sharedNormUnit,
+  unitFactor as sharedUnitFactor,
+} from '../inventory/unit-conversion';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { mapLoyverseItems, looksLikeLoyverse } from './loyverse.mapper';
 import { isRecipeBusinessType } from '@repo/shared-types';
@@ -2709,45 +2714,24 @@ export class ImportService {
    * quantity of anything until the sheet says how big it is), which is the
    * caller's cue to look for a Pack Size instead of guessing one.
    */
+  /*
+    Unit conversion moved to inventory/unit-conversion.ts.
+
+    The app's own Add-ingredient form needs exactly this table and exactly
+    these rules, and two copies that disagree is how the same ingredient ends
+    up stocked twice under two units. These stay as thin private methods so
+    every call site in this file is untouched; the answers now come from one
+    place.
+  */
   private unitFactor(from: string, to: string): number | null {
-    const f = ImportService.UNIT_FACTORS[this.normUnit(from)];
-    const t = ImportService.UNIT_FACTORS[this.normUnit(to)];
-    if (!f || !t || f.family !== t.family) return null;
-    return f.perBase / t.perBase;
+    return sharedUnitFactor(from, to);
   }
 
-  private static readonly UNIT_FACTORS: Record<string, { family: 'mass' | 'volume'; perBase: number }> = {
-    mg: { family: 'mass', perBase: 0.001 },
-    g:  { family: 'mass', perBase: 1 },
-    gram: { family: 'mass', perBase: 1 },
-    grams: { family: 'mass', perBase: 1 },
-    kg: { family: 'mass', perBase: 1000 },
-    kilo: { family: 'mass', perBase: 1000 },
-    kilogram: { family: 'mass', perBase: 1000 },
-    oz: { family: 'mass', perBase: 28.349523125 },
-    lb: { family: 'mass', perBase: 453.59237 },
-    ml: { family: 'volume', perBase: 1 },
-    milliliter: { family: 'volume', perBase: 1 },
-    millilitre: { family: 'volume', perBase: 1 },
-    cl: { family: 'volume', perBase: 10 },
-    l:  { family: 'volume', perBase: 1000 },
-    li: { family: 'volume', perBase: 1000 },
-    liter: { family: 'volume', perBase: 1000 },
-    litre: { family: 'volume', perBase: 1000 },
-    tsp: { family: 'volume', perBase: 4.92892159375 },
-    tbsp: { family: 'volume', perBase: 14.78676478125 },
-    cup: { family: 'volume', perBase: 240 },
-    floz: { family: 'volume', perBase: 29.5735295625 },
-  };
+  private static readonly UNIT_FACTORS = SHARED_UNIT_FACTORS;
 
   /** Lowercase, strip punctuation/plurals so "Grams." and "gram" agree. */
   private normUnit(raw: string): string {
-    return String(raw ?? '')
-      .toLowerCase()
-      .replace(/[.\s]/g, '')
-      .replace(/^(fluid|fl)ounces?$/, 'floz')
-      .replace(/^floz(es)?$/, 'floz')
-      .replace(/s$/, '');
+    return sharedNormUnit(raw);
   }
 
   /**
@@ -3202,6 +3186,27 @@ export class ImportService {
       throw new BadRequestException('Tenant has no active branch. Create one before importing receipts.');
     }
 
+    /*
+      Whether this shop can claim the input tax back, resolved once for the
+      whole sheet.
+
+      `receiveRawMaterial` has always divided a VAT tenant's delivery cost by
+      1.12 so the shelf, the lot, the WAC and the ledger all carry the same
+      net basis. This path did not, so opening stock loaded from the workbook
+      was capitalised GROSS while every later receive of the same ingredient
+      was net -- two bases blended into one weighted average, and the input
+      tax on the opening buy never claimed.
+
+      OWNER_FUNDED is excluded on both paths for the same reason: stock the
+      owner brought in has no supplier and no invoice, so there is no input
+      tax to claim and inventing one would fabricate a receivable from the BIR.
+    */
+    const tenantTax = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { taxStatus: true },
+    });
+    const tenantIsVat = tenantTax?.taxStatus === 'VAT';
+
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
       if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
@@ -3257,6 +3262,15 @@ export class ImportService {
         continue;
       }
 
+      /*
+        What the shelf is worth (net), what the BIR gives back, and what
+        actually left the till. Same three numbers, same rule, as the receive
+        form -- see receiveRawMaterial.
+      */
+      const recoversInputVat = tenantIsVat && paymentMethod !== 'OWNER_FUNDED';
+      const netCost   = recoversInputVat ? cost / 1.12 : cost;
+      const grossCost = cost;
+
       // Resolve branch
       let branchId = defaultBranch.id;
       if (branchName?.trim()) {
@@ -3300,8 +3314,8 @@ export class ImportService {
           // WAC update on RawMaterial
           const oldWac = rm.costPrice ? Number(rm.costPrice) : 0;
           const newWac = newOnHand > 0
-            ? ((oldOnHand * oldWac) + (qty * cost)) / newOnHand
-            : cost;
+            ? ((oldOnHand * oldWac) + (qty * netCost)) / newOnHand
+            : netCost;
           await tx.rawMaterial.update({
             where: { id: rm.id },
             data:  { costPrice: new Prisma.Decimal(newWac) },
@@ -3322,7 +3336,7 @@ export class ImportService {
               rawMaterialId:   rm.id,
               qtyReceived:     new Prisma.Decimal(qty),
               qtyRemaining:    new Prisma.Decimal(qty),
-              unitCost:        new Prisma.Decimal(cost),
+              unitCost:        new Prisma.Decimal(netCost),
               receivedAt:      date,
               referenceNumber: refNumber?.trim() || null,
               paymentMethod,
@@ -3351,7 +3365,7 @@ export class ImportService {
           }
 
           // Accounting event for the JE (Dr 1050 / Cr Cash/AP/Owner)
-          const totalValue = qty * cost;
+          const totalValue = qty * netCost;
           await tx.accountingEvent.create({
             data: {
               tenantId,
@@ -3375,7 +3389,9 @@ export class ImportService {
                 adjustmentType: 'STOCK_IN',
                 quantity:       qty,
                 totalValue,
-                costPrice:      cost,
+                costPrice:      netCost,
+                inputVat:       +((qty * grossCost) - (qty * netCost)).toFixed(2),
+                grossValue:     +(qty * grossCost).toFixed(2),
                 paymentMethod,
                 branchId,
                 receivedAt:     date.toISOString(),

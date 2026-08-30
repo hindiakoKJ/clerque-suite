@@ -186,7 +186,30 @@ export class ProcureService {
       await this.addLine(tenantId, req.id, { rawMaterialId, qtyRequested, shortBy });
       added++;
     }
-    return { requestId: req.id, requestNumber: req.requestNumber, added };
+
+    /*
+      How many ingredients this check could not have found, whatever their
+      stock.
+
+      The low-stock test is `quantity <= lowStockAlert`, and an ingredient with
+      no reorder level fails the `!= null` guard before the comparison. So it
+      can never appear here — not when it runs low, not when it hits zero.
+      Adding nothing therefore has two completely different meanings, and the
+      screen said the reassuring one for both: "nothing is below its reorder
+      level" reads as "you are fine" when the truth may be "nobody is
+      watching any of these".
+
+      A shop can pass a whole kitchen through the app or the onboarding
+      workbook without filling this column once — it is optional in both — and
+      then wonder why Check stock keeps coming back empty while the rice runs
+      out. Counting them is the fix; inventing a default reorder level is not,
+      because a threshold nobody chose is a number nobody can trust.
+    */
+    const unmonitored = await this.prisma.rawMaterial.count({
+      where: { tenantId, isActive: true, lowStockAlert: null },
+    });
+
+    return { requestId: req.id, requestNumber: req.requestNumber, added, unmonitored };
   }
 
   // ── cutoff ────────────────────────────────────────────────────────────────

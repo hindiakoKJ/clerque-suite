@@ -150,11 +150,23 @@ export default function ProcurePage() {
 
   const pull = useMutation({
     mutationFn: () => api.post('/procure/requests/pull-low-stock', { branchId }).then((r) => r.data),
-    onSuccess: (d: { added: number }) => {
+    onSuccess: (d: { added: number; unmonitored?: number }) => {
       refresh();
-      toast.success(d.added
-        ? `Added ${d.added} item${d.added === 1 ? '' : 's'} that are below their reorder level.`
-        : 'Nothing is below its reorder level right now.');
+      // An ingredient with no reorder level can never appear on this list, so
+      // "nothing is below its reorder level" was being said in two very
+      // different situations: everything is stocked, and nobody is watching.
+      // Say which one it is.
+      const blind = d.unmonitored ?? 0;
+      const blindNote = blind > 0
+        ? ` ${blind} ingredient${blind === 1 ? ' has' : 's have'} no reorder level, so ${blind === 1 ? 'it' : 'they'} can never show up here.`
+        : '';
+      if (d.added) {
+        toast.success(`Added ${d.added} item${d.added === 1 ? '' : 's'} that are below their reorder level.${blindNote}`);
+      } else if (blind > 0) {
+        toast.warning(`Nothing is below its reorder level.${blindNote}`);
+      } else {
+        toast.success('Nothing is below its reorder level right now.');
+      }
     },
     onError: (e) => fail(e, 'Could not check stock levels.'),
   });

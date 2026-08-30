@@ -23,6 +23,11 @@ describe('ImportService — stock receipts honour the period lock', () => {
     const lots: any[] = [];
     const prisma: any = {
       branch: { findFirst: jest.fn().mockResolvedValue({ id: 'b1', name: 'Main Branch' }) },
+      // The importer nets input VAT for a VAT-registered shop, exactly as
+      // receiveRawMaterial does, so opening stock and later deliveries are
+      // valued on the same basis. UNREGISTERED keeps these fixtures on the
+      // gross figures they were written against.
+      tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: 'UNREGISTERED' }) },
       rawMaterial: {
         findFirst: jest.fn(({ where }: any) =>
           Promise.resolve({ id: 'rm-' + where.name, name: where.name, unit: 'g', costPrice: '1' })),

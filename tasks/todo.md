@@ -1,231 +1,91 @@
-# Magnet Books — simple POS + Ledger for fridge-magnet home businesses
+# Open work — Clerque
 
-**Goal (KJ, 2026-08-17):** One product for the magnetmoments.cc seller — a home
-fridge-magnet business with limited earnings. Not multinational. Simple. One flat
-access (not tiers): POS to record magnet sales + stock-ins, and a ledger a
-non-accountant can run. Books are gross / no tax (US: no VAT; AU: under the GST
-threshold). Wedge vs a $99/mo competitor: nobody hands a home seller real books.
+## Kitchen-readiness fixes (2026-08-30) — ALL FOUR FIXED
 
-**Design principle:** magnetmoments.cc stays the front door (booking, mark-paid,
-queue, print). Clerque is the books. The bridge is the ingest endpoint we already
-run for CourtSide. Zero accounting logic is rebuilt in the print app.
+Found by adding a real food menu to a real tenant and running it: 11 kitchen
+ingredients, a sub-recipe, an 8-line rice bowl, and one ticket carrying a bar
+drink and a kitchen dish together. The mechanics held — every recipe line
+deducted, the sub-recipe costed to the centavo, COGS posted `Dr 5010 / Cr 1051`,
+trial balance footed. Four things did not.
 
-## Decisions locked this session
-- "Accesses not tiers": ONE plan (`CLERQUE`, everything on) + a per-tenant
-  `ledgerMode` (`FULL` | `SIMPLE`). Simple = Record Entry + Profit + Reports +
-  Settlement; advanced ledger HIDDEN (not grayed) and 403'd server-side.
-- Lever = one JWT-mint override: `advancedAccounting = planFeature && ledgerMode !== 'SIMPLE'`
-  → all 48 `@RequirePlanFeature('advancedAccounting')` guards + the whole ledger
-  nav respect it for free. No per-controller edits.
-- Tenant gets `country`, `currency`, `timezone` (defaults PH/PHP/Asia/Manila so
-  every existing tenant is unchanged). NOT an FX engine — one tenant, one currency.
-- Money display: `formatPeso` becomes currency-aware from the JWT (default PHP);
-  scoped to the simple-mode screens + shell in this slice.
-- magnetmoments "mark paid" → `POST /ingest/magnetmoments` `sale` (idempotent on
-  order id, CourtSide contract shape) → revenue account 4010 (retail sales).
-  Refund event supported (contra-income). One tenant per shop, service API key.
-- Legal riders (AU consumer law / US) = counsel, not code — flagged, not built.
+- [x] **1. "Nothing is below its reorder level" when nobody is watching.**
+      `getLowStock` filters `lowStockAlert != null`
+      (`inventory.service.ts:404`), and Procure's Check stock reads exactly that
+      list (`procure.service.ts:160`). The reorder level is optional in the app
+      AND in the onboarding workbook, so a shop can load 60 ingredients with no
+      reorder level on any of them and the buy list stays permanently empty —
+      while the toast says *"Nothing is below its reorder level right now."*
+      **Proven:** 11 kitchen ingredients created, 0 returned by `getLowStock`.
+      Fix: report how many ingredients are unmonitored. Do not invent a default
+      reorder level — a guessed threshold is worse than a stated absence.
 
-## Schema changes (told KJ before running — additive, backfill-free)
-- `Tenant.ledgerMode LedgerMode @default(FULL)` — enum `LedgerMode { FULL SIMPLE }`
-- `Tenant.country String @default("PH")`, `Tenant.currency String @default("PHP")`,
-  `Tenant.timezone String @default("Asia/Manila")`
-- (repurposing the dead `managerAccountingEnabled` was considered — rejected:
-  inverted/ambiguous name; a clean column is safer.)
+- [x] **2. Units do not convert in the app's Add-ingredient form.**
+      `RawMaterial.unit` is a display label; `conversionFactor` is used nowhere
+      outside the UoM module. Buy in kg, write the recipe in grams, and the
+      recipe costs 1000x. **Proven:** ₱48,000 cost on a ₱220 dish, −21,718%
+      margin, 0 producible.
+      The failure is LOUD, not silent — which is why this is a setup problem,
+      not a corruption. And the conversion already exists: the onboarding
+      workbook does buy-unit → recipe-unit with a pack size
+      (`import.service.ts:2157`). It simply is not reachable from the app form.
+      Fix: extract the conversion, and let the form take the same two units.
 
-## Tasks
-- [x] 1. Schema + migration `20260817000000_ledger_mode_locale` (applied)
-- [x] 2. JWT: mints ledgerMode/country/currency/timezone; auth.service overrides
-      advancedAccounting=false for SIMPLE (copies the shared PLAN_FEATURES object);
-      plan-feature.guard legacy-token fallback mirrors it
-- [x] 3. Owner-writable ledgerMode (DTO @IsIn + updateProfile) + Settings "Ledger mode"
-      card (seeds from DB profile, not stale JWT; "log out and back in" note)
-- [x] 4. Ledger nav HIDES advanced items in SIMPLE (section headers re-homed);
-      FULL nav byte-identical
-- [x] 5. `GET /simple-entries/summary` (money in/out/profit, tenant currency, tenant-tz
-      default month, ISO+range validation) + "This month" profit card w/ month picker
-- [x] 6. `formatMoney`/`currencySymbol`/`setDisplayCurrency`; formatPeso signature
-      unchanged, PHP default → 394 sites identical; wired in store/auth.ts (setUser,
-      clear, onRehydrateStorage); Intl construction try/catch → never blanks the app
-- [x] 7. `POST /ingest/magnetmoments` sale/refund; keys `mm:sale:`/`mm:refund:`;
-      currency MUST match tenant; integer/positive money; lines must sum; gross;
-      refund reads original tender from resultJson (1010 vs 1031)
-- [x] 8. 616/616 API tests (48 suites, +30), api+web tsc clean
-- [x] 9. Live smoke 25/25 (real DI graph, throwaway SIMPLE USD tenant)
-- [x] 10. Memory + review
+- [x] **3. The importer does not net input VAT; the receive form does.**
+      `receiveRawMaterial` divides by 1.12 for a VAT tenant on a non-
+      OWNER_FUNDED receipt (`inventory.service.ts:1472`). The spreadsheet path
+      has no `taxStatus` lookup at all. A workbook row marked CASH or CREDIT
+      capitalises gross while every later receive is net, so the WAC blends two
+      bases and the input tax on opening stock is never claimed.
+      Blank payment method defaults to OWNER_FUNDED, where both agree — so this
+      bites only the shop that filled the column in honestly.
 
-## Review (2026-08-17)
-**Shipped:** the "Magnet Books" access — a SIMPLE-mode tenant sees Dashboard /
-Record Entry / Settlement / Reports / POS-derived AR only, is 403'd on the 48
-advanced routes (even on a legacy token), sees a plain-English monthly profit,
-and gets its magnetmoments.cc sales posted automatically on "mark paid".
-**Bug found by adversarial review and FIXED at the root (not just for the card):**
-`getPLSummary` and `getBalanceSheet` summed contra accounts in their OWN
-direction — a refund RAISED revenue, an owner drawing RAISED equity, accumulated
-depreciation RAISED assets, and Assets = Liabilities + Equity silently broke.
-19 contra accounts in the seeded COA. Fixed to direction-uniform section totals
-(row display unchanged); `getPLSummary` `to` now includes the whole day.
-Pinned by accounts.statements.spec.ts (7 tests) + live: $40 sale − $15 refund →
-money-in $25; balance sheet 515 = 0 + 515. This also corrects the Income
-Statement export and period-close, which reuse getPLSummary.
-**Deferred (needs KJ):** the flat PRICE number; legal riders (AU consumer law / US);
-magnetmoments.cc side of the bridge (call the endpoint on "mark paid" with a
-per-shop readwrite API key) — the Clerque side is live.
-**Housekeeping:** one inert throwaway tenant `magnet-smoke-1786969320126` remains
-in the LOCAL dev DB (0 orders/entries/products; only 2 login_log rows, protected by
-the append-only audit trigger which the sandbox rightly refused to disable). Remove
-with: `ALTER TABLE login_logs DISABLE TRIGGER ALL; DELETE FROM login_logs WHERE
-"tenantId"=(SELECT id FROM tenants WHERE slug LIKE 'magnet-smoke-%'); DELETE FROM
-tenants WHERE slug LIKE 'magnet-smoke-%'; ALTER TABLE login_logs ENABLE TRIGGER ALL;`
-Lesson: smoke scripts should mint JWTs via JwtService.sign() with a hand-built
-payload, not auth.login(), to avoid writing audit rows.
+- [x] **4. The AP bill records net while the GL records gross.**
+      A CREDIT receive credits `2010` with `grossValue`
+      (`journal.service.ts`), but the AP Bill it creates alongside sets
+      `subtotal: totalValue` (net), `vatAmount: 0`, `totalAmount: totalValue`
+      (`inventory.service.ts:1692`). A ₱112 delivery becomes a ₱100 payable:
+      the sub-ledger and the GL disagree by the VAT on every credit purchase,
+      and the shop pays ₱112 against a bill that says ₱100.
 
----
+### Verified working, same run — do not re-investigate
+Sub-recipe batches drain their components (soy 2000 → 1500 for 2 × 250 ml) and
+cost at inputs ÷ yield. An 8-line recipe containing a sub-recipe costs
+correctly (₱87.47 computed = ₱87.47 by hand). One ticket spanning bar and
+kitchen deducts all 12 lines. COGS carries `RECIPE_WAC` and credits 1051. The
+supply guard refuses a kitchen supply from a recipe. 1048 tests green.
 
-## Carolina — features buildable without schema changes (2026-08-27)
+### How each was closed, and proved
 
-Requested: "do everything what you can do now". The three below need no
-migration. Preps, the oat-milk swap column and the raw-material movement log
-all require schema changes and are NOT started — they need explicit approval.
+Fixed in one pass, then verified against the real database rather than argued
+from the code. 36 new tests; 1084 API tests green; web build green.
 
-- [x] 1. Export ingredients as xlsx
-      `ingredientsExport(tenantId)` + `GET /import/export/ingredients`.
-      Fills the SAME seven columns the importer reads, from live RawMaterial
-      rows, so export -> edit -> import is a round trip. This is what stops
-      every ingredient file having to be hand-built outside the app.
-      Property to prove: exporting and re-importing changes nothing.
+1. `createRawMaterial` was **dropping the reorder level entirely** — the form
+   sent it, the DTO carried it, the create wrote name/unit/category/cost and
+   nothing else. So every ingredient added in the app was unmonitored by
+   construction, which is why the kitchen items were invisible. It is now
+   written, and `pullLowStock` returns `unmonitored` so an empty buy list says
+   which of the two things it means. No default reorder level is invented.
+   *Live:* reorder level 2000 persisted, item found "short by 2000 g", and the
+   real tenant reported **55 ingredients nobody is watching**.
 
-- [x] 2. Fix `getLowStock` (inventory.service.ts:354)
-      Today it queries `inventoryItem` joined to Product only, so a cafe gets
-      zero ingredients back. It also spreads `...i`, leaking `avgCost` to
-      cashiers. Add raw materials; drop the leak.
+2. The importer's buy-unit conversion moved to
+   `inventory/unit-conversion.ts`, and the app's Add-ingredient form now takes
+   the same two units plus a pack size. One table, two doors.
+   *Live:* 1 kg at ₱320 with recipes in g stored as ₱0.32/g; 1 pc at ₱150
+   holding 750 ml stored as ₱0.20/ml; "sack" → g refused with
+   *"Add a Pack Size saying how many g are in one sack"* and nothing written.
+   Only on create — re-scaling an existing ingredient would move stock that is
+   already counted on a shelf.
 
-- [x] 3. Expose purchase orders to the owner
-      The module is built (create/submit/receive) with screens, but only under
-      /admin, so a BUSINESS_OWNER cannot reach it.
+3. The importer now resolves `tenant.taxStatus` once per sheet and nets the
+   cost on the same rule as `receiveRawMaterial`, so the lot, the WAC and the
+   ledger share one basis. OWNER_FUNDED — the default for a blank column — is
+   excluded on both paths, so nothing changes for a shop that left it blank.
 
-### Review
+4. The AP bill now carries `subtotal` net, `vatAmount` the input tax and
+   `totalAmount`/`balanceAmount` the gross, which is what the supplier will
+   actually collect and what the journal already credits to 2010.
+   *Live:* a ₱1,120 delivery books as 1000 + 120 = 1120, was 1000 + 0 = 1000.
 
-All three shipped. 834 tests / 74 suites pass; both apps typecheck clean.
-
-**1. Ingredient export** — `ingredientsExport()` + `GET /import/export/ingredients`,
-inheriting the controller's owner/manager/finance roles (costs, so not cashiers).
-Two things the build turned up:
-  * `makeTemplate` stamps every row it is handed with the SAMPLE marker, and
-    `isSampleRow` skips those on import — so passing real data through it would
-    have produced a file that uploads as nothing. Added a `realData` opt that
-    turns off the stamping, the grey italics, and the "rows starting with
-    SAMPLE are ignored" instruction, which is the wrong thing to tell someone
-    about their own data.
-  * Writing `Recipe Unit` equal to `Unit*` and leaving `Pack Size` blank is what
-    makes the round trip exact: the importer only converts when the two differ,
-    so the cost comes back as it went out. Proved in
-    `ingredients-export.spec.ts` — export, re-import, nothing created, every
-    unit and cost unchanged, including the "Strawless Lid ( Cold )" spacing.
-
-**2. getLowStock** — now unions products with `rawMaterialInventory` against
-`RawMaterial.lowStockAlert`, so a cafe actually gets ingredients back instead of
-bottled water. Replaced the `...i` spread with an explicit allow-list: it was
-handing `avgCost` to every CASHIER on the endpoint's role list. Added `shortBy`
-and sorted worst-first, because "8 short" is actionable and "12 <= 20" is not.
-
-**3. Purchase orders** — the API always allowed BUSINESS_OWNER; only the screens
-were unreachable, sitting under an /admin layout that redirects non-SUPER_ADMIN.
-Added /pos/purchase-orders routes that re-export the same components (they never
-reference a tenant — the API scopes by JWT) and a Purchasing nav section
-appended to every vertical, since the default nav branch a coffee shop takes
-does not include the Warehouse section. The pages had four hardcoded
-/admin/purchase-orders links that would have bounced an owner to /select; those
-now resolve against whichever mount the reader is on.
-
-**4. Buy Now — cashier-facing (added after the first three)**
-  * `GET /inventory/low-stock/slip` — the list as 32-column text for the popup
-  * `POST /inventory/low-stock/print` — same content as ESC/POS, reusing the
-    Close & Plan `InlineEscPosBuilder`, so whatever prints receipts prints this
-  * `GET /inventory/low-stock/export` — the xlsx shopping sheet, laid out in the
-    shop's OWN expense-report columns (Date/Store/Area/Item/Pack size/Pack unit/
-    Qty/Unit price/Amount) so one sheet is both the list and the record
-  * `components/pos/BuyNowButton.tsx` in the POS header next to Cash Out —
-    cashiers cannot open /pos/inventory, so the answer comes to them
-  All four are CASHIER-open and carry NO costs; a test asserts the buffer never
-  contains a price. Screen and paper are rendered from one line-list on the
-  server so they cannot drift.
-
-  Depends on `RawMaterial.lowStockAlert` being set — with no thresholds the
-  list is correctly empty. That is column J of the Setup Workbook.
-
-**Not started — these need schema changes and explicit approval:**
-  * `ModifierOptionIngredient.replacesRawMaterialId` — the oat-milk swap
-  * prep tracking (`batchYield`, prep recipe, `qtyReserve`)
-  * `RawMaterialMovement` — the ingredient half of InventoryLog, which the
-    cashier usage report depends on
-
----
-
-## Ingredient categories + one file for everything (2026-08-28)
-
-Explicit go-ahead given for the migration. Three pieces, one slice.
-
-- [x] 1. `RawMaterialCategory` enum + `RawMaterial.category`
-      INGREDIENT / KITCHEN_SUPPLY / BAR_SUPPLY / OFFICE_SUPPLY, defaulting to
-      INGREDIENT so every existing row keeps behaving exactly as it does now.
-      Nothing distinguishes coffee beans from bleach today, which is why 17
-      supplies sit in Carolina's 283-row ingredient list looking like food.
-
-- [x] 2. Category flows through the templates
-      Add the column to the Ingredients import template and read it. Then the
-      rule the owner asked for becomes enforceable: only an INGREDIENT may
-      appear in a recipe, so only ingredients reach COGS. Supplies still get
-      stocked and counted; they simply cannot be an ingredient of anything.
-
-- [x] 3. Setup-pack EXPORT
-      `template/setup-pack` already returns ONE file with seven sheets in
-      dependency order — but only blank. Filling it is the real answer to
-      "too many templates": after day one nobody opens a blank template again,
-      they export their setup, edit it, and upload the same file back.
-
-NOT in this slice: routing supply purchases to expenses instead of inventory.
-That touches AP and is a separate decision — flagged, not started.
-
-### Review
-
-Shipped. 873 tests / 79 suites pass; both apps typecheck.
-
-**1. `RawMaterialCategory`** — enum + `raw_materials.category`, NOT NULL DEFAULT
-'INGREDIENT', plus a `(tenantId, category)` index. Migration
-20260828000000_raw_material_category. Deliberately NOT backfilled by name:
-guessing "Zonrox Bleach" is a supply is right, guessing "Food Keeper" is a coin
-flip, and a wrong category silently removes an item from recipe costing.
-
-**2. Category in the templates, and the rule it makes enforceable.** The column
-is resolved by HEADER, not position, so every seven-column sheet already in the
-wild keeps importing and lands on the default. Input is normalised the way a
-person writes it ("Kitchen Supplies", "kitchen supply", "KITCHEN_SUPPLY") and an
-unrecognised value is REFUSED by name rather than filed as food. A blank cell is
-"not supplied", so re-importing never re-files something categorised in the app.
-Then the owner's rule holds at the point it matters: importRecipesFromRows
-refuses a non-INGREDIENT with a message naming the category, because bleach in a
-recipe is a mistake worth seeing rather than a row to skip.
-
-**3. Recipe UOM — a live accuracy bug, not a missing feature.** The recipes
-template documented a Unit column in its instructions AND wrote 'g'/'ml'/'pc'
-into its sample rows, but shipped only three headers. importRecipesFromRows
-locates that column by matching /^unit/i against the HEADER row, so it always
-returned -1 and the unit was silently dropped. Anyone who followed the
-template's own instructions and wrote "200 ml" against milk stored in litres got
-200 LITRES in one drink, with nothing erroring. Header added, every sample row
-now states its unit, and cups/lids read 'pc' rather than 'g' — a template
-teaches by example before anyone reads the instructions. Still optional, so
-existing sheets keep working.
-
-**4. Setup-pack export.** `GET /import/export/setup-pack` returns ONE file whose
-sheets are the same seven the blank pack ships, with Ingredients and Recipes
-filled from live data. Also `GET /import/export/recipes` on its own. The blank
-pack answers "what must I fill in?"; this answers "what do I already have?",
-which is the question every shop past day one is actually asking. Products,
-Customers, Vendors and the Chart of Accounts ship blank and the Read Me says so
-— Products vary by business type and the rest are rarely bulk-edited.
-
-**Flagged, not started:** routing supply PURCHASES to expenses rather than
-inventory. Categorising them is done; changing where their money lands touches
-AP and is a separate decision.
+Trial balance after all of it: **Dr ₱31,514.62 / Cr ₱31,514.62**, no negative
+stock.

@@ -68,7 +68,7 @@ export default function InventoryPage() {
     branchId: '', quantity: '', reasonCode: 'DAMAGE', note: '',
   });
   const [editingMat, setEditingMat] = useState<RawMaterial | null>(null);
-  const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '' });
+  const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '', recipeUnit: '', packSize: '' });
   const [receiveForm,setReceiveForm]= useState({
     branchId: '',
     quantity: '',
@@ -146,7 +146,7 @@ export default function InventoryPage() {
   // ── Ingredient CRUD ────────────────────────────────────────────────────────
 
   function openCreateMat() {
-    setMatForm({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '' });
+    setMatForm({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '', recipeUnit: '', packSize: '' });
     setEditingMat(null);
     setMatModal('create');
   }
@@ -158,6 +158,11 @@ export default function InventoryPage() {
       category:      m.category ?? 'INGREDIENT',
       costPrice:     m.costPrice     != null ? String(m.costPrice)     : '',
       lowStockAlert: m.lowStockAlert != null ? String(m.lowStockAlert) : '',
+      // Buy-unit reconciliation happens once, at creation. An existing
+      // ingredient already has stock counted in its unit, so re-scaling it
+      // here would move the shelf without anyone touching the shelf.
+      recipeUnit: '',
+      packSize:   '',
     });
     setEditingMat(m);
     setMatModal('edit');
@@ -198,6 +203,22 @@ export default function InventoryPage() {
         lowStockAlert: matForm.lowStockAlert ? parseFloat(matForm.lowStockAlert) : null,
       };
       if (matModal === 'create') {
+        /*
+          The buy unit is reconciled to the recipe unit ONLY on create.
+
+          Changing it later would re-scale stock that is already on the shelf
+          without anyone touching the shelf, so an existing ingredient keeps
+          the unit it was created with. Sent only when the two actually
+          differ, so nothing changes for the ordinary case where a shop buys
+          and uses in the same unit.
+        */
+        const recipeUnit = matForm.recipeUnit.trim();
+        if (recipeUnit && recipeUnit !== matForm.unit.trim()) {
+          Object.assign(payload, {
+            recipeUnit,
+            packSize: matForm.packSize ? parseFloat(matForm.packSize) : undefined,
+          });
+        }
         await api.post('/inventory/raw-materials', payload);
         toast.success('Ingredient created.');
       } else if (editingMat) {
@@ -618,9 +639,55 @@ export default function InventoryPage() {
                     : 'Its cost is an expense of running the shop, never part of a recipe.'}
                 </p>
               </div>
+              {/*
+                Buy unit vs recipe unit.
+
+                `unit` is only a label — nothing in the app converts it — so an
+                ingredient bought by the kilo and portioned by the gram costs a
+                thousand times too much in every recipe that uses it. Drinks
+                never hit this because beans and milk are bought and used the
+                same way; a kitchen hits it on the first sack of rice.
+
+                Only on create: an existing ingredient already has stock
+                counted in its unit, and re-scaling that here would move the
+                shelf without anyone touching the shelf.
+              */}
+              {matModal === 'create' && (
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">
+                    Do recipes measure it differently?
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <select
+                      value={matForm.recipeUnit}
+                      onChange={(e) => setMatForm((f) => ({ ...f, recipeUnit: e.target.value }))}
+                      className={INPUT_CLS}
+                    >
+                      <option value="">No — recipes use {matForm.unit}</option>
+                      {UNITS.filter((u) => u !== matForm.unit).map((u) => (
+                        <option key={u} value={u}>Recipes use {u}</option>
+                      ))}
+                    </select>
+                    {matForm.recipeUnit && matForm.recipeUnit !== matForm.unit && (
+                      <input
+                        type="number" min="0" step="any"
+                        value={matForm.packSize}
+                        onChange={(e) => setMatForm((f) => ({ ...f, packSize: e.target.value }))}
+                        className={INPUT_CLS}
+                        placeholder={`${matForm.recipeUnit} in one ${matForm.unit}`}
+                      />
+                    )}
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    {matForm.recipeUnit && matForm.recipeUnit !== matForm.unit
+                      ? `Buy in ${matForm.unit}, cook in ${matForm.recipeUnit}. Leave the box blank if ${matForm.unit} converts on its own (kg to g does). Fill it in when one ${matForm.unit} is a container — say how many ${matForm.recipeUnit} it holds.`
+                      : 'Say so if you buy it by the sack or bottle but portion it by the gram or millilitre. Stock and recipe cost are then kept in the smaller unit.'}
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Low-stock alert (in {matForm.unit || 'units'})
+                  Low-stock alert (in {matForm.recipeUnit || matForm.unit || 'units'})
                 </label>
                 <input
                   type="number" min="0" step="any"

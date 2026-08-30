@@ -19,6 +19,8 @@ describe('ProcureService', () => {
     lines?: any[];
     status?: string;
     lowStock?: any[];
+    /** Ingredients with no reorder level — invisible to Check stock by design. */
+    unmonitored?: number;
     receiveImpl?: (rmId: string, dto: any) => any;
   } = {}) {
     const created: any[] = [];
@@ -52,6 +54,11 @@ describe('ProcureService', () => {
       },
       rawMaterial: {
         findFirst: jest.fn(({ where }: any) => Promise.resolve({ id: where.id, name: 'White Sugar' })),
+        // How many ingredients carry no reorder level. Check stock reports it
+        // because an ingredient without one can never appear on the list, so
+        // "nothing is below its reorder level" and "nobody is watching" used
+        // to look identical on screen.
+        count: jest.fn().mockResolvedValue(opts.unmonitored ?? 0),
       },
       $transaction: jest.fn((ops: any) => Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
     };
@@ -155,6 +162,56 @@ describe('ProcureService', () => {
     expect(res.added).toBe(2);
     expect(created.map((c) => c.rawMaterialId)).toEqual(['rm-sugar', 'rm-milk']);
     expect(Number(created[0].shortBy)).toBe(4000);
+  });
+
+  /*
+    An ingredient with NO reorder level can never appear on this list.
+
+    The low-stock test is `quantity <= lowStockAlert` behind a `!= null` guard,
+    so an unmonitored ingredient fails before the comparison — not when it runs
+    low, not when it hits zero. Adding nothing therefore means two completely
+    different things, and the screen said the reassuring one for both:
+    "nothing is below its reorder level" reads as "you are fine" when the truth
+    can be "nobody is watching any of these".
+
+    A shop can pass a whole kitchen through the app or the onboarding workbook
+    without filling that column once — it is optional in both — and then wonder
+    why Check stock keeps coming back empty while the rice runs out. Proven on
+    real data: 11 kitchen ingredients created, 0 returned by getLowStock.
+  */
+  describe('ingredients nobody is watching', () => {
+    it('reports how many can never appear, so an empty list can be read correctly', async () => {
+      const { svc } = build({ lowStock: [], unmonitored: 11 });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(0);
+      expect(res.unmonitored).toBe(11);
+    });
+
+    it('still reports them when the check DID find something', async () => {
+      // "Added 2" is not the all-clear it looks like if forty others are
+      // invisible to the same check.
+      const { svc } = build({
+        lowStock: [{ rawMaterialId: 'rm-sugar', shortBy: 4000, kind: 'INGREDIENT' }],
+        unmonitored: 40,
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(1);
+      expect(res.unmonitored).toBe(40);
+    });
+
+    it('says zero when every ingredient has a reorder level', async () => {
+      const { svc } = build({ lowStock: [], unmonitored: 0 });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.unmonitored).toBe(0);
+    });
+
+    it('does not invent a reorder level for them', async () => {
+      // Counting them is the fix. A threshold nobody chose is a number nobody
+      // can trust, and it would put items on a buy list on no authority.
+      const { svc, created } = build({ lowStock: [], unmonitored: 11 });
+      await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(created).toHaveLength(0);
+    });
   });
 
   // ── cutoff ────────────────────────────────────────────────────────────────

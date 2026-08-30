@@ -54,11 +54,24 @@ export default function ClockPage() {
     }
   }
 
-  // Clock out
-  async function handleClockOut() {
+  /*
+    Clock out, asking about the unpaid break.
+
+    breakMins was hard-coded to 0. The API computes worked = total - break
+    (payroll.service.ts), so a 07:00-16:00 shift with an hour's meal break was
+    recorded as 9.00 worked hours -- an hour of overtime, paid at 125%, that
+    nobody worked. Wrong from the first pay run, wrong in the staff member's
+    favour, and invisible: the Break column could only ever print a dash.
+
+    One tap, not a form. Somebody is clocking out, not filling in a timesheet.
+  */
+  const [askBreak, setAskBreak] = useState(false);
+
+  async function handleClockOut(breakMins: number) {
+    setAskBreak(false);
     setActionPending(true);
     try {
-      const { data } = await api.post<ClockStatus>('/payroll/clock/out', { breakMins: 0 });
+      const { data } = await api.post<ClockStatus>('/payroll/clock/out', { breakMins });
       setStatus(data);
       toast.success('Clocked out successfully.');
     } catch (err: any) {
@@ -111,9 +124,38 @@ export default function ClockPage() {
             <Loader2 className="w-5 h-5 animate-spin" />
             <span className="text-sm">Checking status…</span>
           </div>
+        ) : askBreak ? (
+          <div className="w-full max-w-xs rounded-2xl border border-border bg-card p-4 text-center">
+            <p className="text-sm font-semibold text-foreground">How long was your break?</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Unpaid break time comes off your hours.
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {[
+                { m: 0,  label: 'None'   },
+                { m: 30, label: '30 min' },
+                { m: 60, label: '1 hour' },
+              ].map((o) => (
+                <button
+                  key={o.m}
+                  onClick={() => void handleClockOut(o.m)}
+                  disabled={actionPending}
+                  className="min-h-[3rem] rounded-xl border border-border text-sm font-medium transition-colors hover:bg-muted disabled:opacity-50"
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setAskBreak(false)}
+              className="mt-3 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Cancel
+            </button>
+          </div>
         ) : (
           <button
-            onClick={isClockedIn ? handleClockOut : handleClockIn}
+            onClick={isClockedIn ? () => setAskBreak(true) : handleClockIn}
             disabled={actionPending}
             className="flex items-center gap-3 px-10 py-4 rounded-2xl font-semibold text-white text-lg shadow-lg transition-all hover:brightness-110 active:scale-[0.97] disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ background: 'var(--accent)' }}

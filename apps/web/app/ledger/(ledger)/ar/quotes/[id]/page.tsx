@@ -17,6 +17,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 type QuoteStatus = 'DRAFT' | 'SENT' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CONVERTED';
 
@@ -54,7 +55,6 @@ function fmtDate(iso: string | null | undefined) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
 }
-function todayIso() { return new Date().toISOString().slice(0, 10); }
 function daysBetween(a: string, b: string) {
   const ms = new Date(b).getTime() - new Date(a).getTime();
   return Math.max(0, Math.round(ms / 86400000));

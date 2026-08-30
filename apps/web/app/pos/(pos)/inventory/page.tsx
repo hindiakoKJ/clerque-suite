@@ -11,6 +11,7 @@ import { useInventoryBase } from '@/lib/inventory-base';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { isFnbType } from '@repo/shared-types';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ export default function InventoryPage() {
     note: '',
     referenceNumber: '',
     paymentMethod: 'CASH' as 'CASH' | 'CREDIT' | 'OWNER_FUNDED',
-    receivedAt: new Date().toISOString().slice(0, 10),  // YYYY-MM-DD, today by default
+    receivedAt: todayIso(),   // LOCAL today -- toISOString() is UTC, which books a 6am delivery to yesterday
     vendorId: '',
     termsDays: '30',
   });
@@ -144,7 +145,7 @@ export default function InventoryPage() {
       note: '',
       referenceNumber: '',
       paymentMethod: 'CASH',
-      receivedAt: new Date().toISOString().slice(0, 10),
+      receivedAt: todayIso(),
       vendorId: '',
       termsDays: '30',
     });

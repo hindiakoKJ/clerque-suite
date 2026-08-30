@@ -15,6 +15,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 interface Customer { id: string; name: string; isActive?: boolean }
 
@@ -35,7 +36,6 @@ const INPUT_CLS =
 function emptyLine(): LineDraft {
   return { description: '', quantity: '1', unitPrice: '', taxAmount: '0' };
 }
-function todayIso() { return new Date().toISOString().slice(0, 10); }
 function addDaysIso(iso: string, days: number) {
   const d = new Date(iso);
   d.setDate(d.getDate() + days);

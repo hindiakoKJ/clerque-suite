@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import { formatPeso, currencySymbol } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 type EntryType =
   | 'EXPENSE' | 'OTHER_INCOME' | 'OWNER_CONTRIBUTION'
@@ -39,7 +40,7 @@ interface ProfitSummary {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 /** First/last day of a month as YYYY-MM-DD (month is 0-based, local calendar). */

@@ -200,6 +200,18 @@ export default function StaffPage() {
       toast.error('Password is required (or check Clock-only).');
       return;
     }
+    /*
+      A till account with no branch cannot open a shift -- openShift('') always
+      fails and the modal has no way out, so the account is locked out of the
+      POS from its first sign-in. The field offers "— None —" first and reads
+      as optional in a single-branch shop, which is exactly when it is set
+      wrong. Refuse it here rather than at 6am.
+    */
+    const NEEDS_BRANCH = ['CASHIER', 'SALES_LEAD'];
+    if (!createForm.kioskOnly && NEEDS_BRANCH.includes(createForm.role) && !createForm.branchId) {
+      toast.error('Pick a branch — a till account cannot open a shift without one.');
+      return;
+    }
     setSaving(true);
     try {
       await api.post('/users', {

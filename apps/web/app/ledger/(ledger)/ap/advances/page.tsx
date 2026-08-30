@@ -5,6 +5,7 @@ import { Wallet, Plus, Send, Undo2, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 type AdvanceStatus = 'DRAFT' | 'POSTED' | 'APPLIED' | 'REFUNDED' | 'VOIDED';
 type PaymentMethod = 'CASH' | 'GCASH_PERSONAL' | 'GCASH_BUSINESS' | 'MAYA_PERSONAL' | 'MAYA_BUSINESS' | 'QR_PH';
@@ -183,7 +184,7 @@ function CreateAdvanceModal({
   vendors, onClose, onCreated,
 }: { vendors: Vendor[]; onClose: () => void; onCreated: () => void }) {
   const [vendorId, setVendorId] = useState('');
-  const [advanceDate, setAdvanceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [advanceDate, setAdvanceDate] = useState(todayIso());
   const [method, setMethod] = useState<PaymentMethod>('CASH');
   const [totalAmount, setTotalAmount] = useState<number>(0);
   const [reference, setReference] = useState('');

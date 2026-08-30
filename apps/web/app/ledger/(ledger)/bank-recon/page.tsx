@@ -7,6 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import DocumentAttachments from '@/components/shared/DocumentAttachments';
+import { todayIso } from '@/lib/today';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,6 @@ interface StatementRow {
 
 const READ_ROLES = ['BUSINESS_OWNER', 'ACCOUNTANT', 'FINANCE_LEAD', 'SUPER_ADMIN'];
 
-function todayIso() { return new Date().toISOString().slice(0, 10); }
 function startOfMonth() { const d = new Date(); d.setDate(1); return d.toISOString().slice(0, 10); }
 
 let stmtSeq = 0;

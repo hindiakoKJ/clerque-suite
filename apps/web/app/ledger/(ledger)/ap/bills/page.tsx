@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import DocumentAttachments from '@/components/shared/DocumentAttachments';
+import { todayIso } from '@/lib/today';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -111,7 +112,6 @@ function fmtDate(iso: string | null | undefined) {
   });
 }
 
-function todayIso() { return new Date().toISOString().slice(0, 10); }
 
 // ── Create Modal ──────────────────────────────────────────────────────────────
 

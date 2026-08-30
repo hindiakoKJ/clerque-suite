@@ -159,6 +159,42 @@ export function ShiftGate({ children }: ShiftGateProps) {
     return <>{children}</>;
   }
 
+  /*
+    A cashier with no branch cannot open a shift: branchId is '' and
+    openShift('') always fails. The modal has no cancel and no sign-out, so
+    the account was simply locked out of the app -- the barista signs in at
+    6am and gets a dialog that can never be satisfied.
+
+    It happens easily: the Branch field on the staff form offers "— None —"
+    first, is not marked required, and nothing validates it, so in a
+    single-branch shop it reads as optional. Say what is wrong and give them a
+    way out instead of a dialog that cannot be dismissed.
+  */
+  if (!user?.branchId) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="w-full max-w-sm rounded-xl border border-border bg-card p-6 text-center">
+          <h1 className="text-base font-semibold">This account has no branch</h1>
+          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+            A till has to belong to a branch before a shift can be opened. Ask the owner to open
+            <strong className="text-foreground"> Staff</strong>, edit your account and set its
+            branch — then sign in again.
+          </p>
+          <button
+            onClick={() => {
+              useAuthStore.getState().clear();
+              document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+              window.location.href = '/login';
+            }}
+            className="mt-4 inline-flex min-h-[2.5rem] items-center rounded-lg border border-border px-3 text-sm transition-colors hover:bg-muted"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!activeShift) {
     return (
       <OpenShiftModal

@@ -5,6 +5,7 @@ import { Wallet, Plus, Send, Undo2, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -191,7 +192,7 @@ function CreateAdvanceModal({
   customers, onClose, onCreated,
 }: { customers: Customer[]; onClose: () => void; onCreated: () => void }) {
   const [customerId, setCustomerId] = useState('');
-  const [advanceDate, setAdvanceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [advanceDate, setAdvanceDate] = useState(todayIso());
   const [method, setMethod] = useState<PaymentMethod>('CASH');
   const [totalAmount, setTotalAmount] = useState<number>(0);
   const [reference, setReference] = useState('');

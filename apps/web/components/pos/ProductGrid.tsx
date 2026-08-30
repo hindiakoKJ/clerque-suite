@@ -132,7 +132,17 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
     );
 
     if (mustAsk) {
-      // Modifier picker handles a single item at a time — multiplier doesn't apply.
+      /*
+        The picker asks about ONE drink, but the multiplier still applies to
+        how many of that drink go in the cart -- three identical lattes are
+        three of the same choices, not three separate questions.
+
+        This used to drop the multiplier silently. The badge said "×3", the
+        tooltip promised "Next tap will add 3", and the cart got one. Because
+        an option can never be marked default, every drink with a modifier
+        group takes this path -- so "3x latte" undercharged by two lattes,
+        every time, in the direction a shop never notices.
+      */
       setPickerProduct(p);
       return;
     }
@@ -347,7 +357,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
           productName={pickerProduct.name}
           basePrice={Number(pickerProduct.price)}
           modifierGroups={pickerProduct.modifierGroups ?? []}
-          onConfirm={(mods) => commitAdd(pickerProduct, mods)}
+          onConfirm={(mods) => commitAdd(pickerProduct, mods, multiplier)}
           onClose={() => setPickerProduct(null)}
         />
       )}

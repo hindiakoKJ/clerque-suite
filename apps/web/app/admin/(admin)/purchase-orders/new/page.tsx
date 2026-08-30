@@ -10,6 +10,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Trash2, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
+import { todayIso } from '@/lib/today';
 
 /**
  * These screens are mounted twice: at /admin for platform staff and at /pos for
@@ -38,7 +39,7 @@ export default function NewPurchaseOrderPage() {
   const router = useRouter();
   const [branchId, setBranchId] = useState('');
   const [vendorId, setVendorId] = useState('');
-  const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [orderDate, setOrderDate] = useState(() => todayIso());
   const [expectedAt, setExpectedAt] = useState('');
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([

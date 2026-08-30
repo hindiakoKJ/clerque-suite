@@ -24,6 +24,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -52,7 +53,6 @@ function newLine(): Line {
   lineKeySeq += 1;
   return { key: `L${lineKeySeq}`, accountId: '', description: '', quantity: '1', unitPrice: '', taxAmount: '0' };
 }
-function todayIso() { return new Date().toISOString().slice(0, 10); }
 
 // ── Page ───────────────────────────────────────────────────────────────────
 

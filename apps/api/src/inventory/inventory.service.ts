@@ -1190,6 +1190,39 @@ export class InventoryService {
     const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Raw material not found');
 
+    /*
+      You cannot make something a supply while a recipe still uses it.
+
+      Recipes may only contain ingredients (products.service.ts saveBom, and
+      the same rule on the import path). Nothing stopped the reverse move: an
+      item already sitting in a BOM could be reclassified to a supply, and the
+      recipe would keep working until the next save -- which would then be
+      refused, with the reason pointing at a line the owner did not touch.
+
+      This bites immediately on packaging. Cups, lids and straws ARE in the
+      BOMs today (each is consumed per drink, exactly like milk), so calling
+      one a bar supply would strand every drink recipe containing it. Refusing
+      here puts the question where it can be answered: either the item really
+      is consumed per sale and belongs in the recipe, or it does not and the
+      recipe should lose it first.
+    */
+    if (dto.category && dto.category !== 'INGREDIENT' && item.category === 'INGREDIENT') {
+      const [bomUses, variantUses, subRecipeUses] = await Promise.all([
+        this.prisma.bomItem.count({ where: { rawMaterialId: id } }),
+        this.prisma.variantBomItem.count({ where: { rawMaterialId: id } }),
+        this.prisma.subRecipeItem.count({ where: { rawMaterialId: id } }),
+      ]);
+      const uses = bomUses + variantUses + subRecipeUses;
+      if (uses > 0) {
+        throw new BadRequestException(
+          `"${item.name}" is used in ${uses} recipe${uses === 1 ? '' : 's'}, so it cannot be `
+          + 'marked as a supply. If it is genuinely consumed with every item sold — a cup or a '
+          + 'lid — leave it as an ingredient so its cost stays in what the drink costs. '
+          + 'Otherwise remove it from those recipes first.',
+        );
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.rawMaterial.update({
         where: { id },

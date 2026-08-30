@@ -19,9 +19,12 @@ describe('WarehouseService — posting a count creates stock that does not exist
   const TENANT = 't1';
   const BRANCH = 'b1';
 
-  function build(opts: { existing?: Set<string>; lines?: any[] } = {}) {
+  function build(opts: { existing?: Set<string>; lines?: any[]; live?: Record<string, number> } = {}) {
     const existing = opts.existing ?? new Set<string>();
+    /* What is on the shelf RIGHT NOW, for rows that already exist. */
+    const liveQty = new Map<string, number>(Object.entries(opts.live ?? {}));
     const upserts: Array<{ rawMaterialId: string; qty: number; created: boolean }> = [];
+    const events: any[] = [];
 
     const tx: any = {
       cycleCount: {
@@ -35,6 +38,17 @@ describe('WarehouseService — posting a count creates stock that does not exist
         update: jest.fn(({ data }: any) => Promise.resolve({ id: 'cc1', ...data, lines: [] })),
       },
       rawMaterialInventory: {
+        /*
+          Posting reads the LIVE quantity and applies the variance to it rather
+          than writing the counted figure over the top — a count is not instant
+          and the till keeps selling while someone walks the stockroom. An
+          absent row reads as an empty shelf, which is what these opening-stock
+          fixtures describe.
+        */
+        findUnique: jest.fn(({ where }: any) => {
+          const rm = where.branchId_rawMaterialId.rawMaterialId;
+          return Promise.resolve(existing.has(rm) ? { quantity: liveQty.get(rm) ?? 0 } : null);
+        }),
         upsert: jest.fn(({ where, create, update }: any) => {
           const rm = where.branchId_rawMaterialId.rawMaterialId;
           const created = !existing.has(rm);
@@ -50,10 +64,18 @@ describe('WarehouseService — posting a count creates stock that does not exist
         // throw exactly as Prisma does when the row is missing
       },
       cycleCountLine: { update: jest.fn().mockResolvedValue({}) },
+      /*
+        The books' side of a count. Only created when the line's material has a
+        cost price — a variance the books cannot value is a stock fact, not an
+        entry — so fixtures without one legitimately produce none.
+      */
+      accountingEvent: {
+        create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve({}); }),
+      },
     };
     const prisma: any = { $transaction: jest.fn((fn: any) => fn(tx)) };
     const svc = new WarehouseService(prisma) as any;
-    return { svc, tx, upserts };
+    return { svc, tx, upserts, events };
   }
 
   it('posts an opening count on a tenant with no stock rows at all', async () => {
@@ -106,5 +128,76 @@ describe('WarehouseService — posting a count creates stock that does not exist
       id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'POSTED', lines: [],
     });
     await expect(svc.postCycleCount(TENANT, 'cc1', 'u1')).rejects.toThrow(/OPEN/i);
+  });
+
+  /*
+    A count is not instant. Someone walks the stockroom with a tablet while the
+    till keeps selling, so `expectedQty` — captured when the count STARTED — is
+    already stale by the time anyone presses Post.
+
+    Writing the counted figure straight over the quantity silently reversed
+    every sale made in between: the shelf jumped back up while COGS had already
+    relieved the stock, and nothing anywhere said so. The variance is still
+    measured against the snapshot, because that IS what the counter found; it
+    is the application that has to be relative.
+  */
+  describe('sales that happen DURING the count', () => {
+    it('keeps them, instead of undoing them', async () => {
+      // Started at 5000. Counter finds 4800 — 200 g genuinely missing.
+      // While counting, the till sold 300 g, so live is 4700.
+      // The shelf should end at 4700 - 200 = 4500, not at the counted 4800.
+      const { svc, upserts } = build({
+        existing: new Set(['beans']),
+        live: { beans: 4700 },
+        lines: [{ id: 'l1', rawMaterialId: 'beans', countedQty: '4800', expectedQty: '5000' }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts).toHaveLength(1);
+      expect(upserts[0].qty).toBe(4500);
+    });
+
+    it('lands exactly on the counted figure when nothing moved', async () => {
+      // The ordinary case, and the behaviour that existed before: live equals
+      // expected, so live + variance is the counted number.
+      const { svc, upserts } = build({
+        existing: new Set(['beans']),
+        live: { beans: 5000 },
+        lines: [{ id: 'l1', rawMaterialId: 'beans', countedQty: '4800', expectedQty: '5000' }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts[0].qty).toBe(4800);
+    });
+
+    it('still values the variance against what the counter actually found', async () => {
+      // 200 g missing is what gets written off, whatever sold in the meantime.
+      // Charging the books for the intervening sales as well would double-count
+      // them: COGS already relieved that stock.
+      const { svc, events } = build({
+        existing: new Set(['beans']),
+        live: { beans: 4700 },
+        lines: [{
+          id: 'l1', rawMaterialId: 'beans', countedQty: '4800', expectedQty: '5000',
+          rawMaterial: {
+            id: 'beans', name: 'Espresso Beans', unit: 'g',
+            costPrice: '1.85', category: 'INGREDIENT',
+          },
+        }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(events).toHaveLength(1);
+      expect(Number((events[0].payload as any).quantity)).toBe(-200);
+    });
+
+    it('cannot drive the shelf below empty', async () => {
+      // A big shortfall against a nearly-empty live shelf settles at zero
+      // rather than inventing negative stock every later number then inherits.
+      const { svc, upserts } = build({
+        existing: new Set(['beans']),
+        live: { beans: 50 },
+        lines: [{ id: 'l1', rawMaterialId: 'beans', countedQty: '100', expectedQty: '5000' }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts[0].qty).toBe(0);
+    });
   });
 });

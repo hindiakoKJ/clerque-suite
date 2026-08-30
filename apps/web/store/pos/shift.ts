@@ -13,6 +13,24 @@ export interface ActiveShift {
   totalSales: number;
   orderCount: number;
   voidCount: number;
+  /*
+    What left the drawer other than change. Optional because an older API
+    build does not send them, and a missing field must read as zero rather
+    than blanking the close screen.
+  */
+  /** Cash handed back to customers during this shift. */
+  refundTotal?: number;
+  /** Real expenses paid out of the till. */
+  paidOutTotal?: number;
+  /** Mid-shift moves to the safe. */
+  cashDropTotal?: number;
+  /**
+   * Cash rung at this branch during the shift that belongs to no shift —
+   * almost always a supervisor, who bypasses the shift gate. Shown, not
+   * subtracted: it explains an overage without making the cashier
+   * accountable for someone else's sales.
+   */
+  unattributedCashSales?: number;
   expectedCash: number;
   /** Per-method totals for digital payment reconciliation */
   digitalBreakdown: Record<string, number>;

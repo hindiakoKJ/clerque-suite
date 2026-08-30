@@ -108,10 +108,53 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
               <span className="text-muted-foreground">+ Cash sales (net)</span>
               <span className="font-medium text-foreground">{formatPeso(shift.cashSales)}</span>
             </div>
+            {/*
+              Everything that left the drawer, shown so the sum on screen is
+              one a person can follow. Only opening cash and sales were listed,
+              so the moment anything was refunded or paid out the three numbers
+              stopped adding up and the cashier had no way to see why the
+              expected figure was lower than she could account for.
+
+              Hidden at zero: an ordinary shift should not carry three rows of
+              zeroes just to prove a point.
+            */}
+            {(shift.refundTotal ?? 0) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">− Cash refunds</span>
+                <span className="font-medium text-foreground">{formatPeso(shift.refundTotal ?? 0)}</span>
+              </div>
+            )}
+            {(shift.paidOutTotal ?? 0) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">− Paid out</span>
+                <span className="font-medium text-foreground">{formatPeso(shift.paidOutTotal ?? 0)}</span>
+              </div>
+            )}
+            {(shift.cashDropTotal ?? 0) > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">− Cash drops to safe</span>
+                <span className="font-medium text-foreground">{formatPeso(shift.cashDropTotal ?? 0)}</span>
+              </div>
+            )}
             <div className="flex justify-between border-t border-[var(--accent)]/20 pt-1.5 font-bold" style={{ color: 'var(--accent)' }}>
               <span>Expected in drawer</span>
               <span>{formatPeso(shift.expectedCash)}</span>
             </div>
+            {/*
+              Sales someone rang without opening a shift — in practice the
+              owner, who bypasses the shift gate. The cash is in THIS drawer,
+              so without saying so the count comes up over and the cashier is
+              asked to explain a surplus that is not hers. Deliberately below
+              the total and not subtracted from it: she is accountable for what
+              she rang, and this tells her why the drawer holds more.
+            */}
+            {(shift.unattributedCashSales ?? 0) > 0 && (
+              <p className="pt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Also in this drawer: {formatPeso(shift.unattributedCashSales ?? 0)} rung
+                without an open shift (usually the owner). Expect the count to be
+                over by about that much.
+              </p>
+            )}
           </div>
 
           {/* Actual cash declared */}

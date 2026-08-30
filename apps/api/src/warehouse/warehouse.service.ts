@@ -399,6 +399,30 @@ export class WarehouseService {
           );
         }
 
+        /*
+          Apply what the count FOUND to what is on the shelf NOW.
+
+          `expectedQty` is a snapshot taken when the count was STARTED, and a
+          count is not instant: someone walks the stockroom with a tablet while
+          the till keeps selling. Writing `counted` straight over the quantity
+          silently reversed every sale that happened in between -- count 500 g
+          of beans at 3pm, sell 100 g, post at 5pm, and the shelf goes back to
+          500 while COGS has already relieved the 100. The stock ledger and the
+          books disagree from then on, and nothing says so.
+
+          The variance is still measured against the snapshot, because that IS
+          the discrepancy the counter discovered. It is the APPLICATION that
+          has to be relative: live + variance. With no movements in between,
+          live equals expected and this lands on `counted` exactly as before.
+        */
+        const liveRow = await tx.rawMaterialInventory.findUnique({
+          where:  { branchId_rawMaterialId: { branchId: c.branchId, rawMaterialId: line.rawMaterialId } },
+          select: { quantity: true },
+        });
+        const live = liveRow ? new Prisma.Decimal(liveRow.quantity) : new Prisma.Decimal(0);
+        // Never negative: a correction cannot drive the shelf below empty.
+        const settled = Prisma.Decimal.max(live.plus(variance), new Prisma.Decimal(0));
+
         // upsert, not update.
         //
         // A shop that has never received an ingredient has no
@@ -414,11 +438,13 @@ export class WarehouseService {
         // recording purchases that never happened.
         await tx.rawMaterialInventory.upsert({
           where:  { branchId_rawMaterialId: { branchId: c.branchId, rawMaterialId: line.rawMaterialId } },
-          update: { quantity: counted },
+          update: { quantity: settled },
           create: {
             tenantId,
             branchId:      c.branchId,
             rawMaterialId: line.rawMaterialId,
+            // No row yet means nothing has moved, so there is nothing to
+            // preserve and the count is the whole truth.
             quantity:      counted,
           },
         });

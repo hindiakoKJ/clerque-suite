@@ -49,6 +49,9 @@ describe('ShiftsService — recordHandover', () => {
         ),
       },
       shiftCashOut: { findMany: jest.fn().mockResolvedValue([]) },
+      // Refunds reduce expected cash: money handed back across the counter
+      // left the drawer just like a paid-out did.
+      orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const audit: any = { log: jest.fn((r: any) => { auditRows.push(r); return Promise.resolve(); }) };
     return { svc: new ShiftsService(prisma, audit), noteWrites, auditRows };

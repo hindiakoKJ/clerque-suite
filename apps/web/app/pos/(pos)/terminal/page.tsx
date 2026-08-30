@@ -263,7 +263,16 @@ export default function PosTerminal() {
         ...lines
           .filter((l) => l.promotionApplied && l.itemDiscount > 0)
           .map((l) => ({
-            discountType:    'PROMOTION' as const,
+            /*
+              'PROMO', which is what the enum is called.
+
+              DiscountType has five values and PROMOTION is not one of them, so
+              this line reached orderDiscount.create as an invalid enum and
+              Prisma rejected the write — taking the whole sale down with it.
+              Any ticket touched by a promotion 500'd at Charge, and the cast
+              made TypeScript agree it was fine.
+            */
+            discountType:    'PROMO' as const,
             discountAmount:  l.itemDiscount * l.quantity,
             discountPercent: undefined as number | undefined,
             reason: `Promo: ${l.promotionApplied!.promoName} on ${l.product.name}`,

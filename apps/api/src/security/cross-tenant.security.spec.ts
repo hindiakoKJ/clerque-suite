@@ -105,6 +105,9 @@ function makePrismaMock() {
     loginLog:        { count: jest.fn().mockResolvedValue(0), create: jest.fn() },
     product:         { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
     terminal:        { findFirst: jest.fn().mockResolvedValue(null) },
+    // Refunds reduce expected cash: money handed back across the counter
+    // left the drawer just like a paid-out did.
+    orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
     shiftCashOut:    {
       aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }),
       findMany:  jest.fn().mockResolvedValue([]),

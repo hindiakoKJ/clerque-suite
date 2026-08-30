@@ -169,6 +169,25 @@ export class VendorAdvancesService {
           ],
         },
         userId,
+        /*
+          Source 'AP', not the 'MANUAL' default.
+
+          journal.create defaults to MANUAL, and assertPostingControl refuses
+          MANUAL on a restricted account. 2010 Accounts Payable is seeded
+          AP_ONLY, so omitting this makes the AP module fail against the guard
+          that exists to protect it FROM manual entries -- while Procure keeps
+          putting every credit delivery into payables. The balance would grow
+          from the first Net-30 delivery with no way to take it back out.
+
+          It hid because seedDefaultAccounts only INSERTS missing codes and
+          never updates postingControl, so older tenants whose 2010 predates
+          AP_ONLY are grandfathered as OPEN and work by accident. A brand-new
+          tenant -- the next client -- gets the restriction and the 403.
+
+          MANUAL also drags in the JE approval threshold, which would park a
+          large supplier bill in PENDING_APPROVAL instead of posting it.
+        */
+        'AP',
       );
 
       await tx.vendorAdvance.update({
@@ -327,6 +346,25 @@ export class VendorAdvancesService {
           ],
         },
         userId,
+        /*
+          Source 'AP', not the 'MANUAL' default.
+
+          journal.create defaults to MANUAL, and assertPostingControl refuses
+          MANUAL on a restricted account. 2010 Accounts Payable is seeded
+          AP_ONLY, so omitting this makes the AP module fail against the guard
+          that exists to protect it FROM manual entries -- while Procure keeps
+          putting every credit delivery into payables. The balance would grow
+          from the first Net-30 delivery with no way to take it back out.
+
+          It hid because seedDefaultAccounts only INSERTS missing codes and
+          never updates postingControl, so older tenants whose 2010 predates
+          AP_ONLY are grandfathered as OPEN and work by accident. A brand-new
+          tenant -- the next client -- gets the restriction and the 403.
+
+          MANUAL also drags in the JE approval threshold, which would park a
+          large supplier bill in PENDING_APPROVAL instead of posting it.
+        */
+        'AP',
       );
 
       void this.audit.log({

@@ -31,6 +31,22 @@ export interface ShiftSummary {
   paidOutTotal: number;
   /** Total of all CASH_DROP cash-outs during the shift (mid-shift moves to safe). */
   cashDropTotal: number;
+  /**
+   * Cash handed back to customers during this shift.
+   *
+   * Attributed by when the cash LEFT the drawer, not when the sale happened —
+   * a refund against yesterday's coffee empties today's till.
+   */
+  refundTotal: number;
+  /**
+   * Cash rung at this branch during the shift window that carries no shiftId.
+   *
+   * Supervisors bypass the shift gate, so their sales land here. Reported, not
+   * folded into expectedCash — the cashier should not be made accountable for
+   * a drawer someone else added to, but she should be able to see why it is
+   * over.
+   */
+  unattributedCashSales: number;
   expectedCash: number;
   /** Breakdown of digital payment totals by method for cashier reconciliation */
   digitalBreakdown: Record<string, number>;
@@ -490,6 +506,69 @@ ${line}` : line },
       if (c.type === 'CASH_DROP') cashDropTotal += amt;
     }
 
+    /*
+      Cash handed back to customers during this shift.
+
+      Nothing here read refunds at all, so a ₱180 refund left the drawer and
+      expected cash still counted the whole original sale. The drawer came up
+      ₱180 short, the system booked a shortage, and the cashier was asked to
+      sign for money she had given to a customer in front of a witness. The
+      help text on the close screen already promised the opposite.
+
+      Attributed by WHEN THE CASH LEFT, not when the sale happened: a refund
+      against yesterday's coffee empties today's drawer, so it belongs to the
+      shift that was open at the time. OrderItemRefund carries no shiftId, so
+      the shift's own window plus its branch is the attribution — which is the
+      same thing a shiftId would have recorded.
+
+      Only CASH. A GCash reversal never touches the drawer.
+    */
+    const refunds = await this.prisma.orderItemRefund.findMany({
+      where: {
+        refundMethod: 'CASH',
+        createdAt: { gte: shift.openedAt, ...(shift.closedAt ? { lte: shift.closedAt } : {}) },
+        orderItem: { order: { tenantId: shift.tenantId, branchId: shift.branchId } },
+      },
+      select: { refundAmount: true },
+    });
+    const refundTotal = refunds.reduce((s, r) => s + Number(r.refundAmount), 0);
+
+    /*
+      Cash rung at this till during this shift that belongs to NO shift.
+
+      Supervisors bypass the shift gate (ShiftGate.tsx), so when the owner
+      jumps on the till at the morning rush his sales carry no shiftId. The
+      cash still goes into the same physical drawer. At close, the barista
+      counts more than she is expected to have, the system books the surplus
+      to the GL as income, and she is asked to sign for money she cannot
+      explain.
+
+      Whether an owner should have to open his own shift is a decision about
+      how the shop runs, not something to settle here — and with several
+      shifts open per branch there is no unambiguous shift to attach a stray
+      order to. What is not in doubt is that the money must be visible. Named
+      here, the overage has an explanation instead of being a mystery; if the
+      policy later becomes "everyone opens a shift", this simply reads zero.
+    */
+    const unattributed = await this.prisma.order.findMany({
+      where: {
+        tenantId: shift.tenantId,
+        branchId: shift.branchId,
+        shiftId:  null,
+        channel:  'POS',
+        status:   { not: 'VOIDED' },
+        createdAt: { gte: shift.openedAt, ...(shift.closedAt ? { lte: shift.closedAt } : {}) },
+      },
+      include: { payments: true },
+    });
+    let unattributedCashSales = 0;
+    for (const o of unattributed) {
+      const nonCash = o.payments
+        .filter((p) => p.method !== 'CASH')
+        .reduce((s, p) => s + Number(p.amount), 0);
+      unattributedCashSales += Math.max(0, Number(o.totalAmount) - nonCash);
+    }
+
     let cashSales = 0;
     let nonCashSales = 0;
     let orderCount = 0;
@@ -518,10 +597,12 @@ ${line}` : line },
     }
 
     const openingCash  = Number(shift.openingCash);
-    // Expected cash = opening + cash sales − paid-outs − cash drops.
-    // Drops physically leave the till; paid-outs are spent. Both reduce what
-    // the cashier should have on hand at close.
-    const expectedCash = openingCash + cashSales - paidOutTotal - cashDropTotal;
+    // Expected cash = opening + cash sales − cash refunds − paid-outs − drops.
+    // Drops physically leave the till; paid-outs are spent; refunds are handed
+    // back across the counter. All three reduce what the cashier should have
+    // on hand at close, and leaving refunds out made every one of them look
+    // like a shortage on her name.
+    const expectedCash = openingCash + cashSales - refundTotal - paidOutTotal - cashDropTotal;
 
     return {
       id: shift.id,
@@ -542,6 +623,16 @@ ${line}` : line },
       voidCount,
       paidOutTotal,
       cashDropTotal,
+      // Surfaced so the close screen can show the subtraction rather than
+      // making the three numbers fail to add up on screen.
+      refundTotal,
+      /*
+        Cash in this drawer that no shift claims — almost always a supervisor
+        ringing sales outside the shift gate. NOT added to expectedCash: it is
+        reported so the overage has a name, and adding it would quietly make
+        one person accountable for another's till.
+      */
+      unattributedCashSales,
       expectedCash,
       digitalBreakdown,
     };

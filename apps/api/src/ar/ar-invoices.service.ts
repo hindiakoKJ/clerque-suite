@@ -295,6 +295,24 @@ export class ARInvoicesService {
           lines,
         },
         userId,
+        /*
+          Source 'AR', not the 'MANUAL' default.
+
+          journal.create defaults to MANUAL, and assertPostingControl refuses
+          MANUAL on a restricted account. 1030 Accounts Receivable is seeded
+          AR_ONLY, along with 4015 and 4041 invoice revenue, so omitting this
+          makes the AR module fail against the guard that exists to protect it
+          FROM manual entries. An invoice cannot be raised at all.
+
+          It hid because seedDefaultAccounts only INSERTS missing codes and
+          never updates postingControl, so older tenants whose 2010 predates
+          AP_ONLY are grandfathered as OPEN and work by accident. A brand-new
+          tenant -- the next client -- gets the restriction and the 403.
+
+          MANUAL also drags in the JE approval threshold, which would park a
+          large invoice in PENDING_APPROVAL instead of posting it.
+        */
+        'AR',
       );
 
       // Move invoice to OPEN + link to JE

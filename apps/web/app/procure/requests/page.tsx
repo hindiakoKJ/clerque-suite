@@ -59,9 +59,21 @@ export default function ProcurePage() {
 
   const [picking, setPicking]   = useState(false);
   const [search, setSearch]     = useState('');
+  /*
+    Picking an ingredient and saying how much are two different questions, and
+    the second one used to be answered by the code: every tap posted
+    qtyRequested: 1, which nothing on screen showed. The owner got a buy list
+    reading "Biscoff Topping" with no amount, and the database read one GRAM.
+    So the tap now selects, and the amount is asked for -- once, in the
+    ingredient's own unit, with the field already focused.
+  */
+  const [pending, setPending]   = useState<Ingredient | null>(null);
+  const [qty, setQty]           = useState('');
+  const [editing, setEditing]   = useState<string | null>(null);
+  const [editQty, setEditQty]   = useState('');
   const [bought, setBought]     = useState<Record<string, { packs: string; size: string; cost: string; brand: string }>>({});
 
-  const { data: req, isLoading } = useQuery<Request>({
+  const { data: req, isLoading, isError, error, refetch, isFetching } = useQuery<Request>({
     queryKey: ['procure-open', branchId],
     queryFn:  () => api.post('/procure/requests/open', { branchId }).then((r) => r.data),
     enabled:  !!user,
@@ -89,10 +101,23 @@ export default function ProcurePage() {
     onError: (e) => fail(e, 'Could not check stock levels.'),
   });
 
+  // Posting an ingredient that is already on the list SETS its quantity rather
+  // than adding a second line, so this one mutation serves both "add" and
+  // "change how much".
   const addLine = useMutation({
-    mutationFn: (rawMaterialId: string) =>
-      api.post(`/procure/requests/${req!.id}/lines`, { rawMaterialId, qtyRequested: 1 }),
-    onSuccess: () => { refresh(); setPicking(false); setSearch(''); },
+    mutationFn: (v: { rawMaterialId: string; qtyRequested: number }) =>
+      api.post(`/procure/requests/${req!.id}/lines`, v),
+    onSuccess: (_d, v) => {
+      refresh();
+      // The picker stays open on purpose: a stock check finds several things
+      // at once, and reopening it between each one is the difference between
+      // a shortage round taking four taps and taking twelve. The item drops
+      // out of the grid as soon as it lands, so the list is its own receipt.
+      const name = ingredients.find((i) => i.id === v.rawMaterialId)?.name;
+      if (name) toast.success(`${name} added.`);
+      setSearch(''); setPending(null); setQty('');
+      setEditing(null); setEditQty('');
+    },
     onError: (e) => fail(e, 'Could not add that item.'),
   });
 
@@ -142,10 +167,38 @@ export default function ProcurePage() {
     onError: (e) => fail(e, 'Could not post to stock.'),
   });
 
-  if (isLoading || !req) {
+  if (isLoading) {
     return (
       <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+      </div>
+    );
+  }
+
+  /*
+    A failed load used to fall through the same `isLoading || !req` branch as a
+    pending one, so a dead API, a closed period or a 403 all rendered a spinner
+    that never stopped. Someone standing at the bar has no way to tell "still
+    loading" from "this is never going to work", and no way to try again short
+    of reloading the tab.
+  */
+  if (isError || !req) {
+    const message =
+      (error as { response?: { data?: { message?: string } } } | null)?.response?.data?.message ??
+      'Could not load the request. Check the connection and try again.';
+    return (
+      <div className="mx-auto max-w-md rounded-xl border border-border bg-card p-6 text-center">
+        <AlertTriangle className="mx-auto h-5 w-5 text-amber-500" />
+        <h2 className="mt-2 text-sm font-semibold">Could not open the buy list</h2>
+        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{message}</p>
+        <button
+          onClick={() => void refetch()}
+          disabled={isFetching}
+          className="mt-4 inline-flex min-h-[2.5rem] items-center gap-1.5 rounded-lg border border-border px-3 text-sm transition-colors hover:bg-muted disabled:opacity-50"
+        >
+          {isFetching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Try again
+        </button>
       </div>
     );
   }
@@ -221,43 +274,93 @@ export default function ProcurePage() {
 
         {picking && req.status === 'OPEN' && (
           <div className="border-b border-border bg-muted/30 p-3">
-            {/*
-              Tap, do not type. A barista adding sugar to the list is standing
-              at the bar with one hand free; making them spell an ingredient
-              they can see on the shelf is the kind of friction that sends
-              people back to messaging the owner. Search stays, but only as a
-              way to shorten a long list -- never as the way in.
-            */}
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter…"
-              className="w-full rounded-lg border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-            />
-            {ingLoading ? (
-              <div className="flex items-center gap-2 px-1 py-6 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading ingredients…
-              </div>
-            ) : matches.length === 0 ? (
-              <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-                {search ? 'Nothing matches that.' : 'Everything is already on the list.'}
-              </p>
-            ) : (
-              <div className="mt-2 max-h-72 overflow-y-auto">
-                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                  {matches.map((i) => (
-                    <button
-                      key={i.id}
-                      onClick={() => addLine.mutate(i.id)}
-                      disabled={addLine.isPending}
-                      className="flex min-h-[3.25rem] flex-col justify-center rounded-lg border border-border bg-background px-2.5 py-2 text-left transition-colors hover:border-[var(--accent)]/60 hover:bg-muted active:scale-[0.98] disabled:opacity-50"
-                    >
-                      <span className="line-clamp-2 text-xs font-medium leading-tight">{i.name}</span>
-                      <span className="mt-0.5 text-[10px] text-muted-foreground">{i.unit}</span>
-                    </button>
-                  ))}
+            {pending ? (
+              /*
+                Step two. Asked here rather than left to a default, because a
+                buy list without amounts sends someone to the market to guess,
+                and a default nobody sees is worse than no default at all.
+              */
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const n = parseFloat(qty);
+                  if (!(n > 0)) { toast.error('Enter how much is needed.'); return; }
+                  addLine.mutate({ rawMaterialId: pending.id, qtyRequested: n });
+                }}
+              >
+                <div className="text-sm font-medium">{pending.name}</div>
+                <p className="mt-0.5 text-xs text-muted-foreground">How much do you need?</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      autoFocus
+                      inputMode="decimal"
+                      value={qty}
+                      onChange={(e) => setQty(e.target.value)}
+                      placeholder="0"
+                      className="w-full rounded-lg border border-border py-2.5 pl-3 pr-12 text-base focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                      {pending.unit}
+                    </span>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={addLine.isPending}
+                    className="inline-flex min-h-[2.75rem] items-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 text-sm font-semibold text-white transition-opacity disabled:opacity-50"
+                  >
+                    {addLine.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                    Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setPending(null); setQty(''); }}
+                    className="min-h-[2.75rem] rounded-lg border border-border px-3 text-sm text-muted-foreground transition-colors hover:bg-muted"
+                  >
+                    Back
+                  </button>
                 </div>
-              </div>
+              </form>
+            ) : (
+              <>
+                {/*
+                  Tap, do not type. A barista adding sugar to the list is
+                  standing at the bar with one hand free; making them spell an
+                  ingredient they can see on the shelf is the kind of friction
+                  that sends people back to messaging the owner. Search stays,
+                  but only as a way to shorten a long list -- never as the way in.
+                */}
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Filter…"
+                  className="w-full rounded-lg border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                />
+                {ingLoading ? (
+                  <div className="flex items-center gap-2 px-1 py-6 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading ingredients…
+                  </div>
+                ) : matches.length === 0 ? (
+                  <p className="px-1 py-6 text-center text-xs text-muted-foreground">
+                    {search ? 'Nothing matches that.' : 'Everything is already on the list.'}
+                  </p>
+                ) : (
+                  <div className="mt-2 max-h-72 overflow-y-auto">
+                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                      {matches.map((i) => (
+                        <button
+                          key={i.id}
+                          onClick={() => { setPending(i); setQty(''); }}
+                          className="flex min-h-[3.25rem] flex-col justify-center rounded-lg border border-border bg-background px-2.5 py-2 text-left transition-colors hover:border-[var(--accent)]/60 hover:bg-muted active:scale-[0.98]"
+                        >
+                          <span className="line-clamp-2 text-xs font-medium leading-tight">{i.name}</span>
+                          <span className="mt-0.5 text-[10px] text-muted-foreground">{i.unit}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -283,8 +386,58 @@ export default function ProcurePage() {
               return (
                 <li key={l.id} className="px-4 py-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{l.rawMaterial.name}</div>
+                      {/*
+                        The amount, in the ingredient's own unit, on the line
+                        itself. This is the whole content of the request -- an
+                        owner reading it in the grocery needs the number more
+                        than the control number, so it leads.
+                      */}
+                      {editing === l.id ? (
+                        <form
+                          className="mt-1 flex items-center gap-1.5"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const n = parseFloat(editQty);
+                            if (!(n > 0)) { toast.error('Enter how much is needed.'); return; }
+                            addLine.mutate({ rawMaterialId: l.rawMaterialId, qtyRequested: n });
+                          }}
+                        >
+                          <div className="relative w-32">
+                            <input
+                              autoFocus
+                              inputMode="decimal"
+                              value={editQty}
+                              onChange={(e) => setEditQty(e.target.value)}
+                              className="w-full rounded-lg border border-border py-1.5 pl-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                            />
+                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                              {l.rawMaterial.unit}
+                            </span>
+                          </div>
+                          <button type="submit" disabled={addLine.isPending}
+                            className="rounded-lg bg-[var(--accent)] px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+                            {addLine.isPending ? '…' : 'Save'}
+                          </button>
+                          <button type="button" onClick={() => { setEditing(null); setEditQty(''); }}
+                            className="px-1.5 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+                            Cancel
+                          </button>
+                        </form>
+                      ) : req.status === 'OPEN' ? (
+                        <button
+                          onClick={() => { setEditing(l.id); setEditQty(String(num(l.qtyRequested))); }}
+                          className="mt-0.5 rounded text-sm font-semibold tabular-nums text-[var(--accent)] hover:underline"
+                          aria-label={`Change how much ${l.rawMaterial.name} to buy`}
+                        >
+                          {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
+                        </button>
+                      ) : (
+                        <div className="mt-0.5 text-sm font-semibold tabular-nums">
+                          {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
+                        </div>
+                      )}
                       <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                         {l.lineNumber}
                         {num(l.shortBy) > 0 && (

@@ -10,6 +10,7 @@ import { toggleTheme } from '@/components/portal/AppLoginPage';
 const ACCENT: Record<AppProduct, string> = {
   pos:     'hsl(217 91% 55%)',
   ledger:  'hsl(173 70% 40%)',
+  procure: 'hsl(28 80% 48%)',
   payroll: 'hsl(262 70% 58%)',
   console: 'hsl(330 70% 45%)',
 };

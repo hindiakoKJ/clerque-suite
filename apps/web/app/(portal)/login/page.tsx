@@ -10,7 +10,7 @@ import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
 
 /* The valid ?app= values that map to a product config */
-const VALID_PRODUCTS: AppProduct[] = ['pos', 'ledger', 'payroll', 'console'];
+const VALID_PRODUCTS: AppProduct[] = ['pos', 'ledger', 'procure', 'payroll', 'console'];
 
 function LoginInner() {
   const router = useRouter();
@@ -156,6 +156,7 @@ function LoginInner() {
     : {
         pos:     '/login?app=pos',
         ledger:  '/login?app=ledger',
+        procure: '/login?app=procure',
         payroll: '/login?app=payroll',
       };
   delete siblingUrls[product];

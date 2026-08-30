@@ -3,13 +3,13 @@
 import { useState, useEffect, type ElementType } from 'react';
 import {
   Eye, EyeOff, ArrowRight,
-  ShoppingCart, BookOpen, Users, ShieldCheck, Wifi, WifiOff, Check,
+  ShoppingCart, BookOpen, Users, ShieldCheck, ShoppingBasket, Wifi, WifiOff, Check,
   Sun, Moon, Lock, Hash, Delete,
 } from 'lucide-react';
 
 /* ─── Product registry ─────────────────────────────────────────────────── */
 
-export type AppProduct = 'pos' | 'ledger' | 'payroll' | 'console';
+export type AppProduct = 'pos' | 'ledger' | 'procure' | 'payroll' | 'console';
 
 interface ProductConfig {
   name: string;
@@ -53,6 +53,23 @@ const PRODUCTS: Record<AppProduct, ProductConfig> = {
     ],
     showOffline: false,
     shadowClass: 'shadow-teal-500/20',
+  },
+  procure: {
+    name: 'Procure',
+    Icon: ShoppingBasket,
+    // Same orange the app itself sets on --accent, so the sign-in page and
+    // the app a person lands in are recognisably the same product.
+    accent: 'hsl(28 80% 48%)',
+    accentDark: 'hsl(28 80% 58%)',
+    heroWords: ['Know what is left.', 'Buy it once.'],
+    sub: 'Clerque Procure — stock, buy lists, receiving and counts. Everything that comes in, and what it cost.',
+    features: [
+      'Buy list that fills itself from what is low',
+      'Receive against what was actually requested',
+      'Count the shelf and correct the books',
+    ],
+    showOffline: false,
+    shadowClass: 'shadow-orange-500/20',
   },
   payroll: {
     name: 'Sync',

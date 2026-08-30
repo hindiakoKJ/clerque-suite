@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt, User as UserIcon, Plane, ClipboardList, Gift } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
@@ -66,6 +66,18 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
   const router = useRouter();
   const pathname = usePathname();
   const { user, clear } = useAuthStore();
+
+  /*
+    Same hydration guard as POS and Ledger. Every nav item below depends on
+    the role, and on the server `user` is null because the auth store lives in
+    localStorage -- so SSR emits the logged-out nav and the client emits a
+    different one. That mismatch is what left a hard load of /ledger stuck on
+    a spinner forever; this layout has the same shape and simply had not been
+    caught yet.
+  */
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
+
   const isHrRole = !!user && (HR_VIEW_ROLES as readonly string[]).includes(user.role);
 
   // ── App-level guard ────────────────────────────────────────────────────────
@@ -162,6 +174,8 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
           makePayNavItem('/payroll/my-expenses', 'My Expenses',    Receipt,         MY_EXPENSES_ROLES,   role),
         ]
   ).filter((item) => !item.disabled);
+
+  if (!hydrated) return null;
 
   return (
     <div

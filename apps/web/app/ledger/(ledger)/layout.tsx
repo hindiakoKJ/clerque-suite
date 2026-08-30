@@ -1,6 +1,6 @@
 'use client';
-import React, { useEffect } from 'react';
-import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart, FileSignature, Wallet, NotebookPen } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Landmark, CalendarClock, Scale, FileText, User, TrendingDown, TrendingUp, ShieldCheck, ClipboardCheck, Receipt, FileSpreadsheet, BarChart3, FileBarChart, FileSignature, Wallet, NotebookPen, Users, Building2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -83,6 +83,23 @@ function makeLedgerNavItem(
 export default function LedgerLayout({ children }: { children: React.ReactNode }) {
   const router         = useRouter();
   const { user, clear } = useAuthStore();
+
+  /*
+    Wait for the auth store to rehydrate before rendering the nav.
+
+    Every item here is role- and plan-dependent. On the server `user` is null
+    (the store lives in localStorage), so SSR emitted the logged-OUT nav; the
+    client then rehydrated with a real user and emitted a different one. React
+    saw the mismatch, threw "Hydration failed because the server rendered text
+    didn't match", and discarded the whole tree -- leaving a HARD LOAD of any
+    /ledger URL stuck on the loading spinner forever. Navigating in from
+    another app worked, because there was no server render to disagree with,
+    which is why it went unnoticed: only a refresh or a bookmark hit it.
+
+    The POS layout has done this since Sprint 19; Ledger never got it.
+  */
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
   const isBirRegistered = user?.isBirRegistered ?? false;
   const isFullLedger   = user?.planFeatures?.advancedAccounting ?? false;
   // Magnet Books — SIMPLE is an owner *choice*, not a plan lock: hide the
@@ -152,6 +169,12 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     makeLedgerNavItem('/ledger/ar/invoices',   'POS-derived AR',     TrendingUp,      AR_ROLES,         role),
     makeLedgerNavItem('/ledger/ar/advances',   'Customer Advances',  Wallet,          AR_ROLES,         role,
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    // The Customers screen had NO nav entry. Its only link was inside a
+    // dismissible banner on the invoices page, so once someone closed that
+    // banner the screen was unreachable -- and with it the ability to add the
+    // customer an invoice needs.
+    makeLedgerNavItem('/ledger/ar/customers',  'Customers',          Users,           AR_ROLES,         role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
 
     // ── Payables (sub-ledger) ───────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role,
@@ -159,6 +182,12 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     makeLedgerNavItem('/ledger/ap/expenses',   'Expense Claims',     TrendingDown,    AP_ROLES,         role,
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
     makeLedgerNavItem('/ledger/ap/advances',   'Vendor Advances',    Wallet,          AP_ROLES,         role,
+      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    // Vendors had no nav entry either. On a fresh tenant the vendor dropdown
+    // on a new bill is empty, validation refuses to save without one, and the
+    // screen that creates vendors could not be opened -- so the FIRST vendor
+    // bill could never be recorded at all.
+    makeLedgerNavItem('/ledger/ap/vendors',    'Vendors',            Building2,       AP_ROLES,         role,
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
     makeLedgerNavItem('/ledger/expense-approvals', 'Expense Approvals', ClipboardCheck, EXPENSE_APPROVAL_ROLES, role,
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
@@ -221,6 +250,9 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
     acc.items.push(item);
     return acc;
   }, { items: [] }).items;
+
+  // Nothing until the store is back — see the note above.
+  if (!hydrated) return null;
 
   return (
     <div

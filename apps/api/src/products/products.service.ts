@@ -378,6 +378,40 @@ export class ProductsService {
       }
     }
 
+    /*
+      A supply cannot be part of a recipe.
+      
+      This rule already existed on the spreadsheet import path
+      (import.service.ts: "a recipe line naming detergent is a mistake worth
+      seeing") but not here, so the app let you put bleach in a latte while
+      the importer refused the same row. The ingredient picker tells the owner
+      that a supply's cost is "never part of a recipe" -- this is what makes
+      that sentence true rather than a promise.
+
+      Checked in ONE query rather than per line: a recipe has a handful of
+      rows and this runs on every save.
+    */
+    if (items.length > 0) {
+      const offenders = await this.prisma.rawMaterial.findMany({
+        where: {
+          tenantId,
+          id:       { in: items.map((b) => b.rawMaterialId) },
+          category: { not: 'INGREDIENT' },
+        },
+        select: { name: true, category: true },
+      });
+      if (offenders.length > 0) {
+        const list = offenders
+          .map((o) => `"${o.name}" (${String(o.category).toLowerCase().replace(/_/g, ' ')})`)
+          .join(', ');
+        throw new BadRequestException(
+          `${list} ${offenders.length === 1 ? 'is a supply' : 'are supplies'}, not an ingredient, `
+          + 'so they cannot be part of a recipe. Supplies are an expense of running the shop, '
+          + 'not a cost of the drink. Change the category under Stock on hand if that is wrong.',
+        );
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // Wipe existing BOM
       await tx.bomItem.deleteMany({ where: { productId } });

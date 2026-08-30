@@ -71,13 +71,59 @@ export default function ProcurePage() {
   const [qty, setQty]           = useState('');
   const [editing, setEditing]   = useState<string | null>(null);
   const [editQty, setEditQty]   = useState('');
+  /*
+    Who actually paid. This was hard-coded to CASH, and the two answers post
+    to DIFFERENT accounts: CASH credits 1010 Cash on Hand, OWNER_FUNDED credits
+    3010 Owner's Capital. An owner who paid for the grocery run out of their own
+    wallet -- the ordinary case this app was built for -- had the books say
+    money left the till, so the till read short by the value of the delivery
+    and nobody could find it. Asked, not assumed.
+  */
+  const [paidBy, setPaidBy] = useState<'CASH' | 'OWNER_FUNDED'>('OWNER_FUNDED');
   const [bought, setBought]     = useState<Record<string, { packs: string; size: string; cost: string; brand: string }>>({});
 
-  const { data: req, isLoading, isError, error, refetch, isFetching } = useQuery<Request>({
+  /*
+    Which request this screen is showing.
+
+    It used to be whatever POST /procure/requests/open returned -- and that
+    endpoint CREATES an open request when the branch has none. So the moment
+    you sent a list, there was no OPEN request any more, the next fetch made a
+    brand new empty one, and the request you had just sent disappeared from the
+    app entirely. Everything after SENT -- recording what was bought, posting
+    it to stock -- was unreachable. Procure could ask for things and never
+    receive them.
+
+    So: fetch the branch's requests and show the one that needs a person next.
+    A delivery waiting to be posted outranks shopping waiting to be recorded,
+    which outranks a list still being built. Only when nothing is outstanding
+    do we open a fresh one.
+  */
+  const [viewing, setViewing] = useState<string | null>(null);
+
+  const { data: all = [], isLoading: listLoading, isError, error, refetch, isFetching } =
+    useQuery<Request[]>({
+      queryKey: ['procure-requests', branchId],
+      queryFn:  () => api.get('/procure/requests', { params: { branchId } }).then((r) => r.data),
+      enabled:  !!user,
+    });
+
+  const live = all.filter((r) => r.status !== 'RECEIVED' && r.status !== 'CANCELLED');
+  const byNeed =
+    live.find((r) => r.status === 'BOUGHT') ??
+    live.find((r) => r.status === 'SENT') ??
+    live.find((r) => r.status === 'OPEN') ??
+    null;
+
+  // Nothing outstanding at all -- open one so the branch always has somewhere
+  // to put the next shortage. Runs only when the list came back empty-handed.
+  const { data: opened, isLoading: openLoading } = useQuery<Request>({
     queryKey: ['procure-open', branchId],
     queryFn:  () => api.post('/procure/requests/open', { branchId }).then((r) => r.data),
-    enabled:  !!user,
+    enabled:  !!user && !listLoading && !isError && byNeed === null,
   });
+
+  const req = (viewing ? all.find((r) => r.id === viewing) : null) ?? byNeed ?? opened;
+  const isLoading = listLoading || (byNeed === null && openLoading);
 
   const { data: ingredients = [], isLoading: ingLoading } = useQuery<Ingredient[]>({
     queryKey: ['raw-materials-procure'],
@@ -86,7 +132,10 @@ export default function ProcurePage() {
     staleTime: 300_000,
   });
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ['procure-open'] });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['procure-requests'] });
+    qc.invalidateQueries({ queryKey: ['procure-open'] });
+  };
   const fail = (e: unknown, fallback: string) =>
     toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback);
 
@@ -155,7 +204,7 @@ export default function ProcurePage() {
   });
 
   const receive = useMutation({
-    mutationFn: () => api.post(`/procure/requests/${req!.id}/receive`, { paymentMethod: 'CASH' }).then((r) => r.data),
+    mutationFn: () => api.post(`/procure/requests/${req!.id}/receive`, { paymentMethod: paidBy }).then((r) => r.data),
     onSuccess: (d: { posted: unknown[]; skipped: unknown[]; failed: { name: string; reason: string }[] }) => {
       refresh();
       if (d.failed.length) {
@@ -247,6 +296,35 @@ export default function ProcurePage() {
           ))}
         </ol>
       </div>
+
+      {/*
+        Everything else that is still open, plus the last few finished ones.
+        Without this the only reachable request is whichever one the rule above
+        picked, and a second branch's list -- or yesterday's delivery that was
+        never posted -- would have no way back.
+      */}
+      {all.length > 1 && (
+        <div className="flex flex-wrap gap-1.5">
+          {all.slice(0, 8).map((r) => {
+            const active = r.id === req.id;
+            return (
+              <button
+                key={r.id}
+                onClick={() => setViewing(r.id)}
+                className={`rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+                  active ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-border hover:bg-muted'
+                }`}
+              >
+                <span className="block font-mono text-[11px]">{r.requestNumber}</span>
+                <span className="block text-[10px] text-muted-foreground">
+                  {STEPS.find((x) => x.key === r.status)?.label ?? r.status.toLowerCase()}
+                  {' · '}{r.lines.length} item{r.lines.length === 1 ? '' : 's'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* the list */}
       <div className="rounded-xl border border-border bg-card">
@@ -522,6 +600,34 @@ export default function ProcurePage() {
             {saveBought.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
             Save what was bought
           </button>
+        )}
+        {req.status === 'BOUGHT' && (
+          <div className="mb-3 rounded-xl border border-border bg-card p-3">
+            <p className="text-xs font-medium">Who paid for this?</p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              This decides where the money comes from in the books, so the till still balances
+              tonight.
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {([
+                { v: 'OWNER_FUNDED', label: 'Owner paid',   sub: 'Out of their own pocket' },
+                { v: 'CASH',         label: 'From the till', sub: 'Cash taken from the drawer' },
+              ] as const).map((o) => (
+                <button
+                  key={o.v}
+                  onClick={() => setPaidBy(o.v)}
+                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                    paidBy === o.v
+                      ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                      : 'border-border hover:bg-muted'
+                  }`}
+                >
+                  <span className="block text-xs font-semibold">{o.label}</span>
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">{o.sub}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {req.status === 'BOUGHT' && (
           <button

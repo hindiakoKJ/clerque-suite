@@ -30,6 +30,20 @@ import { AppSwitcher } from '@/components/shell/AppSwitcher';
  * closest is CASHIER, which is a till, not a kitchen. Left as a decision
  * rather than guessed at.
  */
+/*
+  Procure's brand colour, matching its card on /select. Every other app layout
+  sets these on <html> and Procure did not, so `--accent` resolved to the empty
+  string on every /procure route: each bg-[var(--accent)] button rendered with
+  NO background at all, and text-[var(--accent)] with no colour. The Add button
+  on the buy list -- the primary action of the app -- was invisible.
+
+  It goes on <html> rather than the wrapper so Radix dialog portals, which
+  mount at document.body, inherit it too. Cleaned up on unmount so switching
+  apps does not leave Procure's orange behind in Counter.
+*/
+const PROCURE_ACCENT      = 'hsl(28 80% 48%)';
+const PROCURE_ACCENT_SOFT = 'hsl(28 80% 48% / 0.08)';
+
 export const STOCK_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF'];
 // GENERAL_EMPLOYEE is the cook/barista account: it can put something on the
 // buy list and nothing else. Read access to the stock screens is deliberately
@@ -53,6 +67,16 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
   // would bounce a legitimate manager to /login on every refresh.
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => { setHydrated(true); }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--accent',      PROCURE_ACCENT);
+    root.style.setProperty('--accent-soft', PROCURE_ACCENT_SOFT);
+    return () => {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-soft');
+    };
+  }, []);
 
   // Redirect only where there is somewhere to go. Sending a role that cannot
   // open ANY Procure page to /procure/requests just moved it to a page it also

@@ -216,8 +216,18 @@ export class InventoryController {
 
   // ─── Raw Materials (F&B ingredient library) ─────────────────────────────────
 
-  /** List all raw materials — used to populate recipe dropdowns */
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  /**
+   * List all raw materials — used to populate recipe dropdowns, and the
+   * ingredient picker on a Procure buy list.
+   *
+   * GENERAL_EMPLOYEE is here for that second reason only. The cook and barista
+   * accounts were given the right to put something on the buy list, but not
+   * the right to READ the ingredient list they pick from, so the picker opened
+   * empty for exactly the people it was built for. Reading the ingredient
+   * library is not the same as reading stock value: names and units only.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF',
+         'GENERAL_EMPLOYEE')
   @Get('raw-materials')
   listRawMaterials(
     @CurrentUser() user: JwtPayload,

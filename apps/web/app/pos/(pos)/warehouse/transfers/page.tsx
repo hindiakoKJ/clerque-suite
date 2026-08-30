@@ -143,11 +143,19 @@ export default function StockTransfersPage() {
 function NewTransferModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
 
-  const { data: branchData } = useQuery<{ data: Branch[] }>({
+  /*
+    GET /tenant/branches returns a BARE ARRAY (tenant.service.ts getBranches),
+    not { data: [...] }. Reading .data off an array gives undefined, so the
+    branch list was permanently empty -- the picker showed only its placeholder
+    and the Start button stayed disabled forever. This screen could not be used
+    at all. Accept either shape so it cannot break again if the endpoint is
+    ever wrapped.
+  */
+  const { data: branchData } = useQuery<Branch[] | { data: Branch[] }>({
     queryKey: ['branches'],
     queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
   });
-  const branches = branchData?.data ?? [];
+  const branches: Branch[] = Array.isArray(branchData) ? branchData : branchData?.data ?? [];
 
   const { data: rawMaterials = [] } = useQuery<RawMaterial[]>({
     queryKey: ['raw-materials'],

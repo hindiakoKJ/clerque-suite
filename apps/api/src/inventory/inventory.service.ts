@@ -1083,6 +1083,8 @@ export class InventoryService {
         tenantId,
         name: dto.name,
         unit: dto.unit,
+        // Defaults to INGREDIENT at the database level when omitted.
+        ...(dto.category ? { category: dto.category } : {}),
         costPrice: dto.costPrice != null ? new Prisma.Decimal(dto.costPrice) : undefined,
       },
     });
@@ -1194,6 +1196,7 @@ export class InventoryService {
         data: {
           ...(dto.name          != null ? { name:          dto.name }                              : {}),
           ...(dto.unit          != null ? { unit:          dto.unit }                              : {}),
+          ...(dto.category      != null ? { category:      dto.category }                          : {}),
           ...(dto.costPrice     != null ? { costPrice:     new Prisma.Decimal(dto.costPrice) }     : {}),
           ...(dto.isActive      != null ? { isActive:      dto.isActive }                          : {}),
           // null explicitly clears the alert; undefined means "not provided — leave alone"

@@ -19,6 +19,8 @@ interface RawMaterial {
   id: string;
   name: string;
   unit: string;
+  /** INGREDIENT | KITCHEN_SUPPLY | BAR_SUPPLY | OFFICE_SUPPLY */
+  category?:     string | null;
   costPrice:     number | null;
   lowStockAlert: number | null;
   stockQty:      number | null;
@@ -50,7 +52,7 @@ export default function InventoryPage() {
   // Modal state
   const [matModal,   setMatModal]   = useState<'create' | 'edit' | 'receive' | null>(null);
   const [editingMat, setEditingMat] = useState<RawMaterial | null>(null);
-  const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', costPrice: '', lowStockAlert: '' });
+  const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '' });
   const [receiveForm,setReceiveForm]= useState({
     branchId: '',
     quantity: '',
@@ -120,7 +122,7 @@ export default function InventoryPage() {
   // ── Ingredient CRUD ────────────────────────────────────────────────────────
 
   function openCreateMat() {
-    setMatForm({ name: '', unit: 'g', costPrice: '', lowStockAlert: '' });
+    setMatForm({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '' });
     setEditingMat(null);
     setMatModal('create');
   }
@@ -129,6 +131,7 @@ export default function InventoryPage() {
     setMatForm({
       name:          m.name,
       unit:          m.unit,
+      category:      m.category ?? 'INGREDIENT',
       costPrice:     m.costPrice     != null ? String(m.costPrice)     : '',
       lowStockAlert: m.lowStockAlert != null ? String(m.lowStockAlert) : '',
     });
@@ -160,6 +163,7 @@ export default function InventoryPage() {
       const payload = {
         name:          matForm.name.trim(),
         unit:          matForm.unit.trim(),
+        category:      matForm.category,
         costPrice:     matForm.costPrice     ? parseFloat(matForm.costPrice)     : undefined,
         lowStockAlert: matForm.lowStockAlert ? parseFloat(matForm.lowStockAlert) : null,
       };
@@ -494,6 +498,33 @@ export default function InventoryPage() {
                     placeholder="0.0000"
                   />
                 </div>
+              </div>
+              {/*
+                Ingredient or supply. This decides whether the item's cost ends
+                up in what a drink costs, or is simply an expense of running
+                the place -- bleach and trash bags are bought, counted and run
+                out exactly like coffee beans, which is why they were
+                indistinguishable until now.
+              */}
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">
+                  What is this? <span className="text-red-400">*</span>
+                </label>
+                <select
+                  value={matForm.category}
+                  onChange={(e) => setMatForm((f) => ({ ...f, category: e.target.value }))}
+                  className={INPUT_CLS}
+                >
+                  <option value="INGREDIENT">Ingredient — goes into a recipe</option>
+                  <option value="KITCHEN_SUPPLY">Kitchen supply — used up, not sold</option>
+                  <option value="BAR_SUPPLY">Bar supply — used up, not sold</option>
+                  <option value="OFFICE_SUPPLY">Office / cleaning supply</option>
+                </select>
+                <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                  {matForm.category === 'INGREDIENT'
+                    ? 'Its cost becomes part of what a product costs to make.'
+                    : 'Its cost is an expense of running the shop, never part of a recipe.'}
+                </p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">

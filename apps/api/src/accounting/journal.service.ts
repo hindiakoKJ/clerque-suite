@@ -742,12 +742,30 @@ export class JournalService {
         const refSuffix = refNumber ? ` (Ref ${refNumber})` : '';
         description = `Inventory ${adjustmentType.toLowerCase().replace(/_/g, ' ')}: ${productName}${reason ? ` — ${reason}` : ''}${refSuffix}`;
 
+        /*
+          A physical count is not a purchase.
+
+          Finding more on the shelf than the system expected is a CORRECTION,
+          not money coming in — nobody paid for it and the owner did not
+          invest it. Left to the ordinary path it would credit 3010 Owner's
+          Capital (the default when no payment method is given), which quietly
+          inflates equity every time somebody counts well.
+
+          It reverses the loss instead: the same 5060 a shortage is charged
+          to, so a shop that miscounts one month and corrects the next nets
+          out to nothing rather than accumulating phantom equity.
+        */
+        const isCountCorrection =
+          String(payload['reasonCode'] ?? '').toUpperCase() === 'COUNT_CORRECTION';
+
         if (quantity > 0) {
           const creditAccount =
+            isCountCorrection          ? '5060' :  // Inventory Write-off — reverses a shortage
             paymentMethod === 'CASH'   ? '1010' :  // Cash on Hand — supplier paid in cash today
             paymentMethod === 'CREDIT' ? '2010' :  // Accounts Payable — Net-30 / accrual
                                          '3010';   // Owner's Capital — owner funded the stock
           const creditDescription =
+            isCountCorrection          ? `Count correction — ${productName} found` :
             paymentMethod === 'CASH'   ? `Cash purchase — ${productName}` :
             paymentMethod === 'CREDIT' ? `Supplier credit — ${productName}` :
                                          'Owner equity — inventory funded';
@@ -787,7 +805,9 @@ export class JournalService {
             where:  { id: tenantId },
             select: { taxStatus: true },
           });
-          const claimsInputVat = tenantTax?.taxStatus === 'VAT';
+          // No supplier, no invoice, no input tax. A count correction is an
+          // internal adjustment; claiming VAT on it would be inventing a credit.
+          const claimsInputVat = tenantTax?.taxStatus === 'VAT' && !isCountCorrection;
           const inputVat = claimsInputVat
             ? +(totalValue - totalValue / 1.12).toFixed(2)
             : 0;

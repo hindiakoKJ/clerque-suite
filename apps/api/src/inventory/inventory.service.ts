@@ -8,6 +8,7 @@ import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
+import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
 
 export { AdjustStockDto, SetThresholdDto, CreateRawMaterialDto, ReceiveRawMaterialDto };
 
@@ -1273,6 +1274,145 @@ export class InventoryService {
    *
    * Period lock is enforced — backdating into a closed period is rejected.
    */
+  /**
+   * Take raw material OFF the shelf for a reason that is not a sale.
+   *
+   * There was no way to do this. `adjust` resolves a productId against the
+   * Product table, so it never reached a raw material: spoiled milk, a dropped
+   * bottle of syrup and beans past their date were unrecordable. The stock
+   * stayed on the books, the recipe kept believing it was there, and the POS
+   * kept offering drinks nobody could make.
+   *
+   * Deliberately its own method rather than a negative receive. Receiving
+   * blends WAC, creates a lot and can create an AP bill — none of which a
+   * write-off should do. Taking stock out at the CURRENT average cost is the
+   * whole operation.
+   */
+  async writeOffRawMaterial(
+    tenantId: string,
+    rawMaterialId: string,
+    userId: string,
+    dto: WriteOffRawMaterialDto,
+  ) {
+    const material = await this.prisma.rawMaterial.findFirst({
+      where: { id: rawMaterialId, tenantId },
+    });
+    if (!material) throw new NotFoundException('Raw material not found');
+
+    await this.assertBranchBelongsToTenant(tenantId, dto.branchId);
+
+    const writtenOffAt = new Date();
+    await this.periods.assertDateIsOpen(tenantId, writtenOffAt);
+
+    return this.prisma.$transaction(async (tx) => {
+      /*
+        The reference number is the idempotency key, exactly as it is on
+        receive. A double-tap on a tablet must not write the milk off twice,
+        and a write-off is not something a person can see happening.
+      */
+      if (dto.referenceNumber) {
+        const seen = await tx.rawMaterialLot.findFirst({
+          where: { tenantId, rawMaterialId, referenceNumber: dto.referenceNumber },
+          select: { id: true },
+        });
+        if (seen) {
+          return { duplicate: true, rawMaterialId, quantity: 0, message: 'Already written off.' };
+        }
+      }
+
+      const inv = await tx.rawMaterialInventory.findUnique({
+        where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
+      });
+      const onHand = inv ? Number(inv.quantity) : 0;
+
+      /*
+        Refuse to write off more than is there.
+
+        Negative stock is not a state a shelf can be in, and allowing it turns
+        every later number -- maxProducible, the count variance, the valuation
+        -- into nonsense. If the shelf genuinely disagrees with the system,
+        that is a COUNT, which sets an absolute figure and explains itself.
+      */
+      if (dto.quantity > onHand) {
+        throw new BadRequestException(
+          `Only ${onHand} ${material.unit} of "${material.name}" is on hand at this branch. `
+          + 'To correct a quantity that does not match the shelf, do a cycle count instead — '
+          + 'it records what was actually there rather than guessing the difference.',
+        );
+      }
+
+      const unitCost  = Number(material.costPrice ?? 0);
+      const totalValue = dto.quantity * unitCost;
+      const qtyAfter  = onHand - dto.quantity;
+
+      await tx.rawMaterialInventory.update({
+        where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
+        data:  { quantity: new Prisma.Decimal(qtyAfter) },
+      });
+
+      /*
+        A zero-value lot row is the write-off's receipt: it is what makes the
+        reference number unique-able, and it is what a movement log reads.
+        qtyReceived is negative because stock left.
+      */
+      await tx.rawMaterialLot.create({
+        data: {
+          tenantId,
+          branchId:        dto.branchId,
+          rawMaterialId,
+          qtyReceived:     new Prisma.Decimal(-dto.quantity),
+          qtyRemaining:    new Prisma.Decimal(0),
+          unitCost:        new Prisma.Decimal(unitCost),
+          receivedAt:      writtenOffAt,
+          referenceNumber: dto.referenceNumber ?? null,
+          paymentMethod:   'OWNER_FUNDED',
+        },
+      });
+
+      // Nothing to say to the books when the item has no cost, or when it was
+      // already expensed on receipt — the journal handler decides the second.
+      if (totalValue > 0) {
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type:    'INVENTORY_ADJUSTMENT',
+            status:  'PENDING',
+            payload: {
+              kind:            'RAW_MATERIAL_RECEIPT',
+              rawMaterialId,
+              rawMaterialName: material.name,
+              category:        material.category,
+              unit:            material.unit,
+              quantity:        -dto.quantity,          // negative — stock OUT
+              unitCost,
+              totalValue:      -totalValue,
+              branchId:        dto.branchId,
+              reasonCode:      dto.reasonCode,
+              referenceNumber: dto.referenceNumber ?? null,
+              writtenOffById:  userId,
+              productName:     material.name,
+              adjustmentType:  'WRITE_OFF',
+              reason:          dto.note ?? dto.reasonCode,
+            } as unknown as Prisma.JsonObject,
+          },
+        });
+      }
+
+      // Recipe costs do not change — the unit cost is untouched — but the
+      // number of drinks the shop can make certainly does.
+      return {
+        rawMaterialId,
+        branchId:      dto.branchId,
+        quantityBefore: onHand,
+        quantityAfter:  qtyAfter,
+        quantity:       dto.quantity,
+        reasonCode:     dto.reasonCode,
+        unitCost,
+        totalValue,
+      };
+    });
+  }
+
   async receiveRawMaterial(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto) {
     const material = await this.prisma.rawMaterial.findFirst({
       where: { id: rawMaterialId, tenantId },

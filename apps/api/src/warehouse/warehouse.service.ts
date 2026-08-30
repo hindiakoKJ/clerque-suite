@@ -339,7 +339,14 @@ export class WarehouseService {
     return this.prisma.$transaction(async (tx) => {
       const c = await tx.cycleCount.findFirst({
         where:   { id, tenantId },
-        include: { lines: true },
+        // The raw material comes along so the variance can be VALUED and
+        // routed. Counting the shelf is the one thing that is supposed to
+        // make stock and the books agree, and this method used to move only
+        // the stock -- it never created an AccountingEvent, so every count
+        // pushed the two further apart instead.
+        include: { lines: { include: { rawMaterial: {
+          select: { id: true, name: true, unit: true, costPrice: true, category: true },
+        } } } },
       });
       if (!c) throw new NotFoundException('Cycle count not found.');
       if (c.status !== 'OPEN') {
@@ -388,6 +395,48 @@ export class WarehouseService {
           where: { id: line.id },
           data:  { varianceQty: variance },
         });
+
+        /*
+          Tell the books what the count found.
+
+          Emitted as an ordinary INVENTORY_ADJUSTMENT so it goes through the
+          same routing as every other stock movement: an ingredient hits its
+          asset account, a supply that was already expensed on receipt posts
+          nothing at all, and COUNT_CORRECTION lands in 5060 rather than being
+          buried in cost of sale.
+
+          Valued at the material's own cost. A variance with no cost price is
+          a quantity correction the books cannot express, so no event is
+          created rather than one worth zero.
+        */
+        const unitCost = Number(line.rawMaterial?.costPrice ?? 0);
+        const varianceQty = Number(variance);
+        if (unitCost > 0) {
+          await tx.accountingEvent.create({
+            data: {
+              tenantId,
+              type:    'INVENTORY_ADJUSTMENT',
+              status:  'PENDING',
+              payload: {
+                kind:            'RAW_MATERIAL_RECEIPT',
+                rawMaterialId:   line.rawMaterialId,
+                rawMaterialName: line.rawMaterial?.name ?? 'Ingredient',
+                category:        line.rawMaterial?.category ?? null,
+                unit:            line.rawMaterial?.unit ?? '',
+                quantity:        varianceQty,               // signed: + found, - missing
+                unitCost,
+                totalValue:      Math.abs(varianceQty) * unitCost * (varianceQty < 0 ? -1 : 1),
+                branchId:        c.branchId,
+                reasonCode:      'COUNT_CORRECTION',
+                referenceNumber: c.countNumber ?? null,
+                // Legacy fields the journal handler reads
+                productName:     line.rawMaterial?.name ?? 'Ingredient',
+                adjustmentType:  'COUNT_CORRECTION',
+                reason:          `Physical count${c.countNumber ? ` ${c.countNumber}` : ''}`,
+              } as unknown as Prisma.JsonObject,
+            },
+          });
+        }
       }
 
       return tx.cycleCount.update({

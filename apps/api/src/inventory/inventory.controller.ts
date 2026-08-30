@@ -26,6 +26,7 @@ import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 import { RecipeCatchupService } from './recipe-catchup.service';
 import { RecipeCatchupApplyDto, RecipeCatchupPreviewDto } from './dto/recipe-catchup.dto';
+import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
 
 @ApiTags('Inventory')
 @ApiBearerAuth('access-token')
@@ -276,6 +277,27 @@ export class InventoryController {
     @Body() dto: Partial<CreateRawMaterialDto> & { isActive?: boolean },
   ) {
     return this.inventoryService.updateRawMaterial(user.tenantId!, id, dto);
+  }
+
+  /**
+   * Take raw material off the shelf for a reason that is not a sale.
+   *
+   * Same roles as receiving. Whoever can put stock in can take it out — the
+   * control is that the REASON is required and the value lands in a different
+   * expense account depending on it, not that fewer people may record waste.
+   * Making spoilage hard to record does not reduce spoilage; it reduces the
+   * chance anyone finds out about it.
+   */
+  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @RequireIdempotency()
+  @Post('raw-materials/:id/write-off')
+  @HttpCode(HttpStatus.OK)
+  writeOffRawMaterial(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: WriteOffRawMaterialDto,
+  ) {
+    return this.inventoryService.writeOffRawMaterial(user.tenantId!, id, user.sub, dto);
   }
 
   /**

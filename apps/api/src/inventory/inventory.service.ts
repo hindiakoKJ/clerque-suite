@@ -1569,6 +1569,45 @@ export class InventoryService {
       }
     }
 
+    /*
+      A delivery cost wildly unlike the one on file is almost always a typo or
+      the wrong unit, not a real price move.
+
+      Receiving blends the cost into the WAC and then RIPPLES it out through
+      recostProductsUsing, so one mistyped figure silently rewrites what every
+      drink using this ingredient costs — and therefore every reported margin.
+      A shop buying beans at ₱1.85/g that types 1850 (the price of the sack)
+      gets a latte costing more than a phone, and nothing on the way in objects.
+
+      A factor of 10 is deliberately loose: real prices move, and a guard that
+      cries wolf gets clicked through. This catches the order-of-magnitude
+      mistakes — a unit confusion, a misplaced decimal, a per-sack price typed
+      into a per-gram field — and nothing else.
+
+      Overridable, because sometimes the price really did move: pass
+      acceptCostChange and it proceeds. Refusing outright would leave a shop
+      unable to record a real delivery.
+    */
+    const priorCost = material.costPrice != null ? Number(material.costPrice) : 0;
+    if (
+      netCostPrice != null && netCostPrice > 0 && priorCost > 0 &&
+      dto.acceptCostChange !== true
+    ) {
+      const factor = netCostPrice / priorCost;
+      if (factor >= 10 || factor <= 0.1) {
+        const money = (n: number) =>
+          '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        throw new BadRequestException(
+          `"${material.name}" is on file at ${money(priorCost)} per ${material.unit}, ` +
+          `and this delivery says ${money(netCostPrice)} per ${material.unit} — ` +
+          `${factor >= 10 ? Math.round(factor) + ' times more' : Math.round(1 / factor) + ' times less'}. ` +
+          `Check the unit: a price for a whole sack or bottle entered against a per-${material.unit} ` +
+          `ingredient will re-cost every recipe that uses it. If the price really did change, ` +
+          'tick "the price really changed" and receive again.',
+        );
+      }
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.rawMaterialInventory.findUnique({
         where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },

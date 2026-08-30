@@ -79,8 +79,12 @@ export default function InventoryPage() {
     receivedAt: todayIso(),   // LOCAL today -- toISOString() is UTC, which books a 6am delivery to yesterday
     vendorId: '',
     termsDays: '30',
+    /* Set only after the server refuses an order-of-magnitude cost change. */
+    acceptCostChange: false,
   });
   const [matSaving,  setMatSaving]  = useState(false);
+  /* The server's cost-sanity refusal, shown inline with a way past it. */
+  const [costWarning, setCostWarning] = useState<string | null>(null);
 
   // Inline edit threshold state
   const [editMatThreshold,    setEditMatThreshold]    = useState<{ id: string; value: string } | null>(null);
@@ -186,7 +190,9 @@ export default function InventoryPage() {
       receivedAt: todayIso(),
       vendorId: '',
       termsDays: '30',
+      acceptCostChange: false,
     });
+    setCostWarning(null);
     setMatModal('receive');
   }
 
@@ -289,6 +295,14 @@ export default function InventoryPage() {
         referenceNumber: receiveForm.referenceNumber.trim() || undefined,
         paymentMethod:   receiveForm.paymentMethod,
         receivedAt:      new Date(receiveForm.receivedAt).toISOString(),
+        /*
+          Only sent once the person has seen the refusal and confirmed the
+          price really moved. Receiving blends the cost into the weighted
+          average and re-costs every recipe using this ingredient, so an
+          order-of-magnitude change is refused by default — it is nearly
+          always a unit mix-up or a stray decimal.
+        */
+        ...(receiveForm.acceptCostChange ? { acceptCostChange: true } : {}),
         ...(receiveForm.paymentMethod === 'CREDIT' ? {
           vendorId:  receiveForm.vendorId,
           termsDays: parseInt(receiveForm.termsDays, 10) || 30,
@@ -298,7 +312,14 @@ export default function InventoryPage() {
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
       setMatModal(null);
     } catch (err: unknown) {
-      toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to receive stock.');
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      // The cost-sanity refusal is the one error with a way forward, so offer
+      // it rather than making the person guess what the server wants.
+      if (msg && /Check the unit/i.test(msg)) {
+        setCostWarning(msg);
+      } else {
+        toast.error(msg ?? 'Failed to receive stock.');
+      }
     } finally {
       setMatSaving(false);
     }
@@ -945,9 +966,39 @@ export default function InventoryPage() {
                 {' '}Entering a cost per unit also updates the Weighted Average Cost.
               </p>
             </div>
+            {/*
+              The cost-sanity refusal, shown where the person is working rather
+              than as a toast that vanishes.
+
+              Receiving blends the delivery cost into the weighted average and
+              re-costs every recipe using this ingredient, so a price an order
+              of magnitude from the one on file is refused by default — it is
+              almost always a unit mix-up or a stray decimal, and a shop buying
+              beans at ₱1.85/g that types the ₱1,850 sack price would give
+              every latte a four-figure cost.
+
+              Real prices do move, so there is a way through. It is a
+              deliberate second action, and it says what it will do.
+            */}
+            {costWarning && (
+              <div className="mx-6 mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+                <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+                  {costWarning}
+                </p>
+                <button
+                  onClick={() => {
+                    setReceiveForm((f) => ({ ...f, acceptCostChange: true }));
+                    setCostWarning(null);
+                  }}
+                  className="mt-2 text-xs font-semibold underline text-amber-900 dark:text-amber-200"
+                >
+                  The price really changed — receive at this cost
+                </button>
+              </div>
+            )}
             <div className="px-6 pb-5 flex gap-3">
               <button
-                onClick={() => setMatModal(null)}
+                onClick={() => { setMatModal(null); setCostWarning(null); }}
                 className="flex-1 border border-border text-muted-foreground rounded-xl py-2 text-sm font-medium hover:bg-muted transition-colors"
               >
                 Cancel

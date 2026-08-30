@@ -32,10 +32,34 @@ export default function CycleCountsPage() {
     queryFn:  () => api.get('/warehouse/cycle-counts').then((r) => r.data),
   });
 
+  /*
+    Posting asks WHICH KIND of count this is, because the two mean opposite
+    things to the books.
+
+    A routine count found a discrepancy: something was wrong, and the
+    difference is written off to 5060. A shop's FIRST count is not a
+    discrepancy at all — nothing was wrong, the owner simply has stock on the
+    shelf — and it credits 3010 Owner's Capital.
+
+    The endpoint has always accepted `isOpeningBalance`; this screen never sent
+    it, so it defaulted to false and an opening count booked the entire shelf
+    as a NEGATIVE write-off. On ₱48,000 of opening stock that is ₱48,000 of
+    invented profit in the first income statement the BIR ever sees.
+  */
+  const [postTarget, setPostTarget] = useState<CycleCount | null>(null);
+
   const post = useMutation({
-    mutationFn: (id: string) => api.post(`/warehouse/cycle-counts/${id}/post`).then((r) => r.data),
-    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['cycle-counts'] }); toast.success('Posted — variances applied.'); },
-    onError:    (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
+    mutationFn: (v: { id: string; isOpeningBalance: boolean }) =>
+      api.post(`/warehouse/cycle-counts/${v.id}/post`, { isOpeningBalance: v.isOpeningBalance })
+        .then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['cycle-counts'] });
+      setPostTarget(null);
+      toast.success(v.isOpeningBalance
+        ? 'Posted as opening stock — booked to Owner’s Capital.'
+        : 'Posted — variances applied.');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
   });
 
   return (
@@ -91,20 +115,17 @@ export default function CycleCountsPage() {
                           Count
                         </button>
                         {/*
-                          Posting rewrites stock to the counted figures and
-                          books the adjustment. There is no unpost -- the only
-                          statuses are OPEN / POSTED / CANCELLED -- and this was
-                          an unlabelled icon a thumb could catch while
-                          scrolling. Confirm first.
+                          Posting moves stock by the difference this count
+                          found and books the adjustment. There is no unpost --
+                          the only statuses are OPEN / POSTED / CANCELLED --
+                          and this was an unlabelled icon a thumb could catch
+                          while scrolling, so it opens a dialog rather than
+                          firing. That dialog also asks whether this is the
+                          shop's FIRST count, which decides whether the value
+                          lands in a write-off or in Owner's Capital.
                         */}
                         <button
-                          onClick={() => {
-                            if (!window.confirm(
-                              'Post this count?\n\nStock will be rewritten to the counted figures and the '
-                              + 'difference booked to the ledger. This cannot be undone.'
-                            )) return;
-                            post.mutate(c.id);
-                          }}
+                          onClick={() => setPostTarget(c)}
                           disabled={post.isPending}
                           className="p-1.5 rounded text-emerald-700 hover:bg-emerald-500/15"
                           title="Post variances"
@@ -121,8 +142,90 @@ export default function CycleCountsPage() {
         )}
       </section>
 
+      {postTarget && (
+        <PostCountModal
+          count={postTarget}
+          pending={post.isPending}
+          onCancel={() => setPostTarget(null)}
+          onPost={(isOpeningBalance) => post.mutate({ id: postTarget.id, isOpeningBalance })}
+        />
+      )}
       {showNew && <NewCountModal onClose={() => setShowNew(false)} />}
       {openCountId && <CountSheetModal countId={openCountId} onClose={() => setOpenCountId(null)} />}
+    </div>
+  );
+}
+
+/**
+ * Which kind of count is this?
+ *
+ * The same counted numbers mean opposite things to the books depending on the
+ * answer, and only the person who did the counting knows which it is. A
+ * routine count found something WRONG and the difference is a write-off; a
+ * first count found nothing wrong at all — it is the owner's stock arriving on
+ * the books.
+ *
+ * Asked rather than inferred. The system could guess "no previous count means
+ * opening", but a shop adopting Clerque mid-life has real stock AND a real
+ * history, and guessing wrong writes tens of thousands of pesos into the wrong
+ * account on the first statement anyone sees.
+ */
+function PostCountModal({
+  count, pending, onCancel, onPost,
+}: {
+  count: { countNumber: string; branch: { name: string }; _count: { lines: number } };
+  pending: boolean;
+  onCancel: () => void;
+  onPost: (isOpeningBalance: boolean) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-lg p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold text-lg">Post {count.countNumber}</h2>
+          <p className="text-sm text-muted-foreground">
+            {count.branch?.name} · {count._count?.lines} item{count._count?.lines === 1 ? '' : 's'}
+          </p>
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          Stock moves by the difference this count found, so anything sold while
+          you were counting is kept. This cannot be undone.
+        </p>
+
+        <div className="space-y-2">
+          <button
+            onClick={() => onPost(false)}
+            disabled={pending}
+            className="w-full text-left rounded-xl border border-border p-3 hover:bg-muted disabled:opacity-50"
+          >
+            <span className="block text-sm font-semibold">Routine count</span>
+            <span className="block text-xs text-muted-foreground mt-0.5">
+              Correcting the records. The difference is booked as a stock
+              write-off or gain.
+            </span>
+          </button>
+          <button
+            onClick={() => onPost(true)}
+            disabled={pending}
+            className="w-full text-left rounded-xl border border-border p-3 hover:bg-muted disabled:opacity-50"
+          >
+            <span className="block text-sm font-semibold">
+              Opening stock — this shop&apos;s first count
+            </span>
+            <span className="block text-xs text-muted-foreground mt-0.5">
+              Nothing was wrong. Booked to Owner&apos;s Capital as stock the
+              owner put into the business.
+            </span>
+          </button>
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={onCancel} disabled={pending} className="px-4 py-2 rounded-lg text-sm hover:bg-muted">
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

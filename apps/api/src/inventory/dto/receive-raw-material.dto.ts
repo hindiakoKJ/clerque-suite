@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, MaxLength, IsDateString, IsIn } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, MaxLength, IsDateString, IsIn, IsBoolean } from 'class-validator';
 
 export class ReceiveRawMaterialDto {
   @IsString()
@@ -43,6 +43,19 @@ export class ReceiveRawMaterialDto {
   @IsString()
   @MaxLength(100)
   referenceNumber?: string;
+
+  /**
+   * "The price really did change."
+   *
+   * Receiving blends the delivery cost into the weighted average and ripples
+   * it out to every recipe using the ingredient, so a cost an order of
+   * magnitude away from the one on file is refused — it is nearly always a
+   * unit mix-up or a misplaced decimal, and it would silently rewrite every
+   * margin in the shop. This is the way past it when the price genuinely moved.
+   */
+  @IsOptional()
+  @IsBoolean()
+  acceptCostChange?: boolean;
 
   /**
    * Vendor (supplier) — required when paymentMethod is CREDIT (a Bill needs

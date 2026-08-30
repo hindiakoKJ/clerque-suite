@@ -547,15 +547,20 @@ export default function PosTerminal() {
             />
           </div>
         )}
-        <div className="ml-auto flex items-center gap-3">
-          <button
-            onClick={() => toast.info('Sent to kitchen (mock)')}
-            disabled={cartCount === 0}
-            className="inline-flex items-center gap-2 px-4 min-h-[40px] rounded-lg text-sm font-semibold border-2 border-[var(--counter-primary)] text-[var(--counter-primary)] bg-card hover:bg-[var(--counter-primary-container)] transition-colors disabled:opacity-50 disabled:border-border disabled:text-muted-foreground"
-          >
-            Send to kitchen
-          </button>
-        </div>
+        {/*
+          "Send to kitchen" removed.
+
+          It called toast.info('Sent to kitchen (mock)') and did nothing else —
+          a prominent, confident button that reported success and sent nothing.
+          Harmless while the shop only sold drinks; actively dangerous the day a
+          kitchen exists, because the cashier would tell a customer the food was
+          ordered while the cook's screen stayed empty.
+
+          Nothing was lost by removing it: the KDS reads OrderItem directly
+          (kds.service.ts listStationQueue), so a ticket reaches the kitchen
+          when the ORDER is created. There was never anything for this button
+          to do.
+        */}
       </div>
 
       <div className="flex flex-1 overflow-hidden relative">

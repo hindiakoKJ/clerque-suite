@@ -618,8 +618,16 @@ export class ProductsService {
         category: { select: { id: true, name: true } },
         variants: { where: { isActive: true } },
         inventory: { where: { branchId }, select: { quantity: true, lowStockAlert: true } },
-        // BOM lines so we can compute maxProducible for RECIPE_BASED items
-        bomItems: { select: { rawMaterialId: true, quantity: true } },
+        // BOM lines so we can compute maxProducible for RECIPE_BASED items.
+        // The raw material comes with them so the limiting one can be NAMED —
+        // "16 left" tells a cashier to call someone, but not who or what for.
+        bomItems: {
+          select: {
+            rawMaterialId: true,
+            quantity: true,
+            rawMaterial: { select: { id: true, name: true, unit: true } },
+          },
+        },
         modifierGroups: {
           include: {
             modifierGroup: {
@@ -696,6 +704,19 @@ export class ProductsService {
 
     return products.map((p) => {
       let maxProducible: number | null = null;
+      /*
+        WHICH ingredient set the ceiling.
+
+        The count was already derived from exactly one BOM line and then the
+        line was thrown away, so "16 left" reached the till as a bare number:
+        enough to tell a cashier to call someone, not enough to say who or
+        what for. Keeping the line costs nothing — it is the same loop — and
+        turns the alert into an instruction.
+      */
+      let limitedBy: {
+        rawMaterialId: string; name: string; unit: string;
+        stock: number; perUnit: number;
+      } | null = null;
 
       if (p.inventoryMode === 'RECIPE_BASED') {
         // No BOM at all → cannot produce; treat as 0 so cashier can't sell it.
@@ -709,7 +730,16 @@ export class ProductsService {
             const perUnit = Number(bom.quantity);
             if (perUnit <= 0) continue;
             const producible = Math.floor(stock / perUnit);
-            if (producible < min) min = producible;
+            if (producible < min) {
+              min = producible;
+              limitedBy = {
+                rawMaterialId: bom.rawMaterialId,
+                name:          bom.rawMaterial?.name ?? 'Unknown ingredient',
+                unit:          bom.rawMaterial?.unit ?? '',
+                stock,
+                perUnit,
+              };
+            }
           }
           maxProducible = min === Number.POSITIVE_INFINITY ? 0 : min;
         }
@@ -750,6 +780,8 @@ export class ProductsService {
             }
           : null,
         maxProducible,
+        // Null for unit-based products — nothing limits them but themselves.
+        limitedBy,
         isLowStock,
         isOutOfStock,
       };

@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, ChevronRight, Loader2, AlertTriangle,
+  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -65,6 +65,17 @@ export default function ProcureHome() {
       title: 'Purchase request',
       desc:  'Build the buy list, send it, record what was bought.',
       note:  req ? `${req.requestNumber} · ${req.lines.length} item${req.lines.length === 1 ? '' : 's'}` : null,
+      show:  true,
+    },
+    {
+      // The answer to "what is that 16 on the POS tile". Open to everyone who
+      // can build a buy list, including the kitchen -- the person who notices
+      // should be able to look it up rather than shout.
+      href:  '/procure/ceiling',
+      Icon:  Gauge,
+      title: 'What is limiting the menu',
+      desc:  'The ingredient behind the number on each POS tile.',
+      note:  null,
       show:  true,
     },
     {

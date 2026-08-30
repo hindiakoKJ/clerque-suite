@@ -304,6 +304,93 @@ export class ProcureService {
     });
   }
 
+  // ── what is capping the menu ───────────────────────────────────────────────
+
+  /**
+   * Which ingredients are limiting how many things the shop can sell.
+   *
+   * The POS tile says "16 left" and that number is real, but it is the wrong
+   * end of the telescope for anyone who can act on it. The cashier sees a
+   * consequence; whoever buys stock needs the cause. This inverts it: instead
+   * of a product and its ceiling, an ingredient and everything it is holding
+   * back.
+   *
+   * "Fresh Milk — 16 servings, capping 14 drinks" is a buy decision. "16 left"
+   * on a latte tile is a reason to shout across the room.
+   *
+   * Deliberately its own query rather than reusing the POS product payload,
+   * which drags in price lists, modifier groups and variants to answer a
+   * question about stock.
+   */
+  async menuCeiling(tenantId: string, branchId: string) {
+    const products = await this.prisma.product.findMany({
+      where: { tenantId, isActive: true, inventoryMode: 'RECIPE_BASED' },
+      select: {
+        id: true, name: true,
+        bomItems: {
+          select: {
+            rawMaterialId: true,
+            quantity: true,
+            rawMaterial: { select: { id: true, name: true, unit: true, lowStockAlert: true } },
+          },
+        },
+      },
+    });
+
+    const rawMaterialIds = [...new Set(products.flatMap((p) => p.bomItems.map((b) => b.rawMaterialId)))];
+    if (rawMaterialIds.length === 0) return { branchId, ingredients: [], productsChecked: 0 };
+
+    const stockRows = await this.prisma.rawMaterialInventory.findMany({
+      where:  { branchId, rawMaterialId: { in: rawMaterialIds } },
+      select: { rawMaterialId: true, quantity: true },
+    });
+    const stockOf = new Map(stockRows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+
+    // ingredientId -> what it is holding back
+    const capping = new Map<string, {
+      rawMaterialId: string; name: string; unit: string;
+      stock: number; servingsLeft: number;
+      products: Array<{ id: string; name: string; canMake: number }>;
+    }>();
+
+    for (const p of products) {
+      if (p.bomItems.length === 0) continue;
+
+      let min = Number.POSITIVE_INFINITY;
+      let limiter: (typeof p.bomItems)[number] | null = null;
+      for (const bom of p.bomItems) {
+        const perUnit = Number(bom.quantity);
+        if (perUnit <= 0) continue;
+        const producible = Math.floor((stockOf.get(bom.rawMaterialId) ?? 0) / perUnit);
+        if (producible < min) { min = producible; limiter = bom; }
+      }
+      if (!limiter || min === Number.POSITIVE_INFINITY) continue;
+
+      const key = limiter.rawMaterialId;
+      const entry = capping.get(key) ?? {
+        rawMaterialId: key,
+        name: limiter.rawMaterial?.name ?? 'Unknown ingredient',
+        unit: limiter.rawMaterial?.unit ?? '',
+        stock: stockOf.get(key) ?? 0,
+        servingsLeft: min,
+        products: [],
+      };
+      // The tightest product is the one that runs out first, so it sets the
+      // number a person should act on.
+      entry.servingsLeft = Math.min(entry.servingsLeft, min);
+      entry.products.push({ id: p.id, name: p.name, canMake: min });
+      capping.set(key, entry);
+    }
+
+    const ingredients = [...capping.values()]
+      .map((i) => ({ ...i, productCount: i.products.length,
+                     products: i.products.sort((a, b) => a.canMake - b.canMake) }))
+      // Most urgent first: fewest servings, then whatever blocks the most menu.
+      .sort((a, b) => a.servingsLeft - b.servingsLeft || b.productCount - a.productCount);
+
+    return { branchId, productsChecked: products.length, ingredients };
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────────
 
   private lineInclude() {

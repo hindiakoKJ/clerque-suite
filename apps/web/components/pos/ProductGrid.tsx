@@ -53,6 +53,8 @@ interface Product {
    * Updates instantly when ingredients are sold or received.
    */
   maxProducible?: number | null;
+  /** Which ingredient set that ceiling. Null for unit-based products. */
+  limitedBy?: { rawMaterialId: string; name: string; unit: string; stock: number; perUnit: number } | null;
   isLowStock?: boolean;
   isOutOfStock?: boolean;
   imageUrl?: string | null;
@@ -332,7 +334,11 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
 
                   {/* Stock badge — shows "X left" so cashier knows max sellable units.
                       For recipe-based products, this is computed from ingredients
-                      and updates instantly when ingredients are consumed. */}
+                      and updates instantly when ingredients are consumed.
+
+                      The title names the ingredient that set the ceiling. A bare
+                      "16 left" tells the cashier to call someone but not what to
+                      say; "16 left — limited by Fresh Milk" is the message. */}
                   {stock !== null && (
                     <span className={cn(
                       'absolute top-2 right-2 text-[10px] sm:text-xs px-1.5 py-0.5 rounded-full font-semibold',
@@ -341,8 +347,22 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                         : isLow
                         ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                         : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-                    )}>
+                    )}
+                    title={
+                      p.limitedBy
+                        ? `${isOut ? 'Out' : `${stock} left`} — limited by ${p.limitedBy.name}`
+                          + ` (${p.limitedBy.stock.toLocaleString()} ${p.limitedBy.unit} in stock,`
+                          + ` ${p.limitedBy.perUnit.toLocaleString()} ${p.limitedBy.unit} each)`
+                        : undefined
+                    }>
                       {isOut ? 'OUT' : isLow ? `LOW · ${stock}` : `${stock} left`}
+                    </span>
+                  )}
+                  {/* Named on the tile itself when it is actually urgent —
+                      a tooltip is no use on a tablet, which has no hover. */}
+                  {(isLow || isOut) && p.limitedBy && (
+                    <span className="absolute bottom-1 left-3 right-3 truncate text-[9px] leading-tight text-amber-600 dark:text-amber-400">
+                      needs {p.limitedBy.name}
                     </span>
                   )}
                 </button>

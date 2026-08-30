@@ -53,6 +53,10 @@ export const REQUEST_ROLES = [...STOCK_ROLES, 'CASHIER', 'SALES_LEAD', 'GENERAL_
 
 function rolesFor(pathname: string): string[] {
   if (pathname.startsWith('/procure/requests')) return REQUEST_ROLES;
+  // The menu ceiling is a READ of what is short. The cook who notices the
+  // milk is low is exactly who should be able to check it, so it sits with
+  // the buy list rather than with the stock screens.
+  if (pathname.startsWith('/procure/ceiling'))  return REQUEST_ROLES;
   if (pathname === '/procure')                  return REQUEST_ROLES;
   return STOCK_ROLES;
 }

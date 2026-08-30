@@ -49,6 +49,23 @@ export class ProcureController {
     return this.procure.openRequest(user.tenantId!, body.branchId ?? user.branchId!, user.sub);
   }
 
+  /**
+   * What is capping the menu, by ingredient.
+   *
+   * The till shows "16 left" on a latte. Whoever buys stock needs the other
+   * half of that sentence — which ingredient, and how much of the menu it is
+   * holding back. Open to the same roles as the buy list, because the cook who
+   * notices is the one who should be able to look it up.
+   *
+   * Declared BEFORE :id so "menu-ceiling" is not read as a request id.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @Get('menu-ceiling')
+  @ApiOperation({ summary: 'Ingredients ranked by how much of the menu they are limiting' })
+  menuCeiling(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
+    return this.procure.menuCeiling(user.tenantId!, branchId ?? user.branchId!);
+  }
+
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

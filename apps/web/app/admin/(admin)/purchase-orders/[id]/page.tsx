@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ArrowLeft, Send, Inbox } from 'lucide-react';
 import { api } from '@/lib/api';
+import { LoadFailed } from '@/components/shared/LoadFailed';
 
 /**
  * These screens are mounted twice: at /admin for platform staff and at /pos for
@@ -58,7 +59,7 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
   const queryClient = useQueryClient();
   const [receiveQty, setReceiveQty] = useState<Record<string, string>>({});
 
-  const { data: po, isLoading } = useQuery<PO>({
+  const { data: po, isLoading, isError, error, refetch, isFetching } = useQuery<PO>({
     queryKey: ['purchase-order', id],
     queryFn:  () => api.get<PO>(`/purchase-orders/${id}`).then((r) => r.data),
   });
@@ -81,7 +82,10 @@ export default function PurchaseOrderDetailPage({ params }: { params: Promise<{ 
     },
   });
 
-  if (isLoading || !po) return <div className="p-4 sm:p-6 text-sm text-muted-foreground">Loading…</div>;
+  if (isLoading) return <div className="p-4 sm:p-6 text-sm text-muted-foreground">Loading…</div>;
+  if (isError || !po) {
+    return <LoadFailed what="this purchase order" error={error} onRetry={() => void refetch()} retrying={isFetching} />;
+  }
 
   const canSubmit  = po.status === 'DRAFT' && po.items.length > 0;
   const canReceive = po.status === 'ORDERED' || po.status === 'PARTIAL';

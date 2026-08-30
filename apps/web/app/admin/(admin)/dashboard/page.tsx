@@ -9,6 +9,7 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { Spinner } from '@/components/ui/Spinner';
+import { LoadFailed } from '@/components/shared/LoadFailed';
 
 interface PlatformMetrics {
   generatedAt: string;
@@ -76,14 +77,17 @@ export default function AdminDashboard() {
   // privacy, in case the screen is being shared during a sales demo).
   const [showAiCost, setShowAiCost] = useState(false);
 
-  const { data, isLoading } = useQuery<PlatformMetrics>({
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery<PlatformMetrics>({
     queryKey: ['admin-metrics'],
     queryFn:  () => api.get('/admin/metrics').then((r) => r.data),
     enabled:  !!(user?.isSuperAdmin || user?.role === 'SUPER_ADMIN'),
     refetchInterval: 60_000,
   });
 
-  if (isLoading || !data) return <Spinner size="lg" message="Loading platform metrics…" />;
+  if (isLoading) return <Spinner size="lg" message="Loading platform metrics…" />;
+  if (isError || !data) {
+    return <LoadFailed what="platform metrics" error={error} onRetry={() => void refetch()} retrying={isFetching} />;
+  }
 
   const statusMap = Object.fromEntries(data.tenants.byStatus.map((r) => [r.status, r.count]));
 

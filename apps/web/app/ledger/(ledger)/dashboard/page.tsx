@@ -7,6 +7,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { LoadFailed } from '@/components/shared/LoadFailed';
 
 interface ProcessMetrics {
   generatedAt: string;
@@ -136,7 +137,7 @@ export default function LedgerDashboardPage() {
   // tenants and pre-modular JWTs continue to see everything.
   const posEnabled = user?.modulePos !== false;
 
-  const { data, isLoading, refetch, isFetching } = useQuery<ProcessMetrics>({
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery<ProcessMetrics>({
     queryKey: ['ledger-process-metrics'],
     queryFn:  () => api.get('/ledger/process-metrics').then((r) => r.data),
     enabled:  !!user,
@@ -193,10 +194,13 @@ export default function LedgerDashboardPage() {
         </div>
       </div>
 
-      {isLoading || !data ? (
+      {isLoading ? (
         <div className="text-center py-16 text-muted-foreground text-sm">
           Loading process metrics…
         </div>
+      ) : isError || !data ? (
+        <LoadFailed what="the process metrics" error={error}
+          onRetry={() => void refetch()} retrying={isFetching} />
       ) : (
         <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
 

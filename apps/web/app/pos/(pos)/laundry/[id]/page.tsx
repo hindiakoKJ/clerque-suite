@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { LoadFailed } from '@/components/shared/LoadFailed';
 
 type PaymentMethod = 'CASH' | 'CARD' | 'GCASH';
 
@@ -81,7 +82,7 @@ export default function LaundryDetailPage() {
   const router = useRouter();
   const qc = useQueryClient();
 
-  const { data: order, isLoading } = useQuery<LaundryDetail>({
+  const { data: order, isLoading, isError, error, refetch, isFetching } = useQuery<LaundryDetail>({
     queryKey: ['laundry-order', id],
     queryFn:  () => api.get(`/laundry/orders/${id}`).then((r) => r.data),
     enabled:  !!id,
@@ -178,6 +179,9 @@ export default function LaundryDetailPage() {
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed.'),
   });
 
+  if (isError && !order) {
+    return <LoadFailed what="this order" error={error} onRetry={() => void refetch()} retrying={isFetching} />;
+  }
   if (isLoading || !order) {
     return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
   }

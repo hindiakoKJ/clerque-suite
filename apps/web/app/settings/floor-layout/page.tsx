@@ -12,6 +12,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isFnbType } from '@repo/shared-types';
+import { LoadFailed } from '@/components/shared/LoadFailed';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -53,12 +54,17 @@ export default function FloorLayoutSettingsPage() {
   // Only owner / super-admin can manage layout
   const canManage = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
 
-  if (isLoading || !layout) {
+  if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
         Loading layout…
       </div>
     );
+  }
+  // Not loading and still nothing: the fetch failed. Previously this fell into
+  // the same branch above and span forever.
+  if (!layout) {
+    return <LoadFailed what="the floor layout" onRetry={() => void refetch()} />;
   }
 
   // Floor Layout only applies to F&B tenants — bounce non-F&B back to Settings

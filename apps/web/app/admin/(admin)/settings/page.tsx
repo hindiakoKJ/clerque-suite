@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { LoadFailed } from '@/components/shared/LoadFailed';
 
 type Tab = 'company' | 'billing' | 'demo' | 'about';
 
@@ -110,7 +111,8 @@ function CompanyTab() {
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
   });
 
-  if (isLoading || !cfg) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (isLoading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (!cfg) return <LoadFailed what="platform settings" />;
 
   const merged = { ...cfg, ...form };
 
@@ -218,7 +220,8 @@ function BillingTab() {
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
   });
 
-  if (isLoading || !cfg) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (isLoading) return <div className="text-sm text-muted-foreground">Loading…</div>;
+  if (!cfg) return <LoadFailed what="platform settings" />;
 
   return (
     <div className="max-w-2xl space-y-4">

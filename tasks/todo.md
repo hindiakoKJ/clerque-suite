@@ -89,3 +89,67 @@ from the code. 36 new tests; 1084 API tests green; web build green.
 
 Trial balance after all of it: **Dr ₱31,514.62 / Cr ₱31,514.62**, no negative
 stock.
+
+---
+
+## Must-fix list — ALL TEN CLOSED (2026-08-31)
+
+From `tasks/three-app-review.md`. Each verified against the real database, not
+just unit-tested.
+
+- [x] **1. You could not pay a supplier.** Seven `journal.create` call sites
+      omitted the `source` argument, so AP and AR posted as MANUAL and were
+      refused by the posting-control guard that exists to protect those
+      accounts FROM manual entries. Hidden because `seedDefaultAccounts` only
+      INSERTS missing codes and never updates `postingControl` — older tenants
+      are grandfathered OPEN and work by accident; a fresh tenant gets the
+      restriction. *Live:* the exact 403, then `JE-202608-0062` bill posted and
+      `JE-202608-0063` supplier paid.
+- [x] **2. AP bill written net with zero VAT** (closed in the previous batch).
+- [x] **3. A promotion 500'd the Charge button.** `'PROMOTION'` is not one of
+      the five `DiscountType` values, so Prisma rejected the write and took the
+      whole ticket with it. `as const` made TypeScript agree it was fine.
+- [x] **4. A count undid the sales made while counting.** `expectedQty` is a
+      snapshot from when the count STARTED; the counted figure was written
+      straight over live stock. The variance is still measured against the
+      snapshot — that IS what the counter found — but it is now APPLIED to live
+      stock. *Live:* counted 4800 with 300 g sold during the count → shelf 4500,
+      where the old code wrote 4800.
+- [x] **5. Nothing ever wrote a Z-Read.** Now generated when the LAST open
+      shift at a branch closes — the shop's day ends when the shop says so, not
+      at a clock. Fire-and-forget: a cashier must be able to close her drawer
+      whether or not the report builds. *Live:* silent on the first of two
+      closes, written on the last, still one after closing again.
+- [x] **6. A refund was booked as the cashier being short.** Refunds were read
+      nowhere. Attributed by when the cash LEFT the drawer, not when the sale
+      happened.
+- [x] **7. The owner's sales were invisible to the drawer.** Supervisors bypass
+      the shift gate, so his cash goes in the same till with no shiftId and she
+      counts over. **Reported, not folded into expected cash** — see the open
+      question below.
+- [x] **8. An opening count was booked as a write-off.** The screen never sent
+      `isOpeningBalance`, so a shop's first count credited 5060 — a negative
+      expense. Posting now asks which kind of count it is, in words.
+- [x] **9. One mistyped cost re-costed the whole menu.** Refused at an order of
+      magnitude from the cost on file, naming both prices and pointing at the
+      unit, with a deliberate override for a real price move.
+- [x] **10. "Send to kitchen" sent nothing.** Removed rather than wired: the
+      KDS reads `OrderItem` directly, so a ticket arrives when the ORDER is
+      created. There was never anything for it to do.
+- [x] **Bonus (should-fix #17).** The close screen listed opening cash and
+      sales, then a total with refunds, paid-outs and drops subtracted
+      invisibly. All three now show when non-zero.
+
+### One question for KJ
+
+**Should the owner have to open a shift like everyone else?** Right now
+supervisors bypass the gate. Either policy is defensible, and with several
+shifts open per branch there is no unambiguous shift to attach a stray order
+to — so the amount is now reported rather than guessed at. Say the word and it
+becomes a hard gate; until then the overage at least has a name.
+
+### Note on existing tenants
+`seedDefaultAccounts` never updates `postingControl` on accounts that already
+exist, so tenants created before a control was added keep the old one. The demo
+tenant's `2010` was OPEN and has been set to `AP_ONLY` to match the seed. Worth
+a one-off sync before onboarding anyone whose books already exist.

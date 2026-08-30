@@ -54,7 +54,7 @@ describe('ShiftsService — recordHandover', () => {
       orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const audit: any = { log: jest.fn((r: any) => { auditRows.push(r); return Promise.resolve(); }) };
-    return { svc: new ShiftsService(prisma, audit), noteWrites, auditRows };
+    return { svc: new ShiftsService(prisma, audit, { generateZRead: jest.fn() } as any), noteWrites, auditRows };
   }
 
   it('records declared vs expected and computes the variance', async () => {

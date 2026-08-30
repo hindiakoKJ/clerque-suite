@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
+import { ReportsService } from '../reports/reports.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { Prisma } from '@prisma/client';
@@ -54,9 +55,12 @@ export interface ShiftSummary {
 
 @Injectable()
 export class ShiftsService {
+  private readonly logger = new Logger(ShiftsService.name);
+
   constructor(
-    private prisma: PrismaService,
-    private audit:  AuditService,
+    private prisma:  PrismaService,
+    private audit:   AuditService,
+    private reports: ReportsService,
   ) {}
 
   // ─── Branch ownership guard ───────────────────────────────────────────────
@@ -178,7 +182,7 @@ export class ShiftsService {
     // a shift could close successfully but the cash-variance JE could fail
     // and leave the GL out of sync with the actual drawer count. Wrapping in
     // a transaction guarantees all-or-nothing.
-    return this.prisma.$transaction(async (tx) => {
+    const closed = await this.prisma.$transaction(async (tx) => {
       // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId, closedAt: null }
       // is atomic — the tenantId guard and the "not-yet-closed" check happen in one
       // SQL statement, eliminating the window between findFirst and the write.
@@ -219,6 +223,59 @@ export class ShiftsService {
 
       return tx.shift.findFirst({ where: { id: shiftId, tenantId } });
     });
+
+    /*
+      The last shift at a branch closing IS the end of the business day, so
+      that is when the Z-Read gets written.
+
+      POST /reports/z-read has always existed, is correct, and is idempotent
+      per branch per day — and nothing in the product ever called it. The
+      Z-Read History report in Ledger reads a table nothing writes. For a
+      VAT-registered shop that is the daily record the BIR expects a CAS to
+      keep, so its absence is not a missing convenience.
+
+      Not a clock-based cron: a shop's day ends when the shop says it does,
+      and a Z-Read fired at 23:55 while the till is still open would lock the
+      day's totals early — the record is idempotent, so the premature one
+      would win and the late sales would never appear on it.
+
+      Not a call from the browser either: the endpoint is restricted to
+      managers and owners, and the person who closes the last shift is usually
+      a cashier. Generated here, server-side, where the close already is.
+
+      Deliberately outside the transaction and deliberately swallowing its own
+      errors: a cashier at 10pm must be able to close her drawer whether or not
+      the day's Z-Read could be built. A missing Z-Read is recoverable — the
+      owner regenerates it from Reports, and it is idempotent so nothing
+      duplicates. A drawer she cannot close is not.
+    */
+    const stillOpen = await this.prisma.shift.count({
+      where: { tenantId, branchId: shift.branchId, closedAt: null },
+    });
+    if (stillOpen === 0) {
+      try {
+        await this.reports.generateZRead(
+          tenantId,
+          shift.branchId,
+          ShiftsService.todayPH(),
+          cashierId,
+        );
+      } catch (err) {
+        // Logged, never thrown. See above.
+        this.logger.error(
+          `[shifts] Z-Read generation failed for branch ${shift.branchId} after closing ` +
+          `shift ${shiftId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return closed;
+  }
+
+  /** Today's date in PH local time (UTC+8) as YYYY-MM-DD. */
+  private static todayPH(): string {
+    const ph = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    return ph.toISOString().slice(0, 10);
   }
 
   // ─── Cash Out / Cash Drop ───────────────────────────────────────────────

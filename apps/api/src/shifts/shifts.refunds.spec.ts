@@ -54,7 +54,7 @@ describe('ShiftsService — refunds and expected cash', () => {
         }),
       },
     };
-    const svc = new ShiftsService(prisma, { log: jest.fn() } as any) as any;
+    const svc = new ShiftsService(prisma, { log: jest.fn() } as any, { generateZRead: jest.fn() } as any) as any;
     const shift = {
       id: 's1', tenantId: TENANT, branchId: BRANCH, cashierId: 'u1',
       openingCash: 1000, openedAt: OPENED,
@@ -162,7 +162,7 @@ describe('ShiftsService — cash no shift claims', () => {
       shiftCashOut:    { findMany: jest.fn().mockResolvedValue([]) },
       orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const svc = new ShiftsService(prisma, { log: jest.fn() } as any) as any;
+    const svc = new ShiftsService(prisma, { log: jest.fn() } as any, { generateZRead: jest.fn() } as any) as any;
     const shift = {
       id: 's1', tenantId: TENANT, branchId: BRANCH, cashierId: 'u1',
       openingCash: 1000, openedAt: OPENED, closedAt: null,

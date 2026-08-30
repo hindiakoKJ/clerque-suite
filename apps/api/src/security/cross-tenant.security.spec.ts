@@ -32,6 +32,7 @@ import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { OrderQuoteService } from '../orders/order-quote.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ShiftsService }    from '../shifts/shifts.service';
+import { ReportsService }   from '../reports/reports.service';
 
 // ── Dependencies ──────────────────────────────────────────────────────────────
 import { PrismaService }              from '../prisma/prisma.service';
@@ -663,6 +664,11 @@ describe('SECURITY — ShiftsService: Cross-Tenant Attack Vectors', () => {
         // Handover drawer counts write to the audit trail; irrelevant to
         // these attack vectors, so a stub suffices.
         { provide: AuditService, useValue: { log: jest.fn() } },
+        // Closing the LAST open shift at a branch writes that day's Z-Read.
+        // Stubbed: these cases are about tenant scoping, not the report, and
+        // the generation is deliberately fire-and-forget so it cannot affect
+        // whether a close succeeds.
+        { provide: ReportsService, useValue: { generateZRead: jest.fn() } },
       ],
     }).compile();
 

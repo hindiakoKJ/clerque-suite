@@ -3,6 +3,7 @@ import { DEVICE_TOKEN_SURFACES } from './lib/device-surfaces';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { levelValue } from '@repo/shared-types';
+import { POS_ROLES, LEDGER_ROLES, PROCURE_ROLES } from '@/lib/app-roles';
 
 /**
  * Multi-tenant + multi-domain routing middleware.
@@ -168,19 +169,11 @@ export function middleware(req: NextRequest) {
   //
   // These hard gates run BEFORE the appAccess check below so a stale
   // legacy appAccess record can't smuggle a wrong-role user past.
-  const POS_ROLES     = new Set(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'CASHIER']);
-  // MDM and WAREHOUSE_STAFF deliberately sit here and NOT in POS_ROLES: they
-  // own stock without ever touching a till. They are the reason a /pos/* link
-  // inside a Procure screen is a hard ejection rather than a detour.
-  const PROCURE_ROLES = new Set([
-    'BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF',
-    'CASHIER', 'SALES_LEAD', 'GENERAL_EMPLOYEE',
-  ]);
-  const LEDGER_ROLES  = new Set([
-    'BUSINESS_OWNER', 'BRANCH_MANAGER',
-    'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD',
-    'AR_ACCOUNTANT', 'AP_ACCOUNTANT', 'EXTERNAL_AUDITOR',
-  ]);
+  // Role gates live in lib/app-roles.ts so the launcher, the in-app switcher
+  // and this edge check can never disagree. They used to: /select offered
+  // Counter on access level alone, and this gate threw those users straight
+  // back out -- an infinite loop for any account whose only app was one it
+  // was not allowed to enter.
   // Sync (/payroll) is unrestricted by role — every employee uses it for
   // self-service (clock-in, payslips, leave requests). Specific HR pages
   // are gated client-side via the layout role lists.

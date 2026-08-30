@@ -99,7 +99,9 @@ export function useSalesChecklist(tenant: BusinessTypeAware): ChecklistItem[] {
       done: hasStaff,
       label: 'Invite your team',
       hint: 'Add a cashier or manager so the till isn\'t tied to the owner account.',
-      href: '/settings/staff',
+      // Staff lives in the POS app, not under /settings -- there is no
+      // app/settings/staff route, so this step 404'd from the checklist.
+      href: '/pos/staff',
       optional: true,
     },
     {

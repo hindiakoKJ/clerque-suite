@@ -56,7 +56,7 @@ function Hero() {
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <Link
-            href="/signup"
+            href="/signup/pos"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-lg text-white font-semibold text-sm hover:opacity-90 transition-opacity"
             style={{ background: ACCENT }}
           >

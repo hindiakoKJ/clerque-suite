@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Calendar, FileText, DollarSign, Clock, ArrowRight, Plane, ClipboardList, MapPin } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { downloadAuthFile } from '@/lib/utils';
 
 interface MySalary {
   name:       string;
@@ -217,12 +218,23 @@ export default function MyPayrollPage() {
                   <td className="px-4 py-2.5 text-right">{fmtPeso(Number(s.grossPay))}</td>
                   <td className="px-4 py-2.5 text-right font-semibold">{fmtPeso(Number(s.netPay))}</td>
                   <td className="px-2 py-2.5 text-right">
-                    <a
-                      href={`/api/v1/payroll/me/payslips/${s.id}/pdf`}
+                    {/*
+                      Was a plain href to /api/v1/... -- a SAME-ORIGIN path on
+                      the Next app, which has no such route, so it hit the 404
+                      page. Even pointed at the API it would have failed: the
+                      endpoint needs a Bearer token and an <a> cannot send one.
+                      downloadAuthFile resolves the API origin and attaches the
+                      token.
+                    */}
+                    <button
+                      onClick={() => void downloadAuthFile(
+                        `/payroll/me/payslips/${s.id}/pdf`,
+                        `payslip-${s.payRun?.periodEnd ?? s.id}.pdf`,
+                      )}
                       className="text-xs text-[var(--accent)] hover:underline inline-flex items-center gap-1"
                     >
                       PDF <FileText className="h-3 w-3" />
-                    </a>
+                    </button>
                   </td>
                 </tr>
               ))}

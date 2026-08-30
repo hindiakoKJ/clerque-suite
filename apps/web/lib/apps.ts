@@ -1,6 +1,7 @@
 'use client';
 import { ShoppingCart, BookOpen, Users, ShieldCheck, ShoppingBasket } from 'lucide-react';
 import type { AccessLevel } from '@repo/shared-types';
+import { canEnterApp } from './app-roles';
 
 /**
  * The Clerque ecosystem, in one place.
@@ -23,20 +24,10 @@ export interface AppCard {
   minLevel: AccessLevel;
 }
 
-/**
- * Who gets Procure. Anyone who already touches stock: the cashier who notices
- * the shortage, the cook who needs it, the staff who receive and move it, and
- * the owner who buys it. Matches the roles the Procure API accepts, so the
- * card never appears for someone who would be refused on arrival.
- */
-export const PROCURE_ROLES = new Set([
-  'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM',
-  'WAREHOUSE_STAFF', 'CASHIER', 'SALES_LEAD',
-  // Cooks and baristas. They hold GENERAL_EMPLOYEE, which is already NONE on
-  // both POS and Ledger, so Procure is the only app they get -- and they are
-  // the people who notice the sugar is nearly out.
-  'GENERAL_EMPLOYEE',
-]);
+// Role gates come from lib/app-roles.ts, the same table the edge middleware
+// enforces. This file used to keep its own copy and check only the ACCESS
+// LEVEL, so it offered cards the edge then rejected -- see the note there.
+export { PROCURE_ROLES } from './app-roles';
 
 export const APPS: AppCard[] = [
   {
@@ -163,12 +154,17 @@ export function accessibleApps(
       // the other three would have hidden it from everyone: no user has a
       // PROCURE row, and there is no tenant flag for it, so both gates
       // would fail for a card that should simply be there.
-      if (app.id === 'procure') return PROCURE_ROLES.has(user.role);
+      if (app.id === 'procure') return canEnterApp('procure', user.role);
       const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
       // First gate: tenant plan must include the module.
       if (!moduleEnabled(code)) return false;
       // Second gate: user's per-app access level.
-      return hasAccess(code, app.minLevel);
+      if (!hasAccess(code, app.minLevel)) return false;
+      // Third gate, and the one that was missing: the role gate the EDGE
+      // applies. Without it this offered Counter to MDM and WAREHOUSE_STAFF
+      // on their POS:OPERATOR level, and middleware ejected them the moment
+      // they clicked -- out of whatever app they were in.
+      return canEnterApp(app.id, user.role);
     })
     .map((app) => {
       if (app.name === 'Console') return { ...app, resolvedRoute: app.route };

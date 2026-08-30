@@ -4,6 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import Link from 'next/link';
 import { X, LogOut, Settings, HelpCircle } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
+import { AppSwitcher } from './AppSwitcher';
 
 interface MobileNavSheetProps {
   open: boolean;
@@ -83,6 +84,7 @@ export function MobileNavSheet({
               <Settings className="h-4 w-4 shrink-0" />
               <span>Settings</span>
             </Link>
+            <AppSwitcher inline onNavigate={onClose} />
             {user && (
               <div className="px-3 py-2 mt-1 rounded-md bg-muted/30">
                 <p className="text-xs font-medium text-foreground truncate">{user.name}</p>

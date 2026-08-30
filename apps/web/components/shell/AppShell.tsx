@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { MobileNavSheet } from './MobileNavSheet';
 import { toggleTheme } from '@/components/portal/AppLoginPage';
 import { useAuthStore } from '@/store/auth';
+import { AppSwitcher } from './AppSwitcher';
 
 export interface NavItem {
   href: string;
@@ -273,6 +274,10 @@ export function AppShell({
               {!collapsed && <span>Settings</span>}
             </Link>
           )}
+          {/* Switch app — renders itself away when the user holds only one.
+              Placed above Sign out because signing out WAS how people changed
+              app, and this is meant to catch that reach. */}
+          <AppSwitcher collapsed={collapsed} />
           {/* Sign Out — rendered only when the parent layout provides a handler */}
           {onSignOut && (
             <button

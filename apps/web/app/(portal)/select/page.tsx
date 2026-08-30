@@ -5,106 +5,19 @@ import { useRouter } from 'next/navigation';
 import { ShoppingCart, BookOpen, Users, Lock, ArrowRight, ShieldCheck, ShoppingBasket } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/store/auth';
+import { accessibleApps, type AppCardWithRoute } from '@/lib/apps';
 import { api } from '@/lib/api';
-import type { AccessLevel } from '@repo/shared-types';
 import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 
 /* ─── App card registry ──────────────────────────────────────────────────── */
 
-interface AppCard {
-  id: 'pos' | 'ledger' | 'payroll' | 'procure';
-  name: string;
-  description: string;
-  Icon: React.ElementType;
-  accent: string;
-  accentDark: string;
-  route: string;
-  minLevel: AccessLevel;
-}
-
 /**
- * Who gets Procure. Anyone who already touches stock: the cashier who notices
- * the shortage, the staff who receive and move it, and the owner who buys it.
- * Matches the roles the Procure API accepts, so the card never appears for
- * someone who would be refused on arrival.
+ * The registry moved to lib/apps.ts so the in-app switcher can offer exactly
+ * what this launcher offers. Two copies of "which apps can this user open"
+ * would drift the first time a role changed, and the failure mode is silent:
+ * a card here that 403s on arrival, or an app the switcher hides for someone
+ * who genuinely has it.
  */
-const PROCURE_ROLES = new Set([
-  'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM',
-  'WAREHOUSE_STAFF', 'CASHIER', 'SALES_LEAD',
-  // Cooks and baristas. They hold GENERAL_EMPLOYEE, which is already NONE on
-  // both POS and Ledger, so Procure is the only app they get -- and they are
-  // the people who notice the sugar is nearly out.
-  'GENERAL_EMPLOYEE',
-]);
-
-const APPS: AppCard[] = [
-  {
-    id: 'pos',
-    name: 'Counter',
-    description: 'Point-of-sale for retail, F&B, and services — keep the line moving.',
-    Icon: ShoppingCart,
-    accent: 'hsl(217 91% 55%)',
-    accentDark: 'hsl(217 91% 60%)',
-    route: '/pos',
-    minLevel: 'OPERATOR',
-  },
-  {
-    id: 'ledger',
-    name: 'Ledger',
-    description: 'Double-entry accounting with invoices, journals, and reports.',
-    Icon: BookOpen,
-    accent: 'hsl(173 70% 40%)',
-    accentDark: 'hsl(173 70% 45%)',
-    route: '/ledger',
-    minLevel: 'READ_ONLY',
-  },
-  {
-    id: 'procure',
-    name: 'Procure',
-    description: 'Stock, ingredient requests, receiving, and transfers between rooms.',
-    Icon: ShoppingBasket,
-    accent: 'hsl(28 80% 48%)',
-    accentDark: 'hsl(28 80% 58%)',
-    route: '/procure',
-    // Unused for Procure -- it is gated on role, not on an AppAccess row. See
-    // the filter below.
-    minLevel: 'NONE',
-  },
-  {
-    id: 'payroll',
-    name: 'Sync',
-    description: 'Staff time tracking, attendance, and payroll management.',
-    Icon: Users,
-    accent: 'hsl(262 70% 58%)',
-    accentDark: 'hsl(262 70% 65%)',
-    route: '/payroll/clock',
-    minLevel: 'CLOCK_ONLY',
-  },
-];
-
-/**
- * Where to land each role inside an app. Important for Sync because
- * CLOCK_ONLY (CASHIER, GENERAL_EMPLOYEE etc.) lands on /payroll/clock,
- * while OPERATOR / FULL (PAYROLL_MASTER, BUSINESS_OWNER) lands on the HR
- * dashboard.
- */
-function routeForApp(
-  app: AppCard,
-  level: AccessLevel | 'NONE' | undefined,
-  role?: string,
-): string {
-  // Console (SUPER_ADMIN) → always /admin regardless of `id` shim
-  if (app.name === 'Console') return '/admin';
-  // KIOSK_DISPLAY accounts skip the cashier terminal and go straight to a
-  // station picker — these tablets only run KDS or customer display, never
-  // the till. (Defense in depth: the terminal also enforces TERMINAL_ROLES.)
-  if (role === 'KIOSK_DISPLAY' && app.id === 'pos') return '/pos/select-display';
-  if (app.id === 'payroll') {
-    if (level === 'CLOCK_ONLY' || level === 'READ_ONLY') return '/payroll/clock';
-    return '/payroll/dashboard';
-  }
-  return app.route;
-}
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
@@ -123,61 +36,11 @@ export default function SelectPage() {
 
   // ── Compute accessible apps with role-aware routes (BEFORE any early
   // return — React requires hooks in stable call-order across renders).
-  type AppCardWithRoute = AppCard & { resolvedRoute: string };
-
-  // SUPER_ADMIN gets a synthetic "Console" card on top of the real apps.
-  // Treat SUPER_ADMIN role as super-admin even if isSuperAdmin flag missing
+  const accessible: AppCardWithRoute[] = accessibleApps(user, hasAccess);
+  // Treat the SUPER_ADMIN role as super-admin even if the isSuperAdmin flag
+  // is missing — same rule accessibleApps applies internally.
   const isSuper = !!user && (user.isSuperAdmin === true || user.role === 'SUPER_ADMIN');
-  const baseApps: AppCard[] = isSuper
-    ? [
-        {
-          id:          'pos' as const, // unused; routing handled by resolvedRoute
-          name:        'Console',
-          description: 'Platform-wide admin: tenants, metrics, failed events, AI overrides.',
-          Icon:        ShieldCheck,
-          accent:      'hsl(330 70% 45%)',
-          accentDark:  'hsl(330 70% 55%)',
-          route:       '/admin',
-          minLevel:    'NONE' as AccessLevel,
-        },
-        ...APPS,
-      ]
-    : APPS;
 
-  // Tenant module entitlement (modular pricing, 2026-05-08). When a flag is
-  // explicitly false, hide the card even if the user has a non-NONE app access
-  // level. Undefined defaults to true for backward compat.
-  function moduleEnabled(code: 'POS' | 'LEDGER' | 'PAYROLL'): boolean {
-    if (!user) return false;
-    if (code === 'POS')     return user.modulePos     !== false;
-    if (code === 'LEDGER')  return user.moduleLedger  !== false;
-    return user.modulePayroll !== false;
-  }
-
-  const accessible: AppCardWithRoute[] = user
-    ? baseApps
-        .filter((app) => {
-          // Console card always visible to super admins
-          if (app.name === 'Console') return isSuper;
-          // Procure is gated on ROLE rather than on an AppAccess row. Copying
-          // the other three would have hidden it from everyone: no user has a
-          // PROCURE row, and there is no tenant flag for it, so both gates
-          // would fail for a card that should simply be there.
-          if (app.id === 'procure') return PROCURE_ROLES.has(user.role);
-          const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
-          // First gate: tenant plan must include the module.
-          if (!moduleEnabled(code)) return false;
-          // Second gate: user's per-app access level.
-          return hasAccess(code, app.minLevel);
-        })
-        .map((app) => {
-          if (app.name === 'Console') return { ...app, resolvedRoute: app.route };
-          if (app.id === 'procure')   return { ...app, resolvedRoute: app.route };
-          const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
-          const level = user.appAccess.find((a) => a.app === code)?.level;
-          return { ...app, resolvedRoute: routeForApp(app, level, user.role) };
-        })
-    : [];
   const onlyApp = accessible.length === 1 ? accessible[0] : null;
 
   // Redirect to login if unauthenticated, or straight to the only app the

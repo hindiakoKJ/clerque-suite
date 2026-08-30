@@ -602,17 +602,15 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     ];
   }
 
-  // Purchasing — appended to every vertical, like Reports.
+  // Purchasing left the till with the rest of stock. Buying is Procure's job;
+  // a purchase order is the vendor-and-credit-terms version of the same thing
+  // and belongs beside it, not beside the terminal.
   //
-  // The purchase-order module has existed for a while (create / submit /
-  // receive) and the API has always allowed BUSINESS_OWNER. Its only screens,
-  // though, live under /admin, which redirects anyone who is not SUPER_ADMIN —
-  // so the feature was built, permitted, and unreachable for the people it was
-  // for. It hangs here rather than off the Warehouse section because that
-  // section is only spread into some verticals, and every business buys stock.
-  const purchasingSection = withSection('Purchasing', [
-    makeNavItem('/pos/purchase-orders', 'Purchase Orders', ReceiptIcon, MGMT_POS, role),
-  ]);
+  // The route still resolves and /admin/purchase-orders is unchanged, so
+  // nothing is deleted — only unadvertised. Whether POs become a Procure
+  // request type or stay their own flow is a decision for the first client
+  // that actually buys on credit; see tasks/procure.md.
+  const purchasingSection = withSection('Purchasing', []);
 
   // Sprint 19 — Reports section appended to every vertical's nav.
   // Cashiers don't see it (MGMT_POS gated); makeNavItem still emits the

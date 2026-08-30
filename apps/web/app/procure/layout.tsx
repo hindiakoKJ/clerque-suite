@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, ShoppingBasket } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
+import { AppSwitcher } from '@/components/shell/AppSwitcher';
 
 /**
  * Clerque Procure.
@@ -80,13 +81,18 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
-          <Link href="/procure" className="flex min-w-0 items-center gap-3">
+          <Link href="/procure" className="flex min-w-0 flex-1 items-center gap-3">
             <ShoppingBasket className="h-5 w-5 shrink-0 text-[var(--accent)]" />
             <div className="min-w-0">
               <h1 className="truncate text-base font-semibold leading-tight">Procure</h1>
               <p className="truncate text-xs text-muted-foreground">Stock, requests, and receiving</p>
             </div>
           </Link>
+          {/* Procure has no AppShell sidebar to hang this off, and it is the
+              app a warehouse or kitchen account lands in — the one most likely
+              to be someone's only app, and the one where being stuck would be
+              least obvious. It hides itself when there is nowhere else to go. */}
+          <AppSwitcher align="down" />
         </div>
       </header>
       {/*

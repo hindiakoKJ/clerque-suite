@@ -53,6 +53,6 @@
     "@babel/core": "^7.26.0",
     "@types/react": "~19.1.0",
     "sharp": "^0.34.5",
-    "typescript": "~5.9.2"
+    "typescript": "~6.0.3"
   }
 }

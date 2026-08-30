@@ -454,7 +454,15 @@ describe('JournalService — accounting correctness across business types', () =
   // ── 2. COGS handler ────────────────────────────────────────────────────────
 
   describe('COGS event', () => {
-    it('café recipe — Dr COGS / Cr Inventory with derived cost', async () => {
+    /*
+      A recipe sale relieves 1051 Raw Materials, not 1050 Merchandise.
+
+      Receipts capitalise an ingredient to 1051. Crediting 1050 here would
+      make 1051 grow forever and drive 1050 permanently negative in a
+      recipe-based shop, because nothing would ever relieve the raw materials
+      a latte consumed. costMethod is what distinguishes them.
+    */
+    it('café recipe — Dr COGS / Cr Raw Materials, not Merchandise', async () => {
       const lines = await runProcessEvent({
         orderId: 'order-1',
         lines:  [{ productId: 'p1', quantity: 1, unitCost: 30, totalCost: 30, costMethod: 'RECIPE_WAC' }],
@@ -462,7 +470,38 @@ describe('JournalService — accounting correctness across business types', () =
 
       const s = summarise(lines);
       expect(s.debits.get('5010')).toBeCloseTo(30, 2);   // COGS up
-      expect(s.credits.get('1050')).toBeCloseTo(30, 2);  // Inventory down
+      expect(s.credits.get('1051')).toBeCloseTo(30, 2);  // raw materials down
+      expect(s.credits.get('1050')).toBeUndefined();     // never merchandise
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('one basket, both kinds — each comes out of the account it went into', async () => {
+      // A latte and a bottle of water on the same receipt. Relieving both from
+      // one account would be wrong whichever account was chosen.
+      const lines = await runProcessEvent({
+        orderId: 'order-mixed',
+        lines: [
+          { productId: 'latte', quantity: 1, unitCost: 30, totalCost: 30, costMethod: 'RECIPE_WAC' },
+          { productId: 'water', quantity: 2, unitCost: 12, totalCost: 24, costMethod: 'WAC' },
+        ],
+      }, 'COGS') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('5010')).toBeCloseTo(54, 2);
+      expect(s.credits.get('1051')).toBeCloseTo(30, 2);  // the latte's ingredients
+      expect(s.credits.get('1050')).toBeCloseTo(24, 2);  // the bottled water
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('an older payload with no costMethod reads as merchandise', async () => {
+      // Those events predate recipe costing, and merchandise is what they meant.
+      const lines = await runProcessEvent({
+        orderId: 'order-legacy',
+        lines:  [{ productId: 'p1', quantity: 1, unitCost: 30, totalCost: 30 }],
+      }, 'COGS') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.credits.get('1050')).toBeCloseTo(30, 2);
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 

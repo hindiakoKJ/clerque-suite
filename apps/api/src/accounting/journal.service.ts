@@ -574,7 +574,42 @@ export class JournalService {
 
         description = `COGS ${payload['orderId'] ?? event.id}`;
         lines.push({ accountId: await getAccount('5010'), debit: totalCost,  description: 'Cost of goods sold' });
-        lines.push({ accountId: await getAccount('1050'), credit: totalCost, description: 'Inventory deduction' });
+
+        /*
+          Relieve the account the stock was actually capitalised INTO.
+
+          Receipts route by what the item is: an ingredient is capitalised to
+          1051 Raw Materials, a product bought to resell sits in 1050
+          Merchandise. Crediting 1050 for everything -- which is what this did
+          -- would have made 1051 grow forever and driven 1050 permanently
+          negative in a recipe-based shop, because nothing would ever relieve
+          the raw materials a latte consumed.
+
+          The line already knows: costMethod is RECIPE_WAC or RECIPE_FIFO when
+          the cost came from a recipe walk over raw materials, and LOT_SPECIFIC
+          / FIFO / WAC / SNAPSHOT when it came from the product's own stock.
+
+          Split, not either/or: one order can hold a latte and a bottle of
+          water, and each has to come out of the account it went into.
+        */
+        const relief = new Map<string, number>();
+        for (const l of cogsLines as Array<{ totalCost?: number; costMethod?: string }>) {
+          const fromRecipe = String(l.costMethod ?? '').startsWith('RECIPE');
+          const account = fromRecipe ? '1051' : PRODUCT_INVENTORY_ACCOUNT;
+          relief.set(account, (relief.get(account) ?? 0) + Number(l.totalCost ?? 0));
+        }
+        // An older payload with no costMethod at all predates recipe costing;
+        // merchandise is the safe reading, and it is what those events meant.
+        if (relief.size === 0) relief.set(PRODUCT_INVENTORY_ACCOUNT, totalCost);
+
+        for (const [account, amount] of relief) {
+          if (amount <= 0) continue;
+          lines.push({
+            accountId: await getAccount(account),
+            credit: +amount.toFixed(2),
+            description: account === '1051' ? 'Raw materials consumed' : 'Inventory deduction',
+          });
+        }
 
       } else if (event.type === 'VOID') {
         // Sprint 9: VOID handler now handles two distinct modes —

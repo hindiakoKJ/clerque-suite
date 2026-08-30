@@ -323,7 +323,20 @@ export default function OrdersPage() {
                                     <th className="text-right pb-1 text-muted-foreground font-medium">Qty</th>
                                     <th className="text-right pb-1 text-muted-foreground font-medium">Unit</th>
                                     <th className="text-right pb-1 text-muted-foreground font-medium">Total</th>
-                                    {canVoid && o.status === 'COMPLETED' && (
+                                    {/*
+                                          PAID counts as well as COMPLETED. The
+                                          only thing that promotes PAID ->
+                                          COMPLETED is a KDS bump, so a shop
+                                          without a kitchen tablet leaves every
+                                          order at PAID forever and this button
+                                          never appeared -- even though the API
+                                          accepts the refund (orders.service
+                                          refundItem has no status guard). A
+                                          customer returning a wrong drink
+                                          could not be refunded through the app
+                                          at all.
+                                        */}
+                                        {canVoid && (o.status === 'COMPLETED' || o.status === 'PAID') && (
                                       <th className="text-right pb-1 text-muted-foreground font-medium w-20"></th>
                                     )}
                                   </tr>
@@ -346,7 +359,20 @@ export default function OrdersPage() {
                                         <td className="py-1 text-right text-muted-foreground">{Number(item.quantity)}</td>
                                         <td className="py-1 text-right text-muted-foreground">{formatPeso(Number(item.unitPrice))}</td>
                                         <td className="py-1 text-right font-medium text-foreground">{formatPeso(Number(item.lineTotal))}</td>
-                                        {canVoid && o.status === 'COMPLETED' && (
+                                        {/*
+                                          PAID counts as well as COMPLETED. The
+                                          only thing that promotes PAID ->
+                                          COMPLETED is a KDS bump, so a shop
+                                          without a kitchen tablet leaves every
+                                          order at PAID forever and this button
+                                          never appeared -- even though the API
+                                          accepts the refund (orders.service
+                                          refundItem has no status guard). A
+                                          customer returning a wrong drink
+                                          could not be refunded through the app
+                                          at all.
+                                        */}
+                                        {canVoid && (o.status === 'COMPLETED' || o.status === 'PAID') && (
                                           <td className="py-1 text-right">
                                             {item.id && !fullyRefunded ? (
                                               <button

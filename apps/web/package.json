@@ -39,7 +39,7 @@
   "devDependencies": {
     "@repo/typescript-config": "*",
     "@tailwindcss/postcss": "^4.2.4",
-    "@types/node": "^22",
+    "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tailwindcss": "^4.1.1",

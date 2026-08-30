@@ -85,10 +85,38 @@ physically is*.
       nothing changes on deploy.
 - [ ] Transfers UI switches from branch→branch to location→location, with
       branch→branch kept for the multi-venue case.
-- [ ] **DECISION — the pickleball court bar.** Is it a separate VENUE (its own
-      till, its own Z-read, its own BIR registration) or another ROOM in this
-      one? If it needs its own Z-read it is a branch, and it gets its own
-      rooms underneath. That is a BIR question, not a software one.
+
+### The pickleball court bar — RESOLVED (KJ, 2026-08-30)
+
+KJ: the court sits a few metres from the cafe and **will be registered
+separately**.
+
+**So it is not a room, and the distance is irrelevant.** BIR counts
+establishments, not metres — a place that rings its own sales and hands the
+customer its own invoice is its own registered establishment even if it shares
+a wall. Rooms exist for stock that has no till.
+
+Which of the two it becomes turns on **whose TIN is printed on the customer's
+receipt**. That is an entity question for their accountant, and it has two
+different answers here:
+
+| The court is registered as… | In Clerque | Stock moving cafe → snack bar |
+|---|---|---|
+| A **different TIN** — a corporation, or a different person | a separate **TENANT**: own books, own VAT return, own subscription | a **SALE**. Invoice, output VAT on the cafe, input VAT on the court. Not a transfer. |
+| The **same TIN**, second business name / branch code — the usual shape, since a sole proprietor can only hold one TIN | a separate **BRANCH** in this tenant: own Z-read, own invoice series, own registered POS, consolidated books | a **branch transfer**: quantity moves, no P&L effect. |
+
+**The trap is the same in both columns: the supply line.** "The cafe just sends
+over cups and beans" is what breaks the books. Under separate TINs those
+informal moves understate the cafe's sales and leave the court holding stock
+with no purchase document behind it. Under one TIN it is harmless — but only
+if it is recorded as a transfer instead of quietly vanishing.
+
+**Consequence for this build: none, and that is the point.** A snack bar is a
+branch or a tenant, and both exist today. `StockLocation` stays exactly the
+three rooms — stockroom, bar, kitchen. When the court opens it gets its own
+rooms underneath (back stock, front bar), which the shape already allows. The
+migration does not grow.
+
 - [ ] **Name the limiting ingredient** in `maxProducible`. It is already
       computed and thrown away. Naming it is what routes "we are out of X" to
       the person who can fix it.

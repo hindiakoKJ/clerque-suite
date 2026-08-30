@@ -48,6 +48,13 @@ export default function InventoryPage() {
 
   // Filter for low stock only
   const [filterLow, setFilterLow] = useState(false);
+  /*
+    Supplies were indistinguishable from food until the category field became
+    settable, so every tenant has some sitting as INGREDIENT. The owner needs
+    to FIND them to fix them, and 283 rows is too many to scan.
+  */
+  const [filterCat, setFilterCat] = useState<'ALL' | 'INGREDIENT' | 'SUPPLY'>('ALL');
+  const isSupply = (m: RawMaterial) => !!m.category && m.category !== 'INGREDIENT';
 
   // Modal state
   const [matModal,   setMatModal]   = useState<'create' | 'edit' | 'receive' | null>(null);
@@ -100,7 +107,12 @@ export default function InventoryPage() {
   });
 
   // Filter the displayed list when "Low only" is on
-  const displayed = filterLow ? rawMaterials.filter((m) => m.isLowStock) : rawMaterials;
+  const displayed = rawMaterials
+    .filter((m) => (filterLow ? m.isLowStock : true))
+    .filter((m) =>
+      filterCat === 'ALL' ? true
+      : filterCat === 'SUPPLY' ? isSupply(m)
+      : !isSupply(m));
 
   // ── Threshold inline save ─────────────────────────────────────────────────
 
@@ -285,6 +297,16 @@ export default function InventoryPage() {
             <AlertTriangle className="h-3.5 w-3.5" />
             Low stock only
           </button>
+          <select
+            value={filterCat}
+            onChange={(e) => setFilterCat(e.target.value as typeof filterCat)}
+            className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs"
+            aria-label="Filter by what the item is"
+          >
+            <option value="ALL">Everything</option>
+            <option value="INGREDIENT">Ingredients only</option>
+            <option value="SUPPLY">Supplies only</option>
+          </select>
           {canEdit && (
             <button
               onClick={openCreateMat}
@@ -352,6 +374,11 @@ export default function InventoryPage() {
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
                             <AlertTriangle className="h-2.5 w-2.5" />
                             Low
+                          </span>
+                        )}
+                        {isSupply(m) && (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            Supply
                           </span>
                         )}
                         <ChevronRight className="h-3 w-3 opacity-40 group-hover:opacity-100 transition-opacity" />

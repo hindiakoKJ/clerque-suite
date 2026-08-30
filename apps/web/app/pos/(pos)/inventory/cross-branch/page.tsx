@@ -19,6 +19,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { useAppHome } from '@/lib/inventory-base';
 
 interface Branch { id: string; name: string }
 
@@ -46,6 +47,7 @@ export default function CrossBranchInventoryPage() {
   const router = useRouter();
   const user   = useAuthStore((s) => s.user);
   const qc     = useQueryClient();
+  const home   = useAppHome();   // back goes to the app you came from
 
   const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
 
@@ -76,7 +78,7 @@ export default function CrossBranchInventoryPage() {
   return (
     <div className="max-w-[1400px] mx-auto p-4 sm:p-6 space-y-5">
       <button
-        onClick={() => router.push('/pos/dashboard')}
+        onClick={() => router.push(home)}
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-4 w-4" /> Back

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { useInventoryBase } from '@/lib/inventory-base';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -97,6 +98,7 @@ export default function IngredientDrilldownPage({
 }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const user = useAuthStore((s) => s.user);
+  const base = useInventoryBase();   // /pos/inventory or /procure/stock
   const init = defaultRange();
   const [from, setFrom] = useState(init.from);
   const [to,   setTo]   = useState(init.to);
@@ -148,7 +150,7 @@ export default function IngredientDrilldownPage({
       <div className="flex items-center justify-between gap-3 p-4 sm:px-6 border-b border-border shrink-0 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
           <Link
-            href="/pos/inventory"
+            href={base}
             className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
             title="Back to Ingredients"
           >

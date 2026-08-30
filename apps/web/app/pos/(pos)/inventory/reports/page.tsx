@@ -8,6 +8,7 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
+import { useInventoryBase } from '@/lib/inventory-base';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,7 @@ function downloadCsv(filename: string, headers: string[], rows: (string | number
 type Tab = 'on-hand' | 'purchases' | 'consumption';
 
 export default function IngredientReportsPage() {
+  const base = useInventoryBase();   // stays inside POS or Procure, whichever opened it
   const user = useAuthStore((s) => s.user);
   const [tab, setTab] = useState<Tab>('on-hand');
   const init = defaultRange();
@@ -145,7 +147,7 @@ export default function IngredientReportsPage() {
       <div className="flex items-center justify-between gap-3 p-4 sm:px-6 border-b border-border shrink-0 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
           <Link
-            href="/pos/inventory"
+            href={base}
             className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
             title="Back to Ingredients"
           >
@@ -243,9 +245,10 @@ function ReconcileCallout({ label, value }: { label: string; value: number }) {
 }
 
 function IngredientNameCell({ id, name, isLowStock }: { id: string; name: string; isLowStock: boolean }) {
+  const base = useInventoryBase();
   return (
     <Link
-      href={`/pos/inventory/${id}`}
+      href={`${base}/${id}`}
       className="group flex items-center gap-2 hover:underline"
       style={{ color: 'var(--accent)' }}
     >

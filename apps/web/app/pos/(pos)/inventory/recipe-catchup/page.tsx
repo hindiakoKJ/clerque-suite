@@ -7,6 +7,7 @@ import {
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
+import { useInventoryBase } from '@/lib/inventory-base';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -77,6 +78,7 @@ const WARN_STYLE: Record<CatchupWarning['level'], { box: string; icon: typeof In
  * therefore an optional refinement, not a precaution.
  */
 export default function RecipeCatchupPage() {
+  const base = useInventoryBase();   // stays inside POS or Procure, whichever opened it
   const today = new Date().toISOString().slice(0, 10);
 
   const [from, setFrom] = useState(today);
@@ -139,7 +141,7 @@ export default function RecipeCatchupPage() {
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-border shrink-0">
         <div>
           <Link
-            href="/pos/inventory"
+            href={base}
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
           >
             <ChevronLeft className="h-3 w-3" />

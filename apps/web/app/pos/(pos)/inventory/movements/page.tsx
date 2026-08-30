@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
+import { useInventoryBase } from '@/lib/inventory-base';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,7 @@ const PAYMENT_LABEL: Record<string, string> = {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function StockMovementsPage() {
+  const base = useInventoryBase();   // stays inside POS or Procure, whichever opened it
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? '';
 
@@ -121,7 +123,7 @@ export default function StockMovementsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-border shrink-0">
         <div>
           <Link
-            href="/pos/inventory"
+            href={base}
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
           >
             <ChevronLeft className="h-3 w-3" />

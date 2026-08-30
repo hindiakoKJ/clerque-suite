@@ -75,7 +75,6 @@ const INVENTORY_ROLES  = MGMT_POS;
 const STAFF_ROLES      = MGMT_POS;
 const UOM_ROLES        = MGMT_POS;
 const PROMOTIONS_ROLES = MGMT_POS;
-const WAREHOUSE_ROLES  = MGMT_POS;       // multi-branch stock transfers
 const PROJECT_ROLES    = MGMT_POS;       // construction / job-cost
 // My Expenses moved to /payroll/my-expenses — it's a personal-reimbursement
 // concept (HR territory), not a POS sale-floor concept. POS will instead get
@@ -189,7 +188,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         { href: '/pos/dashboard',    roles: DASHBOARD_ROLES  },
         { href: '/pos/orders',       roles: ORDERS_ROLES     },
         { href: '/pos/products',     roles: PRODUCTS_ROLES   },
-        { href: '/pos/inventory',    roles: INVENTORY_ROLES  },
         { href: '/pos/staff',        roles: STAFF_ROLES      },
         { href: '/pos/settings/uom', roles: UOM_ROLES        },
       ].find((item) => inRoles(r, item.roles));
@@ -353,11 +351,17 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   // drops the header automatically when items.length === 0.
   // Sprint 19 — owner-only Cross-Branch dashboard alongside Transfers.
   const OWNER_ONLY = ['BUSINESS_OWNER', 'SUPER_ADMIN'] as const;
-  const warehouseSection = withSection('Warehouse', [
-    ...(isMultiBranch   ? [makeNavItem('/pos/inventory/cross-branch', 'Cross-Branch', Activity,       OWNER_ONLY,      role)] : []),
-    ...(showTransfers   ? [makeNavItem('/pos/warehouse/transfers',    'Transfers',    Truck,          WAREHOUSE_ROLES, role)] : []),
-    ...(showCycleCounts ? [makeNavItem('/pos/warehouse/cycle-counts', 'Cycle Counts', ClipboardCheck, WAREHOUSE_ROLES, role)] : []),
-  ]);
+  // Ingredients / Materials / Inventory were removed from every vertical's nav
+  // for the same reason as Warehouse below: they add stock, and adding stock
+  // does not belong in the till. The ROUTES still exist -- Procure re-exports
+  // the same components -- so nothing is broken, only relocated.
+  //
+  // Warehouse moved to Procure. A till exists to take money; everything that
+  // ADDS inventory now lives in its own app, so a cashier account stops being
+  // an inventory account by accident. That separation is the whole point --
+  // it is what lets a dedicated inventory role exist without colliding with
+  // separation of duties.
+  const warehouseSection = withSection('Warehouse', []);
 
   // Sprint 19 — Owner-only Sales Report, available across all verticals.
   // MGMT_POS = Owner + Branch Manager (cashier never sees revenue here).
@@ -454,7 +458,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',          'Products',        Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',         'Materials',       ClipboardList,   INVENTORY_ROLES, role),
       ]),
       ...warehouseSection,
     ];
@@ -486,7 +489,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',          'Products',          Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',         'Ingredients',       ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/modifier-recipes',  'Modifier recipes',  FlaskConical,    PRODUCTS_ROLES,  role),
         // Wholesale price lists — bakery B2B (wholesale to a coffee shop or
         // hotel chain). Coffee shops + restaurants don't need it.
@@ -515,7 +517,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]) : []),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',    isMfg ? 'Raw Materials' : 'Inventory', ClipboardList, INVENTORY_ROLES, role),
         makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
       ]),
       ...withSection('Projects', [
@@ -536,7 +537,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
       ]),
       ...warehouseSection,
@@ -556,7 +556,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',          'Products',     Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',         'Inventory',    ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/serialized-units',  'Serialized units', FileBadge,   INVENTORY_ROLES, role),
         makeNavItem('/pos/settings/uom',      'Units (UoM)',  Ruler,           UOM_ROLES,       role),
       ]),
@@ -581,7 +580,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         makeNavItem('/pos/terminal',     'Terminal',      ShoppingCart,    TERMINAL_ROLES,  role),
         makeNavItem('/pos/orders',       'Orders',        ShoppingBag,     ORDERS_ROLES,    role),
         makeNavItem('/pos/products',     'Products',      Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',    'Inventory',     ClipboardList,   INVENTORY_ROLES, role),
       ]),
       ...warehouseSection,
     ];
@@ -599,7 +597,6 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       ]),
       ...withSection('Catalog', [
         makeNavItem('/pos/products',     'Products',    Package,         PRODUCTS_ROLES,  role),
-        makeNavItem('/pos/inventory',    'Inventory',   ClipboardList,   INVENTORY_ROLES, role),
         makeNavItem('/pos/settings/uom', 'Units (UoM)', Ruler,           UOM_ROLES,       role),
       ]),
     ];
@@ -718,8 +715,9 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
       )}
 
       {/* Buy Now — the cashier's route to "what are we running out of?".
-          They cannot open /pos/inventory (manager-only), so the answer comes
-          to them here, next to the other till actions. */}
+          Stock lives in Procure now and the till no longer links to it at all,
+          so this is how the answer reaches them: next to the other till
+          actions, at the moment they notice. */}
       <BuyNowButton branchId={user?.branchId ?? undefined} />
 
       {activeShift && (

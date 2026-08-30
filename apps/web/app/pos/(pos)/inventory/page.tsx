@@ -7,6 +7,7 @@ import {
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { useInventoryBase } from '@/lib/inventory-base';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { isFnbType } from '@repo/shared-types';
 import { toast } from 'sonner';
@@ -36,6 +37,7 @@ const UNITS = ['g', 'kg', 'ml', 'L', 'pc', 'pcs', 'oz', 'tsp', 'tbsp', 'cup', 's
 export default function InventoryPage() {
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? '';
+  const base = useInventoryBase();   // /pos/inventory or /procure/stock
   const qc = useQueryClient();
 
   const { data: tenantProfile } = useBusinessSetup(true);
@@ -244,7 +246,7 @@ export default function InventoryPage() {
         </div>
         <div className="flex items-center gap-2">
           <Link
-            href="/pos/inventory/reports"
+            href={`${base}/reports`}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title="Stock on Hand · Purchases · Consumption — date-range reports"
           >
@@ -252,7 +254,7 @@ export default function InventoryPage() {
             Reports
           </Link>
           <Link
-            href="/pos/inventory/movements"
+            href={`${base}/movements`}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title="Full audit trail of stock movements"
           >
@@ -260,7 +262,7 @@ export default function InventoryPage() {
             Movement Log
           </Link>
           <Link
-            href="/pos/inventory/recipe-catchup"
+            href={`${base}/recipe-catchup`}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title="Replay ingredient usage for orders that sold before their recipe existed"
           >
@@ -336,7 +338,7 @@ export default function InventoryPage() {
                     {/* Name + low-stock badge — clickable to drill down */}
                     <td className="px-6 py-3 font-medium">
                       <Link
-                        href={`/pos/inventory/${m.id}`}
+                        href={`${base}/${m.id}`}
                         className="group inline-flex items-center gap-2 hover:underline"
                         style={{ color: 'var(--accent)' }}
                       >

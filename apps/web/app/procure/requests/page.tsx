@@ -67,7 +67,7 @@ export default function ProcurePage() {
     enabled:  !!user,
   });
 
-  const { data: ingredients = [] } = useQuery<Ingredient[]>({
+  const { data: ingredients = [], isLoading: ingLoading } = useQuery<Ingredient[]>({
     queryKey: ['raw-materials-procure'],
     queryFn:  () => api.get('/inventory/raw-materials').then((r) => r.data),
     enabled:  picking,
@@ -152,9 +152,12 @@ export default function ProcurePage() {
 
   const stepIndex = Math.max(0, STEPS.findIndex((s) => s.key === req.status));
   const alreadyIn = new Set(req.lines.map((l) => l.rawMaterialId));
+  // Everything not already on the request, alphabetical, filtered only if the
+  // person chose to narrow it. No arbitrary cap -- a hidden ingredient is one
+  // somebody has to hunt for.
   const matches = ingredients
     .filter((i) => !alreadyIn.has(i.id) && i.name.toLowerCase().includes(search.toLowerCase()))
-    .slice(0, 8);
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   const estimate = req.lines.reduce(
     (s, l) => s + num(l.packsBought) * num(l.packCost), 0);
@@ -218,30 +221,43 @@ export default function ProcurePage() {
 
         {picking && req.status === 'OPEN' && (
           <div className="border-b border-border bg-muted/30 p-3">
+            {/*
+              Tap, do not type. A barista adding sugar to the list is standing
+              at the bar with one hand free; making them spell an ingredient
+              they can see on the shelf is the kind of friction that sends
+              people back to messaging the owner. Search stays, but only as a
+              way to shorten a long list -- never as the way in.
+            */}
             <input
-              autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search an ingredient…"
+              placeholder="Filter…"
               className="w-full rounded-lg border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             />
-            {search && (
-              <ul className="mt-2 space-y-1">
-                {matches.length === 0 && (
-                  <li className="px-1 py-2 text-xs text-muted-foreground">No match.</li>
-                )}
-                {matches.map((i) => (
-                  <li key={i.id}>
+            {ingLoading ? (
+              <div className="flex items-center gap-2 px-1 py-6 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading ingredients…
+              </div>
+            ) : matches.length === 0 ? (
+              <p className="px-1 py-6 text-center text-xs text-muted-foreground">
+                {search ? 'Nothing matches that.' : 'Everything is already on the list.'}
+              </p>
+            ) : (
+              <div className="mt-2 max-h-72 overflow-y-auto">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                  {matches.map((i) => (
                     <button
+                      key={i.id}
                       onClick={() => addLine.mutate(i.id)}
-                      className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted"
+                      disabled={addLine.isPending}
+                      className="flex min-h-[3.25rem] flex-col justify-center rounded-lg border border-border bg-background px-2.5 py-2 text-left transition-colors hover:border-[var(--accent)]/60 hover:bg-muted active:scale-[0.98] disabled:opacity-50"
                     >
-                      <span>{i.name}</span>
-                      <span className="text-xs text-muted-foreground">{i.unit}</span>
+                      <span className="line-clamp-2 text-xs font-medium leading-tight">{i.name}</span>
+                      <span className="mt-0.5 text-[10px] text-muted-foreground">{i.unit}</span>
                     </button>
-                  </li>
-                ))}
-              </ul>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         )}

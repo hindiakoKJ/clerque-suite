@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ClipboardList, Boxes, PackagePlus, ArrowLeftRight, ChevronRight, Loader2, AlertTriangle,
+  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, ChevronRight, Loader2, AlertTriangle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -46,21 +46,21 @@ export default function ProcureHome() {
       note:  req ? `${req.requestNumber} · ${req.lines.length} item${req.lines.length === 1 ? '' : 's'}` : null,
     },
     {
-      href:  '/pos/inventory',
+      href:  '/procure/stock',
       Icon:  Boxes,
       title: 'Stock on hand',
-      desc:  'Every ingredient, what it costs, what is left.',
+      desc:  'Every ingredient, what it costs, what is left. Receiving happens here.',
       note:  null,
     },
     {
-      href:  '/pos/inventory',
-      Icon:  PackagePlus,
-      title: 'Receive stock',
-      desc:  'Record a delivery that did not come from a request.',
+      href:  '/procure/cycle-counts',
+      Icon:  ClipboardCheck,
+      title: 'Cycle counts',
+      desc:  'Count the shelf and correct what the system believes.',
       note:  null,
     },
     {
-      href:  '/pos/warehouse/transfers',
+      href:  '/procure/transfers',
       Icon:  ArrowLeftRight,
       title: 'Transfers',
       desc:  'Move stock between locations.',

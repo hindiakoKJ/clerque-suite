@@ -803,14 +803,17 @@ describe('JournalService — accounting correctness across business types', () =
 
   describe('INVENTORY_ADJUSTMENT event', () => {
     /*
-      These three now assert 1051 Raw Materials, not 1050 Merchandise, and a
-      VAT split. Merchandise Inventory is for goods bought to resell as-is;
-      beans that get MADE into a drink are raw materials. And a VAT-registered
-      buyer holding a VAT invoice claims the 12% as input tax (NIRC Sec 110) —
-      capitalising the gross forfeited it on every delivery.
-      The suite's default tenant is taxStatus VAT.
+      These assert 1051 Raw Materials rather than 1050 Merchandise: goods
+      bought to resell as-is are merchandise, beans that get MADE into a drink
+      are raw materials.
+
+      They capitalise the GROSS. An input-VAT split was tried here and removed:
+      the sub-ledger (RawMaterial.costPrice, lot.unitCost, the WAC blend) values
+      the shelf at the price as entered, and every relief reads that — so
+      debiting the asset net while relieving it gross drained 1051 by 12% of
+      every peso. Both sides must value the same shelf at the same number.
     */
-    it('cash receipt — Dr Raw Materials + Input VAT / Cr Cash', async () => {
+    it('cash receipt — Dr Raw Materials / Cr Cash, at gross', async () => {
       const lines = await runProcessEvent({
         kind:           'RAW_MATERIAL_RECEIPT',
         productName:    'Espresso Beans',
@@ -822,15 +825,14 @@ describe('JournalService — accounting correctness across business types', () =
       }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
 
       const s = summarise(lines);
-      // 2500 gross = 2232.14 net + 267.86 input VAT
-      expect(s.debits.get('1051')).toBeCloseTo(2232.14, 2);
-      expect(s.debits.get('1040')).toBeCloseTo(267.86, 2);
-      expect(s.debits.get('1050')).toBeUndefined();      // never merchandise
-      expect(s.credits.get('1010')).toBeCloseTo(2500, 2); // the money is the gross
+      expect(s.debits.get('1051')).toBeCloseTo(2500, 2);   // the shelf's own value
+      expect(s.debits.get('1040')).toBeUndefined();        // no split — see the note above
+      expect(s.debits.get('1050')).toBeUndefined();        // never merchandise
+      expect(s.credits.get('1010')).toBeCloseTo(2500, 2);
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 
-    it('credit receipt — Dr Raw Materials + Input VAT / Cr Accounts Payable', async () => {
+    it('credit receipt — Dr Raw Materials / Cr Accounts Payable', async () => {
       const lines = await runProcessEvent({
         kind:           'RAW_MATERIAL_RECEIPT',
         productName:    'Milk',
@@ -841,9 +843,9 @@ describe('JournalService — accounting correctness across business types', () =
       }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
 
       const s = summarise(lines);
-      expect(s.debits.get('1051')).toBeCloseTo(1339.29, 2);
-      expect(s.debits.get('1040')).toBeCloseTo(160.71, 2);
-      expect(s.credits.get('2010')).toBeCloseTo(1500, 2);  // AP accrual on the gross
+      expect(s.debits.get('1051')).toBeCloseTo(1500, 2);
+      expect(s.debits.get('1040')).toBeUndefined();
+      expect(s.credits.get('2010')).toBeCloseTo(1500, 2);  // AP accrual
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 
@@ -858,9 +860,35 @@ describe('JournalService — accounting correctness across business types', () =
       }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
 
       const s = summarise(lines);
-      expect(s.debits.get('1051')).toBeCloseTo(4464.29, 2);
-      expect(s.debits.get('1040')).toBeCloseTo(535.71, 2);
-      expect(s.credits.get('3010')).toBeCloseTo(5000, 2); // Owner's capital, gross
+      expect(s.debits.get('1051')).toBeCloseTo(5000, 2);
+      // An owner contribution has no supplier and no VAT invoice behind it, so
+      // there was never a credit to claim here in the first place.
+      expect(s.debits.get('1040')).toBeUndefined();
+      expect(s.credits.get('3010')).toBeCloseTo(5000, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('the shelf value and the GL debit are the SAME number', async () => {
+      /*
+        The invariant the split broke. receiveRawMaterial writes the delivery
+        cost into RawMaterial.costPrice and the lot, and every relief reads
+        that — so whatever this debit is, it must equal quantity x that cost,
+        or the asset drains on an empty stockroom while the trial balance
+        still foots.
+      */
+      const QTY = 1000, UNIT_COST = 0.112;
+      const lines = await runProcessEvent({
+        kind:           'RAW_MATERIAL_RECEIPT',
+        productName:    'Brown sugar',
+        adjustmentType: 'STOCK_IN',
+        quantity:       QTY,
+        unitCost:       UNIT_COST,
+        totalValue:     QTY * UNIT_COST,
+        paymentMethod:  'CASH',
+      }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1051')).toBeCloseTo(QTY * UNIT_COST, 2);   // 112.00, not 100.00
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 

@@ -825,33 +825,39 @@ export class JournalService {
             : `Stock received: ${productName}`;
 
           /*
-            Input VAT is split out of the gross.
+            The stock receipt capitalises the GROSS, deliberately.
 
-            A VAT-registered buyer holding a VAT invoice may credit the 12%
-            against output VAT (NIRC Sec 110) — but only where it is invoiced
-            AND RECORDED. This path capitalised the gross and never touched
-            1040, while bills and expense claims handled it correctly, so
-            every delivery quietly forfeited the credit.
+            An input-VAT split was added here and then removed, because it
+            broke the thing that matters more: the sub-ledger and the GL have
+            to value the same shelf at the same number.
 
-            Only for a VAT-registered tenant. NON_VAT / EXEMPT / PERCENTAGE_TAX
-            has no input tax to claim, so the whole gross is the cost.
+            receiveRawMaterial stores the delivery's cost as entered — gross —
+            into RawMaterial.costPrice, RawMaterialLot.unitCost and the WAC
+            blend, and every relief (a sale's recipe walk, a write-off, a count)
+            reads that. Debiting the asset NET while relieving it GROSS drains
+            1051 by 12% of every peso: proven on real data, where a 1,000 g
+            delivery valued the shelf at 112.00 and capitalised 100.00. The
+            trial balance still foots, because each entry is internally
+            balanced — so nothing flags it and the asset just goes negative on
+            an empty stockroom.
+
+            It was wrong in a second way too: claimsInputVat did not consider
+            paymentMethod, so an OWNER_FUNDED receipt — the DEFAULT when the
+            payload omits one, and what the bulk opening-stock importer sends —
+            fabricated a VAT credit with no supplier, no invoice and no OR
+            behind it. NIRC Sec 110 allows the credit only where the purchase
+            is invoiced by a VAT-registered supplier.
+
+            The right fix is to carry inventory NET of recoverable VAT on BOTH
+            sides (PAS 2: cost excludes recoverable taxes) — but that changes
+            every recipe cost and every reported margin by about 11%, which is
+            the owner's call to make with his eyes open, not a side effect of
+            a bug fix. Recorded in tasks/costing-sod-isolation.md.
+
+            Input VAT on purchases is still captured correctly on the AP bill
+            and expense-claim paths, which is where an invoice actually exists.
           */
-          const tenantTax = await this.prisma.tenant.findUnique({
-            where:  { id: tenantId },
-            select: { taxStatus: true },
-          });
-          // No supplier, no invoice, no input tax. A count correction is an
-          // internal adjustment; claiming VAT on it would be inventing a credit.
-          const claimsInputVat = tenantTax?.taxStatus === 'VAT' && !isCountCorrection;
-          const inputVat = claimsInputVat
-            ? +(totalValue - totalValue / 1.12).toFixed(2)
-            : 0;
-          const netCost = +(totalValue - inputVat).toFixed(2);
-
-          lines.push({ accountId: await getAccount(debitAccount), debit: netCost, description: debitDescription });
-          if (inputVat > 0) {
-            lines.push({ accountId: await getAccount('1040'), debit: inputVat, description: `Input VAT — ${productName}` });
-          }
+          lines.push({ accountId: await getAccount(debitAccount), debit: totalValue, description: debitDescription });
           lines.push({ accountId: await getAccount(creditAccount), credit: totalValue, description: creditDescription });
         } else {
           const absValue = Math.abs(totalValue);

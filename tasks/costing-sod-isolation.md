@@ -52,9 +52,29 @@ never touches COGS.
 ### Sequencing
 
 - [x] **Before go-live.** ~~Supplies stop debiting 1050 and start debiting
-      6210/6070. Split `1040` Input VAT out of every receipt.~~ **DONE**
-      (25ee77a). Verified on real data: bleach `Dr 6070 500.00 / Dr 1040 60.00
-      / Cr 1010 560.00`; sugar `Dr 1051 100.00 / Dr 1040 12.00 / Cr 1010 112.00`.
+      6210/6070.~~ **DONE** (25ee77a). Category routing verified on real data.
+- [x] **Input VAT split — ADDED THEN REMOVED.** It broke the invariant that
+      matters more: the sub-ledger and the GL must value the same shelf at the
+      same number. `receiveRawMaterial` stores the delivery cost as entered
+      (gross) into `RawMaterial.costPrice`, the lot and the WAC blend, and
+      every relief reads that — so debiting the asset NET while relieving it
+      GROSS drained 1051 by 12% of every peso. Proven on real data: a 1,000 g
+      delivery valued the shelf at 112.00 and capitalised 100.00. The trial
+      balance still footed, so nothing flagged it.
+      It was wrong a second way too: the check did not consider
+      `paymentMethod`, so an OWNER_FUNDED receipt — the default, and what the
+      bulk opening-stock importer sends — fabricated a VAT credit with no
+      supplier and no invoice behind it.
+
+- [ ] **DECISION FOR KJ — carry inventory NET of recoverable VAT?**
+      This is the correct end state (PAS 2: cost excludes recoverable taxes)
+      and the only way to claim input tax on stock purchases. It means
+      `receiveRawMaterial` divides the entered cost by 1.12 for a VAT tenant,
+      so the shelf, the lot, the WAC and the GL are all net and agree.
+      **It changes every recipe cost and every reported margin by about 11%**,
+      which is why it is your call and not a side effect of a bug fix. Until
+      then input VAT on purchases is still captured correctly on the AP-bill
+      and expense-claim paths, where an invoice actually exists.
 - [ ] **After go-live.** Ingredient receipts move `1050` → `1051`, and the COGS
       relief leg must credit 1051 for recipe-costed lines. Both are current
       assets, so no total moves — only the inventory note and the RMC 57-2015

@@ -2208,6 +2208,40 @@ export class ImportService {
           isActive:      true,
         };
         if (existing) {
+          /*
+            The same rule the app enforces: an item a recipe uses cannot be
+            re-filed as a supply.
+
+            inventory.service.updateRawMaterial refuses this, but the
+            spreadsheet went straight to the row. It bites first on packaging —
+            cups, lids and straws ARE in every drink BOM, and "Bar supply" is
+            what a barista would naturally type against Cups. From that moment
+            each case of cups expenses to 6210 while every latte sold still
+            relieves 1051 for the cup inside its recipe, driving the asset
+            negative at the rate the shop sells drinks.
+
+            A row error rather than a throw: one bad cell must not abandon the
+            other two hundred rows.
+          */
+          if (category && category !== 'INGREDIENT' && existing.category === 'INGREDIENT') {
+            const [bom, variant, sub] = await Promise.all([
+              this.prisma.bomItem.count({ where: { rawMaterialId: existing.id } }),
+              this.prisma.variantBomItem.count({ where: { rawMaterialId: existing.id } }),
+              this.prisma.subRecipeItem.count({ where: { rawMaterialId: existing.id } }),
+            ]);
+            const uses = bom + variant + sub;
+            if (uses > 0) {
+              result.errors.push({
+                row: rowNum,
+                message: `"${name.trim()}" is used in ${uses} recipe${uses === 1 ? '' : 's'}, so it `
+                  + 'cannot be changed to a supply. If it is consumed with every item sold — a cup '
+                  + 'or a lid — leave the Category blank or set it to Ingredient, so its cost stays '
+                  + 'in what the drink costs.',
+              });
+              continue;
+            }
+          }
+
           // Same rule as products: a blank cell is "not supplied", not zero.
           // Blanking Cost per Unit used to write 0 over a cost the owner had
           // entered in the app, which silently zeroes recipe COGS for every
@@ -3327,6 +3361,16 @@ export class ImportService {
                 kind:           'RAW_MATERIAL_RECEIPT',
                 rawMaterialId:  rm.id,
                 rawMaterialName: rm.name,
+                /*
+                  What the thing IS. Without this the journal handler falls
+                  back to INGREDIENT and debits 1051 Raw Materials for EVERY
+                  bulk-imported receipt, supplies included — and a supply can
+                  never be relieved, because it cannot be in a recipe and its
+                  reductions post nothing. That is a balance nothing can ever
+                  clear, arriving through the first path a new tenant uses.
+                  The whole row is already loaded above.
+                */
+                category:       rm.category,
                 productName:    rm.name,
                 adjustmentType: 'STOCK_IN',
                 quantity:       qty,

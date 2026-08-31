@@ -60,6 +60,21 @@ interface SubRecipe {
   kind:            'MAKE' | 'MOVE';
   /** For a MOVE, what it comes from. */
   movesFrom:       string | null;
+  /**
+   * How many of each dish or drink this prep can still serve.
+   *
+   * The number the floor actually thinks in. Each line is a ceiling on its
+   * own — several dishes share one prep and compete for it — so they are not
+   * meant to be added up.
+   */
+  serves: Array<{
+    productId:    string;
+    productName:  string;
+    perServing:   number;
+    servingsLeft: number;
+  }>;
+  /** Which station preps this, inferred from the dishes it feeds. */
+  station: { id: string; name: string; kind: string } | null;
   components: Component[];
 }
 
@@ -76,6 +91,26 @@ export default function BatchesPage() {
     queryFn:  () => api.get('/inventory/sub-recipes', { params: { branchId } }).then((r) => r.data),
     enabled:  !!branchId,
   });
+
+  /*
+    Kitchen preps with kitchen preps, bar preps with the bar. Anything the
+    routing cannot place goes last under its own heading rather than being
+    silently dropped or guessed at.
+  */
+  const groups = (() => {
+    const byStation = new Map<string, { label: string; items: SubRecipe[] }>();
+    for (const r of recipes) {
+      const key = r.station?.id ?? '~none';
+      const label = r.station?.name ?? 'Not assigned to a station';
+      const g = byStation.get(key) ?? { label, items: [] };
+      g.items.push(r);
+      byStation.set(key, g);
+    }
+    return [...byStation.values()].sort((a, b) =>
+      a.label === 'Not assigned to a station' ? 1
+      : b.label === 'Not assigned to a station' ? -1
+      : a.label.localeCompare(b.label));
+  })();
 
   const make = useMutation({
     /*
@@ -149,8 +184,21 @@ export default function BatchesPage() {
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {recipes.map((r) => (
+      {/*
+        Grouped by station, because the cook and the barista are different
+        people looking for different things. The routing is inferred from the
+        dishes each prep feeds — Category already points at a Station for
+        kitchen and bar tickets — so nobody has to tag anything.
+      */}
+      {groups.map(({ label, items }) => (
+        <section key={label} className="space-y-3">
+          {groups.length > 1 && (
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {label}
+            </h2>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+        {items.map((r) => (
           <div key={r.id} className="rounded-xl border border-border bg-card p-4 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -186,6 +234,34 @@ export default function BatchesPage() {
                 )}
               </div>
             </div>
+
+            {/*
+              Servings first, because that is the question being asked.
+              "Enough for 10 plates" is what decides whether to prep now or
+              after the rush; "15 batches" is a fact about the recipe.
+
+              Each line is its own ceiling — two dishes sharing this prep are
+              each told what they could serve if they had it all — so they are
+              listed rather than totalled.
+            */}
+            {r.serves.length > 0 && (
+              <div className="rounded-lg border border-[var(--accent)]/25 bg-[var(--accent-soft)] p-2.5 space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Enough on hand for
+                </p>
+                {r.serves.map((sv) => (
+                  <div key={sv.productId} className="flex justify-between text-xs">
+                    <span className="truncate pr-2">{sv.productName}</span>
+                    <span className="tabular-nums shrink-0 font-semibold">
+                      {sv.servingsLeft.toLocaleString('en-PH')}
+                      <span className="font-normal text-muted-foreground">
+                        {' '}{sv.servingsLeft === 1 ? 'serving' : 'servings'}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="rounded-lg bg-muted/40 p-2.5 space-y-1">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -265,7 +341,9 @@ export default function BatchesPage() {
             </button>
           </div>
         ))}
-      </div>
+          </div>
+        </section>
+      ))}
 
       {target && (
         <MakeBatchModal

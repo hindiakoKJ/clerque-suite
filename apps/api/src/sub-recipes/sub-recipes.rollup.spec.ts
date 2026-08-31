@@ -49,6 +49,12 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
   function build(stock: Record<string, number>) {
     const prisma: any = {
       rawMaterial: { findMany: jest.fn().mockResolvedValue(CHAIN) },
+      /*
+        The list now also walks the other way -- every product whose recipe
+        calls for a prep -- so it can say how many SERVINGS are left rather
+        than how many batches. Empty here: these cases are about the chain.
+      */
+      bomItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue(
           Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),
@@ -175,7 +181,13 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
     function rot(stock: Record<string, number>) {
       const prisma: any = {
         rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, READY]) },
-        rawMaterialInventory: {
+        /*
+        The list now also walks the other way -- every product whose recipe
+        calls for a prep -- so it can say how many SERVINGS are left rather
+        than how many batches. Empty here: these cases are about the chain.
+      */
+      bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      rawMaterialInventory: {
           findMany: jest.fn().mockResolvedValue(
             Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),
           ),
@@ -211,7 +223,13 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
       };
       const prisma: any = {
         rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, withHerbs]) },
-        rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
+        /*
+        The list now also walks the other way -- every product whose recipe
+        calls for a prep -- so it can say how many SERVINGS are left rather
+        than how many batches. Empty here: these cases are about the chain.
+      */
+      bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
       };
       const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
       expect(rows.find((r: any) => r.id === 'R').kind).toBe('MAKE');
@@ -222,7 +240,13 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
       const reduced = { ...READY, batchYield: 1800 };
       const prisma: any = {
         rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, reduced]) },
-        rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
+        /*
+        The list now also walks the other way -- every product whose recipe
+        calls for a prep -- so it can say how many SERVINGS are left rather
+        than how many batches. Empty here: these cases are about the chain.
+      */
+      bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
       };
       const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
       expect(rows.find((r: any) => r.id === 'R').kind).toBe('MAKE');
@@ -238,7 +262,13 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
       };
       const prisma: any = {
         rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, fromRaw]) },
-        rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
+        /*
+        The list now also walks the other way -- every product whose recipe
+        calls for a prep -- so it can say how many SERVINGS are left rather
+        than how many batches. Empty here: these cases are about the chain.
+      */
+      bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
       };
       const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
       expect(rows.find((r: any) => r.id === 'R').kind).toBe('MAKE');

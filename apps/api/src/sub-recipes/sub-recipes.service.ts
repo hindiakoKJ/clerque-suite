@@ -99,6 +99,42 @@ export class SubRecipesService {
     const prepById = new Map(rows.map((r) => [r.id, r]));
 
     /*
+      What a prep is actually FOR: servings.
+
+      "Fifteen batches" is a number about the recipe. Nobody on the floor
+      thinks that way -- a cook thinks "enough sauce for ten more plates" and a
+      barista thinks "enough syrup for forty lattes". That is the number that
+      decides whether to start prepping now or after the rush, and it is the
+      one that was missing.
+
+      Found by walking the other way: every product whose recipe calls for this
+      prep, and how much of it one serving takes. The station comes with it,
+      because Category routes to Station -- the same routing that already sends
+      a ticket to the kitchen printer or the bar. So the kitchen sees kitchen
+      preps and the bar sees its own, without anyone tagging anything.
+    */
+    const usedBy = await this.prisma.bomItem.findMany({
+      where:  { rawMaterialId: { in: rows.map((r) => r.id) }, product: { tenantId, isActive: true } },
+      select: {
+        rawMaterialId: true,
+        quantity:      true,
+        product: {
+          select: {
+            id: true, name: true,
+            category: { select: { id: true, name: true,
+              station: { select: { id: true, name: true, kind: true } } } },
+          },
+        },
+      },
+    });
+    const feeds = new Map<string, typeof usedBy>();
+    for (const b of usedBy) {
+      const list = feeds.get(b.rawMaterialId) ?? [];
+      list.push(b);
+      feeds.set(b.rawMaterialId, list);
+    }
+
+    /*
       How much of something could this shop actually get its hands on.
 
       Not just what is on the shelf: a prepared item can be MADE, and what it
@@ -237,6 +273,37 @@ export class SubRecipesService {
         kind:          isMove ? ('MOVE' as const) : ('MAKE' as const),
         /** For a MOVE, where it comes from: the frozen tub, the bulk drum. */
         movesFrom:     isMove ? only!.rawMaterial.name : null,
+        /*
+          How many of each dish or drink this prep can still serve, from what
+          is on hand right now. Several products share one prep and they
+          compete for it, so each line is a ceiling on its own, not a total --
+          the same honesty as the batch counts above.
+        */
+        serves: (feeds.get(r.id) ?? [])
+          .filter((b) => Number(b.quantity) > 0)
+          .map((b) => ({
+            productId:    b.product.id,
+            productName:  b.product.name,
+            perServing:   Number(b.quantity),
+            servingsLeft: Math.floor(Number(r.inventory[0]?.quantity ?? 0) / Number(b.quantity)),
+          }))
+          .sort((a, b) => a.servingsLeft - b.servingsLeft),
+        /*
+          Which station preps this, inferred from the products it feeds rather
+          than tagged by hand. Category already routes to Station for kitchen
+          and bar tickets, so a prep used only by pasta belongs to the kitchen
+          and one used only by drinks belongs to the bar. Null when the
+          products have no station set, or when a prep genuinely feeds both.
+        */
+        station: (() => {
+          const st = [...new Map(
+            (feeds.get(r.id) ?? [])
+              .map((b) => b.product.category?.station)
+              .filter((x): x is NonNullable<typeof x> => !!x)
+              .map((x) => [x.id, x]),
+          ).values()];
+          return st.length === 1 ? st[0] : null;
+        })(),
         /** Batches the shelf supports with no prep in between. */
         batches:       batchesNow,
         /** The component that stops it right now — often another prep. */

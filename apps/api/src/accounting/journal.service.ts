@@ -739,6 +739,31 @@ export class JournalService {
 
       } else if (event.type === 'INVENTORY_ADJUSTMENT') {
         /*
+          A batch of syrup or sauce moves value WITHIN raw materials.
+
+          The sugar and water that went in and the syrup that came out are
+          both 1051 Raw Materials, and the output is valued at exactly what
+          the inputs cost -- stirring cannot create or destroy value. Debit
+          and credit would be the same account for the same amount, so the
+          correct journal entry is no journal entry.
+
+          The event still exists and is still processed, because it is the
+          RECORD of the preparation: who made it, when, what went in and what
+          came out. That is what Stock Movements reads, and before it a batch
+          was the one stock movement in the system with no trail at all.
+
+          The books hear about it later, when a drink using it is sold and
+          COGS relieves 1051 at the recipe cost.
+        */
+        if (String(payload['kind'] ?? '') === 'SUB_RECIPE_BATCH') {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data:  { status: 'SYNCED', syncedAt: new Date(), lastError: null },
+          });
+          return { skipped: true };
+        }
+
+        /*
           Is this a raw material or a finished product?
 
           The signal has lived in different fields across versions of this

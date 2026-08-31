@@ -31,6 +31,7 @@ describe('SubRecipesService — making a batch', () => {
     const stock = { 'rm-sugar': 8000, 'rm-water': 108000, ...(opts.stock ?? {}) };
     const writes: Array<{ id: string; qty: number }> = [];
     const lots: any[] = [];
+    const events: any[] = [];
     let syrupCost = opts.syrupCost ?? 0.0806;
 
     /*
@@ -68,6 +69,15 @@ describe('SubRecipesService — making a batch', () => {
         findUnique: jest.fn().mockResolvedValue({ quantity: opts.syrupStock ?? 711 }),
       },
       rawMaterial:    { update: jest.fn(({ data }: any) => { syrupCost = Number(data.costPrice); return Promise.resolve({}); }) },
+      /*
+        A batch now records ITSELF: an event carrying who made it, when,
+        what went in and what came out. The journal posts nothing for it --
+        value moves within 1051 -- but Stock Movements reads it, and
+        without it a preparation left no trail anywhere.
+      */
+      accountingEvent: {
+        create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve({}); }),
+      },
       rawMaterialLot: {
         create: jest.fn(({ data }: any) => { lots.push(data); return Promise.resolve({}); }),
         // The components' lot layers are drained too now: the batch used to
@@ -101,7 +111,7 @@ describe('SubRecipesService — making a batch', () => {
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const svc = new SubRecipesService(prisma) as any;
-    return { svc, prisma, tx, writes, lots, cost: () => syrupCost };
+    return { svc, prisma, tx, writes, lots, events, cost: () => syrupCost };
   }
 
   it('consumes the inputs and adds the yield', async () => {

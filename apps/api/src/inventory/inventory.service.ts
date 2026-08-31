@@ -1036,8 +1036,64 @@ export class InventoryService {
       for (const ev of events) {
         const p = ev.payload as Record<string, unknown> | null;
         if (!p) continue;
-        if (p['kind'] !== 'RAW_MATERIAL_RECEIPT') continue;
         if (branchId && p['branchId'] && p['branchId'] !== branchId) continue;
+
+        /*
+          A preparation: syrup made, sauce cooked, a frozen tub thawed.
+
+          Shown as two kinds of line so the movement reads the way it happened
+          -- the prepared item arriving, and each ingredient it took leaving.
+          Before this a batch appeared nowhere at all, which made prep the only
+          stock movement with no audit trail.
+        */
+        if (p['kind'] === 'SUB_RECIPE_BATCH') {
+          const madeAt = typeof p['madeAt'] === 'string' ? p['madeAt'] : ev.createdAt.toISOString();
+          const madeBy = typeof p['madeById'] === 'string' ? p['madeById'] : null;
+          const batches = Number(p['batches'] ?? 1);
+          results.push({
+            id:             ev.id,
+            kind:           'RAW_MATERIAL',
+            occurredAt:     madeAt,
+            type:           'STOCK_IN',
+            itemName:       String(p['rawMaterialName'] ?? 'Prepared item'),
+            unit:           typeof p['unit'] === 'string' ? p['unit'] : null,
+            quantity:       Number(p['quantity'] ?? 0),
+            quantityBefore: Number(p['quantityBefore'] ?? 0),
+            quantityAfter:  Number(p['quantityAfter'] ?? 0),
+            branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
+            reason:         `Prepared — ${batches} batch${batches === 1 ? '' : 'es'}`,
+            reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
+            createdById:    madeBy,
+            createdByName:  null,
+            paymentMethod:  null,
+            totalValue:     Number(p['totalValue'] ?? 0),
+            accountingEventId: ev.id,
+          });
+          for (const c of (Array.isArray(p['consumed']) ? p['consumed'] : []) as Array<Record<string, unknown>>) {
+            results.push({
+              id:             ev.id + ':' + String(c['rawMaterialId'] ?? ''),
+              kind:           'RAW_MATERIAL',
+              occurredAt:     madeAt,
+              type:           'STOCK_OUT',
+              itemName:       String(c['name'] ?? 'Ingredient'),
+              unit:           typeof c['unit'] === 'string' ? c['unit'] : null,
+              quantity:       -Number(c['quantity'] ?? 0),
+              quantityBefore: 0,
+              quantityAfter:  0,
+              branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
+              reason:         `Used to prepare ${String(p['rawMaterialName'] ?? 'a prep')}`,
+              reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
+              createdById:    madeBy,
+              createdByName:  null,
+              paymentMethod:  null,
+              totalValue:     null,
+              accountingEventId: ev.id,
+            });
+          }
+          continue;
+        }
+
+        if (p['kind'] !== 'RAW_MATERIAL_RECEIPT') continue;
 
         const occurredAt = (typeof p['receivedAt'] === 'string' ? p['receivedAt'] : ev.createdAt.toISOString());
 

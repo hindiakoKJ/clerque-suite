@@ -639,6 +639,56 @@ export class SubRecipesService {
         },
       });
 
+      /*
+        The record of the preparation itself.
+
+        Stock Movements is built from AccountingEvent payloads, and a batch
+        emitted none -- so making 2 kg of syrup was the one stock movement in
+        the whole system with no trail. The sugar left the shelf, the syrup
+        appeared, and nothing anywhere said who did it or when. For a shop that
+        wants each preparation documented, that is the gap.
+
+        Recorded as SUB_RECIPE_BATCH, which the journal deliberately posts
+        NOTHING for: the components and the output are both raw-material
+        inventory and the value is identical on both sides, so there is no
+        entry to make. The event exists to be READ -- it is the paper trail,
+        not a ledger instruction.
+
+        Carries both sides, so the movement reads as one event rather than
+        several unrelated ones: what was made, and everything it took.
+      */
+      await tx.accountingEvent.create({
+        data: {
+          tenantId,
+          type:   'INVENTORY_ADJUSTMENT',
+          status: 'PENDING',
+          payload: {
+            kind:            'SUB_RECIPE_BATCH',
+            rawMaterialId,
+            rawMaterialName: rm.name,
+            unit:            rm.unit,
+            branchId:        dto.branchId,
+            batches,
+            quantity:        produced,
+            quantityBefore:  before,
+            quantityAfter:   after,
+            unitCost,
+            totalValue:      +(produced * unitCost).toFixed(2),
+            madeAt:          madeAt.toISOString(),
+            madeById:        userId,
+            referenceNumber: ref ?? null,
+            note:            dto.note ?? null,
+            consumed: rm.subRecipeItems.map((l) => ({
+              rawMaterialId: l.rawMaterial.id,
+              name:          l.rawMaterial.name,
+              unit:          l.rawMaterial.unit,
+              quantity:      Number(l.quantity) * batches,
+              unitCost:      Number(l.rawMaterial.costPrice ?? 0),
+            })),
+          } as unknown as Prisma.JsonObject,
+        },
+      });
+
       return {
         rawMaterialId,
         name:      rm.name,

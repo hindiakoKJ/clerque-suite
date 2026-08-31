@@ -38,6 +38,13 @@ export interface CreateOrderOptions {
   enforceServerTotals?: boolean;
   /** The caller's role, for the discount-authority (SOD) check. */
   callerRole?: string | null;
+  /**
+   * Skip the "can the kitchen actually make this" ceiling.
+   *
+   * Set by bulkSync for offline sales: those already happened, so refusing one
+   * would lose a real sale rather than prevent one. A live till never sets it.
+   */
+  skipStockCeiling?: boolean;
   /** The caller's per-user permission grants, if any. */
   callerCustomPermissions?: readonly string[] | null;
   /**
@@ -130,6 +137,12 @@ export class OrdersService {
       externalRef         = null,
       enforceServerTotals = false,
       callerRole              = null,
+      /*
+        A synced offline sale already happened -- the drink is in the
+        customer's hand -- so the stock ceiling must not refuse it. Only a
+        live till can be stopped before the customer pays.
+      */
+      skipStockCeiling        = false,
       callerCustomPermissions = null,
     } = opts;
 
@@ -872,6 +885,17 @@ export class OrdersService {
       // Populated only where recipe costing is actually switched on — see
       // `costFromRecipe` below.
       const recipeUnitCostByProduct = new Map<string, number>();
+      /*
+        Every recipe line this order cannot actually satisfy.
+
+        Gathered across the whole order rather than thrown on the first one, so
+        a cashier is told everything that is wrong in one go instead of
+        discovering it a line at a time with a customer waiting.
+      */
+      const shortfalls: Array<{
+        name: string; unit: string; needed: number; have: number;
+        perUnit: number; product: string;
+      }> = [];
 
       // ── Which costing does this sale use? ────────────────────────────────
       // Two independent things used to be conflated: DEDUCTING ingredients
@@ -891,7 +915,11 @@ export class OrdersService {
       //     ingredient costs land — no re-import, no lost recipes.
       const tenantCostingMode = await tx.tenant.findUnique({
         where:  { id: tenantId },
-        select: { inventoryMode: true, recipeDeductionPausedAt: true },
+        select: {
+          inventoryMode: true, recipeDeductionPausedAt: true,
+          // Whether this shop is willing to sell what it cannot make.
+          allowSaleWhenOutOfStock: true,
+        },
       });
       const houseUsesRecipes = tenantCostingMode?.inventoryMode === 'RECIPE_BASED';
 
@@ -953,7 +981,7 @@ export class OrdersService {
                 select: {
                   rawMaterialId: true,
                   quantity:      true,
-                  rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
+                  rawMaterial:   { select: { name: true, unit: true, costPrice: true, lotsTracked: true } },
                 },
               },
             },
@@ -967,7 +995,7 @@ export class OrdersService {
           productId:     true,
           rawMaterialId: true,
           quantity:      true,
-          rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
+          rawMaterial:   { select: { name: true, unit: true, costPrice: true, lotsTracked: true } },
         },
       });
       const bomsByProduct = new Map<string, typeof allBomLines>();
@@ -1003,7 +1031,7 @@ export class OrdersService {
               variantId:     true,
               rawMaterialId: true,
               quantity:      true,
-              rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
+              rawMaterial:   { select: { name: true, unit: true, costPrice: true, lotsTracked: true } },
             },
           })
         : [];
@@ -1078,7 +1106,11 @@ export class OrdersService {
         const bomItems: Array<{
           rawMaterialId: string;
           quantity: Prisma.Decimal;
-          rawMaterial: { costPrice: Prisma.Decimal | null; lotsTracked: boolean } | null;
+          // name and unit so a refusal can say WHICH ingredient ran short.
+          rawMaterial: {
+            name: string; unit: string;
+            costPrice: Prisma.Decimal | null; lotsTracked: boolean;
+          } | null;
         }> = variantBom && variantBom.length > 0
           ? variantBom
           : (bomsByProduct.get(item.productId) ?? []);
@@ -1162,6 +1194,25 @@ export class OrdersService {
           const hasStockRow = stockNow.has(bom.rawMaterialId);
           if (hasStockRow) {
             const before = stockNow.get(bom.rawMaterialId)!;
+            /*
+              Short. Remembered, not swallowed.
+
+              The floor below is what let a till accept six lattes with three
+              lattes' worth of milk: the fourth, fifth and sixth deducted
+              nothing, the sale went through, and three customers were refused
+              AFTER paying. The shortfall was even computed further down and
+              spent on COGS -- so the system knew, costed it, and said nothing.
+            */
+            if (before < consumeQty) {
+              shortfalls.push({
+                name:   bom.rawMaterial?.name ?? 'an ingredient',
+                unit:   bom.rawMaterial?.unit ?? '',
+                needed: consumeQty,
+                have:   before,
+                perUnit: perUnitQty,
+                product: item.productName ?? 'this item',
+              });
+            }
             const after  = Math.max(before - consumeQty, 0);
             stockNow.set(bom.rawMaterialId, after);
             if (!deductionPaused) {
@@ -1229,6 +1280,53 @@ export class OrdersService {
         if (costFromRecipe(item.productId)) {
           recipeUnitCostByProduct.set(item.productId, perUnitCost);
         }
+      }
+
+      /*
+        Refuse a sale the kitchen cannot make.
+
+        The tile already greys out at zero and names the limiting ingredient,
+        and Tenant.allowSaleWhenOutOfStock already exists and is honoured on
+        the DISPLAY side (products.service.ts) -- but nothing enforced it on
+        the SALE. So the guard was cosmetic: anything that got past the tile,
+        by quantity, by a stale cache, or by the tablet app which drops the
+        flag entirely, was accepted and floored.
+
+        Refused here, before any write, so nothing is committed and the cashier
+        is told BEFORE the customer pays rather than after.
+
+        Deliberately NOT applied to a synced offline order (`skipStockCeiling`,
+        passed by bulkSync): that sale already physically happened, the drink is
+        already in the customer's hand, and refusing it would lose a real sale
+        rather than prevent one. The same is true of a machine caller, which is
+        recording something that occurred elsewhere.
+
+        A shop that genuinely wants to sell into the negative -- a kitchen that
+        trusts its cooks over its stock file -- sets allowSaleWhenOutOfStock and
+        gets the old behaviour back.
+      */
+      if (
+        shortfalls.length > 0
+        && !deductionPaused
+        && !tenantCostingMode?.allowSaleWhenOutOfStock
+        && !skipStockCeiling
+        && channel === 'POS'
+      ) {
+        const worst = shortfalls[0];
+        const others = shortfalls.length > 1
+          ? ` (and ${shortfalls.length - 1} other ingredient${shortfalls.length === 2 ? '' : 's'})`
+          : '';
+        const canMake = worst.perUnit > 0 ? Math.floor(worst.have / worst.perUnit) : 0;
+        throw new BadRequestException({
+          code:    'NOT_ENOUGH_INGREDIENTS',
+          message:
+            `Not enough ${worst.name} for ${worst.product}${others}. ` +
+            `It needs ${worst.needed} ${worst.unit} and there ${worst.have === 1 ? 'is' : 'are'} ` +
+            `${worst.have} ${worst.unit} left — enough for ${canMake}. ` +
+            'Change the order before taking payment.',
+          ingredient: worst.name,
+          canMake,
+        });
       }
 
       // Flush the aggregate pool: ONE write per distinct ingredient. The
@@ -1988,6 +2086,9 @@ export class OrdersService {
         const created = await this.create(tenantId, cashierId, order, {
           callerRole:              caller.role ?? null,
           callerCustomPermissions: caller.customPermissions ?? null,
+          // These sales already happened offline; refusing one now would lose
+          // a real sale rather than prevent one.
+          skipStockCeiling:        true,
         });
         results.push({ clientUuid: order.clientUuid!, orderId: created.id, ok: true });
       } catch (err: any) {

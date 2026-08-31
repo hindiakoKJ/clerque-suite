@@ -3321,10 +3321,18 @@ export class ImportService {
             data:  { costPrice: new Prisma.Decimal(newWac) },
           });
 
-          // RawMaterialInventory update
+          /*
+            RawMaterialInventory update — RELATIVE.
+
+            This was the last absolute stock write left. Importing a stock
+            sheet during trading recomputed the total from a read taken before
+            the import started, so every unit sold in between came back: the
+            tile then read high and a barista accepted an order she could not
+            make. Every other path was made relative; this one was missed.
+          */
           await tx.rawMaterialInventory.upsert({
             where:  { branchId_rawMaterialId: { branchId, rawMaterialId: rm.id } },
-            update: { quantity: new Prisma.Decimal(newOnHand) },
+            update: { quantity: { increment: new Prisma.Decimal(qty) } },
             create: { tenantId, branchId, rawMaterialId: rm.id, quantity: new Prisma.Decimal(newOnHand) },
           });
 

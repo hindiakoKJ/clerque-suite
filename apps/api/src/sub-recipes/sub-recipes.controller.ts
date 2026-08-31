@@ -22,8 +22,11 @@ export class SubRecipesController {
    * Declared BEFORE the ':rawMaterialId' route so Nest does not match the
    * literal path segment as an id.
    */
+  // GENERAL_EMPLOYEE is the cook's account. Without it the prep board 403s for
+  // the one person whose job it describes, and unrecorded prep means the
+  // components never move, never trip a reorder level and never get bought.
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM',
-         'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+         'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'GENERAL_EMPLOYEE')
   @Get()
   @ApiOperation({ summary: 'Every prepared ingredient, with batches still makeable' })
   list(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
@@ -35,7 +38,7 @@ export class SubRecipesController {
    * barista about to make a batch needs to see what goes in it.
    */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM',
-         'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+         'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'GENERAL_EMPLOYEE')
   @Get(':rawMaterialId')
   @ApiOperation({ summary: 'What one batch of this prepared ingredient is made from' })
   get(@CurrentUser() user: JwtPayload, @Param('rawMaterialId') id: string) {
@@ -77,7 +80,8 @@ export class SubRecipesController {
    * the one who knows it happened, and a shift that cannot record it is a
    * shift where the raw materials silently stop moving.
    */
-  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM',
+         'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Post(':rawMaterialId/batches')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Record that a batch was made: consume the inputs, add the yield' })

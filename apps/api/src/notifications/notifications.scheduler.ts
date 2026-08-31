@@ -45,6 +45,7 @@ export class NotificationsScheduler {
     for (const t of tenants) {
       await Promise.allSettled([
         this.lowStockProducer(t.id),
+        this.lowIngredientProducer(t.id),
         this.overdueArApProducer(t.id),
         this.periodCloseReminderProducer(t.id),
       ]);
@@ -91,6 +92,103 @@ export class NotificationsScheduler {
       });
     } catch (err) {
       this.logger.error(`lowStockProducer failed for ${tenantId}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Ingredients running out → owner alert.
+   *
+   * The producer above reads InventoryItem, which is FINISHED GOODS. A cafe
+   * selling recipe-based drinks has no rows there at all, so the only job in
+   * the product that runs on its own was structurally incapable of warning
+   * about the one thing that stops a cafe trading: an ingredient hitting zero.
+   *
+   * Every other ingredient warning in the system is PULL. The prep board, the
+   * menu ceiling, Check stock, the days-of-cover report — all of them are true
+   * and all of them only exist if a human decides to go and look. Nothing ever
+   * made one look. So the milk ran out over a quiet weekend, the tile greyed
+   * out on Monday morning, and the barista said no to a customer while the
+   * system had been correct the whole time and had told nobody.
+   *
+   * Three numbers, deliberately, because two of them work without anyone
+   * having configured anything:
+   *
+   *   AT ZERO      — nothing left. Needs no reorder level to be true, which
+   *                  matters because most ingredients have none.
+   *   BELOW LEVEL  — the classic warning, for the ones that are set up.
+   *   UNWATCHED    — how many ingredients have no reorder level at all, so
+   *                  "nothing is low" can be read correctly. A shop with 56 of
+   *                  75 unmonitored is not a shop with nothing to buy.
+   */
+  private async lowIngredientProducer(tenantId: string): Promise<void> {
+    try {
+      const branches = await this.prisma.branch.findMany({
+        where:  { tenantId, isActive: true },
+        select: { id: true, name: true },
+      });
+      if (branches.length === 0) return;
+
+      const atZero:  string[] = [];
+      const belowRe: string[] = [];
+      let unwatched = 0;
+
+      for (const b of branches) {
+        const rows = await this.prisma.rawMaterial.findMany({
+          where:  { tenantId, isActive: true },
+          select: {
+            name: true, unit: true, lowStockAlert: true,
+            inventory: { where: { branchId: b.id }, select: { quantity: true } },
+          },
+        });
+        for (const r of rows) {
+          const onHand = Number(r.inventory[0]?.quantity ?? 0);
+          const level  = r.lowStockAlert != null ? Number(r.lowStockAlert) : null;
+          const where  = branches.length > 1 ? ` (${b.name})` : '';
+          if (onHand <= 0) {
+            atZero.push(`${r.name}${where}`);
+          } else if (level != null && level > 0 && onHand <= level) {
+            belowRe.push(`${r.name} — ${onHand} ${r.unit} left${where}`);
+          }
+          // Counted once, on the first branch, so a two-branch shop does not
+          // report the same unset ingredient twice.
+          if (level == null && b.id === branches[0].id) unwatched += 1;
+        }
+      }
+
+      // Nothing to say beats a nightly alert that always fires.
+      if (atZero.length === 0 && belowRe.length === 0) return;
+
+      const parts: string[] = [];
+      if (atZero.length) {
+        parts.push(`OUT: ${atZero.slice(0, 5).join(', ')}` +
+          (atZero.length > 5 ? ` and ${atZero.length - 5} more` : ''));
+      }
+      if (belowRe.length) {
+        parts.push(`Low: ${belowRe.slice(0, 5).join(', ')}` +
+          (belowRe.length > 5 ? ` and ${belowRe.length - 5} more` : ''));
+      }
+      if (unwatched > 0) {
+        parts.push(`${unwatched} ingredient${unwatched === 1 ? '' : 's'} ` +
+          `${unwatched === 1 ? 'has' : 'have'} no reorder level, so ` +
+          `${unwatched === 1 ? 'it is' : 'they are'} not being watched at all.`);
+      }
+
+      await this.notifications.create({
+        tenantId,
+        userId: null,
+        // Out of something is a different conversation from getting low.
+        kind:   atZero.length > 0 ? 'ERROR' : 'WARNING',
+        title:  atZero.length > 0
+          ? `${atZero.length} ingredient${atZero.length === 1 ? '' : 's'} out of stock`
+          : `${belowRe.length} ingredient${belowRe.length === 1 ? '' : 's'} running low`,
+        body:   parts.join(' · '),
+        link:   '/procure/requests',
+        // Keyed on the counts, so a shop whose position has not changed is not
+        // told again every night -- but a new shortage still gets through.
+        dedupeKey: `low-ingredient-${atZero.length}-${belowRe.length}`,
+      });
+    } catch (err) {
+      this.logger.error(`lowIngredientProducer failed for ${tenantId}: ${(err as Error).message}`);
     }
   }
 

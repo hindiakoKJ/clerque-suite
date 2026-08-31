@@ -226,3 +226,36 @@ defects found by hand. 1177 API tests, 105 suites; web build green.
   a control was added keeps the old one. Worth a one-off sync before onboarding
   anyone whose books already exist.
 - `1053` Finished Goods and `1052` WIP remain dead, on purpose.
+
+---
+
+## Cafe Carolina — the operational walkthrough (2026-08-31)
+
+KJ's list, run in his order, on a **fresh NON_VAT tenant** with three branches
+(Stockroom / Bar / Kitchen). Every step against the real database.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Order ingredients | `REQ-20260831-001` sent, 3 lines. **Nothing posted** — an order is a commitment |
+| 2 | Receive | 3/3 posted. `JE-0001  Dr 1051 9,000 / Cr 1010 9,000` — **no 1040**, she is not VAT-registered |
+| 3 | Weighted average | 5,000 g at ₱1.80 + 5,000 g at ₱2.20 → **₱2.00/g**, 10,000 g on hand |
+| 4 | Count the shelf | system 10,000, counted 9,850 → corrected, and the 150 g shortfall hit **5060 write-off**, not COGS |
+| 5 | Sauces, 3 levels | L1 ₱0.02/ml → L2 ₱0.13/ml → L3 **₱0.21/ml**. Each level consumed the level below it (400 g sugar → 1,000 ml L1 → 600 ml L2) |
+| 6 | Move stock | Stockroom → Bar 3,000 g; Stockroom → Kitchen 400 ml sauce. Total unchanged at 9,850 g — **nothing created or lost** |
+| 7 | Operating supplies | 2,000 ml bleach → `Dr 6210 300 / Cr 1010 300`. **Expensed, never capitalised** |
+| 8 | Sell | 2 × Sauced Latte, ₱360 cash. `Dr 1010 360 / Cr 4010 360` — **no output VAT** |
+| 9 | Recipe COGS | ₱53.62/cup hand-checked; `RECIPE_WAC`, `Dr 5010 107.23 / Cr 1051 107.23` |
+| 10 | Stock moving | beans 3,000 → 2,964 (2×18) · milk 20,000 → 19,700 (2×150) · **sauce 200 → 160 (2×20)** |
+
+Books after: trial balance **Dr ₱27,957.23 / Cr ₱27,957.23**, 0 unbalanced,
+0 negative stock, 0 stuck in the queue.
+
+### The one thing that is not what it looks like
+
+**"Stockroom / Bar / Kitchen" are BRANCHES in this run, not rooms.** The
+transfer mechanics are proven and correct — quantity moves, nothing is created
+or lost — but they are branch-to-branch, which is the model that exists today.
+Rooms inside one branch (`StockLocation`) is the migration we deliberately
+parked. Using branches for rooms works for stock but gives each room its own
+Z-read, its own shifts and its own line in every report, which is wrong for one
+shop. See the transfer decision in `procure.md`.

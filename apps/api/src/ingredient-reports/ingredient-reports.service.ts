@@ -326,6 +326,41 @@ export class IngredientReportsService {
       }
     }
 
+    /*
+      4b. Consumption by PREP.
+
+      Step 4 derives usage from paid orders x PRODUCT recipe. That misses the
+      whole other way this shop consumes ingredients: a batch of syrup takes
+      1,200 g of sugar in one go, and the sugar is not in any product recipe --
+      the SYRUP is. So an ingredient used only for prep read as zero
+      consumption, which made its days-of-cover null, which reads as "infinite"
+      on the one ingredient that leaves the shelf in the biggest lumps.
+
+      Measured on the demo data: 15,200 g of sugar on hand, consumed 0, cover
+      NONE -- while every batch of syrup takes 1,200 g of it.
+
+      The batch events carry what each preparation actually took, so this is a
+      real measurement rather than another estimate.
+    */
+    const prepEvents = await this.prisma.accountingEvent.findMany({
+      where: {
+        tenantId,
+        type:      'INVENTORY_ADJUSTMENT',
+        createdAt: { gte: fromDate, lte: toDate },
+      },
+      select: { payload: true },
+    });
+    for (const ev of prepEvents) {
+      const pl = ev.payload as Record<string, unknown> | null;
+      if (!pl || pl['kind'] !== 'SUB_RECIPE_BATCH') continue;
+      if (opts.branchId && pl['branchId'] && pl['branchId'] !== opts.branchId) continue;
+      for (const c of (Array.isArray(pl['consumed']) ? pl['consumed'] : []) as Array<Record<string, unknown>>) {
+        const id = String(c['rawMaterialId'] ?? '');
+        if (!id) continue;
+        consumptionQtyByRm.set(id, (consumptionQtyByRm.get(id) ?? 0) + Number(c['quantity'] ?? 0));
+      }
+    }
+
     // 5. Build the per-ingredient rows.
     const rows = ingredients.map((rm) => {
       const cost           = rm.costPrice != null ? Number(rm.costPrice) : 0;

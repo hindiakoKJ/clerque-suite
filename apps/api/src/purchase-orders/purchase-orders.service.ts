@@ -309,7 +309,25 @@ export class PurchaseOrdersService {
    * the stock receives run after it commits, because receiveRawMaterial opens
    * its own. Same shape as the Procure buy-list receive.
    */
-  async receive(tenantId: string, id: string, lines: ReceiveLine[]) {
+  async receive(
+    tenantId: string,
+    id: string,
+    lines: ReceiveLine[],
+    /**
+     * How this delivery was paid for. Defaults to CASH.
+     *
+     * A named vendor does NOT imply terms. Shopee is a vendor and it is
+     * prepaid: the money leaves when the order is placed, days before the
+     * parcel arrives. Defaulting a vendor PO to CREDIT would invent an
+     * Accounts Payable balance the shop does not owe and an AP bill nobody
+     * will ever pay off -- a liability that then sits on the balance sheet
+     * forever because there is no payment to clear it.
+     *
+     * CREDIT stays available for a shop that genuinely buys on terms; it
+     * just has to be said rather than assumed.
+     */
+    paymentMethod: 'CASH' | 'CREDIT' | 'OWNER_FUNDED' = 'CASH',
+  ) {
     if (!lines?.length) throw new BadRequestException('No lines provided to receive.');
 
     const toStock: Array<{
@@ -416,11 +434,16 @@ export class PurchaseOrdersService {
     /*
       Now move the stock properly, one line at a time.
 
-      CREDIT when the PO names a vendor, because that is what a purchase order
-      to a supplier IS -- goods now, money later -- and it is what raises the
-      AP bill so the debt is visible and payable. Without a vendor there is
-      nobody to owe, so it is treated as owner-funded, exactly as the receive
-      form does.
+      Cash unless told otherwise. A named vendor is not a credit line: the
+      ordinary shape here is a market run paid on the spot, or a Shopee
+      order paid when it is placed. Both are money already gone by the time
+      the goods land, so the entry is Dr inventory / Cr cash and there is
+      nothing to age.
+
+      (Strictly, prepaying days before delivery is an advance to a supplier
+      that converts to inventory on arrival. For a few days' lag on a cafe's
+      order that is noise, and carrying it would mean a second account and a
+      second entry for every parcel. Not worth it here.)
 
       A line that fails is reported rather than thrown: the PO's quantities are
       already committed, and rolling the whole receipt back over one bad line
@@ -435,8 +458,11 @@ export class PurchaseOrdersService {
           branchId,
           quantity:        s.quantity,
           costPrice:       s.unitCost,
-          paymentMethod:   vendorId ? 'CREDIT' : 'OWNER_FUNDED',
-          ...(vendorId ? { vendorId } : {}),
+          paymentMethod,
+          // The vendor only matters to the books on terms -- that is what
+          // the AP bill is for. A cash or prepaid delivery has nothing to
+          // age and nobody to chase.
+          ...(paymentMethod === 'CREDIT' && vendorId ? { vendorId } : {}),
           referenceNumber: s.reference,
           ...(s.expirationDate ? { expirationDate: s.expirationDate } : {}),
           purchaseOrderItemId: s.itemId,

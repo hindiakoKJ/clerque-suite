@@ -69,9 +69,15 @@ export class PurchaseOrdersController {
   receive(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { lines: ReceiveLine[] },
+    /*
+      paymentMethod defaults to CASH in the service. A named vendor is not a
+      credit line -- Shopee is a vendor and it is prepaid -- so terms have to
+      be stated rather than assumed, or the shop ends up with an Accounts
+      Payable balance it does not owe.
+    */
+    @Body() body: { lines: ReceiveLine[]; paymentMethod?: 'CASH' | 'CREDIT' | 'OWNER_FUNDED' },
   ) {
     if (!user.tenantId) throw new BadRequestException('No tenant context.');
-    return this.svc.receive(user.tenantId, id, body?.lines ?? []);
+    return this.svc.receive(user.tenantId, id, body?.lines ?? [], body?.paymentMethod ?? 'CASH');
   }
 }

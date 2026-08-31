@@ -939,17 +939,26 @@ export class JournalService {
 
         // PH chart-of-accounts mapping (defaults; tenants can re-route in
         // Settings → Chart of Accounts if they want finer breakdown).
-        //   SUPPLIES        → 6070 Office Supplies Expense
-        //   TRANSPORT       → 6100 Transportation and Travel
-        //   UTILITIES       → 6060 Utilities Expense
-        //   REPAIRS         → 6090 Repairs and Maintenance
-        //   MEALS / OTHER   → 6140 Miscellaneous Expense
+        //   SUPPLIES         → 6070 Office Supplies Expense
+        //   TRANSPORT        → 6100 Transportation and Travel
+        //   ACCOMMODATION    → 6100 Transportation and Travel (a hotel IS travel)
+        //   COMMUNICATION    → 6110 Communication Expense
+        //   UTILITIES        → 6060 Utilities Expense
+        //   REPAIRS          → 6090 Repairs and Maintenance
+        //   MEALS / OTHER    → 6140 Miscellaneous Expense
+        //
+        // ACCOMMODATION and COMMUNICATION were added when reimbursed expense
+        // claims started posting through this same event: the claim form has
+        // always offered those categories and they would otherwise have
+        // fallen into Miscellaneous, which is where detail goes to die.
         const expenseAccount =
-          category === 'SUPPLIES'  ? '6070' :
-          category === 'TRANSPORT' ? '6100' :
-          category === 'UTILITIES' ? '6060' :
-          category === 'REPAIRS'   ? '6090' :
-                                     '6140';
+          category === 'SUPPLIES'      ? '6070' :
+          category === 'TRANSPORT'     ? '6100' :
+          category === 'ACCOMMODATION' ? '6100' :
+          category === 'COMMUNICATION' ? '6110' :
+          category === 'UTILITIES'     ? '6060' :
+          category === 'REPAIRS'       ? '6090' :
+                                         '6140';
 
         const shiftSuffix = shiftId ? ` (shift ${shiftId.slice(-6)})` : '';
         description = `Paid out: ${category}${reason ? ` — ${reason}` : ''}${shiftSuffix}`;

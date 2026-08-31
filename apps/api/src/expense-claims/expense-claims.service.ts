@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExpenseClaimStatus } from '@prisma/client';
 import {
@@ -300,14 +301,61 @@ export class ExpenseClaimsService {
       );
     }
 
-    return this.prisma.expenseClaim.update({
-      where: { id: claimId },
-      data: {
-        status:     'PAID',
-        paidAt:     new Date(),
-        paymentRef: dto.paymentRef,
-      },
-      include: { items: true },
+    /*
+      Reimbursing a claim is money leaving the business, so it has to reach
+      the books.
+
+      Nothing in this whole directory referenced the journal: a claim went
+      DRAFT to SUBMITTED to APPROVED to PAID, the employee got their money,
+      and the expense never appeared anywhere. The shop's costs were
+      understated by every peso ever reimbursed, and the period-close
+      checklist told the owner these would 'leak across periods' while the
+      screen quietly posted nothing at all.
+
+      Posted on PAID rather than APPROVED because that is when the cash
+      actually moves. Approving creates an obligation, not an outflow, and
+      accruing it would need a liability account and a settlement path that
+      this flow does not have.
+
+      Emitted as PAID_OUT, one per line, because that is exactly this shape
+      already: Dr expense routed by category / Cr cash. One event per line
+      rather than per claim keeps the category detail in the GL instead of
+      collapsing a taxi fare and a box of receipts into one number.
+
+      In the same transaction as the status change: a claim marked PAID whose
+      events did not queue would be invisible to both the screen and the
+      books, and nothing would ever look at it again.
+    */
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.expenseClaim.update({
+        where: { id: claimId },
+        data: {
+          status:     'PAID',
+          paidAt:     new Date(),
+          paymentRef: dto.paymentRef,
+        },
+        include: { items: true },
+      });
+
+      for (const item of updated.items) {
+        const amount = Number(item.amount);
+        if (!(amount > 0)) continue;
+        await tx.accountingEvent.create({
+          data: {
+            tenantId,
+            type:   'PAID_OUT',
+            status: 'PENDING',
+            payload: {
+              amount,
+              category: String(item.category ?? 'OTHER').toUpperCase(),
+              reason:   `Reimbursement ${updated.claimNumber ?? claimId.slice(-6)}` +
+                        (item.description ? ` — ${item.description}` : ''),
+            } as unknown as Prisma.JsonObject,
+          },
+        });
+      }
+
+      return updated;
     });
   }
 

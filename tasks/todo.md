@@ -163,3 +163,66 @@ means an order predating the rule or something that got past it.
 exist, so tenants created before a control was added keep the old one. The demo
 tenant's `2010` was OPEN and has been set to `AP_ONLY` to match the seed. Worth
 a one-off sync before onboarding anyone whose books already exist.
+
+---
+
+## Week-one list — ALL CLOSED (2026-08-31)
+
+Everything remaining from `tasks/three-app-review.md`, plus the three kitchen
+defects found by hand. 1177 API tests, 105 suites; web build green.
+
+### The books
+- [x] **Cash Flow called every current asset "cash."** The band ran 1000–1099,
+      sweeping in AR, Digital Wallet Receivable, Input VAT and both inventory
+      accounts. It still reconciled, which is what made it convincing. Cash is
+      1010–1025; 1030–1099 now lands in operating so nothing is dropped.
+      *Live:* ending cash ₱-388,995 = the 1010 balance exactly, with 1031,
+      1040, 1050 and 1051 all in the operating section.
+- [x] **The Sales Book printed senior and PWD sales as taxable.** The
+      VAT-Exempt and Zero-Rated columns were hard-coded to zero while the till
+      already recorded `taxType` and posted no output VAT — so the book
+      contradicted the ledger and overstated the output-tax base.
+- [x] **The Purchase Book had no stock in it.** It read `expenseEntry` only, so
+      the 2550Q input-tax claim had no supporting book behind its largest
+      component. Sourced from the lots, on the same net basis and the same
+      OWNER_FUNDED exclusion as the receive path.
+- [x] **A failed accounting event was a dead end.** Re-queued every ten minutes
+      up to five attempts; the ones that give up are logged loudly every pass.
+- [x] **Closing a period could lock out work already on its way** — which grew
+      teeth the moment failed events began retrying. Now refuses while anything
+      up to the period end is unposted, and says how many.
+- [x] **Expense claims never reached the ledger at all.** DRAFT → SUBMITTED →
+      APPROVED → PAID, the employee got their money, and the expense appeared
+      nowhere. Posted on PAID as `PAID_OUT`, one per line so the category
+      detail survives.
+- [x] **The trial balance was a day behind the statements it proves.**
+
+### Stock
+- [x] **Two tills erased each other.** Every deduction and receipt wrote an
+      absolute quantity from a stale read. Relative now, with one floor
+      statement after — keeping both the concurrency safety and the
+      no-negative-stock invariant.
+- [x] **A Large cost the same as a Regular.** `variantBomItem` was written and
+      never read. *(The write endpoint still has no screen — worth a UI before
+      anyone relies on it.)*
+- [x] **An ingredient with no stock row was free forever.**
+- [x] **A count could restate a closed month**, and **a batch could too.**
+- [x] **Batch prep had an API and no screen** — `/procure/batches` now exists,
+      with a list endpoint that resolves every recipe's remaining batches in
+      one stock read.
+- [x] **Batches could be recorded twice, and left their components' lot layers
+      untouched.**
+
+### Reports
+- [x] **The dashboard and the income statement disagreed about cost.** The
+      resolved waterfall cost is now written back to the order line.
+- [x] **The X-Read dropped the lunch rush** — COMPLETED only, where the Z-Read
+      counts PAID and COMPLETED.
+
+### Still open, deliberately
+- Variant recipes have no editing screen. The consumption side is correct now,
+  so this is latent rather than dangerous — but nobody can define one yet.
+- `postingControl` never syncs to existing tenants, so a tenant created before
+  a control was added keeps the old one. Worth a one-off sync before onboarding
+  anyone whose books already exist.
+- `1053` Finished Goods and `1052` WIP remain dead, on purpose.

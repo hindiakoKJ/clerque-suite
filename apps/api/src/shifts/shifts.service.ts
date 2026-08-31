@@ -168,12 +168,37 @@ export class ShiftsService {
     cashierId: string,
     closingCashDeclared: number,
     notes?: string,
+    /**
+     * The caller's role, so a supervisor can close a drawer its owner left open.
+     *
+     * A barista who forgets to Close Shift and goes home used to leave the till
+     * unclosable by anyone: the next `open` auto-closes it with NO drawer count
+     * and NO variance, so yesterday's cash is never reconciled and the day gets
+     * no Z-Read. That is a hole in the one control the shop actually runs on.
+     *
+     * Omitted keeps the original owner-only rule, for any caller not yet updated.
+     */
+    callerRole?: string | null,
   ) {
     const shift = await this.prisma.shift.findFirst({
       where: { id: shiftId, tenantId },
     });
     if (!shift) throw new NotFoundException('Shift not found');
-    if (shift.cashierId !== cashierId) throw new ForbiddenException('Only the shift owner can close this shift');
+    /*
+      The drawer's owner closes it; a supervisor may close it for them.
+
+      Deliberately not open to everyone: the declared count is what the variance
+      is measured against, so one cashier closing another's till could post a
+      shortage against someone else's name. A manager or owner doing it is the
+      real-world escalation — they are the ones holding the key to the safe.
+    */
+    const SUPERVISOR_ROLES = new Set(['BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'SUPER_ADMIN']);
+    const closedByOther = shift.cashierId !== cashierId;
+    if (closedByOther && !(callerRole && SUPERVISOR_ROLES.has(callerRole))) {
+      throw new ForbiddenException(
+        'Only the cashier who opened this shift can close it. A manager or owner can close it for them.',
+      );
+    }
     if (shift.closedAt) throw new ConflictException('Shift is already closed');
 
     const summary = await this.buildSummary(shift);
@@ -195,7 +220,12 @@ export class ShiftsService {
           closingCashDeclared: new Prisma.Decimal(closingCashDeclared),
           closingCashExpected: new Prisma.Decimal(closingCashExpected),
           variance:            new Prisma.Decimal(variance),
-          notes:               notes ?? shift.notes,
+          // Who counted the drawer is the first question asked about a
+          // variance somebody else declared, so it goes on the record.
+          notes:               closedByOther
+            ? [shift.notes, `Closed on the cashier's behalf by ${cashierId}.`, notes]
+                .filter(Boolean).join(' · ')
+            : (notes ?? shift.notes),
         },
       });
       if (result.count === 0) {

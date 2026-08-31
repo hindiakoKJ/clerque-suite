@@ -19,7 +19,7 @@ describe('WarehouseService — posting a count creates stock that does not exist
   const TENANT = 't1';
   const BRANCH = 'b1';
 
-  function build(opts: { existing?: Set<string>; lines?: any[]; live?: Record<string, number> } = {}) {
+  function build(opts: { existing?: Set<string>; lines?: any[]; live?: Record<string, number>; periods?: any } = {}) {
     const existing = opts.existing ?? new Set<string>();
     /* What is on the shelf RIGHT NOW, for rows that already exist. */
     const liveQty = new Map<string, number>(Object.entries(opts.live ?? {}));
@@ -74,8 +74,15 @@ describe('WarehouseService — posting a count creates stock that does not exist
       },
     };
     const prisma: any = { $transaction: jest.fn((fn: any) => fn(tx)) };
-    const svc = new WarehouseService(prisma) as any;
-    return { svc, tx, upserts, events };
+    /*
+      Posting a count writes to the books, so it honours the period lock the
+      same way receiveRawMaterial and writeOffRawMaterial do. This path was
+      reimplemented against Prisma directly and never checked, so a count
+      could restate a month that was already closed and reconciled.
+    */
+    const periods: any = { assertDateIsOpen: jest.fn().mockResolvedValue(undefined) };
+    const svc = new WarehouseService(prisma, opts.periods ?? periods) as any;
+    return { svc, tx, upserts, events, periods };
   }
 
   it('posts an opening count on a tenant with no stock rows at all', async () => {
@@ -199,5 +206,69 @@ describe('WarehouseService — posting a count creates stock that does not exist
       await svc.postCycleCount(TENANT, 'cc1', 'u1');
       expect(upserts[0].qty).toBe(0);
     });
+  });
+});
+
+/**
+ * A count restates stock AND writes to the books, so it cannot land in a month
+ * that is already closed and reconciled.
+ *
+ * `receiveRawMaterial` and `writeOffRawMaterial` both check before any write.
+ * This path was reimplemented against Prisma directly and never did, so the
+ * one movement large enough to restate a whole shelf was the one movement that
+ * could quietly move last month's numbers.
+ */
+describe('WarehouseService.postCycleCount — the period lock', () => {
+  const TENANT = 't1';
+  const BRANCH = 'b1';
+
+  function build(periods: any) {
+    const upserts: any[] = [];
+    const tx: any = {
+      cycleCount: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN',
+          lines: [{ id: 'l1', rawMaterialId: 'beans', countedQty: '4200', expectedQty: '0' }],
+        }),
+        update: jest.fn().mockResolvedValue({ id: 'cc1', lines: [] }),
+      },
+      rawMaterialInventory: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn((a: any) => { upserts.push(a); return Promise.resolve({}); }),
+      },
+      cycleCountLine:  { update: jest.fn().mockResolvedValue({}) },
+      accountingEvent: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma: any = { $transaction: jest.fn((fn: any) => fn(tx)) };
+    return { svc: new WarehouseService(prisma, periods) as any, upserts };
+  }
+
+  it('refuses to post into a closed month', async () => {
+    const periods = { assertDateIsOpen: jest.fn().mockRejectedValue(new Error('Period is closed.')) };
+    const { svc } = build(periods);
+    await expect(svc.postCycleCount(TENANT, 'cc1', 'u1')).rejects.toThrow(/closed/i);
+  });
+
+  it('writes nothing when the month is closed', async () => {
+    // Half a posted count is worse than none: stock would have moved for some
+    // ingredients and not others, with no record of where it stopped.
+    const periods = { assertDateIsOpen: jest.fn().mockRejectedValue(new Error('Period is closed.')) };
+    const { svc, upserts } = build(periods);
+    await svc.postCycleCount(TENANT, 'cc1', 'u1').catch(() => undefined);
+    expect(upserts).toHaveLength(0);
+  });
+
+  it('checks once for the whole count, not once per line', async () => {
+    const periods = { assertDateIsOpen: jest.fn().mockResolvedValue(undefined) };
+    const { svc } = build(periods);
+    await svc.postCycleCount(TENANT, 'cc1', 'u1');
+    expect(periods.assertDateIsOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts normally when the month is open', async () => {
+    const periods = { assertDateIsOpen: jest.fn().mockResolvedValue(undefined) };
+    const { svc, upserts } = build(periods);
+    await svc.postCycleCount(TENANT, 'cc1', 'u1');
+    expect(upserts).toHaveLength(1);
   });
 });

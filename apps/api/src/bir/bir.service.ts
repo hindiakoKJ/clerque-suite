@@ -476,20 +476,53 @@ export class BirService {
     headerRow.font = { bold: true, size: 10 };
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
 
+    /*
+      The VAT-Exempt and Zero-Rated columns existed and were hard-coded to zero,
+      so EVERY sale was reported as taxable — including the ones the law says
+      are not.
+
+      A senior citizen or PWD sale is VAT-exempt by statute (RA 9994, RA 10754),
+      and the till already records that: the order carries `taxType` and
+      `isPwdScDiscount`, and the sale posts no Output VAT because
+      `vatAmount` is zero. The book then contradicted the ledger, declaring
+      taxable sales the shop never charged VAT on — which overstates the
+      output-tax base in the one document an examiner reads first.
+
+      Read from the order rather than re-derived: `taxType` is what the terminal
+      classified the sale as at the point of sale, and `isPwdScDiscount` is the
+      statutory-discount flag that goes with it. An order with no taxType at all
+      predates the field and is treated as VAT_12, which is what it was recorded
+      as.
+    */
     let totalGross = 0, totalVat = 0, totalAmount = 0;
+    let totalExempt = 0, totalZero = 0;
     orders.forEach((o, i) => {
-      const gross  = Number(o.totalAmount) - Number(o.vatAmount);
       const vat    = Number(o.vatAmount);
       const total  = Number(o.totalAmount);
-      totalGross  += gross; totalVat += vat; totalAmount += total;
+      const net    = total - vat;
+
+      const taxType = String((o as { taxType?: string }).taxType ?? 'VAT_12');
+      const exempt  = taxType === 'VAT_EXEMPT' || (o.isPwdScDiscount === true && vat === 0);
+      const zero    = taxType === 'ZERO_RATED';
+
+      const vatExempt = exempt ? net : 0;
+      const zeroRated = zero   ? net : 0;
+      const taxable   = exempt || zero ? 0 : net;
+
+      totalGross  += taxable;
+      totalExempt += vatExempt;
+      totalZero   += zeroRated;
+      totalVat    += vat;
+      totalAmount += total;
+
       const row = ws.addRow({
         date:        (o.completedAt ?? o.createdAt).toLocaleDateString('en-PH'),
         orNumber:    o.orderNumber,
-        customer:    'Walk-in',
+        customer:    o.customerName ?? 'Walk-in',
         grossSales:  total,
-        vatExempt:   0,
-        zeroRated:   0,
-        taxable:     gross,
+        vatExempt,
+        zeroRated,
+        taxable,
         outputVat:   vat,
         totalAmount: total,
       });
@@ -499,7 +532,9 @@ export class BirService {
     // Totals row
     const totalsRow = ws.addRow({
       date: 'TOTAL', orNumber: '', customer: '',
-      grossSales: totalAmount, vatExempt: 0, zeroRated: 0,
+      grossSales: totalAmount,
+      vatExempt: totalExempt,
+      zeroRated: totalZero,
       taxable: totalGross, outputVat: totalVat, totalAmount,
     });
     totalsRow.font = { bold: true };
@@ -548,6 +583,45 @@ export class BirService {
     headerRow.font = { bold: true, size: 10 };
     headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
 
+    /*
+      Stock receipts belong in this book, and were missing from it entirely.
+
+      The Purchase Book read `expenseEntry` only — rent, utilities, a repair.
+      Every sack of beans and litre of milk the shop buys is a purchase of
+      goods carrying input VAT, posted through the receive path and the
+      importer, and none of it appeared. So the 2550Q input-tax claim had no
+      supporting book behind its largest component, which is the first thing an
+      examiner asks to see.
+
+      Sourced from the lots, because that is the one record every receipt
+      creates whatever door it came through — the app's Receive form, the
+      onboarding workbook, a purchase-order receipt. AP bills would cover only
+      the credit ones.
+
+      `unitCost` is NET of recoverable VAT (see receiveRawMaterial), so the
+      input tax is derived on the same basis and the same rule: a VAT tenant,
+      and not OWNER_FUNDED, where there is no supplier and no invoice behind
+      the stock. Negative `qtyReceived` is the write-off sentinel, not a
+      purchase, and is excluded.
+    */
+    const isVatTenant = (await this.prisma.tenant.findUnique({
+      where: { id: tenantId }, select: { taxStatus: true },
+    }))?.taxStatus === 'VAT';
+
+    const lots = await this.prisma.rawMaterialLot.findMany({
+      where: {
+        tenantId,
+        receivedAt:  { gte: from, lt: to },
+        qtyReceived: { gt: 0 },
+      },
+      select: {
+        receivedAt: true, referenceNumber: true, paymentMethod: true,
+        qtyReceived: true, unitCost: true,
+        rawMaterial: { select: { name: true, unit: true } },
+      },
+      orderBy: { receivedAt: 'asc' },
+    });
+
     let totGross = 0, totVat = 0, totWht = 0, totNet = 0;
     expenses.forEach((e, i) => {
       totGross += Number(e.grossAmount); totVat += Number(e.inputVat);
@@ -563,6 +637,30 @@ export class BirService {
         net:       Number(e.netAmount),
       });
       if (i % 2 === 1) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+    });
+
+    lots.forEach((l, i) => {
+      const net       = Number(l.qtyReceived) * Number(l.unitCost);
+      const claimable = isVatTenant && l.paymentMethod !== 'OWNER_FUNDED';
+      const inputVat  = claimable ? +(net * 0.12).toFixed(2) : 0;
+      const gross     = +(net + inputVat).toFixed(2);
+      totGross += gross; totVat += inputVat; totNet += net;
+      const row = ws.addRow({
+        date:      l.receivedAt.toLocaleDateString('en-PH'),
+        ref:       l.referenceNumber ?? '',
+        // The lot records what was bought, not who from — vendor lives on the
+        // AP bill, and only a credit purchase has one. Naming the goods is
+        // more use to whoever reconciles this than an empty column.
+        vendor:    `Stock: ${l.rawMaterial?.name ?? 'ingredient'}`,
+        vendorTin: '',
+        gross,
+        inputVat,
+        wht:       0,
+        net:       +net.toFixed(2),
+      });
+      if ((expenses.length + i) % 2 === 1) {
+        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } };
+      }
     });
 
     const totals = ws.addRow({ date: 'TOTAL', ref: '', vendor: '', vendorTin: '', gross: totGross, inputVat: totVat, wht: totWht, net: totNet });

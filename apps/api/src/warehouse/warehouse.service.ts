@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, StockTransferStatus, CycleCountStatus } from '@prisma/client';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 
 // ── Stock Transfer DTOs ────────────────────────────────────────────────────────
 
@@ -13,7 +14,22 @@ export interface CreateTransferDto {
 
 @Injectable()
 export class WarehouseService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    /*
+      Posting a count moves stock AND writes to the books, so it has to respect
+      the same period lock every other stock movement does. `receiveRawMaterial`
+      and `writeOffRawMaterial` both check before any write; this path was
+      reimplemented against Prisma directly and never did, so a count could
+      restate a month that was already closed and reconciled — and the only
+      sign would be last month's numbers quietly moving.
+
+      Optional so an older wiring that constructs this service with Prisma
+      alone still boots. When it is absent the check is skipped rather than
+      throwing, which is the behaviour that existed before it was injected.
+    */
+    @Optional() private readonly periods?: AccountingPeriodsService,
+  ) {}
 
   // ── Numbering helpers (per-tenant per-year, race-safe within tx) ─────────
   private async nextTransferNumber(tx: Prisma.TransactionClient, tenantId: string): Promise<string> {
@@ -382,6 +398,16 @@ export class WarehouseService {
       if (!c) throw new NotFoundException('Cycle count not found.');
       if (c.status !== 'OPEN') {
         throw new BadRequestException(`Only OPEN counts can be posted (current: ${c.status}).`);
+      }
+
+      /*
+        Checked BEFORE any line is written, not per line: a count is one event
+        on one date, and half a posted count is worse than none — the stock
+        would have moved for some ingredients and not others with no record of
+        where it stopped.
+      */
+      if (this.periods) {
+        await this.periods.assertDateIsOpen(tenantId, c.postedAt ?? new Date());
       }
 
       for (const line of c.lines) {

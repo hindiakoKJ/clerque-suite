@@ -124,4 +124,54 @@ describe('ShiftsService.close — writing the day\'s Z-Read', () => {
     await svc.close(TENANT, SHIFT, CASHIER, 1500);
     expect(generateZRead).toHaveBeenCalled();
   });
+  /*
+    A barista who forgets to Close Shift and goes home used to leave a till
+    nobody could close. The next `open` auto-closes it with NO drawer count and
+    NO variance, so yesterday's cash is never reconciled and the day gets no
+    Z-Read — a hole in the one control the shop actually runs on.
+
+    Not open to everyone, though: the declared count is what the variance is
+    measured against, so one cashier closing another's till could post a
+    shortage against someone else's name.
+  */
+  describe('closing a drawer that is not yours', () => {
+    const OTHER = 'someone-else';
+
+    it('is refused for another cashier', async () => {
+      const { svc } = build();
+      await expect(svc.close(TENANT, SHIFT, OTHER, 1500, undefined, 'CASHIER'))
+        .rejects.toThrow(/Only the cashier who opened this shift/);
+    });
+
+    it('is refused when no role is supplied at all', async () => {
+      // Keeps the original owner-only rule for any caller not yet updated.
+      const { svc } = build();
+      await expect(svc.close(TENANT, SHIFT, OTHER, 1500))
+        .rejects.toThrow(/Only the cashier who opened this shift/);
+    });
+
+    it('says a manager can do it, rather than just refusing', async () => {
+      const { svc } = build();
+      await expect(svc.close(TENANT, SHIFT, OTHER, 1500, undefined, 'CASHIER'))
+        .rejects.toThrow(/A manager or owner can close it for them/);
+    });
+
+    it.each(['BUSINESS_OWNER', 'BRANCH_MANAGER'])('is allowed for a %s', async (role) => {
+      const { svc } = build();
+      await expect(svc.close(TENANT, SHIFT, OTHER, 1500, undefined, role)).resolves.toBeDefined();
+    });
+
+    it('records who actually counted the drawer', async () => {
+      // The first question asked about a variance somebody else declared.
+      const { svc, prisma } = build();
+      await svc.close(TENANT, SHIFT, OTHER, 1500, 'drawer was left open', 'BRANCH_MANAGER');
+      const written = (prisma.$transaction as jest.Mock).mock.calls.length;
+      expect(written).toBe(1);
+    });
+
+    it('still lets the owner close their own shift with no role at all', async () => {
+      const { svc } = build();
+      await expect(svc.close(TENANT, SHIFT, CASHIER, 1500)).resolves.toBeDefined();
+    });
+  });
 });

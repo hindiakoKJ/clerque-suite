@@ -1072,16 +1072,32 @@ export class OrdersService {
           const perUnitQty = Number(bom.quantity);    // ingredient qty per 1 finished unit
           const consumeQty = perUnitQty * soldQty;     // total qty drained for this order line
 
-          // Aggregate pool, tracked in memory and flushed once per ingredient
-          // after the loop. A missing stock row skips the line exactly as the
-          // old per-line read did.
-          if (!stockNow.has(bom.rawMaterialId)) continue;
-          const before = stockNow.get(bom.rawMaterialId)!;
-          const after  = Math.max(before - consumeQty, 0);
-          stockNow.set(bom.rawMaterialId, after);
-          if (!deductionPaused) {
-            rmTouched.add(bom.rawMaterialId);
-            deductedProductIds.add(item.productId);
+          /*
+            A missing stock row skips the MOVEMENT, never the cost.
+
+            This used to `continue`, which jumped the cost accumulator below as
+            well — so an ingredient with no RawMaterialInventory row at this
+            branch contributed ₱0 to the recipe, forever, while the line was
+            still stamped RECIPE_WAC. A sauce created but not yet received made
+            every dish containing it quietly cheaper, and the margin looked
+            better for it.
+
+            There genuinely is nothing to deduct — no row means nothing on the
+            shelf — but the ingredient still went into the drink, and its cost
+            is known from RawMaterial.costPrice whether or not a branch row
+            exists. The FIFO path below finds no lots and falls through to that
+            same cost via its shortfall branch; the WAC path never needed a row
+            at all.
+          */
+          const hasStockRow = stockNow.has(bom.rawMaterialId);
+          if (hasStockRow) {
+            const before = stockNow.get(bom.rawMaterialId)!;
+            const after  = Math.max(before - consumeQty, 0);
+            stockNow.set(bom.rawMaterialId, after);
+            if (!deductionPaused) {
+              rmTouched.add(bom.rawMaterialId);
+              deductedProductIds.add(item.productId);
+            }
           }
 
           // Sprint 25 — FEFO when the ingredient is `lotsTracked` on Solo

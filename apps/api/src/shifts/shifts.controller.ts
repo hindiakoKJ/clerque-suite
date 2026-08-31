@@ -135,7 +135,10 @@ export class ShiftsController {
    * (owner-as-cashier on Tier 1/2). The service still enforces that the
    * caller is the user who opened the shift.
    */
-  @Roles('CASHIER', 'SALES_LEAD', 'BUSINESS_OWNER')
+  // BRANCH_MANAGER added: a barista who forgets to close and goes home used to
+  // leave a till nobody could close, and the auto-close on the next open writes
+  // no drawer count and no variance.
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Post(':id/close')
   @HttpCode(HttpStatus.OK)
   close(
@@ -149,6 +152,7 @@ export class ShiftsController {
       user.sub,
       body.closingCashDeclared,
       body.notes,
+      user.role,
     );
   }
 }

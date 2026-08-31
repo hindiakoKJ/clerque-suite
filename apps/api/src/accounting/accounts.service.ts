@@ -900,8 +900,21 @@ export class AccountsService {
       const endBal   = balanceAsOf(a, endCutoff);
       const delta = endBal - startBal;
 
-      // Cash accounts (1000-1099) — track separately, exclude from sections
-      if (code >= 1000 && code < 1100) {
+      /*
+        Cash is 1010-1025, not the whole 1000 band.
+
+        The band used to run to 1099, which swept in 1030 Accounts Receivable,
+        1031 Digital Wallet Receivable, 1040 Input VAT and 1050/1051 Inventory
+        — every current asset the shop owns — and called them cash. So the
+        statement reported total assets as "cash", the operating section came
+        out nearly empty because the working-capital changes had been eaten,
+        and it still reconciled, which is what made it convincing.
+
+        1025 is the last cash-equivalent in the seeded chart; 1030 is the first
+        receivable. A tenant adding their own cash account has to put it inside
+        that range, which is what a chart of accounts is for.
+      */
+      if (code >= 1000 && code <= 1029) {
         openingCash += startBal;
         endingCash  += endBal;
         continue;
@@ -919,7 +932,17 @@ export class AccountsService {
 
       const section = { label: '', code: a.code, name: a.name, delta, effectOnCash };
 
-      if (code >= 1100 && code < 1800) {
+      /*
+        1030-1099 belongs here, and used to be swallowed by the cash band.
+
+        Receivables, input VAT and inventory are the classic working-capital
+        movements — stock bought and not yet sold, money invoiced and not yet
+        collected. With the cash band narrowed to real cash, they have to land
+        in operating or they land nowhere, and a statement that silently drops
+        a section is worse than one that mislabels it: `reconciles` would go
+        false with no indication of which accounts went missing.
+      */
+      if (code >= 1030 && code < 1800) {
         operating.push({ ...section, label: 'Working capital change' });
       } else if (code >= 1800 && code < 2000) {
         investing.push({ ...section, label: 'PPE / Intangibles' });

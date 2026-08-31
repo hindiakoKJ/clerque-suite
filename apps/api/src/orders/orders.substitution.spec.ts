@@ -63,6 +63,9 @@ describe('OrdersService — ingredient substitution', () => {
         ]),
       },
       rawMaterialInventory: {
+        // Deductions are relative now, so a concurrent sale cannot be erased;
+        // updateMany then floors any row the overselling pushed below zero.
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         // One batched read for every ingredient the order could touch.
         findMany: jest.fn(({ where }: any) =>
           Promise.resolve(
@@ -71,7 +74,10 @@ describe('OrdersService — ingredient substitution', () => {
         ),
         update: jest.fn(({ where, data }: any) => {
           const id = where.branchId_rawMaterialId.rawMaterialId;
-          consumed[id] = (stock[id] ?? 0) - Number(data.quantity);
+          // The write is RELATIVE now — { quantity: { decrement } } — so a
+          // concurrent sale on the other till cannot be erased by an
+          // absolute figure computed from a stale snapshot.
+          consumed[id] = Number(data.quantity?.decrement ?? 0);
           return Promise.resolve({});
         }),
       },

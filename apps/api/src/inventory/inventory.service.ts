@@ -1622,9 +1622,21 @@ export class InventoryService {
           tenantId,
           branchId: dto.branchId,
           rawMaterialId,
+          // No row yet, so there is nothing to add to.
           quantity: new Prisma.Decimal(qtyAfter),
         },
-        update: { quantity: new Prisma.Decimal(qtyAfter) },
+        /*
+          Relative, not absolute.
+
+          `qtyAfter` is computed from a read taken moments earlier, so two
+          deliveries received at the same time — the barista on the tablet and
+          the owner on his phone — each wrote their own total and the later
+          write erased the earlier delivery entirely. Stock then read LOW, the
+          buy list re-ordered what was already on the shelf, and the only sign
+          was a count that came up over. Transfers have always used increment;
+          this is the same fix.
+        */
+        update: { quantity: { increment: new Prisma.Decimal(dto.quantity) } },
       });
 
       // WAC cost update: if new cost price provided, update material cost

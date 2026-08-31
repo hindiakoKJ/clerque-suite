@@ -799,11 +799,22 @@ export class OrdersService {
 
         const qtyBefore = Number(invItem.quantity);
         const qtyAfter  = Math.max(qtyBefore - soldQty, 0);
+        // Relative, for the same reason ingredient deductions are: two tills
+        // selling the same product at once each wrote a total computed from
+        // their own read, and the later write erased the earlier sale.
+        // Floored afterwards, since a decrement cannot clamp at zero itself.
+        const taken = qtyBefore - qtyAfter;
 
-        await tx.inventoryItem.update({
-          where: { id: invItem.id },
-          data:  { quantity: new Prisma.Decimal(qtyAfter) },
-        });
+        if (taken > 0) {
+          await tx.inventoryItem.update({
+            where: { id: invItem.id },
+            data:  { quantity: { decrement: new Prisma.Decimal(taken) } },
+          });
+          await tx.inventoryItem.updateMany({
+            where: { id: invItem.id, quantity: { lt: 0 } },
+            data:  { quantity: new Prisma.Decimal(0) },
+          });
+        }
 
         await tx.inventoryLog.create({
           data: {
@@ -966,11 +977,49 @@ export class OrdersService {
         bomsByProduct.set(b.productId, list);
       }
 
+      /*
+        A Large is not a Regular with a bigger price.
+
+        VariantBomItem has existed and had a write endpoint, and nothing on the
+        consumption side ever read it — this walk queried `bomItem` alone. So a
+        shop that models sizes as variants sold the Large at Large money while
+        deducting Regular ingredients and posting Regular COGS. The margin on
+        the Large looked wonderful and no error was ever raised, which is the
+        combination that keeps a mistake alive.
+
+        Variant lines REPLACE the product's, they do not add to it: a variant
+        recipe is the whole recipe for that size, not a supplement. A variant
+        with no recipe of its own falls back to the product's, which is what
+        every existing product does today and why this changes nothing for
+        them.
+      */
+      const allVariantIds = [...new Set(
+        payload.items.map((i) => i.variantId).filter((v): v is string => !!v),
+      )];
+      const allVariantBomLines = allVariantIds.length > 0
+        ? await tx.variantBomItem.findMany({
+            where:  { variantId: { in: allVariantIds }, variant: { product: { tenantId } } },
+            select: {
+              variantId:     true,
+              rawMaterialId: true,
+              quantity:      true,
+              rawMaterial:   { select: { costPrice: true, lotsTracked: true } },
+            },
+          })
+        : [];
+      const bomsByVariant = new Map<string, typeof allVariantBomLines>();
+      for (const b of allVariantBomLines) {
+        const list = bomsByVariant.get(b.variantId) ?? [];
+        list.push(b);
+        bomsByVariant.set(b.variantId, list);
+      }
+
       // Every ingredient this order could touch, with its current stock. The
       // in-memory map mirrors what the sequential read-then-write saw: each
       // line reads the level AFTER earlier lines' deductions, floored at zero.
       const allRmIds = [...new Set([
         ...allBomLines.map((b) => b.rawMaterialId),
+        ...allVariantBomLines.map((b) => b.rawMaterialId),
         ...hoistedOptions.flatMap((o) => o.ingredients.map((ing) => ing.rawMaterialId)),
       ])];
       const stockRows = allRmIds.length > 0
@@ -980,6 +1029,19 @@ export class OrdersService {
           })
         : [];
       const stockNow = new Map(stockRows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+      /*
+        What the shelf held when this order started, kept so the flush below
+        can write a RELATIVE change rather than an absolute figure.
+
+        `stockNow` is mutated as the recipe walk decides costs and FIFO layers,
+        so by the end it is this order's opinion of the shelf — which is only
+        correct if nothing else touched it meanwhile. Two tills ringing at once
+        both computed from their own snapshot and both wrote an absolute value,
+        so the later write silently erased the earlier one's deduction and the
+        stock read HIGHER than reality. The POS then kept offering drinks that
+        were not there, and the gap only surfaced at the next count.
+      */
+      const stockAtStart = new Map(stockNow);
       const rmTouched = new Set<string>();
 
       for (const item of payload.items) {
@@ -1011,7 +1073,15 @@ export class OrdersService {
         // The productId guard above already rejects cross-tenant productIds,
         // but scoping the bomItem query by product.tenantId makes this
         // resilient to any future code path that bypasses the upstream guard.
-        const bomItems = bomsByProduct.get(item.productId) ?? [];
+        // A variant's own recipe wins; without one it uses the product's.
+        const variantBom = item.variantId ? bomsByVariant.get(item.variantId) : undefined;
+        const bomItems: Array<{
+          rawMaterialId: string;
+          quantity: Prisma.Decimal;
+          rawMaterial: { costPrice: Prisma.Decimal | null; lotsTracked: boolean } | null;
+        }> = variantBom && variantBom.length > 0
+          ? variantBom
+          : (bomsByProduct.get(item.productId) ?? []);
 
         // Build the unified consumption list: scaled base BOM + modifier
         // add-ons. Both shapes match `{ rawMaterialId, quantity, rawMaterial }`
@@ -1167,9 +1237,33 @@ export class OrdersService {
       // round-trip count, not the arithmetic.
       if (!deductionPaused) {
         for (const rmId of rmTouched) {
+          const used = (stockAtStart.get(rmId) ?? 0) - (stockNow.get(rmId) ?? 0);
+          if (used === 0) continue;
+          // Relative, so a concurrent sale on the other till cannot be erased.
           await tx.rawMaterialInventory.update({
             where: { branchId_rawMaterialId: { branchId: payload.branchId, rawMaterialId: rmId } },
-            data:  { quantity: new Prisma.Decimal(stockNow.get(rmId)!) },
+            data:  { quantity: { decrement: new Prisma.Decimal(used) } },
+          });
+        }
+        /*
+          Then floor, in one statement.
+
+          A relative decrement cannot clamp at zero the way the in-memory walk
+          does, so two tills overselling the last of the milk can land the row
+          slightly below zero. That is the honest outcome — more was sold than
+          was there — but negative stock makes every later number nonsense:
+          maxProducible, count variance, valuation. Clamping after keeps the
+          concurrency-safe write AND the invariant, where the old absolute
+          write kept only the invariant by losing the other sale.
+        */
+        if (rmTouched.size > 0) {
+          await tx.rawMaterialInventory.updateMany({
+            where: {
+              branchId: payload.branchId,
+              rawMaterialId: { in: [...rmTouched] },
+              quantity: { lt: 0 },
+            },
+            data: { quantity: new Prisma.Decimal(0) },
           });
         }
       }
@@ -1237,17 +1331,13 @@ export class OrdersService {
           ? Number(tenantCostingProfile.overheadRatePerUnit)
           : 0;
 
-      await tx.accountingEvent.create({
-        data: {
-          tenantId,
-          orderId: order.id,
-          type: 'COGS',
-          status: 'PENDING',
-          payload: {
-            orderId: order.id,
-            branchId: payload.branchId,
-            overheadRate,                      // 0 for non-manufacturing tenants
-            lines: payload.items
+      /*
+        Hoisted out of the event payload so the SAME resolved cost can be
+        written back onto the order line below. It used to be built inline and
+        thrown away, which is how the books and every order-line screen ended
+        up disagreeing about what a sale cost.
+      */
+      const cogsLines = payload.items
               .map((i) => {
                 // Cost resolution precedence (most → least authoritative):
                 //   1. RECIPE     — sum of actual ingredient costs (FIFO lot
@@ -1290,10 +1380,44 @@ export class OrdersService {
                   costMethod,
                 };
               })
-              .filter((line): line is NonNullable<typeof line> => line !== null),
+              .filter((line): line is NonNullable<typeof line> => line !== null);
+
+      await tx.accountingEvent.create({
+        data: {
+          tenantId,
+          orderId: order.id,
+          type: 'COGS',
+          status: 'PENDING',
+          payload: {
+            orderId: order.id,
+            branchId: payload.branchId,
+            overheadRate,                      // 0 for non-manufacturing tenants
+            lines: cogsLines,
           } as unknown as Prisma.JsonObject,
         },
       });
+
+      /*
+        Write the RESOLVED unit cost back onto the order line.
+
+        OrderItem.costPrice was whatever the till sent — its snapshot of
+        Product.costPrice, a number somebody typed once. The ledger meanwhile
+        used the waterfall above (recipe, then lot, then WAC, then that
+        snapshot), so the same sale had two different costs: one in the books
+        and one on every screen reading the order line, including the POS
+        dashboard's gross profit. An owner comparing his dashboard to his
+        income statement found two margins and no way to tell which was real.
+
+        The waterfall is the honest one — it is what the shelf actually gave
+        up — so it becomes the number of record. Written after the COGS event
+        is built so there is exactly one place the cost is decided.
+      */
+      for (const line of cogsLines) {
+        await tx.orderItem.updateMany({
+          where: { orderId: order.id, productId: line.productId },
+          data:  { costPrice: new Prisma.Decimal(line.unitCost) },
+        });
+      }
 
       // Sprint 4A — Lock the valuation method choice once the first
       // transaction posts. Subsequent attempts to change WAC ↔ FIFO will

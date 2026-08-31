@@ -523,8 +523,19 @@ export class AccountsService {
   // ── Trial Balance ────────────────────────────────────────────────────────────
 
   async getTrialBalance(tenantId: string, asOf?: string) {
+    /*
+      As-of means the END of that day, the way every other statement reads it.
+
+      A bare 'YYYY-MM-DD' parses to midnight UTC, so `lte` excluded everything
+      posted DURING the day being asked about. The balance sheet and the cash
+      flow statement both push their cutoff to 23:59:59.999; the trial balance
+      did not, so the same date produced a trial balance one day behind the
+      statements it is supposed to prove — and the difference showed up as an
+      apparent imbalance in exactly the situation you check a trial balance
+      for, a reversal posted on the as-of day.
+    */
     // Use postingDate for period filtering; fall back to document date for legacy entries.
-    const asOfDate  = asOf ? new Date(asOf) : undefined;
+    const asOfDate  = asOf ? endOfDay(new Date(asOf)) : undefined;
     const jeFilter: Record<string, unknown> = { tenantId, status: 'POSTED' };
     if (asOfDate) {
       jeFilter['OR'] = [

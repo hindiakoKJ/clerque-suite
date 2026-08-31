@@ -433,7 +433,19 @@ export class ReportsService {
       include: { payments: true, items: true },
     });
 
-    const completed   = orders.filter((o) => o.status === 'COMPLETED');
+    /*
+      PAID counts, not just COMPLETED — the same rule the Z-Read uses.
+
+      COMPLETED means the last item was bumped; PAID means the customer has
+      paid and revenue is recognised. Filtering to COMPLETED alone dropped
+      every sale still being made, which for a drinks-only shop was a
+      rounding error and for a kitchen is most of the lunch rush: a rice bowl
+      is PAID the moment it is rung and COMPLETED twenty minutes later.
+
+      The shift report and the day report disagreeing about the same sales is
+      the kind of thing that makes an owner stop trusting both.
+    */
+    const completed   = orders.filter((o) => o.status === 'COMPLETED' || o.status === 'PAID');
     const voided      = orders.filter((o) => o.status === 'VOIDED');
     const grossSales  = completed.reduce((s, o) => s + Number(o.subtotal),       0);
     const netSales    = completed.reduce((s, o) => s + Number(o.totalAmount),    0);

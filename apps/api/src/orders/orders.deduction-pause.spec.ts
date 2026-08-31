@@ -64,6 +64,9 @@ describe('OrdersService — ingredient deduction pause', () => {
       },
       modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
+        // Deductions are relative now, so a concurrent sale cannot be erased;
+        // updateMany then floors any row the overselling pushed below zero.
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         findMany: jest.fn(({ where }: any) =>
           Promise.resolve(where.rawMaterialId.in.map((id: string) => ({ rawMaterialId: id, quantity: 1000 }))),
         ),

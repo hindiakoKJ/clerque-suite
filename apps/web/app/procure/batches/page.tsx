@@ -28,6 +28,8 @@ interface Component {
   unit:     string;
   quantity: number;
   onHand:   number;
+  /** True when this component is itself something the shop preps. */
+  isPrep:   boolean;
 }
 
 interface SubRecipe {
@@ -37,8 +39,18 @@ interface SubRecipe {
   costPrice:  number | null;
   batchYield: number | null;
   onHand:     number;
+  /** Batches the shelf supports right now, with no prep in between. */
   batches:    number;
+  /** What stops it right now — often another prep. */
   limitedBy:  string | null;
+  /** Batches once the levels underneath are made first. */
+  batchesWithPrep: number;
+  /** The raw material that finally runs out, however deep it sits. */
+  rootLimitedBy:   string | null;
+  /** The path from this item down to that raw material. */
+  limiterChain:    string[];
+  /** Whether something below this has to be made before it can be. */
+  needsPrep:       boolean;
   components: Component[];
 }
 
@@ -139,11 +151,28 @@ export default function BatchesPage() {
                   {r.costPrice != null && <> · {peso(r.costPrice)}/{r.unit}</>}
                 </p>
               </div>
+              {/*
+                Two numbers, because they answer two different questions.
+
+                "Ready now" is what the cook can start this minute. "After prep"
+                is what the chain could yield once the levels underneath are
+                made — which is the whole reason the shop preps ahead. Showing
+                only the first tells someone they cannot make the finishing
+                sauce while a full tub of base sits behind them.
+
+                The second is only shown when it differs, so an ordinary
+                one-level prep stays a single clean number.
+              */}
               <div className="text-right shrink-0">
                 <p className="font-display text-lg font-bold tabular-nums" style={{ color: 'var(--accent)' }}>
                   {r.batches}
                 </p>
-                <p className="text-[11px] text-muted-foreground">batches left</p>
+                <p className="text-[11px] text-muted-foreground">ready now</p>
+                {r.needsPrep && (
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    <span className="font-semibold text-foreground tabular-nums">{r.batchesWithPrep}</span> after prep
+                  </p>
+                )}
               </div>
             </div>
 
@@ -153,7 +182,17 @@ export default function BatchesPage() {
               </p>
               {r.components.map((c) => (
                 <div key={c.rawMaterialId} className="flex justify-between text-xs">
-                  <span className="text-muted-foreground truncate pr-2">{c.name}</span>
+                  <span className="text-muted-foreground truncate pr-2">
+                    {c.name}
+                    {/* A component you also MAKE is a level of the chain, not a
+                        thing you buy. Saying so is what turns a flat list into
+                        something a cook can reason about. */}
+                    {c.isPrep && (
+                      <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--accent)]">
+                        prep
+                      </span>
+                    )}
+                  </span>
                   <span className="tabular-nums shrink-0">
                     {c.quantity} {c.unit}
                     <span className="text-muted-foreground"> · {c.onHand.toLocaleString('en-PH')} left</span>
@@ -167,10 +206,40 @@ export default function BatchesPage() {
               batches" tells the cook to stop, "0 batches, short on brown
               sugar" tells them what to buy.
             */}
-            {r.batches === 0 && r.limitedBy && (
+            {/*
+              What to actually DO about it.
+
+              "Short on mother sauce" is a puzzle; "make the base first" or
+              "buy sugar" is an instruction. The chain is followed down to the
+              raw material that genuinely runs out, so the message names
+              something that can be bought rather than something that has to be
+              made from something else that also has to be made.
+            */}
+            {r.batches === 0 && r.needsPrep && (
               <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                Not enough {r.limitedBy} to make another batch.
+                <span>
+                  Make {r.limitedBy} first — then you can do {r.batchesWithPrep}.
+                  {r.limiterChain.length > 1 && (
+                    <span className="block text-muted-foreground mt-0.5">
+                      {r.limiterChain.join(' → ')}
+                    </span>
+                  )}
+                </span>
+              </p>
+            )}
+            {r.batches === 0 && !r.needsPrep && r.rootLimitedBy && (
+              <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span>
+                  Out of {r.rootLimitedBy}. Nothing more can be made until it is
+                  bought.
+                  {r.limiterChain.length > 1 && (
+                    <span className="block text-muted-foreground mt-0.5">
+                      {r.limiterChain.join(' → ')}
+                    </span>
+                  )}
+                </span>
               </p>
             )}
 

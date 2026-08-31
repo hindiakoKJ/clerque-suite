@@ -88,23 +88,112 @@ export class SubRecipesService {
       orderBy: { name: 'asc' },
     });
 
-    // How many more each could make, resolved in ONE stock read rather than a
-    // round trip per recipe — a kitchen with a dozen preps would otherwise pay
-    // a dozen queries to draw one list.
-    const componentIds = [...new Set(
-      rows.flatMap((r) => r.subRecipeItems.map((l) => l.rawMaterial.id)),
-    )];
-    const stock = await this.stockOf(branchId, componentIds);
+    // One stock read for everything the whole tree touches, rather than a round
+    // trip per recipe: a kitchen with a dozen preps would otherwise pay a dozen
+    // queries to draw one list.
+    const allIds = [...new Set([
+      ...rows.map((r) => r.id),
+      ...rows.flatMap((r) => r.subRecipeItems.map((l) => l.rawMaterial.id)),
+    ])];
+    const stock = await this.stockOf(branchId, allIds);
+    const prepById = new Map(rows.map((r) => [r.id, r]));
+
+    /*
+      How much of something could this shop actually get its hands on.
+
+      Not just what is on the shelf: a prepared item can be MADE, and what it
+      is made from can often be made too. Three levels deep is the shape the
+      owner actually runs — a base, a mother sauce built on the base, a
+      finishing sauce built on that — and it exists precisely so service is
+      fast, because the slow work is already done before the customer orders.
+
+      Looking only one level down (what this used to do) tells a cook "you
+      cannot make the finishing sauce, you are out of mother sauce" and stops
+      there. That is the least useful true statement available: the cook still
+      has to walk the chain by hand to discover there is plenty of base and the
+      thing actually missing is sugar.
+
+      NOTE: this is an upper bound per item, not a production plan. Two preps
+      sharing a component are each told what they could make if they had it
+      all; making one really does reduce what the other can make. For "what
+      should I prep next" that is the right number, and the batch screen still
+      refuses anything the shelf cannot actually support.
+    */
+    const memo = new Map<string, number>();
+    const available = (id: string, visiting: Set<string>): number => {
+      const cached = memo.get(id);
+      if (cached !== undefined) return cached;
+      const onHand = stock.get(id) ?? 0;
+      const prep = prepById.get(id);
+      // A cycle cannot be created through setRecipe, which walks the whole tree
+      // and refuses one. Guarded anyway so older data cannot hang a request.
+      if (!prep || prep.batchYield == null || Number(prep.batchYield) <= 0 || visiting.has(id)) {
+        memo.set(id, onHand);
+        return onHand;
+      }
+      visiting.add(id);
+      let couldMake = Number.POSITIVE_INFINITY;
+      for (const line of prep.subRecipeItems) {
+        const per = Number(line.quantity);
+        if (per <= 0) continue;
+        couldMake = Math.min(couldMake, Math.floor(available(line.rawMaterial.id, visiting) / per));
+      }
+      visiting.delete(id);
+      const total = onHand + (Number.isFinite(couldMake) ? couldMake * Number(prep.batchYield) : 0);
+      memo.set(id, total);
+      return total;
+    };
+
+    /*
+      Which RAW material finally runs out, and the path down to it.
+
+      Follows the binding component at each level until it reaches something
+      that is not itself a prep. "Short on sugar" is actionable; "short on
+      mother sauce" is a puzzle.
+    */
+    const rootLimiter = (id: string, seen: Set<string>): { name: string; chain: string[] } | null => {
+      const prep = prepById.get(id);
+      if (!prep || seen.has(id)) return null;
+      seen.add(id);
+      let worst: { id: string; name: string; can: number } | null = null;
+      for (const line of prep.subRecipeItems) {
+        const per = Number(line.quantity);
+        if (per <= 0) continue;
+        const can = Math.floor(available(line.rawMaterial.id, new Set()) / per);
+        if (!worst || can < worst.can) {
+          worst = { id: line.rawMaterial.id, name: line.rawMaterial.name, can };
+        }
+      }
+      if (!worst) return null;
+      const deeper = rootLimiter(worst.id, seen);
+      return deeper
+        ? { name: deeper.name, chain: [worst.name, ...deeper.chain] }
+        : { name: worst.name, chain: [worst.name] };
+    };
 
     return rows.map((r) => {
-      let batches = Number.POSITIVE_INFINITY;
-      let limitedBy: string | null = null;
+      // What the shelf supports RIGHT NOW, with no prep in between. This is
+      // what the cook can start on this minute.
+      let readyNow = Number.POSITIVE_INFINITY;
+      let blockedBy: string | null = null;
       for (const line of r.subRecipeItems) {
         const per = Number(line.quantity);
         if (per <= 0) continue;
         const can = Math.floor((stock.get(line.rawMaterial.id) ?? 0) / per);
-        if (can < batches) { batches = can; limitedBy = line.rawMaterial.name; }
+        if (can < readyNow) { readyNow = can; blockedBy = line.rawMaterial.name; }
       }
+      const batchesNow = Number.isFinite(readyNow) ? readyNow : 0;
+
+      // And what it supports if the levels underneath are made first.
+      let withPrep = Number.POSITIVE_INFINITY;
+      for (const line of r.subRecipeItems) {
+        const per = Number(line.quantity);
+        if (per <= 0) continue;
+        withPrep = Math.min(withPrep, Math.floor(available(line.rawMaterial.id, new Set()) / per));
+      }
+      const batchesWithPrep = Number.isFinite(withPrep) ? withPrep : 0;
+      const root = rootLimiter(r.id, new Set());
+
       return {
         id:            r.id,
         name:          r.name,
@@ -112,14 +201,26 @@ export class SubRecipesService {
         costPrice:     r.costPrice != null ? Number(r.costPrice) : null,
         batchYield:    r.batchYield != null ? Number(r.batchYield) : null,
         onHand:        Number(r.inventory[0]?.quantity ?? 0),
-        batches:       batches === Number.POSITIVE_INFINITY ? 0 : batches,
-        limitedBy,
+        /** Batches the shelf supports with no prep in between. */
+        batches:       batchesNow,
+        /** The component that stops it right now — often another prep. */
+        limitedBy:     batchesNow === 0 ? blockedBy : null,
+        /** Batches once the levels underneath are made first. */
+        batchesWithPrep,
+        /** The raw material that finally runs out, however deep it sits. */
+        rootLimitedBy: root?.name ?? null,
+        /** The path from this item down to that raw material. */
+        limiterChain:  root?.chain ?? [],
+        /** Whether anything below this has to be made before it can be. */
+        needsPrep:     batchesWithPrep > batchesNow,
         components: r.subRecipeItems.map((l) => ({
           rawMaterialId: l.rawMaterial.id,
           name:          l.rawMaterial.name,
           unit:          l.rawMaterial.unit,
           quantity:      Number(l.quantity),
           onHand:        stock.get(l.rawMaterial.id) ?? 0,
+          /** True when this component is itself something the shop preps. */
+          isPrep:        prepById.has(l.rawMaterial.id),
         })),
       };
     });

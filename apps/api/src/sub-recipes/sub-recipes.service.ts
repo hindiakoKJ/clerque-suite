@@ -194,6 +194,33 @@ export class SubRecipesService {
       const batchesWithPrep = Number.isFinite(withPrep) ? withPrep : 0;
       const root = rootLimiter(r.id, new Set());
 
+      /*
+        Is this MAKING something, or MOVING something between states?
+
+        Cafe Carolina's "levels" are not a cooking hierarchy. Level 2 is 2 kg
+        of spaghetti sauce in the freezer and Level 3 is the same 2 kg thawed
+        and on the line: same ingredients, same weight, nothing added. When the
+        line runs dry the frozen batch is thawed and BECOMES the ready one, and
+        the kitchen cooks a fresh batch for the freezer.
+
+        The mechanism carries that already -- a one-line recipe of 2000 g of
+        the frozen item yielding 2000 g of the ready one moves the quantity and
+        the cost across untouched. What does not carry is the vocabulary:
+        "batches", "made from", "I made some" are cooking words, and calling a
+        thaw a batch reads as nonsense to the person doing it.
+
+        So the shape is inferred rather than configured, because every shop
+        does this differently and none of them should have to fill in a form
+        about it. One component, that component is itself a prep, and the yield
+        equals what goes in => nothing is being added, so it is a MOVE. Anything
+        else is a MAKE.
+      */
+      const only = r.subRecipeItems.length === 1 ? r.subRecipeItems[0] : null;
+      const isMove = !!only
+        && prepById.has(only.rawMaterial.id)
+        && r.batchYield != null
+        && Math.abs(Number(only.quantity) - Number(r.batchYield)) < 1e-6;
+
       return {
         id:            r.id,
         name:          r.name,
@@ -201,6 +228,15 @@ export class SubRecipesService {
         costPrice:     r.costPrice != null ? Number(r.costPrice) : null,
         batchYield:    r.batchYield != null ? Number(r.batchYield) : null,
         onHand:        Number(r.inventory[0]?.quantity ?? 0),
+        /**
+         * 'MOVE' when this is the same thing in a different state — thawed,
+         * decanted, portioned — and 'MAKE' when it is genuinely produced from
+         * other ingredients. Drives the wording only; the mechanics are the
+         * same either way.
+         */
+        kind:          isMove ? ('MOVE' as const) : ('MAKE' as const),
+        /** For a MOVE, where it comes from: the frozen tub, the bulk drum. */
+        movesFrom:     isMove ? only!.rawMaterial.name : null,
         /** Batches the shelf supports with no prep in between. */
         batches:       batchesNow,
         /** The component that stops it right now — often another prep. */

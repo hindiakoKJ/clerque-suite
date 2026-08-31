@@ -138,4 +138,118 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
     expect(of(rows, 'L1').needsPrep).toBe(false);
     expect(of(rows, 'L1').rootLimitedBy).toBe('Sugar');
   });
+
+  /*
+    Telling a thaw apart from a cook, without asking anyone.
+
+    Carolina's "levels" are not a hierarchy: level 2 is 2 kg of sauce in the
+    freezer and level 3 is the same 2 kg thawed on the line. Same ingredients,
+    same weight, nothing added. The mechanism carries it already — a one-line
+    recipe of 2000 g in, 2000 g out, moves quantity and cost across untouched.
+
+    What does not carry is the vocabulary. "One batch makes 2000 g" and "I made
+    some" are cooking words, and reading them next to a tub you are defrosting
+    is nonsense. So the shape is INFERRED: one component, itself a prep, and
+    the yield equals what goes in means nothing was added.
+
+    Inferred rather than configured because every shop does this differently
+    and none of them should have to fill in a form about it.
+  */
+  describe('a thaw is not a cook', () => {
+    const FROZEN = {
+      id: 'F', name: 'Spag Sauce FROZEN', unit: 'g', costPrice: 0.227, batchYield: 2000,
+      inventory: [] as Array<{ quantity: number }>,
+      subRecipeItems: [
+        { quantity: 1200, rawMaterial: { id: 'tom', name: 'Tomato', unit: 'g', costPrice: 0.12 } },
+        { quantity: 700,  rawMaterial: { id: 'mea', name: 'Meat',   unit: 'g', costPrice: 0.42 } },
+      ],
+    };
+    const READY = {
+      id: 'R', name: 'Spag Sauce READY', unit: 'g', costPrice: 0.227, batchYield: 2000,
+      inventory: [] as Array<{ quantity: number }>,
+      subRecipeItems: [
+        { quantity: 2000, rawMaterial: { id: 'F', name: 'Spag Sauce FROZEN', unit: 'g', costPrice: 0.227 } },
+      ],
+    };
+
+    function rot(stock: Record<string, number>) {
+      const prisma: any = {
+        rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, READY]) },
+        rawMaterialInventory: {
+          findMany: jest.fn().mockResolvedValue(
+            Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),
+          ),
+        },
+      };
+      return new SubRecipesService(prisma) as any;
+    }
+
+    it('calls the thaw a MOVE', async () => {
+      const rows = await rot({ tom: 20000, mea: 12000, F: 2000 }).list(TENANT, BRANCH);
+      expect(rows.find((r: any) => r.id === 'R').kind).toBe('MOVE');
+    });
+
+    it('names where it moves from', async () => {
+      const rows = await rot({ tom: 20000, mea: 12000, F: 2000 }).list(TENANT, BRANCH);
+      expect(rows.find((r: any) => r.id === 'R').movesFrom).toBe('Spag Sauce FROZEN');
+    });
+
+    it('calls the cook a MAKE', async () => {
+      const rows = await rot({ tom: 20000, mea: 12000 }).list(TENANT, BRANCH);
+      expect(rows.find((r: any) => r.id === 'F').kind).toBe('MAKE');
+      expect(rows.find((r: any) => r.id === 'F').movesFrom).toBeNull();
+    });
+
+    it('is a MAKE when anything at all is added', async () => {
+      // Same single source, but a pinch of herbs goes in: that is a recipe.
+      const withHerbs = {
+        ...READY,
+        subRecipeItems: [
+          ...READY.subRecipeItems,
+          { quantity: 20, rawMaterial: { id: 'her', name: 'Herbs', unit: 'g', costPrice: 1.1 } },
+        ],
+      };
+      const prisma: any = {
+        rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, withHerbs]) },
+        rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
+      expect(rows.find((r: any) => r.id === 'R').kind).toBe('MAKE');
+    });
+
+    it('is a MAKE when the yield differs from what went in', async () => {
+      // 2000 g in, 1800 g out is a reduction — real cooking, real loss.
+      const reduced = { ...READY, batchYield: 1800 };
+      const prisma: any = {
+        rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, reduced]) },
+        rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
+      expect(rows.find((r: any) => r.id === 'R').kind).toBe('MAKE');
+    });
+
+    it('is a MAKE when the single source is bought, not prepped', async () => {
+      // Decanting a purchased drum is still just stock, not a second state.
+      const fromRaw = {
+        ...READY,
+        subRecipeItems: [
+          { quantity: 2000, rawMaterial: { id: 'tom', name: 'Tomato', unit: 'g', costPrice: 0.12 } },
+        ],
+      };
+      const prisma: any = {
+        rawMaterial: { findMany: jest.fn().mockResolvedValue([FROZEN, fromRaw]) },
+        rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
+      };
+      const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
+      expect(rows.find((r: any) => r.id === 'R').kind).toBe('MAKE');
+    });
+
+    it('still points at the freezer when the line is dry', async () => {
+      const rows = await rot({ tom: 20000, mea: 12000, F: 0 }).list(TENANT, BRANCH);
+      const ready = rows.find((r: any) => r.id === 'R');
+      expect(ready.batches).toBe(0);
+      expect(ready.limitedBy).toBe('Spag Sauce FROZEN');
+      expect(ready.batchesWithPrep).toBeGreaterThan(0);
+    });
+  });
 });

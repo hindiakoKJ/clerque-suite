@@ -51,6 +51,15 @@ interface SubRecipe {
   limiterChain:    string[];
   /** Whether something below this has to be made before it can be. */
   needsPrep:       boolean;
+  /**
+   * 'MOVE' when this is the same thing in another state — a frozen tub thawed
+   * onto the line — and 'MAKE' when it is cooked from other ingredients.
+   * Inferred from the recipe, not configured: one component, itself a prep,
+   * and the yield equals what goes in means nothing was added.
+   */
+  kind:            'MAKE' | 'MOVE';
+  /** For a MOVE, what it comes from. */
+  movesFrom:       string | null;
   components: Component[];
 }
 
@@ -167,7 +176,9 @@ export default function BatchesPage() {
                 <p className="font-display text-lg font-bold tabular-nums" style={{ color: 'var(--accent)' }}>
                   {r.batches}
                 </p>
-                <p className="text-[11px] text-muted-foreground">ready now</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {r.kind === 'MOVE' ? 'can thaw' : 'ready now'}
+                </p>
                 {r.needsPrep && (
                   <p className="text-[11px] text-muted-foreground mt-1">
                     <span className="font-semibold text-foreground tabular-nums">{r.batchesWithPrep}</span> after prep
@@ -178,7 +189,9 @@ export default function BatchesPage() {
 
             <div className="rounded-lg bg-muted/40 p-2.5 space-y-1">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                One batch makes {r.batchYield ?? '—'} {r.unit}, from
+                {r.kind === 'MOVE'
+                  ? `${r.batchYield ?? '—'} ${r.unit} from the ${r.movesFrom ?? 'backup'} — nothing added`
+                  : `One batch makes ${r.batchYield ?? '—'} ${r.unit}, from`}
               </p>
               {r.components.map((c) => (
                 <div key={c.rawMaterialId} className="flex justify-between text-xs">
@@ -248,7 +261,7 @@ export default function BatchesPage() {
               disabled={r.batches === 0 || make.isPending}
               className="w-full rounded-lg bg-[var(--accent)] text-white text-sm font-semibold py-2 disabled:opacity-40 hover:opacity-90 transition-opacity"
             >
-              I made some
+              {r.kind === 'MOVE' ? 'Move it to the line' : 'I made some'}
             </button>
           </div>
         ))}
@@ -284,7 +297,9 @@ function MakeBatchModal({
         <div>
           <h2 className="font-semibold text-lg">{recipe.name}</h2>
           <p className="text-sm text-muted-foreground">
-            How many batches did you make?
+            {recipe.kind === 'MOVE'
+              ? 'How many did you move across?'
+              : 'How many batches did you make?'}
           </p>
         </div>
 
@@ -301,7 +316,9 @@ function MakeBatchModal({
             <p className="font-semibold">
               Adds {(n * (recipe.batchYield ?? 0)).toLocaleString('en-PH')} {recipe.unit} of {recipe.name}
             </p>
-            <p className="text-muted-foreground">and takes off the shelf:</p>
+            <p className="text-muted-foreground">
+              {recipe.kind === 'MOVE' ? 'and takes the same amount from:' : 'and takes off the shelf:'}
+            </p>
             {recipe.components.map((c) => (
               <div key={c.rawMaterialId} className="flex justify-between">
                 <span className="text-muted-foreground truncate pr-2">{c.name}</span>

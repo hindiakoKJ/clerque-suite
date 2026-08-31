@@ -57,14 +57,28 @@ export default function BatchesPage() {
   });
 
   const make = useMutation({
+    /*
+      Every submission carries its own key.
+
+      Recording a batch is not something a person can SEE happening, and this
+      screen is used on a phone in a kitchen: a double-tap, or a retry after
+      the signal dropped, would consume the sugar twice and invent syrup nobody
+      made. The server makes the same key only once and returns what the first
+      attempt produced.
+    */
     mutationFn: (v: { id: string; batches: number }) =>
-      api.post(`/inventory/sub-recipes/${v.id}/batches`, { branchId, batches: v.batches })
-        .then((r) => r.data),
-    onSuccess: () => {
+      api.post(`/inventory/sub-recipes/${v.id}/batches`, {
+        branchId,
+        batches: v.batches,
+        referenceNumber: (globalThis.crypto?.randomUUID?.() ?? `b-${v.id}-${Date.now()}`),
+      }).then((r) => r.data),
+    onSuccess: (d: { duplicate?: boolean }) => {
       qc.invalidateQueries({ queryKey: ['sub-recipes', branchId] });
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
       setTarget(null);
-      toast.success('Recorded — the ingredients it used have come off the shelf.');
+      toast.success(d?.duplicate
+        ? 'Already recorded — nothing was made twice.'
+        : 'Recorded — the ingredients it used have come off the shelf.');
     },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Could not record the batch.'),
   });

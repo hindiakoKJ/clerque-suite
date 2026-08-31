@@ -21,6 +21,8 @@ describe('SubRecipesService — making a batch', () => {
     syrupCost?: number;
     batchYield?: number | null;
     lines?: Array<{ id: string; name: string; unit: string; cost: number; qty: number }>;
+    /** Lot layers behind a component, which the batch now drains oldest-first. */
+    componentLots?: Array<{ id: string; qtyRemaining: number; receivedAt: Date }>;
   } = {}) {
     const lines = opts.lines ?? [
       { id: 'rm-sugar', name: 'White Sugar', unit: 'g',  cost: 0.09,  qty: 1000 },
@@ -31,23 +33,49 @@ describe('SubRecipesService — making a batch', () => {
     const lots: any[] = [];
     let syrupCost = opts.syrupCost ?? 0.0806;
 
+    /*
+      Stock writes are RELATIVE now -- { decrement } on the inputs and
+      { increment } on the output -- so a sale ringing at the same moment is
+      not erased by a total computed from a snapshot taken before it.
+
+      The mock applies the change to a running balance and records the
+      RESULT, so these cases keep asserting the quantity that ends up on the
+      shelf rather than the shape of the write.
+    */
+    const balances: Record<string, number> = { ...stock, [SYRUP]: opts.syrupStock ?? 711 };
+    const applied = (id: string, data: any, fallbackCreate?: any) => {
+      const q = data?.quantity;
+      if (q && typeof q === 'object' && 'decrement' in q) balances[id] = (balances[id] ?? 0) - Number(q.decrement);
+      else if (q && typeof q === 'object' && 'increment' in q) balances[id] = (balances[id] ?? 0) + Number(q.increment);
+      else if (q !== undefined) balances[id] = Number(q);
+      else if (fallbackCreate?.quantity !== undefined) balances[id] = Number(fallbackCreate.quantity);
+      writes.push({ id, qty: balances[id] });
+    };
+
     const tx: any = {
       rawMaterialInventory: {
         update: jest.fn(({ where, data }: any) => {
-          writes.push({ id: where.branchId_rawMaterialId.rawMaterialId, qty: Number(data.quantity) });
+          applied(where.branchId_rawMaterialId.rawMaterialId, data);
           return Promise.resolve({});
         }),
         upsert: jest.fn(({ where, create, update }: any) => {
-          writes.push({
-            id:  where.branchId_rawMaterialId.rawMaterialId,
-            qty: Number(update?.quantity ?? create.quantity),
-          });
+          applied(where.branchId_rawMaterialId.rawMaterialId, update, create);
           return Promise.resolve({});
         }),
+        // Floors anything the decrements pushed below zero. Nothing to do
+        // here: makeBatch refuses outright when the inputs are short.
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         findUnique: jest.fn().mockResolvedValue({ quantity: opts.syrupStock ?? 711 }),
       },
       rawMaterial:    { update: jest.fn(({ data }: any) => { syrupCost = Number(data.costPrice); return Promise.resolve({}); }) },
-      rawMaterialLot: { create: jest.fn(({ data }: any) => { lots.push(data); return Promise.resolve({}); }) },
+      rawMaterialLot: {
+        create: jest.fn(({ data }: any) => { lots.push(data); return Promise.resolve({}); }),
+        // The components' lot layers are drained too now: the batch used to
+        // create a lot for its output and never touch the inputs', so
+        // qtyRemaining kept counting stock already stirred into syrup.
+        findMany: jest.fn().mockResolvedValue(opts.componentLots ?? []),
+        update:   jest.fn().mockResolvedValue({}),
+      },
     };
 
     const prisma: any = {
@@ -155,6 +183,110 @@ describe('SubRecipesService — making a batch', () => {
       { name: 'White Sugar', quantity: 2000, unit: 'g'  },
       { name: 'Water',       quantity: 1000, unit: 'ml' },
     ]);
+  });
+
+  /*
+    Three things a batch screen makes urgent.
+
+    Recording a batch is not something a person can SEE happening, it is done
+    on a phone in a kitchen, and it moves stock AND revalues an ingredient. So
+    it needs the same protections every other stock movement has: it must not
+    happen twice on a double-tap, it must not restate a month that is closed,
+    and it must drain the layers it consumed.
+  */
+  describe('protections a floor action needs', () => {
+    it('makes the same batch only once for a given reference', async () => {
+      const { svc, prisma, writes } = build();
+      prisma.rawMaterialLot = {
+        findFirst: jest.fn().mockResolvedValue({ id: 'lot-1', qtyReceived: 1130 }),
+      };
+      const res = await svc.makeBatch(
+        TENANT, SYRUP, { branchId: BRANCH, batches: 1, referenceNumber: 'BATCH-abc' }, 'u1',
+      );
+      expect(res.duplicate).toBe(true);
+      expect(writes).toHaveLength(0);
+    });
+
+    it('returns what the first attempt produced, rather than throwing', async () => {
+      // A client retrying after a timeout should get the answer it would have
+      // got the first time.
+      const { svc, prisma } = build();
+      prisma.rawMaterialLot = {
+        findFirst: jest.fn().mockResolvedValue({ id: 'lot-1', qtyReceived: 1130 }),
+      };
+      const res = await svc.makeBatch(
+        TENANT, SYRUP, { branchId: BRANCH, batches: 1, referenceNumber: 'BATCH-abc' }, 'u1',
+      );
+      expect(res.produced).toBe(1130);
+    });
+
+    it('makes the batch when the reference has not been seen', async () => {
+      const { svc, prisma, writes } = build();
+      prisma.rawMaterialLot = { findFirst: jest.fn().mockResolvedValue(null) };
+      await svc.makeBatch(
+        TENANT, SYRUP, { branchId: BRANCH, batches: 1, referenceNumber: 'BATCH-new' }, 'u1',
+      );
+      expect(writes.length).toBeGreaterThan(0);
+    });
+
+    it('stamps the caller reference on the lot, so the retry can find it', async () => {
+      const { svc, prisma, lots } = build();
+      prisma.rawMaterialLot = { findFirst: jest.fn().mockResolvedValue(null) };
+      await svc.makeBatch(
+        TENANT, SYRUP, { branchId: BRANCH, batches: 1, referenceNumber: 'BATCH-new' }, 'u1',
+      );
+      expect(lots[0].referenceNumber).toBe('BATCH-new');
+    });
+
+    it('refuses to record a batch into a closed month', async () => {
+      const { svc, prisma } = build();
+      const periods = { assertDateIsOpen: jest.fn().mockRejectedValue(new Error('Period is closed.')) };
+      const svc2 = new (svc.constructor)(prisma, periods) as any;
+      await expect(svc2.makeBatch(TENANT, SYRUP, { branchId: BRANCH, batches: 1 }, 'u1'))
+        .rejects.toThrow(/closed/i);
+    });
+
+    it('writes nothing when the month is closed', async () => {
+      const { svc, prisma, writes } = build();
+      const periods = { assertDateIsOpen: jest.fn().mockRejectedValue(new Error('Period is closed.')) };
+      const svc2 = new (svc.constructor)(prisma, periods) as any;
+      await svc2.makeBatch(TENANT, SYRUP, { branchId: BRANCH, batches: 1 }, 'u1').catch(() => undefined);
+      expect(writes).toHaveLength(0);
+    });
+
+    it('drains the components lot layers, oldest first', async () => {
+      /*
+        The batch created a lot for its OUTPUT and never touched the inputs',
+        so qtyRemaining on the sugar kept counting stock already stirred into
+        syrup. A later FIFO sale then drained a layer that was not there, at a
+        price the shop had already used up.
+      */
+      const { svc, tx } = build({
+        componentLots: [
+          { id: 'lot-old', qtyRemaining: 600, receivedAt: new Date('2026-01-01') },
+          { id: 'lot-new', qtyRemaining: 900, receivedAt: new Date('2026-06-01') },
+        ],
+      });
+      await svc.makeBatch(TENANT, SYRUP, { branchId: BRANCH, batches: 1 }, 'u1');
+
+      const drains = (tx.rawMaterialLot.update as jest.Mock).mock.calls.map((c) => ({
+        id:   c[0].where.id,
+        take: Number(c[0].data.qtyRemaining.decrement),
+      }));
+      // 1000 g of sugar: 600 from the old layer, then 400 from the newer one.
+      expect(drains[0]).toEqual({ id: 'lot-old', take: 600 });
+      expect(drains[1]).toEqual({ id: 'lot-new', take: 400 });
+    });
+
+    it('never drains more than a layer holds', async () => {
+      const { svc, tx } = build({
+        componentLots: [{ id: 'lot-small', qtyRemaining: 50, receivedAt: new Date('2026-01-01') }],
+      });
+      await svc.makeBatch(TENANT, SYRUP, { branchId: BRANCH, batches: 1 }, 'u1');
+      for (const call of (tx.rawMaterialLot.update as jest.Mock).mock.calls) {
+        expect(Number(call[0].data.qtyRemaining.decrement)).toBeLessThanOrEqual(50);
+      }
+    });
   });
 });
 

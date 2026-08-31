@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
+import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -30,6 +31,17 @@ export interface MakeBatchDto {
   batches:  number;
   note?:    string;
   madeAt?:  string;
+  /**
+   * Idempotency key. The same string only ever makes the batch once.
+   *
+   * Recording a batch is not something a person can SEE happening, and it is
+   * done on a phone in a kitchen: a double-tap, or a retry after the signal
+   * dropped, would consume the sugar twice and invent syrup nobody made. The
+   * lot's own generated reference cannot serve as the key -- it is
+   * BATCH-<date>-<id>, identical for two genuine batches of the same thing
+   * on the same day.
+   */
+  referenceNumber?: string;
 }
 
 export interface SubRecipeLineInput {
@@ -40,7 +52,15 @@ export interface SubRecipeLineInput {
 
 @Injectable()
 export class SubRecipesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /*
+      Making a batch moves stock and revalues an ingredient, so it belongs
+      inside the period lock like every other stock movement. Optional so an
+      older wiring that constructs this with Prisma alone still boots.
+    */
+    @Optional() private readonly periods?: AccountingPeriodsService,
+  ) {}
 
   /**
    * Every prepared ingredient the shop makes, with what it can still produce.
@@ -289,6 +309,32 @@ export class SubRecipesService {
     const madeAt = dto.madeAt ? new Date(dto.madeAt) : new Date();
     if (Number.isNaN(madeAt.getTime())) throw new BadRequestException('madeAt is not a valid date.');
 
+    if (this.periods) await this.periods.assertDateIsOpen(tenantId, madeAt);
+
+    /*
+      The same reference only ever makes the batch once.
+
+      Checked before any write, and returns the original outcome rather than
+      throwing, so a client retrying after a timeout gets the answer it would
+      have got the first time.
+    */
+    const ref = dto.referenceNumber?.trim();
+    if (ref) {
+      const already = await this.prisma.rawMaterialLot.findFirst({
+        where:  { tenantId, rawMaterialId, referenceNumber: ref },
+        select: { id: true, qtyReceived: true },
+      });
+      if (already) {
+        return {
+          rawMaterialId,
+          branchId:  dto.branchId,
+          produced:  Number(already.qtyReceived),
+          duplicate: true,
+          message:   'This batch was already recorded. Nothing was made again.',
+        };
+      }
+    }
+
     const produced   = Number(rm.batchYield) * batches;
     const inputValue = rm.subRecipeItems.reduce(
       (sum, l) => sum + Number(l.quantity) * batches * Number(l.rawMaterial.costPrice ?? 0), 0,
@@ -300,12 +346,52 @@ export class SubRecipesService {
     return this.prisma.$transaction(async (tx) => {
       for (const line of rm.subRecipeItems) {
         const used = Number(line.quantity) * batches;
-        const have = stock.get(line.rawMaterial.id) ?? 0;
+        // Relative, so a sale ringing at the same moment is not erased by a
+        // total computed from a snapshot taken before it.
         await tx.rawMaterialInventory.update({
           where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId: line.rawMaterial.id } },
-          data:  { quantity: new Prisma.Decimal(have - used) },
+          data:  { quantity: { decrement: new Prisma.Decimal(used) } },
         });
+
+        /*
+          Drain the components' lot layers too.
+
+          The batch CREATES a lot for its output and never touched the inputs',
+          so qtyRemaining on the sugar and the mirin kept counting stock that
+          had already been stirred into syrup. On a FIFO or lot-tracked
+          ingredient the next sale then drained a layer that was not there,
+          costing it at a price the shop had already used up, and the oldest
+          layer never aged out.
+
+          Oldest first, the same order the sale path uses.
+        */
+        let remaining = used;
+        const lots = await tx.rawMaterialLot.findMany({
+          where:   { branchId: dto.branchId, rawMaterialId: line.rawMaterial.id, qtyRemaining: { gt: 0 } },
+          orderBy: [{ receivedAt: 'asc' }],
+        });
+        for (const lot of lots) {
+          if (remaining <= 0) break;
+          const take = Math.min(remaining, Number(lot.qtyRemaining));
+          await tx.rawMaterialLot.update({
+            where: { id: lot.id },
+            data:  { qtyRemaining: { decrement: new Prisma.Decimal(take) } },
+          });
+          remaining -= take;
+        }
       }
+
+      // Whatever the decrements pushed below zero, floor once. A relative
+      // write cannot clamp itself, and negative stock makes every later
+      // number -- maxProducible, count variance, valuation -- nonsense.
+      await tx.rawMaterialInventory.updateMany({
+        where: {
+          branchId: dto.branchId,
+          rawMaterialId: { in: rm.subRecipeItems.map((l) => l.rawMaterial.id) },
+          quantity: { lt: 0 },
+        },
+        data: { quantity: new Prisma.Decimal(0) },
+      });
 
       const existing = await tx.rawMaterialInventory.findUnique({
         where:  { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
@@ -317,7 +403,8 @@ export class SubRecipesService {
       await tx.rawMaterialInventory.upsert({
         where:  { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
         create: { tenantId, branchId: dto.branchId, rawMaterialId, quantity: new Prisma.Decimal(after) },
-        update: { quantity: new Prisma.Decimal(after) },
+        // Relative for the same reason the components are.
+        update: { quantity: { increment: new Prisma.Decimal(produced) } },
       });
 
       // Blend the batch into the sub-recipe's own WAC, exactly as a delivery
@@ -339,7 +426,11 @@ export class SubRecipesService {
           qtyRemaining:    new Prisma.Decimal(produced),
           unitCost:        new Prisma.Decimal(unitCost),
           receivedAt:      madeAt,
-          referenceNumber: `BATCH-${madeAt.toISOString().slice(0, 10)}-${rawMaterialId.slice(-6)}`,
+          // The caller's key when it gave one, so a retry is caught above; the
+          // generated form otherwise, which is descriptive but NOT unique --
+          // two genuine batches of the same thing on the same day share it.
+          referenceNumber: ref
+            ?? `BATCH-${madeAt.toISOString().slice(0, 10)}-${rawMaterialId.slice(-6)}`,
           paymentMethod:   'OWNER_FUNDED',
         },
       });

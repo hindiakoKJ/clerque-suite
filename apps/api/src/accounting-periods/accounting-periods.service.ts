@@ -85,6 +85,42 @@ export class AccountingPeriodsService {
       throw new BadRequestException('Period is already closed');
     }
 
+    /*
+      Nothing from this period may still be waiting to reach the books.
+
+      Sales post through a queue drained by a cron, so there is always a short
+      window where a sale exists and its journal entry does not. Closing during
+      that window locked the period against entries that were already on their
+      way: the queue then tried to post them, hit the period lock, and failed —
+      permanently, because the date they belong to can never be reopened by the
+      retry. The books would be short by exactly those sales, the trial balance
+      would still foot, and nothing would say which ones were missing.
+
+      That risk grew teeth once failed events started being retried
+      automatically: without this, a period closed over a pending sale produces
+      an event that fails every ten minutes forever.
+
+      Deliberately checks everything up to the period END rather than only
+      inside it — an event from an earlier month that has not posted yet is
+      just as unable to post afterwards, and is a louder problem, not a
+      quieter one.
+    */
+    const unposted = await this.prisma.accountingEvent.count({
+      where: {
+        tenantId,
+        status:    { in: ['PENDING', 'FAILED'] },
+        createdAt: { lte: period.endDate },
+      },
+    });
+    if (unposted > 0) {
+      throw new BadRequestException(
+        `${unposted} transaction${unposted === 1 ? '' : 's'} from this period ` +
+        `${unposted === 1 ? 'has' : 'have'} not reached the books yet, so closing now would lock ` +
+        `${unposted === 1 ? 'it' : 'them'} out permanently. They usually post within a minute — ` +
+        'try again shortly, or review them under Ledger → Accounting Events.',
+      );
+    }
+
     const updated = await this.prisma.accountingPeriod.update({
       where: { id: periodId },
       data: { status: 'CLOSED', closedById, closedAt: new Date() },

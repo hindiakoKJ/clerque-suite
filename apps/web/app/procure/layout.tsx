@@ -57,6 +57,17 @@ function rolesFor(pathname: string): string[] {
   // milk is low is exactly who should be able to check it, so it sits with
   // the buy list rather than with the stock screens.
   if (pathname.startsWith('/procure/ceiling'))  return REQUEST_ROLES;
+  /*
+    Recording a batch is a floor action, and the API already says so: CASHIER,
+    SALES_LEAD and WAREHOUSE_STAFF may all post one, because the person who
+    made the syrup is the one who knows it happened. A shift that cannot record
+    it is a shift where the raw materials silently stop moving.
+
+    Safe to open where the other stock screens are not: this one has no Create,
+    Edit or Receive control, so "let them look" does not quietly mean "let them
+    receive".
+  */
+  if (pathname.startsWith('/procure/batches'))  return REQUEST_ROLES;
   if (pathname === '/procure')                  return REQUEST_ROLES;
   return STOCK_ROLES;
 }

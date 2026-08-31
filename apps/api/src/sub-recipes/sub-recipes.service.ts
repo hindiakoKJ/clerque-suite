@@ -42,6 +42,69 @@ export interface SubRecipeLineInput {
 export class SubRecipesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Every prepared ingredient the shop makes, with what it can still produce.
+   *
+   * There was no way to LIST these, which is why there has never been a screen:
+   * the API could fetch one by id, cost it and record a batch, but nothing
+   * could show a cook what there was to make. So a shop that defined a house
+   * syrup or a sauce had a recipe nobody could act on, and its components never
+   * moved — they never tripped a reorder level, never reached a buy list, and
+   * ran out mid-service while the system insisted they were on the shelf.
+   */
+  async list(tenantId: string, branchId: string) {
+    const rows = await this.prisma.rawMaterial.findMany({
+      where:  { tenantId, isActive: true, subRecipeItems: { some: {} } },
+      select: {
+        id: true, name: true, unit: true, costPrice: true, batchYield: true,
+        inventory: { where: { branchId }, select: { quantity: true } },
+        subRecipeItems: {
+          select: {
+            quantity: true,
+            rawMaterial: { select: { id: true, name: true, unit: true, costPrice: true } },
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    // How many more each could make, resolved in ONE stock read rather than a
+    // round trip per recipe — a kitchen with a dozen preps would otherwise pay
+    // a dozen queries to draw one list.
+    const componentIds = [...new Set(
+      rows.flatMap((r) => r.subRecipeItems.map((l) => l.rawMaterial.id)),
+    )];
+    const stock = await this.stockOf(branchId, componentIds);
+
+    return rows.map((r) => {
+      let batches = Number.POSITIVE_INFINITY;
+      let limitedBy: string | null = null;
+      for (const line of r.subRecipeItems) {
+        const per = Number(line.quantity);
+        if (per <= 0) continue;
+        const can = Math.floor((stock.get(line.rawMaterial.id) ?? 0) / per);
+        if (can < batches) { batches = can; limitedBy = line.rawMaterial.name; }
+      }
+      return {
+        id:            r.id,
+        name:          r.name,
+        unit:          r.unit,
+        costPrice:     r.costPrice != null ? Number(r.costPrice) : null,
+        batchYield:    r.batchYield != null ? Number(r.batchYield) : null,
+        onHand:        Number(r.inventory[0]?.quantity ?? 0),
+        batches:       batches === Number.POSITIVE_INFINITY ? 0 : batches,
+        limitedBy,
+        components: r.subRecipeItems.map((l) => ({
+          rawMaterialId: l.rawMaterial.id,
+          name:          l.rawMaterial.name,
+          unit:          l.rawMaterial.unit,
+          quantity:      Number(l.quantity),
+          onHand:        stock.get(l.rawMaterial.id) ?? 0,
+        })),
+      };
+    });
+  }
+
   /** An ingredient is a sub-recipe when it has components AND a yield. */
   async get(tenantId: string, rawMaterialId: string) {
     const rm = await this.prisma.rawMaterial.findFirst({

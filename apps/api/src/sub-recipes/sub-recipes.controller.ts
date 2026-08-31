@@ -17,6 +17,20 @@ export class SubRecipesController {
   constructor(private readonly subRecipes: SubRecipesService) {}
 
   /**
+   * Everything the shop preps, with how much more each could make.
+   *
+   * Declared BEFORE the ':rawMaterialId' route so Nest does not match the
+   * literal path segment as an id.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM',
+         'WAREHOUSE_STAFF', 'FINANCE_LEAD')
+  @Get()
+  @ApiOperation({ summary: 'Every prepared ingredient, with batches still makeable' })
+  list(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
+    return this.subRecipes.list(user.tenantId!, branchId ?? user.branchId!);
+  }
+
+  /**
    * Reading a sub-recipe is as broad as reading any other ingredient — a
    * barista about to make a batch needs to see what goes in it.
    */

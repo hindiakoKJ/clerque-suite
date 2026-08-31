@@ -18,6 +18,13 @@ function makePrismaMock() {
       create:    jest.fn(),
       update:    jest.fn(),
     },
+    /*
+      Closing refuses while anything from the period is still queued for the
+      books — otherwise those entries are locked out permanently and the books
+      end up short with a trial balance that still foots. Zero here means the
+      queue is drained, which is the normal case these cases describe.
+    */
+    accountingEvent: { count: jest.fn().mockResolvedValue(0) },
     user: {
       findMany: jest.fn(),
     },
@@ -275,6 +282,67 @@ describe('AccountingPeriodsService', () => {
 
       await svc.reopenPeriod('tenant-1', 'period-1', 'user-owner', 'Payroll correction');
       expect(audit.log).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('closing over transactions that have not posted yet', () => {
+    /*
+      Sales reach the books through a queue drained by a cron, so there is
+      always a short window where a sale exists and its journal entry does not.
+      Closing during that window locked the period against entries already on
+      their way: the queue then hit the period lock and failed permanently, the
+      books were short by exactly those sales, and the trial balance still
+      footed.
+
+      It got worse once failed events began retrying automatically — a period
+      closed over a pending sale produces an event that fails every ten
+      minutes forever.
+    */
+    const PERIOD = { id: 'p1', tenantId: 't1', name: 'August 2026', status: 'OPEN', endDate: new Date('2026-08-31') };
+
+    it('refuses while transactions are still queued', async () => {
+      const prisma = makePrismaMock();
+      prisma.accountingPeriod.findFirst.mockResolvedValue(PERIOD);
+      prisma.accountingEvent.count.mockResolvedValue(3);
+      const svc = new AccountingPeriodsService(prisma as never, { log: jest.fn() } as never);
+      await expect(svc.closePeriod('t1', 'p1', 'u1')).rejects.toThrow(/have not reached the books/);
+    });
+
+    it('says how many, and what to do about it', async () => {
+      const prisma = makePrismaMock();
+      prisma.accountingPeriod.findFirst.mockResolvedValue(PERIOD);
+      prisma.accountingEvent.count.mockResolvedValue(1);
+      const svc = new AccountingPeriodsService(prisma as never, { log: jest.fn() } as never);
+      await expect(svc.closePeriod('t1', 'p1', 'u1'))
+        .rejects.toThrow(/1 transaction .*has not reached.*try again shortly/s);
+    });
+
+    it('does not close the period when it refuses', async () => {
+      const prisma = makePrismaMock();
+      prisma.accountingPeriod.findFirst.mockResolvedValue(PERIOD);
+      prisma.accountingEvent.count.mockResolvedValue(2);
+      const svc = new AccountingPeriodsService(prisma as never, { log: jest.fn() } as never);
+      await svc.closePeriod('t1', 'p1', 'u1').catch(() => undefined);
+      expect(prisma.accountingPeriod.update).not.toHaveBeenCalled();
+    });
+
+    it('counts FAILED as well as PENDING', async () => {
+      // A failed event is no more able to post after the lock than a pending
+      // one, and it is the louder problem of the two.
+      const prisma = makePrismaMock();
+      prisma.accountingPeriod.findFirst.mockResolvedValue(PERIOD);
+      const svc = new AccountingPeriodsService(prisma as never, { log: jest.fn() } as never);
+      await svc.closePeriod('t1', 'p1', 'u1').catch(() => undefined);
+      expect(prisma.accountingEvent.count.mock.calls[0][0].where.status)
+        .toEqual({ in: ['PENDING', 'FAILED'] });
+    });
+
+    it('closes normally once the queue is drained', async () => {
+      const prisma = makePrismaMock();
+      prisma.accountingPeriod.findFirst.mockResolvedValue(PERIOD);
+      prisma.accountingPeriod.update.mockResolvedValue({ ...PERIOD, status: 'CLOSED' });
+      const svc = new AccountingPeriodsService(prisma as never, { log: jest.fn() } as never);
+      await expect(svc.closePeriod('t1', 'p1', 'u1')).resolves.toMatchObject({ status: 'CLOSED' });
     });
   });
 });

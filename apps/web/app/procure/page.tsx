@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle,
+  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle, ChefHat,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -83,6 +83,28 @@ export default function ProcureHome() {
       Icon:  Boxes,
       title: 'Stock on hand',
       desc:  'Every ingredient, what it costs, what is left. Receiving happens here.',
+      note:  null,
+      show:  canStock,
+    },
+    {
+      /*
+        The one screen a kitchen cannot work without and never had.
+
+        The API for batch prep has existed all along — define what a batch is
+        made from, see how many more you could make, record that you made some
+        — and nothing in the web app ever called it. So a shop that defined a
+        house syrup or a sauce had a recipe nobody could act on: the components
+        never moved, never tripped a reorder level, never reached a buy list,
+        and ran out mid-service while the system insisted they were on the
+        shelf.
+
+        Open to whoever can move stock, because the person who made the batch
+        is the one who knows it happened.
+      */
+      href:  '/procure/batches',
+      Icon:  ChefHat,
+      title: 'Prep & batches',
+      desc:  'Syrups, sauces, anything made in advance. Record a batch and its ingredients come off the shelf.',
       note:  null,
       show:  canStock,
     },

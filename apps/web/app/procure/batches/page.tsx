@@ -1,0 +1,255 @@
+'use client';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ChefHat, AlertTriangle } from 'lucide-react';
+import { toast } from 'sonner';
+import { api } from '@/lib/api';
+import { useAuthStore } from '@/store/auth';
+
+/**
+ * Recording that a batch of something was made.
+ *
+ * The API for this has existed all along — define what one batch is made from,
+ * see how many more you could make, record that you made some — and there was
+ * no screen anywhere. Grepping the whole web app for `sub-recipes`,
+ * `batchYield` or `/batches` returned nothing.
+ *
+ * The consequence is quiet and specific. A shop defines "House Syrup", the
+ * cook makes five litres, and the sugar and water it was made from never move.
+ * They never fall below their reorder level, never reach a buy list, and run
+ * out mid-service while the system insists there are kilos on the shelf. The
+ * syrup's own stock never goes up either, so every drink using it deducts from
+ * a balance that was never replenished.
+ */
+
+interface Component {
+  rawMaterialId: string;
+  name:     string;
+  unit:     string;
+  quantity: number;
+  onHand:   number;
+}
+
+interface SubRecipe {
+  id:         string;
+  name:       string;
+  unit:       string;
+  costPrice:  number | null;
+  batchYield: number | null;
+  onHand:     number;
+  batches:    number;
+  limitedBy:  string | null;
+  components: Component[];
+}
+
+const peso = (n: number | null | undefined) =>
+  n == null ? '—' : '₱' + Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+
+export default function BatchesPage() {
+  const qc = useQueryClient();
+  const branchId = useAuthStore((s) => s.user?.branchId ?? '');
+  const [target, setTarget] = useState<SubRecipe | null>(null);
+
+  const { data: recipes = [], isLoading, isError, refetch } = useQuery<SubRecipe[]>({
+    queryKey: ['sub-recipes', branchId],
+    queryFn:  () => api.get('/inventory/sub-recipes', { params: { branchId } }).then((r) => r.data),
+    enabled:  !!branchId,
+  });
+
+  const make = useMutation({
+    mutationFn: (v: { id: string; batches: number }) =>
+      api.post(`/inventory/sub-recipes/${v.id}/batches`, { branchId, batches: v.batches })
+        .then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sub-recipes', branchId] });
+      qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
+      setTarget(null);
+      toast.success('Recorded — the ingredients it used have come off the shelf.');
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Could not record the batch.'),
+  });
+
+  return (
+    <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+          <ChefHat className="h-6 w-6 text-[var(--accent)]" />
+          Prep &amp; Batches
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Things you make in advance — syrups, sauces, stocks. Record a batch and
+          the ingredients it used come off the shelf.
+        </p>
+      </header>
+
+      {isError && (
+        <div className="rounded-xl border border-border bg-card p-6 text-center space-y-2">
+          <p className="text-sm text-muted-foreground">Could not load prepared ingredients.</p>
+          <button onClick={() => refetch()} className="text-sm font-medium text-[var(--accent)] hover:underline">
+            Try again
+          </button>
+        </div>
+      )}
+
+      {!isError && isLoading && (
+        <div className="rounded-xl border border-border bg-card p-10 text-center text-sm text-muted-foreground">
+          Loading…
+        </div>
+      )}
+
+      {/*
+        The empty state explains what this screen is FOR. A cook who has never
+        seen a sub-recipe has no idea what "no prepared ingredients" means, and
+        the recipe has to be defined elsewhere before anything can appear here.
+      */}
+      {!isError && !isLoading && recipes.length === 0 && (
+        <div className="rounded-xl border border-border bg-card p-8 text-center space-y-2">
+          <p className="text-sm font-medium">Nothing is made in advance yet.</p>
+          <p className="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
+            If you make something in bulk and portion it out later — a syrup, a
+            sauce, a marinade — set it up as an ingredient and give it a recipe.
+            It will show up here so the cook can record each batch, and the
+            things it is made from will come off the shelf when they do.
+          </p>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {recipes.map((r) => (
+          <div key={r.id} className="rounded-xl border border-border bg-card p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-semibold truncate">{r.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {r.onHand.toLocaleString('en-PH')} {r.unit} on hand
+                  {r.costPrice != null && <> · {peso(r.costPrice)}/{r.unit}</>}
+                </p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="font-display text-lg font-bold tabular-nums" style={{ color: 'var(--accent)' }}>
+                  {r.batches}
+                </p>
+                <p className="text-[11px] text-muted-foreground">batches left</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-muted/40 p-2.5 space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                One batch makes {r.batchYield ?? '—'} {r.unit}, from
+              </p>
+              {r.components.map((c) => (
+                <div key={c.rawMaterialId} className="flex justify-between text-xs">
+                  <span className="text-muted-foreground truncate pr-2">{c.name}</span>
+                  <span className="tabular-nums shrink-0">
+                    {c.quantity} {c.unit}
+                    <span className="text-muted-foreground"> · {c.onHand.toLocaleString('en-PH')} left</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/*
+              Naming the limiter is the whole point of showing a count: "0
+              batches" tells the cook to stop, "0 batches, short on brown
+              sugar" tells them what to buy.
+            */}
+            {r.batches === 0 && r.limitedBy && (
+              <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                Not enough {r.limitedBy} to make another batch.
+              </p>
+            )}
+
+            <button
+              onClick={() => setTarget(r)}
+              disabled={r.batches === 0 || make.isPending}
+              className="w-full rounded-lg bg-[var(--accent)] text-white text-sm font-semibold py-2 disabled:opacity-40 hover:opacity-90 transition-opacity"
+            >
+              I made some
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {target && (
+        <MakeBatchModal
+          recipe={target}
+          pending={make.isPending}
+          onCancel={() => setTarget(null)}
+          onConfirm={(batches) => make.mutate({ id: target.id, batches })}
+        />
+      )}
+    </div>
+  );
+}
+
+function MakeBatchModal({
+  recipe, pending, onCancel, onConfirm,
+}: {
+  recipe: SubRecipe;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: (batches: number) => void;
+}) {
+  const [batches, setBatches] = useState('1');
+  const n = parseInt(batches, 10) || 0;
+  const tooMany = n > recipe.batches;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-4">
+        <div>
+          <h2 className="font-semibold text-lg">{recipe.name}</h2>
+          <p className="text-sm text-muted-foreground">
+            How many batches did you make?
+          </p>
+        </div>
+
+        <input
+          type="number" min={1} max={recipe.batches} step={1} autoFocus
+          value={batches}
+          onChange={(e) => setBatches(e.target.value)}
+          className="w-full rounded-lg border border-border bg-background px-3 py-3 text-2xl font-bold text-center tabular-nums"
+        />
+
+        {/* What it will actually do, in the units the cook is holding. */}
+        {n > 0 && !tooMany && (
+          <div className="rounded-lg bg-muted/40 p-3 space-y-1 text-xs">
+            <p className="font-semibold">
+              Adds {(n * (recipe.batchYield ?? 0)).toLocaleString('en-PH')} {recipe.unit} of {recipe.name}
+            </p>
+            <p className="text-muted-foreground">and takes off the shelf:</p>
+            {recipe.components.map((c) => (
+              <div key={c.rawMaterialId} className="flex justify-between">
+                <span className="text-muted-foreground truncate pr-2">{c.name}</span>
+                <span className="tabular-nums shrink-0">
+                  {(c.quantity * n).toLocaleString('en-PH')} {c.unit}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tooMany && (
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            There are only enough ingredients for {recipe.batches}
+            {recipe.limitedBy ? ` — ${recipe.limitedBy} runs out first.` : '.'}
+          </p>
+        )}
+
+        <div className="flex gap-2">
+          <button onClick={onCancel} disabled={pending} className="flex-1 rounded-lg border border-border py-2 text-sm hover:bg-muted">
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(n)}
+            disabled={pending || n < 1 || tooMany}
+            className="flex-1 rounded-lg bg-[var(--accent)] text-white py-2 text-sm font-semibold disabled:opacity-40"
+          >
+            {pending ? 'Recording…' : 'Record it'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

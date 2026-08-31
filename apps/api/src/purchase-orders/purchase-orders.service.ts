@@ -3,6 +3,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, PurchaseOrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { InventoryService } from '../inventory/inventory.service';
 
 export interface PurchaseOrderLineInput {
   rawMaterialId?: string | null;
@@ -41,7 +42,19 @@ export interface ReceiveLine {
 
 @Injectable()
 export class PurchaseOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /*
+      Receiving stock is one behaviour and it lives in one place.
+
+      This module reimplemented it -- create a lot, bump the quantity -- and
+      so skipped everything the real path does: the accounting event, the
+      weighted-average blend, the recipe re-cost, the AP bill, the period
+      lock and the idempotency check. Stock arrived and the books never
+      heard about it.
+    */
+    private readonly inventory: InventoryService,
+  ) {}
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -278,14 +291,39 @@ export class PurchaseOrdersService {
   }
 
   /**
-   * Record receipts against PO lines. Increments PurchaseOrderItem.qtyReceived,
-   * creates RawMaterialLot rows linked back via purchaseOrderItemId (for
-   * rawMaterial-typed lines only), and rolls the PO status forward.
+   * Record receipts against PO lines.
+   *
+   * ORDERING posts nothing, deliberately: a purchase order is a commitment,
+   * not a transaction. Nothing has changed hands, so there is no entry to
+   * make. RECEIVING is the moment the books care about, and it is the same
+   * moment whether the goods came the same day or three days later.
+   *
+   * The stock movement itself is delegated to InventoryService rather than
+   * reimplemented here. This method used to create a lot and bump the
+   * quantity directly, which meant a PO receipt produced NO accounting event,
+   * NO weighted-average blend, NO recipe re-cost, NO AP bill and NO period
+   * check. Stock landed on the shelf for free: COGS was understated when it
+   * sold, and the money owed to the supplier was never recorded.
+   *
+   * The PO's own bookkeeping (qtyReceived, status) stays in a transaction;
+   * the stock receives run after it commits, because receiveRawMaterial opens
+   * its own. Same shape as the Procure buy-list receive.
    */
   async receive(tenantId: string, id: string, lines: ReceiveLine[]) {
     if (!lines?.length) throw new BadRequestException('No lines provided to receive.');
 
-    return this.prisma.$transaction(async (tx) => {
+    const toStock: Array<{
+      rawMaterialId: string;
+      quantity:      number;
+      unitCost:      number;
+      expirationDate: string | null;
+      reference:     string;
+      itemId:        string;
+    }> = [];
+    let branchId = '';
+    let vendorId: string | null = null;
+
+    const po0 = await this.prisma.$transaction(async (tx) => {
       const po = await tx.purchaseOrder.findFirst({
         where:   { id, tenantId },
         include: { items: true },
@@ -319,52 +357,33 @@ export class PurchaseOrdersService {
           data:  { qtyReceived: new Prisma.Decimal(newQtyReceived) },
         });
 
-        // Raw-material lines create a lot + bump RawMaterialInventory.
+        /*
+          Collected, not written. The actual stock movement goes through
+          InventoryService once this transaction commits, so it gets the
+          accounting event, the WAC blend, the recipe re-cost, the AP bill and
+          the period lock -- none of which happened when this module wrote the
+          rows itself.
+        */
         if (item.rawMaterialId) {
           const expirationDate = line.expirationDate ? new Date(line.expirationDate) : null;
           if (expirationDate && Number.isNaN(expirationDate.getTime())) {
             throw new BadRequestException('expirationDate is not a valid date.');
           }
-
-          await tx.rawMaterialLot.create({
-            data: {
-              tenantId,
-              branchId:            po.branchId,
-              rawMaterialId:       item.rawMaterialId,
-              qtyReceived:         new Prisma.Decimal(line.qtyReceived),
-              qtyRemaining:        new Prisma.Decimal(line.qtyReceived),
-              unitCost:            item.unitCost,
-              receivedAt:          new Date(),
-              expirationDate,
-              referenceNumber:     po.poNumber,
-              purchaseOrderItemId: item.id,
-            },
-          });
-
-          const inv = await tx.rawMaterialInventory.findUnique({
-            where: {
-              branchId_rawMaterialId: {
-                branchId:      po.branchId,
-                rawMaterialId: item.rawMaterialId,
-              },
-            },
-            select: { quantity: true },
-          });
-          const newQty = (inv ? Number(inv.quantity) : 0) + line.qtyReceived;
-          await tx.rawMaterialInventory.upsert({
-            where: {
-              branchId_rawMaterialId: {
-                branchId:      po.branchId,
-                rawMaterialId: item.rawMaterialId,
-              },
-            },
-            create: {
-              tenantId,
-              branchId:      po.branchId,
-              rawMaterialId: item.rawMaterialId,
-              quantity:      new Prisma.Decimal(newQty),
-            },
-            update: { quantity: new Prisma.Decimal(newQty) },
+          toStock.push({
+            rawMaterialId:  item.rawMaterialId,
+            quantity:       line.qtyReceived,
+            unitCost:       Number(item.unitCost),
+            expirationDate: line.expirationDate ?? null,
+            /*
+              Unique per receipt STEP, not per line: a PO line is often
+              received in instalments, and keying on the line alone would make
+              the second delivery look like a repeat of the first. The
+              cumulative quantity moves with each step and repeats only when
+              the same step is submitted twice, which is exactly what should
+              be caught.
+            */
+            reference: `${po.poNumber}-${item.id.slice(-6)}-${newQtyReceived}`,
+            itemId:    item.id,
           });
         }
         // Product-typed PO lines: deferred — wire to InventoryLot/InventoryItem
@@ -384,11 +403,53 @@ export class PurchaseOrdersService {
           ? PurchaseOrderStatus.PARTIAL
           : po.status;
 
+      branchId = po.branchId;
+      vendorId = po.vendorId ?? null;
+
       return tx.purchaseOrder.update({
         where:   { id },
         data:    { status: nextStatus },
         include: { items: true },
       });
     });
+
+    /*
+      Now move the stock properly, one line at a time.
+
+      CREDIT when the PO names a vendor, because that is what a purchase order
+      to a supplier IS -- goods now, money later -- and it is what raises the
+      AP bill so the debt is visible and payable. Without a vendor there is
+      nobody to owe, so it is treated as owner-funded, exactly as the receive
+      form does.
+
+      A line that fails is reported rather than thrown: the PO's quantities are
+      already committed, and rolling the whole receipt back over one bad line
+      would lose the deliveries that were fine. The caller sees which lines
+      reached the books and which did not.
+    */
+    const posted: Array<{ rawMaterialId: string; quantity: number }> = [];
+    const failed: Array<{ rawMaterialId: string; reason: string }> = [];
+    for (const s of toStock) {
+      try {
+        await this.inventory.receiveRawMaterial(tenantId, s.rawMaterialId, {
+          branchId,
+          quantity:        s.quantity,
+          costPrice:       s.unitCost,
+          paymentMethod:   vendorId ? 'CREDIT' : 'OWNER_FUNDED',
+          ...(vendorId ? { vendorId } : {}),
+          referenceNumber: s.reference,
+          ...(s.expirationDate ? { expirationDate: s.expirationDate } : {}),
+          purchaseOrderItemId: s.itemId,
+        } as never);
+        posted.push({ rawMaterialId: s.rawMaterialId, quantity: s.quantity });
+      } catch (err) {
+        failed.push({
+          rawMaterialId: s.rawMaterialId,
+          reason: err instanceof Error ? err.message : 'Could not post this line to stock.',
+        });
+      }
+    }
+
+    return { ...po0, posted, failed };
   }
 }

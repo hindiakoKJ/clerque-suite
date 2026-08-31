@@ -42,10 +42,12 @@ export interface ShiftSummary {
   /**
    * Cash rung at this branch during the shift window that carries no shiftId.
    *
-   * Supervisors bypass the shift gate, so their sales land here. Reported, not
-   * folded into expectedCash — the cashier should not be made accountable for
-   * a drawer someone else added to, but she should be able to see why it is
-   * over.
+   * A POS cash sale with no shift is now refused outright, so this should read
+   * zero for anything rung since. It survives as a backstop: a non-zero value
+   * means either an order predating the rule or something that got past it,
+   * and either way it is the cashier's explanation for a count that will not
+   * reconcile. Never folded into expectedCash — she is accountable for what
+   * she rang, not for a drawer someone else added to.
    */
   unattributedCashSales: number;
   expectedCash: number;
@@ -600,12 +602,16 @@ ${line}` : line },
       to the GL as income, and she is asked to sign for money she cannot
       explain.
 
-      Whether an owner should have to open his own shift is a decision about
-      how the shop runs, not something to settle here — and with several
-      shifts open per branch there is no unambiguous shift to attach a stray
-      order to. What is not in doubt is that the money must be visible. Named
-      here, the overage has an explanation instead of being a mystery; if the
-      policy later becomes "everyone opens a shift", this simply reads zero.
+      KJ has since settled the policy: owners have no shift, and the cashier is
+      the only one who handles cash. So a POS cash sale with no shiftId is now
+      REFUSED outright at order creation (orders.service.ts, CASH_WITHOUT_SHIFT)
+      and the owner is offered GCash instead.
+
+      This stays as the backstop, not the defence. It should read zero for
+      every shift rung under the guard — so a non-zero value means something
+      got past it, or the drawer holds cash from orders that predate the rule.
+      Either way it is the cashier's explanation for a count that does not
+      match, which is exactly when someone needs one.
     */
     const unattributed = await this.prisma.order.findMany({
       where: {

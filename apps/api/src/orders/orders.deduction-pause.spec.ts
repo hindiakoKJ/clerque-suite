@@ -115,6 +115,9 @@ describe('OrdersService — ingredient deduction pause', () => {
     };
 
     const prisma: any = {
+      // The order carries a shiftId now — a POS cash sale needs a drawer to
+      // put the money in — so the ownership check runs.
+      shift: { count: jest.fn().mockResolvedValue(1) },
       order: { findFirst: jest.fn().mockResolvedValue(null) },
       tenant: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ taxStatus: 'VAT', planCode: 'CLERQUE', isPtuHolder: false }),
@@ -151,6 +154,9 @@ describe('OrdersService — ingredient deduction pause', () => {
 
     const payload = {
       clientUuid: 'u-' + Math.random(),
+      // A real till always has one: a POS cash sale needs a drawer to put the
+      // money in, so cash without a shiftId is now refused.
+      shiftId: 'shift-1',
       branchId: BRANCH,
       items,
       payments: [{ method: 'CASH', amount: 139 * itemCount }],

@@ -26,6 +26,15 @@ interface PaymentModalProps {
   open: boolean;
   total: number;
   isOffline: boolean;
+  /**
+   * Whether this person has a drawer to put cash in.
+   *
+   * Owners have no shift, and the cashier is the only one who handles cash.
+   * The server refuses a POS cash sale with no shiftId, so without this the
+   * owner would count the money, hit Charge and only THEN be told — with a
+   * customer holding out a ₱500 note. Better to never offer cash at all.
+   */
+  canTakeCash?: boolean;
   onConfirm: (payments: PaymentEntry[], b2b?: B2bOrderInfo) => Promise<void>;
   onClose: () => void;
 }
@@ -69,7 +78,7 @@ function methodToTab(m: PaymentMethod): TabKey {
   return 'CARD';
 }
 
-export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: PaymentModalProps) {
+export function PaymentModal({ open, total, isOffline, canTakeCash = true, onConfirm, onClose }: PaymentModalProps) {
   const [payments, setPayments] = useState<PaymentEntry[]>([]);
   const [method, setMethod] = useState<PaymentMethod>('CASH');
   const [tab, setTab] = useState<TabKey>('CASH');
@@ -98,7 +107,13 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
   const nonCashTotal = payments.filter((p) => p.method !== 'CASH').reduce((s, p) => s + p.amount, 0);
   const change = settled ? Math.max(0, cashTotal - (total - nonCashTotal)) : 0;
 
-  const activeMethods = isOffline ? METHODS.filter((m) => m.value === 'CASH') : METHODS;
+  /*
+    Offline leaves only cash; no till leaves everything BUT cash. They can be
+    true at once — an owner with no shift and no connection can take no payment
+    at all, which is the honest answer rather than one that fails at Charge.
+  */
+  const activeMethods = (isOffline ? METHODS.filter((m) => m.value === 'CASH') : METHODS)
+    .filter((m) => canTakeCash || m.value !== 'CASH');
   const activeMethod = activeMethods.find((m) => m.value === method) ?? activeMethods[0]!;
 
   // For the cash keypad: live "bayad" preview is amountStr; sukli = bayad - total
@@ -332,11 +347,31 @@ export function PaymentModal({ open, total, isOffline, onConfirm, onClose }: Pay
             </div>
           </div>
 
+          {/*
+            No drawer, no cash.
+
+            Owners have no shift, and the cashier is the only one who handles
+            cash. The server refuses a POS cash sale carrying no shiftId, so
+            saying it here — before the money is counted — is the difference
+            between "take GCash instead" and an error with a customer already
+            holding out a ₱500 note.
+          */}
+          {!canTakeCash && (
+            <div className="mx-6 mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+                You have no open shift, so there is no drawer for cash. Take GCash or
+                Maya, or have the cashier ring this sale.
+              </p>
+            </div>
+          )}
+
           {/* ── Segmented tabs ─────────────────────────────────────── */}
           <div className="flex gap-1.5 px-6 pt-3 pb-3 bg-card border-b border-border">
             {TABS.map((t) => {
               const isOn = tab === t.key;
-              const disabled = isOffline && t.key !== 'CASH' && t.key !== 'SPLIT';
+              // Cash and Split both put notes in a drawer, so both need a till.
+              const noTill = !canTakeCash && (t.key === 'CASH' || t.key === 'SPLIT');
+              const disabled = (isOffline && t.key !== 'CASH' && t.key !== 'SPLIT') || noTill;
               const brandColor = t.brand ?? 'var(--counter-primary)';
               return (
                 <button

@@ -123,10 +123,8 @@ just unit-tested.
 - [x] **6. A refund was booked as the cashier being short.** Refunds were read
       nowhere. Attributed by when the cash LEFT the drawer, not when the sale
       happened.
-- [x] **7. The owner's sales were invisible to the drawer.** Supervisors bypass
-      the shift gate, so his cash goes in the same till with no shiftId and she
-      counts over. **Reported, not folded into expected cash** — see the open
-      question below.
+- [x] **7. The owner's sales were invisible to the drawer.** Now impossible:
+      cash without a till is refused. See the answered question below.
 - [x] **8. An opening count was booked as a write-off.** The screen never sent
       `isOpeningBalance`, so a shop's first count credited 5060 — a negative
       expense. Posting now asks which kind of count it is, in words.
@@ -140,13 +138,25 @@ just unit-tested.
       sales, then a total with refunds, paid-outs and drops subtracted
       invisibly. All three now show when non-zero.
 
-### One question for KJ
+### The shift question — ANSWERED (KJ, 2026-08-31)
 
-**Should the owner have to open a shift like everyone else?** Right now
-supervisors bypass the gate. Either policy is defensible, and with several
-shifts open per branch there is no unambiguous shift to attach a stray order
-to — so the amount is now reported rather than guessed at. Say the word and it
-becomes a hard gate; until then the overage at least has a name.
+> "owners should have no shift. cashier should be the only one with cash."
+
+Which turns the fix inside out. It is not "make the owner open a shift" — he
+keeps none, deliberately. It is that **cash cannot be taken without a drawer to
+put it in**, so a POS cash sale carrying no `shiftId` is refused outright
+(`CASH_WITHOUT_SHIFT`). Non-cash is untouched: a GCash sale opens no drawer, so
+an owner can still ring one, and the till hides the Cash and Split tabs rather
+than letting him count the money first and fail at Charge.
+
+Deliberately NOT requiring the shift to be open *now*: the Counter app queues
+sales offline and syncs them later, sometimes after the cashier has gone home.
+The cash was in a drawer when it was taken. Presence is the control; openness
+is a timing accident.
+
+`unattributedCashSales` survives as a backstop rather than the defence — it
+should now read zero for anything rung under the guard, so a non-zero value
+means an order predating the rule or something that got past it.
 
 ### Note on existing tenants
 `seedDefaultAccounts` never updates `postingControl` on accounts that already

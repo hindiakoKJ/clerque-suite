@@ -504,6 +504,7 @@ export default function PosTerminal() {
           open={showPayment}
           total={grandTotal()}
           isOffline={!isOnline}
+          canTakeCash={!!activeShift}
           onConfirm={handleCheckout}
           onClose={() => setShowPayment(false)}
         />
@@ -620,6 +621,12 @@ export default function PosTerminal() {
         open={showPayment}
         total={grandTotal()}
         isOffline={!isOnline}
+        /*
+          Owners bypass the shift gate and therefore have no drawer. The server
+          refuses a POS cash sale with no shiftId; this stops it being offered
+          in the first place.
+        */
+        canTakeCash={!!activeShift}
         onConfirm={handleCheckout}
         onClose={() => setShowPayment(false)}
       />

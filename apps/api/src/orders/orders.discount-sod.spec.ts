@@ -21,6 +21,9 @@ describe('OrdersService.create — discount authority', () => {
 
   const basePayload = (over: Record<string, unknown> = {}) => ({
     clientUuid: 'uuid-1',
+    // A real till always has one: a POS cash sale needs a drawer to put the
+    // money in, so cash without a shiftId is now refused.
+    shiftId: 'shift-1',
     branchId:   'branch-1',
     items:      [],
     payments:   [{ method: 'CASH', amount: 100 }],

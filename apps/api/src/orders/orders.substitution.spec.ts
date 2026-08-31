@@ -96,6 +96,7 @@ describe('OrdersService — ingredient substitution', () => {
       $executeRaw: jest.fn().mockResolvedValue(0),
       $executeRawUnsafe: jest.fn().mockResolvedValue(0),
       $queryRaw: jest.fn().mockResolvedValue([]),
+      shift: { count: jest.fn().mockResolvedValue(1) },
       product: {
         findMany: jest.fn().mockResolvedValue([
           { id: PRODUCT, name: 'Latte', inventoryMode: 'RECIPE_BASED', costPrice: 0 },
@@ -107,6 +108,9 @@ describe('OrdersService — ingredient substitution', () => {
       tx,
       prisma: {
         order:  { findFirst: jest.fn().mockResolvedValue(null) },
+        // The order carries a shiftId now — a POS cash sale needs a drawer to
+        // put the money in — so the ownership check runs.
+        shift:  { count: jest.fn().mockResolvedValue(1) },
         tenant: {
           findUniqueOrThrow: jest.fn().mockResolvedValue({ taxStatus: 'VAT', planCode: 'CLERQUE', isPtuHolder: false }),
           findUnique: jest.fn().mockResolvedValue({ taxStatus: 'VAT', planCode: 'CLERQUE' }),
@@ -150,6 +154,9 @@ describe('OrdersService — ingredient substitution', () => {
 
   const payload = () => ({
     clientUuid: 'u-' + Math.random(),
+    // A real till always has one: a POS cash sale needs a drawer to put the
+    // money in, so cash without a shiftId is now refused.
+    shiftId: 'shift-1',
     branchId: BRANCH,
     items: [{
       productId: PRODUCT,

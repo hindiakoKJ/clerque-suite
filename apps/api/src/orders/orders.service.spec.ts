@@ -34,6 +34,7 @@ function makePrismaMock() {
     inventoryLog: { create: jest.fn() },
     accountingEvent: { create: jest.fn() },
     tenant:      { findUniqueOrThrow: jest.fn(), findUnique: jest.fn().mockResolvedValue({ returnsOwnerOnly: false }) },
+    shift: { count: jest.fn().mockResolvedValue(1) },
     product:     { findMany: jest.fn().mockResolvedValue([]) },
     prescription: { findMany: jest.fn().mockResolvedValue([]) },
     user:        { findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },

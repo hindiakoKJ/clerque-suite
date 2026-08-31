@@ -221,6 +221,44 @@ export class OrdersService {
       }
     }
 
+    /*
+      Cash needs a till, and a till is a shift.
+
+      KJ's rule for the shop: owners have no shift, and the cashier is the only
+      one who handles cash. Supervisors bypass the shift gate on purpose, so
+      before this an owner ringing a cash sale put money in the barista's
+      drawer with no shiftId on the order — she counted over at close, the
+      surplus posted to the GL as income, and she was asked to explain a
+      windfall that was not hers.
+
+      So the control is not "make the owner open a shift". It is that CASH
+      cannot be taken without a drawer to put it in. Non-cash is untouched: a
+      GCash sale never opens a drawer, so an owner can still ring one.
+
+      Deliberately NOT requiring the shift to be open right now. The Counter
+      app queues sales offline and syncs them later, sometimes after the
+      cashier has gone home — the cash was in a drawer when it was taken, and
+      rejecting the sync would lose a real sale. Presence is the control;
+      openness is a timing accident.
+
+      Scoped to the POS channel. An ecosystem or online order settling in cash
+      has no till of ours behind it, and refusing those would break working
+      integrations for a rule about our own counter.
+    */
+    if (channel === 'POS' && !(payload as any).shiftId) {
+      const cashTotal = (payload.payments ?? [])
+        .filter((p) => p.method === 'CASH')
+        .reduce((sum, p) => sum + Number(p.amount ?? 0), 0);
+      if (cashTotal > 0) {
+        throw new BadRequestException({
+          code:    'CASH_WITHOUT_SHIFT',
+          message:
+            'Cash needs an open till. You are signed in without a shift, so there is no ' +
+            'drawer to put it in — have the cashier ring this sale, or take GCash instead.',
+        });
+      }
+    }
+
     // Guard: for machine callers, ENFORCE the money rather than trust it.
     //
     // The POS is first-party code operated by a person inside the business,

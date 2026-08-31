@@ -16,6 +16,9 @@ describe('OrdersService — platform (API-channel) creates', () => {
 
   const payload = (over: Partial<OfflineOrder> = {}): OfflineOrder => ({
     clientUuid: 'uuid-1',
+    // A real till always has one: a POS cash sale needs a drawer to put the
+    // money in, so cash without a shiftId is now refused.
+    shiftId: 'shift-1',
     branchId:   'branch-1',
     items: [
       {

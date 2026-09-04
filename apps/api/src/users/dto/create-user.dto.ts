@@ -1,3 +1,4 @@
+import { HIREABLE_ROLES, type HireableRole } from '@repo/shared-types';
 import {
   IsBoolean,
   IsEmail,
@@ -13,25 +14,18 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export const STAFF_ROLES = [
-  'BUSINESS_OWNER',
-  'MDM',
-  'BRANCH_MANAGER',
-  'SALES_LEAD',
-  'ACCOUNTANT',
-  'BOOKKEEPER',
-  'FINANCE_LEAD',
-  'PAYROLL_MASTER',
-  'WAREHOUSE_STAFF',
-  'CASHIER',
-  'GENERAL_EMPLOYEE',
-  'EXTERNAL_AUDITOR',
-  // Service / Display Accounts — kiosk credentials, not real employees.
-  // No Payroll, no Ledger, no Terminal. Excluded from staff cap.
-  'KIOSK_DISPLAY',
-] as const;
+/**
+ * Re-exported, not re-listed.
+ *
+ * This used to be its own hand-maintained array and had drifted from the
+ * database: AR_ACCOUNTANT and AP_ACCOUNTANT are real roles, granted
+ * `ledger:view` and named in 107 @Roles decorators, but were missing here --
+ * so `POST /users` rejected them and no shop could ever hire an AR or AP
+ * clerk. One list, in @repo/shared-types, is the fix.
+ */
+export const STAFF_ROLES = HIREABLE_ROLES;
 
-export type StaffRole = (typeof STAFF_ROLES)[number];
+export type StaffRole = HireableRole;
 
 export class CreateUserDto {
   @ApiProperty({ example: 'Maria Santos' })

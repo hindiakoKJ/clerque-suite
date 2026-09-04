@@ -14,6 +14,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { JournalTemplatesService } from './journal-templates.service';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 @Injectable()
 export class JournalTemplatesScheduler {
@@ -24,7 +25,7 @@ export class JournalTemplatesScheduler {
     private readonly svc:    JournalTemplatesService,
   ) {}
 
-  @Cron('0 20 * * *', { timeZone: 'Asia/Manila' })
+  @Cron('0 20 * * *', { timeZone: PH_TIMEZONE })
   async runDailyTemplates() {
     this.logger.log('Running due journal-template auto-instantiations…');
     const tenants = await this.prisma.tenant.findMany({

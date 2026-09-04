@@ -59,6 +59,14 @@ describe('SubRecipesService.makeBatch — the record of the preparation', () => 
         ]),
       },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
+      // Which products use this prep, and therefore which station it belongs
+      // to. Empty = no station derived, which is permissive everywhere.
+      bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // And which preps use it, for the one-hop inheritance a parked tub needs.
+      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // The shop's own stations, read so a persona scope written for a floor
+      // plan this shop does not have cannot refuse every batch.
+      station: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const svc = new SubRecipesService(prisma) as any;

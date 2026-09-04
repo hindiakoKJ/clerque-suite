@@ -72,7 +72,9 @@ export class AiQuotaGuard implements CanActivate {
       where: {
         tenantId,
         createdAt: { gte: startOfMonth },
-        action:    { in: ['journal_drafter', 'journal_guide', 'receipt_ocr'] },
+        // Procure's receipt reader spends a prompt like the others and is
+        // counted like the others; left off this list it was free.
+        action:    { in: ['journal_drafter', 'journal_guide', 'receipt_ocr', 'procure_receipt_lines'] },
       },
     });
 

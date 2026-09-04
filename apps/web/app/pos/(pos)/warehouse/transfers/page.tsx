@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Truck, Plus, Send, Inbox, X, ArrowRight } from 'lucide-react';
@@ -39,6 +39,9 @@ function fmt(iso: string | null) {
 export default function StockTransfersPage() {
   const qc = useQueryClient();
   const [showNew, setShowNew] = useState(false);
+  // Which transfer is unfolded to show its lines. Send and Receive used to
+  // be pressed against a line COUNT: "3 lines" of what, nobody could see.
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const { data: transfers = [], isLoading } = useQuery<Transfer[]>({
     queryKey: ['stock-transfers'],
@@ -98,8 +101,18 @@ export default function StockTransfersPage() {
             </thead>
             <tbody>
               {transfers.map((t) => (
-                <tr key={t.id} className="border-t border-border/40">
-                  <td className="px-4 py-2.5 font-mono text-xs">{t.transferNumber}</td>
+                <Fragment key={t.id}>
+                <tr className="border-t border-border/40">
+                  <td className="px-4 py-2.5 font-mono text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setOpenId(openId === t.id ? null : t.id)}
+                      className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                      title="Show what is in this transfer"
+                    >
+                      {t.transferNumber}
+                    </button>
+                  </td>
                   <td className="px-4 py-2.5">
                     {t.fromBranch.name} <ArrowRight className="inline h-3 w-3 mx-1 text-muted-foreground" /> {t.toBranch.name}
                   </td>
@@ -146,6 +159,8 @@ export default function StockTransfersPage() {
                     )}
                   </td>
                 </tr>
+                {openId === t.id && <TransferLinesRow id={t.id} />}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -154,6 +169,34 @@ export default function StockTransfersPage() {
 
       {showNew && <NewTransferModal onClose={() => setShowNew(false)} />}
     </div>
+  );
+}
+
+// ── The lines of one transfer ───────────────────────────────────────────────
+function TransferLinesRow({ id }: { id: string }) {
+  const { data, isLoading } = useQuery<{ lines: Array<{ id: string; quantity: string | number; rawMaterial: { name: string; unit: string } }> }>({
+    queryKey: ['stock-transfer', id],
+    queryFn:  () => api.get(`/warehouse/transfers/${id}`).then((r) => r.data),
+  });
+  return (
+    <tr className="bg-muted/20">
+      <td colSpan={6} className="px-6 py-3">
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : !data?.lines?.length ? (
+          <p className="text-xs text-muted-foreground">No lines.</p>
+        ) : (
+          <ul className="grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2">
+            {data.lines.map((l) => (
+              <li key={l.id} className="flex justify-between gap-3 border-b border-border/40 py-1">
+                <span>{l.rawMaterial.name}</span>
+                <span className="font-mono text-xs text-muted-foreground">{Number(l.quantity).toLocaleString()} {l.rawMaterial.unit}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </td>
+    </tr>
   );
 }
 

@@ -29,6 +29,7 @@
 
 import type { UserRole, AppAccessEntry } from './auth';
 import type { PermissionKey } from './permissions';
+import type { StationKind } from './layouts';
 
 export type PersonaKey =
   | 'OWNER_OPERATOR'
@@ -42,7 +43,9 @@ export type PersonaKey =
   | 'INVENTORY_MANAGER'
   | 'PAYROLL_OFFICER'
   | 'GENERAL_EMPLOYEE_DEFAULT'
-  | 'EXTERNAL_AUDITOR_DEFAULT';
+  | 'EXTERNAL_AUDITOR_DEFAULT'
+  | 'BARISTA'
+  | 'LINE_COOK';
 
 export interface PersonaTemplate {
   key: PersonaKey;
@@ -74,6 +77,22 @@ export interface PersonaTemplate {
    * touch sensitive data and should only be assignable by the owner).
    */
   requiresOwnerAssignment: boolean;
+  /**
+   * Which prep stations this persona works, if it is tied to one.
+   *
+   * A cafe's kitchen and bar both prep ahead, and until now every account that
+   * could record a batch could record ANY batch: a barista could book the
+   * spaghetti sauce, a cook could book the syrup. Nothing was stolen by that,
+   * but the record of who used which ingredients — the whole point of
+   * attributing prep to a station — was only as good as everyone remembering
+   * to pick the right one from a list.
+   *
+   * OMITTED means every station, which is what all twelve existing personas
+   * mean and what every account with no persona at all means. So this changes
+   * nothing for anyone until an owner deliberately hires someone as a barista
+   * or a line cook.
+   */
+  prepStationKinds?: StationKind[];
 }
 
 export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
@@ -216,6 +235,55 @@ export const PERSONAS: Record<PersonaKey, PersonaTemplate> = {
 
   // ── External Auditor ───────────────────────────────────────────────────────
   // T6 only — audit:log feature flag is required.
+  // ── Bar and kitchen ────────────────────────────────────────────────────────
+  // The two jobs in a cafe that PREP, kept apart so each one's board shows
+  // their own work. Both are ordinary front-line accounts otherwise.
+  BARISTA: {
+    key: 'BARISTA',
+    displayName: 'Barista',
+    description: 'Runs the bar: takes orders, and preps the bar\u2019s syrups and cold brew. Kitchen preps are not theirs to record.',
+    // A barista at Cafe Carolina IS the cashier -- there is no separate till
+    // person -- so this is built on CASHIER rather than GENERAL_EMPLOYEE.
+    baseRole: 'CASHIER',
+    appAccessOverrides: [],
+    extraPermissions: ['inventory:view'],
+    relevantFor: ['FNB'],
+    requiresOwnerAssignment: false,
+    /*
+      Every station where drinks get made, INCLUDING the plain counter.
+
+      The first version listed BAR / HOT_BAR / COLD_BAR, reading the station
+      enum's comments rather than the floor plans. Checked against
+      COFFEE_SHOP_LAYOUTS, that was wrong in both directions: no tier creates
+      HOT_BAR or COLD_BAR at all, and the two SMALLEST tiers -- CS-1 and CS-2,
+      the shops most likely to have exactly one barista -- create only a
+      COUNTER. So a barista at a one-counter shop would have opened a blank
+      prep board and been refused every batch by the server.
+
+      COUNTER is safe to include: no tier creates a COUNTER alongside a BAR, so
+      where it exists it IS the bar. HOT_BAR and COLD_BAR are kept because the
+      enum documents them as the CS-5 split and a shop may yet be moved onto
+      them by hand.
+    */
+    prepStationKinds: ['COUNTER', 'BAR', 'HOT_BAR', 'COLD_BAR'],
+  },
+  LINE_COOK: {
+    key: 'LINE_COOK',
+    displayName: 'Line cook',
+    description: 'Works the kitchen: preps the sauces, stocks and bases. Does not run the till.',
+    baseRole: 'GENERAL_EMPLOYEE',
+    appAccessOverrides: [],
+    extraPermissions: ['inventory:view'],
+    relevantFor: ['FNB'],
+    requiresOwnerAssignment: false,
+    /*
+      The food side. PASTRY_PASS is a real station -- CS-5 creates one -- and
+      leaving it out meant a bakery's pastry preps were refused to the very
+      people who make them.
+    */
+    prepStationKinds: ['KITCHEN', 'PASTRY_PASS'],
+  },
+
   EXTERNAL_AUDITOR_DEFAULT: {
     key: 'EXTERNAL_AUDITOR_DEFAULT',
     displayName: 'External Auditor',
@@ -300,4 +368,66 @@ export function listHiringPersonasForTenant(
   const specific = all.filter((p) => p.relevantFor.includes(businessType));
   const universal = all.filter((p) => p.relevantFor.length === 0);
   return [...specific, ...universal];
+}
+
+/* ─── Prep station scope ──────────────────────────────────────── */
+
+/**
+ * Which prep stations this person may record batches for.
+ *
+ * `null` means EVERY station, and that is the answer for every account that
+ * existed before this: the twelve original personas carry no station scope,
+ * and most staff have no persona at all. Restricting is opt-in, one hire at a
+ * time, which is the only safe default — a rule that silently narrowed what
+ * existing staff could do would strand a cook at 7am with a blank screen.
+ *
+ * Exported from here rather than written twice so the list a barista SEES and
+ * the rule the server ENFORCES cannot drift apart.
+ */
+export function prepStationKindsFor(
+  personaKey: string | null | undefined,
+): StationKind[] | null {
+  if (!personaKey) return null;
+  const persona = PERSONAS[personaKey as PersonaKey];
+  if (!persona) return null;
+  const kinds = persona.prepStationKinds;
+  return kinds && kinds.length > 0 ? kinds : null;
+}
+
+/**
+ * May this person record a batch for a prep at `stationKind`?
+ *
+ * A prep with NO station — one whose category was never routed, or one that
+ * genuinely feeds both the bar and the kitchen — is allowed to everyone.
+ * Hiding those would be the cruel reading: a shop that has not finished
+ * routing its menu would hand its cook an empty prep board and conclude the
+ * feature is broken. An unrouted prep is a setup gap, not a permission
+ * boundary.
+ */
+export function canPrepAtStation(
+  personaKey: string | null | undefined,
+  stationKind: string | null | undefined,
+  /**
+   * Every station kind this shop actually has, when the caller knows them.
+   *
+   * The backstop against a floor plan nobody anticipated. Widening the lists
+   * above fixed the shapes that exist TODAY, but the lists are still a guess
+   * about how a shop is laid out, and a guess that is wrong hands somebody an
+   * empty screen and a refusal on every tap -- the most expensive way for a
+   * rule to be wrong, because it looks like the feature is broken.
+   *
+   * So: if a persona's stations do not overlap this shop's stations AT ALL,
+   * the scope is meaningless here and is not applied. A rule that would hide
+   * everything is a rule that was written for a different shop.
+   */
+  shopStationKinds?: readonly string[] | null,
+): boolean {
+  const allowed = prepStationKindsFor(personaKey);
+  if (!allowed) return true;
+  if (!stationKind) return true;
+  if (shopStationKinds && shopStationKinds.length > 0) {
+    const overlaps = shopStationKinds.some((k) => allowed.includes(k as StationKind));
+    if (!overlaps) return true;
+  }
+  return allowed.includes(stationKind as StationKind);
 }

@@ -571,6 +571,7 @@ export class RecipeCatchupService {
   }): CatchupWarning[] {
     const warnings: CatchupWarning[] = [];
 
+
     if (ctx.lineCount === 0) {
       warnings.push({
         level: 'info',

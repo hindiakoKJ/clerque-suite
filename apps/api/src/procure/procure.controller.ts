@@ -45,8 +45,9 @@ export class ProcureController {
   @Post('open')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Today's open request for this branch" })
-  open(@CurrentUser() user: JwtPayload, @Body() body: { branchId?: string }) {
-    return this.procure.openRequest(user.tenantId!, body.branchId ?? user.branchId!, user.sub);
+  async open(@CurrentUser() user: JwtPayload, @Body() body: { branchId?: string }) {
+    const branchId = await this.procure.resolveBranch(user.tenantId!, body.branchId ?? user.branchId);
+    return this.procure.openRequest(user.tenantId!, branchId, user.sub);
   }
 
   /**
@@ -62,8 +63,8 @@ export class ProcureController {
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get('menu-ceiling')
   @ApiOperation({ summary: 'Ingredients ranked by how much of the menu they are limiting' })
-  menuCeiling(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
-    return this.procure.menuCeiling(user.tenantId!, branchId ?? user.branchId!);
+  async menuCeiling(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
+    return this.procure.menuCeiling(user.tenantId!, await this.procure.resolveBranch(user.tenantId!, branchId ?? user.branchId));
   }
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
@@ -80,8 +81,9 @@ export class ProcureController {
   @Post('pull-low-stock')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Add everything below its reorder level to the open request' })
-  pull(@CurrentUser() user: JwtPayload, @Body() body: { branchId?: string }) {
-    return this.procure.pullLowStock(user.tenantId!, body.branchId ?? user.branchId!, user.sub);
+  async pull(@CurrentUser() user: JwtPayload, @Body() body: { branchId?: string }) {
+    const branchId = await this.procure.resolveBranch(user.tenantId!, body.branchId ?? user.branchId);
+    return this.procure.pullLowStock(user.tenantId!, branchId, user.sub);
   }
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
@@ -136,9 +138,15 @@ export class ProcureController {
   receive(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { paymentMethod?: 'CASH' | 'OWNER_FUNDED' },
+    @Body() body: { paymentMethod?: 'CASH' | 'OWNER_FUNDED'; acceptCostChange?: boolean },
   ) {
-    return this.procure.receiveRequest(user.tenantId!, id, user.sub, body.paymentMethod ?? 'CASH');
+    /*
+      "The price really did change" from this screen too. A line refused by the
+      order-of-magnitude guard left the request at BOUGHT with no way past the
+      guard except the receipts screen, and a hand-typed request never had one.
+    */
+    return this.procure.receiveRequest(user.tenantId!, id, user.sub, body.paymentMethod ?? 'CASH',
+      body.acceptCostChange === true ? { acceptCostChangeAll: true } : {});
   }
 
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM')

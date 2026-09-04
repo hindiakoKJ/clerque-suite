@@ -261,14 +261,17 @@ export class InventoryController {
   }
 
   /** Create a new raw material (ingredient) */
-  @Roles('BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  // BRANCH_MANAGER is admitted to Stock on hand by the Procure layout, and a
+  // manager who receives the delivery is the person who sets the reorder
+  // level. Admitting them here stops the screen offering buttons that 403.
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF')
   @Post('raw-materials')
   createRawMaterial(@CurrentUser() user: JwtPayload, @Body() dto: CreateRawMaterialDto) {
     return this.inventoryService.createRawMaterial(user.tenantId!, dto);
   }
 
   /** Update raw material name, unit, or cost price */
-  @Roles('BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF')
   @Patch('raw-materials/:id')
   @HttpCode(HttpStatus.OK)
   updateRawMaterial(
@@ -304,7 +307,7 @@ export class InventoryController {
    * Sprint 25 — Toggle FEFO batch/expiry tracking on a raw material.
    * Enforces Solo tier cap (Lite: 0, Standard: 10, Pro: unlimited).
    */
-  @Roles('BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF')
   @Patch('raw-materials/:id/lot-tracking')
   @HttpCode(HttpStatus.OK)
   setRawMaterialLotTracking(
@@ -335,7 +338,9 @@ export class InventoryController {
    * writing anything. Always call this before `apply`: the line count it
    * returns is the confirmation token `apply` demands.
    */
-  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'SUPER_ADMIN')
+  // Preview is a read. WAREHOUSE_STAFF reach the page through the Procure
+  // layout and could open it only to be refused; apply stays with the owner.
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'SUPER_ADMIN')
   @Post('recipe-catchup/preview')
   @HttpCode(HttpStatus.OK)
   previewRecipeCatchup(

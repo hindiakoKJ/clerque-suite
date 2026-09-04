@@ -108,6 +108,12 @@ describe('SubRecipesService — making a batch', () => {
         ),
       },
       subRecipeItem: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), createMany: jest.fn() },
+      // Which products use this prep, and therefore which station it belongs
+      // to. Empty = no station derived, which is permissive everywhere.
+      bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // The shop's own stations, read so a persona scope written for a floor
+      // plan this shop does not have cannot refuse every batch.
+      station: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const svc = new SubRecipesService(prisma) as any;

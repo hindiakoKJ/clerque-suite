@@ -23,6 +23,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiService, MODEL_OPUS } from './ai.service';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 const DRAFTER_MODEL = MODEL_OPUS;
 const DRAFTER_PROMPT_VERSION = 'v1.0.0';
@@ -204,7 +205,7 @@ export class JournalDrafterService {
     ]);
 
     const todayPh = new Date(
-      new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' }),
+      new Date().toLocaleString('en-US', { timeZone: PH_TIMEZONE }),
     ).toISOString().slice(0, 10);
 
     return {

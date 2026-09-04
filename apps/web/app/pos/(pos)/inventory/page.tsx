@@ -12,6 +12,7 @@ import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { isFnbType } from '@repo/shared-types';
 import { toast } from 'sonner';
 import { todayIso } from '@/lib/today';
+import { INGREDIENT_UNITS } from '@repo/shared-types';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -26,6 +27,8 @@ interface RawMaterial {
   stockQty:      number | null;
   isLowStock:    boolean;
   isActive:      boolean;
+  /** Batches with expiry dates, used oldest-expiry-first. */
+  lotsTracked?:  boolean;
 }
 
 interface Branch { id: string; name: string; }
@@ -33,7 +36,10 @@ interface Branch { id: string; name: string; }
 const INPUT_CLS =
   'w-full border border-border bg-background rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent transition-shadow';
 
-const UNITS = ['g', 'kg', 'ml', 'L', 'pc', 'pcs', 'oz', 'tsp', 'tbsp', 'cup', 'sachet', 'slice', 'sheet', 'pack'];
+// One list, in @repo/shared-types. Two copies of the units a shop may pick
+// from must agree: an ingredient created with a unit the other screen does
+// not offer becomes uneditable there, and its recipes mismatch in silence.
+const UNITS = INGREDIENT_UNITS;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -68,7 +74,7 @@ export default function InventoryPage() {
     branchId: '', quantity: '', reasonCode: 'DAMAGE', note: '',
   });
   const [editingMat, setEditingMat] = useState<RawMaterial | null>(null);
-  const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '', recipeUnit: '', packSize: '' });
+  const [matForm,    setMatForm]    = useState({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '', recipeUnit: '', packSize: '', lotsTracked: false });
   const [receiveForm,setReceiveForm]= useState({
     branchId: '',
     quantity: '',
@@ -150,7 +156,7 @@ export default function InventoryPage() {
   // ── Ingredient CRUD ────────────────────────────────────────────────────────
 
   function openCreateMat() {
-    setMatForm({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '', recipeUnit: '', packSize: '' });
+    setMatForm({ name: '', unit: 'g', category: 'INGREDIENT', costPrice: '', lowStockAlert: '', recipeUnit: '', packSize: '', lotsTracked: false });
     setEditingMat(null);
     setMatModal('create');
   }
@@ -167,6 +173,7 @@ export default function InventoryPage() {
       // here would move the shelf without anyone touching the shelf.
       recipeUnit: '',
       packSize:   '',
+      lotsTracked: m.lotsTracked ?? false,
     });
     setEditingMat(m);
     setMatModal('edit');
@@ -229,6 +236,14 @@ export default function InventoryPage() {
         toast.success('Ingredient created.');
       } else if (editingMat) {
         await api.patch(`/inventory/raw-materials/${editingMat.id}`, payload);
+        /*
+          Batch tracking has its own route because it is gated by plan (Lite
+          none, Standard ten, Pro unlimited). The route existed; no screen
+          ever called it, so the only way to turn it on was the database.
+        */
+        if (matForm.lotsTracked !== (editingMat.lotsTracked ?? false)) {
+          await api.patch(`/inventory/raw-materials/${editingMat.id}/lot-tracking`, { enabled: matForm.lotsTracked });
+        }
         toast.success('Ingredient updated.');
       }
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
@@ -261,13 +276,15 @@ export default function InventoryPage() {
         // the milk off twice, and a write-off is not visible while it happens.
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
       );
-      const d = res.data as { duplicate?: boolean; quantityAfter?: number };
+      const d = res.data as { duplicate?: boolean; quantityAfter?: number; warning?: string | null };
       if (d.duplicate) {
         toast.info('That write-off was already recorded.');
       } else {
         toast.success(
           `${qty} ${editingMat.unit} written off — ${d.quantityAfter ?? '?'} ${editingMat.unit} left.`,
         );
+        // The shelf moved but the books did not: no cost on file to value it.
+        if (d.warning) toast.warning(d.warning, { duration: 10000 });
       }
       setMatModal(null);
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
@@ -287,7 +304,7 @@ export default function InventoryPage() {
     if (!receiveForm.quantity || isNaN(qty) || qty <= 0) { toast.error('Enter a valid quantity.'); return; }
     setMatSaving(true);
     try {
-      await api.post(`/inventory/raw-materials/${editingMat.id}/receive`, {
+      const received = await api.post(`/inventory/raw-materials/${editingMat.id}/receive`, {
         branchId:        receiveForm.branchId,
         quantity:        qty,
         costPrice:       receiveForm.costPrice ? parseFloat(receiveForm.costPrice) : undefined,
@@ -309,6 +326,9 @@ export default function InventoryPage() {
         } : {}),
       });
       toast.success(`${qty} ${editingMat.unit} of "${editingMat.name}" received.`);
+      // Received at no cost: the shelf moved, the books did not. Said now.
+      const warning = (received.data as { warning?: string | null })?.warning;
+      if (warning) toast.warning(warning, { duration: 10000 });
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
       setMatModal(null);
     } catch (err: unknown) {
@@ -722,6 +742,26 @@ export default function InventoryPage() {
                 </p>
               </div>
             </div>
+            {matModal === 'edit' && (
+              <div className="px-6 pb-4">
+                <label className="flex items-start gap-3 rounded-xl border border-border px-3 py-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={matForm.lotsTracked}
+                    onChange={(e) => setMatForm((f) => ({ ...f, lotsTracked: e.target.checked }))}
+                    className="mt-0.5 h-4 w-4"
+                  />
+                  <span className="text-sm">
+                    <span className="font-medium">Track batches and expiry dates</span>
+                    <span className="block text-[11px] text-muted-foreground mt-0.5">
+                      Each delivery becomes a batch with its own expiry. Sales use the batch that expires first,
+                      and the expiry board warns before it does. Best for milk, cream, meat. Your plan may cap
+                      how many ingredients can do this.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
             <div className="px-6 pb-5 flex gap-3">
               <button
                 onClick={() => setMatModal(null)}

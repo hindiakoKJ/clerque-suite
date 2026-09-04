@@ -81,6 +81,52 @@ export class DocumentsService {
     });
   }
 
+  /**
+   * File bytes that never touched disk.
+   *
+   * `upload` above takes what multer wrote to a temp path. A receipt photo
+   * arrives as base64 in a JSON body -- the same way the AI reader takes it,
+   * so the client sends one thing, not a JSON body and a multipart form --
+   * and there is no temp file to move. Same checks, same storage path, same
+   * Document row; only the source differs.
+   */
+  async uploadBuffer(
+    tenantId: string,
+    entityType: string,
+    entityId: string,
+    buffer: Buffer,
+    mimeType: string,
+    filename: string,
+    label?: string,
+    uploadedById?: string,
+  ) {
+    if (!ALLOWED_MIMES.has(mimeType)) {
+      throw new BadRequestException(
+        `File type "${mimeType}" is not allowed. Accepted: PDF, JPEG, PNG, WEBP.`,
+      );
+    }
+    if (buffer.length > MAX_SIZE_BYTES) {
+      throw new BadRequestException('File exceeds the 10 MB size limit.');
+    }
+    const safeBasename = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const uniquePrefix = crypto.randomBytes(6).toString('hex');
+    const storagePath = `tenants/${tenantId}/${entityType.toLowerCase()}/${entityId}/${uniquePrefix}_${safeBasename}`;
+
+    await this.storage.putBuffer(buffer, storagePath, { contentType: mimeType, tenantId });
+
+    return this.prisma.document.create({
+      data: {
+        tenantId, entityType, entityId,
+        filename:  filename,
+        mimeType,
+        sizeBytes: buffer.length,
+        storagePath,
+        label:     label ?? null,
+        uploadedById: uploadedById ?? null,
+      },
+    });
+  }
+
   /** List all documents for a given entity. */
   async list(tenantId: string, entityType: string, entityId: string) {
     return this.prisma.document.findMany({

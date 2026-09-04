@@ -2598,6 +2598,254 @@ export class ImportService {
   }
 
   /**
+   * The shop's whole recipe book, costed, in the shape a PivotTable wants.
+   *
+   * `recipesExport` above answers "what are my recipes?" and is built with
+   * makeTemplate, which puts a title and a block of instructions above the
+   * header row. That is right for a file somebody fills in by hand and wrong
+   * for a file somebody pivots: Insert > PivotTable wants a clean rectangle
+   * with the headers on the first row, and merged instruction cells above them
+   * turn a two-click job into a chore.
+   *
+   * So this one is built directly. Headers on row 1, one row per fact, no
+   * merged cells, no blank rows, no totals inline, and each sheet wrapped in a
+   * real Excel Table — which makes Insert > PivotTable prefill its own source
+   * range, and gives the filter buttons for free.
+   *
+   * TWO SHEETS, TWO GRAINS, ON PURPOSE
+   * `Recipes` is one row per recipe LINE. `Dish Costs` is one row per DISH.
+   * Keeping them apart is the whole reason the numbers can be trusted in a
+   * pivot: a selling price living on a line-grain sheet gets summed once per
+   * ingredient, so Buffalo Wings at P150 across eleven lines reads as P1,650.
+   * Every column on `Recipes` is safe to Sum; every column on `Dish Costs` is
+   * one row per dish, so it is safe there too.
+   *
+   * The first four columns are the Recipes importer's own, in its own order,
+   * so the file that comes out is a file the importer takes back: it reads
+   * columns 1-3 positionally and finds Unit by header, and never looks past
+   * them. Nothing added here can shift a value into the wrong field, and no
+   * added header may begin with "unit" or it would be found as the unit column.
+   */
+  async recipeCostingExport(tenantId: string): Promise<Buffer> {
+    const products = await this.prisma.product.findMany({
+      where: { tenantId, isActive: true, bomItems: { some: {} } },
+      select: {
+        name: true, price: true,
+        category: { select: { name: true } },
+        bomItems: {
+          select: {
+            quantity: true,
+            rawMaterial: {
+              select: {
+                name: true, unit: true, costPrice: true,
+                subRecipeItems: { select: { id: true }, take: 1 },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    /*
+      One row per line, ordered so a human reading it top to bottom sees a
+      whole dish before the next one starts. A pivot does not care about order;
+      the person scrolling for their dish does.
+    */
+    type Line = {
+      product: string; ingredient: string; qty: number; unit: string;
+      category: string; madeOrBought: string; unitCost: number | null;
+    };
+    const lines: Line[] = [];
+    for (const p of products) {
+      const sorted = [...p.bomItems].sort((a, b) =>
+        a.rawMaterial.name.localeCompare(b.rawMaterial.name));
+      for (const b of sorted) {
+        const rm = b.rawMaterial;
+        const raw = rm.costPrice != null ? Number(rm.costPrice) : 0;
+        lines.push({
+          product:      p.name,
+          ingredient:   rm.name,
+          qty:          Number(b.quantity),
+          unit:         rm.unit,
+          category:     p.category?.name ?? '(no category)',
+          // An ingredient that is itself built from other ingredients is made
+          // in-house. Worth a column: it splits food cost into what the shop
+          // buys and what it makes, which are different problems to fix.
+          madeOrBought: rm.subRecipeItems.length > 0 ? 'Made in-house' : 'Bought',
+          unitCost:     raw > 0 ? raw : null,
+        });
+      }
+    }
+
+    const MONEY_FMT = '#,##0.00';
+    const FINE_FMT  = '#,##0.0000';
+    const QTY_FMT   = '#,##0.###';
+    const PCT_FMT   = '0.0%';
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Clerque';
+    /*
+      Every formula also carries the value it evaluates to. exceljs writes a
+      bare <f> with no cached <v> otherwise, and a PivotTable built over cells
+      that have never been calculated aggregates nothing. fullCalcOnLoad makes
+      Excel refresh them all on open regardless.
+    */
+    wb.calcProperties.fullCalcOnLoad = true;
+
+    // ── Sheet 1: Recipes — one row per line ─────────────────────────────────
+    const ws = wb.addWorksheet('Recipes');
+    const HEADERS = [
+      'Product Name*', 'Ingredient Name*', 'Quantity*', 'Unit',
+      'Category', 'Made or Bought', 'Cost per Unit (₱)', 'Line Cost (₱)', 'Priced?',
+    ];
+    const first = 2;
+    const last = Math.max(first, lines.length + 1);
+
+    const rows = lines.map((l, i) => {
+      const r = i + first;
+      return [
+        l.product, l.ingredient, l.qty, l.unit, l.category, l.madeOrBought,
+        l.unitCost,
+        // Quantity x cost, live, so editing a quantity recosts the line in
+        // front of whoever edited it.
+        { formula: `IF(OR(NOT(ISNUMBER($C${r})),NOT(ISNUMBER($G${r}))),"",$C${r}*$G${r})`,
+          result: l.unitCost == null ? '' : +(l.qty * l.unitCost).toFixed(4) },
+        l.unitCost == null ? 'No price yet' : 'Yes',
+      ];
+    });
+
+    ws.addTable({
+      name: 'RecipeLines',
+      ref: 'A1',
+      headerRow: true,
+      style: { theme: 'TableStyleLight1', showRowStripes: true },
+      columns: HEADERS.map((h) => ({ name: h, filterButton: true })),
+      rows: rows.length ? rows : [['', '', null, '', '', '', null, null, '']],
+    });
+
+    ws.getColumn(3).numFmt = QTY_FMT;
+    ws.getColumn(7).numFmt = FINE_FMT;
+    ws.getColumn(8).numFmt = MONEY_FMT;
+    [30, 28, 12, 8, 24, 16, 18, 16, 14].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+    // ── Sheet 2: Dish Costs — one row per dish ──────────────────────────────
+    const ds = wb.addWorksheet('Dish Costs');
+    const DHEAD = [
+      'Category', 'Product Name', 'Sells For (₱)', 'Cost to Make (₱)',
+      'Margin (₱)', 'Margin %', 'Recipe Lines', 'Lines With No Price', 'Costing Complete?',
+    ];
+
+    const P = `Recipes!$A$${first}:$A$${last}`;
+    const H = `Recipes!$H$${first}:$H$${last}`;
+    const I = `Recipes!$I$${first}:$I$${last}`;
+
+    const drows = products.map((p, i) => {
+      const r = i + 2;
+      const mine = lines.filter((l) => l.product === p.name);
+      const unpriced = mine.filter((l) => l.unitCost == null).length;
+      const cost = mine.reduce((s, l) => s + (l.unitCost == null ? 0 : l.qty * l.unitCost), 0);
+      const price = Number(p.price);
+      const complete = unpriced === 0;
+
+      /*
+        SUMPRODUCT rather than SUMIF, and it is not a style choice. SUMIF and
+        COUNTIF treat their criteria as PATTERNS: a dish named "Buffalo Wings
+        *NEW*" would silently match every dish beginning with "Buffalo Wings ".
+        No name in this tenant contains a wildcard today, which is exactly the
+        kind of thing that stops being true without anyone noticing.
+      */
+      return [
+        p.category?.name ?? '(no category)',
+        p.name,
+        price,
+        { formula: `SUMPRODUCT((${P}=$B${r})*IF(ISNUMBER(${H}),${H},0))`,
+          result: +cost.toFixed(2) },
+        { formula: `IF($D${r}="","",$C${r}-$D${r})`, result: +(price - cost).toFixed(2) },
+        // Blank, not zero, while anything is unpriced. A margin computed from a
+        // cost that is missing an ingredient is not a small error, it is a
+        // flattering one -- the same reason recipeCostingReport returns null.
+        { formula: `IF(OR($I${r}<>"Yes",$C${r}<=0),"",($C${r}-$D${r})/$C${r})`,
+          result: complete && price > 0 ? +((price - cost) / price).toFixed(6) : '' },
+        // `*1` rather than the more idiomatic `--`: both coerce TRUE/FALSE to
+        // 1/0 in Excel, but `--` is parsed inconsistently outside it, and this
+        // column is one a spreadsheet reader silently reports as zero when it
+        // gets it wrong. Multiplication is understood everywhere.
+        { formula: `SUMPRODUCT((${P}=$B${r})*1)`, result: mine.length },
+        { formula: `SUMPRODUCT((${P}=$B${r})*(${I}="No price yet"))`, result: unpriced },
+        { formula: `IF($H${r}>0,"No","Yes")`, result: complete ? 'Yes' : 'No' },
+      ];
+    });
+
+    ds.addTable({
+      name: 'DishCosts',
+      ref: 'A1',
+      headerRow: true,
+      style: { theme: 'TableStyleLight1', showRowStripes: true },
+      columns: DHEAD.map((h) => ({ name: h, filterButton: true })),
+      rows: drows.length ? drows : [['', '', null, null, null, null, null, null, '']],
+    });
+
+    ds.getColumn(3).numFmt = MONEY_FMT;
+    ds.getColumn(4).numFmt = MONEY_FMT;
+    ds.getColumn(5).numFmt = MONEY_FMT;
+    ds.getColumn(6).numFmt = PCT_FMT;
+    [24, 30, 14, 16, 14, 10, 13, 18, 18].forEach((w, i) => { ds.getColumn(i + 1).width = w; });
+    ds.views = [{ state: 'frozen', ySplit: 1 }];
+
+    // ── Sheet 3: Notes — last, deliberately ─────────────────────────────────
+    /*
+      Kept off the two data sheets so their first row is the header row, and
+      kept LAST so it can never be the sheet an upload lands on: parseFile falls
+      back to the first sheet in the file when it cannot find the one it wants.
+    */
+    const notes = wb.addWorksheet('Notes');
+    const say = (t: string, bold = false) => {
+      const row = notes.addRow([t]);
+      row.getCell(1).font = { bold, size: bold ? 12 : 10, color: { argb: bold ? 'FF8B5E3C' : 'FF444444' } };
+      row.getCell(1).alignment = { wrapText: true, vertical: 'top' };
+    };
+    const unpricedNames = [...new Set(lines.filter((l) => l.unitCost == null).map((l) => l.ingredient))];
+    const brokenDishes = products.filter((p) =>
+      p.bomItems.some((b) => !(Number(b.rawMaterial.costPrice) > 0))).length;
+
+    say('Your recipes, costed', true);
+    say('');
+    say(`${lines.length} recipe lines across ${products.length} products, exported ${new Date().toISOString().slice(0, 10)}.`);
+    say(`${brokenDishes} product${brokenDishes === 1 ? '' : 's'} cannot be costed yet because `
+      + `${unpricedNames.length} ingredient${unpricedNames.length === 1 ? ' has' : 's have'} no price. `
+      + `Their margin is left blank rather than reported as if the missing ingredient were free.`);
+    if (unpricedNames.length) say(`No price yet: ${unpricedNames.join(', ')}`);
+    say('');
+    say('To pivot it', true);
+    say('Click any cell on Recipes or Dish Costs, then Insert > PivotTable. The range is already a named '
+      + 'table (RecipeLines and DishCosts), so Excel fills the source in for you.');
+    say('Pivot Recipes to ask where the money goes — Line Cost by Ingredient, or by Category. Pivot Dish '
+      + 'Costs to ask which dishes earn — Margin % by Product. Keep them apart: a selling price summed '
+      + 'once per ingredient is eleven times too big, which is why it is not on the Recipes sheet.');
+    say('');
+    say('To change something', true);
+    say('Edit Quantity on the Recipes sheet and upload this file back at Settings > Import > Recipes. Only '
+      + 'the first four columns are read; everything after them is ignored on the way in.');
+    say('Do NOT edit a Product Name or an Ingredient Name. Both are matched by name, so an edited one '
+      + 'either fails to find its target or attaches the line to something else.');
+    say('Adding a line to an existing dish works — type it under the last row. A brand-new dish, or a '
+      + 'brand-new ingredient, has to exist first: add it with the Products or Ingredients template, or '
+      + 'use the Setup Pack, which loads Products, then Ingredients, then Recipes in one upload.');
+    say('Deleting a row here does NOT delete the recipe line. The import only ever adds or updates; remove '
+      + 'a line in the app instead.');
+    say('');
+    say('Cost per Unit is a snapshot', true);
+    say('It is what the ingredient costs in Clerque right now. Recording a delivery recalculates it as a '
+      + 'weighted average of what you actually paid, so export again after a delivery rather than trusting '
+      + 'an old file.');
+    notes.getColumn(1).width = 110;
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /**
    * The whole setup as ONE file — the same seven sheets the blank pack ships,
    * but filled in where the data exists.
    *
@@ -3373,7 +3621,22 @@ export class ImportService {
           }
 
           // Accounting event for the JE (Dr 1050 / Cr Cash/AP/Owner)
-          const totalValue = qty * netCost;
+          /*
+            Rounded to the centavo, exactly as `grossValue` below is.
+
+            The same defect the direct receive path had, in the importer's own
+            copy: this was the bare product while grossValue was
+            `+(...).toFixed(2)`. For a NON-VAT or owner-funded receipt they are
+            the SAME multiplication, so a value landing on a half-centavo split
+            the two legs of the entry and the trial balance stopped footing:
+            5325 x 0.575 = 3061.875 posted Dr 3061.88 / Cr 3061.87.
+
+            Both opening-stock rows that broke Carolina's books came through
+            HERE, not through receiveRawMaterial — the importer is how a shop
+            loads its opening figures, which is exactly when a half-centavo is
+            most likely and least likely to be noticed.
+          */
+          const totalValue = +(qty * netCost).toFixed(2);
           await tx.accountingEvent.create({
             data: {
               tenantId,

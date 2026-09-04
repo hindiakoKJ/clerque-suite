@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronDown, ChevronRight, Plus, X, Receipt,
@@ -12,6 +13,25 @@ import { downloadAuthFile } from '@/lib/utils';
 import { toast } from 'sonner';
 import { ReceiptModal, type ReceiptData } from '@/components/pos/ReceiptModal';
 import { ImportModal } from '@/components/ui/ImportModal';
+
+/**
+ * A reference that names a purchase request links to it. Stock receipts post
+ * with the request's number as their reference, so from the books you can
+ * reach the delivery that made the entry -- before this, the number was text.
+ */
+function refLink(reference: string) {
+  const m = /^(REQ-\d{8}-\d{3})/.exec(reference);
+  if (!m) return reference;
+  return (
+    <Link
+      href={`/procure/requests?view=${encodeURIComponent(m[1])}`}
+      onClick={(e) => e.stopPropagation()}
+      className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+    >
+      {reference}
+    </Link>
+  );
+}
 
 function fmtPeso(n: number) {
   return n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -310,7 +330,7 @@ export default function JournalPage() {
                             <td className="px-4 py-2.5 max-w-xs">
                               <p className="text-foreground truncate">{entry.description}</p>
                               {entry.reference && (
-                                <p className="text-xs text-muted-foreground mt-0.5 truncate">Ref: {entry.reference}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5 truncate">Ref: {refLink(entry.reference)}</p>
                               )}
                               {isReversal && (
                                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
@@ -467,7 +487,7 @@ export default function JournalPage() {
                                   {entry.reference && (
                                     <span>
                                       <span className="font-medium text-foreground">Reference:</span>{' '}
-                                      {entry.reference}
+                                      {refLink(entry.reference)}
                                     </span>
                                   )}
                                   {entry.createdBy && (

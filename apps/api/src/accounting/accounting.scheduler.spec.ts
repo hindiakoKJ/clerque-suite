@@ -1,100 +1,65 @@
 import { AccountingScheduler } from './accounting.scheduler';
 
 /**
- * A failed accounting event was a dead end.
- *
- * `processAllPending` only ever selects PENDING, so once an event flipped to
- * FAILED nothing re-offered it and nothing reported it. A sale whose journal
- * entry failed once — a period closed for the minute it took to post, an
- * account deactivated mid-shift — never reached the books at all, and the only
- * sign was that the trial balance was quietly short.
- *
- * That is the worst shape a bug can have: silent, permanent, and invisible in
- * a report that still foots.
+ * An accounting event that fails five times is money missing from the books,
+ * and until now the only place that said so was a log line nobody at the shop
+ * reads. The retry job now tells the tenant, once per count, where to look.
  */
-describe('AccountingScheduler.retryFailedEvents', () => {
-  function build(opts: { stuck?: Array<{ tenantId: string; n: number }> } = {}) {
-    const logs: string[] = [];
-    const errors: string[] = [];
+describe('AccountingScheduler — stuck events reach a person', () => {
+  function build(stuck: Array<{ tenantId: string; n: number; lastError?: string }>) {
+    const created: any[] = [];
     const prisma: any = {
       accountingEvent: {
-        updateMany: jest.fn().mockResolvedValue({ count: 3 }),
-        groupBy: jest.fn().mockResolvedValue(
-          (opts.stuck ?? []).map((s) => ({ tenantId: s.tenantId, _count: { _all: s.n } })),
-        ),
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'evt-9', type: 'SALE', lastError: 'Accounting period is closed.',
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        groupBy: jest.fn().mockResolvedValue(stuck.map((s) => ({ tenantId: s.tenantId, _count: { _all: s.n } }))),
+        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+          const s = stuck.find((x) => x.tenantId === where.tenantId);
+          return Promise.resolve(s ? { id: 'ev-1', type: 'INVENTORY_ADJUSTMENT', lastError: s.lastError ?? null } : null);
         }),
       },
     };
-    const svc = new AccountingScheduler(prisma, {} as any);
-    (svc as any).logger = {
-      log:   (m: string) => logs.push(m),
-      error: (m: string) => errors.push(m),
+    const journal: any = { processAllPending: jest.fn() };
+    const notifications: any = {
+      create: jest.fn().mockImplementation((args: any) => { created.push(args); return Promise.resolve({ id: 'n1' }); }),
     };
-    return { svc, prisma, logs, errors };
+    const svc = new AccountingScheduler(prisma, journal, notifications);
+    return { svc, created, prisma };
   }
 
-  it('re-queues failed events so the normal processor picks them up', async () => {
-    // Flipped back to PENDING rather than reprocessed here, so a retry takes
-    // exactly the same path as a first attempt.
-    const { svc, prisma } = build();
+  it('sends a warning to the tenant with the count, the reason and the place to fix it', async () => {
+    const { svc, created } = build([{ tenantId: 't1', n: 3, lastError: 'Period 2026-08 is closed.' }]);
     await svc.retryFailedEvents();
-    expect(prisma.accountingEvent.updateMany).toHaveBeenCalledWith({
-      where: { status: 'FAILED', retryCount: { lt: 5 } },
-      data:  { status: 'PENDING' },
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({
+      tenantId: 't1', userId: null, kind: 'WARNING', link: '/ledger/events', dedupeKey: 'accounting-stuck-3',
     });
+    expect(created[0].title).toBe('3 stock entries could not be posted to the books');
+    expect(created[0].body).toContain('Period 2026-08 is closed.');
+    expect(created[0].body).toContain('The shelf is right; the books are missing it');
   });
 
-  it('says how many it re-queued', async () => {
-    const { svc, logs } = build();
+  it('says it once, in the singular, for one event', async () => {
+    const { svc, created } = build([{ tenantId: 't1', n: 1 }]);
     await svc.retryFailedEvents();
-    expect(logs.join('\n')).toMatch(/Re-queued 3 failed accounting event/);
+    expect(created[0].title).toBe('1 stock entry could not be posted to the books');
+    expect(created[0].body).toMatch(/^A stock movement could not be recorded/);
   });
 
-  it('stops retrying after five attempts instead of looping forever', async () => {
-    const { svc, prisma } = build();
+  it('re-queues only the events that still have retries left', async () => {
+    const { svc, prisma } = build([]);
     await svc.retryFailedEvents();
+
+    // Everything at or past the ceiling is left alone deliberately: it is
+    // what the notification is about. Without this the ceiling could be
+    // dropped and failed events would be retried forever in silence.
     const where = prisma.accountingEvent.updateMany.mock.calls[0][0].where;
+    expect(where.status).toBe('FAILED');
     expect(where.retryCount).toEqual({ lt: 5 });
   });
 
-  it('shouts about events that gave up, because that is money off the books', async () => {
-    const { svc, errors } = build({ stuck: [{ tenantId: 't1', n: 4 }] });
+  it('stays quiet when nothing is stuck', async () => {
+    const { svc, created } = build([]);
     await svc.retryFailedEvents();
-    expect(errors.join('\n')).toMatch(/Tenant t1 has 4 accounting event\(s\) stuck/);
-    expect(errors.join('\n')).toMatch(/NOT on the books/);
-  });
-
-  it('names the latest failure, so the log says what to fix', async () => {
-    const { svc, errors } = build({ stuck: [{ tenantId: 't1', n: 1 }] });
-    await svc.retryFailedEvents();
-    expect(errors.join('\n')).toMatch(/SALE evt-9 — Accounting period is closed\./);
-  });
-
-  it('says nothing when nothing is stuck', async () => {
-    const { svc, errors } = build({ stuck: [] });
-    await svc.retryFailedEvents();
-    expect(errors).toHaveLength(0);
-  });
-
-  it('does not run two passes at once', async () => {
-    const { svc, prisma } = build();
-    let release: () => void = () => {};
-    prisma.accountingEvent.updateMany.mockImplementation(
-      () => new Promise((res) => { release = () => res({ count: 0 }); }),
-    );
-    const first = svc.retryFailedEvents();
-    await svc.retryFailedEvents();               // must return immediately
-    expect(prisma.accountingEvent.updateMany).toHaveBeenCalledTimes(1);
-    release();
-    await first;
-  });
-
-  it('survives a database error rather than killing the cron', async () => {
-    const { svc, errors } = build();
-    (svc as any).prisma = undefined;
-    await expect(svc.retryFailedEvents()).resolves.toBeUndefined();
-    expect(errors.join('\n')).toMatch(/Failed to retry accounting events/);
+    expect(created).toEqual([]);
   });
 });

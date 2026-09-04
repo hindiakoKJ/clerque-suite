@@ -39,6 +39,54 @@ export type UserRole =
  */
 export type StaffRole = Exclude<UserRole, 'SERVICE'>;
 
+/**
+ * The roles a shop can actually HIRE someone into, as a runtime list.
+ *
+ * There were four copies of this list: the Prisma enum, the `UserRole` type
+ * above, `STAFF_ROLES` in the users DTO, and a fourth hand-typed union in the
+ * Staff screen. Three of them were meant to say the same thing and had already
+ * drifted -- AR_ACCOUNTANT and AP_ACCOUNTANT are valid in the database, carry
+ * `ledger:view` in PERMISSION_MATRIX, and are named in 107 @Roles decorators
+ * across the API, but neither the DTO nor the UI could assign them. So a
+ * hundred-odd endpoints were gated to two roles nobody could hold.
+ *
+ * One list now, imported by both the DTO and the screen. The Prisma enum stays
+ * the database's own source of truth -- it cannot import TypeScript -- and
+ * HIREABLE_ROLE_SET below is what keeps the two honest.
+ *
+ * Two deliberate exclusions:
+ *   SUPER_ADMIN — platform staff at HNS, not a shop employee.
+ *   SERVICE     — an API key, not a person; it has no User row at all.
+ */
+export const HIREABLE_ROLES = [
+  'BUSINESS_OWNER',
+  'BRANCH_MANAGER',
+  'SALES_LEAD',
+  'CASHIER',
+  'MDM',
+  'WAREHOUSE_STAFF',
+  'FINANCE_LEAD',
+  'BOOKKEEPER',
+  'ACCOUNTANT',
+  'AR_ACCOUNTANT',
+  'AP_ACCOUNTANT',
+  'PAYROLL_MASTER',
+  'GENERAL_EMPLOYEE',
+  'EXTERNAL_AUDITOR',
+  // Service / display accounts — kiosk credentials, not real employees.
+  // No Payroll, no Ledger, no Terminal. Excluded from the staff cap.
+  'KIOSK_DISPLAY',
+] as const satisfies readonly StaffRole[];
+
+export type HireableRole = (typeof HIREABLE_ROLES)[number];
+
+/** Membership test, so callers do not re-list the values to check one. */
+export const HIREABLE_ROLE_SET: ReadonlySet<string> = new Set(HIREABLE_ROLES);
+
+export function isHireableRole(role: string | null | undefined): role is HireableRole {
+  return !!role && HIREABLE_ROLE_SET.has(role);
+}
+
 /* ─── App access ─────────────────────────────────────────────────────────── */
 
 export type AppCode = 'POS' | 'LEDGER' | 'PAYROLL';

@@ -21,6 +21,26 @@ import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/Busin
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
+/**
+ * How many columns to lay the app tiles out in, by how many there are.
+ *
+ * The goal is a rectangle, not a row with a remainder. Four apps -- the usual
+ * full set of Counter, Ledger, Procure and Sync -- go two-by-two rather than
+ * three-and-one. Five is the only count with no clean rectangle; three columns
+ * leaves the smallest gap.
+ *
+ * Whole class strings, because Tailwind generates classes by scanning source
+ * text: a composed name built at runtime would never be emitted.
+ */
+const GRID_COLS: Record<number, string> = {
+  1: 'lg:grid-cols-1',
+  2: 'lg:grid-cols-2',
+  3: 'lg:grid-cols-3',
+  4: 'lg:grid-cols-2',
+  5: 'lg:grid-cols-3',
+  6: 'lg:grid-cols-3',
+};
+
 export default function SelectPage() {
   const router = useRouter();
   const { user, hasAccess, accessToken } = useAuthStore();
@@ -92,15 +112,23 @@ export default function SelectPage() {
           <p className="text-slate-500 dark:text-slate-400">Choose a Clerque app to open.</p>
         </div>
 
-        {/* App grid — inaccessible apps are hidden, not grayed-out */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {/*
+          App grid — inaccessible apps are hidden, not grayed-out.
+
+          The column count follows how many apps this account actually has,
+          rather than being pinned at three. Pinned at three, the common case
+          of FOUR apps rendered as a row of three with one stranded underneath:
+          a ragged L instead of a block. Four in two columns is a square, which
+          is what the eye expects when there is no ordering between the tiles.
+        */}
+        <div className={`grid gap-4 sm:grid-cols-2 ${GRID_COLS[accessible.length] ?? 'lg:grid-cols-3'}`}>
           {accessible.map((app) => {
             const { Icon } = app;
             return (
               <button
                 key={app.id}
                 onClick={() => router.push(app.resolvedRoute)}
-                className="group relative flex flex-col items-start gap-4 rounded-2xl border p-6 text-left transition-all border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer"
+                className="group relative flex h-full flex-col items-start gap-4 rounded-2xl border p-6 text-left transition-all border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer"
               >
                 <div
                   className="rounded-xl p-3"
@@ -120,7 +148,7 @@ export default function SelectPage() {
             );
           })}
           {accessible.length === 0 && (
-            <div className="sm:col-span-2 lg:col-span-3 text-center py-8 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
+            <div className="col-span-full text-center py-8 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
               <Lock className="w-6 h-6 text-slate-400 mx-auto mb-2" />
               <p className="text-sm text-slate-500">
                 Your account has no apps assigned. Contact your business owner.

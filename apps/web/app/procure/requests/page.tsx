@@ -1,12 +1,14 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
-  Plus, Send, ShoppingCart, PackageCheck, Loader2, Trash2, Sparkles, Check, AlertTriangle,
+  Plus, Send, ShoppingCart, PackageCheck, Loader2, Trash2, Sparkles, Check, AlertTriangle, Paperclip,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { formatPeso } from '@/lib/utils';
 
 /**
  * The whole of Procure on one screen.
@@ -42,8 +44,10 @@ interface Request {
 interface Ingredient { id: string; name: string; unit: string }
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v));
-const peso = (v: number) =>
-  `₱${v.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Second hand-rolled copy of the same thing, with the same two hardcodings.
+// These are whole prices rather than unit costs, so two decimals is right --
+// formatPeso already does exactly that, in the tenant's currency.
+const peso = formatPeso;
 
 const STEPS: Array<{ key: Status; label: string }> = [
   { key: 'OPEN',     label: 'Building' },
@@ -54,6 +58,7 @@ const STEPS: Array<{ key: Status; label: string }> = [
 
 export default function ProcurePage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? undefined;
 
@@ -116,6 +121,22 @@ export default function ProcurePage() {
       enabled:  !!user,
     });
 
+  /*
+    ?view=REQ-20260902-001 -- the books link here from a stock receipt's
+    reference. Honoured once, when the list first has the request, so a
+    refetch later does not yank the person back to it.
+  */
+  const viewParamHandled = useRef(false);
+  useEffect(() => {
+    if (viewParamHandled.current || all.length === 0 || typeof window === 'undefined') return;
+    const wanted = new URLSearchParams(window.location.search).get('view');
+    if (!wanted) { viewParamHandled.current = true; return; }
+    const hit = all.find((r) => r.requestNumber === wanted);
+    viewParamHandled.current = true;
+    if (hit) setViewing(hit.id);
+    else toast.error(`${wanted} is not in this branch's list.`);
+  }, [all]);
+
   const live = all.filter((r) => r.status !== 'RECEIVED' && r.status !== 'CANCELLED');
   const byNeed =
     live.find((r) => r.status === 'BOUGHT') ??
@@ -134,6 +155,28 @@ export default function ProcurePage() {
   const req = (viewing ? all.find((r) => r.id === viewing) : null) ?? byNeed ?? opened;
   const isLoading = listLoading || (byNeed === null && openLoading);
 
+  /*
+    The receipt behind a request, when there is one.
+
+    A request posted from a photo carries that photo as a Document. Showing it
+    here is what makes the request auditable from the screen it lives on --
+    the number, the lines, and the paper they came from, together.
+  */
+  const { data: receiptDocs = [] } = useQuery<Array<{ id: string; filename: string; label: string | null }>>({
+    queryKey: ['request-docs', req?.id],
+    queryFn:  () => api.get('/documents', { params: { entityType: 'PurchaseRequest', entityId: req!.id } }).then((r) => r.data),
+    enabled:  !!req?.id,
+    staleTime: 60_000,
+  });
+  const openDoc = async (id: string, filename: string) => {
+    try {
+      const res = await api.get(`/documents/${id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data as Blob);
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch { toast.error(`Could not open ${filename}.`); }
+  };
+
   const { data: ingredients = [], isLoading: ingLoading } = useQuery<Ingredient[]>({
     queryKey: ['raw-materials-procure'],
     queryFn:  () => api.get('/inventory/raw-materials').then((r) => r.data),
@@ -150,7 +193,7 @@ export default function ProcurePage() {
 
   const pull = useMutation({
     mutationFn: () => api.post('/procure/requests/pull-low-stock', { branchId }).then((r) => r.data),
-    onSuccess: (d: { added: number; unmonitored?: number }) => {
+    onSuccess: (d: { added: number; unmonitored?: number; toMake?: Array<{ name: string }> }) => {
       refresh();
       // An ingredient with no reorder level can never appear on this list, so
       // "nothing is below its reorder level" was being said in two very
@@ -166,6 +209,28 @@ export default function ProcurePage() {
         toast.warning(`Nothing is below its reorder level.${blindNote}`);
       } else {
         toast.success('Nothing is below its reorder level right now.');
+      }
+
+      /*
+        Things that are short but cannot be BOUGHT.
+
+        A prepared item -- a syrup, a sauce, a thawed tub -- used to land on
+        this list next to the milk, sending someone to a supplier for something
+        the shop's own bar produces. It is filtered out now, and silently
+        dropping it would be its own bug: the shortage is real, only the remedy
+        is different. Said out loud, with somewhere to go.
+      */
+      const make = d.toMake ?? [];
+      if (make.length) {
+        toast.warning(
+          `${make.map((m) => m.name).slice(0, 3).join(', ')}` +
+          (make.length > 3 ? ` and ${make.length - 3} more` : '') +
+          ' need making, not buying.',
+          {
+            duration: 8000,
+            action: { label: 'Open prep', onClick: () => router.push('/procure/batches') },
+          },
+        );
       }
     },
     onError: (e) => fail(e, 'Could not check stock levels.'),
@@ -224,17 +289,33 @@ export default function ProcurePage() {
     onError: (e) => fail(e, 'Could not save what was bought.'),
   });
 
+  const [acceptCost, setAcceptCost] = useState(false);
   const receive = useMutation({
-    mutationFn: () => api.post(`/procure/requests/${req!.id}/receive`, { paymentMethod: paidBy }).then((r) => r.data),
-    onSuccess: (d: { posted: unknown[]; skipped: unknown[]; failed: { name: string; reason: string }[] }) => {
+    mutationFn: () => api.post(`/procure/requests/${req!.id}/receive`, { paymentMethod: paidBy, ...(acceptCost ? { acceptCostChange: true } : {}) }).then((r) => r.data),
+    onSuccess: (d: { posted: Array<{ name: string; warning?: string | null }>; skipped: unknown[]; failed: { name: string; reason: string }[] }) => {
       refresh();
       if (d.failed.length) {
         toast.warning(`${d.posted.length} posted, ${d.failed.length} could not: ${d.failed[0].reason}`);
       } else {
         toast.success(`${d.posted.length} item${d.posted.length === 1 ? '' : 's'} added to stock.`);
       }
+      // Stock that moved without reaching the books. Said now, not found later.
+      const unvalued = d.posted.filter((p) => p.warning);
+      if (unvalued.length) toast.warning(unvalued[0].warning as string, { duration: 10000 });
     },
     onError: (e) => fail(e, 'Could not post to stock.'),
+  });
+
+  /*
+    A list started by mistake, or shopping that never happened, had no way
+    out: the request sat OPEN or SENT for good, and because the page always
+    opens the oldest live request, it sat in everyone's way. The server
+    refuses to cancel a RECEIVED request (its stock is on the shelf).
+  */
+  const cancelReq = useMutation({
+    mutationFn: () => api.post(`/procure/requests/${req!.id}/cancel`).then((r) => r.data),
+    onSuccess: () => { setViewing(null); refresh(); toast.success('Request cancelled.'); },
+    onError: (e) => fail(e, 'Could not cancel this request.'),
   });
 
   if (isLoading) {
@@ -295,6 +376,16 @@ export default function ProcurePage() {
             <div className="text-xs text-muted-foreground">
               {req.branch?.name ?? 'This branch'} · {req.lines.length} item{req.lines.length === 1 ? '' : 's'}
             </div>
+            {receiptDocs.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {receiptDocs.map((d) => (
+                  <button key={d.id} type="button" onClick={() => openDoc(d.id, d.filename)}
+                    className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
+                    <Paperclip className="h-3 w-3" /> {d.label ?? 'Receipt'}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {estimate > 0 && (
             <div className="text-right">
@@ -659,6 +750,15 @@ export default function ProcurePage() {
             </div>
           </div>
         )}
+        {req.status === 'BOUGHT' && canDecide && req.lines.some((l) => l.receivedAt == null) && (
+          <label className="mb-2 flex items-start gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
+            <input type="checkbox" checked={acceptCost} onChange={(e) => setAcceptCost(e.target.checked)} className="mt-0.5" />
+            <span>
+              <strong className="font-medium text-foreground">The price really changed a lot.</strong>{' '}
+              A delivery costed ten times above or below what is on file is refused as a likely typo. Tick this to post it anyway.
+            </span>
+          </label>
+        )}
         {req.status === 'BOUGHT' && canDecide && (
           <button
             onClick={() => receive.mutate()}
@@ -674,6 +774,21 @@ export default function ProcurePage() {
             <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
             All in stock. The next shortage starts a new request.
           </div>
+        )}
+        {canDecide && (req.status === 'OPEN' || req.status === 'SENT' || req.status === 'BOUGHT') && (
+          <button
+            type="button"
+            onClick={() => {
+              if (!window.confirm(req.status === 'BOUGHT'
+                ? 'Cancel this request?\n\nWhat was bought will NOT be added to stock. This cannot be undone.'
+                : 'Cancel this request?\n\nIts lines are dropped. The next shortage starts a fresh one.')) return;
+              cancelReq.mutate();
+            }}
+            disabled={cancelReq.isPending}
+            className="mt-2 w-full py-2 text-center text-xs text-muted-foreground hover:text-red-600 disabled:opacity-50"
+          >
+            {cancelReq.isPending ? 'Cancelling…' : 'Cancel this request'}
+          </button>
         )}
       </div>
 

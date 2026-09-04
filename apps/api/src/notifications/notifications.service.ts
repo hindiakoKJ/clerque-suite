@@ -29,6 +29,30 @@ export class NotificationsService {
     /** If set, suppress duplicate notifications within the last hour. */
     dedupeKey?: string;
   }) {
+    /*
+      The idempotency this promised never once fired.
+
+      It looked for an earlier notification whose BODY contained the dedupeKey
+      -- but the key is never written into the body, and never was. Callers pass
+      keys like `low-ingredient-3-2-1` while the body reads "OUT: Beans · Low:
+      Fresh Milk". No row could ever match, so `dup` was always null and every
+      caller that asked to be deduplicated was silently not.
+
+      Nothing crashed, which is why it survived: the alerts simply repeated.
+
+      Matching the MESSAGE ITSELF is what the callers actually want, and it
+      needs no new column. Every producer builds its body from the shop's
+      current state -- which ingredients are out, which are low -- so an
+      identical body within the hour IS the duplicate, and a body that has
+      changed is genuinely new news. That is strictly sharper than the intended
+      key match: `low-ingredient-3-2-1` collapses two different sets of three
+      out-of-stock ingredients into one, and the body does not.
+
+      `dedupeKey` stays in the signature as the opt-IN flag -- passing it is how
+      a caller says "suppress a repeat of this" -- and its value still
+      participates, so two producers sharing a title and a body do not collapse
+      into each other.
+    */
     if (args.dedupeKey) {
       const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
       const dup = await this.prisma.notification.findFirst({
@@ -36,7 +60,8 @@ export class NotificationsService {
           tenantId: args.tenantId,
           userId:   args.userId ?? null,
           title:    args.title,
-          body:     { contains: args.dedupeKey },
+          body:     args.body ?? null,
+          link:     args.link ?? null,
           createdAt:{ gte: hourAgo },
         },
         select: { id: true },

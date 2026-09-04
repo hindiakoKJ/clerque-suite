@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { Prisma, PurchaseRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 /**
  * Clerque Procure — the shop asking the owner to buy something.
@@ -42,6 +43,28 @@ export class ProcureService {
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
   ) {}
+
+  /**
+   * The branch a request belongs to, when the caller did not say.
+   *
+   * A second owner or an MDM account is often created with no branch, and
+   * every Procure route read `user.branchId!` -- so for them the open list,
+   * Check stock and the menu ceiling all queried a branch of `undefined` and
+   * came back empty with no error. Given nothing, the shop's first branch;
+   * given something, it has to be this tenant's.
+   */
+  async resolveBranch(tenantId: string, branchId?: string | null): Promise<string> {
+    if (branchId) {
+      const own = await this.prisma.branch.findFirst({ where: { id: branchId, tenantId }, select: { id: true } });
+      if (!own) throw new BadRequestException('Branch not found in your organization.');
+      return own.id;
+    }
+    const first = await this.prisma.branch.findFirst({
+      where: { tenantId }, orderBy: { createdAt: 'asc' }, select: { id: true },
+    });
+    if (!first) throw new BadRequestException('This organization has no branch yet.');
+    return first.id;
+  }
 
   // ── the open request ──────────────────────────────────────────────────────
 
@@ -158,16 +181,44 @@ export class ProcureService {
     if (req.status !== 'OPEN') throw new BadRequestException('The current request is closed.');
 
     const low = await this.inventory.getLowStock(tenantId, branchId);
+    /*
+      Only things the shop can BUY.
+
+      A prepared item is short of being MADE. Putting "White Sugar Syrup --
+      SHORT 800 ml" on a grocery slip sends someone to a supplier for
+      something their own bar produces, and for a shop that rotates a parked
+      batch it would nag every single day, because empty is that batch's
+      normal state.
+    */
     const ingredients = (low as Array<Record<string, unknown>>).filter(
-      (r) => r['kind'] === 'INGREDIENT' || r['rawMaterialId'],
+      (r) => r['kind'] !== 'PREP' && (r['kind'] === 'INGREDIENT' || r['rawMaterialId']),
     );
+    const toMake = (low as Array<Record<string, unknown>>).filter((r) => r['kind'] === 'PREP');
 
     let added = 0;
     for (const row of ingredients) {
       const rawMaterialId = String(row['rawMaterialId'] ?? row['id'] ?? '');
       if (!rawMaterialId) continue;
+      /*
+        An item sitting EXACTLY on its line is short too.
+
+        "Is this low?" is asked in three places and this one disagreed with the
+        other two at the boundary. getLowStock flags `onHand <= lowStockAlert`
+        and the nightly alert uses the same test, so an item resting exactly on
+        its level is flagged by both -- but its shortfall is 0, and `> 0`
+        dropped it here. One shop, one night, three answers: the email said
+        "Straws - 6 pcs left", the printed slip said "SHORT 0 pcs", and Check
+        stock said "Nothing is below its reorder level right now."
+
+        A cafe weighing grams almost never lands on exact equality, which is
+        why this stayed hidden. A shop counting whole units -- cups, lids,
+        sachets, slices -- lands on it constantly, and Carolina counts cups and
+        lids in pieces.
+
+        `>= 0` also keeps a NaN out, the way `> 0` did.
+      */
       const shortBy = Number(row['shortBy'] ?? 0);
-      if (!(shortBy > 0)) continue;
+      if (!(shortBy >= 0)) continue;
       if (req.lines.some((l) => l.rawMaterialId === rawMaterialId)) continue;
       /*
         Buy PAST the line, not exactly to it.
@@ -182,7 +233,13 @@ export class ProcureService {
         reorder-quantity per ingredient is worth having, but guessing one is
         worse than a rule the owner can see and override on the line.
       */
-      const qtyRequested = shortBy * 2;
+      /*
+        Exactly on the line the shortfall is zero, and asking for zero is not
+        asking. Fall back to the reorder level itself, which follows the same
+        rule as the doubling: get above the line and leave some cover.
+      */
+      const level = Number(row['lowStockAlert'] ?? 0);
+      const qtyRequested = shortBy > 0 ? shortBy * 2 : (level > 0 ? level : 1);
       await this.addLine(tenantId, req.id, { rawMaterialId, qtyRequested, shortBy });
       added++;
     }
@@ -209,7 +266,22 @@ export class ProcureService {
       where: { tenantId, isActive: true, lowStockAlert: null },
     });
 
-    return { requestId: req.id, requestNumber: req.requestNumber, added, unmonitored };
+    return {
+      requestId: req.id, requestNumber: req.requestNumber, added, unmonitored,
+      /*
+        Prepared items that are low, reported separately so the screen can send
+        someone to make them instead of to the market. Silence about these
+        would be worse than the old behaviour: the shortage is real, only the
+        remedy is different.
+      */
+      toMake: toMake.map((r) => ({
+        id:       String(r['id'] ?? ''),
+        name:     String(r['name'] ?? ''),
+        unit:     String(r['unit'] ?? ''),
+        quantity: Number(r['quantity'] ?? 0),
+        shortBy:  Number(r['shortBy'] ?? 0),
+      })),
+    };
   }
 
   // ── cutoff ────────────────────────────────────────────────────────────────
@@ -287,7 +359,19 @@ export class ProcureService {
    * rest of the delivery, and a line already received is skipped rather than
    * doubled, because receiveRawMaterial refuses a reference it has seen.
    */
-  async receiveRequest(tenantId: string, requestId: string, userId: string, paymentMethod: 'CASH' | 'OWNER_FUNDED' = 'CASH') {
+  async receiveRequest(
+    tenantId: string,
+    requestId: string,
+    userId: string,
+    paymentMethod: 'CASH' | 'OWNER_FUNDED' = 'CASH',
+    /**
+     * Set by the receipt path. A photographed delivery carries its own date,
+     * its own vendor line, and -- per line -- whether a price an order of
+     * magnitude off the one on file is a typo or a real move. A hand-typed
+     * request passes nothing and behaves exactly as before.
+     */
+    opts: { receivedAt?: string; note?: string; acceptCostChangeFor?: Set<string>; acceptCostChangeAll?: boolean } = {},
+  ) {
     const req = await this.get(tenantId, requestId);
     if (req.status !== 'BOUGHT' && req.status !== 'RECEIVED') {
       throw new BadRequestException(
@@ -295,7 +379,7 @@ export class ProcureService {
       );
     }
 
-    const posted: Array<{ line: string; name: string; quantity: number; unitCost: number }> = [];
+    const posted: Array<{ line: string; name: string; quantity: number; unitCost: number; warning: string | null }> = [];
     const skipped: Array<{ line: string; name: string; reason: string }> = [];
     const failed:  Array<{ line: string; name: string; reason: string }> = [];
 
@@ -311,18 +395,20 @@ export class ProcureService {
       if (!(quantity > 0)) { skipped.push({ line: line.lineNumber, name, reason: 'Zero quantity.' }); continue; }
 
       try {
-        const res = await this.inventory.receiveRawMaterial(tenantId, line.rawMaterialId, {
+        const res: { duplicate?: boolean; warning?: string | null } = await this.inventory.receiveRawMaterial(tenantId, line.rawMaterialId, {
           branchId:        req.branchId,
           quantity,
           costPrice:       unitCost,
           paymentMethod,
           referenceNumber: line.lineNumber,
-          note:            line.brandNote ?? undefined,
+          note:            [opts.note, line.brandNote].filter(Boolean).join(' · ') || undefined,
+          ...(opts.receivedAt ? { receivedAt: opts.receivedAt } : {}),
+          ...(opts.acceptCostChangeAll || opts.acceptCostChangeFor?.has(line.rawMaterialId) ? { acceptCostChange: true } : {}),
         } as never);
-        if ((res as { duplicate?: boolean }).duplicate) {
+        if (res.duplicate) {
           skipped.push({ line: line.lineNumber, name, reason: 'This line was already received.' });
         } else {
-          posted.push({ line: line.lineNumber, name, quantity, unitCost });
+          posted.push({ line: line.lineNumber, name, quantity, unitCost, warning: res.warning ?? null });
         }
         await this.prisma.purchaseRequestLine.update({
           where: { id: line.id }, data: { receivedAt: new Date() },
@@ -474,6 +560,11 @@ export class ProcureService {
     };
   }
 
+  /** The next control number, for a request created outside this service. */
+  nextRequestNumber(tenantId: string): Promise<string> {
+    return this.nextNumber(tenantId);
+  }
+
   /** REQ-YYYYMMDD-NNN, sequential within the day so it reads as a date. */
   private async nextNumber(tenantId: string): Promise<string> {
     /*
@@ -483,7 +574,7 @@ export class ProcureService {
       confusing on its own and wrong when it is used to reconcile a delivery.
     */
     const today = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit',
+      timeZone: PH_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(new Date()).replace(/-/g, '');
     const prefix = `REQ-${today}-`;
     const last = await this.prisma.purchaseRequest.findFirst({

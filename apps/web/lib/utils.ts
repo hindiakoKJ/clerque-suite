@@ -40,9 +40,14 @@ export function getDisplayCurrency(): string {
  * Format an amount (MAJOR units) in the given currency. Locale is derived
  * from the currency when not supplied (PHP→en-PH, USD→en-US, AUD→en-AU, else 'en').
  */
-export function formatMoney(amount: number | string, currency: string = 'PHP', locale?: string): string {
+export function formatMoney(
+  amount: number | string,
+  currency: string = 'PHP',
+  locale?: string,
+  maxFractionDigits?: number,
+): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return moneyFormatter((currency || 'PHP').toUpperCase(), locale).format(num);
+  return moneyFormatter((currency || 'PHP').toUpperCase(), locale, maxFractionDigits).format(num);
 }
 
 /** Currency symbol only (e.g. '₱', '$', 'A$') — for input labels like "Amount ($)". */
@@ -57,20 +62,40 @@ export function currencySymbol(currency: string = 'PHP'): string {
  * makes Intl throw RangeError — which would blank every money cell in the app —
  * so fall back to the PHP default instead of throwing.
  */
-function moneyFormatter(cur: string, locale?: string): Intl.NumberFormat {
+function moneyFormatter(cur: string, locale?: string, maxFractionDigits?: number): Intl.NumberFormat {
+  const opts: Intl.NumberFormatOptions = {
+    style: 'currency',
+    currency: cur,
+    minimumFractionDigits: 2,
+    ...(maxFractionDigits != null ? { maximumFractionDigits: maxFractionDigits } : {}),
+  };
   try {
-    return new Intl.NumberFormat(locale ?? localeForCurrency(cur), {
-      style: 'currency',
-      currency: cur,
-      minimumFractionDigits: 2,
-    });
+    return new Intl.NumberFormat(locale ?? localeForCurrency(cur), opts);
   } catch {
-    return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 2 });
+    return new Intl.NumberFormat('en-PH', { ...opts, currency: 'PHP' });
   }
 }
 
 export function formatPeso(amount: number | string): string {
   return formatMoney(amount, displayCurrency);
+}
+
+/**
+ * Money at INGREDIENT precision — up to four decimals.
+ *
+ * Two screens in Procure had hand-rolled their own peso formatter rather than
+ * use `formatPeso`, and the reason was real: a unit cost is ₱0.0549 per ml, and
+ * rounding that to ₱0.05 is a 9% error on the number the whole recipe costing
+ * rests on. But the hand-rolled copies hardcoded the peso sign and `en-PH`,
+ * so they silently ignored the tenant's currency that `setDisplayCurrency`
+ * exists to honour.
+ *
+ * The precision was the legitimate part; the hardcoding was not. This keeps
+ * one and drops the other.
+ */
+export function formatUnitCost(amount: number | string | null | undefined): string {
+  if (amount == null) return '—';
+  return formatMoney(amount, displayCurrency, undefined, 4);
 }
 
 export function formatDate(date: Date | string, options?: Intl.DateTimeFormatOptions): string {

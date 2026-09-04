@@ -3,6 +3,7 @@ import { ReportsService } from '../reports/reports.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { Prisma } from '@prisma/client';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 /**
  * Above this amount, a manager PIN co-auth is required for PAID_OUT.
@@ -111,8 +112,8 @@ export class ShiftsService {
       where: { tenantId, cashierId, branchId, closedAt: null },
     });
     if (existing) {
-      const today    = new Date().toLocaleDateString('en-PH', { timeZone: 'Asia/Manila' });
-      const shiftDay = new Date(existing.openedAt).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila' });
+      const today    = new Date().toLocaleDateString('en-PH', { timeZone: PH_TIMEZONE });
+      const shiftDay = new Date(existing.openedAt).toLocaleDateString('en-PH', { timeZone: PH_TIMEZONE });
       if (shiftDay === today) {
         return existing;  // same day — fully idempotent, return the open shift
       }
@@ -368,7 +369,7 @@ export class ShiftsService {
     const variance = Math.round((declaredCash - expected) * 100) / 100;
 
     const stamp = new Date().toLocaleTimeString('en-PH', {
-      hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila',
+      hour: '2-digit', minute: '2-digit', timeZone: PH_TIMEZONE,
     });
     const line =
       `[handover ${stamp}] ${countedByName || 'Relief'} counted ` +

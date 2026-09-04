@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Body,
+  Headers,
   Param,
   Query,
   UseGuards,
@@ -35,6 +36,16 @@ interface CreateOrderBody {
    * creating a second one, so a retry after a timeout is always safe.
    */
   externalRef?: string;
+  /**
+   * True when the till is replaying a sale it took while offline.
+   *
+   * That sale already physically happened -- the drink is in the customer's
+   * hand -- so the stock ceiling must not refuse it now. The bulk /orders/sync
+   * route always knew this; the Counter's outbox replays one order at a time
+   * through THIS route and did not, so a sale could be refused after the fact
+   * because a later sale had used the last of the milk.
+   */
+  replayedOffline?: boolean;
 }
 
 interface VoidOrderBody {
@@ -168,8 +179,16 @@ export class OrdersController {
   @RequireIdempotency()
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(@CurrentUser() user: JwtPayload, @Body() body: CreateOrderBody) {
+  create(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: CreateOrderBody,
+    // Sent by the till when it is draining its offline queue. A header, so it
+    // stays out of the idempotency hash of the body; the body field is still
+    // read for rows queued by an older build of the app.
+    @Headers('x-replayed-offline') replayedHeader?: string,
+  ) {
     const service = isServicePrincipal(user);
+    const replayed = replayedHeader === '1' || body.replayedOffline === true;
     return this.ordersService.create(
       user.tenantId!,
       // Null for a service call — there is no cashier. The sale is
@@ -181,6 +200,10 @@ export class OrdersController {
         createdByApiKeyId:   service ? user.apiKeyId : null,
         externalRef:         body.externalRef ?? null,
         enforceServerTotals: service,
+        // A cashier replaying an offline sale is recording something that
+        // already happened. A machine caller never gets this flag: it prices
+        // through the catalog and is not a till.
+        skipStockCeiling:    !service && replayed,
         // SOD: the service checks discount authority against the real caller.
         // Service principals price through the catalog already, so their
         // totals are authoritative and the role check does not apply.

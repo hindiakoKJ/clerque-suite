@@ -28,7 +28,16 @@ const OTHER_INCOME = '4050';
 const EXPENSE_ACCOUNT: Record<ExpenseCategory, string> = {
   RENT:      '6050',
   UTILITIES: '6060',
-  SUPPLIES:  '6070',
+  /*
+    6140, not 6070. Office Supplies Expense (6070) became SYSTEM_ONLY when the
+    supplies categories on ingredients started posting to it, and a MANUAL
+    entry against a SYSTEM_ONLY account is refused -- so every "Supplies"
+    entry from this screen, and every receipt line classed as supplies, has
+    failed since. Miscellaneous is the OPEN expense account; the entry's
+    description still says "Supplies", which is what the person will search
+    for.
+  */
+  SUPPLIES:  '6140',
   REPAIRS:   '6090',
   TRANSPORT: '6100',
   OTHER:     '6140',

@@ -10,9 +10,12 @@ import { AccountingScheduler } from './accounting.scheduler';
 import { AccountingPeriodsModule } from '../accounting-periods/accounting-periods.module';
 import { NumberingModule } from '../numbering/numbering.module';
 import { AuditModule } from '../audit/audit.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [AccountingPeriodsModule, NumberingModule, AuditModule],
+  // NotificationsModule so an event that cannot post after five tries reaches
+  // a person, not only the log.
+  imports: [AccountingPeriodsModule, NumberingModule, AuditModule, NotificationsModule],
   controllers: [AccountsController, JournalController, EventsController],
   providers: [AccountsService, JournalService, JournalImportService, EventsService, AccountingScheduler],
   exports: [AccountsService, JournalService],

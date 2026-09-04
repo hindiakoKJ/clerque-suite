@@ -337,6 +337,25 @@ export class ImportController {
   }
 
   /**
+   * Download the shop's OWN recipes, costed, in the shape a PivotTable wants.
+   *
+   * The export above is the recipes themselves. This is the same lines with
+   * what each one costs, plus a sheet of dish margins -- headers on row 1, one
+   * row per fact, each sheet a named Excel Table, so Insert > PivotTable fills
+   * its own source range in. Its first four columns are the Recipes importer's
+   * own, so it uploads back on the Recipes row unchanged.
+   */
+  @Get('export/recipe-costing')
+  async recipeCostingExport(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.recipeCostingExport(req.user.tenantId!);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-recipe-costing.xlsx"',
+    });
+    res.send(buf);
+  }
+
+  /**
    * Download the shop's OWN ingredients, in the import file's own shape.
    *
    * The blank template above tells a shop what the columns mean; this hands

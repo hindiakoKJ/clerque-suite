@@ -18,6 +18,7 @@ import { assertPasswordPolicy } from './password-policy';
 import { resolveAiQuota } from '../ai/ai-availability';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, PLAN_FEATURES, PLAN_LIMITS, DEFAULT_PLAN_CODE, normalizePlanCode, planFeaturesFor, planLimitsFor } from '@repo/shared-types';
 import type { TaxStatus, AiAddonType } from '@repo/shared-types';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 // 8h access token = one login covers a full work shift; no mid-shift logouts.
 // Refresh-token rotation still happens silently in the background via the
@@ -753,7 +754,7 @@ export class AuthService {
       ledgerMode:        (tenant?.ledgerMode ?? 'FULL') as 'FULL' | 'SIMPLE',
       country:           tenant?.country  ?? 'PH',
       currency:          tenant?.currency ?? 'PHP',
-      timezone:          tenant?.timezone ?? 'Asia/Manila',
+      timezone:          tenant?.timezone ?? PH_TIMEZONE,
     };
 
     // Bake plan-derived feature flags + limits into the JWT for fast guards.

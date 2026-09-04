@@ -20,7 +20,7 @@ describe('OrdersService.create — refusing what the kitchen cannot make', () =>
   const LATTE = 'p-latte';
   const MILK = { id: 'rm-milk', name: 'Fresh Milk', unit: 'ml', costPrice: 0.09, lotsTracked: false };
 
-  function build(opts: { milkStock: number; allowOversell?: boolean }) {
+  function build(opts: { milkStock: number; allowOversell?: boolean; noStockRow?: boolean }) {
     const writes: any[] = [];
     const tx: any = {
       order: {
@@ -38,7 +38,11 @@ describe('OrdersService.create — refusing what the kitchen cannot make', () =>
       variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
       modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
-        findMany: jest.fn().mockResolvedValue([{ rawMaterialId: MILK.id, quantity: opts.milkStock }]),
+        // noStockRow models an ingredient that EXISTS but was never received:
+        // the query comes back empty, which is not the same as a row of zero.
+        findMany: jest.fn().mockResolvedValue(
+          opts.noStockRow ? [] : [{ rawMaterialId: MILK.id, quantity: opts.milkStock }],
+        ),
         update: jest.fn((a: any) => { writes.push(a); return Promise.resolve({}); }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
@@ -101,6 +105,9 @@ describe('OrdersService.create — refusing what the kitchen cannot make', () =>
     return { svc, writes };
   }
 
+  /** A shop where the ingredient exists but was never received: no row at all. */
+  const buildNoRow = () => build({ milkStock: 0, noStockRow: true });
+
   const payload = (qty: number) => ({
     clientUuid: 'ceil-' + qty + '-' + Math.random(),
     shiftId: 'shift-1',
@@ -162,6 +169,30 @@ describe('OrdersService.create — refusing what the kitchen cannot make', () =>
     const { svc, writes } = build({ milkStock: 450 });
     await svc.create(TENANT, 'cashier-1', payload(6) as never, { skipStockCeiling: true } as never);
     expect(writes.length).toBeGreaterThan(0);
+  });
+
+  it('refuses when an ingredient was NEVER received, not just when it ran out', async () => {
+    /*
+      The dangerous asymmetry. The shortfall check used to sit inside
+      `if (hasStockRow)`, so an ingredient received and then emptied refused
+      the sale while an ingredient that never had a row at all sold forever --
+      the same empty shelf, two opposite answers, and the permissive one
+      reserved for the ingredient nobody had ever counted.
+
+      Found by selling three plates of wings on a test tenant whose Onion
+      powder had no inventory row: `allowSaleWhenOutOfStock` was false and the
+      till took the money anyway.
+    */
+    const noRow = buildNoRow();
+    await expect(noRow.svc.create(TENANT, 'cashier-1', payload(1) as never))
+      .rejects.toMatchObject({ response: { code: 'NOT_ENOUGH_INGREDIENTS' } });
+    expect(noRow.writes).toHaveLength(0);
+  });
+
+  it('says the shelf holds zero of it, not that it holds nothing readable', async () => {
+    const noRow = buildNoRow();
+    await expect(noRow.svc.create(TENANT, 'cashier-1', payload(1) as never))
+      .rejects.toThrow(/Fresh Milk/);
   });
 
   it('leaves an ecosystem caller alone', async () => {

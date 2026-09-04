@@ -21,6 +21,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 @Injectable()
 export class NotificationsScheduler {
@@ -32,10 +33,23 @@ export class NotificationsScheduler {
   ) {}
 
   /**
-   * Daily 3am Manila — Asia/Manila is UTC+8, so 19:00 UTC the previous day.
-   * Runs all three producers; failures in one don't block the others.
+   * Daily 3am Manila.
+   *
+   * The offset used to be applied TWICE. The schedule was written as 19:00 --
+   * 3am Manila hand-converted to UTC -- and then `timeZone: PH_TIMEZONE` was
+   * passed as well, so the runner read 19:00 as a Manila time and fired at
+   * 7pm. Nobody noticed because the job still ran once a day and its output
+   * still looked right.
+   *
+   * It matters for THIS job more than most: the whole point of "these
+   * ingredients are running low" is that it lands before the shop opens and
+   * before someone goes to the market. Arriving at 7pm put it in the middle of
+   * evening service, a full trading day after it could have been acted on.
+   *
+   * `timeZone` does the conversion. The cron expression states the local time
+   * the shop actually experiences, and nothing is converted by hand.
    */
-  @Cron('0 19 * * *', { timeZone: 'Asia/Manila' })
+  @Cron('0 3 * * *', { timeZone: PH_TIMEZONE })
   async runDailyProducers() {
     this.logger.log('Running daily notification producers…');
     const tenants = await this.prisma.tenant.findMany({
@@ -130,6 +144,7 @@ export class NotificationsScheduler {
 
       const atZero:  string[] = [];
       const belowRe: string[] = [];
+      const toMake:  string[] = [];
       let unwatched = 0;
 
       for (const b of branches) {
@@ -138,13 +153,24 @@ export class NotificationsScheduler {
           select: {
             name: true, unit: true, lowStockAlert: true,
             inventory: { where: { branchId: b.id }, select: { quantity: true } },
+            // Something the shop MAKES is not something to go and buy, and a
+            // parked batch is empty by design for half its life -- alerting on
+            // it nightly would train everyone to ignore the alert.
+            subRecipeItems: { select: { id: true }, take: 1 },
           },
         });
         for (const r of rows) {
           const onHand = Number(r.inventory[0]?.quantity ?? 0);
           const level  = r.lowStockAlert != null ? Number(r.lowStockAlert) : null;
           const where  = branches.length > 1 ? ` (${b.name})` : '';
-          if (onHand <= 0) {
+          const isPrep = r.subRecipeItems.length > 0;
+          if (isPrep) {
+            // Only worth mentioning once someone has said what "low" means for
+            // it. An empty parked batch with no par level is just Tuesday.
+            if (level != null && level > 0 && onHand <= level) {
+              toMake.push(`${r.name} — ${onHand} ${r.unit} left${where}`);
+            }
+          } else if (onHand <= 0) {
             atZero.push(`${r.name}${where}`);
           } else if (level != null && level > 0 && onHand <= level) {
             belowRe.push(`${r.name} — ${onHand} ${r.unit} left${where}`);
@@ -156,7 +182,7 @@ export class NotificationsScheduler {
       }
 
       // Nothing to say beats a nightly alert that always fires.
-      if (atZero.length === 0 && belowRe.length === 0) return;
+      if (atZero.length === 0 && belowRe.length === 0 && toMake.length === 0) return;
 
       const parts: string[] = [];
       if (atZero.length) {
@@ -166,6 +192,10 @@ export class NotificationsScheduler {
       if (belowRe.length) {
         parts.push(`Low: ${belowRe.slice(0, 5).join(', ')}` +
           (belowRe.length > 5 ? ` and ${belowRe.length - 5} more` : ''));
+      }
+      if (toMake.length) {
+        parts.push(`To prep: ${toMake.slice(0, 5).join(', ')}` +
+          (toMake.length > 5 ? ` and ${toMake.length - 5} more` : ''));
       }
       if (unwatched > 0) {
         parts.push(`${unwatched} ingredient${unwatched === 1 ? '' : 's'} ` +
@@ -180,12 +210,14 @@ export class NotificationsScheduler {
         kind:   atZero.length > 0 ? 'ERROR' : 'WARNING',
         title:  atZero.length > 0
           ? `${atZero.length} ingredient${atZero.length === 1 ? '' : 's'} out of stock`
-          : `${belowRe.length} ingredient${belowRe.length === 1 ? '' : 's'} running low`,
+          : belowRe.length > 0
+            ? `${belowRe.length} ingredient${belowRe.length === 1 ? '' : 's'} running low`
+            : `${toMake.length} item${toMake.length === 1 ? '' : 's'} to prep`,
         body:   parts.join(' · '),
         link:   '/procure/requests',
         // Keyed on the counts, so a shop whose position has not changed is not
         // told again every night -- but a new shortage still gets through.
-        dedupeKey: `low-ingredient-${atZero.length}-${belowRe.length}`,
+        dedupeKey: `low-ingredient-${atZero.length}-${belowRe.length}-${toMake.length}`,
       });
     } catch (err) {
       this.logger.error(`lowIngredientProducer failed for ${tenantId}: ${(err as Error).message}`);

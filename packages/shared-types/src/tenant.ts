@@ -335,3 +335,64 @@ export function receiptAuthority(input: ReceiptAuthorityInput): ReceiptAuthority
     disclaimer:   null,
   };
 }
+
+
+/* ─── Units of measure ─────────────────────────────────────────────────────── */
+
+/**
+ * The units a shop is offered when naming an ingredient or a prep.
+ *
+ * Written out separately in the Inventory screen and the prep setup screen,
+ * which is two copies of a list that must agree: an ingredient created with a
+ * unit one screen offers and the other does not becomes uneditable on the
+ * second screen, and the recipe that consumes it silently mismatches.
+ *
+ * Deliberately NARROWER than `UNIT_FACTORS` in the API's unit-conversion
+ * module, which also knows mg, lb, cl and the long spellings. That table exists
+ * to PARSE whatever a spreadsheet contains; this list exists to OFFER a short,
+ * unambiguous set to someone standing at a shelf. Widening it is a product
+ * decision, not a tidying one — every value here must round-trip through
+ * `unitFactor`, and `pc` / `pcs` / `sachet` / `slice` / `sheet` / `pack`
+ * deliberately do not convert to anything, which is why a countable container
+ * needs a pack size before a recipe can use it.
+ */
+export const INGREDIENT_UNITS = [
+  'g', 'kg', 'ml', 'L', 'pc', 'pcs', 'oz',
+  'tsp', 'tbsp', 'cup', 'sachet', 'slice', 'sheet', 'pack',
+] as const;
+
+export type IngredientUnit = (typeof INGREDIENT_UNITS)[number];
+
+
+/* ─── Time ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * The Philippine business timezone.
+ *
+ * The literal `'Asia/Manila'` was written out in more than twenty places
+ * across scheduling, numbering, shifts, payroll, reports and the day-close
+ * briefing. Every one of them is CORRECT today — `Tenant.timezone` defaults to
+ * exactly this and Clerque is a PH product — so this is not a live bug. It is
+ * a bug waiting for its first tenant in another timezone, at which point
+ * finding all twenty-odd is the whole job.
+ *
+ * Named once so there is one place to look, and one place to change.
+ *
+ * Deliberately NOT wired to `Tenant.timezone` yet. That column exists and is
+ * honoured in two services; making the rest per-tenant means auditing what a
+ * changed day-boundary does to Z-read numbering, payroll week boundaries and
+ * BIR period cutoffs — real work with real risk, and no benefit until a tenant
+ * outside PH exists. `tenantTimezone()` below is where that starts.
+ */
+export const PH_TIMEZONE = 'Asia/Manila';
+
+/**
+ * The timezone to compute a tenant's business day in.
+ *
+ * Falls back to PH rather than to the server's zone: a server in another
+ * region must not silently shift a shop's day boundary, which is what moves a
+ * sale into the wrong Z-read.
+ */
+export function tenantTimezone(tenant?: { timezone?: string | null } | null): string {
+  return tenant?.timezone?.trim() || PH_TIMEZONE;
+}

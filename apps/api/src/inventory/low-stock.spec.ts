@@ -38,6 +38,13 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
           (opts.ingredients ?? []).map((r: any) => ({
             ...r.rawMaterial,
             inventory: r.quantity == null ? [] : [{ quantity: r.quantity }],
+            /*
+              Whether the shop MAKES this or BUYS it. Having a recipe is what
+              decides it, and a prep that is low needs a batch rather than a
+              trip to the market -- so the two go on different lists. Empty
+              unless a case says otherwise: these fixtures are bought goods.
+            */
+            subRecipeItems: r.rawMaterial?.subRecipeItems ?? [],
           }))),
       },
     };

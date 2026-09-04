@@ -7,6 +7,7 @@
  * Bluetooth printer the bakery already owns.
  */
 import { StickerTier } from '@prisma/client';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 const WIDTH = 32;
 
@@ -62,7 +63,7 @@ export interface BriefingInput {
 export function formatBriefingText(input: BriefingInput): string {
   const lines: string[] = [];
   const dateStr = input.date.toLocaleDateString('en-PH', {
-    timeZone: 'Asia/Manila',
+    timeZone: PH_TIMEZONE,
     weekday:  'short',
     year:     'numeric',
     month:    'short',
@@ -105,7 +106,7 @@ export function formatBriefingText(input: BriefingInput): string {
   } else {
     for (const item of useFirstActive) {
       const expStr = item.expirationDate
-        ? item.expirationDate.toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric' })
+        ? item.expirationDate.toLocaleDateString('en-PH', { timeZone: PH_TIMEZONE, month: 'short', day: 'numeric' })
         : 'no expiry';
       let prefix = '  ';
       if (item.tier === StickerTier.USE_FIRST)     prefix = '**';
@@ -183,7 +184,7 @@ export function formatBriefingEscPos(
   b.line('MORNING BRIEFING');
   b.doubleHeight(false);
   const dateStr = input.date.toLocaleDateString('en-PH', {
-    timeZone: 'Asia/Manila',
+    timeZone: PH_TIMEZONE,
     weekday:  'short',
     month:    'short',
     day:      'numeric',
@@ -219,7 +220,7 @@ export function formatBriefingEscPos(
   } else {
     for (const item of useFirstActive) {
       const expStr = item.expirationDate
-        ? item.expirationDate.toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric' })
+        ? item.expirationDate.toLocaleDateString('en-PH', { timeZone: PH_TIMEZONE, month: 'short', day: 'numeric' })
         : 'no expiry';
       if (item.tier === StickerTier.USE_FIRST) {
         b.bold(true).line(`** ${item.rawMaterialName}`).bold(false);

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from './journal.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 /**
  * How many times an event is re-offered before it is left alone.
@@ -21,6 +22,7 @@ export class AccountingScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly journal: JournalService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // Runs every 60 seconds. Processes all PENDING accounting events across all
@@ -112,6 +114,24 @@ export class AccountingScheduler {
           `stuck after ${MAX_RETRIES} attempts — these are NOT on the books. ` +
           `Latest: ${sample?.type ?? '?'} ${sample?.id ?? ''} — ${sample?.lastError ?? 'no error recorded'}`,
         );
+        /*
+          The log is read by nobody at the shop. A stock receipt whose entry
+          never posted still reads RECEIVED on the request and the money is
+          simply missing from the books -- so the owner is told, once per
+          count, with the reason and the place to fix it.
+        */
+        const n = row._count._all;
+        await this.notifications.create({
+          tenantId:  row.tenantId,
+          userId:    null,
+          kind:      'WARNING',
+          title:     `${n} stock entr${n === 1 ? 'y' : 'ies'} could not be posted to the books`,
+          body:      `${n === 1 ? 'A stock movement' : `${n} stock movements`} could not be recorded after ${MAX_RETRIES} tries`
+                     + (sample?.lastError ? ` (${sample.lastError})` : '')
+                     + '. The shelf is right; the books are missing it until this is fixed.',
+          link:      '/ledger/events',
+          dedupeKey: `accounting-stuck-${n}`,
+        }).catch((e: unknown) => this.logger.error(`stuck-event notification failed: ${(e as Error).message}`));
       }
     } catch (err) {
       this.logger.error(`Failed to retry accounting events: ${(err as Error).message}`);

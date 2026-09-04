@@ -99,16 +99,19 @@ describe('AiQuotaGuard', () => {
     });
   });
 
-  it('counts only journal_drafter / journal_guide / receipt_ocr — Smart Picker is free', async () => {
+  it('counts every prompt-spending action, including Procure receipt reads — Smart Picker is free', async () => {
     prisma.aiUsage.count.mockResolvedValue(10);
     const ctx = makeCtx({ tenantId: 't1', aiQuotaMonthly: 100 });
     await guard.canActivate(ctx);
 
+    // 'procure_receipt_lines' is the receipt reader in Procure. Left off this
+    // list it was uncounted, so a shop on the smallest add-on could read
+    // receipts without limit while the drafter was capped.
     expect(prisma.aiUsage.count).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           tenantId: 't1',
-          action: { in: ['journal_drafter', 'journal_guide', 'receipt_ocr'] },
+          action: { in: ['journal_drafter', 'journal_guide', 'receipt_ocr', 'procure_receipt_lines'] },
         }),
       }),
     );

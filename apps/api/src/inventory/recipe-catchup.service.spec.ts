@@ -33,6 +33,8 @@ describe('RecipeCatchupService', () => {
   let stampedItemIds: string[];
   let lotDrains: Array<{ id: string; to: number }>;
   let auditRows: any[];
+  /** Accounting events the apply wrote: one stock-out per costed ingredient. */
+  let events: any[];
 
   function build(opts: {
     items?: any[];
@@ -47,6 +49,7 @@ describe('RecipeCatchupService', () => {
     stampedItemIds = [];
     lotDrains = [];
     auditRows = [];
+    events = [];
 
     const stock = opts.stock ?? { [MILK]: 10_000, [OAT]: 10_000, [BEANS]: 5_000 };
     const items = opts.items ?? [];
@@ -69,6 +72,9 @@ describe('RecipeCatchupService', () => {
         }),
       },
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
+      accountingEvent: {
+        create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve(data); }),
+      },
       bomItem: { findMany: jest.fn().mockResolvedValue(boms) },
       modifierOption: {
         findMany: jest.fn(({ where }: any) =>
@@ -91,9 +97,10 @@ describe('RecipeCatchupService', () => {
         findMany: jest.fn(({ where }: any) =>
           Promise.resolve(
             [
-              { id: MILK, name: 'Fresh Milk', unit: 'ml' },
-              { id: OAT, name: 'Oat Milk', unit: 'ml' },
-              { id: BEANS, name: 'Coffee Beans', unit: 'g' },
+              // Oat milk deliberately has no cost on file.
+              { id: MILK, name: 'Fresh Milk', unit: 'ml', costPrice: 0.08, category: 'INGREDIENT' },
+              { id: OAT, name: 'Oat Milk', unit: 'ml', costPrice: null, category: 'INGREDIENT' },
+              { id: BEANS, name: 'Coffee Beans', unit: 'g', costPrice: 0.9, category: 'INGREDIENT' },
             ].filter((m) => where.id.in.includes(m.id)),
           ),
         ),
@@ -343,5 +350,23 @@ describe('RecipeCatchupService', () => {
     expect(auditRows[0].entityType).toBe('RECIPE_CATCHUP');
     expect(auditRows[0].after.stampedLineCount).toBe(1);
     expect(auditRows[0].performedBy).toBe(USER);
+  });
+  // ───────────────────────── the books stay out of it ────────────────────────
+  //
+  // Catch-up is an INVENTORY correction, not an accounting one. Every sale it
+  // replays already posted its cost: pausing recipe deduction gates the
+  // inventory writes only -- orders.service says so in as many words -- so the
+  // sale still debited 5010 and credited 1051 on the day. Posting again here
+  // would double the expense and relieve 1051 twice, with nothing to undo it
+  // but a hand-written journal entry. This test exists because that mistake
+  // was made once.
+
+  it('posts nothing to the ledger, however much stock it moves', async () => {
+    const { svc } = build({ items: [line('i-1', LATTE, 4)] });
+    const out = await svc.apply(TENANT, USER, { ...RANGE, expectedLineCount: 1 });
+
+    expect(decremented[MILK]).toBe(600);      // the shelf moved
+    expect(events).toEqual([]);               // the books did not
+    expect(out.warnings).toEqual([]);
   });
 });

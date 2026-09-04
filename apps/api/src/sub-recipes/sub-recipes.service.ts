@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, Optional } from '@n
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { canPrepAtStation } from '@repo/shared-types';
 
 /**
  * Sub-recipes — prepared ingredients that are made in the shop rather than
@@ -42,6 +43,61 @@ export interface MakeBatchDto {
    * on the same day.
    */
   referenceNumber?: string;
+  /**
+   * How long this batch is good for, in days from when it was made.
+   *
+   * A prepared batch had no expiry at all: the lot was created with
+   * `expirationDate` left null, so a tub thawed on Tuesday and a tub thawed
+   * three weeks ago were indistinguishable, and FEFO had nothing to sort by.
+   *
+   * It matters most for the batch that is only PARTLY used. A ready tub sitting
+   * on the line is the thing most likely to spoil, precisely because it is not
+   * finished in a day — and nothing anywhere recorded when its clock started.
+   *
+   * Optional: a shop that does not track this is no worse off than before.
+   */
+  shelfLifeDays?: number;
+  /** Or an explicit date, when the cook knows better than a rule of thumb. */
+  expiresAt?: string;
+  /**
+   * WHICH station did this — the kitchen or the bar.
+   *
+   * A prep consumed raw materials and the record said only that the shop used
+   * them. But the two halves of a cafe draw on the same shelf: sugar goes into
+   * the bar's syrup and the kitchen's glaze, and "the shop used 4 kg of sugar"
+   * cannot be split back apart afterwards. So nobody could answer what the
+   * kitchen costs to run, and nobody could see that one side was quietly
+   * burning through something the other side also needs.
+   *
+   * Deliberately a LABEL on the movement and not a separate stock balance.
+   * Splitting the shelf in two would mean a bar till refusing a rice bowl
+   * because its sauce is booked to the kitchen — the till reads one branch's
+   * stock and refuses the sale outright. Recording who used it answers the
+   * question without breaking the sale.
+   *
+   * Optional: a shop with one station, or one that never says, is exactly as
+   * it was.
+   */
+  stationId?: string;
+  /**
+   * What ACTUALLY came out of the pot, when the cook measured it.
+   *
+   * The batch yield is a number nobody can know before the first batch. A shop
+   * setting up a sauce is asked "how much does one batch make?" and the honest
+   * answer is "we have never weighed it" -- so the figure entered at setup is a
+   * guess, and every cost derived from it inherits the guess. Worse, the guess
+   * never corrects itself: the system multiplies it by the batch count forever,
+   * however far reality drifts.
+   *
+   * Measured once, this replaces it. The cost per unit is already
+   * `inputValue / produced`, so a truthful output makes the costing truthful in
+   * the same stroke -- a batch that reduced further than expected is more
+   * concentrated and genuinely costs more per ml.
+   *
+   * Optional, and about the WHOLE batch, not per batch: it is what the cook
+   * read off the jug, so it is compared against `batchYield x batches`.
+   */
+  actualYield?: number;
 }
 
 export interface SubRecipeLineInput {
@@ -72,11 +128,15 @@ export class SubRecipesService {
    * moved — they never tripped a reorder level, never reached a buy list, and
    * ran out mid-service while the system insisted they were on the shelf.
    */
-  async list(tenantId: string, branchId: string) {
+  async list(tenantId: string, branchId: string, personaKey?: string | null) {
     const rows = await this.prisma.rawMaterial.findMany({
       where:  { tenantId, isActive: true, subRecipeItems: { some: {} } },
       select: {
         id: true, name: true, unit: true, costPrice: true, batchYield: true,
+        // The point at which someone should start the next batch. Read here so
+        // the board can say so where the decision is made, rather than only in
+        // a nightly alert nobody is standing next to.
+        lowStockAlert: true,
         inventory: { where: { branchId }, select: { quantity: true } },
         subRecipeItems: {
           select: {
@@ -207,7 +267,31 @@ export class SubRecipesService {
         : { name: worst.name, chain: [worst.name] };
     };
 
-    return rows.map((r) => {
+    /*
+      The three levels, standardised.
+
+        LEVEL 1  ready to use, on the line
+        LEVEL 2  prepared and parked (frozen), waiting to be thawed into L1
+        LEVEL 3  the raw ingredients, already at the station
+
+      Derived, not configured. A prep that a PRODUCT consumes is what the floor
+      serves from, so it is Level 1. A prep that only feeds ANOTHER prep is the
+      one held behind it, so it is Level 2. The raw materials are Level 3 and
+      are already on the card as the component list.
+
+      Deriving it means the shop names nothing and maintains nothing, and the
+      numbers cannot drift out of step with the recipes. Where a prep is
+      neither -- a middle stage of a genuine multi-step cook, which is not this
+      rotation at all -- the level is left null rather than invented.
+    */
+    const feedsAnotherPrep = new Set<string>();
+    for (const parent of rows) {
+      for (const line of parent.subRecipeItems) {
+        if (prepById.has(line.rawMaterial.id)) feedsAnotherPrep.add(line.rawMaterial.id);
+      }
+    }
+
+    const mapped = rows.map((r) => {
       // What the shelf supports RIGHT NOW, with no prep in between. This is
       // what the cook can start on this minute.
       let readyNow = Number.POSITIVE_INFINITY;
@@ -264,6 +348,32 @@ export class SubRecipesService {
         costPrice:     r.costPrice != null ? Number(r.costPrice) : null,
         batchYield:    r.batchYield != null ? Number(r.batchYield) : null,
         onHand:        Number(r.inventory[0]?.quantity ?? 0),
+        /**
+         * When to start the next batch, and whether it is time.
+         *
+         * Zero is the wrong trigger for anything prepped ahead: a shop that
+         * keeps a ready tub and a backup tub has the backup at zero for half
+         * its life by design, and waiting for the READY one to hit zero means
+         * waiting for the shortage itself. The par level is the point where
+         * there is still enough on the line to serve from while the next batch
+         * is made.
+         *
+         * Null when nobody has set one — reported honestly rather than guessed
+         * at, because a made-up par level would fire warnings the shop learns
+         * to ignore.
+         */
+        /**
+         * 1 = ready to use, 2 = parked waiting to be thawed, null = neither.
+         *
+         * Level 3 is not a row here on purpose: it is the raw ingredients, and
+         * they are already listed on the card as what a batch is made from.
+         */
+        level: (feeds.get(r.id) ?? []).length > 0
+          ? 1 as const
+          : feedsAnotherPrep.has(r.id) ? 2 as const : null,
+        parLevel:      r.lowStockAlert != null ? Number(r.lowStockAlert) : null,
+        belowPar:      r.lowStockAlert != null
+                        && Number(r.inventory[0]?.quantity ?? 0) <= Number(r.lowStockAlert),
         /**
          * 'MOVE' when this is the same thing in a different state — thawed,
          * decanted, portioned — and 'MAKE' when it is genuinely produced from
@@ -327,6 +437,116 @@ export class SubRecipesService {
         })),
       };
     });
+
+    /*
+      A barista sees the bar's preps; a cook sees the kitchen's.
+
+      Both jobs used the same account type, so every prep board showed every
+      prep and each person had to pick their own out of the other's. On a phone
+      mid-service that is how the wrong batch gets recorded -- and a wrongly
+      attributed batch is worse than an unattributed one, because it reads as
+      fact.
+
+      A prep with NO station stays visible to EVERYONE. Null means the category
+      was never routed to a station, or the prep genuinely feeds both sides --
+      neither is a permission boundary, and hiding them would hand a shop that
+      has not finished its menu setup a blank screen and the conclusion that
+      the feature is broken.
+
+      Someone with no persona, or a persona that names no station, sees
+      everything. That is every account that exists today.
+    */
+    /*
+      A parked batch belongs to whoever thaws it.
+
+      Station is derived from the PRODUCTS a prep feeds, and a Level 2 tub feeds
+      no product -- only the Level 1 tub in front of it. So every backup batch
+      came back with no station and was therefore visible to everyone: the
+      kitchen's frozen sauce sat on the barista's board, which is precisely the
+      confusion the scoping exists to remove.
+
+      Inherited one hop up, and only when the parents agree. A tub feeding two
+      preps that belong to different stations genuinely has no single owner, and
+      guessing one would be worse than leaving it visible to both.
+    */
+    for (const row of mapped) {
+      if (row.station) continue;
+      const parents = mapped.filter((m) =>
+        m.components.some((c) => c.rawMaterialId === row.id));
+      const stations = [...new Map(
+        parents.map((m) => m.station).filter((x): x is NonNullable<typeof x> => !!x)
+          .map((x) => [x.id, x]),
+      ).values()];
+      if (stations.length === 1) row.station = stations[0];
+    }
+
+    /*
+      The shop's OWN stations, so a persona written for a floor plan this shop
+      does not have cannot blank the board. See canPrepAtStation.
+    */
+    const shopKinds: string[] = [...new Set(
+      mapped.map((m) => m.station?.kind).filter(Boolean).map(String),
+    )];
+    return mapped.filter((row) =>
+      canPrepAtStation(personaKey, row.station?.kind ?? null, shopKinds));
+  }
+
+  /**
+   * Which station preps ONE item — the same derivation the board uses.
+   *
+   * Written as its own method rather than inlined so the station a barista is
+   * SHOWN and the station the server ENFORCES come from one place. Two copies
+   * of this walk would drift, and the drift would show up as a cook being
+   * refused a batch the board had just offered them.
+   *
+   * Null when the products it feeds have no station routed, or when it feeds
+   * both sides. Null is permissive everywhere it is read.
+   */
+  private async stationOfPrep(
+    tenantId: string,
+    rawMaterialId: string,
+    followParents = true,
+  ): Promise<{ id: string; name: string; kind: string } | null> {
+    const usedBy = await this.prisma.bomItem.findMany({
+      where:  { rawMaterialId, product: { tenantId, isActive: true } },
+      select: { product: { select: { category: { select: {
+        station: { select: { id: true, name: true, kind: true } },
+      } } } } },
+    });
+    const stations = [...new Map(
+      usedBy
+        .map((b) => b.product.category?.station)
+        .filter((x): x is NonNullable<typeof x> => !!x)
+        .map((x) => [x.id, x]),
+    ).values()];
+    if (stations.length === 1) {
+      return { id: stations[0].id, name: stations[0].name, kind: String(stations[0].kind) };
+    }
+    if (stations.length > 1 || !followParents) return null;
+
+    /*
+      Nothing routed it directly, so ask whatever it feeds.
+
+      A Level 2 tub feeds no product -- only the Level 1 tub in front of it --
+      so it can never derive a station of its own, and without this the backup
+      batch would be recordable by anyone. It belongs to whoever thaws it.
+
+      One hop, and only when the parents agree: a tub feeding two preps at
+      different stations genuinely has no single owner, and the permissive
+      answer is the right one there.
+    */
+    const parents = await this.prisma.subRecipeItem.findMany({
+      where:  { rawMaterialId, parent: { tenantId, isActive: true } },
+      select: { parentRawMaterialId: true },
+    });
+    const found: Array<{ id: string; name: string; kind: string }> = [];
+    for (const parent of parents) {
+      // followParents=false: one hop only, so a cycle cannot spin here.
+      const st = await this.stationOfPrep(tenantId, parent.parentRawMaterialId, false);
+      if (st) found.push(st);
+    }
+    const uniq = [...new Map(found.map((x) => [x.id, x])).values()];
+    return uniq.length === 1 ? uniq[0] : null;
   }
 
   /** An ingredient is a sub-recipe when it has components AND a yield. */
@@ -472,7 +692,13 @@ export class SubRecipesService {
    * been made is worse than no record — it would blend a cost for stock that
    * does not exist and quietly corrupt the WAC of everything downstream.
    */
-  async makeBatch(tenantId: string, rawMaterialId: string, dto: MakeBatchDto, userId: string) {
+  async makeBatch(
+    tenantId: string,
+    rawMaterialId: string,
+    dto: MakeBatchDto,
+    userId: string,
+    personaKey?: string | null,
+  ) {
     const batches = Number(dto.batches);
     if (!(batches > 0)) throw new BadRequestException('Enter how many batches were made.');
 
@@ -493,6 +719,66 @@ export class SubRecipesService {
     });
     if (!branch) throw new BadRequestException('Branch not found in your organization.');
 
+    /*
+      Who did this — resolved to a NAME here, while the row is in front of us.
+
+      The payload is read back by Stock Movements long after the fact, and a
+      bare id there would mean a join per row or, more likely, a screen that
+      shows nothing. Storing the name alongside also survives the station being
+      renamed later: the record says where the sugar went on the day it went.
+    */
+    let station: { id: string; name: string; kind: string } | null = null;
+    if (dto.stationId) {
+      const found = await this.prisma.station.findFirst({
+        where:  { id: dto.stationId, tenantId },
+        select: { id: true, name: true, kind: true },
+      });
+      if (!found) throw new BadRequestException('That station is not in your organization.');
+      station = { id: found.id, name: found.name, kind: String(found.kind) };
+    }
+
+    /*
+      A barista may not record the kitchen's batch, and a cook may not record
+      the bar's.
+
+      Enforced HERE and not only on the board, because the board is a picture:
+      a stale tab, a bookmarked id, or the tablet app posting straight to the
+      API would all sail past a filtered list. The rule and the filter share
+      one derivation (stationOfPrep) and one predicate (canPrepAtStation), so
+      the two cannot disagree.
+
+      A prep with no station routed is allowed to everyone. That is a setup
+      gap, not a boundary -- refusing it would block a whole shop's prep on a
+      menu-routing task nobody has been asked to do.
+    */
+    const prepStation = await this.stationOfPrep(tenantId, rawMaterialId);
+    // The same backstop the board uses: read the shop's real stations so a
+    // persona written for a floor plan this shop does not have cannot refuse
+    // every batch. Board and server must agree, so both consult it.
+    const shopStations = await this.prisma.station.findMany({
+      where: { tenantId, isActive: true }, select: { kind: true },
+    });
+    const shopKinds = [...new Set(shopStations.map((x) => String(x.kind)))];
+    if (!canPrepAtStation(personaKey, prepStation?.kind ?? null, shopKinds)) {
+      throw new BadRequestException(
+        `"${rm.name}" is a ${prepStation?.name ?? 'different station'} prep. ` +
+        `Ask the ${prepStation?.name ?? 'other station'} to record this batch.`,
+      );
+    }
+
+    /*
+      And when nobody said which station, fall back to the one this prep
+      belongs to.
+
+      Attribution was caller-supplied and therefore blank by default, which
+      made the whole point of recording it -- what did the kitchen use this
+      week -- depend on a person remembering to answer a question. The prep's
+      own station is a fact already in the data, so use it.
+    */
+    if (!station && prepStation) {
+      station = { id: prepStation.id, name: prepStation.name, kind: String(prepStation.kind) };
+    }
+
     const stock  = await this.stockOf(dto.branchId, rm.subRecipeItems.map((l) => l.rawMaterial.id));
     const short  = rm.subRecipeItems
       .map((l) => ({
@@ -512,6 +798,28 @@ export class SubRecipesService {
 
     const madeAt = dto.madeAt ? new Date(dto.madeAt) : new Date();
     if (Number.isNaN(madeAt.getTime())) throw new BadRequestException('madeAt is not a valid date.');
+
+    /*
+      When this batch stops being good.
+
+      An explicit date wins, because the person holding the tub knows more than
+      a rule of thumb. Otherwise it is counted forward from when it was made,
+      which is the only honest starting point: a batch's clock starts when it
+      is prepared, not when it is first used.
+    */
+    let expiresAt: Date | null = null;
+    if (dto.expiresAt) {
+      expiresAt = new Date(dto.expiresAt);
+      if (Number.isNaN(expiresAt.getTime())) {
+        throw new BadRequestException('The "good until" date is not a valid date.');
+      }
+    } else if (dto.shelfLifeDays != null) {
+      const days = Number(dto.shelfLifeDays);
+      if (!Number.isFinite(days) || days <= 0) {
+        throw new BadRequestException('Shelf life has to be a positive number of days.');
+      }
+      expiresAt = new Date(madeAt.getTime() + days * 24 * 60 * 60 * 1000);
+    }
 
     if (this.periods) await this.periods.assertDateIsOpen(tenantId, madeAt);
 
@@ -539,7 +847,32 @@ export class SubRecipesService {
       }
     }
 
-    const produced   = Number(rm.batchYield) * batches;
+    /*
+      What the recipe SAYS this makes, and what the cook says it made.
+
+      Expected is the setup figure; actual is a measurement. Where a
+      measurement exists it wins, because it is the only one of the two that
+      was ever checked against a jug.
+    */
+    const expected = Number(rm.batchYield) * batches;
+    if (dto.actualYield != null) {
+      const measured = Number(dto.actualYield);
+      if (!Number.isFinite(measured) || measured <= 0) {
+        throw new BadRequestException(
+          'How much came out has to be a number greater than zero.',
+        );
+      }
+    }
+    const produced = dto.actualYield != null ? Number(dto.actualYield) : expected;
+    /*
+      How far the pot drifted from the recipe, as a fraction.
+
+      Reported rather than acted on. A first measurement is one data point, and
+      silently rewriting the recipe from it would let one badly-read jug
+      redefine the costing of every future batch. The screen shows the drift and
+      the owner decides.
+    */
+    const yieldVariance = expected > 0 ? +((produced - expected) / expected).toFixed(4) : null;
     const inputValue = rm.subRecipeItems.reduce(
       (sum, l) => sum + Number(l.quantity) * batches * Number(l.rawMaterial.costPrice ?? 0), 0,
     );
@@ -630,6 +963,10 @@ export class SubRecipesService {
           qtyRemaining:    new Prisma.Decimal(produced),
           unitCost:        new Prisma.Decimal(unitCost),
           receivedAt:      madeAt,
+          // Null when the shop does not track it, which is the old behaviour.
+          // Set, it gives FEFO something to sort by and the board something to
+          // warn about before a tub is thrown away.
+          expirationDate:  expiresAt,
           // The caller's key when it gave one, so a retry is caught above; the
           // generated form otherwise, which is descriptive but NOT unique --
           // two genuine batches of the same thing on the same day share it.
@@ -668,14 +1005,26 @@ export class SubRecipesService {
             rawMaterialName: rm.name,
             unit:            rm.unit,
             branchId:        dto.branchId,
+            // Null when the shop never said. Reported honestly rather than
+            // guessed at -- a station attributed by assumption would put the
+            // kitchen's sugar on the bar's running cost.
+            stationId:       station?.id ?? null,
+            stationName:     station?.name ?? null,
+            stationKind:     station?.kind ?? null,
             batches,
             quantity:        produced,
+            // What the recipe expected, so a drift is visible in the record and
+            // not only in the moment.
+            expectedQuantity: expected,
+            measuredYield:    dto.actualYield != null ? Number(dto.actualYield) : null,
+            yieldVariance,
             quantityBefore:  before,
             quantityAfter:   after,
             unitCost,
             totalValue:      +(produced * unitCost).toFixed(2),
             madeAt:          madeAt.toISOString(),
             madeById:        userId,
+            expiresAt:       expiresAt ? expiresAt.toISOString() : null,
             referenceNumber: ref ?? null,
             note:            dto.note ?? null,
             consumed: rm.subRecipeItems.map((l) => ({
@@ -692,7 +1041,12 @@ export class SubRecipesService {
       return {
         rawMaterialId,
         name:      rm.name,
+        station,
         batches,
+        /** What the recipe said it would make. */
+        expected,
+        /** Non-null only when the cook measured. Positive = more than expected. */
+        yieldVariance: dto.actualYield != null ? yieldVariance : null,
         produced,
         unit:      rm.unit,
         unitCost,
@@ -707,6 +1061,7 @@ export class SubRecipesService {
         })),
         madeAt: madeAt.toISOString(),
         madeBy: userId,
+        expiresAt: expiresAt ? expiresAt.toISOString() : null,
       };
     }, { timeout: 30_000, maxWait: 10_000 });
   }

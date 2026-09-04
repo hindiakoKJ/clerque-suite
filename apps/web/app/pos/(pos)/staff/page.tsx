@@ -7,14 +7,20 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 import { StaffPermissionEditor } from '@/components/staff/StaffPermissionEditor';
-import type { PlanCode, UserRole } from '@repo/shared-types';
+import type { PlanCode, UserRole, HireableRole } from '@repo/shared-types';
 
-type StaffRole =
-  | 'BUSINESS_OWNER' | 'BRANCH_MANAGER' | 'SALES_LEAD'
-  | 'CASHIER' | 'MDM' | 'WAREHOUSE_STAFF'
-  | 'FINANCE_LEAD' | 'BOOKKEEPER' | 'ACCOUNTANT'
-  | 'PAYROLL_MASTER' | 'GENERAL_EMPLOYEE' | 'EXTERNAL_AUDITOR'
-  | 'KIOSK_DISPLAY';
+/*
+  Imported, not re-typed.
+
+  This union was the fourth copy of the role list -- after the Prisma enum, the
+  shared UserRole type, and the users DTO -- and the copies had drifted.
+  AR_ACCOUNTANT and AP_ACCOUNTANT are real roles in the database, hold
+  `ledger:view`, and are named in 107 @Roles decorators across the API, but
+  they were missing from this screen and from the DTO. So the only UI that
+  assigns roles could not assign two of them, and a shop could never hire an
+  AR or AP clerk however much of the API was built for one.
+*/
+type StaffRole = HireableRole;
 
 interface Branch { id: string; name: string; }
 interface StaffMember {
@@ -50,6 +56,8 @@ const ROLES: { value: StaffRole; label: string; access: string }[] = [
   { value: 'FINANCE_LEAD',     label: 'Finance Lead',        access: 'Bank reconciliation, cash-flow reports. No payroll, no price edits.' },
   { value: 'BOOKKEEPER',       label: 'Bookkeeper',          access: 'Journal entries and GL read. No payroll, no price edits.' },
   { value: 'ACCOUNTANT',       label: 'Accountant',          access: 'Full ledger read. No payroll.' },
+  { value: 'AR_ACCOUNTANT',    label: 'AR Clerk',            access: 'Receivables — invoices, collections, customer statements. Ledger read.' },
+  { value: 'AP_ACCOUNTANT',    label: 'AP Clerk',            access: 'Payables — bills, vendors, disbursements. Ledger read.' },
   { value: 'PAYROLL_MASTER',   label: 'Payroll Master',      access: 'Payroll runs and salary data. Cannot access POS or Ledger.' },
   { value: 'GENERAL_EMPLOYEE', label: 'General Employee',    access: 'Clock-in/out only. No POS or Ledger access.' },
   { value: 'EXTERNAL_AUDITOR', label: 'External Auditor',    access: 'Read-only compliance view across all modules. Zero write access.' },

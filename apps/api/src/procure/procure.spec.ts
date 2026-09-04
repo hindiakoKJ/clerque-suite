@@ -154,7 +154,6 @@ describe('ProcureService', () => {
       lowStock: [
         { rawMaterialId: 'rm-sugar', shortBy: 4000, kind: 'INGREDIENT' },
         { rawMaterialId: 'rm-milk',  shortBy: 12000, kind: 'INGREDIENT' },
-        { rawMaterialId: 'rm-ok',    shortBy: 0,    kind: 'INGREDIENT' },  // not short
         { productId:     'p1',       shortBy: 5 },                          // a product, not ours
       ],
     });
@@ -162,6 +161,54 @@ describe('ProcureService', () => {
     expect(res.added).toBe(2);
     expect(created.map((c) => c.rawMaterialId)).toEqual(['rm-sugar', 'rm-milk']);
     expect(Number(created[0].shortBy)).toBe(4000);
+  });
+
+  /*
+    Exactly ON the line.
+
+    This fixture used to sit in the test above labelled "not short", and it was
+    skipped. The label was the bug: getLowStock only ever returns items it has
+    already flagged, and its test is `onHand <= lowStockAlert` -- so a row it
+    hands back with a shortfall of ZERO is an item resting exactly on its
+    reorder level, not a healthy one.
+
+    Skipping it meant one shop, one night, three different answers: the nightly
+    email said "Straws - 6 pcs left", the printed slip said "SHORT 0 pcs", and
+    Check stock said "Nothing is below its reorder level right now". A cafe
+    weighing grams rarely lands on equality; a shop counting cups, lids and
+    sachets lands on it constantly.
+  */
+  it('buys the ingredient sitting exactly on its reorder level', async () => {
+    const { svc, created } = build({
+      lowStock: [
+        { rawMaterialId: 'rm-lids', shortBy: 0, lowStockAlert: 200, kind: 'INGREDIENT' },
+      ],
+    });
+    const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+    expect(res.added).toBe(1);
+    expect(created.map((c) => c.rawMaterialId)).toEqual(['rm-lids']);
+  });
+
+  it('asks for the reorder level itself when the shortfall is zero', async () => {
+    // Doubling nothing is nothing, and a zero-quantity line is not a purchase.
+    const { svc, created } = build({
+      lowStock: [
+        { rawMaterialId: 'rm-lids', shortBy: 0, lowStockAlert: 200, kind: 'INGREDIENT' },
+      ],
+    });
+    await svc.pullLowStock(TENANT, BRANCH, USER);
+    expect(Number(created[0].qtyRequested)).toBe(200);
+  });
+
+  it('still buys past the line when the item is genuinely below it', async () => {
+    // The existing rule is unchanged: get above the level and leave cover.
+    const { svc, created } = build({
+      lowStock: [
+        { rawMaterialId: 'rm-sugar', shortBy: 4000, lowStockAlert: 6000, kind: 'INGREDIENT' },
+      ],
+    });
+    await svc.pullLowStock(TENANT, BRANCH, USER);
+    expect(Number(created[0].qtyRequested)).toBe(8000);
   });
 
   /*

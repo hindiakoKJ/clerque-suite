@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import {
   COFFEE_SHOP_LAYOUTS,
+  FNB_BUSINESS_TYPES,
   type CoffeeShopTier,
   type CoffeeShopLayoutTemplate,
 } from '@repo/shared-types';
@@ -102,9 +103,29 @@ export class LayoutsService {
       select: { businessType: true, coffeeShopTier: true },
     });
     if (!tenant) throw new NotFoundException('Tenant not found.');
-    if (tenant.businessType !== 'COFFEE_SHOP') {
+    /*
+      Every food-and-drink shop, not only the ones called coffee shops.
+
+      This is the ONLY code path in the product that creates a Station, and it
+      refused anything that was not literally COFFEE_SHOP. So a restaurant, a
+      bakery, a bar or a caterer could never have a station at all — and with
+      no stations, every prep derives `station: null`, which means the whole
+      layer built on top of it quietly does nothing for them: no "who made
+      it?", no per-station ingredient cost, no separating the barista's board
+      from the cook's. Nothing breaks, which is why it would not have been
+      reported as a bug; the feature is simply absent.
+
+      FNB_BUSINESS_TYPES is the right gate because it is the same set that
+      already unlocks recipe-based inventory — and a shop with no recipes has
+      no preps to route in the first place. The templates themselves are just
+      "which stations exist", and a bakery wanting a counter and a kitchen
+      wants exactly what CS-4 describes.
+
+      Non-F&B is still refused: a hardware store has no kitchen.
+    */
+    if (!(FNB_BUSINESS_TYPES as readonly string[]).includes(tenant.businessType)) {
       throw new BadRequestException(
-        `Coffee Shop tiers only apply to COFFEE_SHOP businesses (this tenant is ${tenant.businessType}).`,
+        `Station layouts apply to food and drink businesses (this tenant is ${tenant.businessType}).`,
       );
     }
     const template: CoffeeShopLayoutTemplate = COFFEE_SHOP_LAYOUTS[tier];

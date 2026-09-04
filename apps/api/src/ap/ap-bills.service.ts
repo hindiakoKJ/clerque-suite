@@ -336,6 +336,19 @@ export class APBillsService {
     if (!['OPEN', 'PARTIALLY_PAID', 'PAID'].includes(bill.status)) {
       throw new BadRequestException(`Cannot void bill in status ${bill.status}.`);
     }
+    /*
+      A bill the stock receipt wrote for itself is not an ordinary payable.
+      Its journal entry is the DELIVERY -- it debits raw materials and credits
+      2010 -- so reversing it here would take the value off the books while
+      the stock stays on the shelf, and nothing would put the shelf right.
+      Undo the delivery where the delivery happened.
+    */
+    if (bill.createdById === 'system-receive') {
+      throw new BadRequestException(
+        'This bill came from a stock delivery, so it cannot be voided here. '
+        + 'Undo the delivery under Stock instead; the bill goes with it.',
+      );
+    }
     if (!bill.journalEntryId) throw new BadRequestException('Bill has no posted JE to reverse.');
 
     return this.prisma.$transaction(async (tx) => {

@@ -618,7 +618,22 @@ export class ProductsService {
       where: { tenantId, isActive: true },
       include: {
         category: { select: { id: true, name: true } },
-        variants: { where: { isActive: true } },
+        variants: {
+          where: { isActive: true },
+          // A size's own recipe, when it has one. The sale deducts the size's
+          // BOM instead of the product's, so the ceiling has to know about it
+          // or a product whose recipes live only on its sizes shows as out of
+          // stock while every size is sellable.
+          include: {
+            variantBomItems: {
+              select: {
+                rawMaterialId: true,
+                quantity: true,
+                rawMaterial: { select: { id: true, name: true, unit: true } },
+              },
+            },
+          },
+        },
         inventory: { where: { branchId }, select: { quantity: true, lowStockAlert: true } },
         // BOM lines so we can compute maxProducible for RECIPE_BASED items.
         // The raw material comes with them so the limiting one can be NAMED —
@@ -689,6 +704,7 @@ export class ProductsService {
     for (const p of products) {
       if (p.inventoryMode === 'RECIPE_BASED') {
         for (const b of p.bomItems) allRawMaterialIds.add(b.rawMaterialId);
+        for (const v of p.variants) for (const b of v.variantBomItems) allRawMaterialIds.add(b.rawMaterialId);
       }
     }
 
@@ -715,35 +731,57 @@ export class ProductsService {
         what for. Keeping the line costs nothing — it is the same loop — and
         turns the alert into an instruction.
       */
-      let limitedBy: {
+      type LimitedBy = {
         rawMaterialId: string; name: string; unit: string;
         stock: number; perUnit: number;
-      } | null = null;
+      } | null;
+      let limitedBy: LimitedBy = null;
+
+      // The ceiling of one recipe: the ingredient that runs out first sets it.
+      const ceilingOf = (bom: Array<{ rawMaterialId: string; quantity: unknown; rawMaterial?: { name: string; unit: string } | null }>) => {
+        let min = Number.POSITIVE_INFINITY;
+        let limit: LimitedBy = null;
+        for (const line of bom) {
+          const stock = rmStockMap.get(line.rawMaterialId) ?? 0;
+          const perUnit = Number(line.quantity);
+          if (perUnit <= 0) continue;
+          const producible = Math.floor(stock / perUnit);
+          if (producible < min) {
+            min = producible;
+            limit = {
+              rawMaterialId: line.rawMaterialId,
+              name:          line.rawMaterial?.name ?? 'Unknown ingredient',
+              unit:          line.rawMaterial?.unit ?? '',
+              stock,
+              perUnit,
+            };
+          }
+        }
+        return { max: min === Number.POSITIVE_INFINITY ? 0 : min, limitedBy: limit };
+      };
+      // One ceiling per size that carries its own recipe, so the till can
+      // tell a size that is out from a product that is out.
+      let variantCeilings: Array<{ variantId: string; maxProducible: number; limitedBy: LimitedBy }> = [];
 
       if (p.inventoryMode === 'RECIPE_BASED') {
-        // No BOM at all → cannot produce; treat as 0 so cashier can't sell it.
-        if (p.bomItems.length === 0) {
-          maxProducible = 0;
+        variantCeilings = p.variants
+          .filter((v) => v.variantBomItems.length > 0)
+          .map((v) => { const c = ceilingOf(v.variantBomItems); return { variantId: v.id, maxProducible: c.max, limitedBy: c.limitedBy }; });
+
+        if (p.bomItems.length > 0) {
+          const base = ceilingOf(p.bomItems);
+          maxProducible = base.max;
+          limitedBy     = base.limitedBy;
+        } else if (variantCeilings.length > 0) {
+          // No product recipe, but the sizes have theirs. The tile can sell
+          // whichever size still has stock, so the best size is the ceiling.
+          // Before this the tile read 0 and was greyed out with stock on hand.
+          const best = variantCeilings.reduce((a, b) => (b.maxProducible > a.maxProducible ? b : a));
+          maxProducible = best.maxProducible;
+          limitedBy     = best.limitedBy;
         } else {
-          // Limiting ingredient = the one that yields the lowest producible count.
-          let min = Number.POSITIVE_INFINITY;
-          for (const bom of p.bomItems) {
-            const stock = rmStockMap.get(bom.rawMaterialId) ?? 0;
-            const perUnit = Number(bom.quantity);
-            if (perUnit <= 0) continue;
-            const producible = Math.floor(stock / perUnit);
-            if (producible < min) {
-              min = producible;
-              limitedBy = {
-                rawMaterialId: bom.rawMaterialId,
-                name:          bom.rawMaterial?.name ?? 'Unknown ingredient',
-                unit:          bom.rawMaterial?.unit ?? '',
-                stock,
-                perUnit,
-              };
-            }
-          }
-          maxProducible = min === Number.POSITIVE_INFINITY ? 0 : min;
+          // No BOM at all → cannot produce; treat as 0 so cashier can't sell it.
+          maxProducible = 0;
         }
       } else {
         // UNIT_BASED: same as before — finished-goods inventory at branch.
@@ -784,6 +822,8 @@ export class ProductsService {
         maxProducible,
         // Null for unit-based products — nothing limits them but themselves.
         limitedBy,
+        // Empty unless a size carries its own recipe.
+        variantCeilings,
         isLowStock,
         isOutOfStock,
       };

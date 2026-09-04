@@ -9,5 +9,8 @@ import { SimpleEntriesService } from './simple-entries.service';
   imports: [AccountingModule],
   controllers: [SimpleEntriesController],
   providers: [SimpleEntriesService],
+  // Procure posts a receipt's non-stock lines (a delivery fee, a repair)
+  // through the same fixed 2-line entries rather than growing its own.
+  exports: [SimpleEntriesService],
 })
 export class SimpleEntriesModule {}

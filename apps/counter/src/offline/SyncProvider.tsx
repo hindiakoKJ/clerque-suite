@@ -58,8 +58,19 @@ async function dispatchOutbox(kind: string, payload: unknown): Promise<boolean> 
       // Payload shape: `{ order: { clientUuid, ... } }` — see api/orderSubmit.ts
       const body = payload as { order?: { clientUuid?: string } };
       const clientUuid = body?.order?.clientUuid;
-      await api.post('/orders', payload, {
-        headers: clientUuid ? { 'Idempotency-Key': clientUuid } : undefined,
+      /*
+        Everything in this outbox already happened at the till, so the server
+        must not refuse it for stock that ran out since -- the customer has
+        the drink. The flag travels as a HEADER, never in the body: the same
+        order may have been posted once already under this Idempotency-Key,
+        and the server compares a hash of the body, so one extra field would
+        turn a clean replay into a permanent conflict.
+      */
+      await api.post('/orders', payload as object, {
+        headers: {
+          ...(clientUuid ? { 'Idempotency-Key': clientUuid } : {}),
+          'X-Replayed-Offline': '1',
+        },
       });
       return true;
     }
@@ -68,7 +79,9 @@ async function dispatchOutbox(kind: string, payload: unknown): Promise<boolean> 
       return true;
     }
     case 'inventory.adjustment': {
-      await api.post('/inventory/adjustments', payload);
+      // The API route is /inventory/adjust; /inventory/adjustments never
+      // existed, so this kind would have 404'd forever had anything enqueued it.
+      await api.post('/inventory/adjust', payload);
       return true;
     }
     case 'shift.close': {

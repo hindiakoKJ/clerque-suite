@@ -30,7 +30,9 @@ export class SubRecipesController {
   @Get()
   @ApiOperation({ summary: 'Every prepared ingredient, with batches still makeable' })
   list(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
-    return this.subRecipes.list(user.tenantId!, branchId ?? user.branchId!);
+    // The persona rides on the JWT already; a barista's board shows the bar's
+    // preps and a cook's shows the kitchen's. Anyone without one sees all.
+    return this.subRecipes.list(user.tenantId!, branchId ?? user.branchId!, user.personaKey);
   }
 
   /**
@@ -84,17 +86,21 @@ export class SubRecipesController {
          'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Post(':rawMaterialId/batches')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Record that a batch was made: consume the inputs, add the yield' })
+  @ApiOperation({ summary: 'Record that a batch was made: consume the inputs, add the yield (measured, if the cook weighed it)' })
   makeBatch(
     @CurrentUser() user: JwtPayload,
     @Param('rawMaterialId') id: string,
     @Body() body: MakeBatchDto,
   ) {
+    // stationId rides along in `body` untouched -- it is validated against the
+    // tenant in the service, so a forged id cannot attribute another shop's
+    // station.
     return this.subRecipes.makeBatch(
       user.tenantId!,
       id,
       { ...body, branchId: body.branchId ?? user.branchId! },
       user.sub,
+      user.personaKey,
     );
   }
 }

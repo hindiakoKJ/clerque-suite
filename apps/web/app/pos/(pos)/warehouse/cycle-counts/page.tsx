@@ -52,12 +52,27 @@ export default function CycleCountsPage() {
     mutationFn: (v: { id: string; isOpeningBalance: boolean }) =>
       api.post(`/warehouse/cycle-counts/${v.id}/post`, { isOpeningBalance: v.isOpeningBalance })
         .then((r) => r.data),
-    onSuccess: (_d, v) => {
+    onSuccess: (d: { warnings?: string[] }, v) => {
       qc.invalidateQueries({ queryKey: ['cycle-counts'] });
       setPostTarget(null);
+      /*
+        A first count at a shop that has not priced its ingredients yet can
+        come back with a warning per line — dozens of them. Say it once, with
+        the number, instead of stacking toasts; and do not say "variances
+        applied" as if the books had moved when some of them could not.
+      */
+      const warnings = d?.warnings ?? [];
+      const n = warnings.length;
       toast.success(v.isOpeningBalance
         ? 'Posted as opening stock — booked to Owner’s Capital.'
-        : 'Posted — variances applied.');
+        : n === 0 ? 'Posted — variances applied.' : 'Posted — the counts are saved.');
+      if (n > 0) {
+        toast.warning(
+          `${n} ingredient${n === 1 ? '' : 's'} had no cost on file, so ${n === 1 ? 'that count' : 'those counts'} `
+          + 'changed the shelf but not the books. Set their cost under Stock on hand.',
+          { duration: 12000 },
+        );
+      }
     },
     onError: (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
   });

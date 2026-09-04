@@ -67,6 +67,21 @@ function rolesFor(pathname: string): string[] {
     Edit or Receive control, so "let them look" does not quietly mean "let them
     receive".
   */
+  /*
+    Defining a prep is master data, not a floor action, and the API says so:
+    `PUT /inventory/sub-recipes/:id` is BUSINESS_OWNER and MDM only. Checked
+    BEFORE the board below, which is a prefix match -- without this, a cashier
+    could open a form whose every Save came back 403.
+
+    Deliberately narrower than STOCK_ROLES. A manager or warehouse account that
+    could open this would see a screen it cannot use, which is worse than not
+    seeing it: changing a recipe changes what every future batch consumes and
+    what the ingredient costs.
+  */
+  if (pathname.startsWith('/procure/batches/setup')) return ['BUSINESS_OWNER', 'MDM'];
+  // Posting a receipt moves stock and money in one tap, so it sits with the
+  // roles the API already lets record a purchase and receive it.
+  if (pathname.startsWith('/procure/receipts'))      return ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM'];
   if (pathname.startsWith('/procure/batches'))  return REQUEST_ROLES;
   if (pathname === '/procure')                  return REQUEST_ROLES;
   return STOCK_ROLES;

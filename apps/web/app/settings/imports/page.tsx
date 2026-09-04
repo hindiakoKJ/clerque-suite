@@ -17,7 +17,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Download, Package, Boxes, Users as UsersIcon, Truck,
   FileSpreadsheet, Loader2, BookOpen, Scroll, Box, Info, Sprout, ChefHat,
-  Upload, CheckCircle2, AlertTriangle, ArrowRightLeft,
+  Upload, CheckCircle2, AlertTriangle, ArrowRightLeft, Calculator,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -49,7 +49,15 @@ interface TemplateInfo {
   id:        string;
   name:      string;
   desc:      string;
-  endpoint:  string;
+  /**
+   * GET route returning the BLANK template.
+   *
+   * Optional, because not every row has one that would mean anything. A
+   * costing export is the shop's own recipes with what they cost -- a blank
+   * version of that is an empty grid nobody could fill in, so that row offers
+   * "My data" only.
+   */
+  endpoint?: string;
   filename:  string;
   Icon:      typeof Package;
   highlight?: boolean;
@@ -203,7 +211,7 @@ export default function ImportTemplatesPage() {
   }
 
   async function downloadTemplate(t: TemplateInfo, mode: 'blank' | 'mine' = 'blank') {
-    const endpoint = mode === 'mine' ? t.exportEndpoint! : t.endpoint;
+    const endpoint = mode === 'mine' ? t.exportEndpoint! : t.endpoint!;
     const filename = mode === 'mine' ? t.exportFilename! : t.filename;
     setDownloading(mode === 'mine' ? `${t.id}:mine` : t.id);
     try {
@@ -290,6 +298,20 @@ export default function ImportTemplatesPage() {
       upload:   '/import/recipes',
         filename: 'clerque-recipes.xlsx',
         Icon: ChefHat,
+      },
+      {
+        id: 'recipe-costing',
+        name: 'Recipe Costing (pivot-ready)',
+        desc: 'Your whole recipe book with what every line costs, plus a sheet of dish margins. '
+          + 'Headers on row 1 and each sheet is a named Excel table, so Insert › PivotTable fills the '
+          + 'source in for you. Line costs live on the Recipes sheet, selling prices and margins on Dish '
+          + 'Costs — kept apart so a price is never summed once per ingredient. Edit a Quantity and '
+          + 'upload it back on the Recipes row above.',
+        exportEndpoint: '/import/export/recipe-costing',
+        exportFilename: 'clerque-recipe-costing.xlsx',
+        upload:   '/import/recipes',
+        filename: 'clerque-recipe-costing.xlsx',
+        Icon: Calculator,
       },
     ] as TemplateInfo[] : []),
     {
@@ -409,16 +431,18 @@ export default function ImportTemplatesPage() {
             </div>
             <div className="flex flex-col items-end gap-2 shrink-0">
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => downloadTemplate(t)}
-                  disabled={downloading === t.id}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
-                >
-                  {downloading === t.id
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : <Download className="h-4 w-4" />}
-                  {downloading === t.id ? 'Downloading…' : '.xlsx'}
-                </button>
+                {t.endpoint && (
+                  <button
+                    onClick={() => downloadTemplate(t)}
+                    disabled={downloading === t.id}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
+                  >
+                    {downloading === t.id
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Download className="h-4 w-4" />}
+                    {downloading === t.id ? 'Downloading…' : '.xlsx'}
+                  </button>
+                )}
 
                 {t.exportEndpoint && (
                   // "My data" sits BEFORE Import, because after day one that is

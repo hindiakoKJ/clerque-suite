@@ -452,6 +452,10 @@ export class JournalService {
     const payload = event.payload as Record<string, unknown>;
     const lines: LineInput[] = [];
     let description = '';
+    // The document behind the entry, when the event names one: a purchase
+    // request line, a delivery reference, a count number. Until now it lived
+    // only as text inside the description, which nothing could link from.
+    let reference: string | null = null;
     // Prefer the business date in the payload over the event creation timestamp.
     // Inventory receipts may be backdated to the supplier-invoice date — and
     // those journal entries should post to the period of the actual receipt,
@@ -764,6 +768,21 @@ export class JournalService {
         }
 
         /*
+          A transfer between two branches of one shop moves stock, not value:
+          1051 is one account for the whole tenant, so nothing changes in the
+          books. The event exists so Stock Movements can show the sugar
+          leaving one branch and arriving at the other -- before this a
+          transfer was the one movement with no trail anywhere.
+        */
+        if (String(payload['kind'] ?? '') === 'STOCK_TRANSFER') {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data:  { status: 'SYNCED', syncedAt: new Date(), lastError: null },
+          });
+          return { skipped: true };
+        }
+
+        /*
           Is this a raw material or a finished product?
 
           The signal has lived in different fields across versions of this
@@ -789,6 +808,7 @@ export class JournalService {
         //   - OWNER_FUNDED → 3010 Owner's Capital       (legacy default + when owner funds stock personally)
         const paymentMethod  = String(payload['paymentMethod'] ?? 'OWNER_FUNDED');
         const refNumber      = payload['referenceNumber'] ? String(payload['referenceNumber']) : null;
+        reference = refNumber;
 
         // Skip zero-value entries (no cost price set on product)
         if (totalValue === 0) {
@@ -1319,6 +1339,7 @@ export class JournalService {
             date:        eventDate,
             postingDate: eventDate, // system events post to the period of the event
             description,
+            reference:   reference ?? undefined,
             status:      'POSTED',
             source:      'SYSTEM',
             createdBy:   'SYSTEM',
@@ -1340,6 +1361,26 @@ export class JournalService {
           where: { id: eventId },
           data: { status: 'SYNCED', syncedAt: new Date() },
         });
+
+        /*
+          A credit receipt made an AP bill at receive time, and this entry is
+          the one that credits 2010 for it. Unlinked, the bill could never be
+          voided ("no posted JE to reverse") and the sub-ledger could not show
+          which entry it belonged to. Matched on the receipt's own reference
+          and the gross amount, the same two things the bill was written with.
+        */
+        const apGross = Number(payload['grossValue'] ?? payload['totalValue'] ?? 0);
+        if (String(payload['paymentMethod'] ?? '') === 'CREDIT' && reference && apGross > 0) {
+          const bill = await tx.aPBill.findFirst({
+            where: {
+              tenantId, reference, journalEntryId: null, createdById: 'system-receive',
+              totalAmount: new Prisma.Decimal(apGross),
+            },
+            orderBy: { createdAt: 'desc' },
+            select:  { id: true },
+          });
+          if (bill) await tx.aPBill.update({ where: { id: bill.id }, data: { journalEntryId: entry.id } });
+        }
 
         return entry;
       });

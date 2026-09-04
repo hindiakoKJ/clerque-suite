@@ -172,6 +172,22 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  /*
+    JSON bodies up to 10 MB, everywhere.
+
+    body-parser's default is 100 kB, and two routes take a phone photo as
+    base64 inside JSON -- /procure/receipts (parse and confirm) and
+    /ai/receipt-ocr. A shrunk receipt photo is ~900 kB of base64, nine times
+    the default, and the failure surfaced as a bare 500 before any controller
+    ran. Registered here, before init, so Nest sees a json parser is already
+    applied and does not add its 100 kB one behind it.
+
+    NOT scoped to the two routes: registering a path-scoped parser made Nest
+    skip its default for the whole app, and every other JSON route silently
+    lost body parsing. One parser, one limit, applied to everything.
+  */
+  app.useBodyParser('json', { limit: '10mb' });
+
   // SecAudit 2026-05 I16 — trust the Railway edge proxy so req.ip is the
   // real client address (not the Railway edge IP). Without this, the global
   // throttler keys every request to the same IP and either lets through too

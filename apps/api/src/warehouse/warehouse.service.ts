@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, Optional } from '@n
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, StockTransferStatus, CycleCountStatus } from '@prisma/client';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
+import { noCostWarning } from '../inventory/inventory.service';
 
 // ── Stock Transfer DTOs ────────────────────────────────────────────────────────
 
@@ -186,9 +187,30 @@ export class WarehouseService {
           where: { branchId_rawMaterialId: { branchId: t.fromBranchId, rawMaterialId: line.rawMaterialId } },
           data:  { quantity: { decrement: line.quantity } },
         });
+        // The lots leave with the stock, oldest first, or the source branch
+        // keeps layers it no longer holds and its expiry order goes wrong.
+        const drained = await this.drainLots(tx, t.fromBranchId, line.rawMaterialId, Number(line.quantity));
+        /*
+          What the stock actually cost on the shelf it left, not what the
+          ingredient averages today. On a FIFO/FEFO shop those differ, and
+          the destination lot is created from this number -- so without it
+          value walks out of one branch at layer cost and arrives at the
+          other at the running average, and the lot ledger drifts away from
+          1051 a little on every transfer. Only when lots covered the move;
+          a shop with no layers keeps the average it was created with.
+        */
+        if (drained.qty > 0) {
+          await tx.stockTransferLine.update({
+            where: { id: line.id },
+            data:  { unitCost: new Prisma.Decimal((drained.value / drained.qty).toFixed(4)) },
+          });
+        }
       }
 
-      return t;
+      // Re-read so the trail and the caller see the realised costs.
+      const sent = await tx.stockTransfer.findFirstOrThrow({ where: { id, tenantId }, include: { lines: true } });
+      await this.transferTrail(tx, tenantId, sent, 'OUT');
+      return sent;
     });
   }
 
@@ -221,8 +243,26 @@ export class WarehouseService {
           },
           update: { quantity: { increment: line.quantity } },
         });
+        // The stock arrives as a lot at exactly what it cost where it left
+        // (send wrote the realised layer cost onto the line), so the
+        // destination can drain it FEFO and the value that left is the
+        // value that arrived.
+        await tx.rawMaterialLot.create({
+          data: {
+            tenantId,
+            branchId:        t.toBranchId,
+            rawMaterialId:   line.rawMaterialId,
+            qtyReceived:     line.quantity,
+            qtyRemaining:    line.quantity,
+            unitCost:        line.unitCost,
+            receivedAt:      new Date(),
+            referenceNumber: t.transferNumber,
+            paymentMethod:   'OWNER_FUNDED',
+          },
+        });
       }
 
+      await this.transferTrail(tx, tenantId, t, 'IN', { byId: userId });
       return t;
     });
   }
@@ -256,7 +296,23 @@ export class WarehouseService {
             where: { branchId_rawMaterialId: { branchId: t.fromBranchId, rawMaterialId: line.rawMaterialId } },
             data:  { quantity: { increment: line.quantity } },
           });
+          // The lots drained at send cannot be un-drained exactly; the stock
+          // comes back as one fresh lot at the current unit cost.
+          await tx.rawMaterialLot.create({
+            data: {
+              tenantId,
+              branchId:        t.fromBranchId,
+              rawMaterialId:   line.rawMaterialId,
+              qtyReceived:     line.quantity,
+              qtyRemaining:    line.quantity,
+              unitCost:        line.unitCost,
+              receivedAt:      new Date(),
+              referenceNumber: `${t.transferNumber}-CANCELLED`,
+              paymentMethod:   'OWNER_FUNDED',
+            },
+          });
         }
+        await this.transferTrail(tx, tenantId, t, 'IN', { returned: true });
       }
 
       return t;
@@ -410,6 +466,9 @@ export class WarehouseService {
         await this.periods.assertDateIsOpen(tenantId, c.postedAt ?? new Date());
       }
 
+      // Variances the books could not value. Said back, not swallowed.
+      const noCost: string[] = [];
+
       for (const line of c.lines) {
         const counted  = new Prisma.Decimal(line.countedQty);
         const expected = new Prisma.Decimal(line.expectedQty);
@@ -494,6 +553,7 @@ export class WarehouseService {
         */
         const unitCost = Number(line.rawMaterial?.costPrice ?? 0);
         const varianceQty = Number(variance);
+        if (!(unitCost > 0) && varianceQty !== 0) noCost.push(line.rawMaterial?.name ?? 'an ingredient');
         if (unitCost > 0) {
           await tx.accountingEvent.create({
             data: {
@@ -530,11 +590,122 @@ export class WarehouseService {
         }
       }
 
-      return tx.cycleCount.update({
+      const posted = await tx.cycleCount.update({
         where: { id },
         data:  { status: 'POSTED', postedAt: new Date(), postedById: userId },
         include: { lines: { include: { rawMaterial: { select: { name: true, unit: true } } } } },
       });
+      return { ...posted, warnings: noCost.map((name) => noCostWarning(name)) };
     });
+  }
+
+  // ── Transfers: lots and the trail ────────────────────────────────────────
+
+  /**
+   * Oldest-expiry-first, then oldest-received: the same order a sale uses.
+   * Reports how much it actually took and what those layers cost, so the
+   * transfer can carry the real value to the other branch.
+   */
+  private async drainLots(
+    tx: Prisma.TransactionClient,
+    branchId: string,
+    rawMaterialId: string,
+    qty: number,
+  ): Promise<{ qty: number; value: number }> {
+    let remaining = qty;
+    let value = 0;
+    const lots = await tx.rawMaterialLot.findMany({
+      where:   { branchId, rawMaterialId, qtyRemaining: { gt: 0 } },
+      orderBy: [{ expirationDate: { sort: 'asc', nulls: 'last' } }, { receivedAt: 'asc' }],
+    });
+    for (const lot of lots) {
+      if (remaining <= 0) break;
+      const lotRem = Number(lot.qtyRemaining);
+      const drain = Math.min(lotRem, remaining);
+      await tx.rawMaterialLot.update({ where: { id: lot.id }, data: { qtyRemaining: new Prisma.Decimal(lotRem - drain) } });
+      value += drain * Number(lot.unitCost ?? 0);
+      remaining -= drain;
+    }
+    return { qty: qty - remaining, value };
+  }
+
+  /**
+   * One event per line, so Stock Movements shows the stock leaving one branch
+   * and arriving at the other. The journal skips the kind: same shop, same
+   * asset account, no entry. Valued at the shop's unit cost for the log only.
+   */
+  private async transferTrail(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    t: { transferNumber: string; fromBranchId: string; toBranchId: string; lines: Array<{ rawMaterialId: string; quantity: Prisma.Decimal; unitCost?: Prisma.Decimal }> },
+    direction: 'OUT' | 'IN',
+    opts: { byId?: string | null; returned?: boolean } = {},
+  ): Promise<void> {
+    // A cancelled transfer comes back to the source; everything else is
+    // out of the source or into the destination.
+    const here  = opts.returned ? t.fromBranchId : (direction === 'OUT' ? t.fromBranchId : t.toBranchId);
+    const other = opts.returned ? t.toBranchId   : (direction === 'OUT' ? t.toBranchId   : t.fromBranchId);
+    const rmIds = t.lines.map((l) => l.rawMaterialId);
+
+    const [branches, materials, onHand] = await Promise.all([
+      tx.branch.findMany({ where: { id: { in: [t.fromBranchId, t.toBranchId] } }, select: { id: true, name: true } }),
+      tx.rawMaterial.findMany({
+        where:  { id: { in: rmIds } },
+        select: { id: true, name: true, unit: true, costPrice: true, category: true },
+      }),
+      /*
+        The shelf as it stands now, so the movement log can show the count
+        before and after. This runs AFTER the stock has already moved, so
+        what comes back is the "after"; the "before" is that plus or minus
+        the line. Without this both columns read 0 and the log looked like
+        the transfer had come from nowhere and gone nowhere.
+      */
+      tx.rawMaterialInventory.findMany({
+        where:  { branchId: here, rawMaterialId: { in: rmIds } },
+        select: { rawMaterialId: true, quantity: true },
+      }),
+    ]);
+    const nameOf = (id: string) => branches.find((b) => b.id === id)?.name ?? 'another branch';
+    const reason = opts.returned
+      ? `Transfer ${t.transferNumber} cancelled - returned`
+      : direction === 'OUT' ? `Transferred to ${nameOf(other)}` : `Transferred from ${nameOf(other)}`;
+
+    for (const line of t.lines) {
+      const m = materials.find((x) => x.id === line.rawMaterialId);
+      const qty = Number(line.quantity);
+      // What this move is worth: the line's own cost when it has one (the
+      // realised layer cost written at send), else the running average.
+      const unitCost = Number(line.unitCost ?? m?.costPrice ?? 0);
+      const after  = Number(onHand.find((r) => r.rawMaterialId === line.rawMaterialId)?.quantity ?? 0);
+      const before = direction === 'OUT' ? after + qty : after - qty;
+      await tx.accountingEvent.create({
+        data: {
+          tenantId,
+          type:    'INVENTORY_ADJUSTMENT',
+          status:  'PENDING',
+          payload: {
+            kind:            'STOCK_TRANSFER',
+            direction,
+            rawMaterialId:   line.rawMaterialId,
+            rawMaterialName: m?.name ?? 'Ingredient',
+            category:        m?.category ?? null,
+            unit:            m?.unit ?? '',
+            quantity:        qty,
+            quantityBefore:  before,
+            quantityAfter:   after,
+            unitCost,
+            totalValue:      qty * unitCost,
+            branchId:        here,
+            otherBranchId:   other,
+            otherBranchName: nameOf(other),
+            referenceNumber: t.transferNumber,
+            byId:            opts.byId ?? null,
+            productName:     m?.name ?? 'Ingredient',
+            adjustmentType:  'STOCK_TRANSFER',
+            reason,
+          } as unknown as Prisma.JsonObject,
+        },
+      });
+    }
   }
 }

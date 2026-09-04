@@ -21,6 +21,8 @@ import { AiController } from './ai.controller';
 @Module({
   providers:   [AiService, AccountPickerService, JournalDrafterService, JournalGuideService, AiQuotaGuard],
   controllers: [AiController],
-  exports:     [AiService, AccountPickerService, JournalDrafterService, JournalGuideService],
+  // AiQuotaGuard is exported so a route outside /ai that spends a prompt --
+  // Procure's receipt reader -- is counted against the same monthly quota.
+  exports:     [AiService, AccountPickerService, JournalDrafterService, JournalGuideService, AiQuotaGuard],
 })
 export class AiModule {}

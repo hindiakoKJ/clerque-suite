@@ -265,6 +265,17 @@ export class ProductPhotosController {
 
   @Get(':id')
   async getPhoto(@Param('id') id: string, @Res() res: Response): Promise<void> {
+    /*
+      Only product photos are public.
+
+      Under the DB storage driver every stored file lands in the same table,
+      and a Document -- a supplier receipt, a bank statement -- is keyed by its
+      filename, which DocumentsService always prefixes with twelve hex
+      characters and an underscore. A product photo's id never has that shape.
+      Refusing the shape here keeps a filed receipt reachable only through
+      GET /documents/:id/download, which is authenticated and tenant-scoped.
+    */
+    if (/^[0-9a-f]{12}_/i.test(id)) throw new NotFoundException();
     const row = await this.prisma.productPhoto.findUnique({ where: { id } });
     if (!row) throw new NotFoundException();
     res.setHeader('Content-Type', row.mimeType);

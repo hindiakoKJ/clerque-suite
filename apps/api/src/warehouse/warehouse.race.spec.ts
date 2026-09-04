@@ -38,7 +38,7 @@ function makePrismaMock() {
 
   const stockTransferFindFirst = jest.fn(async () => ({ status: transferStatus }));
   const stockTransferFindFirstOrThrow = jest.fn(async () => ({
-    id: 't-1', tenantId: 'tenant-1',
+    id: 't-1', tenantId: 'tenant-1', transferNumber: 'ST-2026-000001',
     fromBranchId: 'branch-A', toBranchId: 'branch-B',
     sentAt,
     lines: [{ id: 'line-1', rawMaterialId: 'rm-1', quantity: 10, unitCost: 5 }],
@@ -82,10 +82,29 @@ function makePrismaMock() {
           rawMaterialInventory: {
             findUnique: rmInvFindUnique,
             update: rmInvUpdate,
+            // Read by the movement trail to fill before/after; the race under
+            // test is the status flip, so the live number is enough.
+            findMany: jest.fn(async () => [{ rawMaterialId: 'rm-1', quantity: inventory }]),
             upsert: jest.fn(async ({ update }: any) => {
               if (update?.quantity?.increment) inventory += update.quantity.increment;
               return {};
             }),
+          },
+          // Lots, the trail and the names on it. Not under test here -- the
+          // race is about the status flip -- so they answer with the minimum.
+          rawMaterialLot: {
+            findMany: jest.fn(async () => []),
+            update:   jest.fn(async () => ({})),
+            create:   jest.fn(async ({ data }: any) => data),
+          },
+          rawMaterial: {
+            findMany: jest.fn(async () => [{ id: 'rm-1', name: 'RM', unit: 'g', costPrice: 5, category: 'INGREDIENT' }]),
+          },
+          branch: {
+            findMany: jest.fn(async () => [{ id: 'branch-A', name: 'A' }, { id: 'branch-B', name: 'B' }]),
+          },
+          accountingEvent: {
+            create: jest.fn(async ({ data }: any) => data),
           },
         });
       }),
@@ -179,7 +198,7 @@ describe('WarehouseService — transfer race conditions', () => {
       mock.state.setInventory(100);
       // findFirstOrThrow with sentAt=null → no refund branch
       mock.prisma.stockTransfer.findFirstOrThrow = jest.fn(async () => ({
-        id: 't-1', tenantId: 'tenant-1',
+        id: 't-1', tenantId: 'tenant-1', transferNumber: 'ST-2026-000001',
         fromBranchId: 'branch-A', toBranchId: 'branch-B',
         sentAt: null,
         lines: [{ id: 'line-1', rawMaterialId: 'rm-1', quantity: 10, unitCost: 5 }],

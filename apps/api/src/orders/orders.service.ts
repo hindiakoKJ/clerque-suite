@@ -1192,27 +1192,41 @@ export class OrdersService {
             at all.
           */
           const hasStockRow = stockNow.has(bom.rawMaterialId);
+
+          /*
+            Short. Remembered, not swallowed.
+
+            The floor below is what let a till accept six lattes with three
+            lattes' worth of milk: the fourth, fifth and sixth deducted
+            nothing, the sale went through, and three customers were refused
+            AFTER paying. The shortfall was even computed further down and
+            spent on COGS -- so the system knew, costed it, and said nothing.
+
+            Checked OUTSIDE the has-a-row guard, because a missing row means
+            ZERO on the shelf, not "no opinion". While this sat inside the
+            guard, an ingredient that had been received and then emptied
+            refused the sale, and an ingredient that was NEVER received sold
+            forever -- the same shop, the same empty shelf, two opposite
+            answers, and the more dangerous one reserved for the ingredient
+            nobody had ever counted.
+
+            Only the DEDUCTION needs a row. Deciding whether the kitchen can
+            make the dish does not.
+          */
+          const onHand = stockNow.get(bom.rawMaterialId) ?? 0;
+          if (onHand < consumeQty) {
+            shortfalls.push({
+              name:   bom.rawMaterial?.name ?? 'an ingredient',
+              unit:   bom.rawMaterial?.unit ?? '',
+              needed: consumeQty,
+              have:   onHand,
+              perUnit: perUnitQty,
+              product: item.productName ?? 'this item',
+            });
+          }
+
           if (hasStockRow) {
             const before = stockNow.get(bom.rawMaterialId)!;
-            /*
-              Short. Remembered, not swallowed.
-
-              The floor below is what let a till accept six lattes with three
-              lattes' worth of milk: the fourth, fifth and sixth deducted
-              nothing, the sale went through, and three customers were refused
-              AFTER paying. The shortfall was even computed further down and
-              spent on COGS -- so the system knew, costed it, and said nothing.
-            */
-            if (before < consumeQty) {
-              shortfalls.push({
-                name:   bom.rawMaterial?.name ?? 'an ingredient',
-                unit:   bom.rawMaterial?.unit ?? '',
-                needed: consumeQty,
-                have:   before,
-                perUnit: perUnitQty,
-                product: item.productName ?? 'this item',
-              });
-            }
             const after  = Math.max(before - consumeQty, 0);
             stockNow.set(bom.rawMaterialId, after);
             if (!deductionPaused) {

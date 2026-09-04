@@ -6,6 +6,7 @@ import {
   LaundryServiceCode, LaundryServiceMode, LaundryMachineKind, LaundryMachineStatus,
   LaundryPromoKind, LaundryAddOnKind,
 } from '@prisma/client';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 // ─── DTOs ──────────────────────────────────────────────────────────────────────
 
@@ -1583,7 +1584,7 @@ export class LaundryService {
     // The previous implementation did `getUTCHours() + 8` which can yield 24+
     // and crosses the day boundary near midnight, mis-evaluating off-peak windows.
     const phFormatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Manila',
+      timeZone: PH_TIMEZONE,
       weekday:  'short',
       hour:     '2-digit',
       hour12:   false,

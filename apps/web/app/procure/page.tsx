@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle, ChefHat,
+  ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle, ChefHat, Receipt,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -58,7 +58,23 @@ export default function ProcureHome() {
   const isOwner     = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
   const multiBranch = branches.length > 1;
 
+  const canPost = !!user && ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM'].includes(user.role);
+
   const tiles = [
+    {
+      /*
+        The way most stock actually arrives: somebody went to the market and
+        came back with a receipt. Photograph it, correct the reading, post --
+        stock on the shelf, expenses in the books, the photo filed. First on
+        the page because it is the action that removes the most typing.
+      */
+      href:  '/procure/receipts',
+      Icon:  Receipt,
+      title: 'Upload a receipt',
+      desc:  'Photograph a receipt. Ingredients go into stock, the rest into the books, the photo is filed.',
+      note:  null,
+      show:  canPost,
+    },
     {
       href:  '/procure/requests',
       Icon:  ClipboardList,
@@ -106,7 +122,20 @@ export default function ProcureHome() {
       title: 'Prep & batches',
       desc:  'Syrups, sauces, anything made in advance. Record a batch and its ingredients come off the shelf.',
       note:  null,
-      show:  canStock,
+      /*
+        Shown to everyone who can reach it, which is the whole point of it.
+
+        This tile was gated on `canStock` -- STOCK_ROLES, which excludes CASHIER
+        and GENERAL_EMPLOYEE. Those two ARE the barista and the cook: the API
+        admits them to this endpoint deliberately, the layout admits them to the
+        route, and the screen exists for them. Only the link was missing, so the
+        two people the feature was built for could reach it by typing the URL
+        and by no other means.
+
+        Same `show: true` as the buy list and the menu ceiling above, which made
+        the same judgement for the same reason.
+      */
+      show:  true,
     },
     {
       href:  '/procure/cycle-counts',

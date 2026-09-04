@@ -10,6 +10,7 @@ import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
 import { resolveBuyUnit } from './unit-conversion';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 export { AdjustStockDto, SetThresholdDto, CreateRawMaterialDto, ReceiveRawMaterialDto };
 
@@ -33,6 +34,18 @@ export interface StockMovement {
   totalValue:        number | null;
   accountingEventId: string | null;
 }
+
+/**
+ * Said on every stock movement that changed the shelf but not the books.
+ *
+ * A receipt, write-off or count against an ingredient with no cost on file
+ * posts nothing -- there is no value to post -- and until now nothing told
+ * the person. The stock moved, the books did not, and the gap only showed
+ * up months later as an asset that did not match the shelf.
+ */
+export const noCostWarning = (name: string) =>
+  `"${name}" has no cost on file, so this changed the shelf but not the books. `
+  + 'Set its cost under Stock on hand; the books will not carry this until it has one.';
 
 @Injectable()
 export class InventoryService {
@@ -397,6 +410,22 @@ export class InventoryService {
         select: {
           id: true, name: true, unit: true, lowStockAlert: true,
           inventory: { where: { branchId }, select: { quantity: true } },
+          /*
+            Is this something the shop BUYS, or something it MAKES?
+
+            A prepared item -- a syrup, a sauce, a thawed tub -- is a
+            RawMaterial row like any other, and every read path treated it as
+            buyable. So a sauce running low landed on the grocery list next to
+            the milk, and the one action that would actually fix it (make
+            another batch) was suggested by nothing.
+
+            It is worse than untidy for a shop that rotates stock: the parked
+            batch is EMPTY by design for half its life, so the buy list would
+            nag about it daily and the nightly alert would say it is out of
+            stock. Having a recipe is what makes something made rather than
+            bought, and that is already recorded.
+          */
+          subRecipeItems: { select: { id: true }, take: 1 },
         },
       }),
     ]);
@@ -421,7 +450,10 @@ export class InventoryService {
         .filter((r) => r.lowStockAlert != null
                     && r.onHand <= Number(r.lowStockAlert))
         .map((r) => ({
-          kind:          'INGREDIENT' as const,
+          // A prep is short of being MADE, not short of being bought. Kept in
+          // the same list so nothing is hidden, tagged so the caller can route
+          // it to the right action.
+          kind:          (r.subRecipeItems.length > 0 ? 'PREP' : 'INGREDIENT') as 'PREP' | 'INGREDIENT',
           id:            r.id,
           name:          r.name,
           sku:           null,
@@ -463,7 +495,7 @@ export class InventoryService {
     lines.push({ text: branch?.name ?? '', center: true });
     lines.push({
       text: new Date().toLocaleString('en-PH', {
-        timeZone: 'Asia/Manila', day: 'numeric', month: 'short',
+        timeZone: PH_TIMEZONE, day: 'numeric', month: 'short',
         year: 'numeric', hour: 'numeric', minute: '2-digit',
       }),
       center: true,
@@ -1046,10 +1078,54 @@ export class InventoryService {
           Before this a batch appeared nowhere at all, which made prep the only
           stock movement with no audit trail.
         */
+        /*
+          A transfer between branches: stock leaving one, arriving at the
+          other. No journal entry (same shop, same asset account), but the
+          movement is real and belongs in the log.
+        */
+        if (p['kind'] === 'STOCK_TRANSFER') {
+          const out = p['direction'] === 'OUT';
+          results.push({
+            id:             ev.id,
+            kind:           'RAW_MATERIAL',
+            occurredAt:     ev.createdAt.toISOString(),
+            type:           out ? 'STOCK_OUT' : 'STOCK_IN',
+            itemName:       String(p['rawMaterialName'] ?? 'Ingredient'),
+            unit:           typeof p['unit'] === 'string' ? p['unit'] : null,
+            quantity:       (out ? -1 : 1) * Math.abs(Number(p['quantity'] ?? 0)),
+            quantityBefore: Number(p['quantityBefore'] ?? 0),
+            quantityAfter:  Number(p['quantityAfter'] ?? 0),
+            branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
+            reason:         String(p['reason'] ?? (out ? 'Transferred out' : 'Transferred in')),
+            reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
+            createdById:    typeof p['byId'] === 'string' ? p['byId'] : null,
+            createdByName:  null,
+            paymentMethod:  null,
+            totalValue:     Number(p['totalValue'] ?? 0),
+            accountingEventId: ev.id,
+          });
+          continue;
+        }
+
         if (p['kind'] === 'SUB_RECIPE_BATCH') {
           const madeAt = typeof p['madeAt'] === 'string' ? p['madeAt'] : ev.createdAt.toISOString();
           const madeBy = typeof p['madeById'] === 'string' ? p['madeById'] : null;
           const batches = Number(p['batches'] ?? 1);
+          /*
+            WHERE it was prepped, appended to the reason.
+
+            The two halves of a cafe draw on one shelf: sugar goes into the
+            bar's syrup and the kitchen's glaze. Without this the movement log
+            says the shop used it and the split cannot be recovered afterwards
+            -- so "what does the kitchen cost to run" has no answer, and
+            neither does "which side is burning through the sugar".
+
+            Blank when nobody said, rather than guessed at. Attributing by
+            assumption would put the kitchen's sugar on the bar's running cost,
+            which is worse than not knowing.
+          */
+          const at = typeof p['stationName'] === 'string' && p['stationName']
+            ? ` · ${p['stationName']}` : '';
           results.push({
             id:             ev.id,
             kind:           'RAW_MATERIAL',
@@ -1061,7 +1137,7 @@ export class InventoryService {
             quantityBefore: Number(p['quantityBefore'] ?? 0),
             quantityAfter:  Number(p['quantityAfter'] ?? 0),
             branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
-            reason:         `Prepared — ${batches} batch${batches === 1 ? '' : 'es'}`,
+            reason:         `Prepared — ${batches} batch${batches === 1 ? '' : 'es'}${at}`,
             reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
             createdById:    madeBy,
             createdByName:  null,
@@ -1081,7 +1157,7 @@ export class InventoryService {
               quantityBefore: 0,
               quantityAfter:  0,
               branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
-              reason:         `Used to prepare ${String(p['rawMaterialName'] ?? 'a prep')}`,
+              reason:         `Used to prepare ${String(p['rawMaterialName'] ?? 'a prep')}${at}`,
               reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
               createdById:    madeBy,
               createdByName:  null,
@@ -1507,6 +1583,7 @@ export class InventoryService {
         reasonCode:     dto.reasonCode,
         unitCost,
         totalValue,
+        warning:        totalValue > 0 ? null : noCostWarning(material.name),
       };
     });
   }
@@ -1724,7 +1801,21 @@ export class InventoryService {
       // We use the delivery cost (or current WAC if no cost specified) — NOT the
       // post-WAC blended cost — so the journal value matches the actual money
       // changing hands today.
-      const totalValue = dto.quantity * unitCost;
+      /*
+        Rounded to the centavo, exactly as `grossValue` below is.
+
+        It used to be the bare product `dto.quantity * unitCost`, while
+        grossValue two lines down was `+(...).toFixed(2)`. For a NON-VAT or
+        owner-funded receipt those are the SAME multiplication -- but one was
+        rounded and one was not, so a value landing on a half-centavo split the
+        two legs of the entry: 5325 x 0.575 = 3061.875 posted Dr 3061.88 and
+        Cr 3061.87, and the trial balance stopped footing by a centavo per
+        affected receipt.
+
+        Money is stored to two decimals. Deciding that once, here, is what
+        keeps the debit and the credit the same number.
+      */
+      const totalValue = +(dto.quantity * unitCost).toFixed(2);
       /*
         The same delivery seen three ways, computed once so they cannot drift:
         what the shelf is worth (net), the 12% the BIR gives back, and the
@@ -1732,8 +1823,19 @@ export class InventoryService {
         credits the gross; the AP bill has to agree with the gross, because
         that is the number printed on the supplier's invoice.
       */
-      const inputVat   = +(dto.quantity * ((enteredCost ?? unitCost) - unitCost)).toFixed(2);
       const grossValue = +(dto.quantity * (enteredCost ?? unitCost)).toFixed(2);
+      /*
+        The VAT is the DIFFERENCE between the two rounded numbers, never a
+        third rounding of its own. Rounded separately, net + VAT missed the
+        gross by a centavo on about one receipt in ten (7 kg at PHP 1.02:
+        6.38 + 0.77 against 7.14) -- and the journal debits the net and the
+        VAT while crediting the gross, so that centavo either posted an
+        entry that did not balance or, when float noise pushed it past the
+        one-centavo tolerance, failed the entry outright and left a real
+        delivery off the books for good. Derived this way the three numbers
+        cannot disagree.
+      */
+      const inputVat   = +(grossValue - totalValue).toFixed(2);
 
       // Sprint 4A — always create a Lot record on receive, regardless of the
       // tenant's valuation method. WAC tenants ignore lots (their COGS still
@@ -1865,6 +1967,7 @@ export class InventoryService {
         receivedAt: receivedAt.toISOString(),
         paymentMethod,
         totalValue,
+        warning: totalValue > 0 ? null : noCostWarning(material.name),
       };
     },
     {

@@ -62,7 +62,7 @@ describe('SimpleEntriesService', () => {
 
   it('EXPENSE categories map to the right account', async () => {
     const map: Record<string, string> = {
-      UTILITIES: '6060', SUPPLIES: '6070', REPAIRS: '6090', TRANSPORT: '6100', OTHER: '6140',
+      UTILITIES: '6060', SUPPLIES: '6140', REPAIRS: '6090', TRANSPORT: '6100', OTHER: '6140',
     };
     for (const [cat, code] of Object.entries(map)) {
       await run({ type: 'EXPENSE', category: cat as any, source: 'CASH' });

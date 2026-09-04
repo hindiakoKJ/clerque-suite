@@ -10,6 +10,7 @@ import { ReportsService } from './reports.service';
 import { OperationsService } from './operations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { generateRecipeCostingPdf } from './recipe-costing-pdf';
+import { PH_TIMEZONE } from '@repo/shared-types';
 
 @ApiTags('Reports')
 @ApiBearerAuth('access-token')
@@ -223,7 +224,7 @@ export class ReportsController {
     ]);
 
     const generatedAt = new Date().toLocaleString('en-PH', {
-      timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short',
+      timeZone: PH_TIMEZONE, dateStyle: 'medium', timeStyle: 'short',
     });
     const buf = await generateRecipeCostingPdf({
       tenant: { name: tenant?.name ?? 'Clerque', businessName: tenant?.businessName ?? null },

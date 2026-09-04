@@ -1,6 +1,7 @@
 import { ImportService } from './import.service';
 
-/* eslint-disable @typescript-eslint/no-var-requires */
+// The generator is a plain CommonJS script, shared with the CLI that writes
+// the workbook, so the spec and the CLI can never drift apart.
 const generator = require('../../scripts/gen-recipe-costing-sheet');
 
 /**

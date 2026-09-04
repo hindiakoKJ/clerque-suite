@@ -572,6 +572,17 @@ export default function ProcurePage() {
               const set = (k: keyof typeof b, v: string) =>
                 setBought((prev) => ({ ...prev, [l.id]: { ...b, [k]: v } }));
               const lineTotal = (parseFloat(b.packs) || 0) * (parseFloat(b.cost) || 0);
+              /*
+                How much of what was asked for actually came. Read from the
+                stored line, never from the form being typed into, so it
+                reports the delivery rather than the keystrokes -- and so it
+                keeps reporting once the request is closed and the form is
+                gone. Null until somebody has recorded a buy against it.
+              */
+              const arrived = l.packsBought != null && l.packSize != null
+                ? num(l.packsBought) * num(l.packSize)
+                : null;
+              const short = arrived != null && arrived < num(l.qtyRequested);
 
               return (
                 <li key={l.id} className="px-4 py-3">
@@ -652,8 +663,17 @@ export default function ProcurePage() {
                     ) : null}
                   </div>
 
-                  {/* what was actually bought — only once the request is out */}
-                  {(req.status === 'SENT' || req.status === 'BOUGHT') && !l.receivedAt && (
+                  {/*
+                    What was bought, once the request is out.
+
+                    canDecide, because the Save button under this form is
+                    manager-only: a cook used to get live Packs / One pack
+                    holds / Price boxes with nowhere to send them, so anything
+                    they typed while standing over the delivery was thrown
+                    away when the screen unmounted. Better no box than a box
+                    that eats what you put in it.
+                  */}
+                  {canDecide && (req.status === 'SENT' || req.status === 'BOUGHT') && !l.receivedAt && (
                     <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
                       <label className="text-[11px] text-muted-foreground">
                         Packs
@@ -683,6 +703,22 @@ export default function ProcurePage() {
                         </div>
                       )}
                     </div>
+                  )}
+                  {/*
+                    Asked for, against what came — for everyone, at every
+                    status, including after the request closes. Both numbers
+                    have always been on the line and were simply never
+                    subtracted, so the delivered quantity was written to the
+                    database and then vanished from the only screen the shop
+                    uses. This is the staff's half of Procure: not what it
+                    cost, but whether the right amount turned up.
+                  */}
+                  {arrived != null && (
+                    <p className={`mt-1.5 text-[11px] ${short ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+                      Asked for {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
+                      {' · '}{arrived.toLocaleString()} {l.rawMaterial.unit} {l.receivedAt ? 'in stock' : 'bought'}
+                      {short && <> · {(num(l.qtyRequested) - arrived).toLocaleString()} {l.rawMaterial.unit} short</>}
+                    </p>
                   )}
                 </li>
               );

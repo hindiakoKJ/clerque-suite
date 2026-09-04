@@ -327,6 +327,21 @@ export class ProcureService {
       if (!(l.packCost   >= 0)) throw new BadRequestException('What did one pack cost?');
       const owned = req.lines.find((x) => x.id === l.lineId);
       if (!owned) throw new BadRequestException('That line is not on this request.');
+      /*
+        The status window above admits BOUGHT, which is where a request sits
+        when one of its lines failed to post. Its OTHER lines are already on
+        the shelf and already in the books, and rewriting their packs or
+        price here changed neither -- it just left the request disagreeing
+        with the lot and the journal entry, with nothing to reconcile them.
+        The screen has always hidden these boxes for a posted line; the
+        server never checked.
+      */
+      if (owned.receivedAt) {
+        throw new BadRequestException(
+          `"${owned.rawMaterial?.name ?? 'That line'}" is already in stock. `
+          + 'Correct it under Stock instead — changing it here would leave the books behind.',
+        );
+      }
     }
 
     await this.prisma.$transaction(

@@ -315,6 +315,24 @@ describe('ProcureService', () => {
     receivedAt: null, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' },
   }];
 
+  it('refuses to rewrite a line that is already in stock', async () => {
+    /*
+      A request sits at BOUGHT when one of its lines failed to post, and the
+      bought-window admits BOUGHT — so the lines that DID post were still
+      editable here. Changing packs or price then moved neither the shelf nor
+      the books; it just left the request disagreeing with both. The screen
+      always hid the boxes for a posted line; the server never checked.
+    */
+    const { svc } = build({
+      status: 'BOUGHT',
+      lines: [{ ...BOUGHT[0], receivedAt: new Date('2026-09-03T02:00:00Z') }],
+    });
+
+    await expect(
+      svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 9, packSize: 750, packCost: 100 }]),
+    ).rejects.toThrow(/already in stock/i);
+  });
+
   it('converts packs to units and price per unit when posting', async () => {
     const { svc, received } = build({ status: 'BOUGHT', lines: BOUGHT });
     const res = await svc.receiveRequest(TENANT, 'req1', USER);

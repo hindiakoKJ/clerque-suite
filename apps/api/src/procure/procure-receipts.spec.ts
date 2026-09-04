@@ -142,6 +142,72 @@ describe('ProcureReceiptsService', () => {
       expect(requests).toEqual([]);
     });
 
+    /*
+      A long receipt arrives as strips.
+
+      The phone used to squeeze a metre of thermal paper into one 1,600px
+      frame, which left the print about two pixels tall — unreadable, and the
+      failure looked like a stupid model rather than like us sending a smudge.
+      Now it cuts the photo into overlapping strips at full width, and they
+      are read together as ONE receipt.
+    */
+    it('sends every strip of a long receipt, in order, and says they are one receipt', async () => {
+      const { svc, ai } = build({ aiText: READING });
+      await svc.parse(TENANT, USER, {
+        images: [
+          { base64: 'dG9w', mediaType: 'image/jpeg' },
+          { base64: 'bWlk', mediaType: 'image/jpeg' },
+          { base64: 'Ym90', mediaType: 'image/jpeg' },
+        ],
+      });
+
+      const content = ai.call.mock.calls[0][0].messages[0].content;
+      expect(content.filter((c: any) => c.type === 'image').map((c: any) => c.source.data))
+        .toEqual(['dG9w', 'bWlk', 'Ym90']);
+      const instruction = content.find((c: any) => c.type === 'text').text;
+      expect(instruction).toContain('3 images are ONE receipt');
+      expect(instruction).toMatch(/overlap/i);
+    });
+
+    it('lets an owner read one receipt with the other provider, to compare', async () => {
+      const { svc, ai } = build({ aiText: READING });
+      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', provider: 'anthropic' }, 'BUSINESS_OWNER');
+      expect(ai.call.mock.calls[0][0].provider).toBe('anthropic');
+    });
+
+    it('ignores the same request from anyone else — it decides who gets billed', async () => {
+      const { svc, ai } = build({ aiText: READING });
+      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', provider: 'anthropic' }, 'BRANCH_MANAGER');
+      // Ignored, not refused: the read still happens, on the house provider.
+      expect(ai.call.mock.calls[0][0].provider).toBeUndefined();
+    });
+
+    it('still takes a single photo the old way, and does not talk about strips', async () => {
+      const { svc, ai } = build({ aiText: READING });
+      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', mediaType: 'image/png' });
+
+      const content = ai.call.mock.calls[0][0].messages[0].content;
+      const images = content.filter((c: any) => c.type === 'image');
+      expect(images).toHaveLength(1);
+      expect(images[0].source.media_type).toBe('image/png');
+      expect(content.find((c: any) => c.type === 'text').text).not.toMatch(/strip|ONE receipt/i);
+    });
+
+    it('refuses a read with no photo at all', async () => {
+      const { svc } = build();
+      await expect(svc.parse(TENANT, USER, {} as any)).rejects.toThrow(/photo of the receipt is required/i);
+    });
+
+    it('measures the size limit across ALL the strips, not one at a time', async () => {
+      // Four strips, each comfortably under the cap, together over it. Checked
+      // one at a time this would sail through and fail at the provider.
+      const big = 'A'.repeat(2_100_000);
+      const { svc } = build();
+      await expect(svc.parse(TENANT, USER, {
+        images: [{ base64: big }, { base64: big }, { base64: big }, { base64: big }],
+      })).rejects.toThrow(/too large/i);
+    });
+
     it('derives the pack the way the importer would, and asks where it cannot', async () => {
       const { svc } = build({ aiText: READING });
       const r = await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=' });

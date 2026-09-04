@@ -227,7 +227,7 @@ const SECTIONS: HelpSection[] = [
           <ol className="list-decimal pl-5 space-y-1">
             <li>On the New Entry form, tap <strong>Draft with AI</strong>.</li>
             <li>Describe the transaction in plain English — e.g. &ldquo;Paid ₱5,000 rent for May from BPI&rdquo;.</li>
-            <li>Claude (Opus 4.7) reads your COA + recent entries and proposes balanced lines.</li>
+            <li>The assistant reads your COA + recent entries and proposes balanced lines.</li>
             <li>Review every line. Edit if needed. Tap Save when satisfied.</li>
             <li>Each draft uses 1 AI prompt from your monthly quota. See Settings → Subscription.</li>
             <li>Available for OWNER, SUPER_ADMIN, ACCOUNTANT only (the people who post JEs).</li>

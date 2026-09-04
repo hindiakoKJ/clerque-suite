@@ -20,6 +20,8 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
+import { callGemini } from './providers/gemini.provider';
 import { isAiEnabled } from './ai-availability';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -41,6 +43,23 @@ export const MODEL_SONNET = process.env.AI_MODEL_SONNET ?? 'claude-sonnet-4-5';
 export const MODEL_HAIKU  = process.env.AI_MODEL_HAIKU  ?? 'claude-haiku-4-5';
 const DEFAULT_MODEL = process.env.AI_DEFAULT_MODEL ?? MODEL_SONNET;
 
+/*
+  Which provider does the work.
+
+  Gemini Flash by default, on Vertex: it is a quarter of Sonnet's price and a
+  twentieth of Opus's, and Vertex is what the Google credit can actually pay
+  for. Anthropic stays a one-word switch away, because the receipt matcher was
+  tuned against Claude's output and a worse read costs more in re-typing than
+  the model ever saves.
+
+  An alias, never a dated snapshot, for the same reason the Claude ids above
+  are aliases: Google retires the numbers, not the alias.
+*/
+export type AiProvider = 'gemini' | 'anthropic';
+export const AI_PROVIDER: AiProvider =
+  process.env.AI_PROVIDER === 'anthropic' ? 'anthropic' : 'gemini';
+export const MODEL_GEMINI = process.env.GEMINI_MODEL ?? 'gemini-flash-latest';
+
 // Pricing per 1M tokens (input / output USD). Cache reads cost ~0.1x base
 // input; cache writes ~1.25x (5m TTL) or 2x (1h TTL). The keyed lookup falls
 // back to DEFAULT_MODEL pricing if a new alias hasn't been added here yet —
@@ -53,9 +72,41 @@ const PRICING: Record<string, { input: number; output: number }> = {
   // Legacy ids kept for any historical AiUsage rows that look them up
   'claude-opus-4-7':    { input: 15.0, output: 75.0 },
   'claude-sonnet-4-6':  { input:  3.0, output: 15.0 },
+  /*
+    Gemini Flash, list price on Vertex: 0.75 / 3.75 per 1M as an introductory
+    rate to 31 Dec 2026, then 1.50 / 7.50. The higher pair is what is written
+    here on purpose — a cost estimate that drifts UPWARD on new-year's day is
+    a budget cap that fires early, which is the harmless direction. Override
+    with GEMINI_PRICE_IN / GEMINI_PRICE_OUT if the rate you actually pay
+    differs.
+  */
+  'gemini-flash-latest': {
+    input:  envPrice(process.env.GEMINI_PRICE_IN,  1.5),
+    output: envPrice(process.env.GEMINI_PRICE_OUT, 7.5),
+  },
 };
 
-const DEFAULT_MONTHLY_BUDGET_USD = Number(process.env.AI_MONTHLY_BUDGET_USD ?? 10);
+/**
+ * A price from the environment, where BLANK means "not set" and never zero.
+ *
+ * `??` catches null and undefined; it does not catch the empty string, and
+ * `Number('') === 0`. .env.example ships GEMINI_PRICE_IN="" and clearing a
+ * variable in Railway leaves an empty string behind — so the plain `??` form
+ * priced every call at nothing, which silently retired the monthly budget cap
+ * and made the cost dashboard read $0. Nonsense (`1,5` → NaN) falls back too,
+ * because a NaN cost poisons the whole monthly aggregate.
+ *
+ * The same rule as `resolveDailyReadLimit` in the receipt read guard, which
+ * learned it first.
+ */
+function envPrice(raw: string | undefined, fallback: number): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return fallback;
+  const n = Number(trimmed);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const DEFAULT_MONTHLY_BUDGET_USD = envPrice(process.env.AI_MONTHLY_BUDGET_USD, 10);
 
 interface CallParams {
   tenantId:    string;
@@ -76,20 +127,55 @@ interface CallParams {
   cacheSystem?: boolean;
   /** Adaptive extended thinking — Opus 4.7 / Sonnet 4.6 only. */
   adaptiveThinking?: boolean;
+  /**
+   * Override the deployment's provider for this one call. Exists so the same
+   * receipt can be put through both and compared; leave it unset otherwise.
+   */
+  provider?: AiProvider;
 }
 
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
+  private gemini: GoogleGenAI | null = null;
 
   constructor(private prisma: PrismaService) {
     const key = process.env.ANTHROPIC_API_KEY;
     if (key) {
       this.client = new Anthropic({ apiKey: key });
-    } else {
+    }
+
+    /*
+      Vertex reads its credentials the way every Google library does — from
+      GOOGLE_APPLICATION_CREDENTIALS, or the metadata server — so there is no
+      key to pass here. Project and location are the two things it cannot
+      guess.
+    */
+    const project  = process.env.GOOGLE_CLOUD_PROJECT;
+    const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'us-central1';
+    if (project) {
+      this.gemini = new GoogleGenAI({ vertexai: true, project, location });
+    }
+
+    if (AI_PROVIDER === 'gemini' && !this.gemini) {
+      this.logger.warn('AI_PROVIDER=gemini but GOOGLE_CLOUD_PROJECT is not set — AI features will return 503.');
+    } else if (AI_PROVIDER === 'anthropic' && !this.client) {
       this.logger.warn('ANTHROPIC_API_KEY is not set — AI features will return 503.');
     }
+  }
+
+  /**
+   * The model this provider should actually be asked for.
+   *
+   * Callers name Claude models by constant — the drafter and the guide both
+   * ask for Opus. Handing "claude-opus-4-5" to Vertex is a 404 from Google
+   * and a puzzled hour for whoever reads the log, so a Claude id is treated
+   * as "the strong model, whoever is serving today" and swapped for Flash.
+   */
+  private resolveModel(provider: AiProvider, requested?: string): string {
+    if (provider === 'anthropic') return requested ?? DEFAULT_MODEL;
+    return requested && requested.startsWith('gemini') ? requested : MODEL_GEMINI;
   }
 
   /**
@@ -108,13 +194,14 @@ export class AiService {
       );
     }
 
-    if (!this.client) {
+    const provider: AiProvider = params.provider ?? AI_PROVIDER;
+    if (provider === 'gemini' ? !this.gemini : !this.client) {
       throw new ServiceUnavailableException('AI service is not configured on this deployment.');
     }
 
     await this.assertWithinBudget(params.tenantId);
 
-    const model = params.model ?? DEFAULT_MODEL;
+    const model = this.resolveModel(provider, params.model);
     const startedAt = Date.now();
     let inputTokens = 0;
     let outputTokens = 0;
@@ -145,7 +232,25 @@ export class AiService {
       // that plain completion is fine; if we ever want thinking back, gate
       // it on a known-good model alias (env-driven) and use the `enabled`
       // shape.
-      const response = await this.client.messages.create({
+      if (provider === 'gemini') {
+        /*
+          Google reports promptTokenCount as the WHOLE prompt, cached part
+          included, so the cached count is carried for the log and left out
+          of the cost — charging it again would bill the same tokens twice.
+        */
+        const out = await callGemini(this.gemini!, {
+          model,
+          messages:     params.messages,
+          systemPrompt: params.systemPrompt,
+          maxTokens:    params.maxTokens,
+        });
+        inputTokens  = out.inputTokens;
+        outputTokens = out.outputTokens;
+        textOut      = out.text;
+        return textOut;
+      }
+
+      const response = await this.client!.messages.create({
         model,
         max_tokens: params.maxTokens ?? 1024,
         ...(systemParam !== undefined ? { system: systemParam } : {}),
@@ -183,7 +288,7 @@ export class AiService {
             tenantId:     params.tenantId,
             userId:       params.userId,
             action:       params.action,
-            provider:     'anthropic',
+            provider,
             model,
             inputTokens,
             outputTokens,

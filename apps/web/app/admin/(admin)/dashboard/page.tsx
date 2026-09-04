@@ -238,7 +238,7 @@ export default function AdminDashboard() {
                 ${data.platformCost.aiSpendUsd30d.toFixed(4)} USD
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Anthropic API cost for AI features (JE Drafter, Smart Picker, Receipt OCR) across all tenants.
+                AI provider cost for AI features (JE Drafter, Smart Picker, Receipt OCR) across all tenants.
                 This is OUR cost — recouped via AI add-on packages (₱250–₱1,400/mo per tier).
               </p>
             </>

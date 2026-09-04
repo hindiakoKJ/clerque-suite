@@ -55,10 +55,36 @@ export class ProcureReceiptsService {
 
   // ── reading ───────────────────────────────────────────────────────────────
 
-  async parse(tenantId: string, userId: string, dto: ParseReceiptDto) {
-    if (!dto.imageBase64) throw new BadRequestException('A photo of the receipt is required.');
-    // ~6 MB of base64 is ~4.5 MB of image; a phone photo resized for upload is well under.
-    if (dto.imageBase64.length > 8_000_000) {
+  async parse(tenantId: string, userId: string, dto: ParseReceiptDto, viewerRole?: string | null) {
+    /*
+      Only an owner may name the provider. It decides what the read costs and
+      which company sees the photo, so it is not a knob for whoever happens to
+      be holding the phone. Anyone else asking is ignored rather than refused
+      -- the read still happens, on the deployment's own provider.
+    */
+    const provider = dto.provider && (viewerRole === 'BUSINESS_OWNER' || viewerRole === 'SUPER_ADMIN')
+      ? dto.provider
+      : undefined;
+
+    /*
+      One frame, or several strips of a long receipt. The strips arrive in
+      reading order, top to bottom, overlapping — a metre of thermal paper
+      squeezed into a single frame leaves the text a few pixels tall, which no
+      reader can do anything with.
+    */
+    const strips = (dto.images ?? []).map((i) => ({
+      data: i.base64,
+      mediaType: i.mediaType ?? dto.mediaType ?? 'image/jpeg',
+    }));
+    if (strips.length === 0 && dto.imageBase64) {
+      strips.push({ data: dto.imageBase64, mediaType: dto.mediaType ?? 'image/jpeg' });
+    }
+    if (strips.length === 0) throw new BadRequestException('A photo of the receipt is required.');
+
+    // ~6 MB of base64 is ~4.5 MB of image; a phone photo resized for upload is
+    // well under, and the strips of one receipt together should be too.
+    const totalBytes = strips.reduce((n, s) => n + s.data.length, 0);
+    if (totalBytes > 8_000_000) {
       throw new BadRequestException('That photo is too large. Take it again at a lower resolution.');
     }
 
@@ -71,11 +97,23 @@ export class ProcureReceiptsService {
       cacheSystem:  true,
       // A long market receipt is thirty lines; each is ~60 tokens of JSON.
       maxTokens:    2500,
+      ...(provider ? { provider } : {}),
       messages: [{
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'base64', media_type: dto.mediaType ?? 'image/jpeg', data: dto.imageBase64 } },
-          { type: 'text',  text: 'Read every purchased line and the header per the system prompt. JSON only.' },
+          ...strips.map((s) => ({
+            type: 'image' as const,
+            source: { type: 'base64' as const, media_type: s.mediaType, data: s.data },
+          })),
+          {
+            type: 'text' as const,
+            text: strips.length > 1
+              ? `These ${strips.length} images are ONE receipt, photographed in strips from top to bottom. `
+                + 'Consecutive strips overlap, so a line visible at the bottom of one and the top of the next '
+                + 'is the SAME line — report it once. Read every purchased line and the header per the system '
+                + 'prompt. JSON only.'
+              : 'Read every purchased line and the header per the system prompt. JSON only.',
+          },
         ],
       }],
     });

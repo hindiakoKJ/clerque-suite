@@ -19,6 +19,8 @@ export const RECEIPT_LINES_SYSTEM_PROMPT = `You read Philippine grocery, market 
 
 Given a photo of ONE receipt, return every purchased line as printed, plus the header.
 
+A long receipt may arrive as SEVERAL images: strips of the same receipt, in order, top to bottom, with each strip overlapping the one before it. Treat them as one receipt. A line that appears at the bottom of one strip and again at the top of the next is ONE line, not two — report it once. The header and the total appear on only one strip each; take them wherever they appear.
+
 For each line:
   - description   the item text as printed (keep brand words; do not translate)
   - quantity      how many units were bought, as a number. A weighed item prints its weight here (5.810 for "5.810 KG")

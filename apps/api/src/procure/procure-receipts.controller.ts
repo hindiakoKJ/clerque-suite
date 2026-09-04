@@ -64,7 +64,7 @@ export class ProcureReceiptsController {
     @Body() dto: ParseReceiptDto,
     @Req() req: Request & { receiptReads?: ReceiptReads },
   ) {
-    const result = await this.receipts.parse(user.tenantId!, user.sub, dto);
+    const result = await this.receipts.parse(user.tenantId!, user.sub, dto, user.role);
     // The count the guard took was BEFORE this read; the screen wants after.
     const reads = req.receiptReads
       ? { usedToday: req.receiptReads.usedToday + 1, limit: req.receiptReads.limit, resetsAt: req.receiptReads.resetsAt }

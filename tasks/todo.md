@@ -1496,3 +1496,84 @@ Final state: 1,423 API tests passing (6 skipped), tsc clean in api/web/counter,
 `next build` clean, live checks green on carolina-test (bogus branch 400, no-cost
 warnings, receipt reference on JE-202609-0075, three transfers with movements
 both sides and no journal entry).
+
+## 2026-09-04 (later) — Gemini Flash, and receipts that are too long to photograph
+
+KJ's call: run the AI on Gemini Flash via Vertex, paid for out of his $2,000
+Google for Startups credit. Vertex specifically -- the credit only pays for
+first-party Google, and the free AI Studio key trains on what you send it,
+which for us is a client's supplier list and their prices.
+
+- `AI_PROVIDER` ("gemini" default, "anthropic" one word away). A per-call
+  override exists so the same receipt can be put through both and compared.
+- `resolveModel` swaps a Claude id for Flash on the Gemini path. The drafter
+  and the guide both ask for MODEL_OPUS by constant; Vertex would 404 on it.
+- The AiUsage row's provider was hardcoded 'anthropic'. It now says who did
+  the work, or the cost report is fiction the moment the switch flips.
+- Flash priced at the POST-introductory rate (1.5/7.5 per 1M, not 0.75/3.75)
+  so the monthly budget cap fires early rather than late. Env-overridable.
+- Gemini's cached tokens are logged but not costed: Google already counts
+  them inside promptTokenCount, so adding them bills the same tokens twice.
+
+Long receipts, which is the same bug KJ's client kept hitting:
+- The page scaled the LONGEST edge to 1600px. On half a metre of thermal
+  paper that collapses the width and leaves the print about two pixels tall.
+  It read badly and it looked like the model's fault; it was ours.
+- Now scaled by WIDTH to 1100 and cut into 1400px strips with 180px overlap,
+  up to 8 -- a receipt up to 9:1 before it asks for two photos. It REFUSES
+  past that rather than reading part of one: confirming a parse posts stock,
+  so a quietly missing line is a quietly missing delivery.
+- Server takes `images[]`, still takes a single `imageBase64`, and measures
+  the size cap across all the strips together.
+
+Verified: 1,464 API tests, lint clean, tsc clean in api/web/counter, web build
+clean. The strip maths was simulated over a spread of photo shapes: every case
+reaches the bottom of the receipt, no gaps, never upscales, never exceeds 8.
+
+NOT verified: a real call to Vertex. There is no project id or service account
+on this machine, so read QUALITY on a real receipt is untested -- that is KJ's
+first job once the credentials are in. Both providers stay live precisely so
+that comparison is one env var, not a redeploy.
+
+Pending for KJ: GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION + service-account
+credentials on Railway, AI_FEATURES_ENABLED=true, and an AI add-on on the
+tenant (the quota rides in the JWT, so that user must log out and back in).
+
+### Adversarial review of the Gemini work — 32 findings, 15 confirmed (6 real defects)
+Five finders, one skeptic each, 37 agents. The 15 collapsed into 6 distinct
+defects; several lenses found the same ones.
+
+Fixed:
+- IMPORTANT: `GEMINI_PRICE_IN=""` priced every call at $0. `??` does not catch
+  the empty string and `Number('')` is 0 -- and .env.example shipped exactly
+  that, while clearing a Railway variable leaves an empty string behind. The
+  monthly budget cap would never have fired and the cost dashboard would have
+  read $0 while real money went out. Now an `envPrice()` helper: blank means
+  "not set", never zero, and NaN falls back too. The same rule the receipt read
+  guard already used three files away -- I did not carry it across.
+- IMPORTANT: no `thinkingConfig`. Flash thinks by default and thinking is drawn
+  from the SAME maxOutputTokens allowance as the answer, and `.text` skips
+  thought parts. The old OCR route asks for 400 tokens; a call that spent them
+  thinking would return an empty string, and the screen would tell the person
+  to re-shoot a photo that was fine. Thinking is now off (every job here is
+  extraction), and an empty answer throws with the finishReason instead of
+  being reported as an unreadable receipt.
+- MINOR: `thoughtsTokenCount` is billed as output but reported separately, so
+  leaving it out under-counted spend. Now added to outputTokens.
+- MINOR: the strip top was clamped to (height - stripH), so a photo a little
+  taller than one strip came out as two ~95% identical images -- double cost,
+  and the same lines twice in front of the model. The last strip is now allowed
+  to be short. Overlap is a steady 13%.
+- MINOR: an ordinary 4:3 phone photo still became two images. Single-frame
+  threshold raised to 1568px (the point providers start downscaling), so the
+  commonest case is one image again.
+- MINOR: my own `fail()` change leaked raw axios text ("Network Error") into
+  the toast. Only our deliberate refusals are shown verbatim now, via a
+  `ReceiptPhotoError` class.
+- MINOR (test gap): nothing pinned that the Gemini client is a VERTEX client --
+  swapping it for an AI Studio key kept the suite green, and that key trains on
+  the data. `ai.vertex-only.spec.ts` now fails if anyone does.
+
+Final: 1,473 API tests, lint clean, tsc clean in api/web/counter, web build
+clean. Still no live Vertex call -- read quality remains untested.
+

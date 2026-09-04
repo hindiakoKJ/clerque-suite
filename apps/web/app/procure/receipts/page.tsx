@@ -113,20 +113,116 @@ const todayPH = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila'
  * long side reads every line on a till receipt and ships in well under a
  * megabyte. Done here so the same bytes go to the reader and into the file.
  */
-async function shrinkToBase64(file: File): Promise<{ base64: string; mediaType: 'image/jpeg' }> {
+/*
+  A receipt is a narrow, tall thing, and that broke the old resize.
+
+  It scaled the LONGEST edge to 1,600px. On an ordinary photo that is fine; on
+  half a metre of thermal paper it is ruinous — the width collapses to a couple
+  of hundred pixels and the print ends up two pixels tall. No reader can do
+  anything with that, and the failure looks like the model being stupid rather
+  than like us handing it a smudge.
+
+  So: scale by WIDTH, which is what makes print legible, and if the result is
+  too tall to send as one frame, cut it into overlapping strips. The overlap
+  matters — a cut through the middle of a line would otherwise lose it, or
+  split it into two half-lines. The reader is told the strips are one receipt.
+*/
+const READ_WIDTH   = 1100;   // enough for receipt print to stay sharp
+/*
+  The tallest single image worth sending. Providers downscale anything past
+  roughly this, which is the very thing the strips exist to avoid — but an
+  ordinary 4:3 phone photo lands at about 1,467px tall at our width, and
+  cutting THAT into two images doubles the cost of the commonest case for no
+  reading benefit. So: one frame up to here, strips beyond it.
+*/
+const SINGLE_MAX   = 1568;
+const STRIP_HEIGHT = 1400;   // a comfortable frame
+const OVERLAP      = 180;    // ~2 lines of receipt print, so no line is lost
+const MAX_STRIPS   = 8;      // a ceiling on cost as much as on size
+const FILE_MAX     = 1600;   // the copy that gets filed with the request
+
+interface Shot { base64: string; mediaType: 'image/jpeg' }
+
+function draw(img: HTMLImageElement, sx: number, sy: number, sw: number, sh: number, dw: number, dh: number): Shot {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(dw));
+  canvas.height = Math.max(1, Math.round(dh));
+  const ctx = canvas.getContext('2d')!;
+  // A white ground, so a JPEG of a part-transparent source is not black.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  return { base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mediaType: 'image/jpeg' };
+}
+
+/**
+ * `file` is the copy filed against the request — one frame, small.
+ * `strips` is what the reader gets: full width, cut top to bottom if long.
+ */
+/** Something we refused on purpose, with wording meant for the person. */
+export class ReceiptPhotoError extends Error {}
+
+export async function prepareReceipt(file: File): Promise<{ file: Shot; strips: Shot[] }> {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise<HTMLImageElement>((res, rej) => {
       const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not open that photo.')); i.src = url;
     });
-    const MAX = 1600;
-    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(img.width * scale);
-    canvas.height = Math.round(img.height * scale);
-    canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-    return { base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mediaType: 'image/jpeg' };
+
+    // The filed copy: the whole thing, small, exactly as before.
+    const fileScale = Math.min(1, FILE_MAX / Math.max(img.width, img.height));
+    const filed = draw(img, 0, 0, img.width, img.height, img.width * fileScale, img.height * fileScale);
+
+    // Never upscale: a small photo is a small photo, and blowing it up adds
+    // pixels without adding print.
+    const scale  = Math.min(1, READ_WIDTH / img.width);
+    const width  = img.width * scale;
+    const height = img.height * scale;
+
+    if (height <= SINGLE_MAX) {
+      return { file: filed, strips: [draw(img, 0, 0, img.width, img.height, width, height)] };
+    }
+
+    /*
+      How many strips of (STRIP_HEIGHT - OVERLAP) new content it takes to cover
+      the whole thing.
+
+      Past the ceiling we STOP rather than adapt, and the two obvious
+      adaptations are both worse. Taller strips get downscaled again by the
+      provider, which is the exact problem this function exists to solve.
+      Reading only the first eight strips silently drops the bottom of the
+      receipt -- and this posts stock, so a quietly missing line is a quietly
+      missing delivery. Better to ask for two photos.
+    */
+    const step  = STRIP_HEIGHT - OVERLAP;
+    const count = Math.ceil((height - OVERLAP) / step);
+    if (count > MAX_STRIPS) {
+      throw new ReceiptPhotoError(
+        'That receipt is too long for one photo. Take it in two — the top half and the bottom half — '
+        + 'and read them one after the other.',
+      );
+    }
+    const stripH = STRIP_HEIGHT;
+
+    /*
+      The last strip is allowed to be SHORT. Sliding it up to a full height
+      instead — which is what clamping the top to (height - stripH) does —
+      makes a photo only a little taller than one strip come out as two
+      images that are ~95% the same picture. That doubles the cost of an
+      ordinary portrait photo and gives the model the same lines twice, which
+      is exactly the double-count the overlap instruction has to argue away.
+    */
+    const strips: Shot[] = [];
+    for (let i = 0; i < count; i++) {
+      const top    = i * (stripH - OVERLAP);
+      if (top >= height) break;
+      const bottom = Math.min(top + stripH, height);
+      // Back to source pixels for the crop, so nothing is resampled twice.
+      strips.push(draw(img, 0, top / scale, img.width, (bottom - top) / scale, width, bottom - top));
+      if (bottom >= height) break;
+    }
+    return { file: filed, strips };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -137,7 +233,11 @@ export default function ReceiptsPage() {
   const user = useAuthStore((s) => s.user);
   const isOwner = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
 
-  const [photo, setPhoto] = useState<{ base64: string; mediaType: 'image/jpeg'; previewUrl: string } | null>(null);
+  const [photo, setPhoto] = useState<{
+    base64: string; mediaType: 'image/jpeg'; previewUrl: string;
+    /** The same receipt cut into readable strips — one entry for a short one. */
+    strips: Array<{ base64: string; mediaType: 'image/jpeg' }>;
+  } | null>(null);
   // One key per receipt being entered -- photo or not. A retry after a lost
   // response resends it and gets the first result back instead of a second
   // delivery. It changes only on Start over / Another receipt.
@@ -184,7 +284,15 @@ export default function ReceiptsPage() {
 
   const fail = (e: unknown, fallback: string) => {
     const msg = (e as any)?.response?.data?.message;
-    toast.error(Array.isArray(msg) ? msg.join(' ') : (msg ?? fallback));
+    /*
+      Only OUR OWN refusals are shown verbatim -- a receipt too long for one
+      photo, whose message tells the person what to do instead. Any Error
+      would be wrong here: an axios failure with no response carries text like
+      "Network Error", and putting that in front of someone is worse than the
+      plain fallback.
+    */
+    const local = e instanceof ReceiptPhotoError ? e.message : null;
+    toast.error(Array.isArray(msg) ? msg.join(' ') : (msg ?? local ?? fallback));
   };
 
   async function onPhoto(e: React.ChangeEvent<HTMLInputElement>) {
@@ -192,8 +300,12 @@ export default function ReceiptsPage() {
     e.target.value = '';
     if (!file) return;
     try {
-      const shrunk = await shrinkToBase64(file);
-      setPhoto({ ...shrunk, previewUrl: `data:image/jpeg;base64,${shrunk.base64}` });
+      const shot = await prepareReceipt(file);
+      setPhoto({
+        ...shot.file,
+        strips: shot.strips,
+        previewUrl: `data:image/jpeg;base64,${shot.file.base64}`,
+      });
       setReading(null);
       setResult(null);
       if (rows.length === 0) setRows([blankRow()]);
@@ -205,7 +317,11 @@ export default function ReceiptsPage() {
   // ── reading ─────────────────────────────────────────────────────────────
   const hasWork = rows.some((r) => r.description.trim() || r.rawMaterialId || r.amount.trim() || r.cost.trim());
   const read = useMutation({
-    mutationFn: () => api.post('/procure/receipts/parse', { imageBase64: photo!.base64, mediaType: photo!.mediaType }).then((r) => r.data as ParseResult),
+    // The strips go to the reader; the single filed copy stays behind for the
+    // request. A short receipt is one strip, so this is the same call it was.
+    mutationFn: () => api.post('/procure/receipts/parse', {
+      images: photo!.strips.map((s) => ({ base64: s.base64, mediaType: s.mediaType })),
+    }).then((r) => r.data as ParseResult),
     onSuccess: (r) => {
       setReading(r);
       if (r.reads) qc.setQueryData(['receipt-reads'], r.reads);

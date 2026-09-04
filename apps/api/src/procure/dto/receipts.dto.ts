@@ -1,6 +1,17 @@
 import {
-  IsArray, IsBase64, IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsPositive,
-  IsString, MaxLength, Min, ValidateNested,
+  ArrayMaxSize,
+  IsArray,
+  IsBase64,
+  IsBoolean,
+  IsDateString,
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsPositive,
+  IsString,
+  MaxLength,
+  Min,
+  ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { RAW_MATERIAL_CATEGORIES, RawMaterialCategoryValue } from '../../inventory/dto/create-raw-material.dto';
@@ -10,14 +21,56 @@ const MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type ReceiptMediaType = (typeof MEDIA_TYPES)[number];
 
 /** A photo, nothing else. What it says comes back as a suggestion to correct. */
-export class ParseReceiptDto {
+/** One image, or one strip of a long one. */
+export class ReceiptImageDto {
   @IsString()
   @IsBase64()
-  imageBase64!: string;
+  base64!: string;
 
   @IsOptional()
   @IsIn(MEDIA_TYPES)
   mediaType?: ReceiptMediaType;
+}
+
+export class ParseReceiptDto {
+  /**
+   * A whole receipt in one frame. Still accepted, and still what a short
+   * supermarket slip sends.
+   */
+  @IsOptional()
+  @IsString()
+  @IsBase64()
+  imageBase64?: string;
+
+  @IsOptional()
+  @IsIn(MEDIA_TYPES)
+  mediaType?: ReceiptMediaType;
+
+  /**
+   * A long receipt, cut into overlapping strips top to bottom.
+   *
+   * A metre of thermal paper squeezed into one frame is unreadable by
+   * anything — the text ends up a few pixels tall. The phone cuts it into
+   * strips at full width instead, and they are read together as one receipt.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @ValidateNested({ each: true })
+  @Type(() => ReceiptImageDto)
+  images?: ReceiptImageDto[];
+
+  /**
+   * Read this one receipt with the OTHER provider.
+   *
+   * The point of keeping both alive is being able to put the same photo
+   * through each and compare what comes back, and that is worth nothing if
+   * it needs an environment change and a redeploy. Owner-only: it chooses
+   * who gets billed for the read, and the two do not cost the same.
+   */
+  @IsOptional()
+  @IsIn(['gemini', 'anthropic'])
+  provider?: 'gemini' | 'anthropic';
 }
 
 /**

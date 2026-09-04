@@ -57,6 +57,8 @@ interface TenantProfile {
   recipeDeductionPausedAt?: string | null;
   // Sell even when the system believes stock is zero.
   allowSaleWhenOutOfStock?: boolean | null;
+  // Whether staff see what a delivery cost on the Procure screen.
+  showPurchaseCostsToStaff?: boolean | null;
   // Sprint 25 — maker-checker void threshold (peso-cents). 0 = disabled.
   voidApprovalThresholdCents?: number | null;
   // Magnet Books — owner's saved ledger mode (JWT copy is what gates the ledger).
@@ -725,6 +727,11 @@ export default function SettingsPage() {
             {/* ── Sell when the system believes stock is zero ───────────────── */}
             {isOwner && profile && (
               <SellWhenOutOfStockCard profile={profile} qc={qc} />
+            )}
+
+            {/* ── Who sees what a delivery cost ─────────────────────────────── */}
+            {isOwner && profile && (
+              <PurchaseCostVisibilityCard profile={profile} qc={qc} />
             )}
 
             {/* ── Maker-checker void threshold (Sprint 25, Solo Pro) ────────── */}
@@ -1712,6 +1719,80 @@ function SellWhenOutOfStockCard({
           className="w-11 h-6 rounded-full transition-colors shrink-0"
           style={{ background: enabled ? 'var(--accent)' : 'hsl(var(--muted-foreground) / 0.3)' }}
           aria-label="Toggle selling when out of stock"
+        >
+          <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
+            enabled ? 'translate-x-5' : 'translate-x-0'
+          }`} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Who sees what a delivery cost ─────────────────────────────────────────
+
+/**
+ * Procure is one screen for the whole shop, so the price of a delivery has
+ * always been in front of anyone who could open the request. In a small cafe
+ * that is right — the same people unpack the bags and read the receipt. This
+ * lets a bigger shop keep supplier prices with the people who buy.
+ */
+function PurchaseCostVisibilityCard({
+  profile, qc,
+}: { profile: { showPurchaseCostsToStaff?: boolean | null }; qc: ReturnType<typeof useQueryClient> }) {
+  // Anything but an explicit false means "everyone sees" — the same reading
+  // the server uses, so the switch never shows the opposite of what is stored.
+  const initial = profile.showPurchaseCostsToStaff !== false;
+  const [enabled, setEnabled] = useState(initial);
+
+  const updateMut = useMutation({
+    mutationFn: (next: boolean) =>
+      api.patch('/tenant/profile', { showPurchaseCostsToStaff: next }).then((r) => r.data),
+    onSuccess: (_d, next) => {
+      qc.invalidateQueries({ queryKey: ['tenant-profile'] });
+      toast.success(
+        next
+          ? 'Everyone on the shopping list can see what things cost again.'
+          : 'Only you and your managers see delivery costs now. It takes effect on their next screen refresh.',
+      );
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Failed to update.');
+      setEnabled(initial);
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Delivery Costs on the Shopping List</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          Everyone who can open a shopping list — cooks, baristas, cashiers, warehouse staff — can
+          normally see what each delivery cost, and open the receipt photo filed with it. Turn this
+          off to keep supplier prices between you and your managers. Staff keep the rest of the
+          screen: what was asked for, what was bought, and how much arrived.
+        </p>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2.5">
+        <div className="text-sm">
+          <div className="font-medium text-foreground">Staff can see delivery costs</div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {enabled
+              ? 'Prices and the receipt photo are visible to everyone on the list.'
+              : 'Prices and the receipt photo are hidden from everyone but you and your managers.'}
+          </div>
+        </div>
+        <button
+          onClick={() => {
+            const next = !enabled;
+            setEnabled(next);
+            updateMut.mutate(next);
+          }}
+          disabled={updateMut.isPending}
+          className="w-11 h-6 rounded-full transition-colors shrink-0"
+          style={{ background: enabled ? 'var(--accent)' : 'hsl(var(--muted-foreground) / 0.3)' }}
+          aria-label="Toggle whether staff see delivery costs"
         >
           <span className={`block w-4 h-4 rounded-full bg-white shadow transition-transform mx-1 ${
             enabled ? 'translate-x-5' : 'translate-x-0'

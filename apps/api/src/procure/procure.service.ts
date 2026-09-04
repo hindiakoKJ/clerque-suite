@@ -3,6 +3,7 @@ import { Prisma, PurchaseRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
+import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 
 /**
  * Clerque Procure — the shop asking the owner to buy something.
@@ -66,6 +67,45 @@ export class ProcureService {
     return first.id;
   }
 
+  /**
+   * What one viewer is allowed to see of a request's money.
+   *
+   * Read per call rather than carried in the JWT: an owner who turns this off
+   * expects it to take effect now, not after every member of staff has logged
+   * out and back in again.
+   */
+  private async costsVisibleTo(tenantId: string, role?: string | null): Promise<boolean> {
+    // The people who decide always see; only for everyone else is it worth
+    // a query to find out what this shop has chosen.
+    if (COST_DECIDER_ROLES.includes(role ?? '')) return true;
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { showPurchaseCostsToStaff: true },
+    });
+    return canSeePurchaseCosts(role, tenant?.showPurchaseCostsToStaff);
+  }
+
+  /**
+   * Blank the cost of every line and flag the request, so the screen can drop
+   * the total and the receipt photo rather than render an empty money column.
+   * Quantities stay: what was asked for and how much arrived is the staff's
+   * own work, and hiding it would make the screen useless to them.
+   */
+  private stripCosts<T extends { lines?: Array<Record<string, unknown>> }>(req: T): T {
+    return {
+      ...req,
+      costsHidden: true,
+      lines: (req.lines ?? []).map((l) => ({
+        ...l,
+        packCost: null,
+        // The ingredient's own running cost rides along on every line. The
+        // screen does not print it, but it is the same information -- what
+        // the shop pays for things -- and it is one network tab away.
+        rawMaterial: l.rawMaterial ? { ...(l.rawMaterial as Record<string, unknown>), costPrice: null } : l.rawMaterial,
+      })),
+    } as T;
+  }
+
   // ── the open request ──────────────────────────────────────────────────────
 
   /**
@@ -73,7 +113,13 @@ export class ProcureService {
    * day; a second open request would split the shopping list in half and
    * guarantee two trips, which is the thing being fixed.
    */
-  async openRequest(tenantId: string, branchId: string, userId: string) {
+  async openRequest(tenantId: string, branchId: string, userId: string, viewerRole?: string | null) {
+    const opened = await this.openRequestRaw(tenantId, branchId, userId);
+    if (await this.costsVisibleTo(tenantId, viewerRole)) return opened;
+    return this.stripCosts(opened);
+  }
+
+  private async openRequestRaw(tenantId: string, branchId: string, userId: string) {
     const existing = await this.prisma.purchaseRequest.findFirst({
       where:   { tenantId, branchId, status: 'OPEN' },
       include: this.lineInclude(),
@@ -88,20 +134,35 @@ export class ProcureService {
     });
   }
 
-  async list(tenantId: string, branchId?: string, status?: PurchaseRequestStatus) {
-    return this.prisma.purchaseRequest.findMany({
+  async list(tenantId: string, branchId?: string, status?: PurchaseRequestStatus, viewerRole?: string | null) {
+    const rows = await this.prisma.purchaseRequest.findMany({
       where:   { tenantId, ...(branchId ? { branchId } : {}), ...(status ? { status } : {}) },
       include: this.lineInclude(),
       orderBy: { createdAt: 'desc' },
       take:    100,
     });
+    if (await this.costsVisibleTo(tenantId, viewerRole)) return rows;
+    return rows.map((r) => this.stripCosts(r));
   }
 
-  async get(tenantId: string, id: string) {
+  /**
+   * The request as it really is, costs and all. Every write path reads it
+   * this way: sending, recording what was bought and posting to stock all
+   * need the money, and must never be handed a copy that was blanked for
+   * somebody's screen.
+   */
+  private async getRaw(tenantId: string, id: string) {
     const req = await this.prisma.purchaseRequest.findFirst({
       where: { id, tenantId }, include: this.lineInclude(),
     });
     if (!req) throw new NotFoundException('Purchase request not found.');
+    return req;
+  }
+
+  /** The request as this viewer is allowed to see it. */
+  async get(tenantId: string, id: string, viewerRole?: string | null) {
+    const req = await this.getRaw(tenantId, id);
+    if (!(await this.costsVisibleTo(tenantId, viewerRole))) return this.stripCosts(req);
     return req;
   }
 
@@ -110,7 +171,7 @@ export class ProcureService {
    * on one request is always a mistake — it would send someone for sugar twice.
    */
   async addLine(tenantId: string, requestId: string, dto: AddLineDto) {
-    const req = await this.get(tenantId, requestId);
+    const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'OPEN') {
       throw new BadRequestException(
         `This request is already ${req.status.toLowerCase()}. Start a new one to add more.`,
@@ -160,7 +221,7 @@ export class ProcureService {
   }
 
   async removeLine(tenantId: string, requestId: string, lineId: string) {
-    const req = await this.get(tenantId, requestId);
+    const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'OPEN') {
       throw new BadRequestException('Only an open request can be edited.');
     }
@@ -295,7 +356,7 @@ export class ProcureService {
    * something. That is why this returns `empty` rather than refusing.
    */
   async sendRequest(tenantId: string, requestId: string, userId: string) {
-    const req = await this.get(tenantId, requestId);
+    const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'OPEN') {
       throw new BadRequestException(`This request was already sent (${req.status.toLowerCase()}).`);
     }
@@ -315,7 +376,7 @@ export class ProcureService {
    * a backup rather than the only place the conversion can happen.
    */
   async recordBought(tenantId: string, requestId: string, lines: BoughtLineDto[]) {
-    const req = await this.get(tenantId, requestId);
+    const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'SENT' && req.status !== 'BOUGHT') {
       throw new BadRequestException(
         `A request has to be sent before it can be bought against (this one is ${req.status.toLowerCase()}).`,
@@ -387,7 +448,7 @@ export class ProcureService {
      */
     opts: { receivedAt?: string; note?: string; acceptCostChangeFor?: Set<string>; acceptCostChangeAll?: boolean } = {},
   ) {
-    const req = await this.get(tenantId, requestId);
+    const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'BOUGHT' && req.status !== 'RECEIVED') {
       throw new BadRequestException(
         `Record what was bought before posting it to stock (this one is ${req.status.toLowerCase()}).`,
@@ -450,7 +511,7 @@ export class ProcureService {
   }
 
   async cancel(tenantId: string, requestId: string) {
-    const req = await this.get(tenantId, requestId);
+    const req = await this.getRaw(tenantId, requestId);
     if (req.status === 'RECEIVED') {
       throw new BadRequestException('This request is already in stock and cannot be cancelled.');
     }

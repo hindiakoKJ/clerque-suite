@@ -12,6 +12,7 @@ import * as crypto from 'crypto';
 import { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { canSeePurchaseCosts } from '../procure/cost-visibility';
 
 const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIMES = new Set([
@@ -128,7 +129,20 @@ export class DocumentsService {
   }
 
   /** List all documents for a given entity. */
-  async list(tenantId: string, entityType: string, entityId: string) {
+  async list(tenantId: string, entityType: string, entityId: string, viewerRole?: string | null) {
+    /*
+      A receipt filed against a purchase request is a photograph of the
+      prices. If the owner has decided staff do not see what a delivery cost,
+      handing them the photo would make that decision meaningless, so the
+      same switch governs both. Every other kind of document is unaffected.
+    */
+    if (entityType === 'PurchaseRequest') {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { showPurchaseCostsToStaff: true },
+      });
+      if (!canSeePurchaseCosts(viewerRole, tenant?.showPurchaseCostsToStaff)) return [];
+    }
     return this.prisma.document.findMany({
       where: { tenantId, entityType, entityId },
       orderBy: { createdAt: 'asc' },
@@ -176,11 +190,26 @@ export class DocumentsService {
   }
 
   /** Stream the file to the HTTP response with correct headers. */
-  async serve(tenantId: string, documentId: string, res: Response) {
+  async serve(tenantId: string, documentId: string, res: Response, viewerRole?: string | null) {
     const doc = await this.prisma.document.findFirst({
       where: { id: documentId, tenantId },
     });
     if (!doc) throw new NotFoundException('Document not found.');
+
+    /*
+      Hiding the receipt from the list is not hiding it: this route is open
+      to cashiers too, and a document id is guessable from anyone who has
+      seen it once. The same switch governs the file itself.
+    */
+    if (doc.entityType === 'PurchaseRequest') {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { showPurchaseCostsToStaff: true },
+      });
+      if (!canSeePurchaseCosts(viewerRole, tenant?.showPurchaseCostsToStaff)) {
+        throw new NotFoundException('Document not found.');
+      }
+    }
 
     res.setHeader(
       'Content-Disposition',

@@ -22,6 +22,8 @@ describe('ProcureService', () => {
     /** Ingredients with no reorder level — invisible to Check stock by design. */
     unmonitored?: number;
     receiveImpl?: (rmId: string, dto: any) => any;
+    /** Tenant.showPurchaseCostsToStaff — off means staff do not see costs. */
+    showCostsToStaff?: boolean;
   } = {}) {
     const created: any[] = [];
     const updatedLines: any[] = [];
@@ -35,6 +37,9 @@ describe('ProcureService', () => {
     };
 
     const prisma: any = {
+      // Whether staff see delivery costs. These tests are about the list
+      // itself, so they run as the default shop: everyone sees.
+      tenant: { findUnique: jest.fn().mockResolvedValue({ showPurchaseCostsToStaff: opts.showCostsToStaff ?? true }) },
       purchaseRequest: {
         findFirst: jest.fn().mockResolvedValue(request),
         create:    jest.fn(({ data }: any) => {
@@ -331,6 +336,20 @@ describe('ProcureService', () => {
     await expect(
       svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 9, packSize: 750, packCost: 100 }]),
     ).rejects.toThrow(/already in stock/i);
+  });
+
+  it('posts the real cost even when staff are not allowed to see it', async () => {
+    /*
+      Hiding costs is a matter for screens, never for the posting. The read
+      that serves a cook blanks the money; the write paths read the request
+      raw. When those were the same call, a shop with the switch off would
+      have posted its deliveries into stock at a cost of nothing.
+    */
+    const { svc, received } = build({ status: 'BOUGHT', lines: BOUGHT, showCostsToStaff: false });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER);
+
+    expect(received[0].costPrice).toBeCloseTo(0.72);
+    expect(res.posted).toHaveLength(1);
   });
 
   it('converts packs to units and price per unit when posting', async () => {

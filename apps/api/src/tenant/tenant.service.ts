@@ -26,6 +26,8 @@ export interface UpdateTenantProfileDto {
   recipeDeductionEnabled?: boolean;
   /** Let cashiers sell a product the system believes has no stock. */
   allowSaleWhenOutOfStock?: boolean;
+  /** Whether staff who cannot decide on a purchase request see its costs. */
+  showPurchaseCostsToStaff?: boolean;
   /** Sprint 25 — Maker-checker void threshold (peso-cents). 0 = disabled. */
   voidApprovalThresholdCents?: number;
   /** Magnet Books — owner preference; SIMPLE hides the full accounting surface. */
@@ -622,6 +624,8 @@ export class TenantService {
         recipeDeductionPausedAt: true,
         // Sell even when the system believes stock is zero.
         allowSaleWhenOutOfStock: true,
+        // Whether staff see what a delivery cost on the Procure screen.
+        showPurchaseCostsToStaff: true,
         // Sprint 25 — Maker-checker void threshold (peso-cents).
         voidApprovalThresholdCents: true,
         // Magnet Books — owner's ledger mode (FULL | SIMPLE). Returned so the

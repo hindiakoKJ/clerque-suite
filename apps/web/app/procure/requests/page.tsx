@@ -40,6 +40,12 @@ interface Request {
   lines: Line[];
   branch?: { id: string; name: string } | null;
   sentAt?: string | null;
+  /**
+   * Set by the server when this viewer may not see what the delivery cost.
+   * The costs are already stripped from the lines by then — this only tells
+   * the screen to drop the money furniture instead of rendering empty boxes.
+   */
+  costsHidden?: boolean;
 }
 interface Ingredient { id: string; name: string; unit: string }
 
@@ -165,7 +171,7 @@ export default function ProcurePage() {
   const { data: receiptDocs = [] } = useQuery<Array<{ id: string; filename: string; label: string | null }>>({
     queryKey: ['request-docs', req?.id],
     queryFn:  () => api.get('/documents', { params: { entityType: 'PurchaseRequest', entityId: req!.id } }).then((r) => r.data),
-    enabled:  !!req?.id,
+    enabled:  !!req?.id && !req.costsHidden,   // a photo of the receipt is a photo of the prices
     staleTime: 60_000,
   });
   const openDoc = async (id: string, filename: string) => {
@@ -387,7 +393,7 @@ export default function ProcurePage() {
               </div>
             )}
           </div>
-          {estimate > 0 && (
+          {estimate > 0 && !req.costsHidden && (
             <div className="text-right">
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Spent</div>
               <div className="font-mono text-lg font-semibold">{peso(estimate)}</div>
@@ -672,6 +678,13 @@ export default function ProcurePage() {
                     they typed while standing over the delivery was thrown
                     away when the screen unmounted. Better no box than a box
                     that eats what you put in it.
+                  */}
+                  {/*
+                    Nothing inside this form checks req.costsHidden: the whole
+                    form is manager-only, and costsHidden is only ever set for
+                    someone who is not. The money staff CAN reach -- the Spent
+                    total and the filed receipt -- is gated where it renders,
+                    and stripped on the server besides.
                   */}
                   {canDecide && (req.status === 'SENT' || req.status === 'BOUGHT') && !l.receivedAt && (
                     <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">

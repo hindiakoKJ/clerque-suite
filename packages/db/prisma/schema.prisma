@@ -569,6 +569,20 @@ model Tenant {
   /// simply is not blocked. Owner toggles it in Settings.
   allowSaleWhenOutOfStock Boolean @default(false)
 
+  /// Whether staff who cannot decide on a purchase request — cook, barista,
+  /// cashier, warehouse — see what the shop paid for it.
+  ///
+  /// Procure is one screen for the whole shop, so the cost of a delivery has
+  /// always sat in front of whoever could open the request. In a small cafe
+  /// that is fine: the same people unpack the bags and read the receipt. In a
+  /// bigger shop the owner would rather the supplier's prices stayed with the
+  /// people who buy. Turning this off strips the costs from the request AND
+  /// hides the filed receipt photo, which shows the same prices.
+  ///
+  /// Defaults true — every shop that exists today already works this way.
+  /// Owner toggles it in Settings.
+  showPurchaseCostsToStaff Boolean @default(true)
+
   /// Sprint 19 — Ransomware kill switch. When true, ALL data-mutating
   /// endpoints for this tenant return 423 Locked. Use case: detect
   /// compromise (e.g. unusual destructive activity), flip flag, freeze

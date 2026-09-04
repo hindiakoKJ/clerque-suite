@@ -69,7 +69,7 @@ export class DocumentsController {
     @Req() req: Request,
   ) {
     const user = req.user as JwtPayload;
-    return this.documentsService.list(user.tenantId!, entityType, entityId);
+    return this.documentsService.list(user.tenantId!, entityType, entityId, user.role);
   }
 
   /** GET /documents/:id/download — stream the file. */
@@ -83,7 +83,7 @@ export class DocumentsController {
     @Res() res: Response,
   ) {
     const user = req.user as JwtPayload;
-    await this.documentsService.serve(user.tenantId!, id, res);
+    await this.documentsService.serve(user.tenantId!, id, res, user.role);
   }
 
   /** DELETE /documents/:id — delete document + file from disk. */

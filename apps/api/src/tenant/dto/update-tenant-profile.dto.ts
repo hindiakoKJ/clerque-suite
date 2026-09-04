@@ -95,6 +95,13 @@ export class UpdateTenantProfileDto {
   @IsBoolean()
   allowSaleWhenOutOfStock?: boolean;
 
+  /** Whether staff who cannot decide on a purchase request see what it cost.
+   *  Off also hides the filed receipt photo from them, which shows the same
+   *  prices. Defaults true — how every shop already works. */
+  @IsOptional()
+  @IsBoolean()
+  showPurchaseCostsToStaff?: boolean;
+
   /** Sprint 25 — Maker-checker void/refund threshold in peso-cents.
    *  0 = disabled. Only meaningful when the tenant's plan has
    *  PLAN_FEATURES[planCode].makerCheckerVoids === true. */

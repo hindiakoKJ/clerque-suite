@@ -37,7 +37,7 @@ export class ProcureController {
     @Query('branchId') branchId?: string,
     @Query('status') status?: PurchaseRequestStatus,
   ) {
-    return this.procure.list(user.tenantId!, branchId ?? user.branchId ?? undefined, status);
+    return this.procure.list(user.tenantId!, branchId ?? user.branchId ?? undefined, status, user.role);
   }
 
   /** The list being added to right now. Creates one if there is none. */
@@ -47,7 +47,7 @@ export class ProcureController {
   @ApiOperation({ summary: "Today's open request for this branch" })
   async open(@CurrentUser() user: JwtPayload, @Body() body: { branchId?: string }) {
     const branchId = await this.procure.resolveBranch(user.tenantId!, body.branchId ?? user.branchId);
-    return this.procure.openRequest(user.tenantId!, branchId, user.sub);
+    return this.procure.openRequest(user.tenantId!, branchId, user.sub, user.role);
   }
 
   /**
@@ -70,7 +70,7 @@ export class ProcureController {
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.procure.get(user.tenantId!, id);
+    return this.procure.get(user.tenantId!, id, user.role);
   }
 
   /**

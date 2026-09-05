@@ -194,20 +194,32 @@ describe('ImportService — importStockReceipts dates', () => {
 
 // ── 3. Recipes partial-import flip + insensitive matching ──────────────────
 describe('ImportService — importRecipes', () => {
-  const products = [{ id: 'p-latte', name: 'Latte' }, { id: 'p-esp', name: 'Espresso Solo' }];
+  // As they read AFTER the flip: recostProduct asks for the mode by id.
+  const products = [
+    { id: 'p-latte', name: 'Latte',         inventoryMode: 'RECIPE_BASED' },
+    { id: 'p-esp',   name: 'Espresso Solo', inventoryMode: 'RECIPE_BASED' },
+  ];
   const rms      = [{ id: 'rm-milk', name: 'Whole Milk' }, { id: 'rm-beans', name: 'Beans' }];
   const byName = (list: { id: string; name: string }[]) => jest.fn(async (args: any) => {
+    if (args.where.id) return list.find((x) => x.id === args.where.id) ?? null;
     const w = args.where.name;
     const wanted: string = typeof w === 'string' ? w : w.equals;
     const ci = typeof w !== 'string' && w.mode === 'insensitive';
     return list.find((x) => (ci ? x.name.toLowerCase() === wanted.toLowerCase() : x.name === wanted)) ?? null;
   });
+  // Ingredients are looked up with findMany, because twins are a real hazard.
+  const manyByName = (list: { id: string; name: string }[]) => jest.fn(async (args: any) => {
+    const wanted: string = args.where.name.equals;
+    return list.filter((x) => x.name.toLowerCase() === wanted.toLowerCase());
+  });
   let prisma: any;
   beforeEach(() => {
     prisma = {
-      product:     { findFirst: byName(products), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-      rawMaterial: { findFirst: byName(rms) },
+      product:     { findFirst: byName(products), update: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      rawMaterial: { findMany: manyByName(rms) },
       bomItem:     {
+        // recostProduct reads the BOM after an import; empty = nothing to write
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         create:    jest.fn().mockResolvedValue({}),
         update:    jest.fn().mockResolvedValue({}),
@@ -226,7 +238,7 @@ describe('ImportService — importRecipes', () => {
     expect(prisma.product.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 't1', name: { equals: 'ESPRESSO solo', mode: 'insensitive' } },
     }));
-    expect(prisma.rawMaterial.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    expect(prisma.rawMaterial.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 't1', name: { equals: 'beans', mode: 'insensitive' } },
     }));
     expect(prisma.product.updateMany).toHaveBeenCalledWith(expect.objectContaining({
@@ -254,6 +266,45 @@ describe('ImportService — importRecipes', () => {
     expect(note).toBeDefined();
     expect(note!.message).toContain('Product "Latte"');
     expect(res.errors.some((e) => e.message.includes('Ingredient "Unobtainium" not found'))).toBe(true);
+  });
+
+  /*
+    The live trap, on the plate side: the shop held "Chicken wings" at an old
+    price AND "Chicken Wings" at the new one. Exact spelling wins; twins with
+    no exact match are refused by name, never picked at random.
+  */
+  it('takes the ingredient spelled exactly as written over a case twin, and refuses twins otherwise', async () => {
+    prisma.rawMaterial = { findMany: manyByName([
+      ...rms, { id: 'rm-wings-new', name: 'Chicken Wings' }, { id: 'rm-wings-old', name: 'Chicken wings' },
+    ]) };
+    const svc = new ImportService(prisma, OPEN_PERIODS);
+    const res = await svc.importRecipes(csvFile([
+      'Product Name*,Ingredient Name*,Quantity*',
+      'Espresso Solo,Chicken Wings,2',      // exact -> the new one
+      'Latte,chicken WINGS,2',              // neither twin exactly -> refused
+    ].join('\n')), 't1');
+    expect(prisma.bomItem.create).toHaveBeenCalledTimes(1);
+    expect(prisma.bomItem.create.mock.calls[0][0].data.rawMaterialId).toBe('rm-wings-new');
+    expect(res.errors.some((e) => /"chicken WINGS" matches more than one ingredient.*"Chicken Wings".*"Chicken wings"/.test(e.message))).toBe(true);
+    expect(prisma.product.updateMany.mock.calls[0][0].where.id.in).toEqual(['p-esp']);
+  });
+
+  it('writes the derived cost onto a product whose recipe imported cleanly, and leaves a partial one alone', async () => {
+    prisma.bomItem.findMany = jest.fn(async ({ where }: any) =>
+      where.productId === 'p-esp'   ? [{ quantity: 18,  rawMaterial: { costPrice: 1.1 } }]
+      : where.productId === 'p-latte' ? [{ quantity: 200, rawMaterial: { costPrice: 0.09 } }]
+      : []);
+    const svc = new ImportService(prisma, OPEN_PERIODS);
+    await svc.importRecipes(csvFile([
+      'Product Name*,Ingredient Name*,Quantity*',
+      'Latte,whole milk,200',
+      'Latte,Unobtainium,5',          // Latte stays partial -> its stored cost is NOT touched
+      'Espresso Solo,Beans,18',
+    ].join('\n')), 't1');
+    expect(prisma.product.update).toHaveBeenCalledTimes(1);
+    const call = prisma.product.update.mock.calls[0][0];
+    expect(call.where).toEqual({ id: 'p-esp' });
+    expect(Number(call.data.costPrice)).toBeCloseTo(19.8, 4);
   });
 
   it('an invalid quantity on one row also blocks that product\'s flip', async () => {

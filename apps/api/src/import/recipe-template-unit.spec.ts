@@ -84,7 +84,7 @@ describe('ImportService — the recipes template carries its Unit column', () =>
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       rawMaterial: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'rm1', unit: 'g' }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'rm1', name: 'the ingredient', unit: 'g' }]),
       },
       bomItem: {
         findFirst:  jest.fn().mockResolvedValue(null),

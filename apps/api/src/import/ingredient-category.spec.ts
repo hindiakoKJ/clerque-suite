@@ -111,7 +111,7 @@ describe('ImportService — recipes refuse a supply', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       rawMaterial: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'rm1', unit: 'ml', category }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'rm1', name: 'Zonrox Bleach', unit: 'ml', category }]),
       },
       bomItem: {
         findFirst:  jest.fn().mockResolvedValue(null),

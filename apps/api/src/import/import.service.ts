@@ -8,6 +8,7 @@ import {
   unitFactor as sharedUnitFactor,
 } from '../inventory/unit-conversion';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
+import { SubRecipesService } from '../sub-recipes/sub-recipes.service';
 import { mapLoyverseItems, looksLikeLoyverse } from './loyverse.mapper';
 import { isRecipeBusinessType } from '@repo/shared-types';
 
@@ -37,6 +38,13 @@ export class ImportService {
      * than a missing feature.
      */
     @Optional() private readonly periods?: AccountingPeriodsService,
+    /**
+     * Optional for the same reason as `periods`. "Made in batches" refuses to
+     * import without it rather than writing SubRecipeItem rows by hand — the
+     * app's setRecipe holds the rules for what a prep may be (no cycles, no
+     * duplicate lines, positive yield), and there must be exactly one copy.
+     */
+    @Optional() private readonly subRecipes?: SubRecipesService,
   ) {}
 
   // ── Helper: parse xlsx or csv buffer into row arrays (first sheet only) ──
@@ -1614,6 +1622,11 @@ export class ImportService {
       '         Tip: divide bulk pricing. 1L milk at P85 = 0.085 per ml.',
       '         This sheet sets COST only. Quantities come later, from the Stock Receipts template.',
       '',
+      'Step 2b — "Made in batches": anything the kitchen makes AHEAD and holds ready — breading,',
+      '         marinated wings, cooked rice. One row per ingredient per prep, and how much ONE batch',
+      '         makes. Skip it if you cook everything to order. A sauce made per plate is NOT a batch:',
+      '         put its ingredients straight on the plate in Recipes.',
+      '',
       'Step 3 — "Recipes": what goes INTO each menu item. One row per ingredient, per product.',
       '         An Iced Latte with 5 ingredients = 5 rows. Names must match Products and Ingredients exactly.',
       '         This is what makes your true cost and gross margin correct.',
@@ -1701,8 +1714,9 @@ export class ImportService {
       // ingredient BY NAME, so both must be filled in before it.
       ...(recipeVertical
         ? [
-            { name: 'Ingredients', buf: await this.ingredientsTemplate(tenantId) },
-            { name: 'Recipes',     buf: await this.recipesTemplate(tenantId) },
+            { name: 'Ingredients',     buf: await this.ingredientsTemplate(tenantId) },
+            { name: 'Made in batches', buf: await this.prepsTemplate(tenantId) },
+            { name: 'Recipes',         buf: await this.recipesTemplate(tenantId) },
           ]
         : []),
       { name: 'Customers',         buf: await this.customersTemplate() },
@@ -1783,6 +1797,13 @@ export class ImportService {
         key:  'ingredients',
         rows: pick('Ingredients', 'Raw Materials'),
         run:  (r) => this.importIngredientsFromRows(r, tenantId),
+      },
+      {
+        // After ingredients (a batch is made FROM them) and before recipes (a
+        // plate names a prep the way it names an ingredient).
+        key:  'preps',
+        rows: pick('Made in batches', 'Made In Batches', 'Preps', 'Sub-recipes', 'Batches'),
+        run:  (r) => this.importPrepsFromRows(r, tenantId),
       },
       {
         // Must run after BOTH products and ingredients: a recipe line links
@@ -3095,10 +3116,28 @@ export class ImportService {
           continue;
         }
         tracked.id = product.id;
-        const rm = await this.prisma.rawMaterial.findFirst({
+        /*
+          Exact spelling first, then the case-blind match -- and if that finds
+          TWINS with no exact one, stop and say so. The shop has held both
+          "Chicken wings" and "Chicken Wings" at different prices; a quiet
+          pick of the wrong one costs every plate's chicken at a third.
+        */
+        const found = await this.prisma.rawMaterial.findMany({
           where:  { tenantId, name: { equals: ingName, mode: 'insensitive' } },
-          select: { id: true, unit: true, category: true },
+          select: { id: true, name: true, unit: true, category: true },
         });
+        const rm = found.find((c) => c.name === ingName)
+          ?? (found.length === 1 ? found[0] : undefined);
+        if (!rm && found.length > 1) {
+          result.errors.push({
+            row: rowNum,
+            message: `"${ingredientName}" matches more than one ingredient `
+              + `(${found.map((c) => `"${c.name}"`).join(', ')}). `
+              + 'Rename or merge them under Stock on hand, then re-import.',
+          });
+          tracked.failed++;
+          continue;
+        }
         if (!rm) {
           result.errors.push({ row: rowNum, message: `Ingredient "${ingredientName}" not found. Run the Ingredients import first.` });
           tracked.failed++;
@@ -3194,7 +3233,477 @@ export class ImportService {
         data:  { inventoryMode: 'RECIPE_BASED' },
       });
     }
+    /*
+      Write the derived cost onto every product whose recipe imported cleanly.
+      The screens re-derive it from the recipe on every read, so they were
+      never wrong — but anything reading the stored column raw (the "missing
+      cost" list keys on null) saw a product with a full recipe and no cost.
+      A product with a failing row keeps its stored cost: it was not flipped,
+      so that number is still what it was bought at.
+    */
+    for (const id of productsToFlip) await this.recostProduct(tenantId, id);
     return result;
+  }
+
+  /** The stored Product.costPrice, recomputed from its recipe. */
+  private async recostProduct(tenantId: string, productId: string): Promise<void> {
+    /*
+      Only a recipe-based product takes its cost from its recipe. A unit-based
+      one keeps the price it was bought at -- that IS its cost of sale -- and a
+      recipe that is still partial (rows failing, product not flipped) must
+      not overwrite that with a partial sum.
+    */
+    const product = await this.prisma.product.findFirst({
+      where: { id: productId, tenantId }, select: { inventoryMode: true },
+    });
+    if (product?.inventoryMode !== 'RECIPE_BASED') return;
+    const bom = await this.prisma.bomItem.findMany({
+      where:  { productId, product: { tenantId } },
+      select: { quantity: true, rawMaterial: { select: { costPrice: true } } },
+    });
+    if (bom.length === 0) return;
+    const cost = bom.reduce(
+      (sum, b) => sum + (b.rawMaterial?.costPrice != null ? Number(b.rawMaterial.costPrice) : 0) * Number(b.quantity),
+      0,
+    );
+    await this.prisma.product.update({
+      where: { id: productId },
+      data:  { costPrice: new Prisma.Decimal(cost.toFixed(4)) },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MADE IN BATCHES — the things a kitchen makes ahead
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * One row per ingredient per prep, plus how much ONE batch makes.
+   *
+   * Why this sheet exists: a kitchen's costing spreadsheet fell apart on
+   * exactly this. Breading is made in a batch that covers a hundred pieces;
+   * wings are marinated eighty-six at a time and held; a plate is two of
+   * those plus rice. The owner's sheet hand-copied each batch's total into
+   * the next sheet up, left blank rows costing PHP 1 per gram, and mixed
+   * "pcs", "g" and "portion" until nobody could say what a plate cost.
+   *
+   * Here the person writes what they know — what goes into a batch, and what
+   * comes out — and nothing else. The prep becomes a RawMaterial with a
+   * recipe (SubRecipeItem rows) and a batch yield, through the app's own
+   * setRecipe so the same rules apply as in the screen. Its cost per unit is
+   * worked out from the recipe on the spot, so a plate that uses it costs
+   * correctly from day one instead of costing the prep at zero until the
+   * first batch is recorded. A prep that HAS been batched keeps its real
+   * average — a paper cost never overwrites a measured one.
+   *
+   * Columns (positional): Prep Name, One batch makes, Counted in, Ingredient,
+   * Quantity per batch, Unit (optional), Notes. "One batch makes" and
+   * "Counted in" need filling on a prep's first row only. An ingredient may
+   * be a bought item or another prep on this sheet; preps are imported in
+   * dependency order so a prep of a prep costs correctly.
+   */
+  async importPrepsFromRows(
+    rows: string[][],
+    tenantId: string,
+  ): Promise<ImportResult & { costed: number; keptCost: number }> {
+    const result: ImportResult & { costed: number; keptCost: number } =
+      { imported: 0, updated: 0, skipped: 0, errors: [], costed: 0, keptCost: 0 };
+
+    if (!this.subRecipes) {
+      throw new BadRequestException('Prep import is not available on this deployment.');
+    }
+
+    const headerIdx = this.findHeaderRow(rows, ['Prep Name*', 'Prep Name']);
+    let first = headerIdx >= 0 ? headerIdx + 1 : 1;
+    // The template's hint row, exactly as the Ingredients sheet skips its own.
+    if (String(rows[first]?.[0] ?? '').toLowerCase().includes('required')) first++;
+
+    type Line = { name: string; qty: number; unit: string; row: number };
+    type Prep = { name: string; makes: number; unit: string; lines: Line[]; firstRow: number; failed: boolean };
+    const preps = new Map<string, Prep>();   // key: lowercased name
+
+    // ── 1. Read the rows into preps ────────────────────────────────────────
+    for (let i = first; i < rows.length; i++) {
+      const r = rows[i] ?? [];
+      const rowNum = i + 1;
+      if (this.isSampleRow(r)) { result.skipped++; continue; }
+      const [prepName, makesRaw, countedIn, ingName, qtyRaw, unitRaw] =
+        [0, 1, 2, 3, 4, 5].map((c) => String(r[c] ?? '').trim());
+      if (!prepName && !ingName && !makesRaw && !qtyRaw) continue;      // an empty row
+      if (!prepName) {
+        result.errors.push({ row: rowNum, message: 'Prep Name is required on every row — it is what groups the ingredients into one batch.' });
+        continue;
+      }
+      const key = prepName.toLowerCase();
+      let p = preps.get(key);
+      if (!p) {
+        p = { name: prepName, makes: NaN, unit: '', lines: [], firstRow: rowNum, failed: false };
+        preps.set(key, p);
+      }
+      // Yield and unit come from whichever row carries them; a second row that
+      // disagrees is a real question, not a tie to break silently.
+      if (makesRaw) {
+        const m = this.num(makesRaw);
+        if (!(m > 0)) {
+          result.errors.push({ row: rowNum, message: `"One batch makes" has to be a number above 0 (got "${makesRaw}").` });
+          p.failed = true;
+        } else if (Number.isNaN(p.makes)) {
+          p.makes = m;
+        } else if (p.makes !== m) {
+          result.errors.push({ row: rowNum, message: `"${prepName}" says one batch makes ${makesRaw} here but ${p.makes} on row ${p.firstRow}. Which is it?` });
+          p.failed = true;
+        }
+      }
+      if (countedIn) {
+        if (!p.unit) p.unit = countedIn;
+        else if (p.unit.toLowerCase() !== countedIn.toLowerCase()) {
+          result.errors.push({ row: rowNum, message: `"${prepName}" is counted in "${countedIn}" here but "${p.unit}" on row ${p.firstRow}.` });
+          p.failed = true;
+        }
+      }
+      if (!ingName) {
+        // A row that only carries the prep's name and yield is fine.
+        if (!qtyRaw) continue;
+        result.errors.push({ row: rowNum, message: 'Ingredient is required — what goes into the batch?' });
+        p.failed = true;
+        continue;
+      }
+      const qty = this.num(qtyRaw);
+      if (!(qty > 0)) {
+        result.errors.push({ row: rowNum, message: `Quantity per batch for "${ingName}" has to be a number above 0 (got "${qtyRaw}").` });
+        p.failed = true;
+        continue;
+      }
+      if (p.lines.some((l) => l.name.toLowerCase() === ingName.toLowerCase())) {
+        result.errors.push({ row: rowNum, message: `"${ingName}" is listed twice under "${prepName}". Combine them into one line — two lines would double the batch.` });
+        p.failed = true;
+        continue;
+      }
+      p.lines.push({ name: ingName, qty, unit: unitRaw, row: rowNum });
+    }
+
+    for (const p of preps.values()) {
+      if (!(p.makes > 0)) { result.errors.push({ row: p.firstRow, message: `"${p.name}": fill in "One batch makes" on its first row.` }); p.failed = true; }
+      if (!p.unit)        { result.errors.push({ row: p.firstRow, message: `"${p.name}": fill in "Counted in" (pc / serving / g / ml) on its first row.` }); p.failed = true; }
+      if (p.lines.length === 0 && !p.failed) { result.errors.push({ row: p.firstRow, message: `"${p.name}" has no ingredients.` }); p.failed = true; }
+    }
+
+    // ── 2. Preps before the preps that use them ────────────────────────────
+    // A batch of marinated wings uses the breading batch, so breading has to
+    // exist -- and be costed -- first. Kahn's ordering over the names in this
+    // file; anything left over is a loop, which is refused by name.
+    const inFile = (name: string) => preps.get(name.toLowerCase());
+    const indeg = new Map<string, number>();
+    const users = new Map<string, string[]>();
+    for (const [k, p] of preps) {
+      indeg.set(k, 0);
+      for (const l of p.lines) {
+        const dep = inFile(l.name);
+        if (dep && dep !== p) {
+          indeg.set(k, (indeg.get(k) ?? 0) + 1);
+          users.set(l.name.toLowerCase(), [...(users.get(l.name.toLowerCase()) ?? []), k]);
+        }
+      }
+    }
+    const order: Prep[] = [];
+    const ready = [...indeg.entries()].filter(([, d]) => d === 0).map(([k]) => k);
+    while (ready.length > 0) {
+      const k = ready.shift()!;
+      order.push(preps.get(k)!);
+      for (const u of users.get(k) ?? []) {
+        indeg.set(u, (indeg.get(u) ?? 1) - 1);
+        if (indeg.get(u) === 0) ready.push(u);
+      }
+    }
+    for (const [k, p] of preps) {
+      if (!order.includes(p)) {
+        result.errors.push({ row: p.firstRow, message: `"${p.name}" is part of a loop — a prep that, through others, contains itself. Untangle it and re-import.` });
+        p.failed = true;
+        void k;
+      }
+    }
+
+    // ── 3. Write each prep, in that order ──────────────────────────────────
+    for (const p of order) {
+      if (p.failed) continue;
+      try {
+        /*
+          The prep itself. Exact spelling wins; a single case-blind match IS
+          this prep under the shop's own spelling ("breading" must not create
+          a twin of "Breading"); twins with no exact match are refused.
+
+          Nothing is written until every line below has been resolved, so a
+          bad row leaves the shop exactly as it was -- an existing prep's
+          yield and unit are not rewritten by a sheet that then fails.
+        */
+        const own = await this.prisma.rawMaterial.findMany({
+          where:  { tenantId, name: { equals: p.name, mode: 'insensitive' } },
+          select: { id: true, name: true, category: true },
+        });
+        const existing = own.find((c) => c.name === p.name)
+          ?? (own.length === 1 ? own[0] : undefined);
+        if (!existing && own.length > 1) {
+          throw new Error(
+            `"${p.name}" matches more than one item on your list `
+            + `(${own.map((c) => `"${c.name}"`).join(', ')}). `
+            + 'Rename or merge them under Stock on hand, then re-import.',
+          );
+        }
+        if (existing && existing.category != null && existing.category !== 'INGREDIENT') {
+          const label = String(existing.category).toLowerCase().replace(/_/g, ' ');
+          throw new Error(
+            `"${p.name}" is already on your list as a ${label}. A prep has to be an ingredient — `
+            + 'give the prep a different name, or change its Category on the Ingredients sheet.',
+          );
+        }
+
+        // Its ingredients -- all of them -- matched the way the Recipes sheet matches them.
+        const lines: Array<{ rawMaterialId: string; quantity: number; costPrice: number }> = [];
+        for (const l of p.lines) {
+          /*
+            Exact spelling first, then the case-blind match -- and if that
+            finds TWINS with no exact one, stop and say so.
+
+            Found live: the shop already had "Chicken wings" at an old cost,
+            the sheet said "Chicken Wings" at the new one, and the case-blind
+            match quietly took the old twin. Every plate then costed the
+            chicken at a third of its price, and nothing looked wrong.
+          */
+          const candidates = await this.prisma.rawMaterial.findMany({
+            where:  { tenantId, name: { equals: l.name, mode: 'insensitive' } },
+            select: { id: true, name: true, unit: true, category: true, costPrice: true },
+          });
+          const comp = candidates.find((c) => c.name === l.name)
+            ?? (candidates.length === 1 ? candidates[0] : undefined);
+          if (!comp && candidates.length > 1) {
+            throw new Error(
+              `row ${l.row}: "${l.name}" matches more than one ingredient `
+              + `(${candidates.map((c) => `"${c.name}"`).join(', ')}). `
+              + 'Rename or merge them under Stock on hand, then re-import.',
+            );
+          }
+          if (!comp) {
+            throw new Error(`row ${l.row}: ingredient "${l.name}" not found. Put it on the Ingredients sheet, or as its own prep on this one.`);
+          }
+          if (existing && comp.id === existing.id) throw new Error(`row ${l.row}: "${p.name}" cannot contain itself.`);
+          if (comp.category != null && comp.category !== 'INGREDIENT') {
+            const label = String(comp.category).toLowerCase().replace(/_/g, ' ');
+            throw new Error(`row ${l.row}: "${l.name}" is a ${label}, not an ingredient, so it cannot go into a batch.`);
+          }
+          const reconciled = this.convertRecipeQuantity(l.qty, l.unit, comp.unit);
+          if ('error' in reconciled) throw new Error(`row ${l.row}: ${reconciled.error}`);
+          lines.push({
+            rawMaterialId: comp.id,
+            quantity:      reconciled.value,
+            costPrice:     comp.costPrice != null ? Number(comp.costPrice) : 0,
+          });
+        }
+
+        // Now, and only now, the writes: the prep, then its recipe through
+        // the app's own rules.
+        let rmId: string;
+        let created = false;
+        if (existing) {
+          await this.prisma.rawMaterial.update({
+            where: { id: existing.id },
+            data:  { unit: p.unit, batchYield: new Prisma.Decimal(p.makes), isActive: true },
+          });
+          rmId = existing.id;
+        } else {
+          const made = await this.prisma.rawMaterial.create({
+            data: {
+              tenantId, name: p.name, unit: p.unit, category: 'INGREDIENT',
+              batchYield: new Prisma.Decimal(p.makes),
+            },
+            select: { id: true },
+          });
+          rmId = made.id;
+          created = true;
+        }
+        try {
+          await this.subRecipes.setRecipe(
+            tenantId, rmId, p.makes,
+            lines.map(({ rawMaterialId, quantity }) => ({ rawMaterialId, quantity })),
+          );
+        } catch (err: any) {
+          /*
+            A prep with no recipe is an ingredient that costs nothing, and
+            every plate using it would cost it at zero without a word. If
+            this run created it, take it back out; if even that fails, say
+            exactly what was left behind.
+          */
+          if (created) {
+            let gone = false;
+            try { await this.prisma.rawMaterial.delete({ where: { id: rmId } }); gone = true; } catch { /* reported below */ }
+            if (!gone) {
+              throw new Error(
+                `${err?.message ?? 'could not be imported.'} The half-made prep is still on your list `
+                + `with no recipe — delete "${p.name}" under Stock on hand.`,
+              );
+            }
+          }
+          throw err;
+        }
+        if (created) result.imported++; else result.updated++;
+
+        /*
+          What one unit of the prep costs, from its own recipe. Only until a
+          real batch has been recorded: a measured average beats a paper one,
+          and a re-import must never overwrite what the shelf actually cost.
+        */
+        const batched = await this.prisma.rawMaterialLot.count({ where: { tenantId, rawMaterialId: rmId } });
+        if (batched === 0) {
+          const inputValue = lines.reduce((sum, l) => sum + l.costPrice * l.quantity, 0);
+          const unitCost   = inputValue / p.makes;
+          await this.prisma.rawMaterial.update({
+            where: { id: rmId },
+            data:  { costPrice: new Prisma.Decimal(unitCost.toFixed(4)) },
+          });
+          result.costed++;
+          // Plates already using this prep pick up the number now.
+          const using = await this.prisma.bomItem.findMany({
+            where: { rawMaterialId: rmId, product: { tenantId } }, select: { productId: true }, distinct: ['productId'],
+          });
+          for (const { productId } of using) await this.recostProduct(tenantId, productId);
+        } else {
+          result.keptCost++;
+        }
+      } catch (err: any) {
+        result.errors.push({ row: p.firstRow, message: `Prep "${p.name}": ${err?.message ?? 'could not be imported.'}` });
+        p.failed = true;
+        // Anything in this file made FROM this prep would be built on its old
+        // recipe, or on nothing. Skipped -- and said, row by row.
+        for (const u of users.get(p.name.toLowerCase()) ?? []) {
+          const dep = preps.get(u);
+          if (!dep || dep.failed) continue;
+          dep.failed = true;
+          result.errors.push({ row: dep.firstRow, message: `Prep "${dep.name}": not imported, because "${p.name}" (which it uses) failed above.` });
+        }
+      }
+    }
+    return result;
+  }
+
+  async importPreps(file: Express.Multer.File, tenantId: string) {
+    const rows = await this.parseFile(file, ['Made in batches', 'Preps', 'Sub-recipes', 'Batches']);
+    return this.importPrepsFromRows(rows, tenantId);
+  }
+
+  /**
+   * Every prep the shop has, in the sheet's own columns, so the file that
+   * comes OUT can be edited and go back IN. Yield and unit on a prep's first
+   * row, blank on the rest, exactly as the importer reads them; a component
+   * that is itself a prep is listed by name like any other ingredient.
+   */
+  async prepsExport(tenantId: string): Promise<Buffer> {
+    const preps = await this.prisma.rawMaterial.findMany({
+      where:   { tenantId, isActive: true, subRecipeItems: { some: {} } },
+      orderBy: { name: 'asc' },
+      select: {
+        name: true, unit: true, batchYield: true,
+        subRecipeItems: {
+          select: { quantity: true, rawMaterial: { select: { name: true, unit: true } } },
+          orderBy: { rawMaterial: { name: 'asc' } },
+        },
+      },
+    });
+    // Sorted here as well as in the query: the sheet's order must not depend
+    // on what the database happened to return.
+    preps.sort((a, b) => a.name.localeCompare(b.name));
+    const rows: string[][] = [];
+    for (const p of preps) {
+      p.subRecipeItems.sort((a, b) => a.rawMaterial.name.localeCompare(b.rawMaterial.name));
+      p.subRecipeItems.forEach((line, i) => {
+        rows.push([
+          p.name,
+          i === 0 ? String(Number(p.batchYield ?? 0)) : '',
+          i === 0 ? p.unit : '',
+          line.rawMaterial.name,
+          String(Number(line.quantity)),
+          line.rawMaterial.unit,
+          '',
+        ]);
+      });
+    }
+    return this.makeTemplate(
+      'Made in batches',
+      ['Prep Name*', 'One batch makes*', 'Counted in*', 'Ingredient*', 'Quantity per batch*', 'Unit', 'Notes'],
+      rows,
+      {
+        title: 'Made in batches — as Clerque holds them today',
+        instructions: [
+          'These are your preps as they stand. Change a quantity or a yield, add a row for a new',
+          'ingredient, and upload the file again under Made in batches -- the recipe is replaced',
+          'with what is on the sheet. A prep that has already been made in a real batch keeps its',
+          'measured cost; only a prep that has never been batched is re-costed from these rows.',
+        ],
+        columnHints: [
+          'Required on every row.',
+          'First row of each prep. How much ONE batch makes.',
+          'First row. pc / serving / portion / g / ml.',
+          'A bought item, or another prep.',
+          'Into ONE batch, in the unit shown.',
+          'The ingredient\'s own unit.',
+          'Optional.',
+        ],
+        realData: true,
+      },
+    );
+  }
+
+  async prepsTemplate(tenantId?: string): Promise<Buffer> {
+    void tenantId;
+    const sampleRows: string[][] = [
+      ['Sample - Breading',        '100', 'portion', 'All Purpose Flour', '1000', 'g',  'One batch coats about 100 pieces'],
+      ['Sample - Breading',        '',    '',        'Cornstarch',        '1000', 'g',  ''],
+      ['Sample - Breading',        '',    '',        'Salt',              '15',   'g',  ''],
+      ['Sample - Marinated Wings', '86',  'pc',      'Chicken Wings',     '86',   'pc', 'One 10 kg sack, cut and marinated'],
+      ['Sample - Marinated Wings', '',    '',        'Sample - Breading', '86',   'portion', 'A prep can use another prep'],
+      ['Sample - Cooked Rice',     '375', 'serving', 'Uncooked Rice',     '25',   'kg', 'A 25 kg sack makes 375 servings'],
+    ];
+    return this.makeTemplate(
+      'Made in batches',
+      ['Prep Name*', 'One batch makes*', 'Counted in*', 'Ingredient*', 'Quantity per batch*', 'Unit', 'Notes'],
+      sampleRows,
+      {
+        title: 'Made in batches — what the kitchen makes ahead',
+        instructions: [
+          'How to use:',
+          '  1. One row per ingredient, per prep. A breading with 6 ingredients = 6 rows, all with the same Prep Name.',
+          '',
+          '  2. On the FIRST row of each prep, say what one batch makes:',
+          '     One batch makes* = the number.   Counted in* = what that number is: pc, serving, portion, g, ml.',
+          '         Breading | 100 | portion       -> one batch coats about 100 pieces',
+          '         Marinated Wings | 86 | pc      -> one sack, cut and marinated, is 86 pieces',
+          '         Cooked Rice | 375 | serving    -> one 25 kg sack of rice makes 375 servings',
+          '     Leave those two blank on the prep\'s other rows.',
+          '',
+          '  3. Quantity per batch = how much of that ingredient goes into ONE batch, in the ingredient\'s',
+          '     own unit from the Ingredients sheet. Write "25 kg" and we convert it to grams; write a',
+          '     number with no Unit and we take it as the ingredient\'s own unit.',
+          '',
+          '  4. An ingredient can be another prep on this sheet — marinated wings use the breading batch.',
+          '     List the prep it uses anywhere on the sheet; the order does not matter.',
+          '',
+          '  5. Do NOT put a sauce that is cooked per plate here. That is not a batch — put its ingredients',
+          '     straight on the plate in the Recipes sheet.',
+          '',
+          '  Nothing to calculate. We work out what one piece / serving costs from these rows, and every',
+          '  plate that uses the prep costs correctly the moment this is uploaded.',
+          '',
+          '  Save as .xlsx. Upload via Settings -> Import Templates -> Made in batches (after Ingredients,',
+          '  before Recipes), or as part of the Setup Pack.',
+        ],
+        columnHints: [
+          'Required on every row. Groups the rows into one batch.',
+          'Required on the first row of each prep. How much ONE batch makes.',
+          'Required on the first row. What that number is: pc / serving / portion / g / ml.',
+          'Required. A bought item from the Ingredients sheet, or another prep here.',
+          'Required. How much goes into ONE batch.',
+          'Optional. Blank = the ingredient\'s own unit. kg / L are converted for you.',
+          'Optional.',
+        ],
+      },
+    );
   }
 
   async recipesTemplate(tenantId?: string): Promise<Buffer> {

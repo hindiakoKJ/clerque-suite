@@ -72,6 +72,26 @@ export class DocumentsController {
     return this.documentsService.list(user.tenantId!, entityType, entityId, user.role);
   }
 
+  /**
+   * GET /documents/export?entityType=PurchaseRequest&from=2026-08-01&to=2026-08-31
+   * Every file of that kind filed in the range, as one zip with an index.
+   * Declared before /:id/download so "export" is never read as an id.
+   */
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM',
+         'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'AR_ACCOUNTANT',
+         'AP_ACCOUNTANT', 'EXTERNAL_AUDITOR')
+  @Get('export')
+  async exportArchive(
+    @Query('entityType') entityType: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const user = req.user as JwtPayload;
+    await this.documentsService.exportArchive(user.tenantId!, { entityType, from, to }, user.role, res);
+  }
+
   /** GET /documents/:id/download — stream the file. */
   @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'SALES_LEAD', 'CASHIER',
          'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'AR_ACCOUNTANT',

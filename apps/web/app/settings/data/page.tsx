@@ -68,6 +68,70 @@ function formatLastModified(iso: string | null): string {
   });
 }
 
+/**
+ * All the receipt photos for a month, as one zip.
+ *
+ * The accountant's question is "August's receipts", and until now the only
+ * answer was thirty purchase requests and thirty clicks. One month, one file,
+ * with an index.csv inside so it can be reconciled without opening each.
+ */
+function ReceiptArchiveCard() {
+  const now = new Date();
+  const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+  const [busy, setBusy] = useState(false);
+
+  const grab = async () => {
+    const [y, m] = month.split('-').map(Number);
+    if (!y || !m) return;
+    const from = `${month}-01`;
+    const last = new Date(y, m, 0).getDate();
+    const to   = `${month}-${String(last).padStart(2, '0')}`;
+    setBusy(true);
+    try {
+      await downloadAuthFile(
+        `/documents/export?entityType=PurchaseRequest&from=${from}&to=${to}`,
+        `receipts-${month}.zip`,
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '';
+      toast.error(/404/.test(msg) ? `No receipts were filed in ${month}.` : (msg || 'Download failed.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Receipt photos</h3>
+        <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+          Every receipt filed against a delivery that month, as one zip. Inside is an{' '}
+          <code className="px-1 py-0.5 bg-muted rounded text-[10px]">index.csv</code> listing the date, the
+          request number and the file, so an accountant can reconcile without opening each one.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="month"
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+          className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
+          aria-label="Month of receipts to download"
+        />
+        <button
+          onClick={grab}
+          disabled={busy || !month}
+          className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          style={{ background: 'var(--accent)' }}
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          Download receipts
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function BackupDataPage() {
   const router = useRouter();
   const { user } = useAuthStore();
@@ -157,6 +221,8 @@ export default function BackupDataPage() {
       </div>
 
       <div className="flex-1 p-4 sm:p-6 space-y-6">
+        <ReceiptArchiveCard />
+
         {/* Status banner */}
         {error ? (
           <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 flex gap-3">

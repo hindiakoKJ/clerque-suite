@@ -426,7 +426,7 @@ describe('ImportService — sample rows are ignored on import', () => {
     it('still imports a real row added under the samples', async () => {
       const prisma = makePrisma('COFFEE_SHOP');
       prisma.product.findFirst.mockResolvedValue({ id: 'p-1' });
-      prisma.rawMaterial.findFirst.mockResolvedValue({ id: 'rm-1' });
+      prisma.rawMaterial.findMany.mockResolvedValue([{ id: 'rm-1', name: 'Espresso Beans (Single-Origin)' }]);
       const svc = new ImportService(prisma as any, OPEN_PERIODS);
       const buf = await appendRows(await svc.recipesTemplate('t1'), [
         ['Americano 12oz', 'Espresso Beans (Single-Origin)', '18'],

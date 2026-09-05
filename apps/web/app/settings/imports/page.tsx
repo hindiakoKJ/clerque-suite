@@ -289,6 +289,17 @@ export default function ImportTemplatesPage() {
         Icon: Sprout,
       },
       {
+        id: 'preps',
+        name: 'Made in batches (preps)',
+        desc: `What the kitchen makes AHEAD and holds ready — breading, marinated wings, cooked rice. One row per ingredient per prep, plus how much one batch makes. A plate then uses "2 pc Marinated Wings" the way it uses an ingredient, and the prep's cost is worked out from its own recipe. Import after Ingredients, before Recipes.`,
+        endpoint: '/import/template/preps',
+        exportEndpoint: '/import/export/preps',
+        exportFilename: 'clerque-made-in-batches.xlsx',
+        upload:   '/import/preps',
+        filename: 'clerque-made-in-batches.xlsx',
+        Icon: ChefHat,
+      },
+      {
         id: 'recipes',
         name: 'Recipes (BOM)',
         desc: `One row per ingredient × product. Maps your menu items to ingredients with quantities — Iced Latte 16oz = 18g beans + 200ml milk + 1 cup + 1 lid + 1 stirrer. Auto-flips matched products to RECIPE_BASED so COGS is derived live from ingredients × WAC.`,

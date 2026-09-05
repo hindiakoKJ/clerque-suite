@@ -181,13 +181,15 @@ describe('recipeCostingExport — pivot-ready, and still importable', () => {
         // Each ingredient answers with its OWN unit. A single stubbed unit
         // would make the cup and the sauce fail conversion for a reason that
         // has nothing to do with the export.
-        findFirst: jest.fn().mockImplementation(({ where }: any) => {
+        findMany: jest.fn().mockImplementation(({ where }: any) => {
           const name = String(where.name?.equals ?? '');
           const unit = /cup/i.test(name) ? 'pc' : /sauce/i.test(name) ? 'ml' : 'g';
-          return Promise.resolve({ id: 'rm-' + name, unit, category: 'INGREDIENT' });
+          return Promise.resolve([{ id: 'rm-' + name, name, unit, category: 'INGREDIENT' }]);
         }),
       },
       bomItem: {
+        // recostProduct reads the BOM after an import; empty = nothing to write
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
         create: jest.fn().mockImplementation((a: any) => { written.push(a.data); return Promise.resolve(a.data); }),

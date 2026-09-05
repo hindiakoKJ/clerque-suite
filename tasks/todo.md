@@ -1577,3 +1577,105 @@ Fixed:
 Final: 1,473 API tests, lint clean, tsc clean in api/web/counter, web build
 clean. Still no live Vertex call -- read quality remains untested.
 
+## 2026-09-05 — Storage, downloads, and "fill it in, Clerque does the rest" (KJ AFK)
+
+### Receipts: where they live, and getting them out
+- They live in Postgres (the storage driver falls back to the DB when no
+  S3_BUCKET is set; Railway's disk is ephemeral). Works, but every backup
+  carries the images. R2 is three env vars -- see the runbook below.
+- NEW: `GET /documents/export?entityType=PurchaseRequest&from=&to=` -- every
+  receipt filed in a Manila-day range as ONE zip, with `index.csv` (date,
+  request, filename, bytes) and `MISSING.txt` naming anything storage could
+  not read. Refuses >500 files ("narrow the dates") rather than truncating;
+  404 on an empty month; staff who may not see costs may not download.
+  Settings -> Data -> "Receipt photos" card: pick a month, download.
+- New dependency `archiver` (was only transitive via exceljs).
+
+### "Made in batches" -- the kitchen template that needs no maths
+- The owner's Garlic Chicken sheet failed on formulas: batch totals
+  hand-copied between tabs, blank rows costing PHP 1/g, units mixed. Clerque
+  already modelled a prep (a RawMaterial with subRecipeItems + batchYield)
+  and a plate could already use a prep as a line -- but the importer had NO
+  path for preps, and an imported prep cost PHP 0 on plates until its first
+  batch was recorded.
+- NEW sheet `Made in batches`: Prep Name | One batch makes | Counted in |
+  Ingredient | Quantity per batch | Unit | Notes. One row per ingredient per
+  prep; yield on the first row. Imports between Ingredients and Recipes, in
+  the Setup Pack and on its own (`POST /import/preps`, template at
+  `GET /import/template/preps`, a row on Settings -> Imports).
+- The importer defines the prep through the app's own `setRecipe` (one set
+  of rules), orders preps so a prep-of-a-prep is written after what it uses,
+  and writes the THEORETICAL cost (inputs / yield) -- but only while the prep
+  has never been batched; a measured WAC is never overwritten by a paper one.
+- The recipes importer now also writes the stored Product.costPrice after an
+  import, so the "missing cost" list stops flagging fully-recipe'd plates.
+- FOUND LIVE, then fixed: carolina-test had BOTH "Chicken wings" (old, 10.98)
+  and "Chicken Wings" (new, 29.07). The case-blind component match took the
+  old twin and every plate costed its chicken at a third of the price. Now:
+  exact spelling wins; twins with no exact match are REFUSED by name.
+- `apps/api/scripts/gen-kitchen-setup-sheet.js` -> `onboarding/Carolina-
+  Kitchen-Setup.xlsx`, pre-filled from their file and Anne's answers (86
+  pc/sack, sauce per order -> ingredients straight on the plate), with the
+  unconfirmed numbers tinted and listed on a "Questions for the kitchen" tab.
+- LIVE on carolina-test via POST /import/setup-pack: 0 errors. Breading
+  2.0560/portion, Marinated Wings 31.1258/pc, Cooked Rice 3.7386/serving,
+  Fries 15.3778/serving; Garlic Chicken w/ Rice 102.21, w/ Fries 113.85 --
+  the same numbers as the hand calculation from the owner's sheet. A second
+  upload is idempotent (all "updated", 0 errors).
+- Test-tenant side effects, stated plainly: two new products, 8 new
+  ingredients, 7 existing ones updated (All Purpose Flour and Cornstarch
+  flipped kg -> g, the way the Ingredients importer always has), 4 preps.
+
+### Verified
+1,494 API tests, lint clean, tsc clean in api and web, web build clean.
+
+### R2 runbook for KJ (receipt photos out of Postgres)
+1. Cloudflare -> R2 -> Create bucket `clerque-prod` (any location).
+2. R2 -> Manage R2 API tokens -> Create token, Object Read & Write, scoped
+   to that bucket. Copy the Access Key ID and Secret.
+3. Railway -> API service -> Variables:
+     S3_BUCKET=clerque-prod
+     S3_ACCESS_KEY_ID=<access key>
+     S3_SECRET_ACCESS_KEY=<secret>
+     S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   Redeploy. The driver logs "Storage driver: S3" at boot.
+4. Existing photos stay in Postgres and still download (the key reads back
+   from any driver); new uploads go to R2. Moving the old ones is a one-time
+   copy -- say the word.
+
+### Adversarial review of this batch -- 10 findings, 8 real, all fixed
+The review's verifiers died on a session limit, so each claim was checked
+by hand against the code. Real and fixed:
+- Preps: an existing prep's yield/unit/isActive were rewritten BEFORE its
+  rows were validated; a failing row left it half-changed. Now every line is
+  resolved first, then written.
+- Preps: a prep created and then refused by setRecipe stayed on the list
+  with no recipe (costed at zero on every plate). Now taken back out; preps
+  in the same file built on it are skipped by name.
+- Preps: a supply with the same name was silently turned into a prep.
+  Refused by name.
+- Preps: "breading" on the sheet would have created a twin of "Breading".
+  Now: exact spelling wins, one case-blind match is reused under the shop's
+  spelling, twins with no exact match are refused.
+- Recipes importer: same twins rule (it still took an arbitrary case twin).
+- recostProduct overwrote the bought-at cost of a UNIT_BASED product whose
+  recipe was only partial. Now only products flipped clean are re-costed,
+  and recostProduct refuses to write anything not RECIPE_BASED.
+- Receipts zip: `archive.on('error', err => { throw err })` would have been
+  an uncaught exception -- a process crash. Now logs, aborts, destroys the
+  response; source-stream errors handled the same way (test streams a real
+  zip and a stream that dies mid-read).
+- Receipts zip: two photos with the same name on the same request and day
+  collided. Second gets " (2)".
+Test-only: the "too many files" test now pins `take: MAX+1`; recostProduct
+is pinned on both paths. Not real: nothing else.
+Verified: 1,504 API tests (+10), lint, tsc; live on carolina-test 14/14 --
+workbook re-upload idempotent (0 errors, costs unchanged, 375 ingredients
+before and after), a lowercase "breading" re-import reused the prep (no
+twin, spelling kept), receipts zip streams.
+
+### Still open
+- No live Vertex call yet (needs the project + service account on Railway).
+- Recipe-costing EXPORT does not yet include a "Made in batches" sheet, so
+  the export-edit-reimport loop covers ingredients and plates but not preps.
+

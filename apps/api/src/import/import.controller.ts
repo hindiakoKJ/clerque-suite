@@ -297,6 +297,37 @@ export class ImportController {
     if (!file) throw new BadRequestException('No file uploaded.');
     return this.importService.importIngredients(file, req.user.tenantId!);
   }
+  /**
+   * "Made in batches" — the things a kitchen makes ahead (breading, marinated
+   * wings, cooked rice) with what goes into ONE batch and how much it makes.
+   * Sits between Ingredients and Recipes: a plate names a prep the way it
+   * names an ingredient.
+   */
+  @Post('preps')
+  @UseInterceptors(FileInterceptor('file'))
+  importPreps(@UploadedFile() file: Express.Multer.File, @Req() req: AuthRequest) {
+    if (!file) throw new BadRequestException('No file uploaded.');
+    return this.importService.importPreps(file, req.user.tenantId!);
+  }
+  @Get('export/preps')
+  async prepsExport(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.prepsExport(req.user.tenantId!);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-made-in-batches.xlsx"',
+    });
+    res.send(buf);
+  }
+  @Get('template/preps')
+  async prepsTemplate(@Req() req: AuthRequest, @Res() res: Response) {
+    const buf = await this.importService.prepsTemplate(req.user.tenantId ?? undefined);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="clerque-made-in-batches-template.xlsx"',
+    });
+    res.send(buf);
+  }
+
   @Get('template/ingredients')
   async ingredientsTemplate(@Req() req: AuthRequest, @Res() res: Response) {
     const buf = await this.importService.ingredientsTemplate(req.user.tenantId ?? undefined);

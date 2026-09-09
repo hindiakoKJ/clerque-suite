@@ -1741,3 +1741,22 @@ Two commits (ee3c481 + this one). No schema change anywhere.
   on credit terms. Step 9 (reader kinds for Shopee/DR): after a live Vertex
   read. A `packsArrived` column would let staff record arrival without
   posting -- owner's call.
+
+## 2026-09-09 — The list asks in packs; "remaining" becomes a count
+
+From KJ's screenshots of the Messenger "Purchasing - CC" group: staff write
+"2 bottle hazelnut syrup, remaining 1 bottle", "10 box Emborg, remaining 7".
+- GET /procure/requests/pack-memory: pack size (+ price for those who may see
+  it) per ingredient from the newest received line -- the picker asks in packs
+  before a line exists; a g/ml ingredient can also be asked in kg/L. Lines
+  display "2 packs · 1,500 ml" when they divide cleanly; copy-as-message too.
+- Every line carries onHand (RawMaterialInventory at the branch) and counted.
+- POST /procure/requests/:id/lines/:lineId/count (REQUEST_ROLES): "remaining"
+  lands on an ordinary CycleCount for the branch tagged [REQ:<number>], one
+  count per list, expectedQty = live at first count (snapshot kept on
+  recount). Nothing moves until WAREHOUSE_OPS post it from /procure/cycle-
+  counts, where the existing rule applies the variance to the live figure.
+  WarehouseService.nextCountNumber made public; ProcureModule imports
+  WarehouseModule.
+- Live on carolina-test 11/11 (pack memory Salt 100 g @ 12; count -> CC-2026-
+  000001 with one line, recount keeps the 1400 snapshot, stock unchanged).

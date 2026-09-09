@@ -174,6 +174,13 @@ export class RecordBoughtDto {
   onTheWay?: boolean;
 }
 
+/** "Remaining: 1 bottle" -- what is left on the shelf, in the ingredient's own unit. */
+export class RecordCountDto {
+  @IsNumber({ maxDecimalPlaces: 4 })
+  @Min(0)
+  countedQty!: number;
+}
+
 export const PHOTO_LABELS = ['Receipt', 'Order', 'Delivery receipt', 'Sales invoice'] as const;
 export type PhotoLabel = (typeof PHOTO_LABELS)[number];
 const MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;

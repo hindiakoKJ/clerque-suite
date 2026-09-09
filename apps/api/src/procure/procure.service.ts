@@ -5,6 +5,7 @@ import { InventoryService } from '../inventory/inventory.service';
 import { SimpleEntriesService } from '../simple-entries/simple-entries.service';
 import { ExpenseCategory } from '../simple-entries/dto/simple-entry.dto';
 import { DocumentsService } from '../documents/documents.service';
+import { WarehouseService } from '../warehouse/warehouse.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
@@ -69,6 +70,14 @@ export interface LastPack {
   receivedAt: Date | null;
 }
 
+/** What somebody counted on the shelf while building the list, waiting to be posted. */
+export interface CountedLine {
+  qty: number;
+  expected: number;
+  countId: string;
+  countNumber: string;
+}
+
 export interface PostedExpense {
   description: string;
   amount: number;
@@ -88,6 +97,7 @@ export class ProcureService {
     */
     @Optional() private readonly simple?: SimpleEntriesService,
     @Optional() private readonly documents?: DocumentsService,
+    @Optional() private readonly warehouse?: WarehouseService,
   ) {}
 
   /**
@@ -161,7 +171,7 @@ export class ProcureService {
    * guarantee two trips, which is the thing being fixed.
    */
   async openRequest(tenantId: string, branchId: string, userId: string, viewerRole?: string | null) {
-    const [opened] = await this.withLastPack(tenantId, [await this.openRequestRaw(tenantId, branchId, userId)]);
+    const [opened] = await this.enrich(tenantId, [await this.openRequestRaw(tenantId, branchId, userId)]);
     if (await this.costsVisibleTo(tenantId, viewerRole)) return opened;
     return this.stripCosts(opened);
   }
@@ -182,7 +192,7 @@ export class ProcureService {
   }
 
   async list(tenantId: string, branchId?: string, status?: PurchaseRequestStatus, viewerRole?: string | null) {
-    const rows = await this.withLastPack(tenantId, await this.prisma.purchaseRequest.findMany({
+    const rows = await this.enrich(tenantId, await this.prisma.purchaseRequest.findMany({
       where:   { tenantId, ...(branchId ? { branchId } : {}), ...(status ? { status } : {}) },
       include: this.lineInclude(),
       orderBy: { createdAt: 'desc' },
@@ -208,7 +218,7 @@ export class ProcureService {
 
   /** The request as this viewer is allowed to see it. */
   async get(tenantId: string, id: string, viewerRole?: string | null) {
-    const [req] = await this.withLastPack(tenantId, [await this.getRaw(tenantId, id)]);
+    const [req] = await this.enrich(tenantId, [await this.getRaw(tenantId, id)]);
     if (!(await this.costsVisibleTo(tenantId, viewerRole))) return this.stripCosts(req);
     return req;
   }
@@ -999,14 +1009,11 @@ export class ProcureService {
    * the number came from so a one-off 5 kg sack is visible before it
    * becomes next time's default.
    */
-  private async withLastPack<L extends { rawMaterialId: string }, T extends { lines: L[] }>(
-    tenantId: string,
-    reqs: T[],
-  ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & { lastPack: LastPack | null }> }>> {
-    const ids = [...new Set(reqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))];
-    const rows = ids.length === 0 ? [] : await this.prisma.purchaseRequestLine.findMany({
+  private async lastPacks(tenantId: string, ids?: string[]): Promise<Map<string, LastPack>> {
+    if (ids && ids.length === 0) return new Map();
+    const rows = await this.prisma.purchaseRequestLine.findMany({
       where: {
-        rawMaterialId: { in: ids },
+        ...(ids ? { rawMaterialId: { in: ids } } : {}),
         receivedAt: { not: null },
         packSize:  { gt: 0 },
         packCost:  { gt: 0 },
@@ -1017,16 +1024,159 @@ export class ProcureService {
       distinct: ['rawMaterialId'],
       select:   { rawMaterialId: true, packSize: true, packCost: true, brandNote: true, receivedAt: true },
     });
-    const last = new Map<string, LastPack>(rows.map((r) => [r.rawMaterialId, {
+    return new Map<string, LastPack>(rows.map((r) => [r.rawMaterialId, {
       packSize:   Number(r.packSize),
       packCost:   Number(r.packCost),
       brandNote:  r.brandNote,
       receivedAt: r.receivedAt,
     }]));
-    return reqs.map((r) => ({
-      ...r,
-      lines: r.lines.map((l) => ({ ...l, lastPack: last.get(l.rawMaterialId) ?? null })),
+  }
+
+  /**
+   * The pack memory for every ingredient at once. The picker needs it
+   * BEFORE a line exists, so "2 bottles" can be typed as 2 bottles.
+   */
+  async packMemory(tenantId: string, viewerRole?: string | null) {
+    const seeCosts = await this.costsVisibleTo(tenantId, viewerRole);
+    return [...(await this.lastPacks(tenantId)).entries()].map(([rawMaterialId, p]) => ({
+      rawMaterialId,
+      packSize:   p.packSize,
+      packCost:   seeCosts ? p.packCost : null,
+      brandNote:  p.brandNote,
+      receivedAt: p.receivedAt,
     }));
+  }
+
+  /** The tag on a cycle count that was started from a buy list, one line at a time. */
+  private countTag(requestNumber: string) { return `[REQ:${requestNumber}]`; }
+
+  /**
+   * Every line, with what the shop knows around it: what the ingredient held
+   * and cost last time, what Clerque says is on the shelf at this branch,
+   * and what somebody counted while building the list.
+   */
+  private async enrich<
+    L extends { rawMaterialId: string },
+    T extends { branchId: string; requestNumber: string; lines: L[] },
+  >(
+    tenantId: string,
+    reqs: T[],
+  ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & { lastPack: LastPack | null; onHand: number; counted: CountedLine | null }> }>> {
+    const ids = [...new Set(reqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))];
+    const last = await this.lastPacks(tenantId, ids);
+
+    const branches = [...new Set(reqs.map((r) => r.branchId))];
+    const stock = ids.length === 0 ? [] : await this.prisma.rawMaterialInventory.findMany({
+      where:  { tenantId, branchId: { in: branches }, rawMaterialId: { in: ids } },
+      select: { branchId: true, rawMaterialId: true, quantity: true },
+    });
+    const onHand = new Map(stock.map((x) => [`${x.branchId}:${x.rawMaterialId}`, Number(x.quantity)]));
+
+    // Counts typed while these lists were being built, still waiting to be posted.
+    const counts = reqs.length === 0 ? [] : await this.prisma.cycleCount.findMany({
+      where:  { tenantId, status: 'OPEN', branchId: { in: branches }, notes: { startsWith: '[REQ:' } },
+      select: { id: true, countNumber: true, notes: true },
+    });
+    const countOf = new Map<string, { id: string; countNumber: string }>();
+    for (const r of reqs) {
+      const c = counts.find((x) => (x.notes ?? '').startsWith(this.countTag(r.requestNumber)));
+      if (c) countOf.set(r.requestNumber, c);
+    }
+    const countLines = countOf.size === 0 ? [] : await this.prisma.cycleCountLine.findMany({
+      where:  { countId: { in: [...countOf.values()].map((c) => c.id) }, rawMaterialId: { in: ids } },
+      select: { countId: true, rawMaterialId: true, countedQty: true, expectedQty: true },
+    });
+    const counted = new Map(countLines.map((x) => [`${x.countId}:${x.rawMaterialId}`, x]));
+
+    return reqs.map((r) => {
+      const c = countOf.get(r.requestNumber);
+      return {
+        ...r,
+        lines: r.lines.map((l) => {
+          const cl = c ? counted.get(`${c.id}:${l.rawMaterialId}`) : undefined;
+          return {
+            ...l,
+            lastPack: last.get(l.rawMaterialId) ?? null,
+            onHand:   onHand.get(`${r.branchId}:${l.rawMaterialId}`) ?? 0,
+            counted:  cl && c ? { qty: Number(cl.countedQty), expected: Number(cl.expectedQty), countId: c.id, countNumber: c.countNumber } : null,
+          };
+        }),
+      };
+    });
+  }
+
+  // ── what is left on the shelf ─────────────────────────────────────────────
+
+  /**
+   * "Remaining: 1 bottle" -- the count that has always ridden on the
+   * message to the owner, made real.
+   *
+   * It becomes a line on an ordinary cycle count for the branch, one count
+   * per buy list, started the moment the first line is counted. Expected is
+   * what Clerque had on the shelf right then; counted is what the person
+   * saw. Nothing moves until the owner or manager posts the count from the
+   * counts screen, and then the existing rules apply: the variance is
+   * measured against that snapshot and applied to the live figure, so a
+   * delivery in between is not undone.
+   */
+  async recordCount(tenantId: string, requestId: string, lineId: string, userId: string, countedQty: number) {
+    if (!this.warehouse) throw new BadRequestException('Counting is not available on this deployment.');
+    const req = await this.getRaw(tenantId, requestId);
+    if (req.status !== 'OPEN' && req.status !== 'SENT') {
+      throw new BadRequestException('Counting goes with building the list. This one has already been bought.');
+    }
+    const line = req.lines.find((l) => l.id === lineId);
+    if (!line) throw new BadRequestException('That line is not on this request.');
+    if (!(countedQty >= 0)) throw new BadRequestException('How much is left? Zero is an answer; a negative is not.');
+
+    const tag = this.countTag(req.requestNumber);
+    let count = await this.prisma.cycleCount.findFirst({
+      where:  { tenantId, branchId: req.branchId, status: 'OPEN', notes: { startsWith: tag } },
+      select: { id: true, countNumber: true },
+    });
+    if (!count) {
+      count = await this.prisma.cycleCount.create({
+        data: {
+          tenantId, branchId: req.branchId,
+          countNumber: await this.warehouse.nextCountNumber(this.prisma, tenantId),
+          status: 'OPEN', startedById: userId,
+          notes: `${tag} Counted while building the buy list`,
+        },
+        select: { id: true, countNumber: true },
+      });
+    }
+
+    const existing = await this.prisma.cycleCountLine.findFirst({
+      where:  { countId: count.id, rawMaterialId: line.rawMaterialId },
+      select: { id: true, expectedQty: true },
+    });
+    let expected: number;
+    if (existing) {
+      // The snapshot stays; only the count changed.
+      expected = Number(existing.expectedQty);
+      await this.prisma.cycleCountLine.update({
+        where: { id: existing.id },
+        data:  { countedQty: new Prisma.Decimal(countedQty), varianceQty: new Prisma.Decimal(countedQty - expected), notes: line.lineNumber },
+      });
+    } else {
+      const live = await this.prisma.rawMaterialInventory.findUnique({
+        where:  { branchId_rawMaterialId: { branchId: req.branchId, rawMaterialId: line.rawMaterialId } },
+        select: { quantity: true },
+      });
+      expected = live ? Number(live.quantity) : 0;
+      await this.prisma.cycleCountLine.create({
+        data: {
+          countId: count.id, rawMaterialId: line.rawMaterialId,
+          expectedQty: new Prisma.Decimal(expected), countedQty: new Prisma.Decimal(countedQty),
+          varianceQty: new Prisma.Decimal(countedQty - expected), notes: line.lineNumber,
+        },
+      });
+    }
+    return {
+      countId: count.id, countNumber: count.countNumber,
+      line: line.lineNumber, name: line.rawMaterial.name, unit: line.rawMaterial.unit,
+      expectedQty: expected, countedQty, variance: +(countedQty - expected).toFixed(4),
+    };
   }
 
   /** YYYY-MM-DD, or a refusal. */

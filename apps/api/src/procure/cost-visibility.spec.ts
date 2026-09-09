@@ -61,6 +61,9 @@ describe('Purchase costs — whose eyes', () => {
         purchaseRequestLine: {
           findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'rm1', packSize: 1000, packCost: 180, brandNote: null, receivedAt: new Date() }]),
         },
+        rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
+        cycleCount:           { findMany: jest.fn().mockResolvedValue([]) },
+        cycleCountLine:       { findMany: jest.fn().mockResolvedValue([]) },
       };
       return { svc: new ProcureService(prisma, {} as any), prisma };
     }

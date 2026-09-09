@@ -10,7 +10,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { ProcureService, AddLineDto } from './procure.service';
-import { ReceiveRequestDto, RecordBoughtDto, AttachPhotoDto } from './dto/receive-request.dto';
+import { ReceiveRequestDto, RecordBoughtDto, AttachPhotoDto, RecordCountDto } from './dto/receive-request.dto';
 
 /**
  * Clerque Procure.
@@ -71,6 +71,18 @@ export class ProcureController {
     return this.procure.menuCeiling(user.tenantId!, await this.procure.resolveBranch(user.tenantId!, branchId ?? user.branchId));
   }
 
+  /**
+   * What each ingredient held last time, for every ingredient: the picker
+   * needs it before a line exists, so "2 bottles" is typed as 2 bottles.
+   * Declared BEFORE :id so "pack-memory" is not read as a request id.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @Get('pack-memory')
+  @ApiOperation({ summary: 'Pack size and last price per ingredient, from the last delivery' })
+  packMemory(@CurrentUser() user: JwtPayload) {
+    return this.procure.packMemory(user.tenantId!, user.role);
+  }
+
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
@@ -96,6 +108,24 @@ export class ProcureController {
   @ApiOperation({ summary: 'Add an ingredient to the request' })
   addLine(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: AddLineDto) {
     return this.procure.addLine(user.tenantId!, id, body);
+  }
+
+  /**
+   * "Remaining: 1 bottle". What is left on the shelf, said while building the
+   * list; it lands on a cycle count the owner posts later. Counting is not
+   * posting, so the kitchen may say it.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @Post(':id/lines/:lineId/count')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Record what is left on the shelf for a line, onto a cycle count' })
+  count(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() body: RecordCountDto,
+  ) {
+    return this.procure.recordCount(user.tenantId!, id, lineId, user.sub, body.countedQty);
   }
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')

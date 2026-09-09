@@ -45,7 +45,8 @@ export class WarehouseService {
     return `${prefix}${String(seq).padStart(6, '0')}`;
   }
 
-  private async nextCountNumber(tx: Prisma.TransactionClient, tenantId: string): Promise<string> {
+  /** CC-YYYY-NNNNNN. Public: a count can also be started one line at a time, from the buy list. */
+  async nextCountNumber(tx: Prisma.TransactionClient | PrismaService, tenantId: string): Promise<string> {
     const year = new Date().getUTCFullYear();
     const prefix = `CC-${year}-`;
     const last = await tx.cycleCount.findFirst({

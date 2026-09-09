@@ -8,6 +8,7 @@ import { InventoryModule } from '../inventory/inventory.module';
 import { AiModule } from '../ai/ai.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { SimpleEntriesModule } from '../simple-entries/simple-entries.module';
+import { WarehouseModule } from '../warehouse/warehouse.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { SimpleEntriesModule } from '../simple-entries/simple-entries.module';
     AiModule,             // the receipt reader, with its budget cap and quota guard
     DocumentsModule,      // the photo is filed against the request it creates
     SimpleEntriesModule,  // a line that is not stock is an expense in the books
+    WarehouseModule,      // "remaining: 7 boxes" on the list is a line on a cycle count
   ],
   controllers: [ProcureController, ProcureReceiptsController],
   providers:   [ProcureService, ProcureReceiptsService, ReceiptReadLedger, ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor],

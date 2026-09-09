@@ -45,7 +45,28 @@ interface Line {
   rawMaterial: { id: string; name: string; unit: string; costPrice: string | number | null };
   /** What this ingredient held and cost the last time it was received. */
   lastPack?: LastPack | null;
+  /** What Clerque says is on the shelf at this branch, in the ingredient's unit. */
+  onHand?: number;
+  /** What somebody counted while building the list, waiting for the owner to post it. */
+  counted?: { qty: number; expected: number; countId: string; countNumber: string } | null;
 }
+interface PackMemory { rawMaterialId: string; packSize: number; packCost: number | null; brandNote: string | null }
+
+/**
+ * How a quantity is asked for. Staff count in containers -- "2 bottles",
+ * "10 boxes" -- so when Clerque remembers the pack it asks in packs; a
+ * gram- or millilitre-counted ingredient can also be asked in kilos or
+ * litres. The line always holds the ingredient's own unit.
+ */
+type AskMode = 'packs' | 'unit' | 'big';
+const toBase = (n: number, mode: AskMode, packSize: number | null | undefined) =>
+  mode === 'packs' && packSize ? n * packSize : mode === 'big' ? n * 1000 : n;
+/** A quantity as whole-ish packs, or null when it does not divide cleanly. */
+const inPacks = (qty: number, packSize?: number | null): number | null => {
+  if (!packSize || packSize <= 0) return null;
+  const p = Math.round((qty / packSize) * 100) / 100;
+  return Math.abs(p * packSize - qty) < 1e-6 ? p : null;
+};
 interface Request {
   id: string;
   requestNumber: string;
@@ -151,6 +172,11 @@ export default function ProcurePage() {
   const [qty, setQty]           = useState('');
   const [editing, setEditing]   = useState<string | null>(null);
   const [editQty, setEditQty]   = useState('');
+  const [askMode, setAskMode]   = useState<AskMode>('unit');
+  const [editMode, setEditMode] = useState<AskMode>('unit');
+  /** Per line: "remaining" as typed, and in which mode. */
+  const [remaining, setRemaining] = useState<Record<string, string>>({});
+  const [remainMode, setRemainMode] = useState<Record<string, AskMode>>({});
   /*
     Who actually paid. The three answers post to DIFFERENT accounts: the till
     credits 1010 Cash on Hand, the owner's own money credits 3010 Owner's
@@ -273,6 +299,15 @@ export default function ProcurePage() {
     enabled:  picking,
     staleTime: 300_000,
   });
+  // What one pack of each ingredient held last time -- for the picker, which
+  // asks before a line exists.
+  const { data: packMemory = [] } = useQuery<PackMemory[]>({
+    queryKey: ['procure-pack-memory'],
+    queryFn:  () => api.get('/procure/requests/pack-memory').then((r) => r.data),
+    enabled:  !!user,
+    staleTime: 120_000,
+  });
+  const memoryOf = (rawMaterialId: string): PackMemory | undefined => packMemory.find((m) => m.rawMaterialId === rawMaterialId);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['procure-requests'] });
@@ -344,6 +379,27 @@ export default function ProcurePage() {
       setEditing(null); setEditQty('');
     },
     onError: (e) => fail(e, 'Could not add that item.'),
+  });
+
+  /*
+    "Remaining: 1 bottle" -- what is left on the shelf, said while building
+    the list. It lands on a cycle count for the branch; the owner posts it
+    from the counts screen, and only then does stock move.
+  */
+  const countLine = useMutation({
+    mutationFn: (v: { lineId: string; countedQty: number }) =>
+      api.post(`/procure/requests/${req!.id}/lines/${v.lineId}/count`, { countedQty: v.countedQty }).then((r) => r.data),
+    onSuccess: (d: { name: string; unit: string; countedQty: number; expectedQty: number; countNumber: string }) => {
+      refresh();
+      const diff = d.countedQty - d.expectedQty;
+      toast.success(
+        `${d.name}: counted ${d.countedQty.toLocaleString()} ${d.unit}`
+        + (Math.abs(diff) > 1e-6 ? ` (Clerque had ${d.expectedQty.toLocaleString()} ${d.unit})` : ' — same as Clerque')
+        + `. On count ${d.countNumber}, for the owner to post.`,
+        { duration: 7000 },
+      );
+    },
+    onError: (e) => fail(e, 'Could not record the count.'),
   });
 
   const removeLine = useMutation({
@@ -520,14 +576,29 @@ export default function ProcurePage() {
     onError: (e) => fail(e, 'Could not cancel this request.'),
   });
 
+  /** "2 packs · 1,500 ml" when the pack is known and it divides; else the plain amount. */
+  const packsLabel = (l: Line) => {
+    const qty = num(l.qtyRequested);
+    const packs = inPacks(qty, l.lastPack?.packSize);
+    return packs != null
+      ? `${packs.toLocaleString()} pack${packs === 1 ? '' : 's'} · ${qty.toLocaleString()} ${l.rawMaterial.unit}`
+      : `${qty.toLocaleString()} ${l.rawMaterial.unit}`;
+  };
+  const shelfLabel = (qty: number, l: Line) => {
+    const packs = inPacks(qty, l.lastPack?.packSize);
+    return packs != null && packs > 0
+      ? `${packs.toLocaleString()} pack${packs === 1 ? '' : 's'} (${qty.toLocaleString()} ${l.rawMaterial.unit})`
+      : `${qty.toLocaleString()} ${l.rawMaterial.unit}`;
+  };
+
   /* The list as a message, for an order placed over Viber or Messenger. */
   const copyList = async () => {
     if (!req) return;
     const text = [
       `${req.requestNumber}${req.branch?.name ? ` — ${req.branch.name}` : ''}`,
       ...req.lines.map((l) =>
-        `• ${l.rawMaterial.name} — ${num(l.qtyRequested).toLocaleString()} ${l.rawMaterial.unit}`
-        + (l.lastPack ? ` (last time: ${l.lastPack.packSize.toLocaleString()} ${l.rawMaterial.unit} per pack)` : '')),
+        `• ${l.rawMaterial.name} — ${packsLabel(l)}`
+        + (l.counted ? ` · left: ${shelfLabel(l.counted.qty, l)}` : '')),
     ].join('\n');
     try { await navigator.clipboard.writeText(text); toast.success('Copied. Paste it into Viber or Messenger.'); }
     catch { toast.error('Could not copy the list.'); }
@@ -773,11 +844,37 @@ export default function ProcurePage() {
                   e.preventDefault();
                   const n = parseFloat(qty);
                   if (!(n > 0)) { toast.error('Enter how much is needed.'); return; }
-                  addLine.mutate({ rawMaterialId: pending.id, qtyRequested: n });
+                  addLine.mutate({ rawMaterialId: pending.id, qtyRequested: toBase(n, askMode, memoryOf(pending.id)?.packSize) });
                 }}
               >
                 <div className="text-sm font-medium">{pending.name}</div>
                 <p className="mt-0.5 text-xs text-muted-foreground">How much do you need?</p>
+                {(() => {
+                  const mem = memoryOf(pending.id);
+                  const big = BIG_UNIT[pending.unit];
+                  const modes: Array<{ m: AskMode; label: string }> = [
+                    ...(mem ? [{ m: 'packs' as const, label: 'packs' }] : []),
+                    { m: 'unit', label: pending.unit },
+                    ...(big ? [{ m: 'big' as const, label: big }] : []),
+                  ];
+                  const n = parseFloat(qty);
+                  return (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                      {modes.length > 1 && (
+                        <span className="inline-flex overflow-hidden rounded border border-border">
+                          {modes.map((o) => (
+                            <button key={o.m} type="button" onClick={() => setAskMode(o.m)}
+                              className={`px-2 py-0.5 ${askMode === o.m ? 'bg-[var(--accent)] text-white' : 'bg-background'}`}>
+                              {o.label}
+                            </button>
+                          ))}
+                        </span>
+                      )}
+                      {mem && <span>1 pack = {mem.packSize.toLocaleString()} {pending.unit}{mem.brandNote ? ` · ${mem.brandNote}` : ''} (last time)</span>}
+                      {n > 0 && askMode !== 'unit' && <span>= {toBase(n, askMode, mem?.packSize).toLocaleString()} {pending.unit}</span>}
+                    </div>
+                  );
+                })()}
                 <div className="mt-2 flex items-center gap-2">
                   <div className="relative flex-1">
                     <input
@@ -786,10 +883,10 @@ export default function ProcurePage() {
                       value={qty}
                       onChange={(e) => setQty(e.target.value)}
                       placeholder="0"
-                      className="w-full rounded-lg border border-border py-2.5 pl-3 pr-12 text-base focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                      className="w-full rounded-lg border border-border py-2.5 pl-3 pr-16 text-base focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                     />
                     <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                      {pending.unit}
+                      {askMode === 'packs' ? 'packs' : askMode === 'big' ? BIG_UNIT[pending.unit] : pending.unit}
                     </span>
                   </div>
                   <button
@@ -838,7 +935,7 @@ export default function ProcurePage() {
                       {matches.map((i) => (
                         <button
                           key={i.id}
-                          onClick={() => { setPending(i); setQty(''); }}
+                          onClick={() => { setPending(i); setQty(''); setAskMode(memoryOf(i.id) ? 'packs' : 'unit'); }}
                           className="flex min-h-[3.25rem] flex-col justify-center rounded-lg border border-border bg-background px-2.5 py-2 text-left transition-colors hover:border-[var(--accent)]/60 hover:bg-muted active:scale-[0.98]"
                         >
                           <span className="line-clamp-2 text-xs font-medium leading-tight">{i.name}</span>
@@ -914,12 +1011,12 @@ export default function ProcurePage() {
                         */}
                         {editing === l.id ? (
                           <form
-                            className="mt-1 flex items-center gap-1.5"
+                            className="mt-1 flex flex-wrap items-center gap-1.5"
                             onSubmit={(e) => {
                               e.preventDefault();
                               const n = parseFloat(editQty);
                               if (!(n > 0)) { toast.error('Enter how much is needed.'); return; }
-                              addLine.mutate({ rawMaterialId: l.rawMaterialId, qtyRequested: n });
+                              addLine.mutate({ rawMaterialId: l.rawMaterialId, qtyRequested: toBase(n, editMode, l.lastPack?.packSize) });
                             }}
                           >
                             <div className="relative w-32">
@@ -928,12 +1025,26 @@ export default function ProcurePage() {
                                 inputMode="decimal"
                                 value={editQty}
                                 onChange={(e) => setEditQty(e.target.value)}
-                                className="w-full rounded-lg border border-border py-1.5 pl-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                                className="w-full rounded-lg border border-border py-1.5 pl-2.5 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                               />
                               <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
-                                {l.rawMaterial.unit}
+                                {editMode === 'packs' ? 'packs' : editMode === 'big' ? BIG_UNIT[l.rawMaterial.unit] : l.rawMaterial.unit}
                               </span>
                             </div>
+                            {(l.lastPack || BIG_UNIT[l.rawMaterial.unit]) && (
+                              <span className="inline-flex overflow-hidden rounded border border-border text-[10px]">
+                                {([
+                                  ...(l.lastPack ? [{ m: 'packs' as const, label: 'packs' }] : []),
+                                  { m: 'unit' as const, label: l.rawMaterial.unit },
+                                  ...(BIG_UNIT[l.rawMaterial.unit] ? [{ m: 'big' as const, label: BIG_UNIT[l.rawMaterial.unit] }] : []),
+                                ]).map((o) => (
+                                  <button key={o.m} type="button" onClick={() => setEditMode(o.m)}
+                                    className={`px-1.5 py-0.5 ${editMode === o.m ? 'bg-[var(--accent)] text-white' : 'bg-background'}`}>
+                                    {o.label}
+                                  </button>
+                                ))}
+                              </span>
+                            )}
                             <button type="submit" disabled={addLine.isPending}
                               className="rounded-lg bg-[var(--accent)] px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
                               {addLine.isPending ? '…' : 'Save'}
@@ -945,15 +1056,20 @@ export default function ProcurePage() {
                           </form>
                         ) : req.status === 'OPEN' ? (
                           <button
-                            onClick={() => { setEditing(l.id); setEditQty(String(num(l.qtyRequested))); }}
+                            onClick={() => {
+                              const packs = inPacks(num(l.qtyRequested), l.lastPack?.packSize);
+                              setEditing(l.id);
+                              setEditMode(packs != null ? 'packs' : 'unit');
+                              setEditQty(String(packs ?? num(l.qtyRequested)));
+                            }}
                             className="mt-0.5 rounded text-sm font-semibold tabular-nums text-[var(--accent)] hover:underline"
                             aria-label={`Change how much ${l.rawMaterial.name} to buy`}
                           >
-                            {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
+                            {packsLabel(l)}
                           </button>
                         ) : (
                           <div className="mt-0.5 text-sm font-semibold tabular-nums">
-                            {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
+                            {packsLabel(l)}
                           </div>
                         )}
                         <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
@@ -964,6 +1080,56 @@ export default function ProcurePage() {
                             </span>
                           )}
                         </div>
+                        {/*
+                          What is left on the shelf. Clerque's number first; the
+                          person's count beside it once they have said one --
+                          the "remaining: 7 boxes" every list has always carried.
+                        */}
+                        {(req.status === 'OPEN' || req.status === 'SENT') && (
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                            <span>
+                              {l.counted
+                                ? <>counted <strong className="text-foreground">{shelfLabel(l.counted.qty, l)}</strong>{Math.abs(l.counted.qty - (l.onHand ?? 0)) > 1e-6 ? ` · Clerque says ${shelfLabel(l.onHand ?? 0, l)}` : ' · same as Clerque'}</>
+                                : <>on hand: {shelfLabel(l.onHand ?? 0, l)}</>}
+                            </span>
+                            {canRecord && (
+                              <form
+                                className="inline-flex items-center gap-1"
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  const n = parseFloat(remaining[l.id] ?? '');
+                                  if (!(n >= 0)) { toast.error('How much is left? Zero is an answer.'); return; }
+                                  const mode = remainMode[l.id] ?? (l.lastPack ? 'packs' : 'unit');
+                                  countLine.mutate({ lineId: l.id, countedQty: toBase(n, mode, l.lastPack?.packSize) });
+                                  setRemaining((prev) => ({ ...prev, [l.id]: '' }));
+                                }}
+                              >
+                                <input
+                                  inputMode="decimal"
+                                  value={remaining[l.id] ?? ''}
+                                  onChange={(e) => setRemaining((prev) => ({ ...prev, [l.id]: e.target.value }))}
+                                  placeholder={l.counted ? 'recount' : 'remaining?'}
+                                  aria-label={`How much ${l.rawMaterial.name} is left`}
+                                  className="w-24 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                                />
+                                {l.lastPack ? (
+                                  <span className="inline-flex overflow-hidden rounded border border-border">
+                                    {(['packs', 'unit'] as const).map((m) => (
+                                      <button key={m} type="button" onClick={() => setRemainMode((prev) => ({ ...prev, [l.id]: m }))}
+                                        className={`px-1.5 py-0.5 ${(remainMode[l.id] ?? 'packs') === m ? 'bg-[var(--accent)] text-white' : 'bg-background'}`}>
+                                        {m === 'packs' ? 'packs' : l.rawMaterial.unit}
+                                      </button>
+                                    ))}
+                                  </span>
+                                ) : <span>{l.rawMaterial.unit}</span>}
+                                <button type="submit" disabled={countLine.isPending || !(remaining[l.id] ?? '').trim()}
+                                  className="rounded border border-border px-1.5 py-0.5 hover:bg-muted disabled:opacity-40">
+                                  {countLine.isPending ? '…' : 'count'}
+                                </button>
+                              </form>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                     {req.status === 'OPEN' ? (
@@ -1312,6 +1478,13 @@ export default function ProcurePage() {
         )}
       </div>
 
+      {canDecide && (req.status === 'OPEN' || req.status === 'SENT') && req.lines.some((l) => l.counted) && (
+        <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          What was counted here sits on count {req.lines.find((l) => l.counted)!.counted!.countNumber}.
+          {' '}<a href="/procure/cycle-counts" className="text-[var(--accent)] hover:underline">Post it</a> when you have looked, and stock follows.
+        </p>
+      )}
       {req.status === 'SENT' && (
         <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

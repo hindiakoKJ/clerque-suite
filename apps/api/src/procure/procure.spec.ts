@@ -28,9 +28,16 @@ describe('ProcureService', () => {
     openList?: any;
     /** What the newest received line of each ingredient says it held and cost. */
     lastPacks?: any[];
+    /** RawMaterialInventory rows at the branch. */
+    onHand?: Array<{ rawMaterialId: string; quantity: number }>;
+    /** A cycle count already started from this list. */
+    openCount?: { id: string; countNumber: string; notes: string; lines: any[] } | null;
   } = {}) {
     const created: any[] = [];
     const createdRequests: any[] = [];
+    const createdCounts: any[] = [];
+    const countLines: any[] = [];
+    let openCount: { id: string; countNumber: string; notes: string; lines: any[] } | null = opts.openCount ?? null;
     const updatedLines: any[] = [];
     const received: any[] = [];
     const entries: any[] = [];
@@ -83,6 +90,21 @@ describe('ProcureService', () => {
         findMany:   jest.fn().mockResolvedValue(opts.lastPacks ?? []),
       },
       document: { count: jest.fn().mockResolvedValue(0) },
+      rawMaterialInventory: {
+        findMany:   jest.fn(({ where }: any) => Promise.resolve((opts.onHand ?? []).filter((x) => where.rawMaterialId.in.includes(x.rawMaterialId)).map((x) => ({ branchId: BRANCH, ...x })))),
+        findUnique: jest.fn(({ where }: any) => Promise.resolve((opts.onHand ?? []).find((x) => x.rawMaterialId === where.branchId_rawMaterialId.rawMaterialId) ?? null)),
+      },
+      cycleCount: {
+        findMany:  jest.fn(() => Promise.resolve(openCount ? [{ id: openCount.id, countNumber: openCount.countNumber, notes: openCount.notes }] : [])),
+        findFirst: jest.fn(({ where }: any) => Promise.resolve(openCount && openCount.notes.startsWith(where.notes.startsWith) ? { id: openCount.id, countNumber: openCount.countNumber } : null)),
+        create:    jest.fn(({ data }: any) => { openCount = { id: 'cc1', countNumber: data.countNumber, notes: data.notes, lines: [] }; createdCounts.push(data); return Promise.resolve({ id: 'cc1', countNumber: data.countNumber }); }),
+      },
+      cycleCountLine: {
+        findMany:  jest.fn(() => Promise.resolve(openCount ? openCount.lines.map((l: any) => ({ countId: openCount!.id, ...l })) : [])),
+        findFirst: jest.fn(({ where }: any) => Promise.resolve(openCount?.lines.find((l: any) => l.rawMaterialId === where.rawMaterialId) ?? null)),
+        create:    jest.fn(({ data }: any) => { const l = { id: `ccl${(openCount?.lines.length ?? 0) + 1}`, ...data }; openCount?.lines.push(l); countLines.push(data); return Promise.resolve(l); }),
+        update:    jest.fn(({ where, data }: any) => { const l = openCount?.lines.find((x: any) => x.id === where.id); if (l) Object.assign(l, data); countLines.push({ ...where, ...data }); return Promise.resolve(l); }),
+      },
       rawMaterial: {
         findFirst: jest.fn(({ where }: any) => Promise.resolve({ id: where.id, name: 'White Sugar' })),
         // How many ingredients carry no reorder level. Check stock reports it
@@ -112,10 +134,11 @@ describe('ProcureService', () => {
         return Promise.resolve({ id: 'doc1', filename: name });
       }),
     };
-    const svc = new ProcureService(prisma, inventory, simple, documents) as any;
+    const warehouse: any = { nextCountNumber: jest.fn().mockResolvedValue('CC-2026-000007') };
+    const svc = new ProcureService(prisma, inventory, simple, documents, warehouse) as any;
     return {
-      svc, prisma, inventory, created, createdRequests, updatedLines, received, entries, docs,
-      req: () => request, open: () => openList,
+      svc, prisma, inventory, created, createdRequests, updatedLines, received, entries, docs, createdCounts, countLines,
+      req: () => request, open: () => openList, count: () => openCount,
     };
   }
 
@@ -714,6 +737,64 @@ describe('ProcureService', () => {
     const out = await svc.attachPhoto(TENANT, 'req1', 'cook', { imageBase64: Buffer.from('jpg-bytes').toString('base64'), label: 'Delivery receipt' });
     expect(docs[0]).toMatchObject({ type: 'PurchaseRequest', id: 'req1', size: 9, mime: 'image/jpeg', name: 'delivery-receipt-REQ-20260830-001-1.jpg', label: 'Delivery receipt', by: 'cook' });
     expect(out).toEqual({ id: 'doc1', filename: 'delivery-receipt-REQ-20260830-001-1.jpg', label: 'Delivery receipt' });
+  });
+
+  // ── what the shelf says ───────────────────────────────────────────────────
+
+  const ASKED = [{ id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-haz', qtyRequested: 1500, packsBought: null, packCost: null, receivedAt: null, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } }];
+
+  it('tells every line what is on the shelf at this branch', async () => {
+    const { svc } = build({ status: 'OPEN', lines: ASKED, onHand: [{ rawMaterialId: 'rm-haz', quantity: 750 }] });
+    const seen = await svc.get(TENANT, 'req1', 'GENERAL_EMPLOYEE');
+    expect(seen.lines[0].onHand).toBe(750);
+    expect(seen.lines[0].counted).toBeNull();
+  });
+
+  it('remembers every ingredient\'s pack for the picker, price included only for those who may see it', async () => {
+    const lastPacks = [{ rawMaterialId: 'rm-haz', packSize: 750, packCost: 540, brandNote: 'Da Vinci', receivedAt: new Date() }];
+    const owner = await build({ lastPacks }).svc.packMemory(TENANT, 'BUSINESS_OWNER');
+    expect(owner).toEqual([expect.objectContaining({ rawMaterialId: 'rm-haz', packSize: 750, packCost: 540 })]);
+    const cook = await build({ lastPacks, showCostsToStaff: false }).svc.packMemory(TENANT, 'GENERAL_EMPLOYEE');
+    expect(cook[0]).toMatchObject({ packSize: 750, packCost: null });
+  });
+
+  it('"remaining: 1 bottle" starts a cycle count for this list, snapshotting what Clerque had', async () => {
+    const { svc, createdCounts, countLines } = build({ status: 'SENT', lines: ASKED, onHand: [{ rawMaterialId: 'rm-haz', quantity: 2250 }] });
+    const out = await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 750);
+    expect(createdCounts[0]).toMatchObject({ branchId: BRANCH, countNumber: 'CC-2026-000007', status: 'OPEN', startedById: 'cook' });
+    expect(createdCounts[0].notes).toMatch(/^\[REQ:REQ-20260830-001\]/);
+    expect(countLines[0]).toMatchObject({ rawMaterialId: 'rm-haz', notes: 'REQ-20260830-001-01' });
+    expect(Number(countLines[0].expectedQty)).toBe(2250);
+    expect(Number(countLines[0].countedQty)).toBe(750);
+    expect(Number(countLines[0].varianceQty)).toBe(-1500);
+    expect(out).toMatchObject({ countNumber: 'CC-2026-000007', expectedQty: 2250, countedQty: 750, variance: -1500, unit: 'ml' });
+  });
+
+  it('a second count on the same line keeps the snapshot and changes only the count', async () => {
+    const { svc, createdCounts, countLines, count } = build({ status: 'OPEN', lines: ASKED, onHand: [{ rawMaterialId: 'rm-haz', quantity: 2250 }] });
+    await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 750);
+    const out = await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 1500);
+    expect(createdCounts).toHaveLength(1);                       // one count per list
+    expect(Number(countLines[1].countedQty)).toBe(1500);
+    expect(Number(countLines[1].varianceQty)).toBe(-750);        // against the SAME 2250
+    expect(out.expectedQty).toBe(2250);
+    expect(count()!.lines).toHaveLength(1);
+  });
+
+  it('the request then shows what was counted, next to what Clerque says', async () => {
+    const { svc } = build({ status: 'OPEN', lines: ASKED, onHand: [{ rawMaterialId: 'rm-haz', quantity: 2250 }] });
+    await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 750);
+    const seen = await svc.get(TENANT, 'req1', 'GENERAL_EMPLOYEE');
+    expect(seen.lines[0].counted).toEqual({ qty: 750, expected: 2250, countId: 'cc1', countNumber: 'CC-2026-000007' });
+    expect(seen.lines[0].onHand).toBe(2250);
+  });
+
+  it('counting stops once the list is bought, and never goes below zero', async () => {
+    const bought = build({ status: 'BOUGHT', lines: ASKED });
+    await expect(bought.svc.recordCount(TENANT, 'req1', 'l1', 'cook', 1)).rejects.toThrow(/already been bought/i);
+    const open = build({ status: 'OPEN', lines: ASKED });
+    await expect(open.svc.recordCount(TENANT, 'req1', 'l1', 'cook', -1)).rejects.toThrow(/negative/i);
+    await expect(open.svc.recordCount(TENANT, 'req1', 'nope', 'cook', 1)).rejects.toThrow(/not on this request/i);
   });
 
   it('will not file a photo on a cancelled request', async () => {

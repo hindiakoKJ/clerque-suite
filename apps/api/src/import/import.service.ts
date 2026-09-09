@@ -2904,6 +2904,7 @@ export class ImportService {
     say('WHAT IS FILLED IN', true, 12);
     say(`  Ingredients   ${ingredientCount} rows — your own, with costs and units.`);
     say(`  Recipes       ${recipeCount} rows — your own, with the unit each quantity is in.`);
+    say('  Made in batches — your preps as Clerque holds them; yield and unit on each first row.');
     say('');
     say('WHAT IS BLANK', true, 12);
     say('  Products, Customers, Vendors, Chart of Accounts ship as empty templates.');
@@ -2918,6 +2919,7 @@ export class ImportService {
 
     const bundled: Array<{ name: string; buf: Buffer }> = [
       { name: 'Ingredients',       buf: await this.ingredientsExport(tenantId) },
+      { name: 'Made in batches',   buf: await this.prepsExport(tenantId) },
       { name: 'Recipes',           buf: await this.recipesExport(tenantId) },
       { name: 'Products',          buf: await this.productsTemplate(tenantId) },
       { name: 'Customers',         buf: await this.customersTemplate() },

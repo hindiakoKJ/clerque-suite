@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional, Logger } from '@nestjs/common';
 import { Prisma, PurchaseRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -6,6 +6,8 @@ import { SimpleEntriesService } from '../simple-entries/simple-entries.service';
 import { ExpenseCategory } from '../simple-entries/dto/simple-entry.dto';
 import { DocumentsService } from '../documents/documents.service';
 import { WarehouseService } from '../warehouse/warehouse.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { MailService } from '../mail/mail.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
@@ -98,7 +100,11 @@ export class ProcureService {
     @Optional() private readonly simple?: SimpleEntriesService,
     @Optional() private readonly documents?: DocumentsService,
     @Optional() private readonly warehouse?: WarehouseService,
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly mail?: MailService,
   ) {}
+
+  private readonly logger = new Logger(ProcureService.name);
 
   /**
    * The branch a request belongs to, when the caller did not say.
@@ -405,7 +411,71 @@ export class ProcureService {
       data:    { status: 'SENT', sentAt: new Date(), sentById: userId },
       include: this.lineInclude(),
     });
+    await this.tellTheOwners(tenantId, updated);
     return { ...updated, empty: updated.lines.length === 0 };
+  }
+
+  /**
+   * "Send to the owners" used to send nothing: the list sat in the app until
+   * somebody opened it. Now the owners and this branch's manager get a
+   * notification and, where mail is configured, the list itself -- in packs
+   * where Clerque knows the pack, which is how the shop has always written
+   * it by hand. Best effort: a mail outage never blocks the send.
+   */
+  private async tellTheOwners(
+    tenantId: string,
+    req: { id: string; requestNumber: string; branchId: string; branch?: { name: string } | null;
+           lines: Array<{ rawMaterialId: string; qtyRequested: Prisma.Decimal; rawMaterial: { name: string; unit: string } }> },
+  ) {
+    try {
+      const people = await this.prisma.user.findMany({
+        where: {
+          tenantId, isActive: true,
+          OR: [
+            { role: 'BUSINESS_OWNER' },
+            { role: 'BRANCH_MANAGER', OR: [{ branchId: req.branchId }, { branchId: null }] },
+          ],
+        },
+        select: { id: true, email: true, name: true },
+      });
+      if (people.length === 0) return;
+
+      const packs = await this.lastPacks(tenantId, req.lines.map((l) => l.rawMaterialId));
+      const lines = req.lines.map((l) => {
+        const qty  = Number(l.qtyRequested);
+        const pack = packs.get(l.rawMaterialId);
+        const n    = pack ? Math.round((qty / pack.packSize) * 100) / 100 : null;
+        const whole = n != null && Math.abs(n * pack!.packSize - qty) < 1e-6 && n > 0;
+        return {
+          name:   l.rawMaterial.name,
+          amount: whole
+            ? `${n} pack${n === 1 ? '' : 's'} (${qty.toLocaleString()} ${l.rawMaterial.unit})`
+            : `${qty.toLocaleString()} ${l.rawMaterial.unit}`,
+        };
+      });
+      const branch = req.branch?.name ?? null;
+      const link   = `/procure/requests?view=${req.requestNumber}`;
+      const body   = lines.length === 0
+        ? 'Nothing hit its reorder level — an all-clear.'
+        : lines.slice(0, 6).map((l) => `${l.name} ${l.amount}`).join(' · ') + (lines.length > 6 ? ` · and ${lines.length - 6} more` : '');
+
+      for (const p of people) {
+        if (this.notifications) {
+          await this.notifications.create({
+            tenantId, userId: p.id, kind: 'INFO',
+            title: `Buy list ${req.requestNumber} sent${branch ? ` — ${branch}` : ''}`,
+            body, link,
+            dedupeKey: `req-sent-${req.requestNumber}-${p.id}`,
+          });
+        }
+        if (this.mail && p.email) {
+          await this.mail.sendBuyListSent({ to: p.email, name: p.name, requestNumber: req.requestNumber, branchName: branch, lines, link });
+        }
+      }
+    } catch (err) {
+      // The list IS sent; telling people about it is the part that may fail.
+      this.logger.warn(`[procure] could not notify the owners of ${req.requestNumber}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   // ── shopping ──────────────────────────────────────────────────────────────

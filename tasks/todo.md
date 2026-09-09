@@ -1760,3 +1760,21 @@ From KJ's screenshots of the Messenger "Purchasing - CC" group: staff write
   WarehouseModule.
 - Live on carolina-test 11/11 (pack memory Salt 100 g @ 12; count -> CC-2026-
   000001 with one line, recount keeps the 1400 snapshot, stock unchanged).
+
+## 2026-09-09 — "Send to the owners" now reaches them; preps in the setup-pack export
+
+- ProcureService.sendRequest -> tellTheOwners: every active BUSINESS_OWNER
+  and this branch's BRANCH_MANAGER gets an in-app notification (title "Buy
+  list REQ-… sent — <branch>", body = the lines in packs where the pack is
+  known, link ?view=REQ-…, deduped per request+user) and, when RESEND_API_KEY
+  is set, the list itself by mail (MailService.sendBuyListSent). Best effort:
+  a mail outage never blocks the send. An empty list is announced as an
+  all-clear. ProcureModule imports NotificationsModule + MailModule.
+- Web: "Send as message" uses the phone's share sheet (Messenger/Viber)
+  when available, clipboard otherwise.
+- Setup-pack EXPORT bundles the "Made in batches" sheet between Ingredients
+  and Recipes, so export -> edit -> import now round-trips preps too.
+- Live on carolina-test 8/8 (owner notified "Sugar 1 pack (1,000 g) · Salt 3
+  packs (300 g)", cook not; export has the sheet with 28 prep rows).
+- RESEND_API_KEY is not set locally, so the mail was logged, not sent; in
+  production it goes out if the key is on Railway.

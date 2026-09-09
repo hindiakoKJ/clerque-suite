@@ -32,6 +32,10 @@ describe('ProcureService', () => {
     onHand?: Array<{ rawMaterialId: string; quantity: number }>;
     /** A cycle count already started from this list. */
     openCount?: { id: string; countNumber: string; notes: string; lines: any[] } | null;
+    /** The owners and managers on the account. */
+    people?: Array<{ id: string; email: string | null; name: string; role: string; branchId?: string | null }>;
+    /** A mailer that fails, to prove a send never depends on it. */
+    mailFails?: boolean;
   } = {}) {
     const created: any[] = [];
     const createdRequests: any[] = [];
@@ -90,6 +94,12 @@ describe('ProcureService', () => {
         findMany:   jest.fn().mockResolvedValue(opts.lastPacks ?? []),
       },
       document: { count: jest.fn().mockResolvedValue(0) },
+      user: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.people ?? []).filter((p) => {
+          const alts: any[] = where.OR ?? [];
+          return alts.some((a) => a.role === p.role && (!a.OR || a.OR.some((b: any) => b.branchId === (p.branchId ?? null))));
+        }).map(({ id, email, name }) => ({ id, email, name })))),
+      },
       rawMaterialInventory: {
         findMany:   jest.fn(({ where }: any) => Promise.resolve((opts.onHand ?? []).filter((x) => where.rawMaterialId.in.includes(x.rawMaterialId)).map((x) => ({ branchId: BRANCH, ...x })))),
         findUnique: jest.fn(({ where }: any) => Promise.resolve((opts.onHand ?? []).find((x) => x.rawMaterialId === where.branchId_rawMaterialId.rawMaterialId) ?? null)),
@@ -135,9 +145,13 @@ describe('ProcureService', () => {
       }),
     };
     const warehouse: any = { nextCountNumber: jest.fn().mockResolvedValue('CC-2026-000007') };
-    const svc = new ProcureService(prisma, inventory, simple, documents, warehouse) as any;
+    const notified: any[] = [];
+    const mailed: any[] = [];
+    const notifications: any = { create: jest.fn((a: any) => { notified.push(a); return Promise.resolve({ id: `n${notified.length}` }); }) };
+    const mail: any = { sendBuyListSent: jest.fn((a: any) => { if (opts.mailFails) return Promise.reject(new Error('Resend is down')); mailed.push(a); return Promise.resolve(); }) };
+    const svc = new ProcureService(prisma, inventory, simple, documents, warehouse, notifications, mail) as any;
     return {
-      svc, prisma, inventory, created, createdRequests, updatedLines, received, entries, docs, createdCounts, countLines,
+      svc, prisma, inventory, created, createdRequests, updatedLines, received, entries, docs, createdCounts, countLines, notified, mailed,
       req: () => request, open: () => openList, count: () => openCount,
     };
   }
@@ -795,6 +809,48 @@ describe('ProcureService', () => {
     const open = build({ status: 'OPEN', lines: ASKED });
     await expect(open.svc.recordCount(TENANT, 'req1', 'l1', 'cook', -1)).rejects.toThrow(/negative/i);
     await expect(open.svc.recordCount(TENANT, 'req1', 'nope', 'cook', 1)).rejects.toThrow(/not on this request/i);
+  });
+
+  // ── send to the owners, and they hear it ──────────────────────────────────
+
+  const PEOPLE = [
+    { id: 'owner', email: 'anne@carolina.test', name: 'Anne', role: 'BUSINESS_OWNER', branchId: null },
+    { id: 'mgr',   email: null,                 name: 'Mia',  role: 'BRANCH_MANAGER', branchId: BRANCH },
+    { id: 'other', email: 'x@y.test',           name: 'Ben',  role: 'BRANCH_MANAGER', branchId: 'b2' },
+    { id: 'cook',  email: 'c@y.test',           name: 'Jo',   role: 'GENERAL_EMPLOYEE', branchId: BRANCH },
+  ];
+  const SENT_LINES = [
+    { id: 'l1', rawMaterialId: 'rm-haz', qtyRequested: 1500, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } },
+    { id: 'l2', rawMaterialId: 'rm-sug', qtyRequested: 500,  rawMaterial: { name: 'White Sugar',    unit: 'g' } },
+  ];
+
+  it('sending the list tells the owner and this branch\'s manager, in packs where the pack is known', async () => {
+    const { svc, notified, mailed } = build({
+      status: 'OPEN', lines: SENT_LINES, people: PEOPLE,
+      lastPacks: [{ rawMaterialId: 'rm-haz', packSize: 750, packCost: 540, brandNote: null, receivedAt: new Date() }],
+    });
+    const res = await svc.sendRequest(TENANT, 'req1', USER);
+    expect(res.status).toBe('SENT');
+    expect(notified.map((n) => n.userId).sort()).toEqual(['mgr', 'owner']);      // not the cook, not the other branch
+    expect(notified[0]).toMatchObject({ kind: 'INFO', title: 'Buy list REQ-20260830-001 sent', link: '/procure/requests?view=REQ-20260830-001' });
+    expect(notified[0].body).toBe('Hazelnut Syrup 2 packs (1,500 ml) · White Sugar 500 g');
+    expect(mailed).toHaveLength(1);                                             // the manager has no email
+    expect(mailed[0]).toMatchObject({ to: 'anne@carolina.test', name: 'Anne', requestNumber: 'REQ-20260830-001' });
+    expect(mailed[0].lines[0]).toEqual({ name: 'Hazelnut Syrup', amount: '2 packs (1,500 ml)' });
+  });
+
+  it('an empty list is still announced: silence would mean nothing', async () => {
+    const { svc, notified } = build({ status: 'OPEN', lines: [], people: PEOPLE.slice(0, 1) });
+    const res = await svc.sendRequest(TENANT, 'req1', USER);
+    expect(res.empty).toBe(true);
+    expect(notified[0].body).toMatch(/all-clear/);
+  });
+
+  it('a mailer that is down never blocks the send', async () => {
+    const { svc, notified } = build({ status: 'OPEN', lines: SENT_LINES, people: PEOPLE.slice(0, 1), mailFails: true });
+    const res = await svc.sendRequest(TENANT, 'req1', USER);
+    expect(res.status).toBe('SENT');
+    expect(notified).toHaveLength(1);
   });
 
   it('will not file a photo on a cancelled request', async () => {

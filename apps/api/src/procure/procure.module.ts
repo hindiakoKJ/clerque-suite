@@ -9,6 +9,8 @@ import { AiModule } from '../ai/ai.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { SimpleEntriesModule } from '../simple-entries/simple-entries.module';
 import { WarehouseModule } from '../warehouse/warehouse.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { WarehouseModule } from '../warehouse/warehouse.module';
     DocumentsModule,      // the photo is filed against the request it creates
     SimpleEntriesModule,  // a line that is not stock is an expense in the books
     WarehouseModule,      // "remaining: 7 boxes" on the list is a line on a cycle count
+    NotificationsModule,  // a sent list reaches the owners instead of waiting to be opened
+    MailModule,
   ],
   controllers: [ProcureController, ProcureReceiptsController],
   providers:   [ProcureService, ProcureReceiptsService, ReceiptReadLedger, ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor],

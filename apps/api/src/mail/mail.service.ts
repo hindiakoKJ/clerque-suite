@@ -535,6 +535,56 @@ export class MailService {
 
   // ── Internal helpers ───────────────────────────────────────────────────────
 
+  // ── Buy list sent ─────────────────────────────────────────────────────────
+
+  /**
+   * The kitchen's list, the moment it is sent. This is the Messenger message
+   * the shop has always written by hand -- "GOOD AFTERNOON po madam, BAR
+   * NEEDS TO PURCHASE ..." -- arriving on its own, in packs where Clerque
+   * knows the pack, with a link to the list itself.
+   */
+  async sendBuyListSent(opts: {
+    to:            string;
+    name:          string;
+    requestNumber: string;
+    branchName:    string | null;
+    lines:         Array<{ name: string; amount: string }>;
+    link:          string;
+  }): Promise<void> {
+    const url = `${this.appUrl}${opts.link}`;
+    const rows = opts.lines.map((l) => `
+          <tr>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:14px;color:#1a1a1a;">${this.escape(l.name)}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:14px;color:#1a1a1a;text-align:right;white-space:nowrap;">${this.escape(l.amount)}</td>
+          </tr>`).join('');
+    await this.send({
+      to:      opts.to,
+      subject: `Buy list ${opts.requestNumber}${opts.branchName ? ` — ${opts.branchName}` : ''}`,
+      html:    this.layout(`
+        <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
+          ${opts.lines.length === 0 ? 'Nothing to buy today' : `${opts.lines.length} thing${opts.lines.length === 1 ? '' : 's'} to buy`}
+        </h2>
+        <p style="margin:0 0 16px;color:#555;line-height:1.6;">
+          Hi ${this.escape(opts.name)} — the ${opts.branchName ? this.escape(opts.branchName) + ' ' : ''}list
+          <strong>${this.escape(opts.requestNumber)}</strong> was just sent.
+          ${opts.lines.length === 0 ? 'Nothing hit its reorder level: an all-clear, said out loud.' : ''}
+        </p>
+        ${opts.lines.length > 0 ? `
+        <table style="border-collapse:collapse;width:100%;margin-bottom:24px;">
+          ${rows}
+        </table>` : ''}
+        <a href="${url}"
+           style="display:inline-block;background:#C9651A;color:#fff;text-decoration:none;
+                  padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">
+          Open the list
+        </a>
+        <p style="margin:24px 0 0;color:#888;font-size:13px;line-height:1.6;">
+          Whoever shops records what they bought on this list; you add it to stock when it arrives.
+        </p>
+      `),
+    });
+  }
+
   private async send(opts: {
     to:          string;
     subject:     string;

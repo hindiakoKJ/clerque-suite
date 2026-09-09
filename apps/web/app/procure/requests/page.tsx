@@ -600,6 +600,11 @@ export default function ProcurePage() {
         `• ${l.rawMaterial.name} — ${packsLabel(l)}`
         + (l.counted ? ` · left: ${shelfLabel(l.counted.qty, l)}` : '')),
     ].join('\n');
+    // On a phone the share sheet opens Messenger or Viber directly; elsewhere, the clipboard.
+    if (typeof navigator !== 'undefined' && 'share' in navigator) {
+      try { await navigator.share({ title: req.requestNumber, text }); return; }
+      catch (err) { if ((err as { name?: string })?.name === 'AbortError') return; }
+    }
     try { await navigator.clipboard.writeText(text); toast.success('Copied. Paste it into Viber or Messenger.'); }
     catch { toast.error('Could not copy the list.'); }
   };
@@ -814,7 +819,7 @@ export default function ProcurePage() {
                   className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
                   title="Copy the list as a message, for an order over Viber or Messenger"
                 >
-                  <Copy className="h-3.5 w-3.5" /> Copy as message
+                  <Copy className="h-3.5 w-3.5" /> Send as message
                 </button>
               )}
               {canDecide && (

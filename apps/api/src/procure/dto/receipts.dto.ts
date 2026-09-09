@@ -188,6 +188,16 @@ export class ConfirmReceiptDto {
   @IsBoolean()
   postNow?: boolean;
 
+  /**
+   * With postNow:false onto a request: the goods were paid for on order
+   * day, from paymentMethod. The money leaves now into 1063 and the arrival
+   * costs nothing more. The expense lines (shipping, a platform fee) post
+   * now too, from the same pocket.
+   */
+  @IsOptional()
+  @IsBoolean()
+  paidAhead?: boolean;
+
   @IsOptional()
   @IsString()
   @MaxLength(120)

@@ -1778,3 +1778,33 @@ From KJ's screenshots of the Messenger "Purchasing - CC" group: staff write
   packs (300 g)", cook not; export has the sheet with 28 prep rows).
 - RESEND_API_KEY is not set locally, so the mail was logged, not sent; in
   production it goes out if the key is on Railway.
+
+## 2026-09-09 — Paid ahead: the shop's own GR/IR (KJ's decision B)
+
+Decisions from KJ: credit terms PARKED (MSME-to-MSME is cash/GCash; a card is
+the buyer's own money -- steps 7-8 of the plan closed); Shopee = "account the
+cost now, stock when delivered" = B; AI stays on his Gemini credits via Vertex.
+
+- Three simple-entry types: PAID_AHEAD (Dr 1063 Advance Deposits / Cr pocket),
+  PAID_AHEAD_REFUND (Dr pocket / Cr 1063), PAID_AHEAD_WRITE_OFF (Dr 6140 /
+  Cr 1063). 1063 is the clearing account.
+- RecordBoughtDto.paidFrom (+ charges paid with the order): ProcureService.
+  payAhead posts the advance for sum(packs x cost) of unposted lines, fees as
+  expenses from the same pocket, tags [PREPAID:<pocket>] [ADV:<total>]
+  [ONTHEWAY:day]; a later re-record with paidFrom posts only the DIFFERENCE
+  (refund when lower). Owner-funded = the contribution pair. /bought is now
+  @RequireIdempotency (web sends the key).
+- receiveRequest on a prepaid request passes paymentMethod 'PREPAID' to
+  inventory -> journal credits 1063 (never a pocket again). Short lines settle
+  against the advance: REFUNDED -> PAID_AHEAD_REFUND to the pocket (owner-
+  funded adds an OWNER_DRAWING), LOST / NOT_COMING -> write-off. Fees at the
+  door come from the prepaid pocket. The follow-up inherits [PREPAID:].
+- Receipts path: ConfirmReceiptDto.paidAhead with postNow:false posts the
+  advance from paymentMethod (order screenshot on order day).
+- 'PREPAID' is in the inventory DTO TYPE but not its @IsIn: only Procure may
+  say it.
+- Screens: "Ordered — on the way" gains "Already paid? from:" tiles + fees;
+  prepaid banner "paid ahead ₱X from …"; pocket tiles hidden on a prepaid
+  request; receipts page "Paid when ordered" tick for Save to the request.
+- Live on carolina-test 11/11: 316 in on order day (JE-…0082), shipping 50,
+  price fix -6, arrival 2 of 3 + refund 10 + COD 20, 1063 Dr 316 / Cr 316.

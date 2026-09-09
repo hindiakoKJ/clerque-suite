@@ -15,6 +15,16 @@ export const SIMPLE_ENTRY_TYPES = [
   'OWNER_DRAWING',      // owner takes money out for personal use
   'DEPOSIT_TO_BANK',    // move till cash to the bank
   'WITHDRAW_TO_CASH',   // move bank money to the till
+  /*
+    Goods paid for before they are here -- a Shopee order, a deposit to a
+    supplier. The money leaves the pocket now and waits in 1063 Advance
+    Deposits (a clearing account, like a GR/IR) until the goods arrive and
+    take it onto the shelf; a refund brings it back to the pocket; a parcel
+    that never comes is written off.
+  */
+  'PAID_AHEAD',           // Dr 1063 / Cr pocket
+  'PAID_AHEAD_REFUND',    // Dr pocket / Cr 1063
+  'PAID_AHEAD_WRITE_OFF', // Dr 6140 / Cr 1063
 ] as const;
 export type SimpleEntryType = (typeof SIMPLE_ENTRY_TYPES)[number];
 

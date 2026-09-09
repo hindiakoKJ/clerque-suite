@@ -102,6 +102,25 @@ describe('SimpleEntriesService', () => {
     expect(cr()).toBe('acct-1020');
   });
 
+  it('PAID_AHEAD (bank) → DR 1063 / CR 1020: money waits in the clearing account', async () => {
+    await run({ type: 'PAID_AHEAD', source: 'BANK' });
+    expect(dr()).toBe('acct-1063');
+    expect(cr()).toBe('acct-1020');
+    expect(balanced()).toBe(true);
+  });
+
+  it('PAID_AHEAD_REFUND (bank) → DR 1020 / CR 1063', async () => {
+    await run({ type: 'PAID_AHEAD_REFUND', source: 'BANK' });
+    expect(dr()).toBe('acct-1020');
+    expect(cr()).toBe('acct-1063');
+  });
+
+  it('PAID_AHEAD_WRITE_OFF → DR 6140 / CR 1063: the parcel never came', async () => {
+    await run({ type: 'PAID_AHEAD_WRITE_OFF' });
+    expect(dr()).toBe('acct-6140');
+    expect(cr()).toBe('acct-1063');
+  });
+
   it('amount is posted on both legs and reference is stamped SE', async () => {
     await run({ type: 'EXPENSE', source: 'CASH', amount: 250.5 });
     const debit = captured!.lines.find((l) => l.debit != null)!.debit;

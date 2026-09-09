@@ -24,6 +24,9 @@ const BANK = '1020';
 const OWNER_CAPITAL = '3010';
 const OWNER_DRAWING = '3020';
 const OTHER_INCOME = '4050';
+/** Money paid for goods not yet here. Cleared when they arrive, refunded, or written off. */
+const PAID_AHEAD = '1063';
+const MISC_EXPENSE = '6140';
 
 const EXPENSE_ACCOUNT: Record<ExpenseCategory, string> = {
   RENT:      '6050',
@@ -137,6 +140,12 @@ export class SimpleEntriesService {
         return { drCode: BANK, crCode: CASH, description: `Cash deposited to bank${note}` };
       case 'WITHDRAW_TO_CASH':
         return { drCode: CASH, crCode: BANK, description: `Cash withdrawn from bank${note}` };
+      case 'PAID_AHEAD':
+        return { drCode: PAID_AHEAD, crCode: requireFunding(), description: `Paid ahead for goods${note}` };
+      case 'PAID_AHEAD_REFUND':
+        return { drCode: requireFunding(), crCode: PAID_AHEAD, description: `Refund of goods paid ahead${note}` };
+      case 'PAID_AHEAD_WRITE_OFF':
+        return { drCode: MISC_EXPENSE, crCode: PAID_AHEAD, description: `Paid ahead, never received${note}` };
       default: {
         // Exhaustiveness guard — DTO validation should prevent reaching here.
         const _never: never = dto.type;

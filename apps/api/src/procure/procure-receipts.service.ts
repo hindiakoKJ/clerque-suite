@@ -494,6 +494,14 @@ export class ProcureReceiptsService {
     }
 
     if (dto.postNow === false) {
+      if (dto.paidAhead && !replay) {
+        // The order screenshot: the money left today. Fees on it left today too.
+        const paid = await this.procure.payAhead(
+          tenantId, request, userId, dto.paymentMethod, receiptDate,
+          (dto.expenses ?? []).map((e) => ({ description: e.description, amount: e.amount, category: e.category })),
+        );
+        return { duplicate: false, recorded: true, request: paid.request, posted: [], skipped, failed: [], expenses: paid.summary.entries, created, document, paidAhead: paid.summary };
+      }
       return { duplicate: replay, recorded: true, request, posted: [], skipped, failed: [], expenses: [], created, document };
     }
 

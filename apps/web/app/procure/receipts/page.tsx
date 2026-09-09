@@ -286,6 +286,8 @@ export default function ReceiptsPage() {
     build), then the request is fetched and its lines become the rows.
   */
   const [requestId, setRequestId] = useState<string | null>(null);
+  /** The order screenshot: the money left today. Saved onto the request as paid ahead. */
+  const [paidAhead, setPaidAhead] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const id = new URLSearchParams(window.location.search).get('request');
@@ -513,7 +515,7 @@ export default function ReceiptsPage() {
       }));
       return api.post('/procure/receipts/confirm', {
         ...(branchId ? { branchId } : {}),
-        ...(requestId ? { purchaseRequestId: requestId, postNow } : {}),
+        ...(requestId ? { purchaseRequestId: requestId, postNow, ...(!postNow && paidAhead ? { paidAhead: true } : {}) } : {}),
         ...(vendor.trim() ? { vendor: vendor.trim() } : {}),
         receiptDate: date,
         ...(ref.trim() ? { referenceNumber: ref.trim() } : {}),
@@ -530,6 +532,7 @@ export default function ReceiptsPage() {
       qc.invalidateQueries({ queryKey: ['procure-requests'] });
       qc.invalidateQueries({ queryKey: ['request-docs', requestId] });
       if (r.duplicate) toast.message('This receipt was already posted. Nothing was added twice.');
+      else if (r.paidAhead) toast.success(`Saved onto ${r.request?.requestNumber}. ${formatPeso(r.paidAhead.total)} paid ahead from ${r.paidAhead.pocket === 'BANK' ? 'the shop bank / GCash' : r.paidAhead.pocket === 'CASH' ? 'the till' : 'the owner'} — the shelf waits for the parcel.`, { duration: 8000 });
       else if (r.recorded && r.posted?.length === 0 && !r.failed?.length) toast.success(`Saved onto ${r.request?.requestNumber}. Nothing posted yet.`);
       else if (r.failed?.length) toast.warning(`${r.posted.length} posted, ${r.failed.length} could not be — see below.`);
       else toast.success('In stock. The receipt is filed with the request.');
@@ -987,6 +990,16 @@ export default function ReceiptsPage() {
             {problems.slice(0, 3).map((p) => <li key={p}>{p}</li>)}
             {problems.length > 3 && <li>…and {problems.length - 3} more</li>}
           </ul>
+        )}
+        {requestId && (
+          <label className="flex items-start gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
+            <input type="checkbox" checked={paidAhead} onChange={(e) => setPaidAhead(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
+            <span>
+              <strong className="font-medium text-foreground">Paid when ordered.</strong>{' '}
+              Use with <em>Save to the request</em> for an order screenshot: the money leaves the pocket above today
+              and waits for the parcel; adding it to stock later costs nothing more.
+            </span>
+          </label>
         )}
         <div className="flex gap-2">
           {requestId && (

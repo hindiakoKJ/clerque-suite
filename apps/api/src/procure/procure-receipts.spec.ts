@@ -557,6 +557,16 @@ describe('ProcureReceiptsService', () => {
     expect(docs).toHaveLength(1);
   });
 
+  it('record-only with paid-ahead posts the money into 1063 now, fees too, and tags the request', async () => {
+    const { svc, received, requests, entries } = build({ kitchen: kitchen() });
+    const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', postNow: false, paidAhead: true, paymentMethod: 'BANK', receiptDate: '2026-09-04' });
+    expect(received).toEqual([]);
+    expect(entries.map((e) => [e.type, e.amount, e.source])).toEqual([['PAID_AHEAD', 1217.95, 'BANK'], ['EXPENSE', 50, 'BANK']]);
+    expect((r as any).paidAhead).toMatchObject({ pocket: 'BANK', total: 1217.95 });
+    expect(requests[0].notes).toMatch(/\[PREPAID:BANK\]/);
+    expect(requests[0].notes).toMatch(/\[ONTHEWAY:2026-09-04\]/);
+  });
+
   it('a replay onto the request files the photo once and posts nothing twice', async () => {
     const { svc, received, docs } = build({ kitchen: kitchen() });
     const first = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1', imageBase64: 'AAAA' });

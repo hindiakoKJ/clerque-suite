@@ -172,6 +172,23 @@ export class RecordBoughtDto {
   @IsOptional()
   @IsBoolean()
   onTheWay?: boolean;
+
+  /**
+   * Paid on order day, from this pocket. The money leaves now and waits in
+   * 1063 until the goods arrive; the arrival then costs nothing more.
+   * Implies onTheWay.
+   */
+  @IsOptional()
+  @IsIn(PROCURE_POCKETS)
+  paidFrom?: ProcurePocket;
+
+  /** Shipping or fees paid together with the order, from the same pocket. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => ReceiveChargeDto)
+  charges?: ReceiveChargeDto[];
 }
 
 /** "Remaining: 1 bottle" -- what is left on the shelf, in the ingredient's own unit. */

@@ -154,6 +154,7 @@ export class ProcureController {
    * hides purchase costs from them, and refuses staff a second go at a line.
    */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @RequireIdempotency()   // paid-ahead money and fees post from here; a double-tap must not post twice
   @Post(':id/bought')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Record the shopping: packs, pack size, price paid' })
@@ -165,7 +166,7 @@ export class ProcureController {
     return this.procure.recordBought(
       user.tenantId!, id, body.lines ?? [],
       { userId: user.sub, role: user.role },
-      { note: body.note, boughtAt: body.boughtAt, onTheWay: body.onTheWay },
+      { note: body.note, boughtAt: body.boughtAt, onTheWay: body.onTheWay, paidFrom: body.paidFrom, charges: body.charges },
     );
   }
 

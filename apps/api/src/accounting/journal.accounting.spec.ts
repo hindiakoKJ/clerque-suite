@@ -47,6 +47,7 @@ const ACCOUNT_IDS: Record<string, string> = {
   '1040': 'acct-1040-input-vat',
   '1050': 'acct-1050-inventory',
   '1051': 'acct-1051-raw-materials',
+  '1063': 'acct-1063-advances',
   '2010': 'acct-2010-ap',
   '2020': 'acct-2020-vat',
   '3010': 'acct-3010-equity',
@@ -864,6 +865,23 @@ describe('JournalService — accounting correctness across business types', () =
       expect(s.credits.get('1020')).toBeCloseTo(2500, 2);
       expect(s.credits.get('1010') ?? 0).toBe(0);
       expect(s.credits.get('3010') ?? 0).toBe(0);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('paid-ahead receipt — Dr Inventory / Cr 1063: the advance is used up, no pocket touched', async () => {
+      const lines = await runProcessEvent({
+        kind:           'RAW_MATERIAL_RECEIPT',
+        productName:    'Hazelnut Syrup',
+        adjustmentType: 'STOCK_IN',
+        quantity:       1500,
+        totalValue:     1080,
+        paymentMethod:  'PREPAID',
+      }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
+      const s = summarise(lines);
+      expect(s.debits.get('1051')).toBeCloseTo(1080, 2);
+      expect(s.credits.get('1063')).toBeCloseTo(1080, 2);
+      expect(s.credits.get('1010') ?? 0).toBe(0);
+      expect(s.credits.get('1020') ?? 0).toBe(0);
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 

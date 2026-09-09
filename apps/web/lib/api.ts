@@ -100,6 +100,7 @@ const IDEMPOTENCY_PATTERNS: RegExp[] = [
   /\/inventory\/recipe-catchup\/apply\/?$/,          // POST /inventory/recipe-catchup/apply
   /\/ap\/bills\/[^/]+\/post\/?$/,                   // PATCH /ap/bills/:id/post
   /\/procure\/requests\/[^/]+\/receive\/?$/,        // POST /procure/requests/:id/receive
+  /\/procure\/requests\/[^/]+\/bought\/?$/,         // POST /procure/requests/:id/bought (paid-ahead money)
   /\/ar\/invoices\/[^/]+\/post\/?$/,                // PATCH /ar/invoices/:id/post
 ];
 

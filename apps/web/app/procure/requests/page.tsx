@@ -120,6 +120,57 @@ const POCKETS: Array<{ v: Pocket; label: string; sub: string }> = [
   { v: 'CASH',         label: 'From the till',     sub: 'Cash taken from the drawer' },
   { v: 'BANK',         label: 'Shop bank / GCash', sub: 'The business account' },
 ];
+const pocketLabel = (p: string | null | undefined) => POCKETS.find((x) => x.v === p)?.label ?? p ?? '';
+
+/** Shipping, a platform fee, parking: charges that are not stock. */
+function ChargeRows({ rows, onChange, first }: { rows: Charge[]; onChange: (rows: Charge[]) => void; first: string }) {
+  const inputCls = 'mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]';
+  return (
+    <div className="mt-3">
+      {rows.map((c, i) => (
+        <div key={i} className="mb-1.5 grid grid-cols-[1fr_5.5rem_7.5rem_auto] items-end gap-1.5">
+          <label className="text-[11px] text-muted-foreground">
+            {i === 0 ? first : ''}
+            <input value={c.description} placeholder="Shipping fee"
+              onChange={(e) => onChange(rows.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))}
+              className={inputCls} />
+          </label>
+          <label className="text-[11px] text-muted-foreground">
+            {i === 0 ? 'Amount' : ''}
+            <input inputMode="decimal" value={c.amount} placeholder="0"
+              onChange={(e) => onChange(rows.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))}
+              className={inputCls} />
+          </label>
+          <label className="text-[11px] text-muted-foreground">
+            {i === 0 ? 'Kind' : ''}
+            <select value={c.category}
+              onChange={(e) => onChange(rows.map((x, j) => (j === i ? { ...x, category: e.target.value as ChargeKind } : x)))}
+              className="mt-0.5 block w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
+              <option value="FREIGHT">Shipping / freight</option>
+              <option value="TRANSPORT">Transport, parking</option>
+              <option value="OTHER">Other</option>
+            </select>
+          </label>
+          <button type="button" aria-label="Remove this charge"
+            onClick={() => onChange(rows.filter((_x, j) => j !== i))}
+            className="mb-1 rounded p-1 text-red-600 hover:bg-red-500/10">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => onChange([...rows, { description: '', amount: '', category: 'FREIGHT' }])}
+        className="text-[11px] text-[var(--accent)] hover:underline"
+      >
+        + Shipping, delivery fee or another charge
+      </button>
+    </div>
+  );
+}
+const chargeRows = (rows: Charge[]) => rows
+  .filter((c) => c.description.trim() && parseFloat(c.amount) > 0)
+  .map((c) => ({ description: c.description.trim(), amount: parseFloat(c.amount), category: c.category }));
 const OUTCOMES: Array<{ v: Outcome; label: string }> = [
   { v: 'STILL_COMING', label: 'Still coming' },
   { v: 'REFUNDED',     label: 'Refunded' },
@@ -209,6 +260,9 @@ export default function ProcurePage() {
   const [boughtNote, setBoughtNote] = useState('');
   const [boughtDate, setBoughtDate] = useState('');
   const [ordered, setOrdered]   = useState(false);
+  /** Paid on order day, from this pocket -- the money leaves now and waits for the goods. */
+  const [paidFrom, setPaidFrom] = useState<Pocket | ''>('');
+  const [orderCharges, setOrderCharges] = useState<Charge[]>([]);
   const [photoLabel, setPhotoLabel] = useState<PhotoLabel>('Receipt');
   const fileInput = useRef<HTMLInputElement | null>(null);
 
@@ -473,11 +527,18 @@ export default function ProcurePage() {
         ...(boughtNote.trim() ? { note: boughtNote.trim() } : {}),
         ...(boughtDate ? { boughtAt: boughtDate } : {}),
         ...(ordered ? { onTheWay: true } : {}),
-      }).then((r) => r.data);
+        ...(ordered && paidFrom ? { paidFrom, charges: chargeRows(orderCharges) } : {}),
+      }).then((r) => r.data as { paidAhead?: { pocket: Pocket; total: number; posted: number; entries: Array<{ error?: string }> } });
     },
-    onSuccess: () => {
-      refresh(); setBoughtNote(''); setBoughtDate(''); setOrdered(false);
-      toast.success(ordered ? 'Recorded — marked as on the way.' : 'Shopping recorded.');
+    onSuccess: (d) => {
+      refresh(); setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
+      if (d?.paidAhead) {
+        const bad = d.paidAhead.entries.find((e) => e.error);
+        toast.success(`Recorded. ${peso(Math.abs(d.paidAhead.posted))} ${d.paidAhead.posted < 0 ? 'refunded to' : 'paid ahead from'} ${pocketLabel(d.paidAhead.pocket)}. Nothing more to pay when it arrives.`, { duration: 8000 });
+        if (bad) toast.warning(bad.error as string, { duration: 10000 });
+      } else {
+        toast.success(ordered ? 'Recorded — marked as on the way.' : 'Shopping recorded.');
+      }
     },
     onError: (e) => {
       if (e instanceof Error && !('response' in e)) { toast.error(e.message); return; }
@@ -511,9 +572,7 @@ export default function ProcurePage() {
       const closeShort = lines
         .filter((x) => x.packsArrived != null && (outcome[x.lineId] ?? 'STILL_COMING') !== 'STILL_COMING')
         .map((x) => ({ lineId: x.lineId, outcome: outcome[x.lineId] }));
-      const chargeRows = charges
-        .filter((c) => c.description.trim() && parseFloat(c.amount) > 0)
-        .map((c) => ({ description: c.description.trim(), amount: parseFloat(c.amount), category: c.category }));
+      const chargeRowsNow = chargeRows(charges);
       return api.post(`/procure/requests/${req.id}/receive`, {
         paymentMethod: paidBy,
         ...(acceptCost ? { acceptCostChange: true } : {}),
@@ -521,7 +580,7 @@ export default function ProcurePage() {
         ...(note.trim() ? { note: note.trim() } : {}),
         lines,
         ...(closeShort.length ? { closeShort } : {}),
-        ...(chargeRows.length ? { charges: chargeRows } : {}),
+        ...(chargeRowsNow.length ? { charges: chargeRowsNow } : {}),
         ...(closeRest ? { closeRest: true } : {}),
       }).then((r) => r.data as ReceiveResult);
     },
@@ -662,6 +721,8 @@ export default function ProcurePage() {
     (s, l) => s + num(l.packsBought) * num(l.packCost), 0);
   const orderedOn  = onTheWay(req);
   const balanceOf  = readTag(req.notes, 'BALANCEOF');
+  const prepaid    = readTag(req.notes, 'PREPAID') as Pocket | null;
+  const advance    = Number(readTag(req.notes, 'ADV') ?? 0) || 0;
   const humanNotes = plainNotes(req.notes);
   const unposted   = req.lines.filter((l) => !l.receivedAt);
   const postable   = unposted.filter((l) => l.packsBought != null);
@@ -753,6 +814,9 @@ export default function ProcurePage() {
               {balanceOf
                 ? <>Balance of <span className="font-mono">{balanceOf}</span> — still coming.</>
                 : <>Ordered {orderedOn} — on the way.</>}
+              {prepaid && (
+                <> {advance > 0 && !req.costsHidden ? `${peso(advance)} paid ahead` : 'Paid ahead'} from {pocketLabel(prepaid)}; nothing more to pay.</>
+              )}
               {' '}When it arrives, tick what is in the box and add it to stock.
             </span>
           </p>
@@ -1244,8 +1308,9 @@ export default function ProcurePage() {
                         <span className="pb-2">
                           {num(l.packsBought) - parseFloat(arrivedNow)} pack{num(l.packsBought) - parseFloat(arrivedNow) === 1 ? '' : 's'} short
                           {(outcome[l.id] ?? 'STILL_COMING') === 'STILL_COMING' && ' — a follow-up request will hold them'}
-                          {outcome[l.id] === 'LOST' && ' — expensed at the pack price'}
-                          {outcome[l.id] === 'REFUNDED' && ' — nothing more posts'}
+                          {outcome[l.id] === 'LOST' && (prepaid ? ' — written off from what was paid ahead' : ' — expensed at the pack price')}
+                          {outcome[l.id] === 'REFUNDED' && (prepaid ? ` — money back to ${pocketLabel(prepaid)}` : ' — nothing more posts')}
+                          {outcome[l.id] === 'NOT_COMING' && prepaid && ' — written off from what was paid ahead'}
                         </span>
                       )}
                     </div>
@@ -1288,12 +1353,43 @@ export default function ProcurePage() {
               </label>
             </div>
             <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
-              <input type="checkbox" checked={ordered} onChange={(e) => setOrdered(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
+              <input type="checkbox" checked={ordered} onChange={(e) => { setOrdered(e.target.checked); if (!e.target.checked) { setPaidFrom(''); setOrderCharges([]); } }} className="mt-0.5 accent-[var(--accent)]" />
               <span>
                 <strong className="font-medium text-foreground">Ordered — on the way.</strong>{' '}
-                Paid for or promised, not here yet. Nothing posts until it arrives.
+                Not here yet. Stock waits for the parcel.
               </span>
             </label>
+            {/*
+              Money and goods are two events. A Shopee order is paid days
+              before the parcel: say which pocket paid, and the books show it
+              today -- waiting in "paid ahead" until the goods take it onto
+              the shelf. A refund comes back to the same pocket.
+            */}
+            {ordered && canDecide && !prepaid && (
+              <div className="mt-2">
+                <p className="text-[11px] text-muted-foreground">Already paid? The money leaves the books today, from:</p>
+                <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <button type="button" onClick={() => setPaidFrom('')}
+                    className={`rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${paidFrom === '' ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-border hover:bg-muted'}`}>
+                    <span className="block font-semibold">Not paid yet</span>
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground">Pay when it arrives</span>
+                  </button>
+                  {POCKETS.map((o) => (
+                    <button key={o.v} type="button" onClick={() => setPaidFrom(o.v)}
+                      className={`rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${paidFrom === o.v ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-border hover:bg-muted'}`}>
+                      <span className="block font-semibold">{o.label}</span>
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">{o.sub}</span>
+                    </button>
+                  ))}
+                </div>
+                {paidFrom && <ChargeRows rows={orderCharges} onChange={setOrderCharges} first="Shipping or fees paid with the order" />}
+              </div>
+            )}
+            {ordered && prepaid && (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Already paid ahead from {pocketLabel(prepaid)}. A changed price posts only the difference.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -1336,27 +1432,40 @@ export default function ProcurePage() {
         )}
         {req.status === 'BOUGHT' && canDecide && (
           <div className="rounded-xl border border-border bg-card p-3">
-            <p className="text-xs font-medium">Who paid for this?</p>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-              This decides where the money comes from in the books, so the till and the bank
-              still balance tonight.
-            </p>
-            <div className="mt-2 grid grid-cols-3 gap-2">
-              {POCKETS.map((o) => (
-                <button
-                  key={o.v}
-                  onClick={() => setPaidBy(o.v)}
-                  className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${
-                    paidBy === o.v
-                      ? 'border-[var(--accent)] bg-[var(--accent)]/10'
-                      : 'border-border hover:bg-muted'
-                  }`}
-                >
-                  <span className="block text-xs font-semibold">{o.label}</span>
-                  <span className="mt-0.5 block text-[11px] text-muted-foreground">{o.sub}</span>
-                </button>
-              ))}
-            </div>
+            {prepaid ? (
+              <>
+                <p className="text-xs font-medium">Paid ahead from {pocketLabel(prepaid)}</p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  The money left on order day and has been waiting for the goods. Adding them to stock
+                  costs nothing more; a fee at the door comes from the same pocket; a pack that did not
+                  come is refunded to it or written off.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-medium">Who paid for this?</p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  This decides where the money comes from in the books, so the till and the bank
+                  still balance tonight.
+                </p>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {POCKETS.map((o) => (
+                    <button
+                      key={o.v}
+                      onClick={() => setPaidBy(o.v)}
+                      className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                        paidBy === o.v
+                          ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                          : 'border-border hover:bg-muted'
+                      }`}
+                    >
+                      <span className="block text-xs font-semibold">{o.label}</span>
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">{o.sub}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
               <label className="text-[11px] text-muted-foreground">
                 <span className="flex items-center justify-between">
@@ -1373,46 +1482,7 @@ export default function ProcurePage() {
             </div>
 
             {/* charges that came with the goods but are not stock */}
-            <div className="mt-3">
-              {charges.map((c, i) => (
-                <div key={i} className="mb-1.5 grid grid-cols-[1fr_5.5rem_7.5rem_auto] items-end gap-1.5">
-                  <label className="text-[11px] text-muted-foreground">
-                    {i === 0 ? 'Other charges' : ''}
-                    <input value={c.description} placeholder="Shipping fee"
-                      onChange={(e) => setCharges((prev) => prev.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))}
-                      className={inputCls} />
-                  </label>
-                  <label className="text-[11px] text-muted-foreground">
-                    {i === 0 ? 'Amount' : ''}
-                    <input inputMode="decimal" value={c.amount} placeholder="0"
-                      onChange={(e) => setCharges((prev) => prev.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))}
-                      className={inputCls} />
-                  </label>
-                  <label className="text-[11px] text-muted-foreground">
-                    {i === 0 ? 'Kind' : ''}
-                    <select value={c.category}
-                      onChange={(e) => setCharges((prev) => prev.map((x, j) => (j === i ? { ...x, category: e.target.value as ChargeKind } : x)))}
-                      className="mt-0.5 block w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
-                      <option value="FREIGHT">Shipping / freight</option>
-                      <option value="TRANSPORT">Transport, parking</option>
-                      <option value="OTHER">Other</option>
-                    </select>
-                  </label>
-                  <button type="button" aria-label="Remove this charge"
-                    onClick={() => setCharges((prev) => prev.filter((_x, j) => j !== i))}
-                    className="mb-1 rounded p-1 text-red-600 hover:bg-red-500/10">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setCharges((prev) => [...prev, { description: '', amount: '', category: 'FREIGHT' }])}
-                className="text-[11px] text-[var(--accent)] hover:underline"
-              >
-                + Shipping, delivery fee or another charge
-              </button>
-            </div>
+            <ChargeRows rows={charges} onChange={setCharges} first={prepaid ? 'Fees at the door' : 'Other charges'} />
           </div>
         )}
         {req.status === 'BOUGHT' && canDecide && postable.length > 0 && (

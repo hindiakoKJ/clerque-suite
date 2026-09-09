@@ -51,7 +51,9 @@ describe('ProcureService', () => {
       id: 'req1', tenantId: TENANT, branchId: BRANCH,
       requestNumber: 'REQ-20260830-001',
       status: opts.status ?? 'OPEN',
-      lines: opts.lines ?? [],
+      // Copies: the line update above mutates them like the database would, and
+      // the fixtures are shared between tests.
+      lines: (opts.lines ?? []).map((l: any) => ({ ...l })),
       ...(opts.open ?? {}),
     };
 
@@ -88,7 +90,13 @@ describe('ProcureService', () => {
           if (openList && data.purchaseRequestId === openList.id) openList.lines.push({ id: `o${openList.lines.length + 1}`, ...data });
           return Promise.resolve(data);
         }),
-        update:     jest.fn(({ where, data }: any) => { updatedLines.push({ ...where, ...data }); return Promise.resolve({}); }),
+        update:     jest.fn(({ where, data }: any) => {
+          updatedLines.push({ ...where, ...data });
+          // Like the database: the request read back after an update carries the new numbers.
+          const line = (request?.lines ?? []).find((l: any) => l.id === where.id);
+          if (line) Object.assign(line, data);
+          return Promise.resolve({});
+        }),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
         // What each ingredient held and cost the last time it was received.
         findMany:   jest.fn().mockResolvedValue(opts.lastPacks ?? []),
@@ -851,6 +859,80 @@ describe('ProcureService', () => {
     const res = await svc.sendRequest(TENANT, 'req1', USER);
     expect(res.status).toBe('SENT');
     expect(notified).toHaveLength(1);
+  });
+
+  // ── paid ahead: the shop's own GR/IR ──────────────────────────────────────
+
+  const ORDERED = [
+    { id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-haz', qtyRequested: 1500, packsBought: null, packSize: null, packCost: null, receivedAt: null, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } },
+    { id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-sug', qtyRequested: 1000, packsBought: null, packSize: null, packCost: null, receivedAt: null, rawMaterial: { name: 'White Sugar',    unit: 'g' } },
+  ];
+  const OWNER = { userId: USER, role: 'BUSINESS_OWNER' };
+
+  it('paid on order day: the money leaves the pocket into 1063, the fees too, and the request remembers', async () => {
+    const { svc, entries, req } = build({ status: 'SENT', lines: ORDERED });
+    // The harness keeps one request object; give the update the lines it will read back.
+    const res = await svc.recordBought(TENANT, 'req1', [
+      { lineId: 'l1', packsBought: 2, packSize: 750,  packCost: 540 },
+      { lineId: 'l2', packsBought: 1, packSize: 1000, packCost: 85 },
+    ], OWNER, { paidFrom: 'BANK', boughtAt: '2026-09-04', charges: [{ description: 'Shopee shipping', amount: 80, category: 'FREIGHT' }] });
+
+    expect(entries[0]).toMatchObject({ type: 'PAID_AHEAD', amount: 1165, source: 'BANK', date: '2026-09-04' });
+    expect(entries[1]).toMatchObject({ type: 'EXPENSE', amount: 80, category: 'FREIGHT', source: 'BANK', date: '2026-09-04' });
+    expect(res.paidAhead).toMatchObject({ pocket: 'BANK', total: 1165, posted: 1165 });
+    expect(req().notes).toMatch(/\[ONTHEWAY:2026-09-04\]/);
+    expect(req().notes).toMatch(/\[PREPAID:BANK\]/);
+    expect(req().notes).toMatch(/\[ADV:1165\.00\]/);
+  });
+
+  it('a corrected price posts only the difference against what was paid ahead', async () => {
+    const { svc, entries, req } = build({
+      status: 'BOUGHT',
+      open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1165.00]' },
+      lines: [{ ...ORDERED[0], packsBought: 2, packSize: 750, packCost: 540 }, { ...ORDERED[1], packsBought: 1, packSize: 1000, packCost: 85 }],
+    });
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 500 }], OWNER, { paidFrom: 'BANK' });
+    expect(entries).toEqual([expect.objectContaining({ type: 'PAID_AHEAD_REFUND', amount: 80, source: 'BANK' })]);
+    expect(req().notes).toMatch(/\[ADV:1085\.00\]/);
+  });
+
+  it('owner-funded paid ahead is the owner putting money in, then the business paying it out', async () => {
+    const { svc, entries } = build({ status: 'SENT', lines: [ORDERED[0]] });
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }], OWNER, { paidFrom: 'OWNER_FUNDED' });
+    expect(entries.map((e) => [e.type, e.amount, e.source])).toEqual([['PAID_AHEAD', 1080, 'CASH'], ['OWNER_CONTRIBUTION', 1080, 'CASH']]);
+  });
+
+  const PREPAID_BOUGHT = { open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1620.00]' }, status: 'BOUGHT', lines: BOUGHT };
+
+  it('receiving a paid-ahead order takes the goods from 1063, never the pocket; a fee at the door comes from the same pocket', async () => {
+    const { svc, received, entries } = build(PREPAID_BOUGHT);
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { charges: [{ description: 'COD handling', amount: 20 }] });
+    expect(received[0].paymentMethod).toBe('PREPAID');
+    expect(entries).toEqual([expect.objectContaining({ type: 'EXPENSE', amount: 20, source: 'BANK' })]);
+    expect(res.request.status).toBe('RECEIVED');
+  });
+
+  it('a refunded pack on a paid-ahead order comes back to the pocket that paid', async () => {
+    const { svc, entries } = build(PREPAID_BOUGHT);
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1', packsArrived: 2 }], closeShort: [{ lineId: 'l1', outcome: 'REFUNDED' }] });
+    expect(entries).toEqual([expect.objectContaining({ type: 'PAID_AHEAD_REFUND', amount: 540, source: 'BANK' })]);
+    expect(res.charges[0]).toMatchObject({ description: 'Hazelnut Syrup — 1 pack refunded', entryNumber: 'JE-1' });
+    expect(res.followUp).toBeNull();
+  });
+
+  it('a lost or never-coming pack on a paid-ahead order is written off, not charged again', async () => {
+    for (const outcome of ['LOST', 'NOT_COMING'] as const) {
+      const { svc, entries } = build(PREPAID_BOUGHT);
+      await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1', packsArrived: 2 }], closeShort: [{ lineId: 'l1', outcome }] });
+      expect(entries).toEqual([expect.objectContaining({ type: 'PAID_AHEAD_WRITE_OFF', amount: 540 })]);
+    }
+  });
+
+  it('the balance of a paid-ahead order is paid ahead too', async () => {
+    const { svc, createdRequests } = build(PREPAID_BOUGHT);
+    await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1', packsArrived: 2 }] });
+    const follow = createdRequests.find((r) => r.status === 'BOUGHT');
+    expect(follow.notes).toMatch(/\[PREPAID:BANK\]/);
   });
 
   it('will not file a photo on a cancelled request', async () => {

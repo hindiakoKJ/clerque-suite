@@ -11,7 +11,7 @@ import { MailService } from '../mail/mail.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
-import { appendNote, withTag } from './procure-notes';
+import { appendNote, withTag, readTag } from './procure-notes';
 
 /**
  * Clerque Procure — the shop asking the owner to buy something.
@@ -495,7 +495,11 @@ export class ProcureService {
     requestId: string,
     lines: BoughtLineDto[],
     actor?: { userId: string; role?: string | null },
-    extra: { note?: string; boughtAt?: string; onTheWay?: boolean } = {},
+    extra: {
+      note?: string; boughtAt?: string; onTheWay?: boolean;
+      paidFrom?: ProcurePocket;
+      charges?: Array<{ description: string; amount: number; category?: ExpenseCategory }>;
+    } = {},
   ) {
     const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'SENT' && req.status !== 'BOUGHT') {
@@ -577,8 +581,8 @@ export class ProcureService {
     let notes = req.notes;
     if (extra.note) notes = appendNote(notes, extra.note);
     const boughtDay = extra.boughtAt ? this.dayOf(extra.boughtAt) : null;
-    if (extra.onTheWay) notes = withTag(notes, 'ONTHEWAY', boughtDay ?? this.today());
-    return this.prisma.purchaseRequest.update({
+    if (extra.onTheWay || extra.paidFrom) notes = withTag(notes, 'ONTHEWAY', boughtDay ?? this.today());
+    const updated = await this.prisma.purchaseRequest.update({
       where:   { id: requestId },
       data:    {
         status:   'BOUGHT',
@@ -588,6 +592,71 @@ export class ProcureService {
       },
       include: this.lineInclude(),
     });
+    if (!extra.paidFrom) return updated;
+    const paid = await this.payAhead(tenantId, updated, actor?.userId ?? '', extra.paidFrom, boughtDay ?? this.today(), extra.charges ?? []);
+    return { ...paid.request, paidAhead: paid.summary };
+  }
+
+  /**
+   * The money left on order day; the goods have not.
+   *
+   * A Shopee order or a deposit to a supplier is paid days before the
+   * parcel. Booking it on arrival made the GCash balance in the books wrong
+   * for the whole wait. Booking it as an expense on order day made COGS
+   * wrong instead. So it waits in 1063 Advance Deposits -- a clearing
+   * account, the shop's own GR/IR -- and the arrival takes it onto the
+   * shelf from there. Refunds come back to the pocket; a parcel that never
+   * comes is written off. The request remembers the pocket and the amount,
+   * so a correction to the prices posts only the difference.
+   */
+  async payAhead(
+    tenantId: string,
+    req: { id: string; requestNumber: string; notes: string | null;
+           lines: Array<{ packsBought: Prisma.Decimal | null; packCost: Prisma.Decimal | null; receivedAt: Date | null }> },
+    userId: string,
+    pocket: ProcurePocket,
+    day: string,
+    charges: Array<{ description: string; amount: number; category?: ExpenseCategory }>,
+  ) {
+    if (!this.simple) throw new BadRequestException('Paying ahead cannot be posted on this deployment.');
+    const total = +req.lines
+      .filter((l) => !l.receivedAt && l.packsBought != null && l.packCost != null)
+      .reduce((sum, l) => sum + Number(l.packsBought) * Number(l.packCost), 0)
+      .toFixed(2);
+    const already = Number(readTag(req.notes, 'ADV') ?? 0) || 0;
+    const delta = +(total - already).toFixed(2);
+    const entries: PostedExpense[] = [];
+    const label = `Paid ahead: ${req.requestNumber}`;
+
+    if (Math.abs(delta) >= 0.01) {
+      const type = delta > 0 ? 'PAID_AHEAD' : 'PAID_AHEAD_REFUND';
+      const amount = Math.abs(delta);
+      try {
+        const je = await this.simple.create(tenantId, userId, {
+          type, amount, date: day, source: pocket === 'BANK' ? 'BANK' : 'CASH', note: label,
+        });
+        // Owner-funded: the owner put the money in, then the business paid it out.
+        if (pocket === 'OWNER_FUNDED') {
+          await this.simple.create(tenantId, userId, {
+            type: delta > 0 ? 'OWNER_CONTRIBUTION' : 'OWNER_DRAWING', amount, date: day, source: 'CASH',
+            note: `${delta > 0 ? 'Owner paid' : 'Owner took back'}: ${label}`,
+          });
+        }
+        entries.push({ description: delta > 0 ? 'Paid ahead' : 'Paid-ahead correction', amount, entryNumber: je.entryNumber, status: je.status });
+      } catch (err) {
+        entries.push({ description: 'Paid ahead', amount, error: err instanceof Error ? err.message : 'Could not post.' });
+      }
+    }
+    const fees = charges.length > 0 ? await this.postExpenses(tenantId, userId, day, req.requestNumber, pocket, charges) : [];
+
+    // Paid ahead means not here yet: the request is on the way from this day.
+    let notes = readTag(req.notes, 'ONTHEWAY') ? req.notes : withTag(req.notes, 'ONTHEWAY', day);
+    notes = withTag(notes, 'PREPAID', pocket);
+    notes = withTag(notes, 'ADV', total.toFixed(2));
+    const request = await this.prisma.purchaseRequest.update({
+      where: { id: req.id }, data: { notes }, include: this.lineInclude(),
+    });
+    return { request, summary: { pocket, total, posted: delta, entries: [...entries, ...fees] } };
   }
 
   // ── posting to stock ──────────────────────────────────────────────────────
@@ -631,6 +700,15 @@ export class ProcureService {
     }
     const outcomeOf = new Map<string, ShortOutcome>((opts.closeShort ?? []).map((c) => [c.lineId, c.outcome]));
     const receivedDay = opts.receivedAt ? this.dayOf(opts.receivedAt) : this.today();
+    /*
+      Paid on order day: the pocket was charged then, into 1063. The shelf
+      takes the goods from 1063 now, and anything short settles against it
+      -- a refund back to the same pocket, a loss written off -- never a
+      second charge to the pocket.
+    */
+    const prepaidPocket = readTag(req.notes, 'PREPAID') as ProcurePocket | null;
+    const pocket: ProcurePocket = prepaidPocket ?? paymentMethod;
+    const inventoryPocket: ProcurePocket | 'PREPAID' = prepaidPocket ? 'PREPAID' : paymentMethod;
 
     const posted:  Array<{ line: string; name: string; quantity: number; unitCost: number; warning: string | null }> = [];
     const skipped: Array<{ line: string; name: string; reason: string }> = [];
@@ -669,7 +747,7 @@ export class ProcureService {
             branchId:        req.branchId,
             quantity,
             costPrice:       unitCost,
-            paymentMethod,
+            paymentMethod:   inventoryPocket,
             referenceNumber: line.lineNumber,
             note:            [opts.note, line.brandNote].filter(Boolean).join(' · ') || undefined,
             receivedAt:      receivedDay,
@@ -706,38 +784,40 @@ export class ProcureService {
 
     // ── what was short ─────────────────────────────────────────────────────
     const stillComing = short.filter((x) => x.outcome === 'STILL_COMING');
-    const followUp = stillComing.length > 0 ? await this.createFollowUp(tenantId, req, userId, stillComing) : null;
+    const followUp = stillComing.length > 0 ? await this.createFollowUp(tenantId, req, userId, stillComing, prepaidPocket) : null;
     let notes = req.notes;
     const lost: Array<{ description: string; amount: number; category: ExpenseCategory }> = [];
+    const settled: PostedExpense[] = [];
     for (const x of short) {
       const missing = +(x.packsBought - x.packsArrived).toFixed(4);
       const word: Record<ShortOutcome, string> = {
         STILL_COMING: followUp ? `still coming (${followUp.requestNumber})` : 'still coming',
         REFUNDED:     'refunded',
         LOST:         'lost, expensed',
-        NOT_COMING:   'not coming',
+        NOT_COMING:   prepaidPocket ? 'not coming, written off' : 'not coming',
       };
       notes = appendNote(notes, `${x.name}: bought ${x.packsBought}, ${x.packsArrived} arrived, ${missing} ${word[x.outcome]}`);
-      if (x.outcome === 'LOST') {
-        lost.push({
-          description: `${x.name} — ${missing} pack${missing === 1 ? '' : 's'} paid for and lost`,
-          amount:      +(missing * x.packCost).toFixed(2),
-          category:    'OTHER',
-        });
+      const value = +(missing * x.packCost).toFixed(2);
+      const what  = `${x.name} — ${missing} pack${missing === 1 ? '' : 's'}`;
+      if (prepaidPocket && value >= 0.01 && (x.outcome === 'REFUNDED' || x.outcome === 'LOST' || x.outcome === 'NOT_COMING')) {
+        // Against the advance, never the pocket a second time.
+        settled.push(...await this.settleAdvance(tenantId, userId, receivedDay, req.requestNumber, prepaidPocket, x.outcome, what, value));
+      } else if (x.outcome === 'LOST') {
+        lost.push({ description: `${what} paid for and lost`, amount: value, category: 'OTHER' });
       }
     }
     if (opts.note) notes = appendNote(notes, opts.note);
 
     // ── charges: with the goods, once ──────────────────────────────────────
-    let charges: PostedExpense[] = [];
+    let charges: PostedExpense[] = [...settled];
     const side = [...(opts.charges ?? []), ...lost];
     if (side.length > 0) {
       if (posted.length > 0 || lost.length > 0) {
-        charges = await this.postExpenses(tenantId, userId, receivedDay, req.requestNumber, paymentMethod, side);
+        charges = [...charges, ...await this.postExpenses(tenantId, userId, receivedDay, req.requestNumber, pocket, side)];
       } else {
         // Nothing reached the shelf in this call, so nothing rides along
         // with it: a charge posted twice is worse than one posted late.
-        charges = side.map((c) => ({ description: c.description, amount: c.amount, error: 'Not recorded: nothing was posted in this call. Add it with the lines you post.' }));
+        charges = [...charges, ...side.map((c) => ({ description: c.description, amount: c.amount, error: 'Not recorded: nothing was posted in this call. Add it with the lines you post.' }))];
       }
     }
 
@@ -814,14 +894,15 @@ export class ProcureService {
     req: { branchId: string; requestNumber: string },
     userId: string,
     short: Array<{ rawMaterialId: string; packsBought: number; packsArrived: number; packSize: number; packCost: number; brandNote: string | null }>,
+    prepaidPocket: ProcurePocket | null = null,
   ) {
     const requestNumber = await this.nextNumber(tenantId);
     const numbered: Array<{ lineNumber: string }> = [];
     const now = new Date();
-    const notes = appendNote(
-      withTag(withTag(null, 'BALANCEOF', req.requestNumber), 'ONTHEWAY', this.today()),
-      `Balance of ${req.requestNumber}: still coming`,
-    );
+    let notes = withTag(withTag(null, 'BALANCEOF', req.requestNumber), 'ONTHEWAY', this.today());
+    // Already paid for, on the original: the balance takes its goods from the same advance.
+    if (prepaidPocket) notes = withTag(notes, 'PREPAID', prepaidPocket);
+    notes = appendNote(notes, `Balance of ${req.requestNumber}: still coming`);
     return this.prisma.purchaseRequest.create({
       data: {
         tenantId, branchId: req.branchId, requestNumber,
@@ -904,6 +985,34 @@ export class ProcureService {
       }
     }
     return out;
+  }
+
+  /**
+   * What happens to money paid ahead for packs that did not come. A refund
+   * returns to the pocket that paid (an owner's own money goes back out to
+   * the owner); a loss, or a parcel that will never come, is written off.
+   */
+  private async settleAdvance(
+    tenantId: string, userId: string, day: string, label: string,
+    pocket: ProcurePocket, outcome: ShortOutcome, what: string, amount: number,
+  ): Promise<PostedExpense[]> {
+    if (!this.simple) throw new BadRequestException('Paid-ahead settlement cannot be posted on this deployment.');
+    const refund = outcome === 'REFUNDED';
+    const description = refund ? `${what} refunded` : `${what} paid ahead, never received`;
+    try {
+      const je = await this.simple.create(tenantId, userId, {
+        type: refund ? 'PAID_AHEAD_REFUND' : 'PAID_AHEAD_WRITE_OFF',
+        amount, date: day, source: pocket === 'BANK' ? 'BANK' : 'CASH', note: `${label}: ${description}`.slice(0, 200),
+      });
+      if (refund && pocket === 'OWNER_FUNDED') {
+        await this.simple.create(tenantId, userId, {
+          type: 'OWNER_DRAWING', amount, date: day, source: 'CASH', note: `Refund to the owner: ${label}`.slice(0, 200),
+        });
+      }
+      return [{ description, amount, entryNumber: je.entryNumber, status: je.status }];
+    } catch (err) {
+      return [{ description, amount, error: err instanceof Error ? err.message : 'Could not post.' }];
+    }
   }
 
   // ── the paper ─────────────────────────────────────────────────────────────

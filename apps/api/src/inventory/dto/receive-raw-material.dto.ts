@@ -35,9 +35,15 @@ export class ReceiveRawMaterialDto {
    *   - CREDIT       → Cr 2010 Accounts Payable (for accrual / Net-30 suppliers)
    *   - OWNER_FUNDED → Cr 3010 Owner's Capital (owner stocked from personal funds)
    */
+  /*
+    PREPAID is in the type but not the list: only Procure may say it, for a
+    request whose money already left the pocket on order day and waits in
+    1063. Said over HTTP it would credit the clearing account with no
+    advance behind it.
+  */
   @IsOptional()
   @IsIn(['CASH', 'BANK', 'CREDIT', 'OWNER_FUNDED'])
-  paymentMethod?: 'CASH' | 'BANK' | 'CREDIT' | 'OWNER_FUNDED';
+  paymentMethod?: 'CASH' | 'BANK' | 'CREDIT' | 'OWNER_FUNDED' | 'PREPAID';
 
   /** Optional reference (PO number, supplier invoice number, DR number, etc.) */
   @IsOptional()

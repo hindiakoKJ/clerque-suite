@@ -854,6 +854,7 @@ export class JournalService {
             isCountCorrection          ? '5060' :  // Inventory Write-off — reverses a shortage
             paymentMethod === 'CASH'   ? '1010' :  // Cash on Hand — supplier paid in cash today
             paymentMethod === 'BANK'   ? '1020' :  // Cash in Bank — the shop's bank or GCash paid
+            paymentMethod === 'PREPAID' ? '1063' : // Advance Deposits — paid on order day, cleared now
             paymentMethod === 'CREDIT' ? '2010' :  // Accounts Payable — Net-30 / accrual
                                          '3010';   // Owner's Capital — owner funded the stock
           const creditDescription =
@@ -861,6 +862,7 @@ export class JournalService {
             isCountCorrection          ? `Count correction — ${productName} found` :
             paymentMethod === 'CASH'   ? `Cash purchase — ${productName}` :
             paymentMethod === 'BANK'   ? `Bank purchase — ${productName}` :
+            paymentMethod === 'PREPAID' ? `Paid ahead, now received — ${productName}` :
             paymentMethod === 'CREDIT' ? `Supplier credit — ${productName}` :
                                          'Owner equity — inventory funded';
 

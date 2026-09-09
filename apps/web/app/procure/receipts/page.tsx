@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
-  Camera, Sparkles, Loader2, Plus, Trash2, Check, AlertTriangle, PackageCheck, Receipt, RotateCcw,
+  Camera, Sparkles, Loader2, Plus, Trash2, Check, AlertTriangle, PackageCheck, Receipt, RotateCcw, Paperclip, ClipboardList,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -23,6 +23,26 @@ import { formatPeso } from '@/lib/utils';
  */
 
 interface Ingredient { id: string; name: string; unit: string; category: string }
+
+/**
+ * The kitchen's request this receipt belongs to, when the screen was opened
+ * from one (?request=<id>). Its lines seed the rows, the reader matches its
+ * ingredients first, and posting lands ON it -- one trip, one control
+ * number -- instead of making a second request beside it.
+ */
+interface RequestLine {
+  id: string; lineNumber: string; rawMaterialId: string;
+  qtyRequested: string | number;
+  packsBought: string | number | null; packSize: string | number | null; packCost: string | number | null;
+  brandNote: string | null; receivedAt: string | null;
+  rawMaterial: { id: string; name: string; unit: string };
+  lastPack?: { packSize: number; packCost: number | null; brandNote: string | null } | null;
+}
+interface RequestForReceipt {
+  id: string; requestNumber: string; status: string; boughtAt?: string | null; notes?: string | null;
+  branchId?: string; branch?: { id: string; name: string } | null; lines: RequestLine[];
+}
+interface FiledPhoto { id: string; filename: string; label: string | null }
 
 interface Suggested {
   index: number;
@@ -80,6 +100,10 @@ interface Row {
   printedQty: number | null;
   printedUnit: string | null;
   fromReader: boolean;
+  /** Which photo wrote this row: reading the same photo again replaces only its own rows. */
+  fromPhoto: number | null;
+  /** Seeded from a request line; the person's own packs on it are never overwritten by a reading. */
+  fromLine: boolean;
   failedReason: string | null;
   alternatives: Suggested['alternatives'];
 }
@@ -90,8 +114,9 @@ const blankRow = (): Row => ({
   newName: '', newUnit: 'g', newCategory: 'INGREDIENT',
   packs: '1', size: '', cost: '', brand: '', amount: '', category: 'OTHER',
   acceptCostChange: false, note: null, confidence: null, score: null, printedQty: null, printedUnit: null,
-  fromReader: false, failedReason: null, alternatives: [],
+  fromReader: false, fromPhoto: null, fromLine: false, failedReason: null, alternatives: [],
 });
+const num0 = (v: unknown) => (v == null ? 0 : Number(v));
 
 /** "P195", "₱1,250", "1 250.50" -> the number; anything else -> NaN, which the checks below name. */
 const num = (s: string) => { const n = parseFloat(String(s ?? '').replace(/[₱Pp,\s]/g, '')); return Number.isFinite(n) ? n : NaN; };
@@ -252,6 +277,69 @@ export default function ReceiptsPage() {
   const [result, setResult] = useState<any>(null);
   const takeRef = useRef<HTMLInputElement>(null);
   const chooseRef = useRef<HTMLInputElement>(null);
+  /** Counts photos taken this session, so a re-read replaces only its own rows. */
+  const [photoSeq, setPhotoSeq] = useState(0);
+
+  /*
+    ?request=<id>: opened from the request card. Read once from the URL in an
+    effect (not useSearchParams, which would need a Suspense boundary for the
+    build), then the request is fetched and its lines become the rows.
+  */
+  const [requestId, setRequestId] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const id = new URLSearchParams(window.location.search).get('request');
+    if (id) setRequestId(id);
+  }, []);
+  const { data: request } = useQuery<RequestForReceipt>({
+    queryKey: ['receipt-request', requestId],
+    queryFn:  () => api.get(`/procure/requests/${requestId}`).then((r) => r.data),
+    enabled:  !!user && !!requestId,
+    staleTime: 30_000,
+  });
+  const { data: filed = [] } = useQuery<FiledPhoto[]>({
+    queryKey: ['request-docs', requestId],
+    queryFn:  () => api.get('/documents', { params: { entityType: 'PurchaseRequest', entityId: requestId } }).then((r) => r.data),
+    enabled:  !!user && !!requestId,
+    staleTime: 60_000,
+  });
+  const seeded = useRef<string | null>(null);
+  useEffect(() => {
+    if (!request || seeded.current === request.id) return;
+    seeded.current = request.id;
+    if (request.branchId) setBranchId(request.branchId);
+    if (request.boughtAt) setDate(String(request.boughtAt).slice(0, 10));
+    // The lines the kitchen asked for, unposted ones only, with what is known
+    // about them: what was recorded, else what one held and cost last time.
+    setRows(request.lines.filter((l) => !l.receivedAt).map((l) => {
+      const lp = l.lastPack;
+      const recorded = l.packsBought != null;
+      return {
+        ...blankRow(),
+        description: l.rawMaterial.name,
+        rawMaterialId: l.rawMaterialId,
+        packs: recorded ? String(num0(l.packsBought)) : (lp && lp.packSize > 0 ? String(Math.max(1, Math.ceil(num0(l.qtyRequested) / lp.packSize))) : '1'),
+        size:  recorded && l.packSize != null ? String(num0(l.packSize)) : (lp ? String(lp.packSize) : ''),
+        cost:  recorded && l.packCost != null ? String(num0(l.packCost)) : (lp?.packCost != null ? String(lp.packCost) : ''),
+        brand: l.brandNote ?? lp?.brandNote ?? '',
+        fromLine: true,
+      };
+    }));
+  }, [request]);
+
+  /** Read a photo somebody already filed with the request, without re-uploading it. */
+  async function useFiled(doc: FiledPhoto) {
+    try {
+      const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
+      const blob = res.data as Blob;
+      const file = new File([blob], doc.filename, { type: blob.type || 'image/jpeg' });
+      const shot = await prepareReceipt(file);
+      setPhoto({ ...shot.file, strips: shot.strips, previewUrl: `data:image/jpeg;base64,${shot.file.base64}` });
+      setPhotoSeq((n) => n + 1);
+      setReading(null); setResult(null);
+      if (rows.length === 0) setRows([blankRow()]);
+    } catch (err) { fail(err, `Could not open ${doc.filename}.`); }
+  }
 
   const { data: ingredients = [] } = useQuery<Ingredient[]>({
     queryKey: ['raw-materials'],
@@ -306,6 +394,7 @@ export default function ReceiptsPage() {
         strips: shot.strips,
         previewUrl: `data:image/jpeg;base64,${shot.file.base64}`,
       });
+      setPhotoSeq((n) => n + 1);   // a new photo: its reading appends, it does not replace
       setReading(null);
       setResult(null);
       if (rows.length === 0) setRows([blankRow()]);
@@ -321,6 +410,7 @@ export default function ReceiptsPage() {
     // request. A short receipt is one strip, so this is the same call it was.
     mutationFn: () => api.post('/procure/receipts/parse', {
       images: photo!.strips.map((s) => ({ base64: s.base64, mediaType: s.mediaType })),
+      ...(requestId ? { purchaseRequestId: requestId } : {}),
     }).then((r) => r.data as ParseResult),
     onSuccess: (r) => {
       setReading(r);
@@ -347,12 +437,38 @@ export default function ReceiptsPage() {
           printedQty: l.quantity,
           printedUnit: l.unit,
           fromReader: true,
+          fromPhoto: photoSeq,
           alternatives: l.alternatives,
         };
       });
-      // A second reading replaces only what the first reading wrote. Lines the
-      // person added by hand stay.
-      setRows((prev) => [...readRows, ...prev.filter((x) => !x.fromReader)]);
+      /*
+        Reading the SAME photo again replaces only what that photo wrote; a
+        second photo (the next stall, the bottom half of a long receipt)
+        appends. A reader line that names an ingredient already on the
+        request lands on that row: the size and price the paper shows are
+        filled in, the packs a person recorded are left alone.
+      */
+      setRows((prev) => {
+        const kept = prev.filter((x) => x.fromPhoto !== photoSeq);
+        const leftover: Row[] = [];
+        for (const rr of readRows) {
+          const hit = rr.rawMaterialId ? kept.find((x) => x.fromLine && x.rawMaterialId === rr.rawMaterialId && !x.fromReader) : undefined;
+          if (!hit) { leftover.push(rr); continue; }
+          const idx = kept.indexOf(hit);
+          const recordedPacks = request?.lines.find((l) => l.id && l.rawMaterialId === hit.rawMaterialId)?.packsBought != null;
+          kept[idx] = {
+            ...hit,
+            description: rr.description,
+            packs: recordedPacks ? hit.packs : rr.packs,
+            size:  rr.size || hit.size,
+            cost:  rr.cost || hit.cost,
+            note: rr.note, confidence: rr.confidence, score: rr.score,
+            printedQty: rr.printedQty, printedUnit: rr.printedUnit, alternatives: rr.alternatives,
+            fromReader: true, fromPhoto: photoSeq,
+          };
+        }
+        return [...kept, ...leftover];
+      });
       const s = r.summary;
       toast.success(`Read ${s.lines} line${s.lines === 1 ? '' : 's'} — ${s.matched} matched${s.unmatched ? `, ${s.unmatched} to pick` : ''}${s.needsPack ? `, ${s.needsPack} need a pack size` : ''}.`);
     },
@@ -374,14 +490,14 @@ export default function ReceiptsPage() {
   });
 
   function readReceipt() {
-    const corrected = rows.some((x) => x.fromReader && (x.rawMaterialId || x.cost.trim()));
-    if (corrected && !window.confirm('Read again? The lines the reader filled in will be replaced; lines you added by hand stay.')) return;
+    const corrected = rows.some((x) => x.fromReader && x.fromPhoto === photoSeq && (x.rawMaterialId || x.cost.trim()));
+    if (corrected && !window.confirm('Read again? The lines this photo filled in will be replaced; everything else stays.')) return;
     read.mutate();
   }
 
   // ── posting ─────────────────────────────────────────────────────────────
   const post = useMutation({
-    mutationFn: () => {
+    mutationFn: (postNow: boolean) => {
       const lines = rows.filter((r) => r.kind === 'stock').map((r) => ({
         ...(r.createNew
           ? { create: { name: r.newName.trim(), unit: r.newUnit.trim(), category: r.newCategory } }
@@ -397,6 +513,7 @@ export default function ReceiptsPage() {
       }));
       return api.post('/procure/receipts/confirm', {
         ...(branchId ? { branchId } : {}),
+        ...(requestId ? { purchaseRequestId: requestId, postNow } : {}),
         ...(vendor.trim() ? { vendor: vendor.trim() } : {}),
         receiptDate: date,
         ...(ref.trim() ? { referenceNumber: ref.trim() } : {}),
@@ -410,7 +527,10 @@ export default function ReceiptsPage() {
       setResult(r);
       qc.invalidateQueries({ queryKey: ['raw-materials'] });
       qc.invalidateQueries({ queryKey: ['procure-low'] });
+      qc.invalidateQueries({ queryKey: ['procure-requests'] });
+      qc.invalidateQueries({ queryKey: ['request-docs', requestId] });
       if (r.duplicate) toast.message('This receipt was already posted. Nothing was added twice.');
+      else if (r.recorded && r.posted?.length === 0 && !r.failed?.length) toast.success(`Saved onto ${r.request?.requestNumber}. Nothing posted yet.`);
       else if (r.failed?.length) toast.warning(`${r.posted.length} posted, ${r.failed.length} could not be — see below.`);
       else toast.success('In stock. The receipt is filed with the request.');
     },
@@ -482,7 +602,7 @@ export default function ReceiptsPage() {
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="flex items-center gap-2 text-sm font-semibold">
             {r.failed?.length ? <AlertTriangle className="h-5 w-5 text-amber-500" /> : <Check className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />}
-            {r.duplicate ? 'Already posted' : r.failed?.length ? 'Partly posted' : 'Posted'}
+            {r.duplicate ? 'Already posted' : r.failed?.length ? 'Partly posted' : r.recorded && r.posted?.length === 0 ? 'Saved to the request' : 'Posted'}
             <span className="ml-auto font-mono text-xs text-muted-foreground">{r.request?.requestNumber}</span>
           </div>
           {r.posted?.length > 0 && (
@@ -538,6 +658,12 @@ export default function ReceiptsPage() {
             <RotateCcw className="h-4 w-4" /> Fix the {r.failed.length === 1 ? 'line' : `${r.failed.length} lines`} and post again
           </button>
         )}
+        {r.request?.requestNumber && requestId && (
+          <a href={`/procure/requests?view=${r.request.requestNumber}`}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--accent)] px-4 py-3 text-sm font-semibold text-[var(--accent)]">
+            <ClipboardList className="h-4 w-4" /> Back to {r.request.requestNumber}
+          </a>
+        )}
         <button onClick={() => reset(false)} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white">
           <Camera className="h-4 w-4" /> Another receipt
         </button>
@@ -551,6 +677,31 @@ export default function ReceiptsPage() {
       <input ref={takeRef}   type="file" accept="image/*" capture="environment" className="hidden" onChange={onPhoto} />
       <input ref={chooseRef} type="file" accept="image/*" className="hidden" onChange={onPhoto} />
 
+      {/* 0. the request this belongs to */}
+      {requestId && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--accent)]/40 bg-[var(--accent)]/5 px-4 py-3 text-xs">
+          <ClipboardList className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+          {request ? (
+            <span>
+              Onto <span className="font-mono font-semibold">{request.requestNumber}</span>
+              {request.branch?.name ? ` · ${request.branch.name}` : ''} — the lines below are the kitchen&apos;s list.
+              Nothing becomes a second request.
+            </span>
+          ) : <span>Loading the request…</span>}
+          {filed.length > 0 && (
+            <span className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
+              <span className="text-muted-foreground">Read a filed photo:</span>
+              {filed.map((d) => (
+                <button key={d.id} type="button" onClick={() => void useFiled(d)}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] hover:bg-muted">
+                  <Paperclip className="h-3 w-3" /> {d.label ?? 'Receipt'}
+                </button>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* 1. the photo */}
       <div className="rounded-xl border border-border bg-card p-4">
         <div className="flex items-start gap-3">
@@ -560,6 +711,7 @@ export default function ReceiptsPage() {
             <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
               Photograph it flat, whole, in good light. The reader fills the lines in; you correct
               what it got wrong and post. You can also type the lines without a photo.
+              {requestId ? ' A second photo (another stall, the rest of a long receipt) adds to the lines.' : ''}
             </p>
           </div>
         </div>
@@ -836,14 +988,26 @@ export default function ReceiptsPage() {
             {problems.length > 3 && <li>…and {problems.length - 3} more</li>}
           </ul>
         )}
-        <button
-          onClick={() => post.mutate()}
-          disabled={post.isPending || problems.length > 0}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-50"
-        >
-          {post.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
-          Post to stock{expenseTotal > 0 ? ' and the books' : ''}
-        </button>
+        <div className="flex gap-2">
+          {requestId && (
+            <button
+              onClick={() => post.mutate(false)}
+              disabled={post.isPending || problems.length > 0}
+              title="Write the lines and file the photo onto the request. Post later, when the goods are here."
+              className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-3 py-3 text-xs font-medium shadow-lg disabled:opacity-50"
+            >
+              Save to the request
+            </button>
+          )}
+          <button
+            onClick={() => post.mutate(true)}
+            disabled={post.isPending || problems.length > 0}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-50"
+          >
+            {post.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+            Post to stock{expenseTotal > 0 ? ' and the books' : ''}
+          </button>
+        </div>
       </div>
     </div>
   );

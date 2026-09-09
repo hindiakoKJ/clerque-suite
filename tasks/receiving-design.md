@@ -1,6 +1,6 @@
 # Receiving goods: one door for palengke, Shopee/Lazada and supplier deliveries
 
-Design assessment, 2026-09-06. PROPOSED, NOT BUILT. Produced from four code readers, four independent designs, three judges, one synthesis, and a 49-claim fact check against the code (45 hold; the 4 refuted were precision fixes, noted at the end). No database column is required by any step.
+Design assessment, 2026-09-06. STATUS 2026-09-09: steps 1-6 BUILT and live (see tasks/todo.md); steps 7-9 open. Produced from four code readers, four independent designs, three judges, one synthesis, and a 49-claim fact check against the code (45 hold; the 4 refuted were precision fixes, noted at the end). No database column is required by any step.
 
 ## The recommendation
 

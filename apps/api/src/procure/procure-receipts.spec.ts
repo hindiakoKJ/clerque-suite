@@ -25,10 +25,13 @@ describe('ProcureReceiptsService', () => {
   function build(opts: {
     aiText?: string;
     existingByKey?: any;
+    /** The kitchen's own request, already there for a receipt to land on. */
+    kitchen?: any;
     receiveImpl?: (rmId: string, dto: any) => any;
     twin?: { id: string; name: string; isActive: boolean } | null;
   } = {}) {
     const requests: any[] = [];
+    if (opts.kitchen) requests.push(opts.kitchen);
     const received: Array<{ rmId: string; dto: any }> = [];
     const entries: any[] = [];
     const docs: any[] = [];
@@ -503,6 +506,101 @@ describe('ProcureReceiptsService', () => {
       paymentMethod: 'CASH',
       lines: [{ rawMaterialId: 'sugar', create: { name: 'X', unit: 'g' }, packsBought: 1, packSize: 1, packCost: 1 }],
     })).rejects.toThrow(/either an existing ingredient or a new one/);
+  });
+
+  // ── onto the kitchen's request ────────────────────────────────────────────
+
+  const kitchen = (): any => ({
+    id: 'req-k', tenantId: TENANT, branchId: BRANCH, requestNumber: 'REQ-20260901-004', status: 'SENT',
+    notes: null, boughtAt: null,
+    lines: [
+      { id: 'k1', lineNumber: 'REQ-20260901-004-01', rawMaterialId: 'sugar', qtyRequested: 500, shortBy: 100,
+        packsBought: null, packSize: null, packCost: null, brandNote: null, receivedAt: null,
+        rawMaterial: MATERIALS.find((m) => m.id === 'sugar') },
+    ],
+    branch: { id: BRANCH, name: 'Main' },
+  });
+
+  it('writes the receipt onto the kitchen\'s request instead of beside it', async () => {
+    const { svc, prisma, received, requests, docs, entries } = build({ kitchen: kitchen() });
+    const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1', imageBase64: 'AAAA' });
+
+    // No second request. The sugar line keeps what was asked for; the wings become line 02.
+    expect(prisma.purchaseRequest.create).not.toHaveBeenCalled();
+    const sugar = requests[0].lines.find((l: any) => l.rawMaterialId === 'sugar');
+    expect(Number(sugar.packsBought)).toBe(1);
+    expect(Number(sugar.packCost)).toBe(85);
+    expect(sugar.qtyRequested).toBe(500);
+    const wings = requests[0].lines.find((l: any) => l.rawMaterialId === 'wings');
+    expect(wings.lineNumber).toBe('REQ-20260901-004-02');
+    expect(Number(wings.qtyRequested)).toBeCloseTo(5.81 * 18, 3);
+
+    // Posted on the receipt's date with the request's own control numbers, the fee with them.
+    expect(received.map((x) => x.dto.referenceNumber)).toEqual(['REQ-20260901-004-01', 'REQ-20260901-004-02']);
+    expect(received[0].dto.receivedAt).toBe('2026-09-02');
+    expect(entries.map((e) => e.type)).toEqual(['EXPENSE']);
+    expect(r.expenses[0].entryNumber).toBe('JE-1');
+    expect(r.request.status).toBe('RECEIVED');
+    expect(r.request.notes).toMatch(/\[RCPT:k1\]/);
+    expect(r.request.notes).toMatch(/Puregold · OR 4471/);
+    expect(docs).toEqual([expect.objectContaining({ id: 'req-k', name: 'receipt-REQ-20260901-004.jpg' })]);
+  });
+
+  it('record-only writes the lines and files the photo, and posts nothing', async () => {
+    const { svc, received, requests, docs, entries } = build({ kitchen: kitchen() });
+    const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', postNow: false, receiptDate: '2026-09-04', imageBase64: 'AAAA' });
+    expect(received).toEqual([]);
+    expect(entries).toEqual([]);
+    expect(r.posted).toEqual([]);
+    expect(requests[0].status).toBe('BOUGHT');
+    expect(requests[0].boughtAt.toISOString()).toBe('2026-09-03T16:00:00.000Z');   // midnight in Manila on the receipt date
+    expect(docs).toHaveLength(1);
+  });
+
+  it('a replay onto the request files the photo once and posts nothing twice', async () => {
+    const { svc, received, docs } = build({ kitchen: kitchen() });
+    const first = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1', imageBase64: 'AAAA' });
+    expect(first.posted).toHaveLength(2);
+    const again = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1', imageBase64: 'AAAA' });
+    expect(again.duplicate).toBe(true);
+    expect(received).toHaveLength(2);                 // nothing posted a second time
+    expect(docs).toHaveLength(1);
+  });
+
+  it('leaves a line that is already in stock alone, and says so', async () => {
+    const k = kitchen();
+    k.status = 'BOUGHT';
+    k.lines[0] = { ...k.lines[0], packsBought: 2, packSize: 1000, packCost: 80, receivedAt: new Date('2026-09-01T02:00:00Z') };
+    const { svc, received, requests } = build({ kitchen: k });
+    const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', expenses: [] });
+    expect(Number(requests[0].lines[0].packCost)).toBe(80);                 // untouched
+    expect(r.skipped.some((s: any) => /already in stock/i.test(s.reason))).toBe(true);
+    expect(received.map((x) => x.rmId)).toEqual(['wings']);
+  });
+
+  it('refuses to land on a request that is already in stock', async () => {
+    const k = kitchen();
+    k.status = 'RECEIVED';
+    const { svc } = build({ kitchen: k });
+    await expect(svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k' })).rejects.toThrow(/already in stock/i);
+  });
+
+  it('when reading for a request, an ingredient on the list wins a tie', async () => {
+    // Two names made of the same two words score the same on "WHITE SUGAR 1KG":
+    // a tie, which the matcher refuses to break by alphabet.
+    const twoSugars = [
+      { id: 'brown', name: 'Sugar White', unit: 'g', category: 'INGREDIENT', costPrice: 0.09 },
+      { id: 'sugar', name: 'White Sugar', unit: 'g', category: 'INGREDIENT', costPrice: 0.085 },
+    ];
+    const reading = JSON.stringify({ vendor: 'X', dateText: null, dateIso: null, referenceNumber: null, total: 85,
+      lines: [{ description: 'WHITE SUGAR 1KG', quantity: 1, unit: 'kg', unitPrice: 85, lineTotal: 85, kind: 'ingredient', confidence: 0.9 }] });
+    const { svc, prisma } = build({ aiText: reading, kitchen: kitchen() });
+    prisma.rawMaterial.findMany.mockResolvedValue(twoSugars);
+
+    const alone = await svc.parse(TENANT, USER, { imageBase64: 'AAAA' } as any);
+    expect(alone.lines[0].match).toBeNull();                                // a tie among strangers
+    const withList = await svc.parse(TENANT, USER, { imageBase64: 'AAAA', purchaseRequestId: 'req-k' } as any);
+    expect(withList.lines[0].match?.rawMaterialId).toBe('sugar');           // the one the kitchen asked for
   });
 
   it('refuses a date that is not a date', async () => {

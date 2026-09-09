@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   Plus, Send, ShoppingCart, PackageCheck, Loader2, Trash2, Sparkles, Check, AlertTriangle, Paperclip,
-  Camera, Copy, Truck,
+  Camera, Copy, Truck, Sparkle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -734,15 +734,29 @@ export default function ProcurePage() {
               </button>
             </div>
           )}
-          {req.status === 'SENT' && req.lines.length > 0 && (
-            <button
-              type="button"
-              onClick={() => void copyList()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-              title="Copy the list as a message, for an order over Viber or Messenger"
-            >
-              <Copy className="h-3.5 w-3.5" /> Copy as message
-            </button>
+          {(req.status === 'SENT' || req.status === 'BOUGHT') && (
+            <div className="flex gap-2">
+              {req.status === 'SENT' && req.lines.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void copyList()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  title="Copy the list as a message, for an order over Viber or Messenger"
+                >
+                  <Copy className="h-3.5 w-3.5" /> Copy as message
+                </button>
+              )}
+              {canDecide && (
+                <button
+                  type="button"
+                  onClick={() => router.push(`/procure/receipts?request=${req.id}`)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  title="Let the reader fill the lines from a photo of the receipt -- onto this request"
+                >
+                  <Sparkle className="h-3.5 w-3.5" /> Read the receipt
+                </button>
+              )}
+            </div>
           )}
         </div>
 

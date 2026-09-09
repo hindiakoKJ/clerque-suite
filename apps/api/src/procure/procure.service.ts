@@ -982,7 +982,7 @@ export class ProcureService {
    * Never below the line count either: a row whose number cannot be parsed
    * must not let the next one collide with an existing suffix.
    */
-  private nextLineNumber(requestNumber: string, lines: Array<{ lineNumber: string }>): string {
+  nextLineNumber(requestNumber: string, lines: Array<{ lineNumber: string }>): string {
     const highest = lines.reduce((max, l) => {
       const n = parseInt(String(l.lineNumber ?? '').slice(-2), 10);
       return Number.isFinite(n) && n > max ? n : max;

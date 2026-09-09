@@ -11,6 +11,7 @@ import {
   MaterialRef, ParsedLine,
 } from './receipt-parser';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
+import { hasTag, withTag, appendNote } from './procure-notes';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -124,11 +125,21 @@ export class ProcureReceiptsService {
     }
 
     const materials = await this.materials(tenantId);
+    /*
+      The request's own ingredients first. A shop with three sugars and a
+      reading of "SUGAR 1KG" is a tie among strangers -- unless the kitchen
+      asked for one of them, in which case that is the one. Only when nothing
+      on the list fits does the whole shelf get a look.
+    */
+    const onList = dto.purchaseRequestId ? await this.requestMaterials(tenantId, dto.purchaseRequestId, materials) : [];
     const lines: SuggestedLine[] = parsed.lines.map((l, index) => {
       // An expense line is not on the shelf, so there is nothing to match it to.
       const m = l.kind === 'expense'
         ? { best: null, alternatives: [] }
-        : matchIngredient(l.description, materials);
+        : (() => {
+            const first = onList.length ? matchIngredient(l.description, onList) : null;
+            return first?.best ? first : matchIngredient(l.description, materials);
+          })();
       const best = m.best;
       return {
         index,
@@ -169,9 +180,20 @@ export class ProcureReceiptsService {
     };
   }
 
+  /** The materials on a request, as the matcher sees them. Unknown request: nothing, no error -- reading is a suggestion. */
+  private async requestMaterials(tenantId: string, requestId: string, materials: MaterialRef[]): Promise<MaterialRef[]> {
+    const req = await this.prisma.purchaseRequest.findFirst({
+      where: { id: requestId, tenantId }, select: { lines: { select: { rawMaterialId: true } } },
+    });
+    if (!req) return [];
+    const ids = new Set(req.lines.map((l) => l.rawMaterialId));
+    return materials.filter((m) => ids.has(m.id));
+  }
+
   // ── posting ───────────────────────────────────────────────────────────────
 
   async confirm(tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto) {
+    if (dto.purchaseRequestId) return this.confirmOnto(tenantId, userId, dto);
     const branchId = dto.branchId ?? fallbackBranchId;
     if (!branchId) throw new BadRequestException('Which branch received this?');
     const branch = await this.prisma.branch.findFirst({ where: { id: branchId, tenantId }, select: { id: true } });
@@ -357,6 +379,139 @@ export class ProcureReceiptsService {
       skipped:   receipt.skipped,
       failed:    receipt.failed,
       expenses,
+      created,
+      document,
+    };
+  }
+
+  /**
+   * The receipt written ONTO the request the kitchen sent.
+   *
+   * One trip, one request, one control number. Before this, every
+   * photographed receipt became a second request beside the list, and the
+   * list itself sat at SENT until somebody cancelled it by hand.
+   *
+   * The request's lines keep what was asked for -- only packs, size, price
+   * and brand are written onto them; a printed line the list did not have
+   * becomes a new line with the next control number. Record-only mode
+   * (postNow: false) writes and files but posts nothing: an order screenshot
+   * on the day it was placed, a delivery slip before the owner has looked.
+   * Idempotent by construction: a replay writes the same numbers onto lines
+   * not yet posted, and receiving skips the ones that are; the photo is
+   * filed once per key.
+   */
+  private async confirmOnto(tenantId: string, userId: string, dto: ConfirmReceiptDto) {
+    const req = await this.prisma.purchaseRequest.findFirst({
+      where: { id: dto.purchaseRequestId!, tenantId }, include: this.include(),
+    });
+    if (!req) throw new NotFoundException('Purchase request not found.');
+    const replay = !!dto.idempotencyKey && hasTag(req.notes, 'RCPT') && (req.notes ?? '').includes(this.keyTag(dto.idempotencyKey));
+    // A retry after the first answer was lost, and the first answer had
+    // already put everything on the shelf: the same answer, nothing more.
+    if (req.status === 'RECEIVED' && replay) {
+      return { duplicate: true, recorded: true, request: req, posted: [], skipped: [], failed: [], expenses: [], created: [], document: null };
+    }
+    if (req.status !== 'SENT' && req.status !== 'BOUGHT') {
+      throw new BadRequestException(
+        req.status === 'RECEIVED'
+          ? 'That request is already in stock. Post this receipt on its own instead.'
+          : `That request is ${req.status.toLowerCase()}; send it first, or post this receipt on its own.`,
+      );
+    }
+    if (!dto.lines?.length && !dto.expenses?.length) {
+      throw new BadRequestException('Nothing to record. Add at least one line.');
+    }
+    const receiptDate = this.resolveDate(dto.receiptDate);
+    const label = [dto.vendor?.trim(), dto.referenceNumber?.trim()].filter(Boolean).join(' · ');
+
+    await this.validateLines(tenantId, dto.lines ?? []);
+    const created: Array<{ id: string; name: string; unit: string }> = [];
+    const resolved: Array<ReceiptStockLineDto & { rawMaterialId: string }> = [];
+    for (const line of dto.lines ?? []) {
+      resolved.push({ ...line, rawMaterialId: await this.resolveMaterial(tenantId, line, created, replay) });
+    }
+    const merged = this.mergeLines(resolved);
+    const acceptFor = new Set(resolved.filter((l) => l.acceptCostChange).map((l) => l.rawMaterialId));
+
+    // Onto the list's own lines; what the list did not have becomes a line.
+    const numbered = req.lines.map((l) => ({ lineNumber: l.lineNumber }));
+    const skipped: Array<{ line: string; name: string; reason: string }> = [];
+    for (const m of merged) {
+      const own = req.lines.find((l) => l.rawMaterialId === m.rawMaterialId);
+      const pack = {
+        packsBought: new Prisma.Decimal(m.packsBought),
+        packSize:    new Prisma.Decimal(m.packSize),
+        packCost:    new Prisma.Decimal(m.packCost),
+        brandNote:   m.brandNote ?? null,
+      };
+      if (own?.receivedAt) {
+        skipped.push({ line: own.lineNumber, name: own.rawMaterial.name, reason: 'Already in stock; this receipt did not change it.' });
+        continue;
+      }
+      if (own) {
+        await this.prisma.purchaseRequestLine.update({ where: { id: own.id }, data: pack });
+        continue;
+      }
+      const lineNumber = this.procure.nextLineNumber(req.requestNumber, numbered);
+      numbered.push({ lineNumber });
+      await this.prisma.purchaseRequestLine.create({
+        data: {
+          purchaseRequestId: req.id, lineNumber, rawMaterialId: m.rawMaterialId,
+          qtyRequested: new Prisma.Decimal(m.packsBought * m.packSize),
+          ...pack,
+        },
+      });
+    }
+
+    let notes = req.notes;
+    if (dto.idempotencyKey && !replay) notes = withTag(notes, 'RCPT', dto.idempotencyKey);
+    if (label && !(notes ?? '').includes(label)) notes = appendNote(notes, label);
+    const request = await this.prisma.purchaseRequest.update({
+      where: { id: req.id },
+      data: {
+        status:   'BOUGHT',
+        boughtAt: req.boughtAt ?? new Date(`${receiptDate}T00:00:00+08:00`),
+        ...(notes !== req.notes ? { notes } : {}),
+      },
+      include: this.include(),
+    });
+
+    // The photo, once per key; a posting failure below does not lose it.
+    let document: { id: string; filename: string } | null = null;
+    if (dto.imageBase64 && !replay) {
+      try {
+        const mime = dto.mediaType ?? 'image/jpeg';
+        const ext  = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+        const doc = await this.documents.uploadBuffer(
+          tenantId, 'PurchaseRequest', req.id,
+          Buffer.from(dto.imageBase64, 'base64'), mime,
+          `receipt-${req.requestNumber}.${ext}`, 'Receipt', userId,
+        );
+        document = { id: doc.id, filename: doc.filename };
+      } catch {
+        document = null;
+      }
+    }
+
+    if (dto.postNow === false) {
+      return { duplicate: replay, recorded: true, request, posted: [], skipped, failed: [], expenses: [], created, document };
+    }
+
+    // Through the same door a hand-typed request uses -- the charges ride
+    // with the goods and post once.
+    const out = await this.procure.receiveRequest(tenantId, req.id, userId, dto.paymentMethod, {
+      receivedAt: receiptDate,
+      note:       label || undefined,
+      acceptCostChangeFor: acceptFor,
+      charges:    (dto.expenses ?? []).map((e) => ({ description: e.description, amount: e.amount, category: e.category })),
+    });
+    return {
+      duplicate: replay, recorded: true,
+      request:   out.request,
+      posted:    out.posted,
+      skipped:   [...skipped, ...out.skipped],
+      failed:    out.failed,
+      expenses:  out.charges,
       created,
       document,
     };

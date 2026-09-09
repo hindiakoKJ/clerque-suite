@@ -61,6 +61,16 @@ export class ParseReceiptDto {
   images?: ReceiptImageDto[];
 
   /**
+   * The request this receipt belongs to. Its own ingredients are matched
+   * first, so a reading that could be either of two sugars lands on the one
+   * the kitchen asked for.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  purchaseRequestId?: string;
+
+  /**
    * Read this one receipt with the OTHER provider.
    *
    * The point of keeping both alive is being able to put the same photo
@@ -157,6 +167,26 @@ export class ConfirmReceiptDto {
   @IsString()
   @MaxLength(40)
   branchId?: string;
+
+  /**
+   * Write the receipt ONTO this request -- the list the kitchen sent --
+   * instead of making a second request beside it. The request's own lines
+   * get their packs, size and price; a printed line that is not on the list
+   * becomes a new line with the next control number.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  purchaseRequestId?: string;
+
+  /**
+   * Record only: write the lines and file the photo, post nothing. For an
+   * order screenshot on the day it was placed, or a delivery slip before
+   * the owner has looked. Default true. Ignored without purchaseRequestId.
+   */
+  @IsOptional()
+  @IsBoolean()
+  postNow?: boolean;
 
   @IsOptional()
   @IsString()

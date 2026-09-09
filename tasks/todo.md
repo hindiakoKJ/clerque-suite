@@ -1698,3 +1698,46 @@ and supplier deliveries. Full plan in tasks/receiving-design.md. The short of it
   NO schema change anywhere. Steps 1-2 (date/note/line ticks/carry-forward/Save
   at BOUGHT; remembered pack size and price) need no AI and no answer from Anne.
 - Gated on owner answers: staff may record (step 3); credit terms real? (7-8).
+
+## 2026-09-09 — Receiving redesign BUILT: steps 1-6 of tasks/receiving-design.md
+
+Two commits (ee3c481 + this one). No schema change anywhere.
+- Record (any request role, when Tenant.showPurchaseCostsToStaff is on): POST
+  :id/bought open to floor roles; staff get one go per line; zero price refused;
+  note / boughtAt / onTheWay ([ONTHEWAY:date] tag); POST :id/photo files the
+  paper (Document, labelled). Every line carries lastPack (newest received line
+  of that ingredient) so packs, size, price come pre-filled; price stripped
+  for staff who may not see costs.
+- Post (owner/manager/MDM): validated ReceiveRequestDto -- pocket CASH /
+  OWNER_FUNDED / BANK (BANK -> Cr 1020), receivedAt, note, lines[] with
+  packsArrived, closeShort (STILL_COMING -> follow-up request tagged
+  [BALANCEOF:REQ] [ONTHEWAY:date]; REFUNDED / NOT_COMING -> notes only;
+  LOST -> expense), charges[] (FREIGHT -> 5030, posted once with the goods,
+  refused when nothing posted), closeRest (unposted lines back on the OPEN
+  list). @RequireIdempotency on the route; web sends the key.
+- A short line is REWRITTEN to the packs that arrived (line = lot = books)
+  and the shortfall is written into notes and/or the follow-up.
+- Receipts path: ConfirmReceiptDto.purchaseRequestId + postNow. The receipt
+  lands ON the kitchen's request (packs/size/price onto its lines, extras get
+  the next control number, qtyRequested untouched), photo filed once per
+  key, charges through receiveRequest. ParseReceiptDto.purchaseRequestId
+  makes the matcher score the request's ingredients first (a tie among
+  strangers becomes the one the kitchen asked for). Expense posting moved to
+  ProcureService.postExpenses (both doors post the same way).
+- Screens: requests page rewritten (ticks, prefills + kg/g chip, photo button,
+  where-from/bought-on/on-the-way, three pockets, date, charges, packs arrived
+  + outcomes, Close-the-rest, copy-as-message, Read the receipt, pending
+  order no longer occupies the default view); receipts page: ?request=<id>
+  seeds rows from the request, filed photos readable without re-upload, a
+  new photo appends (same photo re-read replaces its own rows), Save to the
+  request vs Post.
+- Live on carolina-test: 30/30 (wave 1) + 15/16 (wave 2; the one "failure"
+  was the script assuming the open list was empty -- suffix numbering was
+  right). Test-tenant residue: REQ-20260909-001..003 + follow-ups, a few
+  lots of Salt/Rice/Sugar, JE-202609-0076..0079, two 1x1 JPEG documents.
+
+### Still open (from the plan)
+- Steps 7-8 (credit on the request, one bill per DR): wait for Anne's answer
+  on credit terms. Step 9 (reader kinds for Shopee/DR): after a live Vertex
+  read. A `packsArrived` column would let staff record arrival without
+  posting -- owner's call.

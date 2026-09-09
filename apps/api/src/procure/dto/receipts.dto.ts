@@ -173,9 +173,12 @@ export class ConfirmReceiptDto {
   @MaxLength(100)
   referenceNumber?: string;
 
-  /** Where the money came from. CREDIT is deliberately not offered: that needs a vendor bill. */
-  @IsIn(['CASH', 'OWNER_FUNDED'])
-  paymentMethod!: 'CASH' | 'OWNER_FUNDED';
+  /**
+   * Where the money came from: the till, the owner's pocket, or the shop's
+   * bank or GCash. CREDIT is deliberately not offered: that needs a vendor bill.
+   */
+  @IsIn(['CASH', 'OWNER_FUNDED', 'BANK'])
+  paymentMethod!: 'CASH' | 'OWNER_FUNDED' | 'BANK';
 
   @IsArray()
   @ValidateNested({ each: true })

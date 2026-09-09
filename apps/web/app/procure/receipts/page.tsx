@@ -246,7 +246,7 @@ export default function ReceiptsPage() {
   const [vendor, setVendor] = useState('');
   const [date, setDate] = useState(todayPH());
   const [ref, setRef] = useState('');
-  const [paidBy, setPaidBy] = useState<'CASH' | 'OWNER_FUNDED'>('OWNER_FUNDED');
+  const [paidBy, setPaidBy] = useState<'CASH' | 'OWNER_FUNDED' | 'BANK'>('OWNER_FUNDED');
   const [branchId, setBranchId] = useState<string>(user?.branchId ?? '');
   const [reading, setReading] = useState<ParseResult | null>(null);
   const [result, setResult] = useState<any>(null);
@@ -633,10 +633,11 @@ export default function ReceiptsPage() {
         )}
         <div className="sm:col-span-2">
           <p className="text-[11px] text-muted-foreground">Who paid?</p>
-          <div className="mt-0.5 grid grid-cols-2 gap-2">
+          <div className="mt-0.5 grid grid-cols-3 gap-2">
             {([
-              { v: 'OWNER_FUNDED', label: 'Owner paid',    sub: 'Out of their own pocket' },
-              { v: 'CASH',         label: 'From the till',  sub: 'Cash taken from the drawer' },
+              { v: 'OWNER_FUNDED', label: 'Owner paid',        sub: 'Out of their own pocket' },
+              { v: 'CASH',         label: 'From the till',     sub: 'Cash taken from the drawer' },
+              { v: 'BANK',         label: 'Shop bank / GCash', sub: 'The business account' },
             ] as const).map((o) => (
               <button key={o.v} type="button" onClick={() => setPaidBy(o.v)}
                 className={`rounded-lg border px-3 py-1.5 text-left ${paidBy === o.v ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-border hover:bg-muted'}`}>

@@ -849,6 +849,24 @@ describe('JournalService — accounting correctness across business types', () =
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 
+    it('bank-paid receipt — Dr Inventory / Cr Cash in Bank, the shop\'s GCash or bank', async () => {
+      const lines = await runProcessEvent({
+        kind:           'RAW_MATERIAL_RECEIPT',
+        productName:    'Chicken Wings',
+        adjustmentType: 'STOCK_IN',
+        quantity:       86,
+        totalValue:     2500,
+        paymentMethod:  'BANK',
+      }, 'INVENTORY_ADJUSTMENT') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.debits.get('1051')).toBeCloseTo(2500, 2);
+      expect(s.credits.get('1020')).toBeCloseTo(2500, 2);
+      expect(s.credits.get('1010') ?? 0).toBe(0);
+      expect(s.credits.get('3010') ?? 0).toBe(0);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
     it('owner-funded receipt — Dr Inventory / Cr Owner\'s Capital', async () => {
       const lines = await runProcessEvent({
         kind:           'RAW_MATERIAL_RECEIPT',

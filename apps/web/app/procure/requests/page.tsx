@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   Plus, Send, ShoppingCart, PackageCheck, Loader2, Trash2, Sparkles, Check, AlertTriangle, Paperclip,
+  Camera, Copy, Truck,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -16,10 +17,20 @@ import { formatPeso } from '@/lib/utils';
  * A request moves OPEN -> SENT -> BOUGHT -> RECEIVED, and each state needs a
  * different thing from a different person, so the screen shows only that.
  * Nobody navigates; the request tells you what it wants next.
+ *
+ * Two people, two halves. Whoever is holding the bag RECORDS what came: tick
+ * it, check the packs and price that were filled in from last time, add a
+ * photo of the paper. The owner or manager POSTS it: which pocket the money
+ * came from, which day, and it is in stock and in the books.
  */
 
 type Status = 'OPEN' | 'SENT' | 'BOUGHT' | 'RECEIVED' | 'CANCELLED';
+type Pocket = 'CASH' | 'OWNER_FUNDED' | 'BANK';
+type Outcome = 'STILL_COMING' | 'REFUNDED' | 'LOST' | 'NOT_COMING';
+type PhotoLabel = 'Receipt' | 'Order' | 'Delivery receipt' | 'Sales invoice';
+type ChargeKind = 'FREIGHT' | 'TRANSPORT' | 'OTHER';
 
+interface LastPack { packSize: number; packCost: number | null; brandNote: string | null; receivedAt: string | null }
 interface Line {
   id: string;
   lineNumber: string;
@@ -32,6 +43,8 @@ interface Line {
   brandNote: string | null;
   receivedAt: string | null;
   rawMaterial: { id: string; name: string; unit: string; costPrice: string | number | null };
+  /** What this ingredient held and cost the last time it was received. */
+  lastPack?: LastPack | null;
 }
 interface Request {
   id: string;
@@ -40,6 +53,8 @@ interface Request {
   lines: Line[];
   branch?: { id: string; name: string } | null;
   sentAt?: string | null;
+  boughtAt?: string | null;
+  notes?: string | null;
   /**
    * Set by the server when this viewer may not see what the delivery cost.
    * The costs are already stripped from the lines by then — this only tells
@@ -48,11 +63,9 @@ interface Request {
   costsHidden?: boolean;
 }
 interface Ingredient { id: string; name: string; unit: string }
+interface Charge { description: string; amount: string; category: ChargeKind }
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v));
-// Second hand-rolled copy of the same thing, with the same two hardcodings.
-// These are whole prices rather than unit costs, so two decimals is right --
-// formatPeso already does exactly that, in the tenant's currency.
 const peso = formatPeso;
 
 const STEPS: Array<{ key: Status; label: string }> = [
@@ -61,6 +74,62 @@ const STEPS: Array<{ key: Status; label: string }> = [
   { key: 'BOUGHT',   label: 'Bought' },
   { key: 'RECEIVED', label: 'In stock' },
 ];
+
+/*
+  The request's notes carry tags the server writes ([ONTHEWAY:date],
+  [BALANCEOF:REQ-...]) in front of the person's own line. Read apart here the
+  same way the server writes them.
+*/
+const TAG = /\[([A-Z]+):([^\]]*)\]/g;
+const readTag = (notes: string | null | undefined, name: string): string | null => {
+  for (const m of (notes ?? '').matchAll(TAG)) if (m[1] === name) return m[2];
+  return null;
+};
+const plainNotes = (notes: string | null | undefined) => (notes ?? '').replace(TAG, '').replace(/\s{2,}/g, ' ').trim();
+const onTheWay = (r: Request) => readTag(r.notes, 'ONTHEWAY');
+
+const manilaToday = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
+/** The bigger unit a pack is usually sold in, for a gram- or millilitre-counted ingredient. */
+const BIG_UNIT: Record<string, string> = { g: 'kg', ml: 'L' };
+
+const POCKETS: Array<{ v: Pocket; label: string; sub: string }> = [
+  { v: 'OWNER_FUNDED', label: 'Owner paid',        sub: 'Out of their own pocket' },
+  { v: 'CASH',         label: 'From the till',     sub: 'Cash taken from the drawer' },
+  { v: 'BANK',         label: 'Shop bank / GCash', sub: 'The business account' },
+];
+const OUTCOMES: Array<{ v: Outcome; label: string }> = [
+  { v: 'STILL_COMING', label: 'Still coming' },
+  { v: 'REFUNDED',     label: 'Refunded' },
+  { v: 'LOST',         label: 'Lost — expense it' },
+  { v: 'NOT_COMING',   label: 'Not coming' },
+];
+const PHOTO_LABELS: PhotoLabel[] = ['Receipt', 'Order', 'Delivery receipt', 'Sales invoice'];
+
+/** A phone photo, made small enough to file: longest side 1600 px, JPEG. */
+async function shrink(file: File): Promise<{ base64: string; mediaType: 'image/jpeg' }> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('Could not read that photo.'));
+      i.src = url;
+    });
+    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width  = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Could not read that photo.');
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    return { base64: dataUrl.slice(dataUrl.indexOf(',') + 1), mediaType: 'image/jpeg' };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 export default function ProcurePage() {
   const qc = useQueryClient();
@@ -83,24 +152,39 @@ export default function ProcurePage() {
   const [editing, setEditing]   = useState<string | null>(null);
   const [editQty, setEditQty]   = useState('');
   /*
-    Who actually paid. This was hard-coded to CASH, and the two answers post
-    to DIFFERENT accounts: CASH credits 1010 Cash on Hand, OWNER_FUNDED credits
-    3010 Owner's Capital. An owner who paid for the grocery run out of their own
-    wallet -- the ordinary case this app was built for -- had the books say
-    money left the till, so the till read short by the value of the delivery
-    and nobody could find it. Asked, not assumed.
+    Who actually paid. The three answers post to DIFFERENT accounts: the till
+    credits 1010 Cash on Hand, the owner's own money credits 3010 Owner's
+    Capital, the shop's bank or GCash credits 1020 Cash in Bank. Asked, not
+    assumed -- a delivery booked against the wrong pocket is a till that
+    reads short tonight or a bank balance nobody can reconcile.
   */
-  const [paidBy, setPaidBy] = useState<'CASH' | 'OWNER_FUNDED'>('OWNER_FUNDED');
+  const [paidBy, setPaidBy] = useState<Pocket>('OWNER_FUNDED');
+  const [receivedAt, setReceivedAt] = useState(manilaToday());
+  const [note, setNote] = useState('');
+  const [charges, setCharges] = useState<Charge[]>([]);
+  const [acceptCost, setAcceptCost] = useState(false);
 
   /*
-    Sending, recording the shopping and posting to stock are owner/manager
-    actions at the API (procure.controller.ts). The buttons were shown to
-    everyone, so a barista's ONLY primary action was one that always came back
-    "Insufficient permissions" in a red toast. Saying who does it next is more
-    useful than a button that cannot work.
+    Sending and posting to stock are owner/manager actions at the API.
+    Recording what was bought is open to whoever is holding the bag -- when
+    the shop shows purchase costs to its staff. The server strips the costs
+    and sets costsHidden when it does not, so that one flag answers both
+    "may I see the price" and "may I type it".
   */
   const canDecide = !!user && ['BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'].includes(user.role);
-  const [bought, setBought]     = useState<Record<string, { packs: string; size: string; cost: string; brand: string }>>({});
+  const [bought, setBought]     = useState<Record<string, { packs: string; size: string; cost: string; brand: string; source?: 'line' | 'last' | 'none' }>>({});
+  /** Per line: it is here. Doubles as "post this line now" once the request is bought. */
+  const [ticked, setTicked]     = useState<Record<string, boolean>>({});
+  /** Per line: the pack count is typed in the bigger unit (kg for a gram-counted ingredient). */
+  const [sizeBig, setSizeBig]   = useState<Record<string, boolean>>({});
+  /** Per line: how many packs actually came, when fewer than were bought. */
+  const [arrived, setArrived]   = useState<Record<string, string>>({});
+  const [outcome, setOutcome]   = useState<Record<string, Outcome>>({});
+  const [boughtNote, setBoughtNote] = useState('');
+  const [boughtDate, setBoughtDate] = useState('');
+  const [ordered, setOrdered]   = useState(false);
+  const [photoLabel, setPhotoLabel] = useState<PhotoLabel>('Receipt');
+  const fileInput = useRef<HTMLInputElement | null>(null);
 
   /*
     Which request this screen is showing.
@@ -115,8 +199,9 @@ export default function ProcurePage() {
 
     So: fetch the branch's requests and show the one that needs a person next.
     A delivery waiting to be posted outranks shopping waiting to be recorded,
-    which outranks a list still being built. Only when nothing is outstanding
-    do we open a fresh one.
+    which outranks a list still being built -- except an order that is still
+    on the way, which would otherwise sit in front of today's list for days.
+    Only when nothing is outstanding do we open a fresh one.
   */
   const [viewing, setViewing] = useState<string | null>(null);
 
@@ -145,9 +230,10 @@ export default function ProcurePage() {
 
   const live = all.filter((r) => r.status !== 'RECEIVED' && r.status !== 'CANCELLED');
   const byNeed =
-    live.find((r) => r.status === 'BOUGHT') ??
+    live.find((r) => r.status === 'BOUGHT' && !onTheWay(r)) ??
     live.find((r) => r.status === 'SENT') ??
     live.find((r) => r.status === 'OPEN') ??
+    live.find((r) => r.status === 'BOUGHT') ??
     null;
 
   // Nothing outstanding at all -- open one so the branch always has somewhere
@@ -162,11 +248,9 @@ export default function ProcurePage() {
   const isLoading = listLoading || (byNeed === null && openLoading);
 
   /*
-    The receipt behind a request, when there is one.
-
-    A request posted from a photo carries that photo as a Document. Showing it
-    here is what makes the request auditable from the screen it lives on --
-    the number, the lines, and the paper they came from, together.
+    The paper behind a request: the receipt, the order screen, the delivery
+    slip. Filed as Documents against the request, so the number, the lines
+    and the paper they came from live together.
   */
   const { data: receiptDocs = [] } = useQuery<Array<{ id: string; filename: string; label: string | null }>>({
     queryKey: ['request-docs', req?.id],
@@ -279,37 +363,149 @@ export default function ProcurePage() {
     onError: (e) => fail(e, 'Could not send the request.'),
   });
 
+  /*
+    What the boxes show for a line, in priority: what is stored on the line,
+    else what this ingredient held and cost LAST time (packs worked out from
+    what was asked for), else blank. The source is shown beside the boxes so
+    a one-off 5 kg sack is visible before it becomes next time's default.
+  */
+  const defaultsFor = (l: Line) => {
+    if (l.packsBought != null) {
+      return {
+        packs: String(num(l.packsBought)),
+        size:  l.packSize != null ? String(num(l.packSize)) : '',
+        cost:  l.packCost != null ? String(num(l.packCost)) : '',
+        brand: l.brandNote ?? '',
+        source: 'line' as const,
+      };
+    }
+    const lp = l.lastPack;
+    if (lp && lp.packSize > 0) {
+      return {
+        packs: String(Math.max(1, Math.ceil(num(l.qtyRequested) / lp.packSize))),
+        size:  String(lp.packSize),
+        cost:  lp.packCost != null ? String(lp.packCost) : '',
+        brand: lp.brandNote ?? '',
+        source: 'last' as const,
+      };
+    }
+    return { packs: '', size: '', cost: '', brand: '', source: 'none' as const };
+  };
+  const valuesFor = (l: Line) => bought[l.id] ?? defaultsFor(l);
+  const isTicked  = (l: Line) => ticked[l.id] ?? (l.packsBought != null);
+
   const saveBought = useMutation({
-    mutationFn: () => api.post(`/procure/requests/${req!.id}/bought`, {
-      lines: Object.entries(bought)
-        .filter(([, v]) => v.packs && v.size && v.cost)
-        .map(([lineId, v]) => ({
-          lineId,
-          packsBought: parseFloat(v.packs),
-          packSize:    parseFloat(v.size),
-          packCost:    parseFloat(v.cost),
-          brandNote:   v.brand || undefined,
-        })),
-    }),
-    onSuccess: () => { refresh(); toast.success('Shopping recorded.'); },
-    onError: (e) => fail(e, 'Could not save what was bought.'),
+    mutationFn: () => {
+      if (!req) throw new Error('No request.');
+      const rows = req.lines
+        .filter((l) => !l.receivedAt && isTicked(l))
+        // Staff get one go at a line; a filled line is the deciders' to change.
+        .filter((l) => canDecide || l.packsBought == null)
+        .map((l) => {
+          const b = valuesFor(l);
+          return {
+            lineId: l.id, name: l.rawMaterial.name,
+            packsBought: parseFloat(b.packs), packSize: parseFloat(b.size), packCost: parseFloat(b.cost),
+            brandNote: b.brand.trim() || undefined,
+          };
+        });
+      const half = rows.find((r) => !(r.packsBought > 0) || !(r.packSize > 0) || !(r.packCost > 0));
+      if (half) throw new Error(`${half.name}: fill in packs, what one holds, and the price.`);
+      if (rows.length === 0) throw new Error('Tick what you bought first.');
+      return api.post(`/procure/requests/${req.id}/bought`, {
+        lines: rows.map(({ name: _n, ...r }) => r),
+        ...(boughtNote.trim() ? { note: boughtNote.trim() } : {}),
+        ...(boughtDate ? { boughtAt: boughtDate } : {}),
+        ...(ordered ? { onTheWay: true } : {}),
+      }).then((r) => r.data);
+    },
+    onSuccess: () => {
+      refresh(); setBoughtNote(''); setBoughtDate(''); setOrdered(false);
+      toast.success(ordered ? 'Recorded — marked as on the way.' : 'Shopping recorded.');
+    },
+    onError: (e) => {
+      if (e instanceof Error && !('response' in e)) { toast.error(e.message); return; }
+      fail(e, 'Could not save what was bought.');
+    },
   });
 
-  const [acceptCost, setAcceptCost] = useState(false);
+  interface ReceiveResult {
+    posted: Array<{ name: string; warning?: string | null }>;
+    skipped: unknown[];
+    failed: Array<{ name: string; reason: string }>;
+    carried: Array<{ name: string; to: string; alreadyThere: boolean }>;
+    followUp: { requestNumber: string; lines: number } | null;
+    charges: Array<{ description: string; entryNumber?: string; error?: string }>;
+    short: Array<{ name: string; packsBought: number; packsArrived: number; outcome: Outcome }>;
+  }
   const receive = useMutation({
-    mutationFn: () => api.post(`/procure/requests/${req!.id}/receive`, { paymentMethod: paidBy, ...(acceptCost ? { acceptCostChange: true } : {}) }).then((r) => r.data),
-    onSuccess: (d: { posted: Array<{ name: string; warning?: string | null }>; skipped: unknown[]; failed: { name: string; reason: string }[] }) => {
+    mutationFn: (closeRest: boolean) => {
+      if (!req) throw new Error('No request.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedAt)) throw new Error('Pick the day the goods came.');
+      const lines = req.lines
+        .filter((l) => !l.receivedAt && l.packsBought != null && isTicked(l))
+        .map((l) => {
+          const packs = num(l.packsBought);
+          const a = arrived[l.id];
+          const came = a != null && a !== '' ? parseFloat(a) : NaN;
+          const packsArrived = Number.isFinite(came) && came < packs ? came : undefined;
+          return { lineId: l.id, ...(packsArrived != null ? { packsArrived } : {}) };
+        });
+      if (lines.length === 0 && !closeRest) throw new Error('Tick what arrived first.');
+      const closeShort = lines
+        .filter((x) => x.packsArrived != null && (outcome[x.lineId] ?? 'STILL_COMING') !== 'STILL_COMING')
+        .map((x) => ({ lineId: x.lineId, outcome: outcome[x.lineId] }));
+      const chargeRows = charges
+        .filter((c) => c.description.trim() && parseFloat(c.amount) > 0)
+        .map((c) => ({ description: c.description.trim(), amount: parseFloat(c.amount), category: c.category }));
+      return api.post(`/procure/requests/${req.id}/receive`, {
+        paymentMethod: paidBy,
+        ...(acceptCost ? { acceptCostChange: true } : {}),
+        receivedAt,
+        ...(note.trim() ? { note: note.trim() } : {}),
+        lines,
+        ...(closeShort.length ? { closeShort } : {}),
+        ...(chargeRows.length ? { charges: chargeRows } : {}),
+        ...(closeRest ? { closeRest: true } : {}),
+      }).then((r) => r.data as ReceiveResult);
+    },
+    onSuccess: (d) => {
       refresh();
+      setCharges([]); setArrived({}); setOutcome({}); setNote(''); setAcceptCost(false);
+      const bits: string[] = [];
+      if (d.posted.length) bits.push(`${d.posted.length} item${d.posted.length === 1 ? '' : 's'} added to stock`);
+      if (d.carried?.length) bits.push(`${d.carried.map((c) => c.name).join(', ')} back on the list`);
+      if (d.followUp) bits.push(`${d.followUp.requestNumber} holds what is still coming`);
       if (d.failed.length) {
-        toast.warning(`${d.posted.length} posted, ${d.failed.length} could not: ${d.failed[0].reason}`);
+        toast.warning(`${d.posted.length} posted, ${d.failed.length} could not: ${d.failed[0].reason}`, { duration: 10000 });
       } else {
-        toast.success(`${d.posted.length} item${d.posted.length === 1 ? '' : 's'} added to stock.`);
+        toast.success(bits.join(' · ') || 'Nothing to post.', { duration: 8000 });
       }
+      const chargeError = (d.charges ?? []).find((c) => c.error);
+      if (chargeError) toast.warning(`${chargeError.description}: ${chargeError.error}`, { duration: 10000 });
       // Stock that moved without reaching the books. Said now, not found later.
       const unvalued = d.posted.filter((p) => p.warning);
       if (unvalued.length) toast.warning(unvalued[0].warning as string, { duration: 10000 });
     },
-    onError: (e) => fail(e, 'Could not post to stock.'),
+    onError: (e) => {
+      if (e instanceof Error && !('response' in e)) { toast.error(e.message); return; }
+      fail(e, 'Could not post to stock.');
+    },
+  });
+
+  const attachPhoto = useMutation({
+    mutationFn: async (file: File) => {
+      const { base64, mediaType } = await shrink(file);
+      return api.post(`/procure/requests/${req!.id}/photo`, { imageBase64: base64, mediaType, label: photoLabel }).then((r) => r.data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['request-docs', req?.id] });
+      toast.success(`${photoLabel} filed with ${req?.requestNumber}.`);
+    },
+    onError: (e) => {
+      if (e instanceof Error && !('response' in e)) { toast.error(e.message); return; }
+      fail(e, 'Could not file the photo.');
+    },
   });
 
   /*
@@ -323,6 +519,19 @@ export default function ProcurePage() {
     onSuccess: () => { setViewing(null); refresh(); toast.success('Request cancelled.'); },
     onError: (e) => fail(e, 'Could not cancel this request.'),
   });
+
+  /* The list as a message, for an order placed over Viber or Messenger. */
+  const copyList = async () => {
+    if (!req) return;
+    const text = [
+      `${req.requestNumber}${req.branch?.name ? ` — ${req.branch.name}` : ''}`,
+      ...req.lines.map((l) =>
+        `• ${l.rawMaterial.name} — ${num(l.qtyRequested).toLocaleString()} ${l.rawMaterial.unit}`
+        + (l.lastPack ? ` (last time: ${l.lastPack.packSize.toLocaleString()} ${l.rawMaterial.unit} per pack)` : '')),
+    ].join('\n');
+    try { await navigator.clipboard.writeText(text); toast.success('Copied. Paste it into Viber or Messenger.'); }
+    catch { toast.error('Could not copy the list.'); }
+  };
 
   if (isLoading) {
     return (
@@ -360,6 +569,10 @@ export default function ProcurePage() {
     );
   }
 
+  // Whoever is holding the bag may record what came, unless the shop hides
+  // prices from them -- in which case the server has already blanked them.
+  const canRecord = canDecide || (!!user && !req.costsHidden);
+  const recording = canRecord && (req.status === 'SENT' || req.status === 'BOUGHT');
   const stepIndex = Math.max(0, STEPS.findIndex((s) => s.key === req.status));
   const alreadyIn = new Set(req.lines.map((l) => l.rawMaterialId));
   // Everything not already on the request, alphabetical, filtered only if the
@@ -371,26 +584,69 @@ export default function ProcurePage() {
 
   const estimate = req.lines.reduce(
     (s, l) => s + num(l.packsBought) * num(l.packCost), 0);
+  const orderedOn  = onTheWay(req);
+  const balanceOf  = readTag(req.notes, 'BALANCEOF');
+  const humanNotes = plainNotes(req.notes);
+  const unposted   = req.lines.filter((l) => !l.receivedAt);
+  const postable   = unposted.filter((l) => l.packsBought != null);
+  const tickedNow  = postable.filter((l) => isTicked(l));
+  const inputCls   = 'mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]';
 
   return (
     <div className="space-y-5">
       {/* where this request is up to */}
       <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             <div className="font-mono text-sm font-semibold">{req.requestNumber}</div>
             <div className="text-xs text-muted-foreground">
               {req.branch?.name ?? 'This branch'} · {req.lines.length} item{req.lines.length === 1 ? '' : 's'}
             </div>
-            {receiptDocs.length > 0 && (
-              <div className="mt-1 flex flex-wrap gap-1.5">
+            {(receiptDocs.length > 0 || (canRecord && req.status !== 'OPEN' && req.status !== 'CANCELLED')) && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {receiptDocs.map((d) => (
                   <button key={d.id} type="button" onClick={() => openDoc(d.id, d.filename)}
                     className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
                     <Paperclip className="h-3 w-3" /> {d.label ?? 'Receipt'}
                   </button>
                 ))}
+                {canRecord && req.status !== 'OPEN' && req.status !== 'CANCELLED' && (
+                  <>
+                    <select
+                      value={photoLabel}
+                      onChange={(e) => setPhotoLabel(e.target.value as PhotoLabel)}
+                      aria-label="What the photo is of"
+                      className="rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground"
+                    >
+                      {PHOTO_LABELS.map((p) => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => fileInput.current?.click()}
+                      disabled={attachPhoto.isPending}
+                      className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    >
+                      {attachPhoto.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+                      Add photo
+                    </button>
+                    <input
+                      ref={fileInput}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (f) attachPhoto.mutate(f);
+                      }}
+                    />
+                  </>
+                )}
               </div>
+            )}
+            {humanNotes && (
+              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{humanNotes}</p>
             )}
           </div>
           {estimate > 0 && !req.costsHidden && (
@@ -413,6 +669,18 @@ export default function ProcurePage() {
             </li>
           ))}
         </ol>
+
+        {req.status === 'BOUGHT' && (orderedOn || balanceOf) && (
+          <p className="mt-3 flex items-start gap-2 rounded-lg bg-[var(--accent)]/10 px-3 py-2 text-xs leading-relaxed">
+            <Truck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              {balanceOf
+                ? <>Balance of <span className="font-mono">{balanceOf}</span> — still coming.</>
+                : <>Ordered {orderedOn} — on the way.</>}
+              {' '}When it arrives, tick what is in the box and add it to stock.
+            </span>
+          </p>
+        )}
       </div>
 
       {/*
@@ -435,7 +703,7 @@ export default function ProcurePage() {
               >
                 <span className="block font-mono text-[11px]">{r.requestNumber}</span>
                 <span className="block text-[10px] text-muted-foreground">
-                  {STEPS.find((x) => x.key === r.status)?.label ?? r.status.toLowerCase()}
+                  {r.status === 'BOUGHT' && onTheWay(r) ? 'On the way' : (STEPS.find((x) => x.key === r.status)?.label ?? r.status.toLowerCase())}
                   {' · '}{r.lines.length} item{r.lines.length === 1 ? '' : 's'}
                 </span>
               </button>
@@ -465,6 +733,16 @@ export default function ProcurePage() {
                 <Plus className="h-3.5 w-3.5" /> Add
               </button>
             </div>
+          )}
+          {req.status === 'SENT' && req.lines.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void copyList()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+              title="Copy the list as a message, for an order over Viber or Messenger"
+            >
+              <Copy className="h-3.5 w-3.5" /> Copy as message
+            </button>
           )}
         </div>
 
@@ -569,15 +847,19 @@ export default function ProcurePage() {
         ) : (
           <ul className="divide-y divide-border">
             {req.lines.map((l) => {
-              const b = bought[l.id] ?? {
-                packs: l.packsBought != null ? String(num(l.packsBought)) : '',
-                size:  l.packSize    != null ? String(num(l.packSize))    : '',
-                cost:  l.packCost    != null ? String(num(l.packCost))    : '',
-                brand: l.brandNote ?? '',
-              };
-              const set = (k: keyof typeof b, v: string) =>
+              const b = valuesFor(l);
+              const set = (k: 'packs' | 'size' | 'cost' | 'brand', v: string) =>
                 setBought((prev) => ({ ...prev, [l.id]: { ...b, [k]: v } }));
               const lineTotal = (parseFloat(b.packs) || 0) * (parseFloat(b.cost) || 0);
+              const big = BIG_UNIT[l.rawMaterial.unit];
+              const showBig = !!big && !!sizeBig[l.id];
+              // The box shows the size in the chosen unit; the line always holds the base unit.
+              const sizeShown = showBig && b.size !== '' ? String(parseFloat(b.size) / 1000) : b.size;
+              const setSize = (v: string) => {
+                if (!showBig || v === '') { set('size', v); return; }
+                const n = parseFloat(v);
+                set('size', Number.isFinite(n) ? String(+(n * 1000).toFixed(4)) : v);
+              };
               /*
                 How much of what was asked for actually came. Read from the
                 stored line, never from the form being typed into, so it
@@ -585,73 +867,89 @@ export default function ProcurePage() {
                 keeps reporting once the request is closed and the form is
                 gone. Null until somebody has recorded a buy against it.
               */
-              const arrived = l.packsBought != null && l.packSize != null
+              const came = l.packsBought != null && l.packSize != null
                 ? num(l.packsBought) * num(l.packSize)
                 : null;
-              const short = arrived != null && arrived < num(l.qtyRequested);
+              const short = came != null && came < num(l.qtyRequested);
+              const tick = isTicked(l);
+              const staffLocked = !canDecide && l.packsBought != null;   // staff had their go
+              const arrivedNow = arrived[l.id] ?? '';
+              const cameShort = arrivedNow !== '' && parseFloat(arrivedNow) < num(l.packsBought);
 
               return (
                 <li key={l.id} className="px-4 py-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium">{l.rawMaterial.name}</div>
-                      {/*
-                        The amount, in the ingredient's own unit, on the line
-                        itself. This is the whole content of the request -- an
-                        owner reading it in the grocery needs the number more
-                        than the control number, so it leads.
-                      */}
-                      {editing === l.id ? (
-                        <form
-                          className="mt-1 flex items-center gap-1.5"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            const n = parseFloat(editQty);
-                            if (!(n > 0)) { toast.error('Enter how much is needed.'); return; }
-                            addLine.mutate({ rawMaterialId: l.rawMaterialId, qtyRequested: n });
-                          }}
-                        >
-                          <div className="relative w-32">
-                            <input
-                              autoFocus
-                              inputMode="decimal"
-                              value={editQty}
-                              onChange={(e) => setEditQty(e.target.value)}
-                              className="w-full rounded-lg border border-border py-1.5 pl-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                            />
-                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
-                              {l.rawMaterial.unit}
-                            </span>
-                          </div>
-                          <button type="submit" disabled={addLine.isPending}
-                            className="rounded-lg bg-[var(--accent)] px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
-                            {addLine.isPending ? '…' : 'Save'}
-                          </button>
-                          <button type="button" onClick={() => { setEditing(null); setEditQty(''); }}
-                            className="px-1.5 py-1.5 text-xs text-muted-foreground hover:text-foreground">
-                            Cancel
-                          </button>
-                        </form>
-                      ) : req.status === 'OPEN' ? (
-                        <button
-                          onClick={() => { setEditing(l.id); setEditQty(String(num(l.qtyRequested))); }}
-                          className="mt-0.5 rounded text-sm font-semibold tabular-nums text-[var(--accent)] hover:underline"
-                          aria-label={`Change how much ${l.rawMaterial.name} to buy`}
-                        >
-                          {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
-                        </button>
-                      ) : (
-                        <div className="mt-0.5 text-sm font-semibold tabular-nums">
-                          {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
-                        </div>
+                    <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                      {recording && !l.receivedAt && (
+                        <input
+                          type="checkbox"
+                          checked={tick}
+                          disabled={staffLocked}
+                          onChange={(e) => setTicked((prev) => ({ ...prev, [l.id]: e.target.checked }))}
+                          aria-label={`${l.rawMaterial.name} is here`}
+                          className="mt-1 h-4 w-4 shrink-0 accent-[var(--accent)]"
+                        />
                       )}
-                      <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                        {l.lineNumber}
-                        {num(l.shortBy) > 0 && (
-                          <span className="ml-2 font-sans">
-                            short by {num(l.shortBy).toLocaleString()} {l.rawMaterial.unit}
-                          </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{l.rawMaterial.name}</div>
+                        {/*
+                          The amount, in the ingredient's own unit, on the line
+                          itself. This is the whole content of the request -- an
+                          owner reading it in the grocery needs the number more
+                          than the control number, so it leads.
+                        */}
+                        {editing === l.id ? (
+                          <form
+                            className="mt-1 flex items-center gap-1.5"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              const n = parseFloat(editQty);
+                              if (!(n > 0)) { toast.error('Enter how much is needed.'); return; }
+                              addLine.mutate({ rawMaterialId: l.rawMaterialId, qtyRequested: n });
+                            }}
+                          >
+                            <div className="relative w-32">
+                              <input
+                                autoFocus
+                                inputMode="decimal"
+                                value={editQty}
+                                onChange={(e) => setEditQty(e.target.value)}
+                                className="w-full rounded-lg border border-border py-1.5 pl-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                              />
+                              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                                {l.rawMaterial.unit}
+                              </span>
+                            </div>
+                            <button type="submit" disabled={addLine.isPending}
+                              className="rounded-lg bg-[var(--accent)] px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+                              {addLine.isPending ? '…' : 'Save'}
+                            </button>
+                            <button type="button" onClick={() => { setEditing(null); setEditQty(''); }}
+                              className="px-1.5 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+                              Cancel
+                            </button>
+                          </form>
+                        ) : req.status === 'OPEN' ? (
+                          <button
+                            onClick={() => { setEditing(l.id); setEditQty(String(num(l.qtyRequested))); }}
+                            className="mt-0.5 rounded text-sm font-semibold tabular-nums text-[var(--accent)] hover:underline"
+                            aria-label={`Change how much ${l.rawMaterial.name} to buy`}
+                          >
+                            {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
+                          </button>
+                        ) : (
+                          <div className="mt-0.5 text-sm font-semibold tabular-nums">
+                            {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
+                          </div>
                         )}
+                        <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                          {l.lineNumber}
+                          {num(l.shortBy) > 0 && (
+                            <span className="ml-2 font-sans">
+                              short by {num(l.shortBy).toLocaleString()} {l.rawMaterial.unit}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                     {req.status === 'OPEN' ? (
@@ -670,53 +968,104 @@ export default function ProcurePage() {
                   </div>
 
                   {/*
-                    What was bought, once the request is out.
+                    What was bought, once the request is out. Shown to whoever
+                    may record: the boxes come filled from last time, so on a
+                    repeat buy the only typing is a price that moved.
+                  */}
+                  {recording && !l.receivedAt && (
+                    <div className={`mt-2 ${tick ? '' : 'opacity-60'}`}>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <label className="text-[11px] text-muted-foreground">
+                          Packs
+                          <input inputMode="decimal" value={b.packs} disabled={staffLocked} onChange={(e) => set('packs', e.target.value)} className={inputCls} />
+                        </label>
+                        <label className="text-[11px] text-muted-foreground">
+                          <span className="flex items-center justify-between">
+                            <span>One pack holds</span>
+                            {big ? (
+                              <span className="inline-flex overflow-hidden rounded border border-border text-[10px]">
+                                {[l.rawMaterial.unit, big].map((u, i) => (
+                                  <button key={u} type="button"
+                                    onClick={() => setSizeBig((prev) => ({ ...prev, [l.id]: i === 1 }))}
+                                    className={`px-1.5 py-0.5 ${showBig === (i === 1) ? 'bg-[var(--accent)] text-white' : 'bg-background'}`}>
+                                    {u}
+                                  </button>
+                                ))}
+                              </span>
+                            ) : <span>({l.rawMaterial.unit})</span>}
+                          </span>
+                          <input inputMode="decimal" value={sizeShown} disabled={staffLocked} onChange={(e) => setSize(e.target.value)} className={inputCls} />
+                        </label>
+                        <label className="text-[11px] text-muted-foreground">
+                          Price per pack
+                          <input inputMode="decimal" value={b.cost} disabled={staffLocked} onChange={(e) => set('cost', e.target.value)} className={inputCls} />
+                        </label>
+                        <label className="text-[11px] text-muted-foreground">
+                          Brand (optional)
+                          <input value={b.brand} disabled={staffLocked} onChange={(e) => set('brand', e.target.value)}
+                            placeholder="Monin" className={inputCls} />
+                        </label>
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                        {b.source === 'last' && !bought[l.id] && l.lastPack && (
+                          <span>
+                            last time: {l.lastPack.packSize.toLocaleString()} {l.rawMaterial.unit}
+                            {l.lastPack.packCost != null ? ` at ${peso(l.lastPack.packCost)}` : ''}
+                            {l.lastPack.brandNote ? ` · ${l.lastPack.brandNote}` : ''}
+                          </span>
+                        )}
+                        {b.source === 'none' && !bought[l.id] && <span>first time buying this — fill it in once</span>}
+                        {staffLocked && <span>recorded — the owner or manager can change it</span>}
+                        {lineTotal > 0 && (
+                          <span>
+                            {b.packs} × {peso(parseFloat(b.cost) || 0)} = <strong className="font-mono text-foreground">{peso(lineTotal)}</strong>
+                            {b.size && <> · {(parseFloat(b.packs) || 0) * (parseFloat(b.size) || 0)} {l.rawMaterial.unit} into stock</>}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
-                    canDecide, because the Save button under this form is
-                    manager-only: a cook used to get live Packs / One pack
-                    holds / Price boxes with nowhere to send them, so anything
-                    they typed while standing over the delivery was thrown
-                    away when the screen unmounted. Better no box than a box
-                    that eats what you put in it.
-                  */}
                   {/*
-                    Nothing inside this form checks req.costsHidden: the whole
-                    form is manager-only, and costsHidden is only ever set for
-                    someone who is not. The money staff CAN reach -- the Spent
-                    total and the filed receipt -- is gated where it renders,
-                    and stripped on the server besides.
+                    Once bought: how many packs are actually in the box. Only
+                    asked when it differs -- a full delivery is a tick and
+                    nothing else. Short, and the rest is one of four things.
                   */}
-                  {canDecide && (req.status === 'SENT' || req.status === 'BOUGHT') && !l.receivedAt && (
-                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      <label className="text-[11px] text-muted-foreground">
-                        Packs
-                        <input inputMode="decimal" value={b.packs} onChange={(e) => set('packs', e.target.value)}
-                          className="mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" />
+                  {canDecide && req.status === 'BOUGHT' && !l.receivedAt && l.packsBought != null && tick && (
+                    <div className="mt-2 flex flex-wrap items-end gap-2 text-[11px] text-muted-foreground">
+                      <label>
+                        Packs arrived
+                        <input
+                          inputMode="decimal"
+                          value={arrivedNow}
+                          placeholder={String(num(l.packsBought))}
+                          onChange={(e) => setArrived((prev) => ({ ...prev, [l.id]: e.target.value }))}
+                          className="mt-0.5 w-24 rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                        />
                       </label>
-                      <label className="text-[11px] text-muted-foreground">
-                        One pack holds ({l.rawMaterial.unit})
-                        <input inputMode="decimal" value={b.size} onChange={(e) => set('size', e.target.value)}
-                          className="mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" />
-                      </label>
-                      <label className="text-[11px] text-muted-foreground">
-                        Price per pack
-                        <input inputMode="decimal" value={b.cost} onChange={(e) => set('cost', e.target.value)}
-                          className="mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" />
-                      </label>
-                      <label className="text-[11px] text-muted-foreground">
-                        Brand (optional)
-                        <input value={b.brand} onChange={(e) => set('brand', e.target.value)}
-                          placeholder="Monin"
-                          className="mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" />
-                      </label>
-                      {lineTotal > 0 && (
-                        <div className="col-span-2 text-[11px] text-muted-foreground sm:col-span-4">
-                          {b.packs} × {peso(parseFloat(b.cost) || 0)} = <strong className="font-mono text-foreground">{peso(lineTotal)}</strong>
-                          {b.size && <> · {(parseFloat(b.packs) || 0) * (parseFloat(b.size) || 0)} {l.rawMaterial.unit} into stock</>}
-                        </div>
+                      {cameShort && (
+                        <label>
+                          The rest is…
+                          <select
+                            value={outcome[l.id] ?? 'STILL_COMING'}
+                            onChange={(e) => setOutcome((prev) => ({ ...prev, [l.id]: e.target.value as Outcome }))}
+                            className="mt-0.5 block rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
+                          >
+                            {OUTCOMES.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+                          </select>
+                        </label>
+                      )}
+                      {cameShort && (
+                        <span className="pb-2">
+                          {num(l.packsBought) - parseFloat(arrivedNow)} pack{num(l.packsBought) - parseFloat(arrivedNow) === 1 ? '' : 's'} short
+                          {(outcome[l.id] ?? 'STILL_COMING') === 'STILL_COMING' && ' — a follow-up request will hold them'}
+                          {outcome[l.id] === 'LOST' && ' — expensed at the pack price'}
+                          {outcome[l.id] === 'REFUNDED' && ' — nothing more posts'}
+                        </span>
                       )}
                     </div>
                   )}
+
                   {/*
                     Asked for, against what came — for everyone, at every
                     status, including after the request closes. Both numbers
@@ -726,11 +1075,11 @@ export default function ProcurePage() {
                     uses. This is the staff's half of Procure: not what it
                     cost, but whether the right amount turned up.
                   */}
-                  {arrived != null && (
+                  {came != null && (
                     <p className={`mt-1.5 text-[11px] ${short ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
                       Asked for {num(l.qtyRequested).toLocaleString()} {l.rawMaterial.unit}
-                      {' · '}{arrived.toLocaleString()} {l.rawMaterial.unit} {l.receivedAt ? 'in stock' : 'bought'}
-                      {short && <> · {(num(l.qtyRequested) - arrived).toLocaleString()} {l.rawMaterial.unit} short</>}
+                      {' · '}{came.toLocaleString()} {l.rawMaterial.unit} {l.receivedAt ? 'in stock' : 'bought'}
+                      {short && <> · {(num(l.qtyRequested) - came).toLocaleString()} {l.rawMaterial.unit} short</>}
                     </p>
                   )}
                 </li>
@@ -738,17 +1087,46 @@ export default function ProcurePage() {
             })}
           </ul>
         )}
+
+        {/* the recorder's footer: where it came from, and when */}
+        {recording && postable.length + unposted.length > 0 && (
+          <div className="border-t border-border bg-muted/20 px-4 py-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <label className="text-[11px] text-muted-foreground sm:col-span-2">
+                Where from / order no. (optional)
+                <input value={boughtNote} onChange={(e) => setBoughtNote(e.target.value)}
+                  placeholder="Aling Nena's stall · Shopee order 2609041234 · DR 4471" className={inputCls} />
+              </label>
+              <label className="text-[11px] text-muted-foreground">
+                Bought or ordered on
+                <input type="date" value={boughtDate} onChange={(e) => setBoughtDate(e.target.value)} className={inputCls} />
+              </label>
+            </div>
+            <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" checked={ordered} onChange={(e) => setOrdered(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
+              <span>
+                <strong className="font-medium text-foreground">Ordered — on the way.</strong>{' '}
+                Paid for or promised, not here yet. Nothing posts until it arrives.
+              </span>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* whatever this request wants next */}
-      <div className="sticky bottom-4">
-        {!canDecide && req.status !== 'RECEIVED' && req.status !== 'CANCELLED' && (
+      <div className="sticky bottom-4 space-y-2">
+        {!canRecord && req.status !== 'RECEIVED' && req.status !== 'CANCELLED' && (
           <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
             {req.status === 'OPEN'
               ? 'Keep adding what you need. The owner or manager sends this list when the shift cuts off.'
               : req.status === 'SENT'
                 ? 'Sent — waiting for whoever shops to record what they bought.'
                 : 'Bought — waiting for the owner or manager to add it to stock.'}
+          </p>
+        )}
+        {canRecord && !canDecide && req.status === 'OPEN' && (
+          <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
+            Keep adding what you need. The owner or manager sends this list when the shift cuts off.
           </p>
         )}
         {req.status === 'OPEN' && canDecide && (
@@ -761,7 +1139,7 @@ export default function ProcurePage() {
             Send to the owners
           </button>
         )}
-        {req.status === 'SENT' && canDecide && (
+        {recording && (req.status === 'SENT' || !canDecide) && (
           <button
             onClick={() => saveBought.mutate()}
             disabled={saveBought.isPending}
@@ -772,21 +1150,18 @@ export default function ProcurePage() {
           </button>
         )}
         {req.status === 'BOUGHT' && canDecide && (
-          <div className="mb-3 rounded-xl border border-border bg-card p-3">
+          <div className="rounded-xl border border-border bg-card p-3">
             <p className="text-xs font-medium">Who paid for this?</p>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-              This decides where the money comes from in the books, so the till still balances
-              tonight.
+              This decides where the money comes from in the books, so the till and the bank
+              still balance tonight.
             </p>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {([
-                { v: 'OWNER_FUNDED', label: 'Owner paid',   sub: 'Out of their own pocket' },
-                { v: 'CASH',         label: 'From the till', sub: 'Cash taken from the drawer' },
-              ] as const).map((o) => (
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {POCKETS.map((o) => (
                 <button
                   key={o.v}
                   onClick={() => setPaidBy(o.v)}
-                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                  className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${
                     paidBy === o.v
                       ? 'border-[var(--accent)] bg-[var(--accent)]/10'
                       : 'border-border hover:bg-muted'
@@ -797,10 +1172,66 @@ export default function ProcurePage() {
                 </button>
               ))}
             </div>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <label className="text-[11px] text-muted-foreground">
+                <span className="flex items-center justify-between">
+                  <span>The goods came on</span>
+                  {receivedAt === manilaToday() && <span className="rounded-full bg-muted px-1.5 text-[10px]">today</span>}
+                </span>
+                <input type="date" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} className={inputCls} />
+              </label>
+              <label className="text-[11px] text-muted-foreground sm:col-span-2">
+                Note (optional)
+                <input value={note} onChange={(e) => setNote(e.target.value)}
+                  placeholder="Aling Nena, no receipt · OR 4471" className={inputCls} />
+              </label>
+            </div>
+
+            {/* charges that came with the goods but are not stock */}
+            <div className="mt-3">
+              {charges.map((c, i) => (
+                <div key={i} className="mb-1.5 grid grid-cols-[1fr_5.5rem_7.5rem_auto] items-end gap-1.5">
+                  <label className="text-[11px] text-muted-foreground">
+                    {i === 0 ? 'Other charges' : ''}
+                    <input value={c.description} placeholder="Shipping fee"
+                      onChange={(e) => setCharges((prev) => prev.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))}
+                      className={inputCls} />
+                  </label>
+                  <label className="text-[11px] text-muted-foreground">
+                    {i === 0 ? 'Amount' : ''}
+                    <input inputMode="decimal" value={c.amount} placeholder="0"
+                      onChange={(e) => setCharges((prev) => prev.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))}
+                      className={inputCls} />
+                  </label>
+                  <label className="text-[11px] text-muted-foreground">
+                    {i === 0 ? 'Kind' : ''}
+                    <select value={c.category}
+                      onChange={(e) => setCharges((prev) => prev.map((x, j) => (j === i ? { ...x, category: e.target.value as ChargeKind } : x)))}
+                      className="mt-0.5 block w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
+                      <option value="FREIGHT">Shipping / freight</option>
+                      <option value="TRANSPORT">Transport, parking</option>
+                      <option value="OTHER">Other</option>
+                    </select>
+                  </label>
+                  <button type="button" aria-label="Remove this charge"
+                    onClick={() => setCharges((prev) => prev.filter((_x, j) => j !== i))}
+                    className="mb-1 rounded p-1 text-red-600 hover:bg-red-500/10">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setCharges((prev) => [...prev, { description: '', amount: '', category: 'FREIGHT' }])}
+                className="text-[11px] text-[var(--accent)] hover:underline"
+              >
+                + Shipping, delivery fee or another charge
+              </button>
+            </div>
           </div>
         )}
-        {req.status === 'BOUGHT' && canDecide && req.lines.some((l) => l.receivedAt == null) && (
-          <label className="mb-2 flex items-start gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
+        {req.status === 'BOUGHT' && canDecide && postable.length > 0 && (
+          <label className="flex items-start gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
             <input type="checkbox" checked={acceptCost} onChange={(e) => setAcceptCost(e.target.checked)} className="mt-0.5" />
             <span>
               <strong className="font-medium text-foreground">The price really changed a lot.</strong>{' '}
@@ -809,13 +1240,39 @@ export default function ProcurePage() {
           </label>
         )}
         {req.status === 'BOUGHT' && canDecide && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => receive.mutate(false)}
+              disabled={receive.isPending}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {receive.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+              {tickedNow.length === postable.length ? 'Add it all to stock' : `Add ${tickedNow.length} of ${postable.length} to stock`}
+            </button>
+            <button
+              onClick={() => saveBought.mutate()}
+              disabled={saveBought.isPending}
+              title="Save corrections to packs, size or price without posting"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-xs font-medium shadow-lg transition-colors hover:bg-muted disabled:opacity-50"
+            >
+              {saveBought.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShoppingCart className="h-3.5 w-3.5" />}
+              Save
+            </button>
+          </div>
+        )}
+        {req.status === 'BOUGHT' && canDecide && unposted.length > tickedNow.length && (
           <button
-            onClick={() => receive.mutate()}
+            type="button"
+            onClick={() => {
+              if (!window.confirm(
+                'Close this request?\n\nWhat is ticked is added to stock. Everything else goes back on the shopping list, '
+                + 'because it still has to be bought.')) return;
+              receive.mutate(true);
+            }}
             disabled={receive.isPending}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="w-full py-1 text-center text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
           >
-            {receive.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
-            Add it all to stock
+            Close — the rest isn&apos;t coming, put it back on the list
           </button>
         )}
         {req.status === 'RECEIVED' && (
@@ -834,7 +1291,7 @@ export default function ProcurePage() {
               cancelReq.mutate();
             }}
             disabled={cancelReq.isPending}
-            className="mt-2 w-full py-2 text-center text-xs text-muted-foreground hover:text-red-600 disabled:opacity-50"
+            className="w-full py-2 text-center text-xs text-muted-foreground hover:text-red-600 disabled:opacity-50"
           >
             {cancelReq.isPending ? 'Cancelling…' : 'Cancel this request'}
           </button>
@@ -844,8 +1301,8 @@ export default function ProcurePage() {
       {req.status === 'SENT' && (
         <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Fill in only what was actually bought. Anything left blank is simply skipped —
-          it stays on the list for next time.
+          Tick only what was actually bought. Anything left goes back on the next list
+          when this one is added to stock.
         </p>
       )}
     </div>

@@ -4,7 +4,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { AiService } from '../ai/ai.service';
 import { DocumentsService } from '../documents/documents.service';
-import { SimpleEntriesService } from '../simple-entries/simple-entries.service';
 import { ProcureService } from './procure.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import {
@@ -50,7 +49,6 @@ export class ProcureReceiptsService {
     private readonly procure:   ProcureService,
     private readonly ai:        AiService,
     private readonly documents: DocumentsService,
-    private readonly simple:    SimpleEntriesService,
   ) {}
 
   // ── reading ───────────────────────────────────────────────────────────────
@@ -329,48 +327,10 @@ export class ProcureReceiptsService {
         };
 
     // 5. Lines that were never stock: a delivery fee, the plumber, parking.
-    const expenses: Array<{ description: string; amount: number; entryNumber?: string; status?: string; error?: string }> = [];
-    for (const e of dto.expenses ?? []) {
-      try {
-        const note = `${label ? label + ': ' : ''}${e.description}`.slice(0, 200);
-        /*
-          Owner-funded is two honest entries, not one clever one: the owner
-          put the money in (Dr cash, Cr owner's capital), then the business
-          spent it (Dr expense, Cr cash). Same end state as a direct
-          Dr expense / Cr capital, and both halves are entries the simple
-          ledger already knows how to reverse.
-        */
-        const je = await this.simple.create(tenantId, userId, {
-          type: 'EXPENSE', amount: e.amount, date: receiptDate, source: 'CASH',
-          category: e.category ?? 'OTHER', note,
-        });
-        // The expense first, so a failure here leaves nothing behind. The
-        // contribution second, so a failure THERE leaves a real expense on the
-        // books and a message saying which half is missing -- never an orphan
-        // contribution with no spend against it.
-        let contributionNote: string | undefined;
-        if (dto.paymentMethod === 'OWNER_FUNDED') {
-          try {
-            await this.simple.create(tenantId, userId, {
-              type: 'OWNER_CONTRIBUTION', amount: e.amount, date: receiptDate, source: 'CASH',
-              note: `Owner paid: ${note}`.slice(0, 200),
-            });
-          } catch (err) {
-            contributionNote = `Expense posted, but the owner contribution did not: ${
-              err instanceof Error ? err.message : 'unknown error'}. Record it under Ledger > Record Entry.`;
-          }
-        }
-        // status is PENDING_APPROVAL when the shop has a journal threshold:
-        // the entry exists but is not in the books until someone approves it.
-        expenses.push({ description: e.description, amount: e.amount, entryNumber: je.entryNumber, status: je.status,
-                        ...(contributionNote ? { error: contributionNote } : {}) });
-      } catch (err) {
-        expenses.push({
-          description: e.description, amount: e.amount,
-          error: err instanceof Error ? err.message : 'Could not post this expense.',
-        });
-      }
-    }
+    //    Posted the same way the request card posts its own charges.
+    const expenses = await this.procure.postExpenses(
+      tenantId, userId, receiptDate, label, dto.paymentMethod, dto.expenses ?? [],
+    );
 
     // 6. The photo, kept with the request. A posting failure above does not
     //    lose the evidence; a filing failure below does not undo the posting.

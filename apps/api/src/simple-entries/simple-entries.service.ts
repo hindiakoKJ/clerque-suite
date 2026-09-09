@@ -40,6 +40,13 @@ const EXPENSE_ACCOUNT: Record<ExpenseCategory, string> = {
   SUPPLIES:  '6140',
   REPAIRS:   '6090',
   TRANSPORT: '6100',
+  /*
+    Shipping on an online order and the trucker's fee on a supplier delivery
+    are the cost of getting the goods here, not of getting people around --
+    they belong in gross margin, next to the goods. Transportation (6100)
+    stays for parking, fares and fuel.
+  */
+  FREIGHT:   '5030',
   OTHER:     '6140',
 };
 
@@ -49,6 +56,7 @@ const EXPENSE_LABEL: Record<ExpenseCategory, string> = {
   SUPPLIES:  'Supplies',
   REPAIRS:   'Repairs',
   TRANSPORT: 'Transportation',
+  FREIGHT:   'Freight / shipping',
   OTHER:     'Other',
 };
 

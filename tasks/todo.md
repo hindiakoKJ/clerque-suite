@@ -1679,3 +1679,22 @@ twin, spelling kept), receipts zip streams.
 - Recipe-costing EXPORT does not yet include a "Made in batches" sheet, so
   the export-edit-reimport loop covers ingredients and plates but not preps.
 
+## 2026-09-06 — Receiving goods: design assessment (PROPOSED, NOT BUILT)
+
+KJ asked how to ease input of received goods across direct buying, Shopee/Lazada
+and supplier deliveries. Full plan in tasks/receiving-design.md. The short of it:
+- Today there are FOUR doors (purchase request, receipt photo, Stock on hand,
+  purchase orders) and the person holding the bag (cook/barista) may use none of
+  them: bought/receive/photo are owner/manager/MDM only, so the owner types at
+  night. Pack size and price are retyped every purchase; hand-typed receives post
+  on the typing day; a photographed receipt creates a SECOND request; money can
+  only be till or owner (no GCash/bank); credit deliveries are one form and one
+  bill per ingredient; freight has no home; partial parcels are not on the
+  request path. Two defects found: a PHP 0 price blends into WAC; blank lines
+  vanish while the screen promises they stay.
+- Plan: the purchase request becomes the single receiving record for all three
+  channels; whoever holds the goods records (tick arrived, prefilled packs/price,
+  photo), the owner posts (pocket + date + Post). Nine steps, each ships alone,
+  NO schema change anywhere. Steps 1-2 (date/note/line ticks/carry-forward/Save
+  at BOUGHT; remembered pack size and price) need no AI and no answer from Anne.
+- Gated on owner answers: staff may record (step 3); credit terms real? (7-8).

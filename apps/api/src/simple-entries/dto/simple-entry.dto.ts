@@ -19,7 +19,7 @@ export const SIMPLE_ENTRY_TYPES = [
 export type SimpleEntryType = (typeof SIMPLE_ENTRY_TYPES)[number];
 
 export const EXPENSE_CATEGORIES = [
-  'RENT', 'UTILITIES', 'SUPPLIES', 'REPAIRS', 'TRANSPORT', 'OTHER',
+  'RENT', 'UTILITIES', 'SUPPLIES', 'REPAIRS', 'TRANSPORT', 'FREIGHT', 'OTHER',
 ] as const;
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 

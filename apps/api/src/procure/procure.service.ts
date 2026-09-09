@@ -1,9 +1,14 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, PurchaseRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { SimpleEntriesService } from '../simple-entries/simple-entries.service';
+import { ExpenseCategory } from '../simple-entries/dto/simple-entry.dto';
+import { DocumentsService } from '../documents/documents.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
+import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
+import { appendNote, withTag } from './procure-notes';
 
 /**
  * Clerque Procure — the shop asking the owner to buy something.
@@ -38,11 +43,51 @@ export interface BoughtLineDto {
   brandNote?:  string;
 }
 
+/** What one post to stock may carry beyond the pocket. */
+export interface ReceiveOpts {
+  /** The day the goods came (YYYY-MM-DD). Defaults to today. */
+  receivedAt?: string;
+  /** One line for a person: the stall, the receipt number, "no receipt". */
+  note?: string;
+  acceptCostChangeFor?: Set<string>;
+  acceptCostChangeAll?: boolean;
+  /** Only these lines, each with how many packs actually came. Omit = every line with packs. */
+  lines?: Array<{ lineId: string; packsArrived?: number }>;
+  /** For a line that came short, what happens to the rest. Default: still coming. */
+  closeShort?: Array<{ lineId: string; outcome: ShortOutcome }>;
+  /** Close the request after this post; what was not posted goes back on the shopping list. */
+  closeRest?: boolean;
+  /** Charges that came with the goods: shipping, a platform fee, parking. Posted once, with the lines. */
+  charges?: Array<{ description: string; amount: number; category?: ExpenseCategory }>;
+}
+
+/** What the newest received line of an ingredient held and cost. */
+export interface LastPack {
+  packSize:   number;
+  packCost:   number | null;
+  brandNote:  string | null;
+  receivedAt: Date | null;
+}
+
+export interface PostedExpense {
+  description: string;
+  amount: number;
+  entryNumber?: string;
+  status?: string;
+  error?: string;
+}
+
 @Injectable()
 export class ProcureService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
+    /*
+      Optional so the specs that build this service with the two above keep
+      running as they are; the methods that need these say so when absent.
+    */
+    @Optional() private readonly simple?: SimpleEntriesService,
+    @Optional() private readonly documents?: DocumentsService,
   ) {}
 
   /**
@@ -102,6 +147,8 @@ export class ProcureService {
         // screen does not print it, but it is the same information -- what
         // the shop pays for things -- and it is one network tab away.
         rawMaterial: l.rawMaterial ? { ...(l.rawMaterial as Record<string, unknown>), costPrice: null } : l.rawMaterial,
+        // So does what it cost last time.
+        lastPack: l.lastPack ? { ...(l.lastPack as Record<string, unknown>), packCost: null } : l.lastPack,
       })),
     } as T;
   }
@@ -114,7 +161,7 @@ export class ProcureService {
    * guarantee two trips, which is the thing being fixed.
    */
   async openRequest(tenantId: string, branchId: string, userId: string, viewerRole?: string | null) {
-    const opened = await this.openRequestRaw(tenantId, branchId, userId);
+    const [opened] = await this.withLastPack(tenantId, [await this.openRequestRaw(tenantId, branchId, userId)]);
     if (await this.costsVisibleTo(tenantId, viewerRole)) return opened;
     return this.stripCosts(opened);
   }
@@ -135,12 +182,12 @@ export class ProcureService {
   }
 
   async list(tenantId: string, branchId?: string, status?: PurchaseRequestStatus, viewerRole?: string | null) {
-    const rows = await this.prisma.purchaseRequest.findMany({
+    const rows = await this.withLastPack(tenantId, await this.prisma.purchaseRequest.findMany({
       where:   { tenantId, ...(branchId ? { branchId } : {}), ...(status ? { status } : {}) },
       include: this.lineInclude(),
       orderBy: { createdAt: 'desc' },
       take:    100,
-    });
+    }));
     if (await this.costsVisibleTo(tenantId, viewerRole)) return rows;
     return rows.map((r) => this.stripCosts(r));
   }
@@ -161,7 +208,7 @@ export class ProcureService {
 
   /** The request as this viewer is allowed to see it. */
   async get(tenantId: string, id: string, viewerRole?: string | null) {
-    const req = await this.getRaw(tenantId, id);
+    const [req] = await this.withLastPack(tenantId, [await this.getRaw(tenantId, id)]);
     if (!(await this.costsVisibleTo(tenantId, viewerRole))) return this.stripCosts(req);
     return req;
   }
@@ -195,24 +242,7 @@ export class ProcureService {
     return this.prisma.purchaseRequestLine.create({
       data: {
         purchaseRequestId: requestId,
-        /*
-          Derive the suffix from the highest one used, not from how many lines
-          there are. Removing line 02 of three left a count of 2, so the next
-          add produced -03 again -- a duplicate control number on a request,
-          and that number is the idempotency key the receive relies on to know
-          a line has already been posted.
-        */
-        lineNumber:        `${req.requestNumber}-${String(
-          // Never below the line count either: a row whose number cannot be
-          // parsed must not let the next one collide with an existing suffix.
-          Math.max(
-            req.lines.length,
-            req.lines.reduce((max, l) => {
-              const n = parseInt(String(l.lineNumber ?? '').slice(-2), 10);
-              return Number.isFinite(n) && n > max ? n : max;
-            }, 0),
-          ) + 1,
-        ).padStart(2, '0')}`,
+        lineNumber:        this.nextLineNumber(req.requestNumber, req.lines),
         rawMaterialId:     dto.rawMaterialId,
         qtyRequested:      new Prisma.Decimal(dto.qtyRequested),
         shortBy:           dto.shortBy != null ? new Prisma.Decimal(dto.shortBy) : null,
@@ -374,18 +404,53 @@ export class ProcureService {
    * Record what was actually bought: containers, what each holds, what each
    * cost. Doing the packs-to-units maths here is what lets the spreadsheet be
    * a backup rather than the only place the conversion can happen.
+   *
+   * Whoever is holding the bag may record it, not only the owner -- on one
+   * condition: the shop shows purchase costs to its staff. Recording a price
+   * you are not allowed to see makes no sense, and that one switch already
+   * says which kind of shop this is. Recording never posts anything.
    */
-  async recordBought(tenantId: string, requestId: string, lines: BoughtLineDto[]) {
+  async recordBought(
+    tenantId: string,
+    requestId: string,
+    lines: BoughtLineDto[],
+    actor?: { userId: string; role?: string | null },
+    extra: { note?: string; boughtAt?: string; onTheWay?: boolean } = {},
+  ) {
     const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'SENT' && req.status !== 'BOUGHT') {
       throw new BadRequestException(
         `A request has to be sent before it can be bought against (this one is ${req.status.toLowerCase()}).`,
       );
     }
+    const decider = !actor || COST_DECIDER_ROLES.includes(actor.role ?? '');
+    if (!decider) {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId }, select: { showPurchaseCostsToStaff: true },
+      });
+      if (!canSeePurchaseCosts(actor.role, tenant?.showPurchaseCostsToStaff)) {
+        throw new BadRequestException(
+          'On this account only the owner or manager records what was bought. '
+          + 'The owner can open it to staff by showing purchase costs to staff under Settings.',
+        );
+      }
+    }
     for (const l of lines) {
       if (!(l.packsBought > 0)) throw new BadRequestException('How many packs were bought?');
       if (!(l.packSize    > 0)) throw new BadRequestException('What does one pack hold?');
-      if (!(l.packCost   >= 0)) throw new BadRequestException('What did one pack cost?');
+      /*
+        Zero is refused, the way the receipt path refuses it. A zero here is
+        almost always a price that was not typed -- and it does not stay
+        here: receiving blends it into the ingredient's average cost, and
+        every recipe using it gets cheaper on paper. A pack that really was
+        free is left out of the count and mentioned under Brand.
+      */
+      if (!(l.packCost > 0)) {
+        throw new BadRequestException(
+          'What did one pack cost? A zero would pull the ingredient\'s average cost down. '
+          + 'If a pack was free, leave it out of the count and say so under Brand.',
+        );
+      }
       const owned = req.lines.find((x) => x.id === l.lineId);
       if (!owned) throw new BadRequestException('That line is not on this request.');
       /*
@@ -403,6 +468,16 @@ export class ProcureService {
           + 'Correct it under Stock instead — changing it here would leave the books behind.',
         );
       }
+      /*
+        Staff get one go at a line. Nothing records who typed what, so the
+        only way to keep a cook from overwriting the owner's correction is to
+        let staff fill a blank line and leave a filled one to the deciders.
+      */
+      if (!decider && owned.packsBought != null) {
+        throw new BadRequestException(
+          `"${owned.rawMaterial?.name ?? 'That line'}" was already recorded. Ask the owner or manager to change it.`,
+        );
+      }
     }
 
     await this.prisma.$transaction(
@@ -418,9 +493,19 @@ export class ProcureService {
         }),
       ),
     );
+
+    let notes = req.notes;
+    if (extra.note) notes = appendNote(notes, extra.note);
+    const boughtDay = extra.boughtAt ? this.dayOf(extra.boughtAt) : null;
+    if (extra.onTheWay) notes = withTag(notes, 'ONTHEWAY', boughtDay ?? this.today());
     return this.prisma.purchaseRequest.update({
       where:   { id: requestId },
-      data:    { status: 'BOUGHT', boughtAt: new Date() },
+      data:    {
+        status:   'BOUGHT',
+        // The first recording sets the day; a correction later does not move it.
+        boughtAt: boughtDay ? this.manilaMidnight(boughtDay) : (req.boughtAt ?? new Date()),
+        ...(notes !== req.notes ? { notes } : {}),
+      },
       include: this.lineInclude(),
     });
   }
@@ -428,25 +513,28 @@ export class ProcureService {
   // ── posting to stock ──────────────────────────────────────────────────────
 
   /**
-   * Post the bought lines to stock.
+   * Post what arrived to stock.
    *
    * Each line is received on its own, with its own control number as the
    * reference. A line that fails — a locked period, say — does not cost the
    * rest of the delivery, and a line already received is skipped rather than
    * doubled, because receiveRawMaterial refuses a reference it has seen.
+   *
+   * What is posted is what ARRIVED, at the price paid per pack. A line that
+   * came short is rewritten to the packs that came, so the line, the lot and
+   * the books agree, and the rest goes one of four ways: a follow-up request
+   * already "on the way", a refund (nothing more to post -- the pocket was
+   * charged only for what came), a loss (an expense for packs paid for and
+   * gone), or simply not coming. Lines nobody bought go back on the branch's
+   * shopping list when the request closes, which is what the screen has
+   * always promised.
    */
   async receiveRequest(
     tenantId: string,
     requestId: string,
     userId: string,
-    paymentMethod: 'CASH' | 'OWNER_FUNDED' = 'CASH',
-    /**
-     * Set by the receipt path. A photographed delivery carries its own date,
-     * its own vendor line, and -- per line -- whether a price an order of
-     * magnitude off the one on file is a typo or a real move. A hand-typed
-     * request passes nothing and behaves exactly as before.
-     */
-    opts: { receivedAt?: string; note?: string; acceptCostChangeFor?: Set<string>; acceptCostChangeAll?: boolean } = {},
+    paymentMethod: ProcurePocket = 'CASH',
+    opts: ReceiveOpts = {},
   ) {
     const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'BOUGHT' && req.status !== 'RECEIVED') {
@@ -455,9 +543,24 @@ export class ProcureService {
       );
     }
 
-    const posted: Array<{ line: string; name: string; quantity: number; unitCost: number; warning: string | null }> = [];
+    // Which lines this call is about. Given nothing: every line with packs.
+    const chosen = new Map<string, number | undefined>();
+    for (const l of opts.lines ?? []) {
+      if (!req.lines.some((x) => x.id === l.lineId)) throw new BadRequestException('That line is not on this request.');
+      chosen.set(l.lineId, l.packsArrived);
+    }
+    const outcomeOf = new Map<string, ShortOutcome>((opts.closeShort ?? []).map((c) => [c.lineId, c.outcome]));
+    const receivedDay = opts.receivedAt ? this.dayOf(opts.receivedAt) : this.today();
+
+    const posted:  Array<{ line: string; name: string; quantity: number; unitCost: number; warning: string | null }> = [];
     const skipped: Array<{ line: string; name: string; reason: string }> = [];
     const failed:  Array<{ line: string; name: string; reason: string }> = [];
+    const short:   Array<{
+      line: string; name: string; rawMaterialId: string;
+      packsBought: number; packsArrived: number; packSize: number; packCost: number; brandNote: string | null;
+      outcome: ShortOutcome;
+    }> = [];
+    const done = new Set<string>();
 
     for (const line of req.lines) {
       const name = line.rawMaterial.name;
@@ -466,48 +569,293 @@ export class ProcureService {
         skipped.push({ line: line.lineNumber, name, reason: 'Nothing was bought for this line.' });
         continue;
       }
-      const quantity = Number(line.packsBought) * Number(line.packSize);
-      const unitCost = Number(line.packCost) / Number(line.packSize);
-      if (!(quantity > 0)) { skipped.push({ line: line.lineNumber, name, reason: 'Zero quantity.' }); continue; }
+      if (opts.lines && !chosen.has(line.id)) continue;   // left for a later post
 
-      try {
-        const res: { duplicate?: boolean; warning?: string | null } = await this.inventory.receiveRawMaterial(tenantId, line.rawMaterialId, {
-          branchId:        req.branchId,
-          quantity,
-          costPrice:       unitCost,
-          paymentMethod,
-          referenceNumber: line.lineNumber,
-          note:            [opts.note, line.brandNote].filter(Boolean).join(' · ') || undefined,
-          ...(opts.receivedAt ? { receivedAt: opts.receivedAt } : {}),
-          ...(opts.acceptCostChangeAll || opts.acceptCostChangeFor?.has(line.rawMaterialId) ? { acceptCostChange: true } : {}),
-        } as never);
-        if (res.duplicate) {
-          skipped.push({ line: line.lineNumber, name, reason: 'This line was already received.' });
-        } else {
-          posted.push({ line: line.lineNumber, name, quantity, unitCost, warning: res.warning ?? null });
+      const bought  = Number(line.packsBought);
+      const arrived = chosen.get(line.id) ?? bought;
+      if (arrived > bought + 1e-9) {
+        failed.push({ line: line.lineNumber, name, reason: `More arrived than were bought (${arrived} of ${bought}). Change Packs first, then post.` });
+        continue;
+      }
+      const size     = Number(line.packSize);
+      const cost     = Number(line.packCost);
+      const quantity = arrived * size;
+      const unitCost = cost / size;
+      if (!(size > 0) || !(quantity >= 0)) { skipped.push({ line: line.lineNumber, name, reason: 'Zero quantity.' }); continue; }
+
+      if (quantity > 0) {
+        try {
+          const res: { duplicate?: boolean; warning?: string | null } = await this.inventory.receiveRawMaterial(tenantId, line.rawMaterialId, {
+            branchId:        req.branchId,
+            quantity,
+            costPrice:       unitCost,
+            paymentMethod,
+            referenceNumber: line.lineNumber,
+            note:            [opts.note, line.brandNote].filter(Boolean).join(' · ') || undefined,
+            receivedAt:      receivedDay,
+            ...(opts.acceptCostChangeAll || opts.acceptCostChangeFor?.has(line.rawMaterialId) ? { acceptCostChange: true } : {}),
+          } as never);
+          if (res.duplicate) {
+            skipped.push({ line: line.lineNumber, name, reason: 'This line was already received.' });
+          } else {
+            posted.push({ line: line.lineNumber, name, quantity, unitCost, warning: res.warning ?? null });
+          }
+        } catch (err) {
+          failed.push({
+            line: line.lineNumber, name,
+            reason: err instanceof Error ? err.message : 'Could not post this line.',
+          });
+          continue;
         }
-        await this.prisma.purchaseRequestLine.update({
-          where: { id: line.id }, data: { receivedAt: new Date() },
+      }
+
+      // The line now says what is on the shelf. What was paid for and did
+      // not come is written down below, never lost.
+      const data: Prisma.PurchaseRequestLineUpdateInput = { receivedAt: new Date() };
+      if (arrived < bought) {
+        data.packsBought = new Prisma.Decimal(arrived);
+        short.push({
+          line: line.lineNumber, name, rawMaterialId: line.rawMaterialId,
+          packsBought: bought, packsArrived: arrived, packSize: size, packCost: cost, brandNote: line.brandNote,
+          outcome: outcomeOf.get(line.id) ?? 'STILL_COMING',
         });
-      } catch (err) {
-        failed.push({
-          line: line.lineNumber, name,
-          reason: err instanceof Error ? err.message : 'Could not post this line.',
+      }
+      await this.prisma.purchaseRequestLine.update({ where: { id: line.id }, data });
+      done.add(line.id);
+    }
+
+    // ── what was short ─────────────────────────────────────────────────────
+    const stillComing = short.filter((x) => x.outcome === 'STILL_COMING');
+    const followUp = stillComing.length > 0 ? await this.createFollowUp(tenantId, req, userId, stillComing) : null;
+    let notes = req.notes;
+    const lost: Array<{ description: string; amount: number; category: ExpenseCategory }> = [];
+    for (const x of short) {
+      const missing = +(x.packsBought - x.packsArrived).toFixed(4);
+      const word: Record<ShortOutcome, string> = {
+        STILL_COMING: followUp ? `still coming (${followUp.requestNumber})` : 'still coming',
+        REFUNDED:     'refunded',
+        LOST:         'lost, expensed',
+        NOT_COMING:   'not coming',
+      };
+      notes = appendNote(notes, `${x.name}: bought ${x.packsBought}, ${x.packsArrived} arrived, ${missing} ${word[x.outcome]}`);
+      if (x.outcome === 'LOST') {
+        lost.push({
+          description: `${x.name} — ${missing} pack${missing === 1 ? '' : 's'} paid for and lost`,
+          amount:      +(missing * x.packCost).toFixed(2),
+          category:    'OTHER',
         });
       }
     }
+    if (opts.note) notes = appendNote(notes, opts.note);
 
-    // Only close the request when nothing is left outstanding — a partly
-    // posted request that reads RECEIVED would hide the lines that failed.
-    const allDone = failed.length === 0;
+    // ── charges: with the goods, once ──────────────────────────────────────
+    let charges: PostedExpense[] = [];
+    const side = [...(opts.charges ?? []), ...lost];
+    if (side.length > 0) {
+      if (posted.length > 0 || lost.length > 0) {
+        charges = await this.postExpenses(tenantId, userId, receivedDay, req.requestNumber, paymentMethod, side);
+      } else {
+        // Nothing reached the shelf in this call, so nothing rides along
+        // with it: a charge posted twice is worse than one posted late.
+        charges = side.map((c) => ({ description: c.description, amount: c.amount, error: 'Not recorded: nothing was posted in this call. Add it with the lines you post.' }));
+      }
+    }
+
+    // ── closing, and what goes back on the list ────────────────────────────
+    const remaining  = req.lines.filter((l) => !l.receivedAt && !done.has(l.id));
+    const filledLeft = remaining.filter((l) => l.packsBought != null && !failed.some((f) => f.line === l.lineNumber));
+    const closing = failed.length === 0 && req.status === 'BOUGHT' && (opts.closeRest === true || filledLeft.length === 0);
+    const carried = closing ? await this.carryForward(tenantId, req, remaining, userId) : [];
+
     const updated = await this.prisma.purchaseRequest.update({
       where: { id: requestId },
-      data:  allDone
-        ? { status: 'RECEIVED', receivedAt: new Date(), receivedById: userId }
-        : {},
+      data:  {
+        ...(closing ? { status: 'RECEIVED' as const, receivedAt: new Date(), receivedById: userId } : {}),
+        ...(notes !== req.notes ? { notes } : {}),
+      },
       include: this.lineInclude(),
     });
-    return { request: updated, posted, skipped, failed };
+    return {
+      request: updated, posted, skipped, failed, carried, charges,
+      short: short.map(({ line, name, packsBought, packsArrived, outcome }) => ({ line, name, packsBought, packsArrived, outcome })),
+      followUp: followUp ? { id: followUp.id, requestNumber: followUp.requestNumber, lines: followUp.lines.length } : null,
+    };
+  }
+
+  /**
+   * Lines nobody bought, back onto the branch's open list with their own
+   * control numbers. They still have to be bought; dropping them was the
+   * thing the screen promised not to do.
+   */
+  private async carryForward(
+    tenantId: string,
+    req: { branchId: string; requestNumber: string },
+    lines: Array<{ lineNumber: string; rawMaterialId: string; qtyRequested: Prisma.Decimal; shortBy: Prisma.Decimal | null; rawMaterial: { name: string } }>,
+    userId: string,
+  ) {
+    const carried: Array<{ line: string; name: string; qtyRequested: number; to: string; alreadyThere: boolean }> = [];
+    if (lines.length === 0) return carried;
+    const open = await this.openRequestRaw(tenantId, req.branchId, userId);
+    const onOpen = new Set(open.lines.map((l) => l.rawMaterialId));
+    const numbered: Array<{ lineNumber: string }> = open.lines.map((l) => ({ lineNumber: l.lineNumber }));
+    for (const l of lines) {
+      const name = l.rawMaterial.name;
+      const base = { line: l.lineNumber, name, qtyRequested: Number(l.qtyRequested), to: open.requestNumber };
+      // Already asked for again, with a number somebody chose: theirs stands.
+      if (onOpen.has(l.rawMaterialId)) { carried.push({ ...base, alreadyThere: true }); continue; }
+      const lineNumber = this.nextLineNumber(open.requestNumber, numbered);
+      try {
+        await this.prisma.purchaseRequestLine.create({
+          data: { purchaseRequestId: open.id, lineNumber, rawMaterialId: l.rawMaterialId, qtyRequested: l.qtyRequested, shortBy: l.shortBy },
+        });
+      } catch (err) {
+        // Somebody put the same ingredient on the open list a moment ago.
+        // It is there, which is all that was wanted.
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          carried.push({ ...base, alreadyThere: true });
+          continue;
+        }
+        throw err;
+      }
+      numbered.push({ lineNumber });
+      onOpen.add(l.rawMaterialId);
+      carried.push({ ...base, alreadyThere: false });
+    }
+    return carried;
+  }
+
+  /**
+   * The packs still to come, as their own request -- already bought, already
+   * "on the way", never on the open shopping list where Check stock would
+   * buy them a second time.
+   */
+  private async createFollowUp(
+    tenantId: string,
+    req: { branchId: string; requestNumber: string },
+    userId: string,
+    short: Array<{ rawMaterialId: string; packsBought: number; packsArrived: number; packSize: number; packCost: number; brandNote: string | null }>,
+  ) {
+    const requestNumber = await this.nextNumber(tenantId);
+    const numbered: Array<{ lineNumber: string }> = [];
+    const now = new Date();
+    const notes = appendNote(
+      withTag(withTag(null, 'BALANCEOF', req.requestNumber), 'ONTHEWAY', this.today()),
+      `Balance of ${req.requestNumber}: still coming`,
+    );
+    return this.prisma.purchaseRequest.create({
+      data: {
+        tenantId, branchId: req.branchId, requestNumber,
+        status: 'BOUGHT', sentAt: now, boughtAt: now, sentById: userId, createdById: userId, notes,
+        lines: {
+          create: short.map((x) => {
+            const missing = +(x.packsBought - x.packsArrived).toFixed(4);
+            const lineNumber = this.nextLineNumber(requestNumber, numbered);
+            numbered.push({ lineNumber });
+            return {
+              lineNumber,
+              rawMaterialId: x.rawMaterialId,
+              qtyRequested:  new Prisma.Decimal(+(missing * x.packSize).toFixed(4)),
+              packsBought:   new Prisma.Decimal(missing),
+              packSize:      new Prisma.Decimal(x.packSize),
+              packCost:      new Prisma.Decimal(x.packCost),
+              brandNote:     x.brandNote,
+            };
+          }),
+        },
+      },
+      include: this.lineInclude(),
+    });
+  }
+
+  /**
+   * Lines that were never stock: a delivery fee, a platform fee, parking, a
+   * pack paid for and lost. Simple entries from the same pocket, on the same
+   * day.
+   *
+   * Owner-funded is two honest entries, not one clever one: the owner put
+   * the money in (Dr cash, Cr owner's capital), then the business spent it
+   * (Dr expense, Cr cash). Same end state as a direct Dr expense / Cr
+   * capital, and both halves are entries the simple ledger already knows how
+   * to reverse. The expense goes first, so a failure there leaves nothing
+   * behind; the contribution second, so a failure THERE leaves a real
+   * expense on the books and a message saying which half is missing --
+   * never an orphan contribution with no spend against it.
+   */
+  async postExpenses(
+    tenantId: string,
+    userId: string,
+    date: string,
+    label: string,
+    pocket: ProcurePocket,
+    expenses: Array<{ description: string; amount: number; category?: ExpenseCategory }>,
+  ): Promise<PostedExpense[]> {
+    if (expenses.length === 0) return [];
+    if (!this.simple) throw new BadRequestException('Expenses cannot be posted on this deployment.');
+    const out: PostedExpense[] = [];
+    for (const e of expenses) {
+      try {
+        const note = `${label ? label + ': ' : ''}${e.description}`.slice(0, 200);
+        const je = await this.simple.create(tenantId, userId, {
+          type: 'EXPENSE', amount: e.amount, date,
+          source: pocket === 'BANK' ? 'BANK' : 'CASH',
+          category: e.category ?? 'OTHER', note,
+        });
+        let contributionNote: string | undefined;
+        if (pocket === 'OWNER_FUNDED') {
+          try {
+            await this.simple.create(tenantId, userId, {
+              type: 'OWNER_CONTRIBUTION', amount: e.amount, date, source: 'CASH',
+              note: `Owner paid: ${note}`.slice(0, 200),
+            });
+          } catch (err) {
+            contributionNote = `Expense posted, but the owner contribution did not: ${
+              err instanceof Error ? err.message : 'unknown error'}. Record it under Ledger > Record Entry.`;
+          }
+        }
+        // status is PENDING_APPROVAL when the shop has a journal threshold:
+        // the entry exists but is not in the books until someone approves it.
+        out.push({ description: e.description, amount: e.amount, entryNumber: je.entryNumber, status: je.status,
+                   ...(contributionNote ? { error: contributionNote } : {}) });
+      } catch (err) {
+        out.push({
+          description: e.description, amount: e.amount,
+          error: err instanceof Error ? err.message : 'Could not post this expense.',
+        });
+      }
+    }
+    return out;
+  }
+
+  // ── the paper ─────────────────────────────────────────────────────────────
+
+  /**
+   * A photo of the receipt, the order screen or the delivery slip, filed
+   * against the request by whoever is holding it. Filing is not reading:
+   * nothing is parsed and nothing posts. It is the evidence, kept with the
+   * request the moment it exists, instead of on a phone until tonight.
+   */
+  async attachPhoto(
+    tenantId: string,
+    requestId: string,
+    userId: string,
+    dto: { imageBase64: string; mediaType?: string; label?: PhotoLabel },
+  ) {
+    if (!this.documents) throw new BadRequestException('Photos cannot be filed on this deployment.');
+    const req = await this.getRaw(tenantId, requestId);
+    if (req.status === 'CANCELLED') throw new BadRequestException('This request was cancelled.');
+    const buffer = Buffer.from(dto.imageBase64, 'base64');
+    if (buffer.length === 0) throw new BadRequestException('The photo is empty.');
+    if (buffer.length > 8_000_000) throw new BadRequestException('That photo is too large. Take it again at a lower resolution.');
+    const mime  = dto.mediaType ?? 'image/jpeg';
+    const ext   = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+    const label = dto.label ?? 'Receipt';
+    const n = await this.prisma.document.count({ where: { tenantId, entityType: 'PurchaseRequest', entityId: req.id } }) + 1;
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const doc = await this.documents.uploadBuffer(
+      tenantId, 'PurchaseRequest', req.id, buffer, mime,
+      `${slug}-${req.requestNumber}-${n}.${ext}`, label, userId,
+    );
+    return { id: doc.id, filename: doc.filename, label };
   }
 
   async cancel(tenantId: string, requestId: string) {
@@ -623,6 +971,83 @@ export class ProcureService {
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────
+
+  /**
+   * The next line control number on a request.
+   *
+   * Derived from the highest suffix used, not from how many lines there are.
+   * Removing line 02 of three left a count of 2, so the next add produced
+   * -03 again -- a duplicate control number, and that number is the
+   * idempotency key the receive relies on to know a line has been posted.
+   * Never below the line count either: a row whose number cannot be parsed
+   * must not let the next one collide with an existing suffix.
+   */
+  private nextLineNumber(requestNumber: string, lines: Array<{ lineNumber: string }>): string {
+    const highest = lines.reduce((max, l) => {
+      const n = parseInt(String(l.lineNumber ?? '').slice(-2), 10);
+      return Number.isFinite(n) && n > max ? n : max;
+    }, 0);
+    return `${requestNumber}-${String(Math.max(lines.length, highest) + 1).padStart(2, '0')}`;
+  }
+
+  /**
+   * What each ingredient cost last time, and what one pack held.
+   *
+   * RawMaterial stores no pack size, so "Emborg 1 L" was typed as 1000 on
+   * every single request. The newest received line of the same ingredient
+   * already knows -- one query, no new column -- and the screen shows where
+   * the number came from so a one-off 5 kg sack is visible before it
+   * becomes next time's default.
+   */
+  private async withLastPack<L extends { rawMaterialId: string }, T extends { lines: L[] }>(
+    tenantId: string,
+    reqs: T[],
+  ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & { lastPack: LastPack | null }> }>> {
+    const ids = [...new Set(reqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))];
+    const rows = ids.length === 0 ? [] : await this.prisma.purchaseRequestLine.findMany({
+      where: {
+        rawMaterialId: { in: ids },
+        receivedAt: { not: null },
+        packSize:  { gt: 0 },
+        packCost:  { gt: 0 },
+        packsBought: { gt: 0 },
+        purchaseRequest: { tenantId },
+      },
+      orderBy:  { receivedAt: 'desc' },
+      distinct: ['rawMaterialId'],
+      select:   { rawMaterialId: true, packSize: true, packCost: true, brandNote: true, receivedAt: true },
+    });
+    const last = new Map<string, LastPack>(rows.map((r) => [r.rawMaterialId, {
+      packSize:   Number(r.packSize),
+      packCost:   Number(r.packCost),
+      brandNote:  r.brandNote,
+      receivedAt: r.receivedAt,
+    }]));
+    return reqs.map((r) => ({
+      ...r,
+      lines: r.lines.map((l) => ({ ...l, lastPack: last.get(l.rawMaterialId) ?? null })),
+    }));
+  }
+
+  /** YYYY-MM-DD, or a refusal. */
+  private dayOf(given: string): string {
+    const d = given.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || Number.isNaN(new Date(`${d}T00:00:00Z`).getTime())) {
+      throw new BadRequestException('The date has to be a real date (YYYY-MM-DD).');
+    }
+    return d;
+  }
+
+  /** Today in the shop's own timezone. */
+  private today(): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: PH_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+  }
+
+  private manilaMidnight(day: string): Date {
+    return new Date(`${day}T00:00:00+08:00`);
+  }
 
   private lineInclude() {
     return {

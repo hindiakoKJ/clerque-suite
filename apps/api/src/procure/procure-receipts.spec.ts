@@ -94,9 +94,17 @@ describe('ProcureReceiptsService', () => {
       }),
     };
 
+    const simple: any = {
+      create: jest.fn().mockImplementation((_t: string, _u: string, dto: any) => {
+        entries.push(dto);
+        return Promise.resolve({ entryNumber: `JE-${entries.length}` });
+      }),
+    };
+
     // The real ProcureService's receive loop, driven by the mocks above.
+    // Expenses post through it too, from the same pocket as the goods.
     const { ProcureService } = jest.requireActual('./procure.service');
-    const procure = new ProcureService(prisma, inventory);
+    const procure = new ProcureService(prisma, inventory, simple);
     jest.spyOn(procure as any, 'nextNumber').mockResolvedValue('REQ-20260902-001');
 
     const ai: any = { call: jest.fn().mockResolvedValue(opts.aiText ?? '{"lines":[]}') };
@@ -106,14 +114,8 @@ describe('ProcureReceiptsService', () => {
         return Promise.resolve({ id: 'doc1', filename: name });
       }),
     };
-    const simple: any = {
-      create: jest.fn().mockImplementation((_t: string, _u: string, dto: any) => {
-        entries.push(dto);
-        return Promise.resolve({ entryNumber: `JE-${entries.length}` });
-      }),
-    };
 
-    const svc = new ProcureReceiptsService(prisma, inventory, procure, ai, documents, simple);
+    const svc = new ProcureReceiptsService(prisma, inventory, procure, ai, documents);
     return { svc, prisma, inventory, ai, received, entries, docs, requests, createdMaterials };
   }
 
@@ -452,7 +454,7 @@ describe('ProcureReceiptsService', () => {
   it('an owner-funded expense posts the expense first, and says so if the contribution fails', async () => {
     const { svc, entries } = build();
     let n = 0;
-    const simple: any = (svc as any).simple;
+    const simple: any = (svc as any).procure.simple;
     simple.create.mockImplementation((_t: string, _u: string, dto: any) => {
       entries.push(dto);
       if (dto.type === 'OWNER_CONTRIBUTION') return Promise.reject(new Error('Accounts not set up.'));

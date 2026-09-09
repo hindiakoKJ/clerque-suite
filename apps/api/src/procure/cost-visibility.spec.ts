@@ -45,7 +45,7 @@ describe('Purchase costs — whose eyes', () => {
     const request = {
       id: 'req1', requestNumber: 'REQ-20260904-001', status: 'BOUGHT', tenantId: TENANT,
       lines: [{
-        id: 'l1', lineNumber: 1, qtyRequested: 3, packsBought: 2, packSize: 1000, packCost: 180,
+        id: 'l1', lineNumber: 1, rawMaterialId: 'rm1', qtyRequested: 3, packsBought: 2, packSize: 1000, packCost: 180,
         rawMaterial: { id: 'rm1', name: 'Chicken breast', unit: 'g', costPrice: 0.24 },
       }],
     };
@@ -57,9 +57,21 @@ describe('Purchase costs — whose eyes', () => {
           findFirst: jest.fn().mockResolvedValue(JSON.parse(JSON.stringify(request))),
           findMany:  jest.fn().mockResolvedValue([JSON.parse(JSON.stringify(request))]),
         },
+        // What the ingredient cost last time rides on every line too.
+        purchaseRequestLine: {
+          findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'rm1', packSize: 1000, packCost: 180, brandNote: null, receivedAt: new Date() }]),
+        },
       };
       return { svc: new ProcureService(prisma, {} as any), prisma };
     }
+
+    it('hides last time\'s price from the cook along with this time\'s', async () => {
+      const { svc } = build(false);
+      const seen = await svc.get(TENANT, 'req1', 'CASHIER');
+      expect(seen.lines[0].lastPack).toEqual(expect.objectContaining({ packSize: 1000, packCost: null }));
+      const owner = await build(false).svc.get(TENANT, 'req1', 'BUSINESS_OWNER');
+      expect(owner.lines[0].lastPack?.packCost).toBe(180);
+    });
 
     it('gives the owner every number, switch off or on', async () => {
       for (const flag of [true, false]) {

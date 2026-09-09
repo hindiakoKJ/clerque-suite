@@ -31,12 +31,13 @@ export class ReceiveRawMaterialDto {
   /**
    * How was this delivery paid? Drives the credit side of the journal entry:
    *   - CASH         → Cr 1010 Cash on Hand   (default — most common MSME path)
+   *   - BANK         → Cr 1020 Cash in Bank   (the shop's bank or GCash)
    *   - CREDIT       → Cr 2010 Accounts Payable (for accrual / Net-30 suppliers)
    *   - OWNER_FUNDED → Cr 3010 Owner's Capital (owner stocked from personal funds)
    */
   @IsOptional()
-  @IsIn(['CASH', 'CREDIT', 'OWNER_FUNDED'])
-  paymentMethod?: 'CASH' | 'CREDIT' | 'OWNER_FUNDED';
+  @IsIn(['CASH', 'BANK', 'CREDIT', 'OWNER_FUNDED'])
+  paymentMethod?: 'CASH' | 'BANK' | 'CREDIT' | 'OWNER_FUNDED';
 
   /** Optional reference (PO number, supplier invoice number, DR number, etc.) */
   @IsOptional()

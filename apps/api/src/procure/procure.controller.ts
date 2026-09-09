@@ -8,7 +8,9 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
-import { ProcureService, AddLineDto, BoughtLineDto } from './procure.service';
+import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
+import { ProcureService, AddLineDto } from './procure.service';
+import { ReceiveRequestDto, RecordBoughtDto, AttachPhotoDto } from './dto/receive-request.dto';
 
 /**
  * Clerque Procure.
@@ -18,9 +20,11 @@ import { ProcureService, AddLineDto, BoughtLineDto } from './procure.service';
  * owner or manager closes the request, records what was paid, and posts it to
  * stock — those three move money and inventory.
  *
- * GENERAL_EMPLOYEE is the kitchen account. It appears on the list-building
- * routes and nowhere else in this file, which is the whole separation: the
- * person who notices is not the person who spends.
+ * GENERAL_EMPLOYEE is the kitchen account. It builds the list, and -- when
+ * the shop shows purchase costs to its staff -- records what came back and
+ * files the photo of the paper. Sending, posting to stock and cancelling
+ * stay with the owner or manager: recording is writing down, posting is
+ * spending, and the separation is between those two.
  */
 @ApiTags('Procure')
 @ApiBearerAuth('access-token')
@@ -114,39 +118,69 @@ export class ProcureController {
     return this.procure.sendRequest(user.tenantId!, id, user.sub);
   }
 
-  /** What was actually bought, in containers and what each cost. */
-  @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM')
+  /**
+   * What was actually bought, in containers and what each cost. Open to
+   * whoever is holding the bag; the service refuses staff on a shop that
+   * hides purchase costs from them, and refuses staff a second go at a line.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Post(':id/bought')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Record the shopping: packs, pack size, price paid' })
   bought(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { lines: BoughtLineDto[] },
+    @Body() body: RecordBoughtDto,
   ) {
-    return this.procure.recordBought(user.tenantId!, id, body.lines ?? []);
+    return this.procure.recordBought(
+      user.tenantId!, id, body.lines ?? [],
+      { userId: user.sub, role: user.role },
+      { note: body.note, boughtAt: body.boughtAt, onTheWay: body.onTheWay },
+    );
+  }
+
+  /** The paper, filed by whoever is holding it. Filing is not posting. */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @Post(':id/photo')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Attach a photo of the receipt, order screen or delivery slip' })
+  photo(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: AttachPhotoDto) {
+    return this.procure.attachPhoto(user.tenantId!, id, user.sub, body);
   }
 
   /**
    * Posting to stock moves inventory and posts to the ledger, so it stays with
    * the owner or manager.
    */
+  /*
+    Idempotent: the goods are protected by each line's control number, but
+    the charges that ride along (shipping, a platform fee, a lost pack) have
+    no such key, and a double-tap on a slow connection would post them twice.
+  */
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM')
+  @RequireIdempotency()
   @Post(':id/receive')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Post the bought lines to stock' })
+  @ApiOperation({ summary: 'Post what arrived to stock' })
   receive(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { paymentMethod?: 'CASH' | 'OWNER_FUNDED'; acceptCostChange?: boolean },
+    @Body() body: ReceiveRequestDto,
   ) {
     /*
       "The price really did change" from this screen too. A line refused by the
       order-of-magnitude guard left the request at BOUGHT with no way past the
       guard except the receipts screen, and a hand-typed request never had one.
     */
-    return this.procure.receiveRequest(user.tenantId!, id, user.sub, body.paymentMethod ?? 'CASH',
-      body.acceptCostChange === true ? { acceptCostChangeAll: true } : {});
+    return this.procure.receiveRequest(user.tenantId!, id, user.sub, body.paymentMethod ?? 'CASH', {
+      ...(body.acceptCostChange === true ? { acceptCostChangeAll: true } : {}),
+      receivedAt: body.receivedAt,
+      note:       body.note,
+      lines:      body.lines,
+      closeShort: body.closeShort,
+      closeRest:  body.closeRest,
+      charges:    body.charges,
+    });
   }
 
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM')

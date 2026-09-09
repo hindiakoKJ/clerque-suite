@@ -24,10 +24,18 @@ describe('ProcureService', () => {
     receiveImpl?: (rmId: string, dto: any) => any;
     /** Tenant.showPurchaseCostsToStaff — off means staff do not see costs. */
     showCostsToStaff?: boolean;
+    /** The branch's OPEN list, when one exists beside the request under test. */
+    openList?: any;
+    /** What the newest received line of each ingredient says it held and cost. */
+    lastPacks?: any[];
   } = {}) {
     const created: any[] = [];
+    const createdRequests: any[] = [];
     const updatedLines: any[] = [];
     const received: any[] = [];
+    const entries: any[] = [];
+    const docs: any[] = [];
+    let openList = opts.openList ?? null;
     let request = opts.open === null ? null : {
       id: 'req1', tenantId: TENANT, branchId: BRANCH,
       requestNumber: 'REQ-20260830-001',
@@ -41,11 +49,22 @@ describe('ProcureService', () => {
       // itself, so they run as the default shop: everyone sees.
       tenant: { findUnique: jest.fn().mockResolvedValue({ showPurchaseCostsToStaff: opts.showCostsToStaff ?? true }) },
       purchaseRequest: {
-        findFirst: jest.fn().mockResolvedValue(request),
+        // Asked for by id: the request under test. Asked for the branch's
+        // OPEN list: whatever is open beside it, like a real table.
+        findFirst: jest.fn(({ where }: any) =>
+          Promise.resolve(where?.status === 'OPEN' ? (openList ?? (request?.status === 'OPEN' ? request : null)) : request)),
         create:    jest.fn(({ data }: any) => {
-          request = { id: 'req1', lines: [], ...data };
           created.push(data);
-          return Promise.resolve(request);
+          const { lines: nested, ...rest } = data;
+          const made = {
+            id: data.status === 'BOUGHT' ? 'follow1' : 'open1',
+            ...rest,
+            lines: (nested?.create ?? []).map((l: any, i: number) => ({ id: `f${i + 1}`, receivedAt: null, ...l })),
+          };
+          createdRequests.push(made);
+          if (request === null) { request = made; return Promise.resolve(request); }
+          if (!data.status) openList = made;   // a fresh OPEN list
+          return Promise.resolve(made);
         }),
         update: jest.fn(({ data }: any) => {
           request = { ...request, ...data };
@@ -53,10 +72,17 @@ describe('ProcureService', () => {
         }),
       },
       purchaseRequestLine: {
-        create:     jest.fn(({ data }: any) => { created.push(data); return Promise.resolve(data); }),
+        create:     jest.fn(({ data }: any) => {
+          created.push(data);
+          if (openList && data.purchaseRequestId === openList.id) openList.lines.push({ id: `o${openList.lines.length + 1}`, ...data });
+          return Promise.resolve(data);
+        }),
         update:     jest.fn(({ where, data }: any) => { updatedLines.push({ ...where, ...data }); return Promise.resolve({}); }),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        // What each ingredient held and cost the last time it was received.
+        findMany:   jest.fn().mockResolvedValue(opts.lastPacks ?? []),
       },
+      document: { count: jest.fn().mockResolvedValue(0) },
       rawMaterial: {
         findFirst: jest.fn(({ where }: any) => Promise.resolve({ id: where.id, name: 'White Sugar' })),
         // How many ingredients carry no reorder level. Check stock reports it
@@ -74,8 +100,23 @@ describe('ProcureService', () => {
         return Promise.resolve(opts.receiveImpl ? opts.receiveImpl(rmId, dto) : { quantity: dto.quantity });
       }),
     };
-    const svc = new ProcureService(prisma, inventory) as any;
-    return { svc, prisma, inventory, created, updatedLines, received, req: () => request };
+    const simple: any = {
+      create: jest.fn((_t: string, _u: string, dto: any) => {
+        entries.push(dto);
+        return Promise.resolve({ entryNumber: `JE-${entries.length}`, status: 'POSTED' });
+      }),
+    };
+    const documents: any = {
+      uploadBuffer: jest.fn((_t: string, type: string, id: string, buf: Buffer, mime: string, name: string, label: string, by: string) => {
+        docs.push({ type, id, size: buf.length, mime, name, label, by });
+        return Promise.resolve({ id: 'doc1', filename: name });
+      }),
+    };
+    const svc = new ProcureService(prisma, inventory, simple, documents) as any;
+    return {
+      svc, prisma, inventory, created, createdRequests, updatedLines, received, entries, docs,
+      req: () => request, open: () => openList,
+    };
   }
 
   // ── one list ──────────────────────────────────────────────────────────────
@@ -379,19 +420,38 @@ describe('ProcureService', () => {
     expect(out.skipped[0].reason).toMatch(/already received/i);
   });
 
-  it('skips a line nobody bought, without failing the rest', async () => {
-    const { svc } = build({
-      status: 'BOUGHT',
-      lines: [
-        ...BOUGHT,
-        { id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-x',
-          packsBought: null, packSize: null, packCost: null, receivedAt: null,
-          rawMaterial: { name: 'Dried Lemon', unit: 'g' } },
-      ],
-    });
+  const UNBOUGHT = {
+    id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-x', qtyRequested: 200, shortBy: 50,
+    packsBought: null, packSize: null, packCost: null, receivedAt: null,
+    rawMaterial: { name: 'Dried Lemon', unit: 'g' },
+  };
+
+  it('carries a line nobody bought onto the open list, and says so, instead of dropping it', async () => {
+    /*
+      The screen has always promised "anything left blank stays on the list
+      for next time". The server closed the request and the line vanished.
+      Now it goes onto the branch's open list with its own control number.
+    */
+    const { svc, created, res: _r } = { ...build({ status: 'BOUGHT', lines: [...BOUGHT, UNBOUGHT] }), res: null };
     const res = await svc.receiveRequest(TENANT, 'req1', USER);
     expect(res.posted).toHaveLength(1);
     expect(res.skipped[0].reason).toMatch(/nothing was bought/i);
+    expect(res.request.status).toBe('RECEIVED');
+    expect(res.carried).toEqual([expect.objectContaining({ name: 'Dried Lemon', qtyRequested: 200, alreadyThere: false })]);
+    const carried = created.find((c) => c.rawMaterialId === 'rm-x' && c.purchaseRequestId === 'open1');
+    expect(Number(carried.qtyRequested)).toBe(200);
+    expect(Number(carried.shortBy)).toBe(50);
+    expect(carried.lineNumber).toMatch(/-01$/);
+  });
+
+  it('leaves a carried line alone when somebody already put it back on the list', async () => {
+    const { svc, created } = build({
+      status: 'BOUGHT', lines: [...BOUGHT, UNBOUGHT],
+      openList: { id: 'open1', requestNumber: 'REQ-20260831-001', status: 'OPEN', lines: [{ id: 'o1', lineNumber: 'REQ-20260831-001-01', rawMaterialId: 'rm-x' }] },
+    });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER);
+    expect(res.carried[0].alreadyThere).toBe(true);
+    expect(created.some((c) => c.rawMaterialId === 'rm-x')).toBe(false);
   });
 
   it('one failing line does not cost the rest of the delivery', async () => {
@@ -441,5 +501,223 @@ describe('ProcureService', () => {
   it('refuses to cancel something already in stock', async () => {
     const { svc } = build({ status: 'RECEIVED' });
     await expect(svc.cancel(TENANT, 'req1')).rejects.toThrow(/already in stock/i);
+  });
+
+  // ── the receive card learns four things ───────────────────────────────────
+
+  const SECOND = {
+    id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-sug',
+    packsBought: 2, packSize: 1000, packCost: 85, brandNote: null,
+    receivedAt: null, rawMaterial: { name: 'White Sugar', unit: 'g' },
+  };
+
+  it('posts on the day the goods came, with the person\'s note on the lot and the request', async () => {
+    // A Saturday market run typed on Monday landed in Monday's books.
+    const { svc, received } = build({ status: 'BOUGHT', lines: BOUGHT });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { receivedAt: '2026-09-05', note: 'Aling Nena, no receipt' });
+    expect(received[0].receivedAt).toBe('2026-09-05');
+    expect(received[0].note).toMatch(/Aling Nena/);
+    expect(res.request.notes).toMatch(/Aling Nena, no receipt/);
+  });
+
+  it('refuses a date that is not one', async () => {
+    const { svc } = build({ status: 'BOUGHT', lines: BOUGHT });
+    await expect(svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { receivedAt: 'last saturday' })).rejects.toThrow(/real date/i);
+  });
+
+  it('posts only the ticked lines and keeps the request open for the rest', async () => {
+    // Half the trip was paid from the till and half from the owner's wallet:
+    // post the till lines, then the others with the other pocket.
+    const { svc, received, updatedLines } = build({ status: 'BOUGHT', lines: [...BOUGHT, SECOND] });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }] });
+    expect(received.map((r) => r.rawMaterialId)).toEqual(['rm-haz']);
+    expect(res.posted).toHaveLength(1);
+    expect(res.request.status).toBe('BOUGHT');                       // sugar still waiting
+    expect(updatedLines.some((u) => u.id === 'l2')).toBe(false);
+    expect(res.carried).toEqual([]);
+  });
+
+  it('refuses a line that is not on the request', async () => {
+    const { svc } = build({ status: 'BOUGHT', lines: BOUGHT });
+    await expect(svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'someone-elses' }] })).rejects.toThrow(/not on this request/i);
+  });
+
+  it('closes on request and sends what was not posted back to the shopping list', async () => {
+    // "The rest isn't coming" -- but it is still needed, so it goes back on the list.
+    const { svc, created } = build({ status: 'BOUGHT', lines: [...BOUGHT, { ...SECOND, qtyRequested: 2000 }, UNBOUGHT] });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }], closeRest: true });
+    expect(res.request.status).toBe('RECEIVED');
+    expect(res.carried.map((c) => c.name).sort()).toEqual(['Dried Lemon', 'White Sugar']);
+    const onOpen = created.filter((c) => c.purchaseRequestId === 'open1').map((c) => c.lineNumber);
+    expect(onOpen).toHaveLength(2);
+    expect(onOpen[0]).toMatch(/^REQ-\d{8}-\d{3}-01$/);
+    expect(onOpen[1]).toMatch(/^REQ-\d{8}-\d{3}-02$/);
+  });
+
+  it('the shop\'s bank is a pocket of its own', async () => {
+    const { svc, received } = build({ status: 'BOUGHT', lines: BOUGHT });
+    await svc.receiveRequest(TENANT, 'req1', USER, 'BANK');
+    expect(received[0].paymentMethod).toBe('BANK');
+  });
+
+  // ── what came short ───────────────────────────────────────────────────────
+
+  it('a short line posts what arrived, and the rest becomes a follow-up already on the way', async () => {
+    const { svc, received, updatedLines, createdRequests } = build({ status: 'BOUGHT', lines: BOUGHT });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1', packsArrived: 2 }] });
+
+    expect(received[0].quantity).toBe(1500);                          // 2 x 750, not 3 x 750
+    expect(Number(updatedLines.find((u) => u.id === 'l1').packsBought)).toBe(2);   // the line now says what is on the shelf
+    expect(res.short).toEqual([expect.objectContaining({ name: 'Hazelnut Syrup', packsBought: 3, packsArrived: 2, outcome: 'STILL_COMING' })]);
+
+    const follow = createdRequests.find((r) => r.status === 'BOUGHT');
+    expect(res.followUp).toEqual({ id: 'follow1', requestNumber: follow.requestNumber, lines: 1 });
+    expect(follow.notes).toMatch(/\[BALANCEOF:REQ-20260830-001\]/);
+    expect(follow.notes).toMatch(/\[ONTHEWAY:\d{4}-\d{2}-\d{2}\]/);
+    expect(follow.notes).toMatch(/still coming/);
+    const line = follow.lines[0];
+    expect(Number(line.packsBought)).toBe(1);
+    expect(Number(line.packSize)).toBe(750);
+    expect(Number(line.packCost)).toBe(540);
+    expect(Number(line.qtyRequested)).toBe(750);
+    expect(line.lineNumber).toBe(`${follow.requestNumber}-01`);
+    expect(res.request.notes).toMatch(/bought 3, 2 arrived, 1 still coming/);
+    expect(res.request.status).toBe('RECEIVED');
+  });
+
+  it('refuses more arriving than was bought, and says what to change', async () => {
+    const { svc, received } = build({ status: 'BOUGHT', lines: BOUGHT });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1', packsArrived: 4 }] });
+    expect(received).toHaveLength(0);
+    expect(res.failed[0].reason).toMatch(/Change Packs first/);
+    expect(res.request.status).toBe('BOUGHT');
+  });
+
+  it('a lost pack is expensed from the same pocket -- twice over when the owner paid', async () => {
+    const { svc, entries } = build({ status: 'BOUGHT', lines: BOUGHT });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'OWNER_FUNDED', {
+      lines: [{ lineId: 'l1', packsArrived: 2 }], closeShort: [{ lineId: 'l1', outcome: 'LOST' }],
+    });
+    expect(res.followUp).toBeNull();
+    expect(entries.map((e) => e.type)).toEqual(['EXPENSE', 'OWNER_CONTRIBUTION']);
+    expect(entries[0]).toMatchObject({ amount: 540, category: 'OTHER', source: 'CASH' });
+    expect(entries[0].note).toMatch(/Hazelnut Syrup — 1 pack paid for and lost/);
+    expect(res.charges[0].entryNumber).toBe('JE-1');
+    expect(res.request.notes).toMatch(/1 lost, expensed/);
+  });
+
+  it('a refunded pack posts nothing more: the pocket was only charged for what came', async () => {
+    const { svc, entries, received } = build({ status: 'BOUGHT', lines: BOUGHT });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', {
+      lines: [{ lineId: 'l1', packsArrived: 2 }], closeShort: [{ lineId: 'l1', outcome: 'REFUNDED' }],
+    });
+    expect(received[0].quantity).toBe(1500);
+    expect(entries).toEqual([]);
+    expect(res.followUp).toBeNull();
+    expect(res.request.notes).toMatch(/1 refunded/);
+  });
+
+  it('nothing arrived: the line closes empty and the whole order is the follow-up', async () => {
+    const { svc, received, updatedLines, createdRequests } = build({ status: 'BOUGHT', lines: BOUGHT });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1', packsArrived: 0 }] });
+    expect(received).toHaveLength(0);
+    expect(res.posted).toHaveLength(0);
+    const l1 = updatedLines.find((u) => u.id === 'l1');
+    expect(Number(l1.packsBought)).toBe(0);
+    expect(l1.receivedAt).toBeInstanceOf(Date);
+    expect(Number(createdRequests.find((r) => r.status === 'BOUGHT').lines[0].packsBought)).toBe(3);
+    expect(res.request.status).toBe('RECEIVED');
+  });
+
+  // ── charges that came with the goods ──────────────────────────────────────
+
+  it('posts the charges with the goods, from the same pocket, freight as a cost of the goods', async () => {
+    const { svc, entries } = build({ status: 'BOUGHT', lines: BOUGHT });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'BANK', {
+      receivedAt: '2026-09-05',
+      charges: [{ description: 'Shopee shipping', amount: 80, category: 'FREIGHT' }, { description: 'Parking', amount: 20 }],
+    });
+    expect(entries).toEqual([
+      expect.objectContaining({ type: 'EXPENSE', amount: 80, category: 'FREIGHT', source: 'BANK', date: '2026-09-05' }),
+      expect.objectContaining({ type: 'EXPENSE', amount: 20, category: 'OTHER',   source: 'BANK' }),
+    ]);
+    expect(entries[0].note).toMatch(/REQ-20260830-001: Shopee shipping/);
+    expect(res.charges.map((c) => c.entryNumber)).toEqual(['JE-1', 'JE-2']);
+  });
+
+  it('does not post a charge when nothing reached the shelf in the same call', async () => {
+    // A charge posted twice is worse than one posted late.
+    const { svc, entries } = build({ status: 'BOUGHT', lines: [{ ...BOUGHT[0], receivedAt: new Date() }] });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { charges: [{ description: 'Shipping', amount: 80 }] });
+    expect(entries).toEqual([]);
+    expect(res.charges[0].error).toMatch(/nothing was posted/i);
+  });
+
+  // ── recording: who, and what ──────────────────────────────────────────────
+
+  it('refuses a zero price when recording, and says why', async () => {
+    const { svc } = build({ status: 'SENT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz', rawMaterial: { name: 'Hazelnut Syrup' } }] });
+    await expect(svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 1, packSize: 750, packCost: 0 }]))
+      .rejects.toThrow(/average cost down/i);
+  });
+
+  it('lets staff record what they bought only when the shop shows them costs', async () => {
+    const line = { id: 'l1', rawMaterialId: 'rm-haz', packsBought: null, rawMaterial: { name: 'Hazelnut Syrup' } };
+    const row  = [{ lineId: 'l1', packsBought: 1, packSize: 750, packCost: 540 }];
+
+    const hidden = build({ status: 'SENT', lines: [line], showCostsToStaff: false });
+    await expect(hidden.svc.recordBought(TENANT, 'req1', row, { userId: 'cook', role: 'GENERAL_EMPLOYEE' }))
+      .rejects.toThrow(/owner or manager records/i);
+
+    const shown = build({ status: 'SENT', lines: [line], showCostsToStaff: true });
+    const res = await shown.svc.recordBought(TENANT, 'req1', row, { userId: 'cook', role: 'GENERAL_EMPLOYEE' });
+    expect(res.status).toBe('BOUGHT');
+    expect(shown.updatedLines[0].id).toBe('l1');
+  });
+
+  it('gives staff one go at a line; a manager may change it', async () => {
+    const line = { ...BOUGHT[0] };   // already recorded
+    const row  = [{ lineId: 'l1', packsBought: 9, packSize: 750, packCost: 540 }];
+    const staff = build({ status: 'BOUGHT', lines: [line] });
+    await expect(staff.svc.recordBought(TENANT, 'req1', row, { userId: 'cook', role: 'GENERAL_EMPLOYEE' }))
+      .rejects.toThrow(/already recorded/i);
+    const manager = build({ status: 'BOUGHT', lines: [line] });
+    await expect(manager.svc.recordBought(TENANT, 'req1', row, { userId: 'mgr', role: 'BRANCH_MANAGER' })).resolves.toBeTruthy();
+  });
+
+  it('marks an online order as on the way, dated the day it was ordered', async () => {
+    const { svc, req } = build({ status: 'SENT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz', packsBought: null, rawMaterial: { name: 'Hazelnut Syrup' } }] });
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }],
+      { userId: USER, role: 'BUSINESS_OWNER' }, { boughtAt: '2026-09-04', onTheWay: true, note: 'Shopee order 2609041234' });
+    expect(req().notes).toMatch(/\[ONTHEWAY:2026-09-04\]/);
+    expect(req().notes).toMatch(/Shopee order 2609041234/);
+    expect(req().boughtAt.toISOString()).toBe('2026-09-03T16:00:00.000Z');   // midnight in Manila
+  });
+
+  // ── remembered, and filed ─────────────────────────────────────────────────
+
+  it('remembers what an ingredient cost last time, and hides that price from staff who may not see it', async () => {
+    const lastPacks = [{ rawMaterialId: 'rm-haz', packSize: 750, packCost: 540, brandNote: 'Da Vinci', receivedAt: new Date('2026-09-01T02:00:00Z') }];
+    const line = { id: 'l1', rawMaterialId: 'rm-haz', packsBought: null, packCost: null, rawMaterial: { name: 'Hazelnut Syrup', costPrice: 0.72 } };
+
+    const owner = build({ status: 'SENT', lines: [line], lastPacks });
+    const seen = await owner.svc.get(TENANT, 'req1', 'BUSINESS_OWNER');
+    expect(seen.lines[0].lastPack).toMatchObject({ packSize: 750, packCost: 540, brandNote: 'Da Vinci' });
+
+    const cook = build({ status: 'SENT', lines: [line], lastPacks, showCostsToStaff: false });
+    const blind = await cook.svc.get(TENANT, 'req1', 'CASHIER');
+    expect(blind.lines[0].lastPack).toMatchObject({ packSize: 750, packCost: null });
+  });
+
+  it('files the photo against the request, labelled, by whoever is holding it', async () => {
+    const { svc, docs } = build({ status: 'SENT', lines: [] });
+    const out = await svc.attachPhoto(TENANT, 'req1', 'cook', { imageBase64: Buffer.from('jpg-bytes').toString('base64'), label: 'Delivery receipt' });
+    expect(docs[0]).toMatchObject({ type: 'PurchaseRequest', id: 'req1', size: 9, mime: 'image/jpeg', name: 'delivery-receipt-REQ-20260830-001-1.jpg', label: 'Delivery receipt', by: 'cook' });
+    expect(out).toEqual({ id: 'doc1', filename: 'delivery-receipt-REQ-20260830-001-1.jpg', label: 'Delivery receipt' });
+  });
+
+  it('will not file a photo on a cancelled request', async () => {
+    const { svc } = build({ status: 'CANCELLED', lines: [] });
+    await expect(svc.attachPhoto(TENANT, 'req1', 'cook', { imageBase64: Buffer.from('x').toString('base64') })).rejects.toThrow(/cancelled/i);
   });
 });

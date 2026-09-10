@@ -325,7 +325,14 @@ export default function InventoryPage() {
           termsDays: parseInt(receiveForm.termsDays, 10) || 30,
         } : {}),
       });
-      toast.success(`${qty} ${editingMat.unit} of "${editingMat.name}" received.`);
+      // The server refuses a reference it has already received and says so
+      // with duplicate:true -- the stock did NOT move. Saying "received" here
+      // was the one thing that could make a person post it a third way.
+      if ((received.data as { duplicate?: boolean })?.duplicate) {
+        toast.message(`"${editingMat.name}" with reference ${receiveForm.referenceNumber.trim() || '(none)'} was already received. Nothing was added twice.`, { duration: 8000 });
+      } else {
+        toast.success(`${qty} ${editingMat.unit} of "${editingMat.name}" received.`);
+      }
       // Received at no cost: the shelf moved, the books did not. Said now.
       const warning = (received.data as { warning?: string | null })?.warning;
       if (warning) toast.warning(warning, { duration: 10000 });

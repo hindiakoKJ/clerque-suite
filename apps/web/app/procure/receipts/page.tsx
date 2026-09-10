@@ -61,6 +61,8 @@ interface Suggested {
 
 interface Reads { usedToday: number; limit: number; resetsAt: string }
 interface ParseResult {
+  documentKind?: DocumentKind;
+  discount?: number | null; discountNote?: string | null;
   vendor: string | null; dateText: string | null; dateIso: string | null;
   referenceNumber: string | null; total: number | null;
   lines: Suggested[];
@@ -69,7 +71,13 @@ interface ParseResult {
 }
 
 type LineKind = 'stock' | 'expense' | 'skip';
-const EXPENSE_CATEGORIES = ['SUPPLIES', 'TRANSPORT', 'REPAIRS', 'UTILITIES', 'RENT', 'OTHER'] as const;
+const EXPENSE_CATEGORIES = ['FREIGHT', 'TRANSPORT', 'SUPPLIES', 'REPAIRS', 'UTILITIES', 'RENT', 'OTHER'] as const;
+type DocumentKind = 'receipt' | 'order_screen' | 'delivery_receipt';
+const DOCUMENT_KINDS: Array<{ v: DocumentKind; label: string; hint: string }> = [
+  { v: 'receipt',          label: 'Receipt',       hint: 'A till or market receipt' },
+  { v: 'order_screen',     label: 'Order screen',  hint: 'Shopee, Lazada: seller, Order ID, vouchers, shipping' },
+  { v: 'delivery_receipt', label: 'Delivery slip', hint: 'A supplier\'s DR: quantities, often no prices' },
+];
 const NEW_CATEGORIES = [
   { v: 'INGREDIENT',     label: 'Ingredient (goes into recipes)' },
   { v: 'KITCHEN_SUPPLY', label: 'Kitchen supply (cleaning, packaging)' },
@@ -288,6 +296,9 @@ export default function ReceiptsPage() {
   const [requestId, setRequestId] = useState<string | null>(null);
   /** The order screenshot: the money left today. Saved onto the request as paid ahead. */
   const [paidAhead, setPaidAhead] = useState(false);
+  /** What the photo is of. An order screen is usually paid already; the tick follows the kind, and can be untied. */
+  const [documentKind, setDocumentKind] = useState<DocumentKind>('receipt');
+  const chooseKind = (k: DocumentKind) => { setDocumentKind(k); if (k === 'order_screen') setPaidAhead(true); };
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const id = new URLSearchParams(window.location.search).get('request');
@@ -335,6 +346,10 @@ export default function ReceiptsPage() {
       const res = await api.get(`/documents/${doc.id}/download`, { responseType: 'blob' });
       const blob = res.data as Blob;
       const file = new File([blob], doc.filename, { type: blob.type || 'image/jpeg' });
+      // The label it was filed under says what it is.
+      if (doc.label === 'Order') chooseKind('order_screen');
+      else if (doc.label === 'Delivery receipt') chooseKind('delivery_receipt');
+      else if (doc.label === 'Receipt') chooseKind('receipt');
       const shot = await prepareReceipt(file);
       setPhoto({ ...shot.file, strips: shot.strips, previewUrl: `data:image/jpeg;base64,${shot.file.base64}` });
       setPhotoSeq((n) => n + 1);
@@ -413,6 +428,7 @@ export default function ReceiptsPage() {
     mutationFn: () => api.post('/procure/receipts/parse', {
       images: photo!.strips.map((s) => ({ base64: s.base64, mediaType: s.mediaType })),
       ...(requestId ? { purchaseRequestId: requestId } : {}),
+      documentKind,
     }).then((r) => r.data as ParseResult),
     onSuccess: (r) => {
       setReading(r);
@@ -473,6 +489,7 @@ export default function ReceiptsPage() {
       });
       const s = r.summary;
       toast.success(`Read ${s.lines} line${s.lines === 1 ? '' : 's'} — ${s.matched} matched${s.unmatched ? `, ${s.unmatched} to pick` : ''}${s.needsPack ? `, ${s.needsPack} need a pack size` : ''}.`);
+      if (r.discountNote) toast.message(r.discountNote, { duration: 8000 });
     },
     onError: (e: any) => {
       // Any failed read may still have spent a read (a photo the provider
@@ -717,6 +734,15 @@ export default function ReceiptsPage() {
               {requestId ? ' A second photo (another stall, the rest of a long receipt) adds to the lines.' : ''}
             </p>
           </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] text-muted-foreground">This is a</span>
+          {DOCUMENT_KINDS.map((k) => (
+            <button key={k.v} type="button" onClick={() => chooseKind(k.v)} title={k.hint}
+              className={`rounded-full border px-2.5 py-1 text-[11px] ${documentKind === k.v ? 'border-[var(--accent)] bg-[var(--accent)]/10 font-semibold' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+              {k.label}
+            </button>
+          ))}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           <button onClick={() => takeRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">

@@ -7,7 +7,7 @@ import { DocumentsService } from '../documents/documents.service';
 import { ProcureService } from './procure.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import {
-  RECEIPT_LINES_SYSTEM_PROMPT, parseReceiptJson, matchIngredient, derivePack,
+  promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount,
   MaterialRef, ParsedLine,
 } from './receipt-parser';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
@@ -87,11 +87,15 @@ export class ProcureReceiptsService {
       throw new BadRequestException('That photo is too large. Take it again at a lower resolution.');
     }
 
+    const kind = dto.documentKind ?? 'receipt';
+    const kindText = kind === 'order_screen'
+      ? 'This is a screenshot of an online order page. '
+      : kind === 'delivery_receipt' ? 'This is a supplier\'s delivery receipt. ' : '';
     const text = await this.ai.call({
       tenantId,
       userId,
       action:       'procure_receipt_lines',
-      systemPrompt: RECEIPT_LINES_SYSTEM_PROMPT,
+      systemPrompt: promptFor(kind),
       // The prompt is identical on every call, so it caches.
       cacheSystem:  true,
       // A long market receipt is thirty lines; each is ~60 tokens of JSON.
@@ -106,12 +110,12 @@ export class ProcureReceiptsService {
           })),
           {
             type: 'text' as const,
-            text: strips.length > 1
+            text: kindText + (strips.length > 1
               ? `These ${strips.length} images are ONE receipt, photographed in strips from top to bottom. `
                 + 'Consecutive strips overlap, so a line visible at the bottom of one and the top of the next '
                 + 'is the SAME line — report it once. Read every purchased line and the header per the system '
                 + 'prompt. JSON only.'
-              : 'Read every purchased line and the header per the system prompt. JSON only.',
+              : 'Read every purchased line and the header per the system prompt. JSON only.'),
           },
         ],
       }],
@@ -123,6 +127,9 @@ export class ProcureReceiptsService {
     } catch (err) {
       throw new BadRequestException(err instanceof Error ? err.message : 'The receipt could not be read.');
     }
+    // A voucher is money not paid; the lines must say what WAS paid.
+    const applied = spreadDiscount(parsed);
+    parsed = applied.parsed;
 
     const materials = await this.materials(tenantId);
     /*
@@ -160,11 +167,14 @@ export class ProcureReceiptsService {
 
     const linesTotal = lines.reduce((s, l) => s + (l.lineTotal ?? 0), 0);
     return {
+      documentKind:    kind,
       vendor:          parsed.vendor,
       dateText:        parsed.dateText,
       dateIso:         parsed.dateIso,
       referenceNumber: parsed.referenceNumber,
       total:           parsed.total,
+      discount:        parsed.discount,
+      discountNote:    applied.note,
       lines,
       summary: {
         lines:      lines.length,

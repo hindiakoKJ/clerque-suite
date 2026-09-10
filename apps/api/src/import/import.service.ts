@@ -2815,10 +2815,54 @@ export class ImportService {
     [24, 30, 14, 16, 14, 10, 13, 18, 18].forEach((w, i) => { ds.getColumn(i + 1).width = w; });
     ds.views = [{ state: 'frozen', ySplit: 1 }];
 
-    // ── Sheet 3: Notes — last, deliberately ─────────────────────────────────
+    // ── Sheet 3: Made in batches — what each prep costs, from its own recipe ─
     /*
-      Kept off the two data sheets so their first row is the header row, and
-      kept LAST so it can never be the sheet an upload lands on: parseFile falls
+      The breading batch, the marinated wings, the cooked rice: a plate's
+      cost is only as right as these. Two figures per prep, side by side --
+      the cost on file (a measured average once a real batch has been made,
+      the paper figure until then) and the cost the recipe implies today --
+      so a prep whose ingredients have moved in price shows the gap.
+    */
+    const preps = await this.prisma.rawMaterial.findMany({
+      where:   { tenantId, isActive: true, subRecipeItems: { some: {} } },
+      select:  {
+        name: true, unit: true, batchYield: true, costPrice: true,
+        subRecipeItems: { select: { quantity: true, rawMaterial: { select: { name: true, unit: true, costPrice: true } } } },
+      },
+      orderBy: { name: 'asc' },
+    });
+    const ps = wb.addWorksheet('Made in batches');
+    ps.addRow([
+      'Prep', 'One Batch Makes', 'Unit', 'Cost per Unit — on file (₱)', 'Cost per Unit — from recipe (₱)',
+      'Ingredient', 'Qty per Batch', 'Ingredient Unit', 'Ingredient Cost per Unit (₱)', 'Line Cost (₱)',
+    ]).font = { bold: true };
+    for (const prep of preps) {
+      const yieldQty  = prep.batchYield != null ? Number(prep.batchYield) : 0;
+      const items     = [...prep.subRecipeItems].sort((a, b) => a.rawMaterial.name.localeCompare(b.rawMaterial.name));
+      const batchCost = items.reduce((sum, i) => sum + Number(i.quantity) * (i.rawMaterial.costPrice != null ? Number(i.rawMaterial.costPrice) : 0), 0);
+      const fromRecipe = yieldQty > 0 ? +(batchCost / yieldQty).toFixed(4) : null;
+      items.forEach((i, idx) => {
+        const cost = i.rawMaterial.costPrice != null ? Number(i.rawMaterial.costPrice) : null;
+        ps.addRow([
+          idx === 0 ? prep.name : '',
+          idx === 0 ? yieldQty : '',
+          idx === 0 ? prep.unit : '',
+          idx === 0 ? (prep.costPrice != null ? Number(prep.costPrice) : null) : '',
+          idx === 0 ? fromRecipe : '',
+          i.rawMaterial.name, Number(i.quantity), i.rawMaterial.unit, cost,
+          cost != null ? +(Number(i.quantity) * cost).toFixed(4) : null,
+        ]);
+      });
+    }
+    [4, 5, 9, 10].forEach((c) => { ps.getColumn(c).numFmt = FINE_FMT; });
+    [2, 7].forEach((c) => { ps.getColumn(c).numFmt = QTY_FMT; });
+    [28, 14, 10, 20, 22, 28, 12, 10, 20, 14].forEach((w, i) => { ps.getColumn(i + 1).width = w; });
+    ps.views = [{ state: 'frozen', ySplit: 1 }];
+
+    // ── Sheet 4: Notes — last, deliberately ─────────────────────────────────
+    /*
+      Kept off the data sheets so their first row is the header row, and kept
+      LAST so it can never be the sheet an upload lands on: parseFile falls
       back to the first sheet in the file when it cannot find the one it wants.
     */
     const notes = wb.addWorksheet('Notes');

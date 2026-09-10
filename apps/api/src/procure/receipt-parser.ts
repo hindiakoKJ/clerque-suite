@@ -28,7 +28,7 @@ For each line:
   - unitPrice     the price of ONE unit as printed, numeric, no currency symbol; null if not printed
   - lineTotal     the line's total as printed, numeric; null if not printed
   - kind          "ingredient" for food and drink ingredients, "supply" for cleaning, packaging and kitchen consumables that are stocked (bleach, tissue, cups, gloves), "expense" for anything that is not stock at all (a delivery fee, a service charge, parking, a repair)
-  - expenseCategory  only for kind "expense": one of RENT, UTILITIES, SUPPLIES, REPAIRS, TRANSPORT, OTHER
+  - expenseCategory  only for kind "expense": FREIGHT for a shipping or delivery fee, TRANSPORT for fares and parking, else one of RENT, UTILITIES, SUPPLIES, REPAIRS, OTHER
   - confidence    0-1, your confidence that description, quantity and price were read correctly
 
 Header:
@@ -37,6 +37,7 @@ Header:
   - dateIso         that date as YYYY-MM-DD when you can read it unambiguously, else null. Philippine receipts print month first (MM/DD/YYYY); if the format is ambiguous return null
   - referenceNumber the receipt / invoice / OR number as printed, or null
   - total           the FINAL total paid, numeric, or null
+  - discount        a voucher, coupon or discount that reduced what was paid, as a positive number, or null
 
 Rules:
   - A size printed inside the description (1KG, 500G, 1.5L, 12OZ) is the PACK SIZE, not the quantity. If the receipt prints a count, quantity is that count and unit is pc, pack or bottle. Only a weighed line -- a weight with a per-kilo price -- puts the weight in quantity with unit kg.
@@ -51,6 +52,7 @@ Rules:
   "dateIso": <string|null>,
   "referenceNumber": <string|null>,
   "total": <number|null>,
+  "discount": <number|null>,
   "lines": [
     { "description": <string>, "quantity": <number|null>, "unit": <string|null>,
       "unitPrice": <number|null>, "lineTotal": <number|null>,
@@ -59,8 +61,50 @@ Rules:
   ]
 }`;
 
+/**
+ * What kind of paper the photo is. The reader is told, because the three look
+ * nothing alike: a till receipt prints one money figure per line; a Shopee
+ * order page prints the seller, an Order ID, vouchers and a shipping fee; a
+ * supplier's delivery slip prints quantities and often no prices at all.
+ *
+ * UNVERIFIED LIVE: the order-page and delivery-slip paragraphs were written
+ * against how those documents look, not against a real read on Vertex. The
+ * first live read with a real screenshot is the test; adjust the wording
+ * then, and freeze fixtures from what actually came back.
+ */
+export const DOCUMENT_KINDS = ['receipt', 'order_screen', 'delivery_receipt'] as const;
+export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
+
+const KIND_NOTES: Record<DocumentKind, string> = {
+  receipt: '',
+  order_screen: `
+
+This photo is a SCREENSHOT OF AN ONLINE ORDER PAGE (Shopee, Lazada or similar), not a till receipt.
+  - vendor is the SELLER'S shop name as shown, not the platform ("Shopee" is never the vendor)
+  - referenceNumber is the Order ID / Order No.
+  - dateIso is the order date or the payment date, whichever is shown
+  - each item ordered is one line: description = the item name plus its variation text (size, flavour, pack), quantity = the ordered quantity, unitPrice = the price per unit shown for that item, lineTotal = quantity x unitPrice
+  - the shipping fee is a line with kind "expense" and expenseCategory FREIGHT; a platform, service or handling fee is kind "expense" with expenseCategory OTHER
+  - vouchers, coupons and discounts are NOT lines: add them up into the header field discount
+  - total is the amount actually PAID (the order total after vouchers)`,
+  delivery_receipt: `
+
+This photo is a SUPPLIER'S DELIVERY RECEIPT or delivery slip, not a till receipt.
+  - vendor is the supplier as printed
+  - referenceNumber is the DR / delivery receipt number
+  - dateIso is the delivery date
+  - each delivered item is one line with its quantity and unit as printed
+  - a delivery receipt often prints NO prices: then unitPrice and lineTotal are null. Never invent a price, never copy a quantity into a price
+  - total is null unless an amount is printed`,
+};
+
+/** The reader's instructions for one kind of paper. */
+export function promptFor(kind: DocumentKind = 'receipt'): string {
+  return RECEIPT_LINES_SYSTEM_PROMPT + KIND_NOTES[kind];
+}
+
 export type LineKind = 'ingredient' | 'supply' | 'expense';
-export const EXPENSE_CATEGORIES = ['RENT', 'UTILITIES', 'SUPPLIES', 'REPAIRS', 'TRANSPORT', 'OTHER'] as const;
+export const EXPENSE_CATEGORIES = ['RENT', 'UTILITIES', 'SUPPLIES', 'REPAIRS', 'TRANSPORT', 'FREIGHT', 'OTHER'] as const;
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
 export interface ParsedLine {
@@ -80,7 +124,60 @@ export interface ParsedReceipt {
   dateIso:         string | null;
   referenceNumber: string | null;
   total:           number | null;
+  /** A voucher or discount that reduced what was paid. Spread by spreadDiscount, never posted as a line. */
+  discount:        number | null;
   lines:           ParsedLine[];
+}
+
+/**
+ * A voucher is money the shop did not pay, and the books must show what was
+ * paid. Shipping first: a free-shipping voucher is the commonest kind and
+ * belongs to the shipping line alone. Whatever is left comes off the goods
+ * pro-rata by line value, unit prices recomputed, and any rounding residue
+ * lands on the largest line so the lines still add up to what was paid.
+ */
+export function spreadDiscount(parsed: ParsedReceipt): { parsed: ParsedReceipt; note: string | null } {
+  const discount = parsed.discount != null && parsed.discount > 0 ? parsed.discount : 0;
+  if (discount === 0) return { parsed, note: null };
+  const lines = parsed.lines.map((l) => ({ ...l }));
+  let left = discount;
+
+  // 1. Shipping.
+  for (const l of lines) {
+    if (left <= 0) break;
+    if (l.kind !== 'expense' || l.expenseCategory !== 'FREIGHT' || !(l.lineTotal != null && l.lineTotal > 0)) continue;
+    const off = Math.min(left, l.lineTotal);
+    l.lineTotal = +(l.lineTotal - off).toFixed(2);
+    left = +(left - off).toFixed(2);
+  }
+  const offShipping = +(discount - left).toFixed(2);
+
+  // 2. The goods, pro-rata by value.
+  const goods = lines.filter((l) => l.kind !== 'expense' && (l.lineTotal ?? (l.quantity != null && l.unitPrice != null ? l.quantity * l.unitPrice : 0)) > 0);
+  const value = (l: ParsedLine) => l.lineTotal ?? (l.quantity! * l.unitPrice!);
+  const base = goods.reduce((s, l) => s + value(l), 0);
+  let spread = 0;
+  if (left > 0 && base > 0) {
+    for (const l of goods) {
+      const share = +((value(l) / base) * left).toFixed(2);
+      l.lineTotal = +(value(l) - share).toFixed(2);
+      spread = +(spread + share).toFixed(2);
+    }
+    // Rounding residue onto the largest line, so the goods add up exactly.
+    const residue = +(left - spread).toFixed(2);
+    if (residue !== 0) {
+      const biggest = goods.reduce((a, b) => (value(a) >= value(b) ? a : b));
+      biggest.lineTotal = +((biggest.lineTotal ?? 0) - residue).toFixed(2);
+    }
+    for (const l of goods) {
+      if (l.quantity != null && l.quantity > 0 && l.lineTotal != null) l.unitPrice = +(l.lineTotal / l.quantity).toFixed(4);
+    }
+  }
+  const parts: string[] = [];
+  if (offShipping > 0) parts.push(`P${offShipping.toFixed(2)} off the shipping`);
+  if (left > 0 && base > 0) parts.push(`P${left.toFixed(2)} spread across the goods`);
+  const note = parts.length ? `Voucher P${discount.toFixed(2)}: ${parts.join(', ')}.` : `Voucher P${discount.toFixed(2)} could not be applied to any line.`;
+  return { parsed: { ...parsed, lines, discount }, note };
 }
 
 /** "1,132.95", "P1132.95", "₱ 1 132.95" -> 1132.95. Anything else -> null. */
@@ -138,12 +235,14 @@ export function parseReceiptJson(text: string): ParsedReceipt {
   }
 
   const dateIso = str(o.dateIso);
+  const discount = toNumber(o.discount);
   return {
     vendor:          str(o.vendor),
     dateText:        str(o.dateText),
     dateIso:         dateIso && ISO_DATE.test(dateIso) ? dateIso : null,
     referenceNumber: str(o.referenceNumber),
     total:           toNumber(o.total),
+    discount:        discount != null && discount > 0 ? discount : null,
     lines,
   };
 }

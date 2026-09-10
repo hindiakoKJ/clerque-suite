@@ -595,6 +595,28 @@ describe('ProcureReceiptsService', () => {
     await expect(svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k' })).rejects.toThrow(/already in stock/i);
   });
 
+  it('an order-page read tells the reader what it is looking at and spreads the voucher', async () => {
+    const reading = JSON.stringify({
+      vendor: 'Kape Supplies PH', dateIso: '2026-09-04', referenceNumber: '2609041234', total: 560, discount: 120,
+      lines: [
+        { description: 'WHITE SUGAR 1KG', quantity: 2, unit: 'pack', unitPrice: 300, lineTotal: 600, kind: 'ingredient', confidence: 0.9 },
+        { description: 'Shipping fee', quantity: null, unit: null, unitPrice: null, lineTotal: 80, kind: 'expense', expenseCategory: 'FREIGHT', confidence: 0.9 },
+      ],
+    });
+    const { svc, ai } = build({ aiText: reading });
+    const r = await svc.parse(TENANT, USER, { imageBase64: 'AAAA', documentKind: 'order_screen' } as any);
+    const call = ai.call.mock.calls[0][0];
+    expect(call.systemPrompt).toMatch(/SCREENSHOT OF AN ONLINE ORDER PAGE/);
+    expect(call.messages[0].content.at(-1).text).toMatch(/^This is a screenshot of an online order page/);
+    expect(r.documentKind).toBe('order_screen');
+    expect(r.discount).toBe(120);
+    expect(r.discountNote).toMatch(/P80\.00 off the shipping, P40\.00 spread across the goods/);
+    expect(r.lines[0].lineTotal).toBe(560);              // 600 - 40
+    expect(r.lines[0].unitPrice).toBe(280);
+    expect(r.lines[1].lineTotal).toBe(0);
+    expect(r.summary.footsToTotal).toBe(true);           // 560 + 0 = the 560 that was paid
+  });
+
   it('when reading for a request, an ingredient on the list wins a tie', async () => {
     // Two names made of the same two words score the same on "WHITE SUGAR 1KG":
     // a tie, which the matcher refuses to break by alphabet.

@@ -97,6 +97,74 @@ describe('parseReceiptJson — the model\'s text into a receipt', () => {
   });
 });
 
+describe('what kind of paper it is', () => {
+  const { promptFor, spreadDiscount } = jest.requireActual('./receipt-parser');
+
+  it('a till receipt gets the base instructions and nothing more', () => {
+    expect(promptFor('receipt')).not.toMatch(/ORDER PAGE|DELIVERY RECEIPT/);
+    expect(promptFor()).toBe(promptFor('receipt'));
+  });
+
+  it('an order page is told about the seller, the Order ID, vouchers and shipping', () => {
+    const p = promptFor('order_screen');
+    expect(p).toMatch(/SELLER'S shop name/);
+    expect(p).toMatch(/Order ID/);
+    expect(p).toMatch(/vouchers.*header field discount/i);
+    expect(p).toMatch(/shipping fee.*FREIGHT/);
+    expect(p).toMatch(/amount actually PAID/);
+  });
+
+  it('a delivery slip is told never to invent a price', () => {
+    const p = promptFor('delivery_receipt');
+    expect(p).toMatch(/DR \/ delivery receipt number/);
+    expect(p).toMatch(/Never invent a price/);
+  });
+
+  it('reads a header discount and ignores a nonsense one', () => {
+    expect(parseReceiptJson('{"lines":[],"discount":"120"}').discount).toBe(120);
+    expect(parseReceiptJson('{"lines":[],"discount":-5}').discount).toBeNull();
+    expect(parseReceiptJson('{"lines":[]}').discount).toBeNull();
+  });
+
+  const order = () => parseReceiptJson(JSON.stringify({
+    vendor: 'Kape Supplies PH', referenceNumber: '2609091234', total: 1010, discount: 120,
+    lines: [
+      { description: 'Hazelnut Syrup 750ml',  quantity: 2, unit: 'bottle', unitPrice: 300, lineTotal: 600, kind: 'ingredient', confidence: 0.9 },
+      { description: 'Vanilla Syrup 750ml',   quantity: 1, unit: 'bottle', unitPrice: 400, lineTotal: 400, kind: 'ingredient', confidence: 0.9 },
+      { description: 'Shipping fee',          quantity: null, unit: null, unitPrice: null, lineTotal: 80,  kind: 'expense', expenseCategory: 'FREIGHT', confidence: 0.9 },
+      { description: 'Platform fee',          quantity: null, unit: null, unitPrice: null, lineTotal: 50,  kind: 'expense', expenseCategory: 'OTHER',   confidence: 0.9 },
+    ],
+  }));
+
+  it('spreads a voucher: shipping first, then the goods pro-rata, and the lines add up to what was paid', () => {
+    const { parsed, note } = spreadDiscount(order());
+    const [haz, van, ship, fee] = parsed.lines;
+    expect(ship.lineTotal).toBe(0);                      // 80 of the 120 came off the shipping
+    expect(fee.lineTotal).toBe(50);                      // a platform fee is not shipping
+    expect(haz.lineTotal).toBe(576);                     // 40 left, 60% of it off the 600 line
+    expect(van.lineTotal).toBe(384);                     // 40% off the 400 line
+    expect(haz.unitPrice).toBe(288);
+    expect(van.unitPrice).toBe(384);
+    expect(haz.lineTotal! + van.lineTotal! + ship.lineTotal! + fee.lineTotal!).toBe(1010);   // = total paid
+    expect(note).toMatch(/P80\.00 off the shipping, P40\.00 spread across the goods/);
+  });
+
+  it('puts the rounding residue on the largest line so nothing is lost', () => {
+    const o = order();
+    o.lines = o.lines.slice(0, 2).map((l) => ({ ...l }));
+    o.lines[0].lineTotal = 100; o.lines[1].lineTotal = 200; o.discount = 1;   // 0.33 + 0.67: the last centavo must land somewhere
+    const { parsed } = spreadDiscount(o);
+    expect(+(parsed.lines[0].lineTotal! + parsed.lines[1].lineTotal!).toFixed(2)).toBe(299);
+  });
+
+  it('leaves a receipt with no discount exactly as it was', () => {
+    const o = order(); o.discount = null;
+    const { parsed, note } = spreadDiscount(o);
+    expect(parsed).toBe(o);
+    expect(note).toBeNull();
+  });
+});
+
 describe('matching a printed line to the shop\'s own ingredient', () => {
   it('normalises case, punctuation and spacing', () => {
     expect(normalizeName('  CHICKEN-WINGS (5.81kg) ')).toBe('chicken wings 5 81kg');

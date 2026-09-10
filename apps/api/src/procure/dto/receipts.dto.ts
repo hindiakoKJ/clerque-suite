@@ -15,7 +15,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { RAW_MATERIAL_CATEGORIES, RawMaterialCategoryValue } from '../../inventory/dto/create-raw-material.dto';
-import { EXPENSE_CATEGORIES, ExpenseCategory } from '../receipt-parser';
+import { EXPENSE_CATEGORIES, ExpenseCategory, DOCUMENT_KINDS, DocumentKind } from '../receipt-parser';
 
 const MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type ReceiptMediaType = (typeof MEDIA_TYPES)[number];
@@ -69,6 +69,11 @@ export class ParseReceiptDto {
   @IsString()
   @MaxLength(40)
   purchaseRequestId?: string;
+
+  /** What the photo is of: a till receipt (default), an online order page, or a supplier's delivery slip. */
+  @IsOptional()
+  @IsIn(DOCUMENT_KINDS)
+  documentKind?: DocumentKind;
 
   /**
    * Read this one receipt with the OTHER provider.

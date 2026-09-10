@@ -39,6 +39,16 @@ describe('recipeCostingExport — pivot-ready, and still importable', () => {
           },
         ]),
       },
+      // The preps, for the "Made in batches" sheet.
+      rawMaterial: {
+        findMany: jest.fn().mockResolvedValue([{
+          name: 'Breading', unit: 'portion', batchYield: 100, costPrice: 2.056,
+          subRecipeItems: [
+            { quantity: 15,   rawMaterial: { name: 'Salt',              unit: 'g', costPrice: 0.1364 } },
+            { quantity: 1000, rawMaterial: { name: 'All Purpose Flour', unit: 'g', costPrice: 0.0915 } },
+          ],
+        }]),
+      },
     };
     return new ImportService(prisma) as any;
   }
@@ -55,6 +65,18 @@ describe('recipeCostingExport — pivot-ready, and still importable', () => {
     };
     return { wb, read };
   }
+
+  it('lists each prep with its cost on file beside the cost its recipe implies, and keeps Notes last', async () => {
+    const { wb, read } = await sheets(await svc().recipeCostingExport('t1'));
+    const rows = read('Made in batches');
+    expect(rows[0].slice(0, 6)).toEqual(['Prep', 'One Batch Makes', 'Unit', 'Cost per Unit — on file (₱)', 'Cost per Unit — from recipe (₱)', 'Ingredient']);
+    // First row carries the prep; the flour sorts before the salt.
+    expect(rows[1].slice(0, 5)).toEqual(['Breading', 100, 'portion', 2.056, 0.9355]);   // (1000 x 0.0915 + 15 x 0.1364) / 100
+    expect(rows[1].slice(5)).toEqual(['All Purpose Flour', 1000, 'g', 0.0915, 91.5]);
+    expect(rows[2].slice(0, 5)).toEqual(['', '', '', '', '']);
+    expect(rows[2].slice(5)).toEqual(['Salt', 15, 'g', 0.1364, 2.046]);
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Recipes', 'Dish Costs', 'Made in batches', 'Notes']);
+  });
 
   it('puts the headers on row 1, where a PivotTable expects them', async () => {
     const { read } = await sheets(await svc().recipeCostingExport('t1'));

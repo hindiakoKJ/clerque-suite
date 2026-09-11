@@ -36,6 +36,8 @@ describe('ProcureService', () => {
     people?: Array<{ id: string; email: string | null; name: string; role: string; branchId?: string | null }>;
     /** A mailer that fails, to prove a send never depends on it. */
     mailFails?: boolean;
+    /** A ledger that refuses -- a locked month, a chart with no 1063. */
+    ledgerFails?: boolean;
   } = {}) {
     const created: any[] = [];
     const createdRequests: any[] = [];
@@ -142,6 +144,7 @@ describe('ProcureService', () => {
     };
     const simple: any = {
       create: jest.fn((_t: string, _u: string, dto: any) => {
+        if (opts.ledgerFails) return Promise.reject(new Error('Period 2026-09 is closed.'));
         entries.push(dto);
         return Promise.resolve({ entryNumber: `JE-${entries.length}`, status: 'POSTED' });
       }),
@@ -933,6 +936,151 @@ describe('ProcureService', () => {
     await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1', packsArrived: 2 }] });
     const follow = createdRequests.find((r) => r.status === 'BOUGHT');
     expect(follow.notes).toMatch(/\[PREPAID:BANK\]/);
+  });
+
+
+  // -- what the tags are allowed to say -------------------------------------
+
+  /*
+    [PREPAID:] is an instruction to the ledger: it sends the arrival to 1063
+    instead of charging a pocket. Everything below keeps that instruction in
+    Procure's own hands -- it may only be written by money that actually
+    posted, only by someone allowed to spend, and never by text typed into a
+    note box.
+  */
+
+  it('leaves the order un-paid when the ledger refuses the advance', async () => {
+    const { svc, req } = build({ status: 'SENT', lines: ORDERED, ledgerFails: true });
+    const res = await svc.recordBought(TENANT, 'req1', [
+      { lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 },
+    ], OWNER, { paidFrom: 'BANK', boughtAt: '2026-09-04' });
+
+    // Tagged anyway, the arrival would take 1080 out of a clearing account
+    // that was never filled: goods on the shelf and no money out anywhere.
+    expect(req().notes ?? '').not.toMatch(/\[PREPAID:/);
+    expect(req().notes ?? '').not.toMatch(/\[ADV:/);
+    expect(res.paidAhead.posted).toBe(0);
+    expect(res.paidAhead.entries[0].error).toMatch(/closed/i);
+  });
+
+  it('posts the whole amount on the retry after the month is opened', async () => {
+    const { svc, entries, req } = build({
+      status: 'BOUGHT',
+      open: { notes: '[ONTHEWAY:2026-09-04]' },   // the failed attempt left no advance
+      lines: [{ ...ORDERED[0], packsBought: 2, packSize: 750, packCost: 540 }],
+    });
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }], OWNER, { paidFrom: 'BANK' });
+    expect(entries).toEqual([expect.objectContaining({ type: 'PAID_AHEAD', amount: 1080 })]);
+    expect(req().notes).toMatch(/\[ADV:1080\.00\]/);
+  });
+
+  it('does not read a tag out of the note somebody typed', async () => {
+    const { svc, received, req } = build({ status: 'SENT', lines: [ORDERED[0]] });
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }], OWNER,
+      { note: '[PREPAID:CASH] Shopee 2609091234' });
+    expect(req().notes ?? '').not.toMatch(/\[PREPAID:/);
+
+    // And the delivery is charged to the pocket the owner picked, not to 1063.
+    await svc.receiveRequest(TENANT, 'req1', USER, 'BANK', {});
+    expect(received[0].paymentMethod).toBe('BANK');
+  });
+
+  it('will not let staff say the order was paid, or add a fee', async () => {
+    const staff = { userId: 'cook', role: 'GENERAL_EMPLOYEE' };
+    const { svc, entries } = build({ status: 'SENT', lines: ORDERED });
+    await expect(svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }], staff, { paidFrom: 'CASH' }))
+      .rejects.toThrow(/owner or manager/i);
+    await expect(svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }], staff, { charges: [{ description: 'fee', amount: 5000 }] }))
+      .rejects.toThrow(/owner or manager/i);
+    expect(entries).toEqual([]);
+  });
+
+  it('will not let staff rewrite an order that was already paid for', async () => {
+    const { svc } = build({
+      status: 'BOUGHT',
+      open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1080.00]' },
+      lines: [{ ...ORDERED[0], packsBought: null }],
+    });
+    await expect(svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 600 }],
+      { userId: 'cook', role: 'GENERAL_EMPLOYEE' }, {})).rejects.toThrow(/already paid for/i);
+  });
+
+  it('posts a corrected price against the advance even when no pocket is sent', async () => {
+    // The screen stops offering the pocket tiles once an order is prepaid,
+    // so the correction arrives with none. The request remembers which one.
+    const { svc, entries, req } = build({
+      status: 'BOUGHT',
+      open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1080.00]' },
+      lines: [{ ...ORDERED[0], packsBought: 2, packSize: 750, packCost: 540 }],
+    });
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 600 }], OWNER, {});
+    expect(entries).toEqual([expect.objectContaining({ type: 'PAID_AHEAD', amount: 120, source: 'BANK' })]);
+    expect(req().notes).toMatch(/\[ADV:1200\.00\]/);
+  });
+
+  it('refuses to pay an order from a second pocket', async () => {
+    const { svc } = build({
+      status: 'BOUGHT',
+      open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1080.00]' },
+      lines: [{ ...ORDERED[0], packsBought: 2, packSize: 750, packCost: 540 }],
+    });
+    await expect(svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }], OWNER, { paidFrom: 'CASH' }))
+      .rejects.toThrow(/already paid from the shop bank/i);
+  });
+
+  // -- what is still waiting in 1063 ----------------------------------------
+
+  const TWO_PREPAID = {
+    status: 'BOUGHT',
+    open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1250.00]' },
+    lines: [
+      { ...ORDERED[0], packsBought: 2, packSize: 750,  packCost: 540 },   // 1080
+      { ...ORDERED[1], packsBought: 2, packSize: 1000, packCost: 85 },    //  170
+    ],
+  };
+
+  it('counts the advance down to what has not been posted yet', async () => {
+    const { svc, req } = build(TWO_PREPAID);
+    await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }] });
+    // 1080 of the 1250 went onto the shelf out of 1063; 170 is still there.
+    expect(req().notes).toMatch(/\[ADV:170\.00\]/);
+  });
+
+  it('does not invent a refund when a price is corrected after a partial delivery', async () => {
+    /*
+      Measured against the whole order, the second line alone looked like a
+      1080 over-payment and posted a refund that never happened.
+    */
+    const h = build(TWO_PREPAID);
+    await h.svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }] });
+    h.entries.length = 0;
+    await h.svc.recordBought(TENANT, 'req1', [{ lineId: 'l2', packsBought: 2, packSize: 1000, packCost: 85 }], OWNER, {});
+    expect(h.entries).toEqual([]);
+    expect(h.req().notes).toMatch(/\[ADV:170\.00\]/);
+  });
+
+  it('will not close an order that was paid for while packs are still unaccounted for', async () => {
+    const { svc, entries } = build(TWO_PREPAID);
+    await expect(svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }], closeRest: true }))
+      .rejects.toThrow(/White Sugar/);
+    // Nothing posted: the owner is asked to say what became of it first.
+    expect(entries).toEqual([]);
+  });
+
+  it('will not cancel an order whose money is still in 1063', async () => {
+    const { svc } = build(TWO_PREPAID);
+    await expect(svc.cancel(TENANT, 'req1')).rejects.toThrow(/paid for ahead/i);
+  });
+
+  it('sends the balance away with its share of the advance', async () => {
+    const { svc, createdRequests, req } = build(TWO_PREPAID);
+    await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', {
+      lines: [{ lineId: 'l1', packsArrived: 1 }, { lineId: 'l2' }],
+      closeShort: [{ lineId: 'l1', outcome: 'STILL_COMING' }],
+    });
+    const follow = createdRequests.find((r) => r.status === 'BOUGHT');
+    expect(follow.notes).toMatch(/\[ADV:540\.00\]/);   // the pack still coming
+    expect(req().notes).toMatch(/\[ADV:0\.00\]/);      // nothing left on the original
   });
 
   it('will not file a photo on a cancelled request', async () => {

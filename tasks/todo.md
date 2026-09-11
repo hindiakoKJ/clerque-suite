@@ -1808,3 +1808,90 @@ cost now, stock when delivered" = B; AI stays on his Gemini credits via Vertex.
   request; receipts page "Paid when ordered" tick for Save to the request.
 - Live on carolina-test 11/11: 316 in on order day (JE-…0082), shipping 50,
   price fix -6, arrival 2 of 3 + refund 10 + COD 20, 1063 Dr 316 / Cr 316.
+
+## 2026-09-11 — "All pending" while KJ is AFK
+
+- Reader kinds (plan step 9, built against fixtures, UNVERIFIED LIVE until
+  Vertex is on): ParseReceiptDto.documentKind receipt | order_screen |
+  delivery_receipt -> promptFor(kind); header `discount`; spreadDiscount()
+  (shipping first, then pro-rata into goods, residue on the largest line);
+  FREIGHT is a reader expense category. Receipts page: "This is a" chips, the
+  filed photo's label picks the kind, an order screen ticks "paid when
+  ordered". NOTE: with AI off, the AI guard answers 403 before validation, so
+  an unknown kind cannot be seen refused locally.
+- Stock on hand receive modal: a server duplicate (res.duplicate) no longer
+  toasts "received".
+- Recipe-costing report: "Made in batches" sheet (cost on file vs cost from
+  recipe today, one line per ingredient), before Notes.
+- Anne's page republished with the decisions (credit parked; Shopee paid
+  ahead; packs; remaining).
+- Parked by KJ: credit terms (steps 7-8). Blocked on KJ: Vertex env vars +
+  service-account key on Railway (first live read), RESEND_API_KEY for the
+  buy-list mail, R2 for photos.
+
+## 2026-09-12 — Adversarial review of the receiving build (ee3c481..79d67c6)
+
+40 agents over the six receiving commits: 42 raw findings, 18 unique, 13
+confirmed by a second pass. They deduped to eight defects, all money ones,
+all fixed here. 18 new tests; 16 of them fail against the old code.
+
+- [x] **1. The advance was tagged even when the entry failed (CRITICAL).**
+      `payAhead` caught a `simple.create` failure, pushed the error into the
+      response — and still wrote `[PREPAID:] [ADV:total]`. On arrival the
+      request credited 1063 for money never debited: goods on the shelf, no
+      pocket charged, and a re-record could not repair it (delta 0). Now the
+      tags are written from what actually posted (`already + posted`), the
+      PREPAID tag only when the advance is real, and the summary carries the
+      posted amount, so the screen stops saying "paid ahead" after a failure.
+- [x] **2. A note was parsed as a server tag (CRITICAL).**
+      `[PREPAID:CASH]` typed into "Where from / order no." was read by
+      `readTag` and sent the whole delivery to 1063; `plainNotes` stripped it
+      from the screen, so it was invisible. `[ADV:]`, `[RCPT:]` and
+      `[BALANCEOF:]` went the same way. Two rules now: brackets typed by a
+      person are dropped on the way in, and only the run of tags at the FRONT
+      is read, so a bracket in a sentence can never be an instruction.
+- [x] **3. Staff could post money through /bought.** `paidFrom` and `charges`
+      were honoured for any role the route allows — the screen hid the pocket
+      tiles, the server did not. Staff are now refused both, and refused any
+      recording on a request that is already paid for. `lines` needs at least
+      one entry (an empty list walked SENT → BOUGHT and posted against
+      somebody else's numbers).
+- [x] **4. A corrected price on a paid-ahead order posted nothing.** The
+      screen hides the pocket tiles once an order is prepaid, so the
+      correction arrived with no `paidFrom` and `recordBought` returned before
+      `payAhead`: 1063 was credited on arrival for a price the pocket was
+      never charged. The pocket now comes from the request's own tag, and a
+      *different* pocket is refused rather than silently swapped. Same fix on
+      the receipts path, before it receives.
+- [x] **5. The advance measured itself against the whole order.** `[ADV:]`
+      held the original total while `payAhead` summed only unreceived lines,
+      so a correction after a partial delivery posted a refund that never
+      happened. `[ADV:]` is now rewritten after every post to what is still
+      waiting in 1063, and the follow-up carries its own share away with it.
+- [x] **6. Cancelling a paid-ahead order stranded the money.** Nothing posted
+      and 1063 kept it forever. Cancel now refuses while an advance is
+      outstanding and says what to do instead: post it with 0 packs arrived
+      and pick refunded / not coming.
+- [x] **7. "The rest isn't coming" re-bought goods already paid for.**
+      Unticked paid-for lines went back onto the open shopping list with their
+      advance still in 1063. Closing now refuses while a paid-for line is
+      unaccounted for, before anything posts.
+- [x] **8. "Fix the line and post again" posted the delivery fee twice.** The
+      retry keeps the same key and the same fee row, and the first attempt had
+      already posted the fee. The request now remembers which receipt's fees
+      are done (`[FEES:<key>]`) — not merely which receipt it has seen, since
+      a record-only pass writes the key and posts nothing.
+
+### Proved
+API 1585 tests green, lint clean, web build green. Live on carolina-test:
+15/15 on the new guards (a cook's bracket text is not a tag; staff refused
+paidFrom/charges; a second pocket, a cancel and a close all refused; the
+advance counts 316 → 280 → 300 → 0 and 1063 nets Dr 336 / Cr 336), plus no
+regression — receiving 30/30, paid-ahead 11/11, counts 11/11, receipts 16/16,
+send 8/8. The one standing red (`an unknown documentKind is refused`) is the
+AI guard answering 403 before validation with AI off, not a defect.
+
+### Not fixed here
+The 12 findings whose verify agents were lost to a session limit have no
+verdict yet; they are in the run's output (`wzp7rvkyr.output`). Re-run the
+review to finish them.

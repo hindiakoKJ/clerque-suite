@@ -1,5 +1,6 @@
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBase64,
   IsBoolean,
@@ -151,7 +152,13 @@ export class BoughtLineInputDto {
 }
 
 export class RecordBoughtDto {
+  /*
+    At least one line. An empty list used to walk a request from SENT to
+    BOUGHT while saying nothing was bought -- and, with a pocket attached,
+    post money against whatever somebody else had recorded.
+  */
   @IsArray()
+  @ArrayMinSize(1)
   @ArrayMaxSize(200)
   @ValidateNested({ each: true })
   @Type(() => BoughtLineInputDto)

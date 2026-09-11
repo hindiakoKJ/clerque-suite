@@ -528,13 +528,20 @@ export default function ProcurePage() {
         ...(boughtDate ? { boughtAt: boughtDate } : {}),
         ...(ordered ? { onTheWay: true } : {}),
         ...(ordered && paidFrom ? { paidFrom, charges: chargeRows(orderCharges) } : {}),
-      }).then((r) => r.data as { paidAhead?: { pocket: Pocket; total: number; posted: number; entries: Array<{ error?: string }> } });
+      }).then((r) => r.data as { paidAhead?: { pocket: Pocket; total: number; posted: number; advance?: number; entries: Array<{ error?: string }> } });
     },
     onSuccess: (d) => {
       refresh(); setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
       if (d?.paidAhead) {
         const bad = d.paidAhead.entries.find((e) => e.error);
-        toast.success(`Recorded. ${peso(Math.abs(d.paidAhead.posted))} ${d.paidAhead.posted < 0 ? 'refunded to' : 'paid ahead from'} ${pocketLabel(d.paidAhead.pocket)}. Nothing more to pay when it arrives.`, { duration: 8000 });
+        // What the ledger took, not what was asked for: a locked month or a
+        // missing account leaves the order un-paid, and saying otherwise is
+        // how the money goes missing.
+        if (d.paidAhead.posted === 0) {
+          toast.success('Recorded.');
+        } else {
+          toast.success(`Recorded. ${peso(Math.abs(d.paidAhead.posted))} ${d.paidAhead.posted < 0 ? 'refunded to' : 'paid ahead from'} ${pocketLabel(d.paidAhead.pocket)}. Nothing more to pay when it arrives.`, { duration: 8000 });
+        }
         if (bad) toast.warning(bad.error as string, { duration: 10000 });
       } else {
         toast.success(ordered ? 'Recorded — marked as on the way.' : 'Shopping recorded.');

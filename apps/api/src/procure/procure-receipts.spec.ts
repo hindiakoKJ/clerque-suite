@@ -577,6 +577,61 @@ describe('ProcureReceiptsService', () => {
     expect(docs).toHaveLength(1);
   });
 
+  it('does not post the delivery fee twice when a failed line is fixed and posted', async () => {
+    /*
+      "Fix the line and post again" keeps the same key and the same receipt,
+      fee row included. The first go had already posted the fee alongside the
+      lines that worked, so sending it again charged the till twice for one
+      delivery.
+    */
+    let tries = 0;
+    const { svc, entries } = build({
+      kitchen: kitchen(),
+      receiveImpl: (rmId: string) => {
+        if (rmId === 'sugar' && ++tries === 1) throw new Error('Period is locked.');
+        return { totalValue: 1 };
+      },
+    });
+    const first = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1' });
+    expect(first.failed).toHaveLength(1);
+    expect(entries.filter((e: any) => e.type === 'EXPENSE')).toHaveLength(1);
+
+    const again = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1' });
+    expect(again.posted).toHaveLength(1);
+    expect(entries.filter((e: any) => e.type === 'EXPENSE')).toHaveLength(1);
+    expect(again.expenses.some((e: any) => /already recorded/i.test(e.error ?? ''))).toBe(true);
+  });
+
+  it('still posts the fee when the receipt was recorded first and posted later', async () => {
+    /*
+      Record-only writes the key and posts nothing -- not even the fee. The
+      post that follows carries the same key, and its fee has never ridden
+      anywhere, so it has to go now.
+    */
+    const { svc, entries } = build({ kitchen: kitchen() });
+    await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1', postNow: false });
+    expect(entries).toEqual([]);
+    const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1' });
+    expect(entries.filter((e: any) => e.type === 'EXPENSE')).toHaveLength(1);
+    expect(r.expenses[0].entryNumber).toBe('JE-1');
+  });
+
+  it('posts the difference into 1063 when the slip prices an order that was paid ahead', async () => {
+    // Ordered at 85 a pack and paid for; the slip says 95. The goods come off
+    // 1063 at 95, so the extra 10 has to reach 1063 first.
+    const k = kitchen();
+    k.status = 'BOUGHT';
+    k.notes = '[ONTHEWAY:2026-09-01] [PREPAID:BANK] [ADV:85.00]';
+    k.lines[0] = { ...k.lines[0], packsBought: 1, packSize: 1000, packCost: 85 };
+    const { svc, received, entries } = build({ kitchen: k });
+    await svc.confirm(TENANT, USER, BRANCH, {
+      ...CONFIRM, purchaseRequestId: 'req-k', expenses: [], paymentMethod: 'BANK',
+      lines: [{ rawMaterialId: 'sugar', packsBought: 1, packSize: 1000, packCost: 95 }],
+    });
+    expect(entries.map((e: any) => [e.type, e.amount, e.source])).toEqual([['PAID_AHEAD', 10, 'BANK']]);
+    expect(received[0].dto.paymentMethod).toBe('PREPAID');
+  });
+
   it('leaves a line that is already in stock alone, and says so', async () => {
     const k = kitchen();
     k.status = 'BOUGHT';

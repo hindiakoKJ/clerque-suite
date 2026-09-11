@@ -4,14 +4,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { AiService } from '../ai/ai.service';
 import { DocumentsService } from '../documents/documents.service';
-import { ProcureService } from './procure.service';
+import { ProcureService, PostedExpense } from './procure.service';
+import { ProcurePocket } from './dto/receive-request.dto';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import {
   promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount,
   MaterialRef, ParsedLine,
 } from './receipt-parser';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
-import { hasTag, withTag, appendNote } from './procure-notes';
+import { readTag, withTag, appendNote } from './procure-notes';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -415,7 +416,7 @@ export class ProcureReceiptsService {
       where: { id: dto.purchaseRequestId!, tenantId }, include: this.include(),
     });
     if (!req) throw new NotFoundException('Purchase request not found.');
-    const replay = !!dto.idempotencyKey && hasTag(req.notes, 'RCPT') && (req.notes ?? '').includes(this.keyTag(dto.idempotencyKey));
+    const replay = !!dto.idempotencyKey && readTag(req.notes, 'RCPT') === dto.idempotencyKey;
     // A retry after the first answer was lost, and the first answer had
     // already put everything on the shelf: the same answer, nothing more.
     if (req.status === 'RECEIVED' && replay) {
@@ -515,21 +516,57 @@ export class ProcureReceiptsService {
       return { duplicate: replay, recorded: true, request, posted: [], skipped, failed: [], expenses: [], created, document };
     }
 
-    // Through the same door a hand-typed request uses -- the charges ride
-    // with the goods and post once.
+    /*
+      A price on the slip that differs from the one the order was paid at
+      is a difference in the money too. The request remembers the pocket;
+      posting the difference now keeps 1063 equal to the goods it is about
+      to hand over.
+    */
+    const prepaidPocket = readTag(request.notes, 'PREPAID') as ProcurePocket | null;
+    let adjusted: PostedExpense[] = [];
+    if (prepaidPocket) {
+      const paid = await this.procure.payAhead(tenantId, request, userId, prepaidPocket, receiptDate, []);
+      adjusted = paid.summary.entries;
+    }
+
+    /*
+      Through the same door a hand-typed request uses -- the charges ride
+      with the goods and post once. "Fix the line and post again" keeps the
+      same key and the same fee row on screen, and the first attempt had
+      already posted the fee alongside the lines that did work -- so a fee
+      that has already ridden is not sent a second time. Which is not the
+      same as a replay: a record-only pass writes the key and posts nothing,
+      and its fee still has to go when the goods are finally posted. So the
+      request remembers the key whose fees are done, not merely seen.
+    */
+    const fees = (dto.expenses ?? []).map((e) => ({ description: e.description, amount: e.amount, category: e.category }));
+    const feesDone = !!dto.idempotencyKey && readTag(request.notes, 'FEES') === dto.idempotencyKey;
     const out = await this.procure.receiveRequest(tenantId, req.id, userId, dto.paymentMethod, {
       receivedAt: receiptDate,
       note:       label || undefined,
       acceptCostChangeFor: acceptFor,
-      charges:    (dto.expenses ?? []).map((e) => ({ description: e.description, amount: e.amount, category: e.category })),
+      charges:    feesDone ? [] : fees,
     });
+    let landed = out.request;
+    if (dto.idempotencyKey && !feesDone
+        && out.charges.some((c) => c.entryNumber && fees.some((f) => f.description === c.description))) {
+      landed = await this.prisma.purchaseRequest.update({
+        where: { id: req.id },
+        data:  { notes: withTag(landed.notes, 'FEES', dto.idempotencyKey) },
+        include: this.include(),
+      });
+    }
     return {
       duplicate: replay, recorded: true,
-      request:   out.request,
+      request:   landed,
       posted:    out.posted,
       skipped:   [...skipped, ...out.skipped],
       failed:    out.failed,
-      expenses:  out.charges,
+      expenses:  [
+        ...adjusted,
+        ...out.charges,
+        ...(feesDone ? fees.map((f): PostedExpense => ({ description: f.description, amount: f.amount, error: 'Already recorded when this receipt was first posted.' })) : []),
+      ],
       created,
       document,
     };

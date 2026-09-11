@@ -13,6 +13,13 @@ import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
 import { appendNote, withTag, readTag } from './procure-notes';
 
+/** What each pocket is called in a sentence a shop owner reads. */
+const POCKET_WORDS: Record<ProcurePocket, string> = {
+  CASH:         'the till',
+  OWNER_FUNDED: "the owner's own money",
+  BANK:         'the shop bank or GCash',
+};
+
 /**
  * Clerque Procure — the shop asking the owner to buy something.
  *
@@ -507,6 +514,13 @@ export class ProcureService {
         `A request has to be sent before it can be bought against (this one is ${req.status.toLowerCase()}).`,
       );
     }
+    const prepaid = readTag(req.notes, 'PREPAID') as ProcurePocket | null;
+    if (extra.paidFrom && prepaid && extra.paidFrom !== prepaid) {
+      throw new BadRequestException(
+        `This order was already paid from ${POCKET_WORDS[prepaid]}. `
+        + 'Post it, or correct that entry under Ledger, before paying it from somewhere else.',
+      );
+    }
     const decider = !actor || COST_DECIDER_ROLES.includes(actor.role ?? '');
     if (!decider) {
       const tenant = await this.prisma.tenant.findUnique({
@@ -516,6 +530,23 @@ export class ProcureService {
         throw new BadRequestException(
           'On this account only the owner or manager records what was bought. '
           + 'The owner can open it to staff by showing purchase costs to staff under Settings.',
+        );
+      }
+      /*
+        Recording is not spending. Whoever is holding the bag writes down
+        packs and prices; saying the money already left, and from which
+        pocket, posts to the ledger -- so it stays with the people who are
+        allowed to post. The screen has always hidden these boxes from
+        staff; the server never checked.
+      */
+      if (extra.paidFrom || (extra.charges?.length ?? 0) > 0) {
+        throw new BadRequestException(
+          'Only the owner or manager can say the order was paid, or add a delivery fee.',
+        );
+      }
+      if (readTag(req.notes, 'PREPAID')) {
+        throw new BadRequestException(
+          'This order was already paid for, so only the owner or manager can change it.',
         );
       }
     }
@@ -592,8 +623,16 @@ export class ProcureService {
       },
       include: this.lineInclude(),
     });
-    if (!extra.paidFrom) return updated;
-    const paid = await this.payAhead(tenantId, updated, actor?.userId ?? '', extra.paidFrom, boughtDay ?? this.today(), extra.charges ?? []);
+    /*
+      Already paid ahead? Then a corrected price is a correction to the
+      money too, and the pocket is the one the request remembers -- the
+      screen stops offering the pocket tiles once an order is prepaid, so
+      nothing is sent, and the difference used to go unposted: 1063 was
+      credited on arrival for a price the pocket was never charged.
+    */
+    const pocket = extra.paidFrom ?? (readTag(req.notes, 'PREPAID') as ProcurePocket | null);
+    if (!pocket) return updated;
+    const paid = await this.payAhead(tenantId, updated, actor?.userId ?? '', pocket, boughtDay ?? this.today(), extra.charges ?? []);
     return { ...paid.request, paidAhead: paid.summary };
   }
 
@@ -627,6 +666,15 @@ export class ProcureService {
     const delta = +(total - already).toFixed(2);
     const entries: PostedExpense[] = [];
     const label = `Paid ahead: ${req.requestNumber}`;
+    /*
+      What actually reached the ledger. The tags below say the shop's money
+      is already out and waiting in 1063, and the arrival believes them: it
+      takes the goods from 1063 instead of charging a pocket. So they are
+      written from what posted, never from what was asked for. A locked
+      month, a missing 1063, a failed owner half -- the request stays
+      un-prepaid, the person is told, and a retry posts the whole amount.
+    */
+    let posted = 0;
 
     if (Math.abs(delta) >= 0.01) {
       const type = delta > 0 ? 'PAID_AHEAD' : 'PAID_AHEAD_REFUND';
@@ -642,6 +690,7 @@ export class ProcureService {
             note: `${delta > 0 ? 'Owner paid' : 'Owner took back'}: ${label}`,
           });
         }
+        posted = delta;
         entries.push({ description: delta > 0 ? 'Paid ahead' : 'Paid-ahead correction', amount, entryNumber: je.entryNumber, status: je.status });
       } catch (err) {
         entries.push({ description: 'Paid ahead', amount, error: err instanceof Error ? err.message : 'Could not post.' });
@@ -650,13 +699,16 @@ export class ProcureService {
     const fees = charges.length > 0 ? await this.postExpenses(tenantId, userId, day, req.requestNumber, pocket, charges) : [];
 
     // Paid ahead means not here yet: the request is on the way from this day.
+    const advance = +(already + posted).toFixed(2);
     let notes = readTag(req.notes, 'ONTHEWAY') ? req.notes : withTag(req.notes, 'ONTHEWAY', day);
-    notes = withTag(notes, 'PREPAID', pocket);
-    notes = withTag(notes, 'ADV', total.toFixed(2));
+    if (advance >= 0.01) {
+      notes = withTag(notes, 'PREPAID', pocket);
+      notes = withTag(notes, 'ADV', advance.toFixed(2));
+    }
     const request = await this.prisma.purchaseRequest.update({
       where: { id: req.id }, data: { notes }, include: this.lineInclude(),
     });
-    return { request, summary: { pocket, total, posted: delta, entries: [...entries, ...fees] } };
+    return { request, summary: { pocket, total, posted, advance, entries: [...entries, ...fees] } };
   }
 
   // ── posting to stock ──────────────────────────────────────────────────────
@@ -709,6 +761,25 @@ export class ProcureService {
     const prepaidPocket = readTag(req.notes, 'PREPAID') as ProcurePocket | null;
     const pocket: ProcurePocket = prepaidPocket ?? paymentMethod;
     const inventoryPocket: ProcurePocket | 'PREPAID' = prepaidPocket ? 'PREPAID' : paymentMethod;
+
+    /*
+      "The rest isn't coming" puts whatever was not ticked back on the open
+      shopping list. On an order that was PAID for, those packs are money
+      already sitting in 1063: closing would leave it there with nothing to
+      clear it, and buy the same goods a second time. Each one has to be
+      ticked with what arrived and told what became of it.
+    */
+    if (opts.closeRest && prepaidPocket && opts.lines) {
+      const unsettled = req.lines.filter((l) => !l.receivedAt && l.packsBought != null && !chosen.has(l.id));
+      if (unsettled.length > 0) {
+        throw new BadRequestException(
+          `${unsettled.map((l) => l.rawMaterial.name).join(', ')} `
+          + `${unsettled.length === 1 ? 'was' : 'were'} paid for with this order. `
+          + 'Tick each one with the packs that arrived (0 if none) and say whether it was refunded, '
+          + 'lost, still coming or not coming, so the money paid ahead is settled.',
+        );
+      }
+    }
 
     const posted:  Array<{ line: string; name: string; quantity: number; unitCost: number; warning: string | null }> = [];
     const skipped: Array<{ line: string; name: string; reason: string }> = [];
@@ -808,6 +879,22 @@ export class ProcureService {
     }
     if (opts.note) notes = appendNote(notes, opts.note);
 
+    /*
+      What is left of the advance. Packs that reached the shelf took their
+      share out of 1063, packs that were refunded or written off settled
+      theirs, and packs still coming carried theirs to the follow-up. What
+      remains is the lines nobody has posted yet -- and that is the number a
+      later price correction measures its difference against. Left at the
+      whole order, a correction after a partial post read as a refund that
+      never happened.
+    */
+    if (prepaidPocket) {
+      const left = req.lines
+        .filter((l) => !l.receivedAt && !done.has(l.id) && l.packsBought != null && l.packCost != null)
+        .reduce((sum, l) => sum + Number(l.packsBought) * Number(l.packCost), 0);
+      notes = withTag(notes, 'ADV', (+left.toFixed(2)).toFixed(2));
+    }
+
     // ── charges: with the goods, once ──────────────────────────────────────
     let charges: PostedExpense[] = [...settled];
     const side = [...(opts.charges ?? []), ...lost];
@@ -900,8 +987,13 @@ export class ProcureService {
     const numbered: Array<{ lineNumber: string }> = [];
     const now = new Date();
     let notes = withTag(withTag(null, 'BALANCEOF', req.requestNumber), 'ONTHEWAY', this.today());
-    // Already paid for, on the original: the balance takes its goods from the same advance.
-    if (prepaidPocket) notes = withTag(notes, 'PREPAID', prepaidPocket);
+    // Already paid for, on the original: the balance takes its goods from
+    // the same advance, and carries that much of it onto itself.
+    if (prepaidPocket) {
+      const carried = short.reduce((sum, x) => sum + +(x.packsBought - x.packsArrived).toFixed(4) * x.packCost, 0);
+      notes = withTag(notes, 'PREPAID', prepaidPocket);
+      notes = withTag(notes, 'ADV', (+carried.toFixed(2)).toFixed(2));
+    }
     notes = appendNote(notes, `Balance of ${req.requestNumber}: still coming`);
     return this.prisma.purchaseRequest.create({
       data: {
@@ -1065,6 +1157,20 @@ export class ProcureService {
         `${received.length} line${received.length === 1 ? ' is' : 's are'} already in stock `
         + `(${received.map((l) => l.rawMaterial?.name ?? l.lineNumber).join(', ')}), so this `
         + 'request cannot be cancelled. Post the rest, or write off what was received.',
+      );
+    }
+    /*
+      Money already out and waiting in 1063 cannot be cancelled away: the
+      shop either got it back or lost it, and the books have to say which.
+      Posting the request with 0 packs arrived does exactly that, and closes
+      the request on the way through.
+    */
+    const advance = Number(readTag(req.notes, 'ADV') ?? 0) || 0;
+    if (readTag(req.notes, 'PREPAID') && advance >= 0.01) {
+      throw new BadRequestException(
+        `This order was paid for ahead, and ${advance.toFixed(2)} of it is still waiting to be accounted for. `
+        + 'Post it instead, with 0 packs arrived, and say whether it was refunded or is not coming — '
+        + 'that settles the money and closes the request.',
       );
     }
     return this.prisma.purchaseRequest.update({

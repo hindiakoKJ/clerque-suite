@@ -109,6 +109,7 @@ function makePrismaMock() {
     // Refunds reduce expected cash: money handed back across the counter
     // left the drawer just like a paid-out did.
     orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
+    auditLog:        { findFirst: jest.fn().mockResolvedValue(null) },
     shiftCashOut:    {
       aggregate: jest.fn().mockResolvedValue({ _sum: { amount: null } }),
       findMany:  jest.fn().mockResolvedValue([]),

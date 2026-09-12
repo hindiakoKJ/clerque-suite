@@ -22,9 +22,25 @@ export interface HourlyBreakdown {
 }
 
 export interface SalesSummary {
+  /** Receipts that were paid and not voided. One sale, one count. */
   totalOrders: number;
+  /** Receipts that were rung up and then voided. Never counted as sales. */
   voidCount: number;
+  /** What those receipts rang up to, before anything was handed back. */
   totalRevenue: number;
+  /**
+   * Money handed back in this window, whichever day the sale happened.
+   * Attributed by when the money LEFT, the same rule the shift close uses
+   * for the drawer, so the two screens can be read side by side.
+   */
+  refundTotal: number;
+  /** What the shop actually kept: rung up, less handed back. */
+  netSales: number;
+  /**
+   * What one sale was worth, after refunds. The figure an owner means by
+   * "average sale" -- a receipt that was voided is not a sale, and money
+   * given back was never earned.
+   */
   avgOrderValue: number;
   cashRevenue: number;
   nonCashRevenue: number;
@@ -82,6 +98,28 @@ export class ReportsService {
 
   // ─── Daily report ─────────────────────────────────────────────────────────
 
+  /**
+   * Money handed back to customers in a window.
+   *
+   * Attributed by WHEN THE MONEY LEFT, not when the sale happened: a refund
+   * against yesterday's coffee empties today's drawer. That is the rule the
+   * shift close already uses, so the drawer and the day's sales can be read
+   * side by side without the two disagreeing.
+   *
+   * Every method, not only cash: a reversed GCash payment is money the shop
+   * does not have either.
+   */
+  private async refundsIn(tenantId: string, from: Date, to: Date, branchId?: string): Promise<number> {
+    const rows = await this.prisma.orderItemRefund.findMany({
+      where: {
+        createdAt: { gte: from, lte: to },
+        orderItem: { order: { tenantId, ...(branchId ? { branchId } : {}) } },
+      },
+      select: { refundAmount: true },
+    });
+    return rows.reduce((sum, r) => sum + Number(r.refundAmount), 0);
+  }
+
   async getDaily(tenantId: string, branchId: string, date: string): Promise<DailyReport> {
     // PH timezone UTC+8 — interpret the date string as PH local midnight
     const startOfDay = new Date(`${date}T00:00:00+08:00`);
@@ -92,12 +130,19 @@ export class ReportsService {
     // Filtering by paidAt captures both PAID-and-still-in-production and
     // fully-COMPLETED orders for the day. Backfilled paidAt = completedAt
     // on legacy rows means this is backwards-compatible.
+    /*
+      VOIDED belongs in this query even though a void is never a sale.
+      computeSummary counts sales from PAID and COMPLETED only, and counts
+      voids separately -- so leaving them out of the query did not protect
+      the revenue figure, it just made the "voids today" tile read zero
+      forever, whatever happened at the till.
+    */
     const orders = await this.prisma.order.findMany({
       where: {
         tenantId,
         branchId,
         paidAt: { gte: startOfDay, lte: endOfDay },
-        status: { in: ['PAID', 'COMPLETED'] },
+        status: { in: ['PAID', 'COMPLETED', 'VOIDED'] },
       },
       include: { payments: true, items: true },
     });
@@ -111,7 +156,8 @@ export class ReportsService {
       where:  { id: tenantId },
       select: { businessType: true },
     });
-    const summary = this.computeSummary(orders, tenant?.businessType ?? null);
+    const refundTotal = await this.refundsIn(tenantId, startOfDay, endOfDay, branchId);
+    const summary = this.computeSummary(orders, tenant?.businessType ?? null, refundTotal);
     return { date, branchId, ...summary };
   }
 
@@ -143,7 +189,12 @@ export class ReportsService {
       }),
     ]);
 
-    const summary = this.computeSummary(orders, tenantInfo?.businessType ?? null);
+    // The same money the close screen takes out of the drawer, so the two
+    // numbers a cashier sees at the end of a shift agree with each other.
+    const shiftRefunds = await this.refundsIn(
+      tenantId, shift.openedAt, shift.closedAt ?? new Date(), shift.branchId ?? undefined,
+    );
+    const summary = this.computeSummary(orders, tenantInfo?.businessType ?? null, shiftRefunds);
     let paidOutTotal  = 0;
     let cashDropTotal = 0;
     for (const c of cashOuts) {
@@ -184,6 +235,7 @@ export class ReportsService {
   private computeSummary(
     orders: Awaited<ReturnType<typeof this.getOrders>>,
     businessType?: string | null,
+    refundTotal = 0,
   ): SalesSummary {
     // Sprint 7: PAID and COMPLETED both count as "completed sales" — revenue
     // is recognized at sale time per PFRS § 9.
@@ -192,7 +244,16 @@ export class ReportsService {
 
     const totalRevenue = completed.reduce((s, o) => s + Number(o.totalAmount), 0);
     const totalOrders = completed.length;
-    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+    /*
+      Three receipts, one sale. A voided receipt and the corrected one that
+      replaced it are two pieces of paper and one transaction, so the count
+      above is of PAID and COMPLETED orders only -- a void never reaches it.
+      What the average used to miss was the other half: money handed back.
+      A sale refunded in full still read as a full sale, because a refund
+      writes a refund row and leaves the order's total alone.
+    */
+    const netSales = +(totalRevenue - refundTotal).toFixed(2);
+    const avgOrderValue = totalOrders > 0 ? netSales / totalOrders : 0;
 
     // Sprint 9: SERVICE businesses don't have COGS by design — appointments,
     // haircuts, laundry. costPrice = null is intentional, not a leak.
@@ -279,9 +340,13 @@ export class ReportsService {
     // Hourly breakdown (PH time UTC+8)
     const hourMap = new Map<number, { orderCount: number; revenue: number }>();
     for (const order of completed) {
-      if (!order.completedAt) continue;
+      // Paid is the moment that counts, the same moment the headline uses.
+      // Keying on completedAt alone dropped every drink still being made,
+      // so the busiest hour of a rush was missing from its own chart.
+      const rung = order.completedAt ?? order.paidAt;
+      if (!rung) continue;
       // Convert to PH local hour
-      const phHour = (order.completedAt.getUTCHours() + 8) % 24;
+      const phHour = (rung.getUTCHours() + 8) % 24;
       const existing = hourMap.get(phHour) ?? { orderCount: 0, revenue: 0 };
       hourMap.set(phHour, {
         orderCount: existing.orderCount + 1,
@@ -296,6 +361,8 @@ export class ReportsService {
       totalOrders,
       voidCount: voided.length,
       totalRevenue,
+      refundTotal: +refundTotal.toFixed(2),
+      netSales,
       avgOrderValue,
       cashRevenue,
       nonCashRevenue,
@@ -535,6 +602,8 @@ export class ReportsService {
       orderCount:   number;
       voidCount:    number;
       totalRevenue: number;
+      refundTotal:  number;
+      netSales:     number;
       totalCogs:    number;
     }>();
     const isoDay = (d: Date) => {
@@ -554,7 +623,7 @@ export class ReportsService {
       const day = isoDay(new Date(o.paidAt ?? o.createdAt));
       let bucket = buckets.get(day);
       if (!bucket) {
-        bucket = { date: day, orderCount: 0, voidCount: 0, totalRevenue: 0, totalCogs: 0 };
+        bucket = { date: day, orderCount: 0, voidCount: 0, totalRevenue: 0, refundTotal: 0, netSales: 0, totalCogs: 0 };
         buckets.set(day, bucket);
       }
 
@@ -592,9 +661,32 @@ export class ReportsService {
       }
     }
 
-    const grossProfit = totalRevenue - totalCogs;
-    const grossMargin = totalRevenue > 0 ? grossProfit / totalRevenue : 0;
-    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+    /*
+      Money handed back, on the day it was handed back, so a week's chart
+      shows the dip on the day the customer was refunded rather than
+      quietly overstating every day in it.
+    */
+    const refundRows = await this.prisma.orderItemRefund.findMany({
+      where: {
+        createdAt: { gte: start, lte: end },
+        orderItem: { order: { tenantId, ...(branchId ? { branchId } : {}) } },
+      },
+      select: { refundAmount: true, createdAt: true },
+    });
+    let refundTotal = 0;
+    for (const r of refundRows) {
+      const amount = Number(r.refundAmount);
+      refundTotal += amount;
+      const day = isoDay(r.createdAt);
+      const bucket = buckets.get(day);
+      if (bucket) bucket.refundTotal += amount;
+    }
+    for (const b of buckets.values()) b.netSales = Math.round((b.totalRevenue - b.refundTotal) * 100) / 100;
+
+    const netSales = Math.round((totalRevenue - refundTotal) * 100) / 100;
+    const grossProfit = netSales - totalCogs;
+    const grossMargin = netSales > 0 ? grossProfit / netSales : 0;
+    const avgOrderValue = totalOrders > 0 ? netSales / totalOrders : 0;
 
     return {
       from: fromDate,
@@ -602,6 +694,8 @@ export class ReportsService {
       branchId: branchId ?? null,
       totals: {
         totalRevenue:  Math.round(totalRevenue * 100) / 100,
+        refundTotal:   Math.round(refundTotal * 100) / 100,
+        netSales,
         totalCogs:     Math.round(totalCogs * 100) / 100,
         grossProfit:   Math.round(grossProfit * 100) / 100,
         grossMargin:   Math.round(grossMargin * 10000) / 10000,

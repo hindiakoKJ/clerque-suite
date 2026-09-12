@@ -34,6 +34,19 @@ export interface ActiveShift {
   expectedCash: number;
   /** Per-method totals for digital payment reconciliation */
   digitalBreakdown: Record<string, number>;
+  /**
+   * When the drawer is due to be counted again. Optional because an older
+   * API build does not send it, and a missing clock must mean "do not ask"
+   * rather than "ask immediately".
+   */
+  countCheck?: {
+    intervalMinutes: number;
+    lastCountedAt: string | null;
+    since: string;
+    dueAt: string;
+    overdue: boolean;
+    minutesOverdue: number;
+  } | null;
 }
 
 interface ShiftState {

@@ -1961,3 +1961,77 @@ patch:
   to the pocket that paid for the goods cannot bite. A supplier delivery paid
   on arrival is not prepaid, so its fees already follow the pocket chosen on
   the receive form. Closed, no code change needed.
+
+## 2026-09-12 — Counting the till, and a day's sales an owner can trust
+
+Two asks from KJ, and the code reading behind both.
+
+### The till asks to be counted
+
+> "every 2 hours from the time the cashier opens the till there would be a soft
+> reminder to do cutoff counting. this is a soft control."
+
+- [x] The clock is on the shift, and it runs from the LAST COUNT, falling back
+      to the drawer opening. Counting often is never punished with more
+      nagging. `ShiftSummary.countCheck` carries `since`, `dueAt`, `overdue`
+      and `minutesOverdue`, so every screen reads one answer.
+- [x] A mid-shift count already existed under another name: `recordHandover`,
+      written for a relief cashier taking over. It writes a line into the
+      shift notes and an audit row. The audit row is the one a query can
+      reach, so that is what the clock reads. **No schema change.**
+- [x] Two hours by default, `TILL_COUNT_INTERVAL_MINUTES` to change it for a
+      deployment, clamped to 15 minutes and 12 hours so a bad value cannot
+      nag every minute or never ask at all. Making it a per-shop setting is
+      one column on Tenant, which is KJ's call, not mine.
+- [x] On the POS: a dismissible strip beside the offline banner. "Count it
+      now" takes the drawer figure inline and posts the same count; "Later"
+      snoozes 15 minutes and survives a reload. Nothing blocks, nothing is
+      reported to anyone.
+
+### A day's sales, counted honestly
+
+> "i dont want this to be like, 3 receipts, but only 1 legit transaction
+> because one is the void, and the other is the corrected receipt. loyverse is
+> doing that. average sales is incorrectly reported because it counted 3
+> receipts"
+
+Half of that was already right here and half was not. Read before writing:
+
+- [x] **Voids were already excluded from sales.** `getDaily` asks for PAID and
+      COMPLETED only, so the void and its replacement have always counted as
+      one sale, not three. What was broken is the tile beside it: the void
+      COUNT was taken from a list that had already excluded voids, so it read
+      zero forever whatever happened at the till.
+- [x] **Refunds were the real over-count.** A refund writes a refund row and
+      leaves the order's total alone — correct for the receipt, which really
+      did ring up that much, and a trap for every report that read the total
+      and stopped. A sale refunded in full still read as a full sale all day,
+      while the ledger had already reversed it. The dashboard and the books
+      disagreed by every refund taken. Now: `refundTotal`, `netSales`, and an
+      average taken on what was kept, attributed by when the money LEFT —
+      the same rule the shift close uses for the drawer, so the two screens
+      can be read side by side.
+- [x] **The margin, variance and depletion reports counted voided sales, and
+      abandoned carts too.** They filtered on `Order.deletedAt`, which nothing
+      in this codebase ever writes, and on nothing else. Fixed with the same
+      PAID-or-COMPLETED rule.
+- [x] **Close & Plan counted the paper, not the sales.** Its order count
+      included voids and open carts while the peso figure beside it excluded
+      voids, so the two numbers on one card disagreed by exactly the voids.
+      Its day also ran on UTC midnight, so "today" was eight hours out.
+- [x] **The hourly chart dropped every drink still being made**, because it
+      keyed on completedAt alone. The busiest hour of a rush was missing from
+      its own chart while counting in the headline above it.
+
+### Proved
+1601 API tests green (11 new; 3 of the day ones and the whole count-clock
+suite fail against the old code), lint clean, web build green. Live on
+carolina-test: rang a receipt, voided it, rang the corrected one, refunded it
+— one sale counted, one void counted, ₱80 rung, ₱80 back, ₱0 kept, average
+₱0 (15/15). The count clock 10/10, including a till left open since 1
+September reading 15,309 minutes overdue, and a count restarting it.
+
+**Not seen on screen:** the POS banner itself. It is type-checked and builds,
+and what it shows is a pure function of the clock the server sends, which is
+proven live — but it sits behind a login and I do not sign in. Worth thirty
+seconds of KJ's eyes on a real till.

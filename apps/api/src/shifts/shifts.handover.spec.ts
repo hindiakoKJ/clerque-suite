@@ -52,6 +52,8 @@ describe('ShiftsService — recordHandover', () => {
       // Refunds reduce expected cash: money handed back across the counter
       // left the drawer just like a paid-out did.
       orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
+      // The drawer's last mid-shift count, read from the audit trail.
+      auditLog: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const audit: any = { log: jest.fn((r: any) => { auditRows.push(r); return Promise.resolve(); }) };
     return { svc: new ShiftsService(prisma, audit, { generateZRead: jest.fn() } as any), noteWrites, auditRows };

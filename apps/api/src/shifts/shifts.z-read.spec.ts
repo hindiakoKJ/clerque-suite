@@ -47,6 +47,8 @@ describe('ShiftsService.close — writing the day\'s Z-Read', () => {
       order:           { findMany: jest.fn().mockResolvedValue([]) },
       shiftCashOut:    { findMany: jest.fn().mockResolvedValue([]) },
       orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
+      // The drawer's last mid-shift count, read from the audit trail.
+      auditLog: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const svc = new ShiftsService(

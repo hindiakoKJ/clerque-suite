@@ -11,6 +11,22 @@ import { PH_TIMEZONE } from '@repo/shared-types';
  */
 const PAID_OUT_APPROVAL_THRESHOLD = 500;
 
+/** See ShiftSummary.countCheck. */
+export interface CountCheck {
+  /** How long a drawer may go uncounted, in minutes. */
+  intervalMinutes: number;
+  /** The last mid-shift count, or null if none since the drawer opened. */
+  lastCountedAt: Date | null;
+  /** What the clock is running from: the last count, or the open. */
+  since: Date;
+  /** When the next count is due. */
+  dueAt: Date;
+  /** True once that moment has passed. */
+  overdue: boolean;
+  /** How far past due, in whole minutes. Zero when not overdue. */
+  minutesOverdue: number;
+}
+
 export interface ShiftSummary {
   id: string;
   tenantId: string;
@@ -52,8 +68,39 @@ export interface ShiftSummary {
    */
   unattributedCashSales: number;
   expectedCash: number;
+  /**
+   * When the drawer was last counted, and when it is due again.
+   *
+   * A soft control. Nothing is blocked and nothing is reported to anyone:
+   * the till simply asks, on the shop's own clock, whether somebody wants
+   * to count it. The clock starts when the drawer is opened and restarts at
+   * every count, so a shop that counts often is never nagged and a drawer
+   * left alone all afternoon is.
+   *
+   * Null once the shift is closed -- there is nothing left to count.
+   */
+  countCheck: CountCheck | null;
   /** Breakdown of digital payment totals by method for cashier reconciliation */
   digitalBreakdown: Record<string, number>;
+}
+
+/**
+ * How long a drawer may go uncounted before the till asks.
+ *
+ * Two hours is the default because it is the rhythm the owner asked for: long
+ * enough not to interrupt a rush, short enough that a shortage is traced to a
+ * couple of hours of trading instead of a whole day. Set
+ * TILL_COUNT_INTERVAL_MINUTES to change it for a deployment; making it a
+ * per-shop setting is one column on Tenant, which is the owner's call.
+ */
+const DEFAULT_COUNT_INTERVAL_MINUTES = 120;
+const MIN_COUNT_INTERVAL_MINUTES = 15;
+const MAX_COUNT_INTERVAL_MINUTES = 720;
+
+export function countIntervalMinutes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.TILL_COUNT_INTERVAL_MINUTES);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_COUNT_INTERVAL_MINUTES;
+  return Math.min(MAX_COUNT_INTERVAL_MINUTES, Math.max(MIN_COUNT_INTERVAL_MINUTES, Math.round(raw)));
 }
 
 @Injectable()
@@ -562,6 +609,29 @@ ${line}` : line },
     });
   }
 
+  /** See ShiftSummary.countCheck. Null for a shift that is already closed. */
+  private async buildCountCheck(shift: { id: string; tenantId: string; openedAt: Date; closedAt: Date | null }): Promise<CountCheck | null> {
+    if (shift.closedAt) return null;
+    const last = await this.prisma.auditLog.findFirst({
+      where:   { tenantId: shift.tenantId, entityType: 'SHIFT_HANDOVER', entityId: shift.id },
+      orderBy: { createdAt: 'desc' },
+      select:  { createdAt: true },
+    });
+    const intervalMinutes = countIntervalMinutes();
+    const since = last?.createdAt ?? shift.openedAt;
+    const dueAt = new Date(since.getTime() + intervalMinutes * 60_000);
+    const now   = Date.now();
+    const overdue = now >= dueAt.getTime();
+    return {
+      intervalMinutes,
+      lastCountedAt: last?.createdAt ?? null,
+      since,
+      dueAt,
+      overdue,
+      minutesOverdue: overdue ? Math.floor((now - dueAt.getTime()) / 60_000) : 0,
+    };
+  }
+
   // ─── Private: compute summary from orders ────────────────────────────────
 
   private async buildSummary(shift: {
@@ -690,6 +760,16 @@ ${line}` : line },
       cashSales += orderCashNet;
     }
 
+    /*
+      When was this drawer last counted?
+
+      A mid-shift count is recorded by recordHandover, which writes a line
+      into the shift's notes and an audit row. The audit row is the one with
+      a timestamp a query can reach, so it is what the clock reads. No new
+      table, and a count made before this existed still counts.
+    */
+    const countCheck = await this.buildCountCheck(shift);
+
     const openingCash  = Number(shift.openingCash);
     // Expected cash = opening + cash sales − cash refunds − paid-outs − drops.
     // Drops physically leave the till; paid-outs are spent; refunds are handed
@@ -728,6 +808,7 @@ ${line}` : line },
       */
       unattributedCashSales,
       expectedCash,
+      countCheck,
       digitalBreakdown,
     };
   }

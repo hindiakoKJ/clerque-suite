@@ -47,6 +47,7 @@ describe('ShiftsService — refunds and expected cash', () => {
         }),
       },
       shiftCashOut: { findMany: jest.fn().mockResolvedValue(opts.cashOuts ?? []) },
+      auditLog: { findFirst: jest.fn().mockResolvedValue(null) },
       orderItemRefund: {
         findMany: jest.fn(({ where }: any) => {
           refundWhere.push(where);
@@ -161,6 +162,7 @@ describe('ShiftsService — cash no shift claims', () => {
       },
       shiftCashOut:    { findMany: jest.fn().mockResolvedValue([]) },
       orderItemRefund: { findMany: jest.fn().mockResolvedValue([]) },
+      auditLog: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const svc = new ShiftsService(prisma, { log: jest.fn() } as any, { generateZRead: jest.fn() } as any) as any;
     const shift = {

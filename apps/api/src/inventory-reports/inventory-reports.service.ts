@@ -35,6 +35,17 @@ export interface DepletionRow {
   daysUntilStockout: number | null;
 }
 
+/**
+ * The orders that are actually sales.
+ *
+ * Order.deletedAt is written by nothing in this codebase, so filtering on it
+ * alone let two kinds of non-sale into every one of these reports: a receipt
+ * that was rung up and voided, and a cart that was opened and abandoned.
+ * Both carried their full peso value into the owner's margin, variance and
+ * depletion figures.
+ */
+const SOLD: Prisma.OrderWhereInput = { status: { in: ['PAID', 'COMPLETED'] } };
+
 @Injectable()
 export class InventoryReportsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -88,7 +99,7 @@ export class InventoryReportsService {
     // Expected consumption from BOM × OrderItem.quantity over the window.
     const orderItems = await this.prisma.orderItem.findMany({
       where: {
-        order: { tenantId, branchId, deletedAt: null, createdAt: { gte: fromD, lte: toD } },
+        order: { tenantId, branchId, deletedAt: null, ...SOLD, createdAt: { gte: fromD, lte: toD } },
       },
       select: {
         productId: true,
@@ -149,7 +160,7 @@ export class InventoryReportsService {
     const { fromD, toD } = this.parseRange(from, to);
     const items = await this.prisma.orderItem.findMany({
       where: {
-        order: { tenantId, deletedAt: null, createdAt: { gte: fromD, lte: toD } },
+        order: { tenantId, deletedAt: null, ...SOLD, createdAt: { gte: fromD, lte: toD } },
       },
       select: {
         productId:   true,
@@ -211,7 +222,7 @@ export class InventoryReportsService {
 
     const items = await this.prisma.orderItem.findMany({
       where: {
-        order: { tenantId, branchId, deletedAt: null, createdAt: { gte: since, lte: now } },
+        order: { tenantId, branchId, deletedAt: null, ...SOLD, createdAt: { gte: since, lte: now } },
       },
       select: { productId: true, quantity: true },
     });

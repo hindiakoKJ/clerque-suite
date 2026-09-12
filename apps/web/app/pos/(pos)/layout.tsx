@@ -15,6 +15,7 @@ import { isLaundryType, isFnbType } from '@repo/shared-types';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { ClockWidget } from '@/components/pos/ClockWidget';
 import { OfflineBanner } from '@/components/pos/OfflineBanner';
+import { CountTheTillBanner } from '@/components/pos/CountTheTillBanner';
 import { ShiftGate } from '@/components/pos/ShiftGate';
 import { CloseShiftModal } from '@/components/pos/CloseShiftModal';
 import { ShiftEodReport, type ShiftReportData } from '@/components/pos/ShiftEodReport';
@@ -864,6 +865,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         onSignOut={handleLogout}
       >
         <OfflineBanner />
+        <CountTheTillBanner onCounted={refreshShift} />
         {isWrongVerticalLanding ? (
           <div className="flex items-center justify-center h-[60vh] text-sm text-muted-foreground gap-2">
             <span className="inline-block w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" />

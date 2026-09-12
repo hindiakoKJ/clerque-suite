@@ -54,6 +54,8 @@ interface DailyReport {
   totalOrders: number;
   voidCount: number;
   totalRevenue: number;
+  refundTotal: number;
+  netSales: number;
   avgOrderValue: number;
   cashRevenue: number;
   nonCashRevenue: number;
@@ -427,17 +429,27 @@ function SalesDashboard() {
             {(canSeeRevenue
               ? [
                   {
+                    /*
+                      What the shop kept, not what the printer printed. A
+                      voided receipt is not a sale and money handed back was
+                      never earned, so both come off before this number and
+                      before the average below it. When something did come
+                      off, the line underneath shows the subtraction rather
+                      than leaving the owner to wonder why it moved.
+                    */
                     icon: ShoppingCart,
-                    label: 'Total Revenue',
-                    value: formatPeso(data.totalRevenue),
-                    sub: `${data.totalOrders} orders`,
+                    label: 'Sales Today',
+                    value: formatPeso(data.netSales ?? data.totalRevenue),
+                    sub: data.refundTotal > 0
+                      ? `${formatPeso(data.totalRevenue)} rung up, ${formatPeso(data.refundTotal)} refunded`
+                      : `${data.totalOrders} sale${data.totalOrders === 1 ? '' : 's'}`,
                     accentBorder: true,
                   },
                   {
                     icon: TrendingUp,
-                    label: 'Avg Order Value',
+                    label: 'Average Sale',
                     value: formatPeso(data.avgOrderValue),
-                    sub: `${data.totalOrders} completed`,
+                    sub: `over ${data.totalOrders} sale${data.totalOrders === 1 ? '' : 's'}${data.voidCount > 0 ? `, ${data.voidCount} void${data.voidCount === 1 ? '' : 's'} not counted` : ''}`,
                     color: 'hsl(142 76% 36%)',
                   },
                   {
@@ -449,25 +461,27 @@ function SalesDashboard() {
                   },
                   {
                     icon: Ban,
-                    label: 'Voids',
+                    label: 'Voids & Refunds',
                     value: String(data.voidCount),
-                    sub: 'Cancelled orders',
+                    sub: data.refundTotal > 0
+                      ? `voided · ${formatPeso(data.refundTotal)} handed back`
+                      : 'voided receipts, not counted as sales',
                     color: 'hsl(0 72% 51%)',
                   },
                 ]
               : [
                   {
                     icon: ShoppingCart,
-                    label: 'Orders Today',
+                    label: 'Sales Today',
                     value: String(data.totalOrders),
-                    sub: 'Completed transactions',
+                    sub: 'receipts that were paid, voids not counted',
                     accentBorder: true,
                   },
                   {
                     icon: Ban,
                     label: 'Voids',
                     value: String(data.voidCount),
-                    sub: 'Cancelled orders',
+                    sub: 'voided receipts',
                     color: 'hsl(0 72% 51%)',
                   },
                 ]

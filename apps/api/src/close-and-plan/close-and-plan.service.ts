@@ -12,6 +12,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { StickerTier } from '@prisma/client';
+import { PH_TIMEZONE } from '@repo/shared-types';
 import { detectDuplicateLot, type DuplicateCandidate } from './duplicate-detection';
 import { recomputeStickerTiersForItem } from './sticker-tier';
 import {
@@ -78,9 +79,17 @@ export class CloseAndPlanService {
   // ─── Day summary ──────────────────────────────────────────────────────
 
   async getDaySummary(tenantId: string, branchId: string, dateISO?: string): Promise<DaySummary> {
-    const day = dateISO ? new Date(dateISO) : new Date();
-    const startOfDay = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 0, 0, 0));
-    const endOfDay   = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 23, 59, 59, 999));
+    /*
+      The shop's day, not UTC's. Manila is eight hours ahead, so a UTC
+      midnight window put the morning rush in yesterday's summary and cut
+      the evening off at eight. Every other report in the app already reads
+      the day as PH local; this one did not.
+    */
+    const phDay = dateISO
+      ? dateISO.slice(0, 10)
+      : new Intl.DateTimeFormat('en-CA', { timeZone: PH_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const startOfDay = new Date(`${phDay}T00:00:00+08:00`);
+    const endOfDay   = new Date(`${phDay}T23:59:59.999+08:00`);
     const tomorrow   = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
     const tomorrowEnd = new Date(endOfDay.getTime() + 24 * 60 * 60 * 1000);
 
@@ -100,13 +109,17 @@ export class CloseAndPlanService {
       },
       select: { totalAmount: true, status: true },
     });
-    const orderCount      = orders.length;
+    /*
+      One sale, one count. The count used to be every row in the window --
+      voided receipts and carts nobody ever paid for included -- while the
+      peso figure beside it left the voids out. So the two numbers on one
+      card disagreed by exactly the voids, and a busy day of corrections
+      looked like a busy day of selling.
+    */
+    const sold            = orders.filter((o) => o.status === 'PAID' || o.status === 'COMPLETED');
+    const orderCount      = sold.length;
     const voidCount       = orders.filter((o) => o.status === 'VOIDED').length;
-    const grossSalesCents = Math.round(
-      orders
-        .filter((o) => o.status !== 'VOIDED')
-        .reduce((s, o) => s + Number(o.totalAmount), 0) * 100,
-    );
+    const grossSalesCents = Math.round(sold.reduce((s, o) => s + Number(o.totalAmount), 0) * 100);
 
     // Open shift / variance
     const shift = await this.prisma.shift.findFirst({

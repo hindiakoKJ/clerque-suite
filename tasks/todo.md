@@ -1955,6 +1955,9 @@ patch:
 - A paid-ahead delivery recovers input VAT even when the owner's own money
   paid it, because the arrival only says PREPAID and the underlying pocket is
   lost. Affects the 2550Q for a VAT-registered shop.
-- **For Anne:** a rider fee at the door on a prepaid order is charged to the
-  pocket that paid for the goods, not the one that paid the rider. Which is
-  right depends on how Carolina actually pays those — worth asking.
+- ~~For Anne: which pocket pays a rider fee at the door on a prepaid order~~
+  **Answered by KJ 2026-09-12: Shopee is always paid at order time, no COD.**
+  So a prepaid parcel has nothing to pay at the door, and charging a door fee
+  to the pocket that paid for the goods cannot bite. A supplier delivery paid
+  on arrival is not prepaid, so its fees already follow the pocket chosen on
+  the receive form. Closed, no code change needed.

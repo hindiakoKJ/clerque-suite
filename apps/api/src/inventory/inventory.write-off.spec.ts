@@ -32,7 +32,8 @@ describe('InventoryService.writeOffRawMaterial', () => {
         create:    jest.fn(({ data }: any) => { lots.push(data); return Promise.resolve(data); }),
       },
       rawMaterialInventory: {
-        findUnique: jest.fn().mockResolvedValue(
+        findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue(
           opts.onHand === undefined ? { quantity: 5000 } : { quantity: opts.onHand },
         ),
         update: jest.fn(({ data }: any) => { updates.push(data); return Promise.resolve(data); }),

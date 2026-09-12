@@ -6,13 +6,24 @@ export interface VarianceRow {
   rawMaterialId: string;
   name:          string;
   unit:          string;
-  startingQty:   number;
+  /**
+   * The last physical count of this ingredient at this branch, and when it
+   * was taken. Everything below is measured from there. Null when the
+   * ingredient has never been counted -- in which case there is no variance
+   * to report, and saying so is the point.
+   */
+  countedAt:     string | null;
+  countNumber:   string | null;
+  startingQty:   number | null;
   receiptsQty:   number;
   expectedConsumption: number;
-  expectedEndingQty:   number;
+  expectedEndingQty:   number | null;
   actualEndingQty:     number;
-  deltaQty:            number;
+  /** Actual on hand minus what the recipes say should be there. */
+  deltaQty:            number | null;
   deltaPct:            number | null;
+  /** Why deltaQty is null, in words a shop owner can act on. */
+  cannotTell:          string | null;
 }
 
 export interface MarginRow {
@@ -74,79 +85,145 @@ export class InventoryReportsService {
     });
     if (!materials.length) return [];
 
-    // Starting stock — approximated by today's qty minus receipts after `fromD`
-    // plus consumption inside the window. Simpler: read current qty and treat
-    // it as "actual ending"; compute starting back-of-envelope.
+    /*
+      Variance is measured from the last time somebody physically counted.
+      There is no other honest anchor: nothing records raw-material movements
+      one by one, so the only quantity this app KNOWS was true is a posted
+      count.
+
+      What this used to do was infer the starting quantity from the ending
+      one -- starting = ending - receipts + expected consumption -- and then
+      compute expected ending = starting + receipts - expected consumption.
+      Those cancel. Every row read exactly zero variance, forever, whatever
+      was walking out of the stockroom, and the report's existence made it
+      look as though somebody was watching. An ingredient nobody has counted
+      now says so instead.
+    */
+    const counts = await this.prisma.cycleCountLine.findMany({
+      where: {
+        rawMaterialId: { in: materials.map((m) => m.id) },
+        count: { tenantId, branchId, status: 'POSTED', postedAt: { not: null, lte: toD } },
+      },
+      select: {
+        rawMaterialId: true, countedQty: true,
+        count: { select: { postedAt: true, countNumber: true } },
+      },
+      orderBy: { count: { postedAt: 'asc' } },
+    });
+    // Ascending, so the last write per ingredient is the most recent count.
+    const anchorByMat = new Map<string, { at: Date; qty: number; countNumber: string }>();
+    for (const c of counts) {
+      if (!c.count.postedAt) continue;
+      anchorByMat.set(c.rawMaterialId, { at: c.count.postedAt, qty: Number(c.countedQty), countNumber: c.count.countNumber });
+    }
+
     const currentInv = await this.prisma.rawMaterialInventory.findMany({
       where:  { tenantId, branchId, rawMaterialId: { in: materials.map((m) => m.id) } },
       select: { rawMaterialId: true, quantity: true },
     });
     const currentByMat = new Map(currentInv.map((r) => [r.rawMaterialId, Number(r.quantity)]));
 
-    // Receipts in window (lot rows with receivedAt between from/to).
+    /*
+      Deliveries since the count, not since the date asked for. An ingredient
+      counted a week ago and one counted this morning are each measured from
+      their own count, so one stale ingredient does not poison the rest.
+      Ingredients with no count are read over the requested window purely so
+      the receipts and consumption columns still say something useful.
+    */
+    const earliest = [...anchorByMat.values()].reduce(
+      (min: Date, a) => (a.at < min ? a.at : min), fromD,
+    );
     const lots = await this.prisma.rawMaterialLot.findMany({
       // Purchases only. A write-off's sentinel lot carries a negative
       // qtyReceived to hold its idempotency reference; netting it against
       // receipts understates what the shop actually bought in the period.
-      where:  { tenantId, branchId, qtyReceived: { gt: 0 }, receivedAt: { gte: fromD, lte: toD } },
-      select: { rawMaterialId: true, qtyReceived: true },
+      where:  { tenantId, branchId, qtyReceived: { gt: 0 }, receivedAt: { gte: earliest, lte: toD } },
+      select: { rawMaterialId: true, qtyReceived: true, receivedAt: true },
     });
+    const sinceOf = (matId: string) => anchorByMat.get(matId)?.at ?? fromD;
     const receiptsByMat = new Map<string, number>();
     for (const l of lots) {
+      if (l.receivedAt < sinceOf(l.rawMaterialId)) continue;
       receiptsByMat.set(l.rawMaterialId, (receiptsByMat.get(l.rawMaterialId) ?? 0) + Number(l.qtyReceived));
     }
 
     // Expected consumption from BOM × OrderItem.quantity over the window.
     const orderItems = await this.prisma.orderItem.findMany({
       where: {
-        order: { tenantId, branchId, deletedAt: null, ...SOLD, createdAt: { gte: fromD, lte: toD } },
+        order: { tenantId, branchId, deletedAt: null, ...SOLD, createdAt: { gte: earliest, lte: toD } },
       },
       select: {
         productId: true,
         quantity:  true,
+        refundedQty: true,
+        order: { select: { createdAt: true } },
       },
     });
-    const productQty = new Map<string, number>();
-    for (const oi of orderItems) {
-      productQty.set(oi.productId, (productQty.get(oi.productId) ?? 0) + Number(oi.quantity));
-    }
-    const boms = productQty.size
+    const boms = orderItems.length
       ? await this.prisma.bomItem.findMany({
-          where:  { productId: { in: Array.from(productQty.keys()) } },
+          where:  { productId: { in: Array.from(new Set(orderItems.map((oi) => oi.productId))) } },
           select: { productId: true, rawMaterialId: true, quantity: true },
         })
       : [];
-    const consumptionByMat = new Map<string, number>();
+    const bomsByProduct = new Map<string, Array<{ rawMaterialId: string; quantity: number }>>();
     for (const b of boms) {
-      const productSold = productQty.get(b.productId) ?? 0;
-      const consumed    = productSold * Number(b.quantity);
-      consumptionByMat.set(b.rawMaterialId, (consumptionByMat.get(b.rawMaterialId) ?? 0) + consumed);
+      const list = bomsByProduct.get(b.productId) ?? [];
+      list.push({ rawMaterialId: b.rawMaterialId, quantity: Number(b.quantity) });
+      bomsByProduct.set(b.productId, list);
+    }
+    /*
+      Counted per ingredient, because each ingredient's window starts at its
+      own count. Refunded units are taken off: a drink handed back was still
+      poured, but a line refunded before it was made never drained anything,
+      and the margin report already nets the same way.
+    */
+    const consumptionByMat = new Map<string, number>();
+    for (const oi of orderItems) {
+      const sold = Number(oi.quantity) - Number(oi.refundedQty ?? 0);
+      if (sold <= 0) continue;
+      for (const b of bomsByProduct.get(oi.productId) ?? []) {
+        if (oi.order.createdAt < sinceOf(b.rawMaterialId)) continue;
+        consumptionByMat.set(b.rawMaterialId, (consumptionByMat.get(b.rawMaterialId) ?? 0) + sold * b.quantity);
+      }
     }
 
+    const round = (n: number) => Math.round(n * 1000) / 1000;
     return materials.map((m) => {
+      const anchor          = anchorByMat.get(m.id) ?? null;
       const receipts        = receiptsByMat.get(m.id) ?? 0;
       const expectedConsume = consumptionByMat.get(m.id) ?? 0;
       const actualEnd       = currentByMat.get(m.id) ?? 0;
-      // starting = actualEnd - receipts + expectedConsume + delta(0 assumed)
-      // expectedEnd = starting + receipts - expectedConsume
-      // For a clean report: surface receipts vs consumption and delta = actualEnd - (starting + receipts - consume)
-      // Without a periodic snapshot we infer starting = actualEnd - receipts + expectedConsume.
-      const startingQty       = actualEnd - receipts + expectedConsume;
-      const expectedEndingQty = startingQty + receipts - expectedConsume;
+      if (!anchor) {
+        return {
+          rawMaterialId: m.id, name: m.name, unit: m.unit,
+          countedAt: null, countNumber: null,
+          startingQty: null,
+          receiptsQty: round(receipts),
+          expectedConsumption: round(expectedConsume),
+          expectedEndingQty: null,
+          actualEndingQty: round(actualEnd),
+          deltaQty: null,
+          deltaPct: null,
+          cannotTell: 'Never counted. Count this ingredient once and every count after it shows what went missing in between.',
+        };
+      }
+      const expectedEndingQty = anchor.qty + receipts - expectedConsume;
       const deltaQty          = actualEnd - expectedEndingQty;
-      const denom             = expectedEndingQty;
-      const deltaPct          = denom !== 0 ? (deltaQty / denom) * 100 : null;
+      const deltaPct          = expectedEndingQty !== 0 ? (deltaQty / expectedEndingQty) * 100 : null;
       return {
         rawMaterialId:       m.id,
         name:                m.name,
         unit:                m.unit,
-        startingQty,
-        receiptsQty:         receipts,
-        expectedConsumption: expectedConsume,
-        expectedEndingQty,
-        actualEndingQty:     actualEnd,
-        deltaQty,
-        deltaPct,
+        countedAt:           anchor.at.toISOString(),
+        countNumber:         anchor.countNumber,
+        startingQty:         round(anchor.qty),
+        receiptsQty:         round(receipts),
+        expectedConsumption: round(expectedConsume),
+        expectedEndingQty:   round(expectedEndingQty),
+        actualEndingQty:     round(actualEnd),
+        deltaQty:            round(deltaQty),
+        deltaPct:            deltaPct == null ? null : Math.round(deltaPct * 100) / 100,
+        cannotTell:          null,
       };
     });
   }

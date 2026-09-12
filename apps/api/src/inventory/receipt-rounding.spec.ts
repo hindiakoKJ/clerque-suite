@@ -34,7 +34,8 @@ describe('Receiving stock — the two legs must be the same number', () => {
         update: jest.fn().mockResolvedValue({}),
       },
       rawMaterialInventory: {
-        findUnique: jest.fn().mockResolvedValue({ quantity: 0 }),
+        findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue({ quantity: 0 }),
         upsert: jest.fn().mockResolvedValue({}),
         update: jest.fn().mockResolvedValue({}),
       },
@@ -60,7 +61,8 @@ describe('Receiving stock — the two legs must be the same number', () => {
       tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus, costingMethod: 'WAC' }),
                 findUniqueOrThrow: jest.fn().mockResolvedValue({ taxStatus, costingMethod: 'WAC' }) },
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }), count: jest.fn().mockResolvedValue(1) },
-      rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue({ quantity: 0 }) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue({ quantity: 0 }) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };

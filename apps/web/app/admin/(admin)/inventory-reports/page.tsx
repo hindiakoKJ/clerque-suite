@@ -18,13 +18,16 @@ interface VarianceRow {
   rawMaterialId: string;
   name:          string;
   unit:          string;
-  startingQty:   number;
+  countedAt:     string | null;
+  countNumber:   string | null;
+  startingQty:   number | null;
   receiptsQty:   number;
   expectedConsumption: number;
-  expectedEndingQty:   number;
+  expectedEndingQty:   number | null;
   actualEndingQty:     number;
-  deltaQty:            number;
+  deltaQty:            number | null;
   deltaPct:            number | null;
+  cannotTell:          string | null;
 }
 interface MarginRow {
   productId:   string;
@@ -111,6 +114,7 @@ export default function InventoryReportsPage() {
             <thead className="text-left text-xs uppercase text-slate-500">
               <tr>
                 <th className="py-2">Material</th>
+                <th className="py-2">Counted</th>
                 <th className="py-2">Starting</th>
                 <th className="py-2">Receipts</th>
                 <th className="py-2">Expected Use</th>
@@ -124,13 +128,24 @@ export default function InventoryReportsPage() {
               {variance.map((v) => (
                 <tr key={v.rawMaterialId} className="border-t">
                   <td className="py-2">{v.name} <span className="text-xs text-slate-400">({v.unit})</span></td>
-                  <td className="py-2">{fmt(v.startingQty, 4)}</td>
+                  <td className="py-2 whitespace-nowrap">
+                    {v.countedAt
+                      ? new Date(v.countedAt).toLocaleDateString('en-PH', { day: 'numeric', month: 'short' })
+                      : <span className="text-xs text-slate-400">never</span>}
+                  </td>
+                  <td className="py-2">{v.startingQty != null ? fmt(v.startingQty, 4) : '—'}</td>
                   <td className="py-2">{fmt(v.receiptsQty, 4)}</td>
                   <td className="py-2">{fmt(v.expectedConsumption, 4)}</td>
-                  <td className="py-2">{fmt(v.expectedEndingQty, 4)}</td>
+                  <td className="py-2">{v.expectedEndingQty != null ? fmt(v.expectedEndingQty, 4) : '—'}</td>
                   <td className="py-2">{fmt(v.actualEndingQty, 4)}</td>
-                  <td className={`py-2 ${v.deltaQty < 0 ? 'text-red-600' : v.deltaQty > 0 ? 'text-emerald-600' : ''}`}>
-                    {fmt(v.deltaQty, 4)}
+                  {/*
+                    A shortage is worth seeing. "We cannot tell you yet" is
+                    worth seeing too, and is the honest answer for an
+                    ingredient nobody has ever counted -- this column used to
+                    print a confident zero for every one of them.
+                  */}
+                  <td className={`py-2 ${(v.deltaQty ?? 0) < 0 ? 'text-red-600' : (v.deltaQty ?? 0) > 0 ? 'text-emerald-600' : ''}`}>
+                    {v.deltaQty != null ? fmt(v.deltaQty, 4) : <span className="text-xs text-slate-400" title={v.cannotTell ?? ''}>count it once</span>}
                   </td>
                   <td className="py-2">{v.deltaPct != null ? `${fmt(v.deltaPct)}%` : '—'}</td>
                 </tr>

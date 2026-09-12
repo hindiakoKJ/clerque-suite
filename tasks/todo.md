@@ -2035,3 +2035,51 @@ September reading 15,309 minutes overdue, and a count restarting it.
 and what it shows is a pure function of the clock the server sends, which is
 proven live — but it sits behind a login and I do not sign in. Worth thirty
 seconds of KJ's eyes on a real till.
+
+## 2026-09-12 — "Are we done with POS?" — the two worst answers, fixed
+
+KJ asked whether POS is finished, on the reasoning that stock, its movements
+and costing all live in Procure now, so a correct Procure means a correct POS.
+Six readers went through the code. He is half right, and the half he is wrong
+about is the expensive half — written up in the report to him. Two findings
+from that sweep were bad enough to fix on the spot.
+
+- [x] **The stock variance report could never find shrinkage.** It inferred
+      the starting quantity from the ending one, so the two cancelled and the
+      difference column was arithmetically zero for every ingredient, every
+      day, whatever walked out of the stockroom. Worse than useless: a wall of
+      zeroes reads as "somebody is watching". There is no movement log for
+      ingredients, so the only quantity this app ever KNOWS is a posted
+      physical count — that is the anchor now, per ingredient, each measured
+      from its own last count. An ingredient nobody has counted says "count it
+      once" instead of printing a confident zero. Refunded drinks no longer
+      charge the stockroom. 5 tests, all failing against the old arithmetic.
+- [x] **A delivery to one branch reset the ingredient's cost for the whole
+      company.** The weighted average blended the new delivery against ONE
+      branch's quantity and then stored the answer on the ingredient, which is
+      company-wide. 200 kg of sugar at the main shop, 5 kg delivered to a
+      kiosk at a holiday price, and every drink in both shops re-costed at the
+      kiosk's price — with nothing on any screen to show it, because the
+      number that moves is a cost per unit. Now blended over every branch,
+      which is where the cost was always stored. A single-branch shop is
+      unaffected, arithmetic identical; Carolina is single-branch today, so
+      this was dormant and would have fired the day a second one opened.
+
+### Found and NOT fixed — they need KJ, not a patch
+
+- **Size-priced drinks never re-cost.** Recipes attached to a variant
+  (`VariantBomItem`) are invisible to the re-cost ripple, which only reads
+  `BomItem`. The register charges the right cost to the books, but the margin
+  screen shows a frozen old number. Storing a per-variant cost is **one column
+  on ProductVariant** — KJ's call, so it is not done. The costing report
+  leaving those drinks out silently is fixable without schema and is queued
+  behind his answer.
+- **Every other stock-moving door.** Procure owns one way IN and none of the
+  ways OUT. The old Receive form has no double-tap protection, the spreadsheet
+  importer has no price sanity check at all (and opening stock comes in that
+  way), the Close & Plan batch receive can post a cost of zero, purchase-order
+  receipts always book on today's date and always as cash, counts and
+  write-offs never touch the lot layers, and a purchase order marks itself
+  received before the stock posts.
+- **Two devices posting the same delivery** can double it: the duplicate check
+  is a read outside the transaction with no unique index behind it.

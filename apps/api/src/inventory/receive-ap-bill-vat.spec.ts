@@ -26,7 +26,8 @@ describe('InventoryService.receiveRawMaterial — the AP bill for a credit deliv
     const events: any[] = [];
     const tx: any = {
       rawMaterialInventory: {
-        findUnique: jest.fn().mockResolvedValue({ quantity: 0 }),
+        findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue({ quantity: 0 }),
         upsert: jest.fn().mockResolvedValue({}),
       },
       rawMaterial: { update: jest.fn().mockResolvedValue({}) },
@@ -52,7 +53,8 @@ describe('InventoryService.receiveRawMaterial — the AP bill for a credit deliv
       tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus }) },
       vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'v1' }) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
-      rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue({ quantity: 0 }) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue({ quantity: 0 }) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const periods: any = { assertDateIsOpen: jest.fn().mockResolvedValue(undefined) };

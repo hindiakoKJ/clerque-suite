@@ -1775,11 +1775,37 @@ export class InventoryService {
       // WAC cost update: if new cost price provided, update material cost
       let unitCost = material.costPrice ? Number(material.costPrice) : 0;
       if (netCostPrice != null) {
+        /*
+          Blend over every branch, because the cost this writes is every
+          branch's.
+
+          RawMaterial.costPrice belongs to the company; RawMaterialInventory
+          belongs to a branch. Blending the new delivery against ONE branch's
+          quantity and then storing the answer company-wide meant a small
+          delivery into a nearly empty branch reset the cost of that
+          ingredient for the whole business -- 200 kg of sugar at the main
+          branch, 5 kg delivered to the kiosk at a holiday price, and every
+          drink in both shops re-costed at the kiosk's price. Nobody would
+          see it: the number that moves is a cost per unit, not a peso figure
+          on a screen.
+
+          A single-branch shop is unaffected; the sum is that one branch.
+        */
+        const everywhere = await tx.rawMaterialInventory.findMany({
+          where:  { tenantId, rawMaterialId },
+          select: { branchId: true, quantity: true },
+        });
+        const qtyBeforeEverywhere = everywhere.reduce(
+          (sum, row) => sum + (row.branchId === dto.branchId ? qtyBefore : Number(row.quantity)),
+          0,
+        );
+        const qtyAfterEverywhere = qtyBeforeEverywhere + dto.quantity;
+
         const oldCost    = unitCost;
-        const totalOldValue  = qtyBefore * oldCost;
+        const totalOldValue  = qtyBeforeEverywhere * oldCost;
         const totalNewValue  = dto.quantity * netCostPrice;
-        const newWac = qtyAfter > 0
-          ? (totalOldValue + totalNewValue) / qtyAfter
+        const newWac = qtyAfterEverywhere > 0
+          ? (totalOldValue + totalNewValue) / qtyAfterEverywhere
           : netCostPrice;
 
         await tx.rawMaterial.update({

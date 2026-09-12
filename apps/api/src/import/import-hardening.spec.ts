@@ -86,7 +86,8 @@ describe('ImportService — importStockReceipts dates', () => {
   beforeEach(() => {
     lotCreates = [];
     const tx = {
-      rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn().mockResolvedValue({}) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue(null), upsert: jest.fn().mockResolvedValue({}) },
       rawMaterial:          { update: jest.fn().mockResolvedValue({}) },
       rawMaterialLot:       { create: jest.fn(async (args: any) => { lotCreates.push(args.data); return {}; }) },
       bomItem:              { findMany: jest.fn().mockResolvedValue([]) },

@@ -22,7 +22,8 @@ describe('InventoryService.receiveRawMaterial — concurrent deliveries', () => 
     const upserts: any[] = [];
     const tx: any = {
       rawMaterialInventory: {
-        findUnique: jest.fn().mockResolvedValue(existingRow ? { quantity: 1000 } : null),
+        findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue(existingRow ? { quantity: 1000 } : null),
         upsert: jest.fn((a: any) => { upserts.push(a); return Promise.resolve({}); }),
       },
       rawMaterial: { update: jest.fn().mockResolvedValue({}) },
@@ -44,7 +45,8 @@ describe('InventoryService.receiveRawMaterial — concurrent deliveries', () => 
       vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'v1' }) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
       rawMaterialInventory: {
-        findUnique: jest.fn().mockResolvedValue(existingRow ? { quantity: 1000 } : null),
+        findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue(existingRow ? { quantity: 1000 } : null),
       },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };

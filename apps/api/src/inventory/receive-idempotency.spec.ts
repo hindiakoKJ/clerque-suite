@@ -25,7 +25,8 @@ describe('InventoryService — receiving the same reference twice', () => {
   function build(existingLot: any = null) {
     const tx: any = {
       rawMaterialInventory: {
-        findUnique: jest.fn().mockResolvedValue({ quantity: 1000 }),
+        findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue({ quantity: 1000 }),
         upsert:     jest.fn().mockResolvedValue({}),
       },
       rawMaterial:     { update: jest.fn().mockResolvedValue({}) },
@@ -46,7 +47,8 @@ describe('InventoryService — receiving the same reference twice', () => {
       tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: 'NON_VAT' }) },
       vendor: { findFirst: jest.fn().mockResolvedValue({ id: 'v1' }) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(existingLot) },
-      rawMaterialInventory: { findUnique: jest.fn().mockResolvedValue({ quantity: 1000 }) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]),
+findUnique: jest.fn().mockResolvedValue({ quantity: 1000 }) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const periods: any = { assertDateIsOpen: jest.fn().mockResolvedValue(undefined) };

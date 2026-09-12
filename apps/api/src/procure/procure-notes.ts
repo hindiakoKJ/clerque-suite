@@ -68,6 +68,13 @@ export function withTag(notes: string | null | undefined, name: string, value: s
   return [head, human(plain)].filter(Boolean).join(' ').slice(0, MAX);
 }
 
+/** Drop a tag, keeping the rest. */
+export function withoutTag(notes: string | null | undefined, name: string): string | null {
+  const { tags, plain } = split(notes);
+  const kept = tags.filter((t) => !t.startsWith(`[${name}:`));
+  return [kept.join(' '), plain].filter(Boolean).join(' ') || null;
+}
+
 /** Add a human line after whatever is there, tags untouched. */
 export function appendNote(notes: string | null | undefined, line: string): string {
   const text = human(line);

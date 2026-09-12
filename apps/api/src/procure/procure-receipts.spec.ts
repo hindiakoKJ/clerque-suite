@@ -602,6 +602,36 @@ describe('ProcureReceiptsService', () => {
     expect(again.expenses.some((e: any) => /already recorded/i.test(e.error ?? ''))).toBe(true);
   });
 
+  it('still gets the advance out when the first attempt died after writing the key', async () => {
+    /*
+      The key is written with the lines, before the money moves. A retry saw
+      the key, called itself a replay and posted nothing -- so the arrival
+      credited 1063 for an advance that was never debited, and the screen
+      said it had already been posted. The advance posts only the difference,
+      so running it every time is safe: a true replay posts nothing.
+    */
+    const k = kitchen();
+    k.status = 'BOUGHT';
+    k.notes = '[RCPT:k1]';                       // the attempt that died
+    k.lines[0] = { ...k.lines[0], packsBought: 1, packSize: 1000, packCost: 85 };
+    const { svc, entries, requests } = build({ kitchen: k });
+    const r = await svc.confirm(TENANT, USER, BRANCH, {
+      ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1',
+      postNow: false, paidAhead: true, paymentMethod: 'BANK', receiptDate: '2026-09-04', expenses: [],
+    });
+    expect(entries.map((e: any) => [e.type, e.amount])).toEqual([['PAID_AHEAD', 1217.95]]);
+    expect((r as any).paidAhead.posted).toBe(1217.95);
+    expect(requests[0].notes).toMatch(/\[ADV:1217\.95\]/);
+
+    // And a real replay now posts nothing on top of it.
+    const again = await svc.confirm(TENANT, USER, BRANCH, {
+      ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k1',
+      postNow: false, paidAhead: true, paymentMethod: 'BANK', receiptDate: '2026-09-04', expenses: [],
+    });
+    expect(entries).toHaveLength(1);
+    expect((again as any).paidAhead.posted).toBe(0);
+  });
+
   it('still posts the fee when the receipt was recorded first and posted later', async () => {
     /*
       Record-only writes the key and posts nothing -- not even the fee. The

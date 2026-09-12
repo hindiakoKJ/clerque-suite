@@ -1,4 +1,7 @@
 import { ProcureService } from './procure.service';
+import { Prisma } from '@prisma/client';
+
+const PrismaKnownError = Prisma.PrismaClientKnownRequestError;
 
 /**
  * Clerque Procure — the shop asking the owner to buy something.
@@ -1081,6 +1084,54 @@ describe('ProcureService', () => {
     const follow = createdRequests.find((r) => r.status === 'BOUGHT');
     expect(follow.notes).toMatch(/\[ADV:540\.00\]/);   // the pack still coming
     expect(req().notes).toMatch(/\[ADV:0\.00\]/);      // nothing left on the original
+  });
+
+  it('keeps the pocket the order was paid from, whatever the caller sends', async () => {
+    // The receipts screen carries its own "who paid" picker and defaults it.
+    // Re-reading an order page onto a request paid from the bank used to
+    // move the tag, and a refund later went back to the wrong pocket.
+    const { svc, entries, req } = build({
+      status: 'BOUGHT',
+      open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1080.00]' },
+      lines: [{ ...ORDERED[0], packsBought: 2, packSize: 750, packCost: 540 }],
+    });
+    await svc.payAhead(TENANT, { ...req(), lines: req().lines }, USER, 'OWNER_FUNDED', '2026-09-05', []);
+    expect(req().notes).toMatch(/\[PREPAID:BANK\]/);
+    expect(entries).toEqual([]);   // nothing changed, so nothing to post
+  });
+
+  it('does not hand the order total to staff who are not shown costs', async () => {
+    const { svc } = build({
+      status: 'BOUGHT',
+      showCostsToStaff: false,
+      open: { notes: '[ONTHEWAY:2026-09-04] [PREPAID:BANK] [ADV:1080.00] Shopee 123' },
+      lines: [{ ...ORDERED[0], packsBought: 2, packSize: 750, packCost: 540 }],
+    });
+    const seen = await svc.get(TENANT, 'req1', 'GENERAL_EMPLOYEE');
+    expect(seen.costsHidden).toBe(true);
+    expect(seen.notes ?? '').not.toMatch(/\[ADV:/);
+    expect(seen.notes).toMatch(/\[PREPAID:BANK\]/);   // which pocket is not an amount
+    expect(seen.notes).toMatch(/Shopee 123/);
+  });
+
+  it('takes the next control number when two lists are started in the same instant', async () => {
+    const { svc, prisma } = build({ open: null });
+    let first = true;
+    const real = prisma.purchaseRequest.create;
+    prisma.purchaseRequest.create = jest.fn((args: any) => {
+      if (first && !args.data.status) {
+        first = false;
+        const clash: any = new Error('Unique constraint failed');
+        clash.code = 'P2002';
+        clash.constructor = { name: 'PrismaClientKnownRequestError' };
+        Object.setPrototypeOf(clash, PrismaKnownError.prototype);
+        return Promise.reject(clash);
+      }
+      return real(args);
+    });
+    const opened = await svc.openRequest(TENANT, BRANCH, USER);
+    expect(opened).toBeTruthy();
+    expect(prisma.purchaseRequest.create).toHaveBeenCalledTimes(2);
   });
 
   it('will not file a photo on a cancelled request', async () => {

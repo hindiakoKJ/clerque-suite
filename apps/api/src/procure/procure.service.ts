@@ -11,7 +11,7 @@ import { MailService } from '../mail/mail.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
-import { appendNote, withTag, readTag } from './procure-notes';
+import { appendNote, withTag, readTag, withoutTag } from './procure-notes';
 
 /** What each pocket is called in a sentence a shop owner reads. */
 const POCKET_WORDS: Record<ProcurePocket, string> = {
@@ -159,10 +159,17 @@ export class ProcureService {
    * Quantities stay: what was asked for and how much arrived is the staff's
    * own work, and hiding it would make the screen useless to them.
    */
-  private stripCosts<T extends { lines?: Array<Record<string, unknown>> }>(req: T): T {
+  private stripCosts<T extends { lines?: Array<Record<string, unknown>>; notes?: string | null }>(req: T): T {
     return {
       ...req,
       costsHidden: true,
+      /*
+        [ADV:] is the peso total of the order, sitting in a field the screen
+        prints as a person's note. The banner already hides the figure from
+        staff; the JSON did not -- the same one-network-tab-away leak the
+        line costs below are stripped for.
+      */
+      ...(typeof req.notes === 'string' ? { notes: withoutTag(req.notes, 'ADV') } : {}),
       lines: (req.lines ?? []).map((l) => ({
         ...l,
         packCost: null,
@@ -197,11 +204,13 @@ export class ProcureService {
     });
     if (existing) return existing;
 
-    const requestNumber = await this.nextNumber(tenantId);
-    return this.prisma.purchaseRequest.create({
-      data:    { tenantId, branchId, requestNumber, createdById: userId },
-      include: this.lineInclude(),
-    });
+    return this.withNumber(
+      (requestNumber) => this.prisma.purchaseRequest.create({
+        data:    { tenantId, branchId, requestNumber, createdById: userId },
+        include: this.lineInclude(),
+      }),
+      () => this.nextNumber(tenantId),
+    );
   }
 
   async list(tenantId: string, branchId?: string, status?: PurchaseRequestStatus, viewerRole?: string | null) {
@@ -658,6 +667,15 @@ export class ProcureService {
     charges: Array<{ description: string; amount: number; category?: ExpenseCategory }>,
   ) {
     if (!this.simple) throw new BadRequestException('Paying ahead cannot be posted on this deployment.');
+    /*
+      One order, one pocket. The receipts screen carries its own "who paid"
+      picker and defaults it, so re-reading an order page onto a request
+      already paid from the bank rewrote the tag to whatever that picker
+      said -- and a refund weeks later went back to the wrong place. The
+      request's own memory wins; a caller cannot move it.
+    */
+    const locked = readTag(req.notes, 'PREPAID') as ProcurePocket | null;
+    if (locked) pocket = locked;
     const total = +req.lines
       .filter((l) => !l.receivedAt && l.packsBought != null && l.packCost != null)
       .reduce((sum, l) => sum + Number(l.packsBought) * Number(l.packCost), 0)
@@ -983,7 +1001,6 @@ export class ProcureService {
     short: Array<{ rawMaterialId: string; packsBought: number; packsArrived: number; packSize: number; packCost: number; brandNote: string | null }>,
     prepaidPocket: ProcurePocket | null = null,
   ) {
-    const requestNumber = await this.nextNumber(tenantId);
     const numbered: Array<{ lineNumber: string }> = [];
     const now = new Date();
     let notes = withTag(withTag(null, 'BALANCEOF', req.requestNumber), 'ONTHEWAY', this.today());
@@ -995,7 +1012,7 @@ export class ProcureService {
       notes = withTag(notes, 'ADV', (+carried.toFixed(2)).toFixed(2));
     }
     notes = appendNote(notes, `Balance of ${req.requestNumber}: still coming`);
-    return this.prisma.purchaseRequest.create({
+    return this.withNumber((requestNumber) => this.prisma.purchaseRequest.create({
       data: {
         tenantId, branchId: req.branchId, requestNumber,
         status: 'BOUGHT', sentAt: now, boughtAt: now, sentById: userId, createdById: userId, notes,
@@ -1017,7 +1034,7 @@ export class ProcureService {
         },
       },
       include: this.lineInclude(),
-    });
+    }), () => this.nextNumber(tenantId));
   }
 
   /**
@@ -1420,15 +1437,29 @@ export class ProcureService {
       select: { id: true, countNumber: true },
     });
     if (!count) {
-      count = await this.prisma.cycleCount.create({
-        data: {
-          tenantId, branchId: req.branchId,
-          countNumber: await this.warehouse.nextCountNumber(this.prisma, tenantId),
-          status: 'OPEN', startedById: userId,
-          notes: `${tag} Counted while building the buy list`,
-        },
-        select: { id: true, countNumber: true },
-      });
+      try {
+        count = await this.withNumber(
+          (countNumber) => this.prisma.cycleCount.create({
+            data: {
+              tenantId, branchId: req.branchId, countNumber,
+              status: 'OPEN', startedById: userId,
+              notes: `${tag} Counted while building the buy list`,
+            },
+            select: { id: true, countNumber: true },
+          }),
+          () => this.warehouse!.nextCountNumber(this.prisma, tenantId),
+        );
+      } catch (err) {
+        // Somebody else started this list's count a moment ago. Theirs is
+        // the one to write into -- that is the whole point of one count
+        // per list.
+        if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
+        count = await this.prisma.cycleCount.findFirst({
+          where:  { tenantId, branchId: req.branchId, status: 'OPEN', notes: { startsWith: tag } },
+          select: { id: true, countNumber: true },
+        });
+        if (!count) throw err;
+      }
     }
 
     const existing = await this.prisma.cycleCountLine.findFirst({
@@ -1502,6 +1533,25 @@ export class ProcureService {
   }
 
   /** REQ-YYYYMMDD-NNN, sequential within the day so it reads as a date. */
+  /**
+   * Read-then-create, so two people starting a list in the same instant can
+   * ask for the same number. The loser used to get a 500 -- and on the
+   * receive path that 500 landed AFTER the packs had been posted and the
+   * lines rewritten, losing the record of what was still coming. Retrying
+   * the number is enough: the second read sees the first one's row.
+   */
+  private async withNumber<T>(make: (requestNumber: string) => Promise<T>, next: () => Promise<string>): Promise<T> {
+    for (let tries = 0; ; tries++) {
+      try {
+        return await make(await next());
+      } catch (err) {
+        const clash = err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002' && tries < 4;
+        if (!clash) throw err;
+        this.logger.warn(`[procure] control number taken; trying the next one (attempt ${tries + 2})`);
+      }
+    }
+  }
+
   private async nextNumber(tenantId: string): Promise<string> {
     /*
       The shop's date, not UTC. Manila is UTC+8, so toISOString() before 08:00

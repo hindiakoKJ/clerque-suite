@@ -504,6 +504,32 @@ export default function ProcurePage() {
   const valuesFor = (l: Line) => bought[l.id] ?? defaultsFor(l);
   const isTicked  = (l: Line) => ticked[l.id] ?? (l.packsBought != null);
 
+  /*
+    One key per attempt, minted here rather than per call inside the client.
+    The goods are safe either way -- each line carries its own reference and
+    receiving refuses one it has seen -- but a delivery fee has no reference.
+    A lost response, a second press, and a fresh key made it a second fee.
+    The key changes only when the attempt succeeds.
+  */
+  const mintKey = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const [buyKey,  setBuyKey]  = useState<string>(mintKey);
+  const [postKey, setPostKey] = useState<string>(mintKey);
+
+  /** Packs, size or price typed on screen that the request has not been told about. */
+  const pendingFixes = () => (req?.lines ?? [])
+    .filter((l) => !l.receivedAt && bought[l.id])
+    .map((l) => {
+      const b = valuesFor(l), d = defaultsFor(l);
+      const same = b.packs === d.packs && b.size === d.size && b.cost === d.cost && (b.brand ?? '') === (d.brand ?? '');
+      if (same) return null;
+      const packs = parseFloat(b.packs), size = parseFloat(b.size), cost = parseFloat(b.cost);
+      if (!(packs > 0) || !(size > 0) || !(cost > 0)) return null;
+      return { lineId: l.id, packsBought: packs, packSize: size, packCost: cost, brandNote: b.brand.trim() || undefined };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
   const saveBought = useMutation({
     mutationFn: () => {
       if (!req) throw new Error('No request.');
@@ -528,10 +554,11 @@ export default function ProcurePage() {
         ...(boughtDate ? { boughtAt: boughtDate } : {}),
         ...(ordered ? { onTheWay: true } : {}),
         ...(ordered && paidFrom ? { paidFrom, charges: chargeRows(orderCharges) } : {}),
-      }).then((r) => r.data as { paidAhead?: { pocket: Pocket; total: number; posted: number; advance?: number; entries: Array<{ error?: string }> } });
+      }, { headers: { 'Idempotency-Key': buyKey } }).then((r) => r.data as { paidAhead?: { pocket: Pocket; total: number; posted: number; advance?: number; entries: Array<{ error?: string }> } });
     },
     onSuccess: (d) => {
-      refresh(); setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
+      refresh(); setBuyKey(mintKey());
+      setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
       if (d?.paidAhead) {
         const bad = d.paidAhead.entries.find((e) => e.error);
         // What the ledger took, not what was asked for: a locked month or a
@@ -563,16 +590,31 @@ export default function ProcurePage() {
     short: Array<{ name: string; packsBought: number; packsArrived: number; outcome: Outcome }>;
   }
   const receive = useMutation({
-    mutationFn: (closeRest: boolean) => {
+    mutationFn: async (closeRest: boolean) => {
       if (!req) throw new Error('No request.');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(receivedAt)) throw new Error('Pick the day the goods came.');
+      /*
+        A price corrected in the boxes above is corrected everywhere or
+        nowhere. Posting sent only the line ids, so the shelf took the OLD
+        price while the screen showed the new one -- and on a paid-ahead
+        order the difference never reached the ledger either. The fixes go
+        first, through the same door the Save button uses.
+      */
+      const fixes = pendingFixes();
+      if (fixes.length > 0) {
+        await api.post(`/procure/requests/${req.id}/bought`, { lines: fixes }, { headers: { 'Idempotency-Key': buyKey } });
+        setBuyKey(mintKey());
+      }
       const lines = req.lines
-        .filter((l) => !l.receivedAt && l.packsBought != null && isTicked(l))
+        .filter((l) => !l.receivedAt && (l.packsBought != null || fixes.some((f) => f.lineId === l.id)) && isTicked(l))
         .map((l) => {
-          const packs = num(l.packsBought);
+          const packs = fixes.find((f) => f.lineId === l.id)?.packsBought ?? num(l.packsBought);
           const a = arrived[l.id];
           const came = a != null && a !== '' ? parseFloat(a) : NaN;
-          const packsArrived = Number.isFinite(came) && came < packs ? came : undefined;
+          // Sent whenever it differs -- more than were bought is refused by
+          // the server with a reason, where it used to be dropped in silence
+          // and the bought count posted instead.
+          const packsArrived = Number.isFinite(came) && came !== packs ? came : undefined;
           return { lineId: l.id, ...(packsArrived != null ? { packsArrived } : {}) };
         });
       if (lines.length === 0 && !closeRest) throw new Error('Tick what arrived first.');
@@ -589,10 +631,10 @@ export default function ProcurePage() {
         ...(closeShort.length ? { closeShort } : {}),
         ...(chargeRowsNow.length ? { charges: chargeRowsNow } : {}),
         ...(closeRest ? { closeRest: true } : {}),
-      }).then((r) => r.data as ReceiveResult);
+      }, { headers: { 'Idempotency-Key': postKey } }).then((r) => r.data as ReceiveResult);
     },
     onSuccess: (d) => {
-      refresh();
+      refresh(); setPostKey(mintKey());
       setCharges([]); setArrived({}); setOutcome({}); setNote(''); setAcceptCost(false);
       const bits: string[] = [];
       if (d.posted.length) bits.push(`${d.posted.length} item${d.posted.length === 1 ? '' : 's'} added to stock`);

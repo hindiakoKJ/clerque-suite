@@ -505,13 +505,32 @@ export class ProcureReceiptsService {
     }
 
     if (dto.postNow === false) {
-      if (dto.paidAhead && !replay) {
-        // The order screenshot: the money left today. Fees on it left today too.
+      if (dto.paidAhead) {
+        /*
+          The order screenshot: the money left today. Fees on it left today
+          too -- once. The advance itself runs on every attempt, because it
+          posts only the difference between what the lines now say and what
+          the request already holds: a true replay posts nothing, while a
+          first attempt that died between writing the key and reaching the
+          ledger still gets its money out. Skipping it on a replay left the
+          arrival crediting 1063 for an advance that was never debited, and
+          the screen said it had already been posted.
+        */
+        const fees = (dto.expenses ?? []).map((e) => ({ description: e.description, amount: e.amount, category: e.category }));
+        const feesDone = !!dto.idempotencyKey && readTag(request.notes, 'FEES') === dto.idempotencyKey;
         const paid = await this.procure.payAhead(
-          tenantId, request, userId, dto.paymentMethod, receiptDate,
-          (dto.expenses ?? []).map((e) => ({ description: e.description, amount: e.amount, category: e.category })),
+          tenantId, request, userId, dto.paymentMethod, receiptDate, feesDone ? [] : fees,
         );
-        return { duplicate: false, recorded: true, request: paid.request, posted: [], skipped, failed: [], expenses: paid.summary.entries, created, document, paidAhead: paid.summary };
+        let landed = paid.request;
+        if (dto.idempotencyKey && !feesDone
+            && paid.summary.entries.some((c) => c.entryNumber && fees.some((f) => f.description === c.description))) {
+          landed = await this.prisma.purchaseRequest.update({
+            where:   { id: req.id },
+            data:    { notes: withTag(landed.notes, 'FEES', dto.idempotencyKey) },
+            include: this.include(),
+          });
+        }
+        return { duplicate: replay, recorded: true, request: landed, posted: [], skipped, failed: [], expenses: paid.summary.entries, created, document, paidAhead: paid.summary };
       }
       return { duplicate: replay, recorded: true, request, posted: [], skipped, failed: [], expenses: [], created, document };
     }

@@ -322,13 +322,21 @@ export default function ReceiptsPage() {
     seeded.current = request.id;
     if (request.branchId) setBranchId(request.branchId);
     if (request.boughtAt) setDate(String(request.boughtAt).slice(0, 10));
-    // The lines the kitchen asked for, unposted ones only, with what is known
-    // about them: what was recorded, else what one held and cost last time.
+    /*
+      The lines the kitchen asked for, unposted ones only, with what is known
+      about them: what was recorded, else what one held and cost last time.
+      A line nobody has recorded is filled in but SKIPPED -- the boxes are a
+      head start, not a claim that it was bought. It joins the delivery when
+      the reader finds it on the paper, or when a person says so. Posting
+      them all put last month's price and a guessed pack count on the shelf
+      for things that never came.
+    */
     setRows(request.lines.filter((l) => !l.receivedAt).map((l) => {
       const lp = l.lastPack;
       const recorded = l.packsBought != null;
       return {
         ...blankRow(),
+        kind: recorded ? 'stock' : 'skip',
         description: l.rawMaterial.name,
         rawMaterialId: l.rawMaterialId,
         packs: recorded ? String(num0(l.packsBought)) : (lp && lp.packSize > 0 ? String(Math.max(1, Math.ceil(num0(l.qtyRequested) / lp.packSize))) : '1'),
@@ -467,7 +475,12 @@ export default function ReceiptsPage() {
         filled in, the packs a person recorded are left alone.
       */
       setRows((prev) => {
-        const kept = prev.filter((x) => x.fromPhoto !== photoSeq);
+        // A re-read replaces what THAT photo wrote. A request line the last
+        // read landed on is not the photo's row to delete: it goes back to
+        // being the kitchen's line, ready to be landed on again.
+        const kept = prev
+          .filter((x) => x.fromLine || x.fromPhoto !== photoSeq)
+          .map((x) => (x.fromLine && x.fromPhoto === photoSeq ? { ...x, fromReader: false, fromPhoto: null } : x));
         const leftover: Row[] = [];
         for (const rr of readRows) {
           const hit = rr.rawMaterialId ? kept.find((x) => x.fromLine && x.rawMaterialId === rr.rawMaterialId && !x.fromReader) : undefined;
@@ -476,6 +489,8 @@ export default function ReceiptsPage() {
           const recordedPacks = request?.lines.find((l) => l.id && l.rawMaterialId === hit.rawMaterialId)?.packsBought != null;
           kept[idx] = {
             ...hit,
+            // On the paper, so it was bought.
+            kind: hit.kind === 'expense' ? 'expense' : 'stock',
             description: rr.description,
             packs: recordedPacks ? hit.packs : rr.packs,
             size:  rr.size || hit.size,
@@ -530,6 +545,16 @@ export default function ReceiptsPage() {
       const expenses = rows.filter((r) => r.kind === 'expense').map((r) => ({
         description: r.description.trim() || 'Expense', amount: pos(r.amount), category: r.category,
       }));
+      /*
+        "Save to the request" writes lines and posts nothing -- which is the
+        point, except for the fee rows: they were sent, dropped, and never
+        mentioned again, so the delivery fee on the slip quietly disappeared
+        unless somebody retyped it later. A fee goes with money leaving:
+        either the order was paid for today, or the goods post now.
+      */
+      if (!postNow && !paidAhead && expenses.length > 0) {
+        throw new Error('A fee posts with money leaving. Use "Post to stock", or tick "Paid when ordered" — or take the fee row off and add it when the goods are posted.');
+      }
       return api.post('/procure/receipts/confirm', {
         ...(branchId ? { branchId } : {}),
         ...(requestId ? { purchaseRequestId: requestId, postNow, ...(!postNow && paidAhead ? { paidAhead: true } : {}) } : {}),
@@ -555,6 +580,7 @@ export default function ReceiptsPage() {
       else toast.success('In stock. The receipt is filed with the request.');
     },
     onError: (e) => {
+      if (e instanceof Error && !('response' in e)) { toast.error(e.message); return; }
       // A refusal on line 2 can leave line 1's new ingredient created; make
       // sure the list shows it so the retry can pick it instead of recreating.
       qc.invalidateQueries({ queryKey: ['raw-materials'] });

@@ -1891,7 +1891,70 @@ regression — receiving 30/30, paid-ahead 11/11, counts 11/11, receipts 16/16,
 send 8/8. The one standing red (`an unknown documentKind is refused`) is the
 AI guard answering 403 before validation with AI off, not a defect.
 
-### Not fixed here
-The 12 findings whose verify agents were lost to a session limit have no
-verdict yet; they are in the run's output (`wzp7rvkyr.output`). Re-run the
-review to finish them.
+### Round two — the findings whose verifiers were lost to a session limit
+
+Recovered from the run's journal (29 raw, deduped), checked against the code
+by hand, and fixed where the code agreed. 4 more tests, all failing against
+the old code; live 9/9 on carolina-test with 1063 netting to zero.
+
+- [x] **9. The receipts screen posted request lines nobody bought.** Opening
+      "Read the receipt" from a request seeded every unposted line as stock,
+      filled from last time's pack and price. Eight lines on the list, five on
+      the photo, and the three that never came went on the shelf at last
+      month's price. Unrecorded lines are now seeded as *skipped*; the reader
+      finding one on the paper turns it back into part of the delivery.
+- [x] **10. A corrected price on screen was not what got posted.** The boxes
+      stay editable on a bought request, but "Add it all to stock" sent only
+      line ids, so the shelf took the stored price. The corrections are now
+      saved first, through the same door the Save button uses — which also
+      posts the paid-ahead difference.
+- [x] **11. "Packs arrived" greater than bought vanished.** Typing 5 when 3
+      were bought sent nothing and posted 3, in silence. It is now sent
+      whenever it differs, so the server's refusal reaches the screen.
+- [x] **12. One idempotency key per attempt, not per click.** A lost response
+      and a second press minted a fresh key, so the delivery fee posted twice
+      (the goods were safe — each line carries its own reference). Both the
+      buy and the post keep their key until the attempt succeeds.
+- [x] **13. The pocket could be moved after the fact.** The receipts screen
+      carries its own "who paid" picker and defaults it, so re-reading an
+      order page onto a request paid from the bank rewrote the tag — and a
+      refund later went back to the wrong pocket. `payAhead` now takes the
+      pocket the request remembers, whoever asks.
+- [x] **14. The advance never got out if the first attempt died mid-flight.**
+      The receipt key is written with the lines, before the money moves, so a
+      retry called itself a replay and posted nothing while the screen said it
+      was done. The advance now runs every time; it posts only the difference,
+      so a true replay still posts nothing.
+- [x] **15. The order total leaked to staff who are not shown costs.**
+      `stripCosts` blanked every price but left `[ADV:1165.00]` in notes — the
+      same network-tab leak the line costs are stripped for. The tag is now
+      scrubbed; which pocket paid stays, since that is not an amount.
+- [x] **16. A control-number collision 500'd, and on the receive path lost
+      the packs still coming.** Two lists opened in the same instant, or two
+      staff counting at once, raced on a read-then-create number. The
+      allocation now retries on the collision, and a count that lost the race
+      joins the count that won.
+- [x] **17. A fee typed onto "Save to the request" went nowhere.** It was
+      sent, dropped and never mentioned. The screen now says a fee posts with
+      money leaving: post the goods, or tick "Paid when ordered".
+
+### Still open from that batch — worth their own pass
+Not fixed here, because each needs a transaction or a decision rather than a
+patch:
+- Two devices posting the same delivery in the same second can double the
+  stock: the per-line duplicate check is a read outside the transaction and
+  there is no unique index on lots. Claim each line before posting.
+- A settlement or lost-pack expense that fails still closes the request, so
+  1063 keeps money with no screen to retry it.
+- A throw after the charges posted makes the retry report them as "not
+  recorded", inviting a second manual entry.
+- Duplicate cycle-count lines when two phones count one ingredient at once;
+  posting applies both variances.
+- Centavo residue in 1063: the advance rounds once on the total, the clearing
+  entries round per line.
+- A paid-ahead delivery recovers input VAT even when the owner's own money
+  paid it, because the arrival only says PREPAID and the underlying pocket is
+  lost. Affects the 2550Q for a VAT-registered shop.
+- **For Anne:** a rider fee at the door on a prepaid order is charged to the
+  pocket that paid for the goods, not the one that paid the rider. Which is
+  right depends on how Carolina actually pays those — worth asking.

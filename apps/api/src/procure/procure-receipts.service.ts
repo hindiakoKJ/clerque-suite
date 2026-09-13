@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -13,6 +13,9 @@ import {
 } from './receipt-parser';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
 import { readTag, withTag, appendNote } from './procure-notes';
+import { CostSanityService, IngredientCostLine } from '../common/sanity/cost-sanity.service';
+import { sanityValueKey } from '@repo/shared-types';
+import { SanityContext, SanityWarning } from '../common/sanity/sanity.types';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -51,6 +54,7 @@ export class ProcureReceiptsService {
     private readonly procure:   ProcureService,
     private readonly ai:        AiService,
     private readonly documents: DocumentsService,
+    @Optional() private readonly sanity?: CostSanityService,
   ) {}
 
   // ── reading ───────────────────────────────────────────────────────────────
@@ -203,8 +207,64 @@ export class ProcureReceiptsService {
 
   // ── posting ───────────────────────────────────────────────────────────────
 
-  async confirm(tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto) {
-    if (dto.purchaseRequestId) return this.confirmOnto(tenantId, userId, dto);
+  /**
+   * "Are you sure this is the correct cost?" -- asked once for the whole
+   * receipt, per printed row, before any of its three write paths runs.
+   *
+   * Per ROW, not per ingredient: two rows of the same ingredient are blended
+   * into one delivery further down, and a wrong price hidden inside that blend
+   * would match nothing a person could point at. A row that creates a new
+   * ingredient has no history, so there is nothing to ask about it yet.
+   */
+  async confirm(tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto, sanity?: SanityContext) {
+    let confirmed: SanityWarning[] = [];
+    if (this.sanity && sanity?.optedIn && dto.lines?.length) {
+      const posted = await this.alreadyOnTheShelf(tenantId, dto);
+      const rows = dto.lines
+        .map((l, i): IngredientCostLine | null => l.rawMaterialId && l.packSize > 0 && !posted.has(l.rawMaterialId)
+          ? {
+            key: `row:${i}`, rawMaterialId: l.rawMaterialId, grossPerUnit: l.packCost / l.packSize,
+            packSize: l.packSize, packCost: l.packCost, branchId: dto.branchId ?? fallbackBranchId,
+            paymentMethod: dto.paymentMethod,
+          }
+          : null)
+        .filter((r): r is IngredientCostLine => r !== null);
+      confirmed = this.sanity.enforce(await this.sanity.checkIngredientCosts(tenantId, rows, sanity), sanity);
+      // A price the person just said is right has answered the old ten-times guard too.
+      const accepted = new Set(confirmed.map((w) => w.key));
+      if (accepted.size > 0) {
+        dto = { ...dto, lines: dto.lines.map((l, i) => (accepted.has(`row:${i}`) ? { ...l, acceptCostChange: true } : l)) } as ConfirmReceiptDto;
+      }
+    }
+    const result = await this.confirmChecked(tenantId, userId, fallbackBranchId, dto, confirmed);
+    if (this.sanity && confirmed.length > 0) {
+      // Only prices that reached the books: a row that failed to post was never "adjusted".
+      const failed = (result as { failed?: Array<{ name?: string }> }).failed ?? [];
+      const failedNames = new Set(failed.map((f) => f.name));
+      const kept = confirmed.filter((w) => !failedNames.has(w.name));
+      await this.sanity.recordConfirmed(tenantId, userId, kept, (w) => ({ type: 'RawMaterial', id: w.rawMaterialId ?? w.key }));
+    }
+    return result;
+  }
+
+  /**
+   * Ingredients this receipt has already put on the shelf -- a retry of the
+   * same receipt, or a request some of whose lines were posted. Their prices
+   * are not asked about again: they are not about to be written.
+   */
+  private async alreadyOnTheShelf(tenantId: string, dto: ConfirmReceiptDto): Promise<Set<string>> {
+    const where = dto.purchaseRequestId
+      ? { id: dto.purchaseRequestId, tenantId }
+      : dto.idempotencyKey ? { tenantId, notes: { startsWith: this.keyTag(dto.idempotencyKey) } } : null;
+    if (!where) return new Set();
+    const req = await this.prisma.purchaseRequest.findFirst({
+      where, select: { lines: { where: { receivedAt: { not: null } }, select: { rawMaterialId: true } } },
+    });
+    return new Set((req?.lines ?? []).map((l) => l.rawMaterialId));
+  }
+
+  private async confirmChecked(tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto, confirmed: SanityWarning[] = []) {
+    if (dto.purchaseRequestId) return this.confirmOnto(tenantId, userId, dto, confirmed);
     const branchId = dto.branchId ?? fallbackBranchId;
     if (!branchId) throw new BadRequestException('Which branch received this?');
     const branch = await this.prisma.branch.findFirst({ where: { id: branchId, tenantId }, select: { id: true } });
@@ -411,7 +471,7 @@ export class ProcureReceiptsService {
    * not yet posted, and receiving skips the ones that are; the photo is
    * filed once per key.
    */
-  private async confirmOnto(tenantId: string, userId: string, dto: ConfirmReceiptDto) {
+  private async confirmOnto(tenantId: string, userId: string, dto: ConfirmReceiptDto, confirmed: SanityWarning[] = []) {
     const req = await this.prisma.purchaseRequest.findFirst({
       where: { id: dto.purchaseRequestId!, tenantId }, include: this.include(),
     });
@@ -446,6 +506,7 @@ export class ProcureReceiptsService {
 
     // Onto the list's own lines; what the list did not have becomes a line.
     const numbered = req.lines.map((l) => ({ lineNumber: l.lineNumber }));
+    const landedOn: Array<{ rawMaterialId: string; lineId: string; perUnit: number }> = [];
     const skipped: Array<{ line: string; name: string; reason: string }> = [];
     for (const m of merged) {
       const own = req.lines.find((l) => l.rawMaterialId === m.rawMaterialId);
@@ -461,17 +522,34 @@ export class ProcureReceiptsService {
       }
       if (own) {
         await this.prisma.purchaseRequestLine.update({ where: { id: own.id }, data: pack });
+        landedOn.push({ rawMaterialId: m.rawMaterialId, lineId: own.id, perUnit: m.packCost / m.packSize });
         continue;
       }
       const lineNumber = this.procure.nextLineNumber(req.requestNumber, numbered);
       numbered.push({ lineNumber });
-      await this.prisma.purchaseRequestLine.create({
+      const created = await this.prisma.purchaseRequestLine.create({
         data: {
           purchaseRequestId: req.id, lineNumber, rawMaterialId: m.rawMaterialId,
           qtyRequested: new Prisma.Decimal(m.packsBought * m.packSize),
           ...pack,
         },
       });
+      if (created?.id) landedOn.push({ rawMaterialId: m.rawMaterialId, lineId: created.id, perUnit: m.packCost / m.packSize });
+    }
+
+    /*
+      A price confirmed here, saved to the request and posted later from the
+      buy list, must not be refused then by the ten-times guard: remember the
+      answer against the line it landed on, at the value of that line (two
+      printed rows of one ingredient are blended into one).
+    */
+    if (this.sanity && confirmed.length > 0) {
+      const answered = new Set(confirmed.map((w) => w.rawMaterialId));
+      const lines = landedOn.filter((l) => answered.has(l.rawMaterialId));
+      for (const l of lines) {
+        const w = confirmed.find((c) => c.rawMaterialId === l.rawMaterialId)!;
+        await this.sanity.recordConfirmed(tenantId, userId, [w], () => ({ type: 'PurchaseRequestLine', id: l.lineId, value: sanityValueKey(l.perUnit) }));
+      }
     }
 
     let notes = req.notes;

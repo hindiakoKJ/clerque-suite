@@ -10,6 +10,8 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
+import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
+import { CostHint, useCostBands } from '@/components/shared/CostHint';
 
 /**
  * The whole of Procure on one screen.
@@ -325,6 +327,14 @@ export default function ProcurePage() {
   });
 
   const req = (viewing ? all.find((r) => r.id === viewing) : null) ?? byNeed ?? opened;
+  /*
+    What each ingredient on this list usually costs, so a price box can say
+    "usually ₱86 to ₱89 — is this right?" the moment a number is entered,
+    while it can still just be fixed. The hint shows once the person leaves
+    the box or presses Enter, not on every keystroke.
+  */
+  const { data: bands } = useCostBands((req?.lines ?? []).map((l) => l.rawMaterialId), req?.branch?.id ?? branchId);
+  const [enteredCost, setEnteredCost] = useState<Record<string, boolean>>({});
   const isLoading = listLoading || (byNeed === null && openLoading);
 
   /*
@@ -367,8 +377,11 @@ export default function ProcurePage() {
     qc.invalidateQueries({ queryKey: ['procure-requests'] });
     qc.invalidateQueries({ queryKey: ['procure-open'] });
   };
-  const fail = (e: unknown, fallback: string) =>
+  const fail = (e: unknown, fallback: string) => {
+    // The person chose to go back and fix a price: nothing failed.
+    if (isSanityCancel(e)) return;
     toast.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message ?? fallback);
+  };
 
   const pull = useMutation({
     mutationFn: () => api.post('/procure/requests/pull-low-stock', { branchId }).then((r) => r.data),
@@ -521,11 +534,18 @@ export default function ProcurePage() {
   const pendingFixes = () => (req?.lines ?? [])
     .filter((l) => !l.receivedAt && bought[l.id])
     .map((l) => {
-      const b = valuesFor(l), d = defaultsFor(l);
-      const same = b.packs === d.packs && b.size === d.size && b.cost === d.cost && (b.brand ?? '') === (d.brand ?? '');
-      if (same) return null;
+      const b = valuesFor(l);
       const packs = parseFloat(b.packs), size = parseFloat(b.size), cost = parseFloat(b.cost);
       if (!(packs > 0) || !(size > 0) || !(cost > 0)) return null;
+      /*
+        Compared as numbers, against what the line already holds: "85.50" typed
+        and 85.5 saved are the same price, and re-sending it would ask the
+        price question again about a number nobody changed.
+      */
+      const same = l.packsBought != null
+        && packs === num(l.packsBought) && size === num(l.packSize) && cost === num(l.packCost)
+        && b.brand.trim() === (l.brandNote ?? '').trim();
+      if (same) return null;
       return { lineId: l.id, packsBought: packs, packSize: size, packCost: cost, brandNote: b.brand.trim() || undefined };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -557,7 +577,7 @@ export default function ProcurePage() {
       }, { headers: { 'Idempotency-Key': buyKey } }).then((r) => r.data as { paidAhead?: { pocket: Pocket; total: number; posted: number; advance?: number; entries: Array<{ error?: string }> } });
     },
     onSuccess: (d) => {
-      refresh(); setBuyKey(mintKey());
+      refresh(); setBuyKey(mintKey()); setBought({});
       setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
       if (d?.paidAhead) {
         const bad = d.paidAhead.entries.find((e) => e.error);
@@ -588,6 +608,7 @@ export default function ProcurePage() {
     followUp: { requestNumber: string; lines: number } | null;
     charges: Array<{ description: string; entryNumber?: string; error?: string }>;
     short: Array<{ name: string; packsBought: number; packsArrived: number; outcome: Outcome }>;
+    marginAlerts?: Array<{ name: string; price: number; cost: number; lossEach: number }>;
   }
   const receive = useMutation({
     mutationFn: async (closeRest: boolean) => {
@@ -604,6 +625,12 @@ export default function ProcurePage() {
       if (fixes.length > 0) {
         await api.post(`/procure/requests/${req.id}/bought`, { lines: fixes }, { headers: { 'Idempotency-Key': buyKey } });
         setBuyKey(mintKey());
+        // Saved: a failure in the post that follows must not rebuild the same fix and ask again.
+        setBought((prev) => {
+          const next = { ...prev };
+          for (const f of fixes) delete next[f.lineId];
+          return next;
+        });
       }
       const lines = req.lines
         .filter((l) => !l.receivedAt && (l.packsBought != null || fixes.some((f) => f.lineId === l.id)) && isTicked(l))
@@ -650,6 +677,16 @@ export default function ProcurePage() {
       // Stock that moved without reaching the books. Said now, not found later.
       const unvalued = d.posted.filter((p) => p.warning);
       if (unvalued.length) toast.warning(unvalued[0].warning as string, { duration: 10000 });
+      // A believable price can still be the one that tips a thin drink into a loss.
+      if (d.marginAlerts?.length) {
+        const first = d.marginAlerts[0]!;
+        toast.warning(
+          `${first.name} now costs ${peso(first.cost)} to make and sells for ${peso(first.price)} — each one loses ${peso(first.lossEach)}.`
+          + (d.marginAlerts.length > 1 ? ` ${d.marginAlerts.length - 1} more item${d.marginAlerts.length === 2 ? '' : 's'} too.` : '')
+          + ' Check the price or the recipe.',
+          { duration: 15000 },
+        );
+      }
     },
     onError: (e) => {
       if (e instanceof Error && !('response' in e)) { toast.error(e.message); return; }
@@ -1271,11 +1308,12 @@ export default function ProcurePage() {
                     repeat buy the only typing is a price that moved.
                   */}
                   {recording && !l.receivedAt && (
-                    <div className={`mt-2 ${tick ? '' : 'opacity-60'}`}>
+                    <div className={`mt-2 ${tick ? '' : 'opacity-60'}`} data-entry-group>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         <label className="text-[11px] text-muted-foreground">
                           Packs
-                          <input inputMode="decimal" value={b.packs} disabled={staffLocked} onChange={(e) => set('packs', e.target.value)} className={inputCls} />
+                          <input inputMode="decimal" value={b.packs} disabled={staffLocked} onChange={(e) => set('packs', e.target.value)} className={inputCls}
+                            data-entry onKeyDown={enterMovesNext} />
                         </label>
                         <label className="text-[11px] text-muted-foreground">
                           <span className="flex items-center justify-between">
@@ -1292,18 +1330,29 @@ export default function ProcurePage() {
                               </span>
                             ) : <span>({l.rawMaterial.unit})</span>}
                           </span>
-                          <input inputMode="decimal" value={sizeShown} disabled={staffLocked} onChange={(e) => setSize(e.target.value)} className={inputCls} />
+                          <input inputMode="decimal" value={sizeShown} disabled={staffLocked} onChange={(e) => setSize(e.target.value)} className={inputCls}
+                            data-entry onKeyDown={enterMovesNext}
+                            onBlur={() => setEnteredCost((prev) => ({ ...prev, [l.id]: true }))} />
                         </label>
                         <label className="text-[11px] text-muted-foreground">
                           Price per pack
-                          <input inputMode="decimal" value={b.cost} disabled={staffLocked} onChange={(e) => set('cost', e.target.value)} className={inputCls} />
+                          <input inputMode="decimal" value={b.cost} disabled={staffLocked} onChange={(e) => set('cost', e.target.value)} className={inputCls}
+                            data-entry onKeyDown={enterMovesNext}
+                            onBlur={() => setEnteredCost((prev) => ({ ...prev, [l.id]: true }))} />
                         </label>
                         <label className="text-[11px] text-muted-foreground">
                           Brand (optional)
                           <input value={b.brand} disabled={staffLocked} onChange={(e) => set('brand', e.target.value)}
-                            placeholder="Monin" className={inputCls} />
+                            placeholder="Monin" className={inputCls} data-entry onKeyDown={enterMovesNext} />
                         </label>
                       </div>
+                      {/* Only for a price somebody typed: the prefilled one is last time's, and so already usual. */}
+                      <CostHint
+                        band={bands?.get(l.rawMaterialId)}
+                        packCost={parseFloat(b.cost)}
+                        packSize={parseFloat(b.size)}
+                        show={!!bought[l.id] && !!enteredCost[l.id]}
+                      />
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
                         {b.source === 'last' && !bought[l.id] && l.lastPack && (
                           <span>

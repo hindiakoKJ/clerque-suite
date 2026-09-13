@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -10,6 +11,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { SanityConfirmationDto } from '../../common/sanity/sanity.types';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -181,4 +183,12 @@ export class CreateProductDto {
   @IsString()
   drugClass?: 'OTC' | 'OTC_BTC' | 'RX_ONLY' | 'DDB_S2' | 'DDB_S3' | 'DDB_S4' | 'DDB_S5'
             | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
+
+  /** "Yes, this is correct" — the answers to a SANITY_CONFIRM_REQUIRED refusal. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => SanityConfirmationDto)
+  sanityConfirmations?: SanityConfirmationDto[];
 }

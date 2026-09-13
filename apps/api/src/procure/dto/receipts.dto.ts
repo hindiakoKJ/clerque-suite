@@ -14,6 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { SanityConfirmationDto } from '../../common/sanity/sanity.types';
 import { RAW_MATERIAL_CATEGORIES, RawMaterialCategoryValue } from '../../inventory/dto/create-raw-material.dto';
 import { EXPENSE_CATEGORIES, ExpenseCategory, DOCUMENT_KINDS, DocumentKind } from '../receipt-parser';
 
@@ -256,4 +257,12 @@ export class ConfirmReceiptDto {
   @IsString()
   @MaxLength(80)
   idempotencyKey?: string;
+
+  /** "Yes, this price is right" — the answers to a SANITY_CONFIRM_REQUIRED refusal. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => SanityConfirmationDto)
+  sanityConfirmations?: SanityConfirmationDto[];
 }

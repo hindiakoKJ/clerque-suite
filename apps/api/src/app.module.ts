@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
+import { SanityModule } from './common/sanity/sanity.module';
 import { AuthModule } from './auth/auth.module';
 import { TenantModule } from './tenant/tenant.module';
 import { CategoriesModule } from './categories/categories.module';
@@ -96,6 +97,7 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
       { name: 'long',   ttl: 60_000,  limit: 600 },  // 600 req / min
     ]),
     PrismaModule,
+    SanityModule,
     AuthModule,
     TenantModule,
     CategoriesModule,

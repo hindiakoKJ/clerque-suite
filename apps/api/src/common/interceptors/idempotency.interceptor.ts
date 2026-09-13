@@ -53,7 +53,20 @@ function endpointKey(method: string, path: string): string {
 }
 
 function hashBody(body: unknown): string {
-  const json = body === undefined || body === null ? '' : JSON.stringify(body);
+  /*
+    A confirmed "yes, this price is right" is left out of the hash. The first
+    attempt is refused before it writes anything, so it is never cached; the
+    confirmed retry succeeds and is. If that answer is then lost in transit and
+    the person presses Save again, the page sends the original body — without
+    the confirmation it no longer holds — and it must replay the saved result,
+    not collide with it as a different request.
+  */
+  let payload = body;
+  if (body && typeof body === 'object' && !Array.isArray(body) && 'sanityConfirmations' in (body as Record<string, unknown>)) {
+    const { sanityConfirmations: _answered, ...rest } = body as Record<string, unknown>;
+    payload = rest;
+  }
+  const json = payload === undefined || payload === null ? '' : JSON.stringify(payload);
   return createHash('sha256').update(json).digest('hex');
 }
 

@@ -6,6 +6,7 @@ import type { JwtPayload } from '@repo/shared-types';
 import { isDemoMode } from './demo/config';
 import { demoApi } from './demo/api';
 import { requestSlugConfirmation } from '@/components/admin/ConfirmSlugModal';
+import { requestSanityConfirmation, type SanityWarning } from '@/components/shared/SanityConfirmModal';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -151,6 +152,16 @@ realApi.interceptors.request.use((config) => {
     // mutation routes. Generated once per call, so a retry by the response
     // interceptor (the 401-refresh path or the slug-confirm retry) replays
     // the SAME key and gets the cached response back, not a duplicate post.
+    /*
+      This client can show "are you sure this is the correct cost?", so it
+      says so. The server only asks clients that do; an older build, or the
+      phone app before its update, keeps today's behaviour instead of being
+      refused with a question it has no way to answer.
+    */
+    if (['POST', 'PATCH', 'PUT'].includes((config.method ?? '').toUpperCase())) {
+      config.headers['X-Sanity-Confirm'] = '1';
+    }
+
     if (needsIdempotencyKey(config.method, config.url) && !config.headers['Idempotency-Key']) {
       const uuid = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
         ? crypto.randomUUID()
@@ -191,6 +202,41 @@ realApi.interceptors.response.use(
     // both shapes so a future filter change doesn't silently regress this path.
     const rawMsg  = (error.response?.data as { message?: string | string[] } | undefined)?.message;
     const errMsg  = Array.isArray(rawMsg) ? rawMsg.join(' ') : rawMsg;
+    /*
+      "Please double-check before saving." The server refused before writing
+      anything because a cost, price or recipe looks out of character. Ask the
+      person; if they say it is right, send the same request again — same
+      body, same Idempotency-Key — with their answer attached. If they go
+      back, the save is abandoned on purpose and the page is told so
+      (isSanityCancel), so it can skip its error toast. A few rounds at most:
+      a second refusal means the number changed underneath, and is asked
+      about afresh.
+    */
+    if (
+      errCode === 'SANITY_CONFIRM_REQUIRED' &&
+      typeof window !== 'undefined' &&
+      (original._sanityRounds ?? 0) < 3
+    ) {
+      const warnings = ((error.response?.data as { warnings?: SanityWarning[] } | undefined)?.warnings ?? []);
+      const yes = await requestSanityConfirmation(warnings);
+      if (!yes) {
+        (error as { sanityCancelled?: boolean }).sanityCancelled = true;
+        return Promise.reject(error);
+      }
+      original._sanityRounds = (original._sanityRounds ?? 0) + 1;
+      let body: Record<string, unknown> = {};
+      try {
+        body = original.data
+          ? (typeof original.data === 'string' ? JSON.parse(original.data) : original.data)
+          : {};
+      } catch { body = {}; }
+      const already = Array.isArray(body.sanityConfirmations) ? (body.sanityConfirmations as Array<{ key: string; value: string }>) : [];
+      body.sanityConfirmations = [...already, ...warnings.map((w) => ({ key: w.key, value: w.value }))];
+      original.data = JSON.stringify(body);
+      original.headers = { ...original.headers, 'Content-Type': 'application/json' };
+      return realApi(original);
+    }
+
     if (
       errCode === 'CONFIRMATION_REQUIRED' &&
       !original._confirmRetried &&

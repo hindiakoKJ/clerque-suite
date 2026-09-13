@@ -21,6 +21,8 @@ import {
   Sun, ChefHat, ShoppingBag, Clock, TrendingUp, Package,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { isSanityCancel } from '@/lib/sanity';
+import { toast } from 'sonner';
 import { useAuthStore } from '@/store/auth';
 
 // ─── Types matching the API contract ────────────────────────────────
@@ -174,6 +176,12 @@ export default function CloseAndPlanPage() {
         })),
       });
       return r.data;
+    },
+    onError: (e: unknown) => {
+      // The person chose to go back and fix a cost: nothing failed.
+      if (isSanityCancel(e)) return;
+      const msg = (e as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
+      toast.error(Array.isArray(msg) ? msg.join(' ') : (msg ?? 'Could not save the delivery.'));
     },
     onSuccess: (res) => {
       // Mark saved + tier

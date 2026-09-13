@@ -9,3 +9,4 @@ export * from './personas';
 export * from './sod';
 export * from './layouts';
 export * from './verticals';
+export * from './price-sanity';

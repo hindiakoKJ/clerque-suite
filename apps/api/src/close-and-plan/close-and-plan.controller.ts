@@ -11,8 +11,9 @@
  * All endpoints require the standard JWT auth + tenant scoping.
  */
 import {
-  Body, Controller, Get, Post, Query, UseGuards, HttpCode, HttpStatus,
+  Body, Controller, Get, Post, Query, UseGuards, HttpCode, HttpStatus, Headers,
 } from '@nestjs/common';
+import { SANITY_HEADER, SanityConfirmation, sanityContext } from '../common/sanity/sanity.types';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -66,9 +67,13 @@ export class CloseAndPlanController {
   @HttpCode(HttpStatus.OK)
   batchReceive(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { branchId: string; lines: ReceiveLineInput[] },
+    @Body() body: { branchId: string; lines: ReceiveLineInput[]; sanityConfirmations?: SanityConfirmation[] },
+    @Headers(SANITY_HEADER) sanity?: string,
   ) {
-    return this.svc.batchReceive(user.tenantId!, body.branchId, user.sub, body.lines);
+    return this.svc.batchReceive(
+      user.tenantId!, body.branchId, user.sub, body.lines,
+      sanityContext(sanity, body.sanityConfirmations, user.sub, user.role),
+    );
   }
 
   @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')

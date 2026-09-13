@@ -1,4 +1,6 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, MaxLength, IsDateString, IsIn, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, MaxLength, IsDateString, IsIn, IsBoolean, IsArray, ArrayMaxSize, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { SanityConfirmationDto } from '../../common/sanity/sanity.types';
 
 export class ReceiveRawMaterialDto {
   @IsString()
@@ -98,4 +100,12 @@ export class ReceiveRawMaterialDto {
   @IsString()
   @MaxLength(40)
   purchaseOrderItemId?: string;
+
+  /** "Yes, this cost is right" — the answers to a SANITY_CONFIRM_REQUIRED refusal. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => SanityConfirmationDto)
+  sanityConfirmations?: SanityConfirmationDto[];
 }

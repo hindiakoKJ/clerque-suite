@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Toaster } from 'sonner';
 import { ConfirmSlugModal } from '@/components/admin/ConfirmSlugModal';
+import { SanityConfirmModal } from '@/components/shared/SanityConfirmModal';
 import { ReadOnlyBanner } from '@/components/security/ReadOnlyBanner';
 import { ToastHistoryDrawer } from '@/components/debug/ToastHistoryDrawer';
 
@@ -30,6 +31,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
           CONFIRMATION_REQUIRED, instead of using window.prompt (which
           some browsers / extensions silently suppress). */}
       <ConfirmSlugModal />
+      {/* "Is this the correct cost?" — opened by the API client whenever the
+          server asks before saving an unusual cost, price or recipe. */}
+      <SanityConfirmModal />
       {/* Sprint 19 — Toast history drawer. Captures every sonner toast
           into a session buffer; floating bottom-right button opens a
           slide-up panel with the last 50. Useful when a transient error

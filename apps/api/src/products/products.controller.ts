@@ -14,6 +14,7 @@ import {
   UploadedFile,
   BadRequestException,
   NotFoundException,
+  Headers,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -21,6 +22,7 @@ import { Response } from 'express';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SANITY_HEADER, SanityConfirmation, sanityContext } from '../common/sanity/sanity.types';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -94,16 +96,16 @@ export class ProductsController {
   // Master data writes: MDM and OWNER (SOD — no other roles may create products)
   @Roles('BUSINESS_OWNER', 'MDM')
   @Post()
-  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
-    return this.productsService.create(user.tenantId!, dto);
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto, @Headers(SANITY_HEADER) sanity?: string) {
+    return this.productsService.create(user.tenantId!, dto, sanityContext(sanity, dto.sanityConfirmations, user.sub, user.role));
   }
 
   // General update — MDM and OWNER allowed; price/cost fields additionally gated
   // at the service level (SOD Price Wall) against any bypass attempts.
   @Roles('BUSINESS_OWNER', 'MDM')
   @Patch(':id')
-  update(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: UpdateProductDto) {
-    return this.productsService.update(user.tenantId!, id, dto, user.role);
+  update(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: UpdateProductDto, @Headers(SANITY_HEADER) sanity?: string) {
+    return this.productsService.update(user.tenantId!, id, dto, user.role, sanityContext(sanity, dto.sanityConfirmations, user.sub, user.role));
   }
 
   // Deactivate (soft-delete) — OWNER only; MDM cannot permanently remove products
@@ -176,9 +178,10 @@ export class ProductsController {
   saveBom(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { items: Array<{ rawMaterialId: string; quantity: number }> },
+    @Body() body: { items: Array<{ rawMaterialId: string; quantity: number }>; sanityConfirmations?: SanityConfirmation[] },
+    @Headers(SANITY_HEADER) sanity?: string,
   ) {
-    return this.productsService.saveBom(user.tenantId!, id, body.items ?? []);
+    return this.productsService.saveBom(user.tenantId!, id, body.items ?? [], sanityContext(sanity, body.sanityConfirmations, user.sub, user.role));
   }
 
   /**

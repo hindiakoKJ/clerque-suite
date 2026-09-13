@@ -8,6 +8,8 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
+import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
+import { CostHint, useCostBands } from '@/components/shared/CostHint';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -281,6 +283,12 @@ export default function ReceiptsPage() {
   const [ref, setRef] = useState('');
   const [paidBy, setPaidBy] = useState<'CASH' | 'OWNER_FUNDED' | 'BANK'>('OWNER_FUNDED');
   const [branchId, setBranchId] = useState<string>(user?.branchId ?? '');
+  /*
+    What each ingredient on the receipt usually costs. A misread price from
+    the photo is exactly as wrong as a mistyped one, so the hint shows for
+    every priced row, not only the ones a person edited.
+  */
+  const { data: bands } = useCostBands(rows.filter((r) => r.kind === 'stock' && !r.createNew).map((r) => r.rawMaterialId), branchId || undefined);
   const [reading, setReading] = useState<ParseResult | null>(null);
   const [result, setResult] = useState<any>(null);
   const takeRef = useRef<HTMLInputElement>(null);
@@ -396,6 +404,8 @@ export default function ReceiptsPage() {
   const readsLeft = reads ? Math.max(0, reads.limit - reads.usedToday) : null;
 
   const fail = (e: unknown, fallback: string) => {
+    // The person chose to go back and fix a price: nothing failed.
+    if (isSanityCancel(e)) return;
     const msg = (e as any)?.response?.data?.message;
     /*
       Only OUR OWN refusals are shown verbatim -- a receipt too long for one
@@ -954,28 +964,35 @@ export default function ReceiptsPage() {
                               </div>
                             )}
                           </div>
-                          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5" data-entry-group>
                             <label className="text-[11px] text-muted-foreground">
                               How many
                               <input inputMode="decimal" value={r.packs} onChange={(e) => update(r.key, { packs: e.target.value })}
+                                data-entry onKeyDown={enterMovesNext}
                                 className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
                             </label>
                             <label className="text-[11px] text-muted-foreground">
                               One holds{unit ? ` (${unit})` : ''}
                               <input inputMode="decimal" value={r.size} onChange={(e) => update(r.key, { size: e.target.value })}
+                                data-entry onKeyDown={enterMovesNext}
                                 className={`mt-0.5 w-full rounded-lg border bg-background px-2 py-1.5 text-sm ${pos(r.size) > 0 ? 'border-border' : 'border-amber-500/60'}`} />
                             </label>
                             <label className="text-[11px] text-muted-foreground">
                               Price each
                               <input inputMode="decimal" value={r.cost} onChange={(e) => update(r.key, { cost: e.target.value })}
+                                data-entry onKeyDown={enterMovesNext}
                                 className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
                             </label>
                             <label className="col-span-3 text-[11px] text-muted-foreground sm:col-span-2">
                               Brand (optional)
                               <input value={r.brand} onChange={(e) => update(r.key, { brand: e.target.value })}
+                                data-entry onKeyDown={enterMovesNext}
                                 className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm" />
                             </label>
                           </div>
+                          {!r.createNew && (
+                            <CostHint band={bands?.get(r.rawMaterialId)} packCost={pos(r.cost) || null} packSize={pos(r.size) || null} />
+                          )}
                           {r.note && (
                             <p className="text-[11px] text-amber-700 dark:text-amber-400">{r.note}</p>
                           )}
@@ -986,7 +1003,7 @@ export default function ReceiptsPage() {
                           )}
                           <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                             <input type="checkbox" checked={r.acceptCostChange} onChange={(e) => update(r.key, { acceptCostChange: e.target.checked })} />
-                            The price really changed a lot (skip the sanity check)
+                            The price really is ten times different (skip the unit check)
                           </label>
                         </>
                       )}

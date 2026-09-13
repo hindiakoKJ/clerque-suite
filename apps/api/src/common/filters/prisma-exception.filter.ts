@@ -27,7 +27,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const req  = ctx.getRequest<Request>();
     const res  = ctx.getResponse<Response>();
 
-    const { status, code, messages } = this.classify(exception);
+    const { status, code, messages, warnings } = this.classify(exception);
 
     if (status >= 500) {
       this.logger.error(
@@ -42,6 +42,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       statusCode: status,
       code,
       message: messages,
+      ...(warnings ? { warnings } : {}),
       path:      req.url,
       timestamp: new Date().toISOString(),
     });
@@ -53,6 +54,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     status:   number;
     code:     string;
     messages: string[];
+    warnings?: unknown[];
   } {
     // 1. NestJS HttpExceptions (guards, @Roles, manual throws, etc.)
     if (exception instanceof HttpException) {
@@ -69,7 +71,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         typeof response === 'object' && response !== null
           ? ((response as Record<string, unknown>)['code'] as string | undefined)
           : undefined;
-      return { status, code: customCode ?? 'HTTP_EXCEPTION', messages };
+      /*
+        A "please double-check this" refusal carries the numbers it is asking
+        about. Without them the screen could only show sentences, not which
+        box to point at or what to send back once the person says yes.
+      */
+      const warnings =
+        typeof response === 'object' && response !== null && Array.isArray((response as Record<string, unknown>)['warnings'])
+          ? ((response as Record<string, unknown>)['warnings'] as unknown[])
+          : undefined;
+      return { status, code: customCode ?? 'HTTP_EXCEPTION', messages, ...(warnings ? { warnings } : {}) };
     }
 
     // 2. Prisma known request errors

@@ -6,6 +6,9 @@ import { Plus, Search, Pencil, ToggleLeft, ToggleRight, Package, Layers, Warehou
 import { api, resolveAssetUrl } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
+import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
+import { MarginReadout } from '@/components/shared/CostHint';
+import { judgePrice } from '@repo/shared-types';
 import { toast } from 'sonner';
 import { ModifierGroupModal } from '@/components/pos/ModifierGroupModal';
 import { StockAdjustModal } from '@/components/pos/StockAdjustModal';
@@ -277,6 +280,8 @@ export default function ProductsPage() {
     }
 
     setSaving(true);
+    // Whether the first of two saves (the details, then the recipe) already went through.
+    let detailsSaved = false;
     try {
       const bomItems = isRecipeBased
         ? validRecipe.map((r) => ({ rawMaterialId: r.rawMaterialId, quantity: parseFloat(r.quantity) }))
@@ -342,6 +347,7 @@ export default function ProductsPage() {
         return;
       } else if (editing) {
         await api.patch(`/products/${editing.id}`, payload);
+        detailsSaved = true;
         // On edit: replace BOM via the dedicated endpoint — but ONLY while
         // recipe mode is on.
         //
@@ -366,6 +372,19 @@ export default function ProductsPage() {
       setModal(null);
     } catch (err: unknown) {
       setBomSaving(false);
+      /*
+        The person chose to go back and fix something: nothing failed. But when
+        the question came from the recipe, the product's own details (name,
+        price) were already saved one step earlier -- say so, rather than let
+        the dialog's "nothing has been saved yet" stand for the whole form.
+      */
+      if (isSanityCancel(err)) {
+        if (detailsSaved) {
+          invalidate();
+          toast.message('The product details were saved. The recipe was not — fix it and save again.', { duration: 8000 });
+        }
+        return;
+      }
       toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to save product.');
     } finally {
       setSaving(false);
@@ -991,9 +1010,34 @@ export default function ProductsPage() {
                     type="number" min="0" step="0.01"
                     value={form.price}
                     onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                    onKeyDown={enterMovesNext}
+                    data-entry
                     className={INPUT_CLS}
                     placeholder="0.00"
                   />
+                  {/*
+                    "Was ₱150 — is this the correct selling price?" while it can
+                    still just be fixed. Against the price being replaced, with
+                    the same rule the save uses.
+                  */}
+                  {(() => {
+                    const typed = parseFloat(form.price);
+                    const prior = editing ? Number(editing.price) : null;
+                    if (!Number.isFinite(typed) || prior == null || Math.abs(typed - prior) < 0.0001) return null;
+                    const v = judgePrice({ prior, typed });
+                    if (!v.unusual) return null;
+                    return (
+                      <p role="status" className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
+                        <span>
+                          {v.free
+                            ? `Was ${formatPeso(prior)}. At ₱0 it will ring up free.`
+                            : `Was ${formatPeso(prior)} — this is ${v.ratio != null && v.ratio >= 2 ? `about ${v.ratio.toFixed(1)} times as much` : v.ratio != null && v.ratio > 1 ? `about ${Math.round((v.ratio - 1) * 100)}% more` : v.ratio != null && v.ratio <= 0.5 ? `about ${(1 / v.ratio).toFixed(1)} times less` : `about ${Math.round((1 - (v.ratio ?? 1)) * 100)}% less`}.`}
+                          {' '}Is this the correct selling price?
+                        </span>
+                      </p>
+                    );
+                  })()}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1.5">
@@ -1030,6 +1074,15 @@ export default function ProductsPage() {
                         Auto-computed from the recipe below — sum of (ingredient cost × quantity).
                         Updates automatically when ingredient prices change. To adjust, edit the recipe or update ingredient costs.
                       </p>
+                      <MarginReadout
+                        cost={recipe.reduce((sum, line) => {
+                          const rm  = rawMaterials.find((r) => r.id === line.rawMaterialId);
+                          return sum + (rm?.costPrice ?? 0) * (parseFloat(line.quantity) || 0);
+                        }, 0) || null}
+                        price={parseFloat(form.price) || null}
+                        vatable={form.isVatable}
+                        vatTenant={(tenantProfile as { taxStatus?: string } | undefined)?.taxStatus === 'VAT'}
+                      />
                     </>
                   ) : (
                     <>
@@ -1037,8 +1090,16 @@ export default function ProductsPage() {
                         type="number" min="0" step="0.01"
                         value={form.costPrice}
                         onChange={(e) => setForm((f) => ({ ...f, costPrice: e.target.value }))}
+                        onKeyDown={enterMovesNext}
+                        data-entry
                         className={INPUT_CLS}
                         placeholder="0.00"
+                      />
+                      <MarginReadout
+                        cost={parseFloat(form.costPrice) || null}
+                        price={parseFloat(form.price) || null}
+                        vatable={form.isVatable}
+                        vatTenant={(tenantProfile as { taxStatus?: string } | undefined)?.taxStatus === 'VAT'}
                       />
                       <p className="mt-1 text-[11px] text-muted-foreground leading-snug">
                         Required — used to compute COGS &amp; gross profit on every sale.

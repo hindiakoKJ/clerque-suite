@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Req, UseGuards, UseInterceptors, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Req, UseGuards, UseInterceptors, HttpCode, HttpStatus, Headers } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -9,6 +9,7 @@ import { JwtPayload } from '@repo/shared-types';
 import { AiQuotaGuard } from '../ai/ai-quota.guard';
 import { ProcureReceiptsService } from './procure-receipts.service';
 import { ParseReceiptDto, ConfirmReceiptDto } from './dto/receipts.dto';
+import { SANITY_HEADER, sanityContext } from '../common/sanity/sanity.types';
 import {
   ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor, ReceiptReadLedger, ReceiptReads, receiptReadsToday,
 } from './receipt-read-limit.guard';
@@ -80,7 +81,11 @@ export class ProcureReceiptsController {
   @Post('confirm')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Post a corrected receipt: receive stock, record expenses, file the photo' })
-  confirm(@CurrentUser() user: JwtPayload, @Body() dto: ConfirmReceiptDto) {
-    return this.receipts.confirm(user.tenantId!, user.sub, user.branchId ?? undefined, dto);
+  confirm(@CurrentUser() user: JwtPayload, @Body() dto: ConfirmReceiptDto, @Headers(SANITY_HEADER) sanity?: string) {
+    const { sanityConfirmations, ...rest } = dto;
+    return this.receipts.confirm(
+      user.tenantId!, user.sub, user.branchId ?? undefined, rest as ConfirmReceiptDto,
+      sanityContext(sanity, sanityConfirmations, user.sub, user.role),
+    );
   }
 }

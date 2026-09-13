@@ -107,6 +107,8 @@ describe('ProcureService', () => {
         findMany:   jest.fn().mockResolvedValue(opts.lastPacks ?? []),
       },
       document: { count: jest.fn().mockResolvedValue(0) },
+      // Prices somebody confirmed on the buy list, read when the goods are posted.
+      auditLog: { findMany: jest.fn().mockResolvedValue([]) },
       user: {
         findMany: jest.fn(({ where }: any) => Promise.resolve((opts.people ?? []).filter((p) => {
           const alts: any[] = where.OR ?? [];

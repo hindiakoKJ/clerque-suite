@@ -40,6 +40,7 @@ describe('ProcureReceiptsService', () => {
 
     const prisma: any = {
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
+      auditLog: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterial: {
         findMany:  jest.fn().mockResolvedValue(MATERIALS),
         findFirst: jest.fn().mockImplementation(({ where }: any) => {

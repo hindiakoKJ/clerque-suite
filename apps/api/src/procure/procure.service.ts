@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, Optional, Logger } from '@nestjs/common';
 import { Prisma, PurchaseRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { InventoryService } from '../inventory/inventory.service';
+import { InventoryService, MarginAlert } from '../inventory/inventory.service';
 import { SimpleEntriesService } from '../simple-entries/simple-entries.service';
 import { ExpenseCategory } from '../simple-entries/dto/simple-entry.dto';
 import { DocumentsService } from '../documents/documents.service';
@@ -12,6 +12,12 @@ import { PH_TIMEZONE } from '@repo/shared-types';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
 import { appendNote, withTag, readTag, withoutTag } from './procure-notes';
+import { sanityValueKey } from '@repo/shared-types';
+import { CostSanityService } from '../common/sanity/cost-sanity.service';
+import { SanityContext } from '../common/sanity/sanity.types';
+
+/** Where a price somebody confirmed on the buy list is written down, per line. */
+const CONFIRMED_LINE = 'PurchaseRequestLine';
 
 /** What each pocket is called in a sentence a shop owner reads. */
 const POCKET_WORDS: Record<ProcurePocket, string> = {
@@ -109,6 +115,7 @@ export class ProcureService {
     @Optional() private readonly warehouse?: WarehouseService,
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly mail?: MailService,
+    @Optional() private readonly sanity?: CostSanityService,
   ) {}
 
   private readonly logger = new Logger(ProcureService.name);
@@ -515,6 +522,7 @@ export class ProcureService {
       note?: string; boughtAt?: string; onTheWay?: boolean;
       paidFrom?: ProcurePocket;
       charges?: Array<{ description: string; amount: number; category?: ExpenseCategory }>;
+      sanity?: SanityContext;
     } = {},
   ) {
     const req = await this.getRaw(tenantId, requestId);
@@ -604,6 +612,38 @@ export class ProcureService {
       }
     }
 
+    /*
+      "Are you sure this is the correct cost?" -- here, where the price per pack
+      is typed, and before anything is written. This is the moment it can
+      still be fixed: by the time the goods are posted the number has been
+      sitting on the request for days and blends into the ingredient's average
+      cost the instant it lands. What the person confirms is written down
+      against the line, so posting it later does not ask the same question
+      again.
+    */
+    let confirmedCosts: Awaited<ReturnType<CostSanityService['checkIngredientCosts']>> = [];
+    if (this.sanity && extra.sanity?.optedIn) {
+      // Only prices that are new or changed. Saving the list again, or posting
+      // a correction to one line, must not ask again about a line nobody touched.
+      const changed = lines.filter((l) => {
+        const owned = req.lines.find((x) => x.id === l.lineId)!;
+        return !(owned.packCost != null && owned.packSize != null
+          && Math.abs(Number(owned.packCost) - l.packCost) < 1e-9 && Math.abs(Number(owned.packSize) - l.packSize) < 1e-9);
+      });
+      const warnings = await this.sanity.checkIngredientCosts(tenantId, changed.map((l) => {
+        const owned = req.lines.find((x) => x.id === l.lineId)!;
+        return {
+          key: `line:${l.lineId}`,
+          rawMaterialId: owned.rawMaterialId,
+          grossPerUnit: l.packCost / l.packSize,
+          packSize: l.packSize,
+          packCost: l.packCost,
+          branchId: req.branchId,
+        };
+      }), extra.sanity);
+      confirmedCosts = this.sanity.enforce(warnings, extra.sanity);
+    }
+
     await this.prisma.$transaction(
       lines.map((l) =>
         this.prisma.purchaseRequestLine.update({
@@ -617,6 +657,19 @@ export class ProcureService {
         }),
       ),
     );
+
+    /*
+      Remembered against the line only when an owner or manager said yes. That
+      memory lifts the ten-times guard when the goods are posted, and that
+      guard is the owner's -- a cashier's yes on the buy list must not switch
+      it off. A cashier's answer still lets their own save through; the owner
+      is simply asked again when posting.
+    */
+    if (this.sanity && confirmedCosts.length > 0 && decider) {
+      await this.sanity.recordConfirmed(tenantId, actor?.userId, confirmedCosts, (w) => ({
+        type: CONFIRMED_LINE, id: w.key.slice('line:'.length),
+      }));
+    }
 
     let notes = req.notes;
     if (extra.note) notes = appendNote(notes, extra.note);
@@ -769,6 +822,28 @@ export class ProcureService {
       chosen.set(l.lineId, l.packsArrived);
     }
     const outcomeOf = new Map<string, ShortOutcome>((opts.closeShort ?? []).map((c) => [c.lineId, c.outcome]));
+
+    /*
+      A price already asked about when it was typed -- on the buy list, or on a
+      receipt saved to this request -- and confirmed by an owner or manager.
+      Refusing it now with the old "check the unit" guard would ask the same
+      question again as a dead end, days later. Only for the exact value
+      confirmed: a price changed since then is judged afresh.
+    */
+    const confirmedAtPurchase = await this.prisma.auditLog.findMany({
+      where: { tenantId, action: 'PRICE_ADJUSTED', entityType: CONFIRMED_LINE, entityId: { in: req.lines.map((l) => l.id) } },
+      select: { entityId: true, after: true },
+    });
+    if (confirmedAtPurchase.length > 0) {
+      const accept = new Set(opts.acceptCostChangeFor ?? []);
+      for (const row of confirmedAtPurchase) {
+        const answer = row.after as { severity?: string; value?: string } | null;
+        const line = req.lines.find((l) => l.id === row.entityId);
+        if (!line || !answer?.value || line.packCost == null || line.packSize == null) continue;
+        if (answer.value === sanityValueKey(Number(line.packCost) / Number(line.packSize))) accept.add(line.rawMaterialId);
+      }
+      opts = { ...opts, acceptCostChangeFor: accept };
+    }
     const receivedDay = opts.receivedAt ? this.dayOf(opts.receivedAt) : this.today();
     /*
       Paid on order day: the pocket was charged then, into 1063. The shelf
@@ -808,6 +883,7 @@ export class ProcureService {
       outcome: ShortOutcome;
     }> = [];
     const done = new Set<string>();
+    const marginAlerts: MarginAlert[] = [];
 
     for (const line of req.lines) {
       const name = line.rawMaterial.name;
@@ -832,7 +908,7 @@ export class ProcureService {
 
       if (quantity > 0) {
         try {
-          const res: { duplicate?: boolean; warning?: string | null } = await this.inventory.receiveRawMaterial(tenantId, line.rawMaterialId, {
+          const res: { duplicate?: boolean; warning?: string | null; marginAlerts?: MarginAlert[] } = await this.inventory.receiveRawMaterial(tenantId, line.rawMaterialId, {
             branchId:        req.branchId,
             quantity,
             costPrice:       unitCost,
@@ -846,6 +922,10 @@ export class ProcureService {
             skipped.push({ line: line.lineNumber, name, reason: 'This line was already received.' });
           } else {
             posted.push({ line: line.lineNumber, name, quantity, unitCost, warning: res.warning ?? null });
+            // Drinks this delivery just pushed into a loss -- told, not asked.
+            for (const alert of res.marginAlerts ?? []) {
+              if (!marginAlerts.some((a) => a.productId === alert.productId)) marginAlerts.push(alert);
+            }
           }
         } catch (err) {
           failed.push({
@@ -941,7 +1021,7 @@ export class ProcureService {
       include: this.lineInclude(),
     });
     return {
-      request: updated, posted, skipped, failed, carried, charges,
+      request: updated, posted, skipped, failed, carried, charges, marginAlerts,
       short: short.map(({ line, name, packsBought, packsArrived, outcome }) => ({ line, name, packsBought, packsArrived, outcome })),
       followUp: followUp ? { id: followUp.id, requestNumber: followUp.requestNumber, lines: followUp.lines.length } : null,
     };

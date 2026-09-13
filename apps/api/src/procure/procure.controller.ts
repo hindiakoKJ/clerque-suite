@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Delete, Body, Param, Query, UseGuards, HttpCode, HttpStatus,
+  Controller, Get, Post, Delete, Body, Param, Query, UseGuards, HttpCode, HttpStatus, Headers,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PurchaseRequestStatus } from '@prisma/client';
@@ -11,6 +11,7 @@ import { JwtPayload } from '@repo/shared-types';
 import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
 import { ProcureService, AddLineDto } from './procure.service';
 import { ReceiveRequestDto, RecordBoughtDto, AttachPhotoDto, RecordCountDto } from './dto/receive-request.dto';
+import { SANITY_HEADER, sanityContext } from '../common/sanity/sanity.types';
 
 /**
  * Clerque Procure.
@@ -162,11 +163,15 @@ export class ProcureController {
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() body: RecordBoughtDto,
+    @Headers(SANITY_HEADER) sanity?: string,
   ) {
     return this.procure.recordBought(
       user.tenantId!, id, body.lines ?? [],
       { userId: user.sub, role: user.role },
-      { note: body.note, boughtAt: body.boughtAt, onTheWay: body.onTheWay, paidFrom: body.paidFrom, charges: body.charges },
+      {
+        note: body.note, boughtAt: body.boughtAt, onTheWay: body.onTheWay, paidFrom: body.paidFrom, charges: body.charges,
+        sanity: sanityContext(sanity, body.sanityConfirmations, user.sub, user.role),
+      },
     );
   }
 

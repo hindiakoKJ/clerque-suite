@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, DrugClass } from '@prisma/client';
 import { hasPermission, planFeaturesFor } from '@repo/shared-types';
@@ -46,11 +46,16 @@ function inferDrugClass(isRxRequired: boolean | undefined, isControlledDrug: boo
 
 import { CreateProductDto, CreateVariantDto, CreateBomItemDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { CostSanityService } from '../common/sanity/cost-sanity.service';
+import { SanityContext } from '../common/sanity/sanity.types';
 export { CreateProductDto, UpdateProductDto, CreateVariantDto, CreateBomItemDto };
 
 @Injectable()
 export class ProductsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Optional() private sanity?: CostSanityService,
+  ) {}
 
   /**
    * Management list — used by /pos/products page.
@@ -209,8 +214,8 @@ export class ProductsService {
     };
   }
 
-  async create(tenantId: string, dto: CreateProductDto) {
-    const { variants, bomItems, ...rest } = dto;
+  async create(tenantId: string, dto: CreateProductDto, sanity?: SanityContext) {
+    const { variants, bomItems, sanityConfirmations: _answered, ...rest } = dto;
 
     // Sprint 25 — Recipe cap enforcement for Solo tiers. SOLO_LITE caps at 5
     // recipe products; SOLO_STANDARD / PRO are unlimited. Only enforced when
@@ -251,6 +256,24 @@ export class ProductsService {
       );
     }
 
+    /*
+      A new product has no price history to compare against, but it does
+      have a cost: does it cost more to make than it sells for, or so little
+      that an ingredient must be in the wrong unit?
+    */
+    let confirmed: Awaited<ReturnType<CostSanityService['checkProduct']>> = [];
+    if (this.sanity && sanity?.optedIn && resolvedCostPrice != null) {
+      const recipe = bomItems && bomItems.length > 0
+        ? await this.sanity.recipeCost(tenantId, bomItems.map((b) => ({ rawMaterialId: b.rawMaterialId, quantity: Number(b.quantity) })))
+        : null;
+      const warnings = await this.sanity.checkProduct(tenantId, {
+        key: 'product:new', name: rest.name, priorPrice: null, price: Number(rest.price),
+        cost: recipe ? recipe.cost : Number(resolvedCostPrice), partlyPriced: recipe?.partlyPriced ?? false,
+        vatable: rest.isVatable ?? true, checkPrice: false, checkMargin: true,
+      }, sanity);
+      confirmed = this.sanity.enforce(warnings, sanity);
+    }
+
     // Sprint 19 — Drug taxonomy. drugClass is the source of truth; isRxRequired
     // and isControlledDrug are projected from it. If the caller supplied
     // drugClass, use it; otherwise infer from the legacy booleans.
@@ -258,7 +281,7 @@ export class ProductsService {
       ?? inferDrugClass(rest.isRxRequired, rest.isControlledDrug);
     const drugBools = deriveDrugBooleans(drugClass);
 
-    return this.prisma.product.create({
+    const created = await this.prisma.product.create({
       data: {
         tenantId,
         ...rest,
@@ -278,11 +301,15 @@ export class ProductsService {
       },
       include: { variants: true, bomItems: { include: { rawMaterial: true } } },
     });
+    if (this.sanity && confirmed.length > 0) {
+      await this.sanity.recordConfirmed(tenantId, sanity?.userId, confirmed, () => ({ type: 'Product', id: created.id }));
+    }
+    return created;
   }
 
-  async update(tenantId: string, id: string, dto: UpdateProductDto, callerRole?: string) {
-    await this.findOne(tenantId, id);
-    const { price, costPrice, ...rest } = dto;
+  async update(tenantId: string, id: string, dto: UpdateProductDto, callerRole?: string, sanity?: SanityContext) {
+    const existing = await this.findOne(tenantId, id);
+    const { price, costPrice, sanityConfirmations: _answered, ...rest } = dto;
 
     // ── SOD Price Wall ────────────────────────────────────────────────────────
     // Defense-in-depth: the controller @Roles() guard is the first line; this
@@ -318,7 +345,43 @@ export class ProductsService {
     // Strip the raw fields from rest so they don't override our derived values.
     const { drugClass: _dc, isRxRequired: _rx, isControlledDrug: _cd, ...restClean } = rest as any;
 
-    return this.prisma.product.update({
+    /*
+      "Are you sure this is the correct selling price?" -- against the price
+      being replaced, and only when it actually changed: the edit form sends
+      the price back on every save, and renaming a drink must not ask about a
+      price nobody touched.
+
+      The margin is judged here for a product whose cost is typed. A recipe
+      product's cost comes from its recipe, which the screen saves in the
+      next call (PUT /products/:id/bom). Its margin is still judged here when
+      the PRICE or the VAT flag changes -- against the recipe on file -- because
+      the recipe check that follows reads the price this call has just saved,
+      and so could never see a price cut that tipped the drink into a loss.
+    */
+    let confirmed: Awaited<ReturnType<CostSanityService['checkProduct']>> = [];
+    if (this.sanity) {
+      const priorPrice = Number(existing.price);
+      const priorCost = existing.costPrice != null ? Number(existing.costPrice) : null;
+      const newPrice = price != null ? Number(price) : priorPrice;
+      const priceChanged = price != null && Math.abs(Number(price) - priorPrice) > 0.0001;
+      const costChanged = costPrice != null && (priorCost == null || Math.abs(Number(costPrice) - priorCost) > 0.0001);
+      const recipe = (dto.inventoryMode ?? existing.inventoryMode) === 'RECIPE_BASED' && existing.bomItems.length > 0;
+      const vatChanged = dto.isVatable != null && dto.isVatable !== existing.isVatable;
+      if (sanity?.optedIn && (priceChanged || costChanged || vatChanged)) {
+        const warnings = await this.sanity.checkProduct(tenantId, {
+          key: `product:${id}`, productId: id, name: rest.name ?? existing.name,
+          priorPrice, price: newPrice, priorCost,
+          cost: recipe ? priorCost : (costPrice != null ? Number(costPrice) : priorCost),
+          vatable: dto.isVatable ?? existing.isVatable,
+          priorVatable: existing.isVatable,
+          checkPrice: priceChanged,
+          checkMargin: !recipe || priceChanged || vatChanged,
+        }, sanity);
+        confirmed = this.sanity.enforce(warnings, sanity);
+      }
+    }
+
+    const updated = await this.prisma.product.update({
       where: { id },
       data: {
         ...restClean,
@@ -327,6 +390,10 @@ export class ProductsService {
         ...(costPrice != null ? { costPrice: new Prisma.Decimal(costPrice) } : {}),
       },
     });
+    if (this.sanity && confirmed.length > 0) {
+      await this.sanity.recordConfirmed(tenantId, sanity?.userId, confirmed, () => ({ type: 'Product', id }));
+    }
+    return updated;
   }
 
   async deactivate(tenantId: string, id: string) {
@@ -351,6 +418,7 @@ export class ProductsService {
     tenantId: string,
     productId: string,
     items: CreateBomItemDto[],
+    sanity?: SanityContext,
   ) {
     const product = await this.findOne(tenantId, productId); // ownership check
 
@@ -414,7 +482,27 @@ export class ProductsService {
       }
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    /*
+      What this recipe will cost against what the drink sells for, before the
+      old recipe is wiped. The screen saves the recipe on every save of a
+      recipe drink, so a drink that already loses money is asked about only
+      when this recipe makes it worse.
+    */
+    let confirmed: Awaited<ReturnType<CostSanityService['checkProduct']>> = [];
+    if (this.sanity && sanity?.optedIn && items.length > 0) {
+      const { cost, partlyPriced } = await this.sanity.recipeCost(tenantId, items.map((i) => ({ rawMaterialId: i.rawMaterialId, quantity: Number(i.quantity) })));
+      if (cost != null) {
+        const warnings = await this.sanity.checkProduct(tenantId, {
+          key: `product:${productId}`, productId, name: product.name,
+          priorPrice: Number(product.price), price: Number(product.price),
+          priorCost: product.costPrice != null ? Number(product.costPrice) : null,
+          cost, partlyPriced, vatable: product.isVatable, checkPrice: false, checkMargin: true,
+        }, sanity);
+        confirmed = this.sanity.enforce(warnings, sanity);
+      }
+    }
+
+    const saved = await this.prisma.$transaction(async (tx) => {
       // Wipe existing BOM
       await tx.bomItem.deleteMany({ where: { productId } });
 
@@ -468,6 +556,10 @@ export class ProductsService {
         include: { rawMaterial: { select: { id: true, name: true, unit: true } } },
       });
     });
+    if (this.sanity && confirmed.length > 0) {
+      await this.sanity.recordConfirmed(tenantId, sanity?.userId, confirmed, () => ({ type: 'Product', id: productId }));
+    }
+    return saved;
   }
 
   /**

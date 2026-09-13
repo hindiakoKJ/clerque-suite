@@ -13,6 +13,24 @@ import { isFnbType } from '@repo/shared-types';
 import { toast } from 'sonner';
 import { todayIso } from '@/lib/today';
 import { INGREDIENT_UNITS } from '@repo/shared-types';
+import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
+import { CostHint, useCostBands } from '@/components/shared/CostHint';
+
+/** A drink a cost change just pushed from making money to losing it. */
+type MarginAlert = { name: string; price: number; cost: number; lossEach: number };
+
+/** Say it once, plainly, when a believable price still tips a thin item into a loss. */
+function tellMarginAlerts(alerts: MarginAlert[] | undefined) {
+  if (!alerts?.length) return;
+  const first = alerts[0]!;
+  const peso = (n: number) => `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  toast.warning(
+    `${first.name} now costs ${peso(first.cost)} to make and sells for ${peso(first.price)} — each one loses ${peso(first.lossEach)}.`
+    + (alerts.length > 1 ? ` ${alerts.length - 1} more item${alerts.length === 2 ? '' : 's'} too.` : '')
+    + ' Check the price or the recipe.',
+    { duration: 15000 },
+  );
+}
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -45,6 +63,9 @@ const UNITS = INGREDIENT_UNITS;
 
 export default function InventoryPage() {
   const user = useAuthStore((s) => s.user);
+  // Whether the person has finished typing into a cost box, so the "usually…" hint
+  // waits until they leave it rather than flashing on every keystroke.
+  const [costEntered, setCostEntered] = useState(false);
   const branchId = user?.branchId ?? '';
   const base = useInventoryBase();   // /pos/inventory or /procure/stock
   const qc = useQueryClient();
@@ -176,6 +197,7 @@ export default function InventoryPage() {
       lotsTracked: m.lotsTracked ?? false,
     });
     setEditingMat(m);
+    setCostEntered(false);
     setMatModal('edit');
   }
 
@@ -200,6 +222,7 @@ export default function InventoryPage() {
       acceptCostChange: false,
     });
     setCostWarning(null);
+    setCostEntered(false);
     setMatModal('receive');
   }
 
@@ -235,7 +258,8 @@ export default function InventoryPage() {
         await api.post('/inventory/raw-materials', payload);
         toast.success('Ingredient created.');
       } else if (editingMat) {
-        await api.patch(`/inventory/raw-materials/${editingMat.id}`, payload);
+        const updated = await api.patch(`/inventory/raw-materials/${editingMat.id}`, payload);
+        tellMarginAlerts((updated.data as { marginAlerts?: MarginAlert[] })?.marginAlerts);
         /*
           Batch tracking has its own route because it is gated by plan (Lite
           none, Standard ten, Pro unlimited). The route existed; no screen
@@ -249,6 +273,8 @@ export default function InventoryPage() {
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
       setMatModal(null);
     } catch (err: unknown) {
+      // The person chose to go back and fix the cost: nothing failed.
+      if (isSanityCancel(err)) return;
       toast.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to save.');
     } finally {
       setMatSaving(false);
@@ -336,9 +362,12 @@ export default function InventoryPage() {
       // Received at no cost: the shelf moved, the books did not. Said now.
       const warning = (received.data as { warning?: string | null })?.warning;
       if (warning) toast.warning(warning, { duration: 10000 });
+      tellMarginAlerts((received.data as { marginAlerts?: MarginAlert[] })?.marginAlerts);
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
       setMatModal(null);
     } catch (err: unknown) {
+      // The person chose to go back and fix the cost: nothing failed.
+      if (isSanityCancel(err)) return;
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
       // The cost-sanity refusal is the one error with a way forward, so offer
       // it rather than making the person guess what the server wants.
@@ -655,9 +684,20 @@ export default function InventoryPage() {
                     type="number" min="0" step="0.0001"
                     value={matForm.costPrice}
                     onChange={(e) => setMatForm((f) => ({ ...f, costPrice: e.target.value }))}
+                    onBlur={() => setCostEntered(true)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { setCostEntered(true); enterMovesNext(e); } }}
+                    data-entry
                     className={INPUT_CLS}
                     placeholder="0.0000"
                   />
+                  {matModal === 'edit' && editingMat && (
+                    <EditCostHint
+                      rawMaterialId={editingMat.id}
+                      typed={matForm.costPrice}
+                      loaded={editingMat.costPrice}
+                      show={costEntered}
+                    />
+                  )}
                 </div>
               </div>
               {/*
@@ -923,9 +963,20 @@ export default function InventoryPage() {
                     type="number" min="0" step="0.0001"
                     value={receiveForm.costPrice}
                     onChange={(e) => setReceiveForm((f) => ({ ...f, costPrice: e.target.value }))}
+                    onBlur={() => setCostEntered(true)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { setCostEntered(true); enterMovesNext(e); } }}
+                    data-entry
                     className={INPUT_CLS}
                     placeholder="Updates WAC"
                   />
+                  {editingMat && (
+                    <ReceiveCostHint
+                      rawMaterialId={editingMat.id}
+                      branchId={receiveForm.branchId}
+                      typed={receiveForm.costPrice}
+                      show={costEntered}
+                    />
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -1064,4 +1115,31 @@ export default function InventoryPage() {
       )}
     </div>
   );
+}
+
+/**
+ * "Usually …, is this the correct cost?" under the Receive cost box. The cost
+ * here is typed per unit as the supplier charged it, which is the basis the
+ * usual prices are kept in, so it is compared as typed.
+ */
+function ReceiveCostHint(props: { rawMaterialId: string; branchId: string; typed: string; show: boolean }) {
+  const { data: bands } = useCostBands([props.rawMaterialId], props.branchId || undefined);
+  const value = parseFloat(props.typed);
+  if (!props.typed || !Number.isFinite(value)) return null;
+  return <CostHint band={bands?.get(props.rawMaterialId)} perUnit={value} show={props.show} />;
+}
+
+/**
+ * The same hint on Edit Ingredient, and only for a cost that was actually
+ * changed: the box arrives filled with the cost on file, which is usual by
+ * definition. (For a VAT-registered shop the cost on file is net of VAT and
+ * the usual prices are not; twelve percent sits well inside what is treated as
+ * an ordinary move, and the save judges it exactly.)
+ */
+function EditCostHint(props: { rawMaterialId: string; typed: string; loaded: number | null; show: boolean }) {
+  const { data: bands } = useCostBands([props.rawMaterialId]);
+  const value = parseFloat(props.typed);
+  if (!props.typed || !Number.isFinite(value)) return null;
+  if (props.loaded != null && Math.abs(value - props.loaded) < 1e-9) return null;
+  return <CostHint band={bands?.get(props.rawMaterialId)} perUnit={value} show={props.show} />;
 }

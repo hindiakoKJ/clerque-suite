@@ -8,11 +8,13 @@
  * three: day summary, batch-receive with duplicate detection, and the
  * briefing build.
  */
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { StickerTier } from '@prisma/client';
 import { PH_TIMEZONE } from '@repo/shared-types';
+import { CostSanityService } from '../common/sanity/cost-sanity.service';
+import { SanityContext } from '../common/sanity/sanity.types';
 import { detectDuplicateLot, type DuplicateCandidate } from './duplicate-detection';
 import { recomputeStickerTiersForItem } from './sticker-tier';
 import {
@@ -74,6 +76,7 @@ export class CloseAndPlanService {
     // this is the only path that also moves stock, blends WAC, re-costs the
     // recipes, queues the journal entry and honours the period lock.
     private inventory: InventoryService,
+    @Optional() private sanity?: CostSanityService,
   ) {}
 
   // ─── Day summary ──────────────────────────────────────────────────────
@@ -290,6 +293,7 @@ export class CloseAndPlanService {
     branchId: string,
     cashierId: string,
     lines: ReceiveLineInput[],
+    sanity?: SanityContext,
   ): Promise<ReceiveResult> {
     if (lines.length === 0) {
       throw new BadRequestException('No lines to receive.');
@@ -344,6 +348,31 @@ export class CloseAndPlanService {
       return { saved: [], duplicates };
     }
 
+    /*
+      "Are you sure this is the correct cost?" -- for every line about to be
+      saved, all at once, before the first one is. Asking inside the loop
+      below would turn the question into a line in `failed` that nobody can
+      answer. After duplicate detection, so a line the person is about to
+      skip as a duplicate is not asked about as well.
+
+      Keyed by position in the draft: the same ingredient can appear twice in
+      one evening's delivery, and each typed price is its own question.
+    */
+    const acceptFor = new Set<number>();
+    let confirmed: Awaited<ReturnType<CostSanityService['checkIngredientCosts']>> = [];
+    if (this.sanity && sanity?.optedIn) {
+      const warnings = await this.sanity.checkIngredientCosts(tenantId, linesToSave.map((line) => ({
+        key: `draft:${lines.indexOf(line)}`,
+        rawMaterialId: line.rawMaterialId,
+        grossPerUnit: line.unitCost,
+        branchId,
+        paymentMethod: line.paymentMethod ?? 'CASH',
+      })), sanity);
+      confirmed = this.sanity.enforce(warnings, sanity);
+      // A price the person just said is right has answered the old ten-times guard too.
+      for (const w of confirmed) acceptFor.add(Number(w.key.slice('draft:'.length)));
+    }
+
     // Receive each surviving line through InventoryService.
     //
     // This used to create RawMaterialLot rows directly, with a comment saying
@@ -376,6 +405,8 @@ export class CloseAndPlanService {
           expirationDate:  line.expirationDate ?? undefined,
           paymentMethod:   line.paymentMethod ?? 'CASH',
           vendorId:        line.vendorId,
+          // A ten-times price the person just confirmed answers the old guard too.
+          ...(acceptFor.has(lines.indexOf(line)) ? { acceptCostChange: true } : {}),
         });
       } catch (err) {
         // A locked period or a missing vendor on a CREDIT line fails ONE line.
@@ -386,6 +417,12 @@ export class CloseAndPlanService {
           reason: err instanceof Error ? err.message : 'Could not receive this line.',
         });
       }
+    }
+
+    if (this.sanity && confirmed.length > 0) {
+      // Only prices that reached the books: a line that failed to receive was never "adjusted".
+      const kept = confirmed.filter((w) => !failed.some((f) => f.rawMaterialId === w.rawMaterialId));
+      await this.sanity.recordConfirmed(tenantId, cashierId, kept, (w) => ({ type: 'RawMaterial', id: w.rawMaterialId ?? w.key }));
     }
 
     // The lot rows we just caused, so the caller still gets its ids back.

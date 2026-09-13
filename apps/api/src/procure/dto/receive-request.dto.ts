@@ -15,6 +15,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { SanityConfirmationDto } from '../../common/sanity/sanity.types';
 import { EXPENSE_CATEGORIES, ExpenseCategory } from '../../simple-entries/dto/simple-entry.dto';
 
 /**
@@ -196,6 +197,14 @@ export class RecordBoughtDto {
   @ValidateNested({ each: true })
   @Type(() => ReceiveChargeDto)
   charges?: ReceiveChargeDto[];
+
+  /** "Yes, this price is right" — the answers to a SANITY_CONFIRM_REQUIRED refusal. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => SanityConfirmationDto)
+  sanityConfirmations?: SanityConfirmationDto[];
 }
 
 /** "Remaining: 1 bottle" -- what is left on the shelf, in the ingredient's own unit. */

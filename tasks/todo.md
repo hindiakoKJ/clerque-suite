@@ -2083,3 +2083,99 @@ from that sweep were bad enough to fix on the spot.
   received before the stock posts.
 - **Two devices posting the same delivery** can double it: the duplicate check
   is a read outside the transaction with no unique index behind it.
+
+## 2026-09-13 — "Are you sure this is the correct cost?"
+
+> "can we have something like a warning when entering a price, cost, and even
+> when it auto computes the COGS and the margin? … for the full cream milk, if
+> the trend goes only around 85-90 pesos then an owner input and entered 190
+> pesos due to error in data entry, a warning will appear. so i hope, data entry
+> and saving is two different functions."
+
+**Entering is not saving, and it already was not.** Five readers checked every
+price and cost box on web and the Counter app: none sits inside a form, none
+saves on Enter, every save is a button. (Enter does save a few non-price boxes:
+the buy list's quantity and "remaining" count, the low-stock threshold, a new
+price-list name. Left alone.) Enter in a price box now moves to the next box.
+
+### Built
+- [x] **One rule, used by the screen and the server alike**
+      (`packages/shared-types/src/price-sanity.ts`). A cost is judged against
+      the ingredient's last 8 real purchases in 180 days: ask when it is more
+      than 1.35x either side of the usual price. With 5+ deliveries the band is
+      built from the middle half, capped at 1.75x, so one confirmed wrong price
+      cannot open it for every typo after. With 1-2 deliveries, or only the cost
+      on file, ask at 1.75x. A pack far bigger or smaller than usual is judged
+      at 1.75x. Owner's example: ₱85-₱90 milk, ₱190 typed → asked; ₱95 and
+      ₱115 → quiet. A selling price is judged against the price it replaces at
+      1.35x, and ₱0 on a priced item is asked. A margin is asked when the drink
+      costs as much as it sells for after VAT, or under 1% of the price (a unit
+      mistake) -- and not again on every save of a drink already losing money.
+- [x] **The server asks before it writes.** `CostSanityService` supplies the
+      history: real purchases only (no write-off markers, transfers or kitchen
+      batches), VAT put back on deliveries kept net since 302040b, the branch's
+      own prices when it has 3+, deliveries in an ingredient's old unit set
+      aside, no purchase trend for things made in the kitchen. A save that looks
+      wrong is refused with 409 `SANITY_CONFIRM_REQUIRED` and the warnings;
+      nothing is written. Wired into: buy list (`/bought`), receipts confirm,
+      Stock on hand receive and Edit Ingredient, Close & Plan, product
+      create/edit and recipe save.
+- [x] **Only clients that can ask are refused.** The web sends
+      `X-Sanity-Confirm: 1`; the Expo counter app and integrations do not, keep
+      today's behaviour, and pay nothing for the history. The ten-times guard
+      still protects everyone.
+- [x] **One dialog for every screen.** `lib/api.ts` catches the refusal, opens
+      "Is this the correct cost?", and on yes resends the same request -- same
+      body, same Idempotency-Key -- with the answers. "Go back and fix" has the
+      focus, so Enter and Esc go back; saving anyway takes a click. An answer
+      clears only that box at exactly that value: a retyped price is asked
+      about again.
+- [x] **A yes is remembered where it matters.** Written to AuditLog as
+      PRICE_ADJUSTED (who, which box, which value). A price an owner or manager
+      confirms on the buy list, or on a receipt saved to a request, is not
+      refused again by the ten-times guard when the goods are posted days later.
+      A cashier's yes lets their own save through but does not switch off the
+      owner's check at posting.
+- [x] **Hints while typing** (`CostHint`, `GET /inventory/raw-materials/cost-bands`):
+      "Full cream milk is usually ₱86 to ₱89 for 1,000 ml (last 8 deliveries) —
+      about 2.2 times as much. Is this the correct cost?" under the box, once it
+      is left or Enter is pressed. On: buy list, receipts, Stock on hand receive
+      and Edit Ingredient. The product form shows the price change and a live
+      margin. Hidden from anyone the shop does not show purchase costs to; the
+      question on save leaves the prices out for them too.
+- [x] **"This drink now loses money"**, told not asked: a delivery or cost edit
+      that pushes a drink from making money to losing it names it in the
+      response, and the screen says so. Not repeated for drinks already at a loss.
+
+### Reviewed
+15-agent adversarial review: 10 confirmed, 0 refuted, all fixed with tests. The
+one that mattered: the new "ten times off" test used a different VAT basis from
+the old guard, so a VAT shop paying with the owner's money could say yes and
+still be refused once. Also: busy ingredients whose transfers crowded real
+purchases out of the window, a recipe price cut into a loss never asked, re-asking
+about unchanged prices, a retry asked about a receipt already on the shelf.
+
+### Proved
+API 1697 tests (≈100 new), lint clean, web build green. Live on carolina-test
+18/18: ₱75 for a 100 g salt pack that usually costs ₱11.50-₱16 is asked and
+nothing is written; confirming saves it on the same idempotency key, and pressing
+Save again replays instead of clashing; a different price is asked again; the
+usual price saves silently; a client without the header is unaffected; the same
+on Stock on hand, Edit Ingredient and a product price. Every earlier live script
+re-run: receiving 30/30, receipts 16/16, paid-ahead 11/11, round-two 9/9, honest
+day 15/15, count clock 10/10, counts 10/11 (the one is a hardcoded ₱12 salt price
+that my own runs have since moved).
+
+**Not seen on screen:** the dialog and the hints. Built, type-checked and
+compiled; they sit behind a login.
+
+**Local test data:** Salt on carolina-test now carries several deliveries at 5x
+the normal price from these live runs, confirmed on purpose. Its "usual" range
+reads wider than a real shop's would.
+
+### Not done, on purpose
+- The Counter (Expo) app does not ask yet; it would need the same dialog and
+  the header. Until then it keeps the ten-times guard only.
+- Imports, modifier prices, price lists, promotions and purchase orders are not
+  asked about.
+- Making the 1.35x band a per-shop setting would be one column — KJ's call.

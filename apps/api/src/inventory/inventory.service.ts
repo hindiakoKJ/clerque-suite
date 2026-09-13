@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';   // already a dependency — see import.service.ts
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,6 +11,10 @@ import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
 import { resolveBuyUnit } from './unit-conversion';
 import { PH_TIMEZONE } from '@repo/shared-types';
+
+import { judgeMargin } from '@repo/shared-types';
+import { CostSanityService } from '../common/sanity/cost-sanity.service';
+import { SanityContext } from '../common/sanity/sanity.types';
 
 export { AdjustStockDto, SetThresholdDto, CreateRawMaterialDto, ReceiveRawMaterialDto };
 
@@ -47,11 +51,26 @@ export const noCostWarning = (name: string) =>
   `"${name}" has no cost on file, so this changed the shelf but not the books. `
   + 'Set its cost under Stock on hand; the books will not carry this until it has one.';
 
+/** A drink that a cost change has just pushed from making money to losing it. */
+export interface MarginAlert {
+  productId: string;
+  name: string;
+  price: number;
+  cost: number;
+  lossEach: number;
+}
+
 @Injectable()
 export class InventoryService {
   constructor(
     private prisma: PrismaService,
     private periods: AccountingPeriodsService,
+    /*
+      Optional so the specs that build this service by hand keep testing the
+      order-of-magnitude guard exactly as they always have. Nest always
+      provides it: SanityModule is global.
+    */
+    @Optional() private sanity?: CostSanityService,
   ) {}
 
   // ─── One-shot product transfer between branches (Sprint 19, owner) ─────
@@ -1325,14 +1344,14 @@ export class InventoryService {
     tx: Prisma.TransactionClient,
     tenantId: string,
     rawMaterialId: string,
-  ): Promise<number> {
+  ): Promise<{ count: number; nowLosingMoney: MarginAlert[] }> {
     const affected = await tx.bomItem.findMany({
       where:    { rawMaterialId, product: { tenantId } },
       select:   { productId: true },
       distinct: ['productId'],
     });
     const ids = affected.map((a) => a.productId);
-    if (ids.length === 0) return 0;
+    if (ids.length === 0) return { count: 0, nowLosingMoney: [] };
 
     const allLines = await tx.bomItem.findMany({
       where:  { productId: { in: ids } },
@@ -1352,18 +1371,85 @@ export class InventoryService {
       );
     }
 
+    /*
+      Which drinks this change just pushed into a loss.
+
+      The cost that moved may be perfectly believable on its own -- milk up
+      ten percent is not a typo -- and still be the change that makes a thin
+      item cost more than it sells for. Nobody would find out until a margin
+      report, if ever. Asking "go back and fix?" would be the wrong question
+      when there is nothing wrong with the delivery, so this is told, not
+      asked. Items already at a loss are not reported again, or a thin-margin
+      item would complain at every delivery.
+    */
+    const [products, tenant] = await Promise.all([
+      tx.product.findMany({
+        where:  { id: { in: [...costByProduct.keys()] } },
+        select: { id: true, name: true, price: true, isVatable: true, costPrice: true },
+      }),
+      tx.tenant.findUnique({ where: { id: tenantId }, select: { taxStatus: true } }),
+    ]);
+    const vatTenant = tenant?.taxStatus === 'VAT';
+    const nowLosingMoney: MarginAlert[] = [];
+    for (const product of products) {
+      const cost = costByProduct.get(product.id);
+      if (cost == null) continue;
+      const price = Number(product.price ?? 0);
+      const before = judgeMargin({ cost: product.costPrice != null ? Number(product.costPrice) : null, price, vatable: product.isVatable, vatTenant });
+      const after  = judgeMargin({ cost, price, vatable: product.isVatable, vatTenant });
+      if (after.losesMoney && !before.losesMoney) {
+        nowLosingMoney.push({
+          productId: product.id, name: product.name, price,
+          cost: Math.round(cost * 100) / 100,
+          lossEach: Math.round((cost - after.netPrice) * 100) / 100,
+        });
+      }
+    }
+
     for (const [productId, cost] of costByProduct) {
       await tx.product.update({
         where: { id: productId },
         data:  { costPrice: new Prisma.Decimal(cost.toFixed(4)) },
       });
     }
-    return costByProduct.size;
+    return { count: costByProduct.size, nowLosingMoney };
   }
 
-  async updateRawMaterial(tenantId: string, id: string, dto: Partial<CreateRawMaterialDto> & { isActive?: boolean; lowStockAlert?: number | null }) {
+  async updateRawMaterial(
+    tenantId: string,
+    id: string,
+    dto: Partial<CreateRawMaterialDto> & { isActive?: boolean; lowStockAlert?: number | null },
+    ctx?: SanityContext,
+  ) {
     const item = await this.prisma.rawMaterial.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Raw material not found');
+
+    /*
+      "Are you sure this is the correct cost?" -- before the cost on file is
+      overwritten, because this edit re-costs every recipe that uses it the
+      moment it saves. Only when the cost actually changed: the edit form
+      re-sends the cost it loaded, and renaming an ingredient must not ask
+      about a price nobody touched. Not when the unit is changing in the same
+      edit either: every past delivery was priced per the old unit, so the
+      comparison would be meaningless.
+    */
+    const unitChanging = dto.unit != null && dto.unit !== item.unit;
+    const costChanging = dto.costPrice != null && (item.costPrice == null || Math.abs(Number(item.costPrice) - dto.costPrice) > 1e-9);
+    let confirmed: Awaited<ReturnType<CostSanityService['checkIngredientCosts']>> = [];
+    if (this.sanity && ctx?.optedIn && costChanging && !unitChanging) {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { taxStatus: true } });
+      /*
+        This box holds the cost on file as it is kept -- net of VAT for a VAT
+        shop -- while the usual prices are as printed. So the trend is judged
+        with VAT put back, and the ten-times test and the message use the
+        number exactly as it sits in the box.
+      */
+      const gross = dto.costPrice! * (tenant?.taxStatus === 'VAT' ? 1.12 : 1);
+      const warnings = await this.sanity.checkIngredientCosts(tenantId, [{
+        key: `rm:${id}:cost`, rawMaterialId: id, grossPerUnit: gross, storedBasisPerUnit: dto.costPrice!,
+      }], ctx);
+      confirmed = this.sanity.enforce(warnings, ctx);
+    }
 
     /*
       You cannot make something a supply while a recipe still uses it.
@@ -1417,14 +1503,16 @@ export class InventoryService {
       // Sprint 8: when an ingredient's cost is manually edited, ripple the
       // change into every product that uses it. Same logic as the receipt
       // path so display + ledger stay aligned.
+      let marginAlerts: MarginAlert[] = [];
       if (dto.costPrice != null) {
-        await this.recostProductsUsing(tx, tenantId, id);
+        marginAlerts = (await this.recostProductsUsing(tx, tenantId, id)).nowLosingMoney;
       }
 
       return {
         ...updated,
         costPrice:     updated.costPrice     != null ? Number(updated.costPrice)     : null,
         lowStockAlert: updated.lowStockAlert != null ? Number(updated.lowStockAlert) : null,
+        marginAlerts,
       };
     },
     {
@@ -1433,7 +1521,53 @@ export class InventoryService {
       // the same headroom over a hosted database.
       timeout: 30_000,
       maxWait: 10_000,
+    }).then(async (result) => {
+      if (this.sanity) {
+        await this.sanity.recordConfirmed(tenantId, ctx?.userId, confirmed, () => ({ type: 'RawMaterial', id }));
+        if (unitChanging) await this.sanity.recordUnitChange(tenantId, id, ctx?.userId, item.unit, dto.unit!);
+      }
+      return result;
     });
+  }
+
+  /**
+   * Receive a delivery from the Stock on hand screen, asking first when the
+   * cost looks wrong.
+   *
+   * The shared receiveRawMaterial is called from Procure, purchase orders,
+   * Close & Plan and the importer, each of which checks its own lines up
+   * front, before anything is written, and never inside a per-line loop that
+   * would turn the question into a silent failure. This is that same up-front
+   * check for the one screen that receives a single line directly.
+   */
+  async receiveRawMaterialChecked(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto, ctx?: SanityContext) {
+    if (!this.sanity || !ctx?.optedIn || dto.costPrice == null) return this.receiveRawMaterial(tenantId, rawMaterialId, dto);
+    /*
+      A delivery already received under this reference is a retry: the answer
+      is "already received, nothing added", and asking about its price again
+      -- in a dialog that says nothing has been saved -- would be both a second
+      question and untrue.
+    */
+    if (dto.referenceNumber?.trim()) {
+      const seen = await this.prisma.rawMaterialLot.findFirst({
+        where: { tenantId, rawMaterialId, referenceNumber: dto.referenceNumber.trim() },
+        select: { id: true },
+      });
+      if (seen) return this.receiveRawMaterial(tenantId, rawMaterialId, dto);
+    }
+    const warnings = await this.sanity.checkIngredientCosts(tenantId, [{
+      key: `rm:${rawMaterialId}:receive`, rawMaterialId, grossPerUnit: dto.costPrice,
+      branchId: dto.branchId, paymentMethod: dto.paymentMethod ?? null,
+    }], ctx);
+    const confirmed = this.sanity.enforce(warnings, ctx);
+    // A person who has just said this price is right has answered the old
+    // ten-times guard's question too; refusing it again would be a dead end.
+    const accept = confirmed.length > 0;
+    const result = await this.receiveRawMaterial(tenantId, rawMaterialId, accept ? { ...dto, acceptCostChange: true } : dto);
+    if (!(result as { duplicate?: boolean }).duplicate) {
+      await this.sanity.recordConfirmed(tenantId, ctx?.userId, confirmed, () => ({ type: 'RawMaterial', id: rawMaterialId }));
+    }
+    return result;
   }
 
   /**
@@ -1774,6 +1908,7 @@ export class InventoryService {
 
       // WAC cost update: if new cost price provided, update material cost
       let unitCost = material.costPrice ? Number(material.costPrice) : 0;
+      let marginAlerts: MarginAlert[] = [];
       if (netCostPrice != null) {
         /*
           Blend over every branch, because the cost this writes is every
@@ -1820,7 +1955,7 @@ export class InventoryService {
         // every recipe that uses it must shift too. Without this, the
         // dashboard's gross-margin numbers and the "missing cost" warnings
         // drift away from reality between receipts.
-        await this.recostProductsUsing(tx, tenantId, rawMaterialId);
+        marginAlerts = (await this.recostProductsUsing(tx, tenantId, rawMaterialId)).nowLosingMoney;
       }
 
       // Total value for the journal entry = (this delivery's qty) × (unit cost).
@@ -1994,6 +2129,7 @@ export class InventoryService {
         paymentMethod,
         totalValue,
         warning: totalValue > 0 ? null : noCostWarning(material.name),
+        marginAlerts,
       };
     },
     {

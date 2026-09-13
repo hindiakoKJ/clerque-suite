@@ -10,6 +10,8 @@ import {
   HttpCode,
   HttpStatus,
   Res,
+  Headers,
+  Optional,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -27,6 +29,10 @@ import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 import { RecipeCatchupService } from './recipe-catchup.service';
 import { RecipeCatchupApplyDto, RecipeCatchupPreviewDto } from './dto/recipe-catchup.dto';
 import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
+import { SANITY_HEADER, SanityConfirmation, sanityContext } from '../common/sanity/sanity.types';
+import { CostSanityService } from '../common/sanity/cost-sanity.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { canSeePurchaseCosts } from '../procure/cost-visibility';
 
 @ApiTags('Inventory')
 @ApiBearerAuth('access-token')
@@ -36,6 +42,8 @@ export class InventoryController {
   constructor(
     private inventoryService: InventoryService,
     private recipeCatchup: RecipeCatchupService,
+    private prisma: PrismaService,
+    @Optional() private sanity?: CostSanityService,
   ) {}
 
   /** List inventory items for a branch — paginated, searchable */
@@ -236,6 +244,32 @@ export class InventoryController {
    * empty for exactly the people it was built for. Reading the ingredient
    * library is not the same as reading stock value: names and units only.
    */
+  /**
+   * What each ingredient usually costs, so a price box can say "usually ₱86 to
+   * ₱89 — is this right?" as soon as a number is typed, before anybody presses
+   * Save. Nothing is refused here; the save asks again on its own.
+   *
+   * Hidden from anyone the shop does not show purchase costs to: the band IS a
+   * price list. Declared before raw-materials/:id so the path is not read as
+   * an id.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF',
+         'GENERAL_EMPLOYEE')
+  @Get('raw-materials/cost-bands')
+  async costBands(
+    @CurrentUser() user: JwtPayload,
+    @Query('ids') ids?: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    const list = (ids ?? '').split(',').map((x) => x.trim()).filter(Boolean).slice(0, 200);
+    if (list.length === 0 || !this.sanity) return [];
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: user.tenantId! }, select: { showPurchaseCostsToStaff: true },
+    });
+    if (!canSeePurchaseCosts(user.role, tenant?.showPurchaseCostsToStaff)) return [];
+    return this.sanity.costBands(user.tenantId!, list, branchId || null);
+  }
+
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF',
          'GENERAL_EMPLOYEE')
   @Get('raw-materials')
@@ -277,9 +311,11 @@ export class InventoryController {
   updateRawMaterial(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() dto: Partial<CreateRawMaterialDto> & { isActive?: boolean },
+    @Body() dto: Partial<CreateRawMaterialDto> & { isActive?: boolean; sanityConfirmations?: SanityConfirmation[] },
+    @Headers(SANITY_HEADER) sanity?: string,
   ) {
-    return this.inventoryService.updateRawMaterial(user.tenantId!, id, dto);
+    const { sanityConfirmations, ...rest } = dto;
+    return this.inventoryService.updateRawMaterial(user.tenantId!, id, rest, sanityContext(sanity, sanityConfirmations, user.sub, user.role));
   }
 
   /**
@@ -326,8 +362,10 @@ export class InventoryController {
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: ReceiveRawMaterialDto,
+    @Headers(SANITY_HEADER) sanity?: string,
   ) {
-    return this.inventoryService.receiveRawMaterial(user.tenantId!, id, dto);
+    const { sanityConfirmations, ...rest } = dto;
+    return this.inventoryService.receiveRawMaterialChecked(user.tenantId!, id, rest as ReceiveRawMaterialDto, sanityContext(sanity, sanityConfirmations, user.sub, user.role));
   }
 
   /**

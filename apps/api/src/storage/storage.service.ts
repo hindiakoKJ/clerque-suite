@@ -291,7 +291,13 @@ export class StorageService {
       const row = await this.prisma.productPhoto.findUnique({ where: { id } });
       if (!row) throw new NotFoundException('File not found in storage.');
       return {
-        stream:        Readable.from(row.data),
+        /*
+          Prisma hands BYTEA back as a plain Uint8Array, not a Buffer, and
+          Readable.from iterates a Uint8Array one NUMBER per byte. Piped to a
+          response that fails on the first chunk, so every download from the
+          database driver broke. Wrapped (no copy), it is one Buffer chunk.
+        */
+        stream:        Readable.from([Buffer.from(row.data.buffer, row.data.byteOffset, row.data.byteLength)]),
         contentType:   row.mimeType,
         contentLength: row.byteSize,
       };

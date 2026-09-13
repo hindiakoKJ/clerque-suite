@@ -13,6 +13,7 @@ import { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { canSeePurchaseCosts } from '../procure/cost-visibility';
+import { BUY_LIST_PDF_LABEL, isReservedDocumentLabel } from '../procure/buy-list-labels';
 import archiver from 'archiver';
 
 /**
@@ -67,6 +68,17 @@ export class DocumentsService {
     label?: string,
     uploadedById?: string,
   ) {
+    /*
+      The buy-list copies Clerque files are found again by their label, and the
+      as-sent one is handed to the kitchen without the cost check. A person's
+      upload under that label would be shared as Clerque's own list -- a
+      supplier invoice with prices, or a forged list -- so the label is not
+      theirs to use.
+    */
+    if (isReservedDocumentLabel(label)) {
+      await fs.promises.unlink(file.path).catch(() => undefined);
+      throw new BadRequestException('That label is kept for the buy lists Clerque files itself. Use another label.');
+    }
     if (!ALLOWED_MIMES.has(file.mimetype)) {
       // Remove the temp file multer wrote
       await fs.promises.unlink(file.path).catch(() => undefined);
@@ -253,7 +265,18 @@ export class DocumentsService {
     const start = new Date(`${from}T00:00:00${MANILA}`);
     const end   = new Date(new Date(`${to}T00:00:00${MANILA}`).getTime() + 86_400_000);
     const docs = await this.prisma.document.findMany({
-      where:   { tenantId, entityType: opts.entityType, createdAt: { gte: start, lt: end } },
+      where:   {
+        tenantId, entityType: opts.entityType, createdAt: { gte: start, lt: end },
+        /*
+          The buy-list PDFs Clerque files on every request are not receipts.
+          Counted here they would push a busy month past the file cap and turn
+          "no receipts were filed" into a zip of lists. Each one stays on its
+          request. (A null label is kept: NOT IN alone would drop those rows.)
+        */
+        ...(opts.entityType === 'PurchaseRequest'
+          ? { OR: [{ label: null }, { label: { notIn: Object.values(BUY_LIST_PDF_LABEL) } }] }
+          : {}),
+      },
       orderBy: { createdAt: 'asc' },
       take:    MAX_ARCHIVE_FILES + 1,
     });
@@ -308,7 +331,8 @@ export class DocumentsService {
       }
     };
 
-    const index: string[] = ['date,request,filename,bytes'];
+    // Label and type, so an uploaded invoice PDF is told apart from a receipt photo.
+    const index: string[] = ['date,request,filename,bytes,label,type'];
     const missing: string[] = [];
     for (const doc of docs) {
       const ref  = refById.get(doc.entityId) ?? null;
@@ -317,7 +341,10 @@ export class DocumentsService {
         const { stream } = await this.storage.getStream(doc.storagePath);
         stream.on('error', abort);   // a source that dies mid-read must not go unhandled either
         archive.append(stream, { name, date: doc.createdAt });
-        index.push([name.slice(0, 10), ref ?? '', doc.filename.replace(/,/g, ' '), String(doc.sizeBytes)].join(','));
+        index.push([
+          name.slice(0, 10), ref ?? '', doc.filename.replace(/,/g, ' '), String(doc.sizeBytes),
+          (doc.label ?? '').replace(/,/g, ' '), doc.mimeType,
+        ].join(','));
       } catch (err) {
         // Say so inside the zip. A file that vanished from storage is a
         // fact the accountant needs, not something to tidy away.
@@ -329,6 +356,22 @@ export class DocumentsService {
       archive.append(missing.join('\n') + '\n', { name: 'MISSING.txt' });
     }
     await archive.finalize();
+  }
+
+  /**
+   * The bytes of one filed document, WITHOUT the purchase-cost switch that
+   * serve() applies. Only for a caller that has already decided this viewer
+   * may have the file: Procure hands the kitchen the buy list as it was sent,
+   * a copy that carries no prices by construction. Anything else goes
+   * through serve().
+   */
+  async readFiled(tenantId: string, documentId: string): Promise<Buffer> {
+    const doc = await this.prisma.document.findFirst({ where: { id: documentId, tenantId } });
+    if (!doc) throw new NotFoundException('Document not found.');
+    const { stream } = await this.storage.getStream(doc.storagePath);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    return Buffer.concat(chunks);
   }
 
   async serve(tenantId: string, documentId: string, res: Response, viewerRole?: string | null) {

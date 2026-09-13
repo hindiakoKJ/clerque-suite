@@ -154,5 +154,14 @@ describe('Receipt archive', () => {
       expect(where.createdAt.gte.toISOString()).toBe('2026-07-31T16:00:00.000Z');
       expect(where.createdAt.lt.toISOString()).toBe('2026-08-31T16:00:00.000Z');
     });
+
+    it('leaves the buy-list PDFs Clerque files out of the receipts zip, but keeps unlabelled files', async () => {
+      const { svc, prisma, res } = build({ docs: [] });
+      await svc.exportArchive(TENANT, { entityType: 'PurchaseRequest', from: '2026-08-01', to: '2026-08-31' }, 'BUSINESS_OWNER', res)
+        .catch(() => undefined);
+      const where = prisma.document.findMany.mock.calls[0][0].where;
+      // NOT IN on its own drops every row whose label is null.
+      expect(where.OR).toEqual([{ label: null }, { label: { notIn: ['Buy list — as sent', 'Buy list — as booked'] } }]);
+    });
   });
 });

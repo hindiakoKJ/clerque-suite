@@ -83,4 +83,17 @@ describe('StorageService — picking a driver that keeps the file', () => {
     expect(url).toBe('/api/v1/products/photos/deadbeefcafe');
     expect(url).not.toContain('.jpg');   // mimeType column is the source of truth
   });
+
+  it('a file read back from the database streams as bytes, not one number per byte', async () => {
+    // Prisma returns BYTEA as a plain Uint8Array. Readable.from iterates that
+    // one NUMBER at a time, and a download piped from it failed on the first chunk.
+    const bytes = new Uint8Array(Buffer.from('%PDF-1.3 a buy list'));
+    const prisma: any = { productPhoto: { findUnique: jest.fn().mockResolvedValue({ data: bytes, mimeType: 'application/pdf', byteSize: bytes.length }) } };
+    const svc = new StorageService({ get: (k: string) => (k === 'STORAGE_DRIVER' ? 'DB' : undefined) } as any, prisma);
+    const { stream } = await svc.getStream('tenants/t1/purchaserequest/req1/ab12cd34ef56.pdf');
+    const chunks: unknown[] = [];
+    for await (const c of stream) chunks.push(c);
+    expect(chunks.every((c) => Buffer.isBuffer(c))).toBe(true);
+    expect(Buffer.concat(chunks as Buffer[]).toString()).toBe('%PDF-1.3 a buy list');
+  });
 });

@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   Plus, Send, ShoppingCart, PackageCheck, Loader2, Trash2, Sparkles, Check, AlertTriangle, Paperclip,
-  Camera, Copy, Truck, Sparkle,
+  Camera, Copy, Truck, Sparkle, FileText, Share2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -342,12 +342,79 @@ export default function ProcurePage() {
     slip. Filed as Documents against the request, so the number, the lines
     and the paper they came from live together.
   */
-  const { data: receiptDocs = [] } = useQuery<Array<{ id: string; filename: string; label: string | null }>>({
+  const { data: receiptDocs = [] } = useQuery<Array<{ id: string; filename: string; label: string | null; mimeType?: string }>>({
     queryKey: ['request-docs', req?.id],
     queryFn:  () => api.get('/documents', { params: { entityType: 'PurchaseRequest', entityId: req!.id } }).then((r) => r.data),
     enabled:  !!req?.id && !req.costsHidden,   // a photo of the receipt is a photo of the prices
     staleTime: 60_000,
   });
+  /*
+    The buy list as a PDF, for the owners' group chat. The list as it went out
+    while it is being bought; what went into stock once it is in. Fetched as
+    soon as the request is on screen: a phone only lets a page share a file
+    straight after a tap, and a tap that first waits on the network loses it.
+  */
+  const pdfCopy: 'sent' | 'booked' | null = !req || req.lines.length === 0
+    ? null
+    : req.status === 'RECEIVED' ? 'booked'
+    : req.status === 'SENT' || req.status === 'BOUGHT' ? 'sent'
+    : null;
+  const inStockCount = (req?.lines ?? []).filter((l) => l.receivedAt).length;
+  const fetchPdf = () => api
+    .get(`/procure/requests/${req!.id}/pdf`, { params: { copy: pdfCopy }, responseType: 'blob' })
+    .then((r) => r.data as Blob);
+  const { data: pdfBlob } = useQuery<Blob>({
+    /*
+      Who is looking is part of the key: the owner's booked copy carries prices,
+      and on a shared tablet the next person signed in must not be handed it
+      from the cache. Lines going into stock change only the booked copy; the
+      copy as sent stays the one already in hand, ready for the tap.
+    */
+    queryKey: ['request-pdf', user?.sub, !!req?.costsHidden, req?.id, pdfCopy, pdfCopy === 'booked' ? inStockCount : null],
+    queryFn:  fetchPdf,
+    enabled:  !!req?.id && !!pdfCopy,
+    staleTime: 60_000,
+  });
+  const [sharingPdf, setSharingPdf] = useState(false);
+  const sharePdf = async () => {
+    if (!req || !pdfCopy) return;
+    setSharingPdf(true);
+    try {
+      let blob = pdfBlob;
+      if (!blob) {
+        try { blob = await fetchPdf(); }
+        catch { toast.error('Could not make the PDF. Check the connection and try again.'); return; }
+      }
+      const name = `${req.requestNumber}-${pdfCopy === 'booked' ? 'in-stock' : 'buy-list'}.pdf`;
+      const file = new File([blob], name, { type: 'application/pdf' });
+      // On a phone the share sheet opens Viber or Messenger with the file attached.
+      if (typeof navigator !== 'undefined' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: req.requestNumber,
+            text:  `${pdfCopy === 'booked' ? 'In stock' : 'Buy list'} ${req.requestNumber}${req.branch?.name ? ` — ${req.branch.name}` : ''}`,
+          });
+          return;
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') return;
+          // Anything else (the tap went stale, the app refused the file): save it instead.
+        }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      toast.success('PDF saved. Attach it in Viber or Messenger.');
+    } finally {
+      setSharingPdf(false);
+    }
+  };
+
   const openDoc = async (id: string, filename: string) => {
     try {
       const res = await api.get(`/documents/${id}/download`, { responseType: 'blob' });
@@ -376,6 +443,9 @@ export default function ProcurePage() {
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['procure-requests'] });
     qc.invalidateQueries({ queryKey: ['procure-open'] });
+    // Sending and posting file a PDF copy on the request.
+    qc.invalidateQueries({ queryKey: ['request-docs'] });
+    qc.invalidateQueries({ queryKey: ['request-pdf'] });
   };
   const fail = (e: unknown, fallback: string) => {
     // The person chose to go back and fix a price: nothing failed.
@@ -830,7 +900,7 @@ export default function ProcurePage() {
                 {receiptDocs.map((d) => (
                   <button key={d.id} type="button" onClick={() => openDoc(d.id, d.filename)}
                     className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
-                    <Paperclip className="h-3 w-3" /> {d.label ?? 'Receipt'}
+                    {d.mimeType === 'application/pdf' ? <FileText className="h-3 w-3" /> : <Paperclip className="h-3 w-3" />} {d.label ?? 'Receipt'}
                   </button>
                 ))}
                 {canRecord && req.status !== 'OPEN' && req.status !== 'CANCELLED' && (
@@ -960,8 +1030,22 @@ export default function ProcurePage() {
               </button>
             </div>
           )}
-          {(req.status === 'SENT' || req.status === 'BOUGHT') && (
+          {(req.status === 'SENT' || req.status === 'BOUGHT' || req.status === 'RECEIVED') && (
             <div className="flex gap-2">
+              {pdfCopy && (
+                <button
+                  type="button"
+                  onClick={() => void sharePdf()}
+                  disabled={sharingPdf}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted disabled:opacity-50"
+                  title={pdfCopy === 'booked'
+                    ? 'What was bought and put in stock, as a PDF for the group chat'
+                    : 'The list as it was sent, as a PDF for the group chat -- the same copy Clerque keeps'}
+                >
+                  {sharingPdf ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Share2 className="h-3.5 w-3.5" />}
+                  Share PDF
+                </button>
+              )}
               {req.status === 'SENT' && req.lines.length > 0 && (
                 <button
                   type="button"
@@ -972,7 +1056,7 @@ export default function ProcurePage() {
                   <Copy className="h-3.5 w-3.5" /> Send as message
                 </button>
               )}
-              {canDecide && (
+              {canDecide && req.status !== 'RECEIVED' && (
                 <button
                   type="button"
                   onClick={() => router.push(`/procure/receipts?request=${req.id}`)}

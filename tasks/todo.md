@@ -2179,3 +2179,81 @@ reads wider than a real shop's would.
 - Imports, modifier prices, price lists, promotions and purchase orders are not
   asked about.
 - Making the 1.35x band a per-shop setting would be one column — KJ's call.
+
+## 2026-09-13 — Procure as the one place: the buy list as a PDF (Phase 1 of 5)
+
+> "all request are done via procure. output can be a PDF ready to be sent to
+> the owner in their gc. but at the same time, that source of pdf, or the
+> request will have its own copy in the system. okay? it should be itemized per
+> line item so that it is easy also for our app to book it per line item."
+
+Plan and critique: five phases (PDF; servings per line; sauce levels; Excel
+round trip; where-bought). Only phase 5 needs a schema change. This section is
+phase 1.
+
+### Built
+- [x] **The list as sent, filed on the request** (`procure/purchase-request-pdf.ts`).
+      On Send, Clerque draws the list and files it where the receipt photos go,
+      labelled "Buy list — as sent". Every row prints the line's control number
+      exactly as stored (REQ-20260913-016-02), sorted by its number; posting to
+      stock uses that same string as the delivery reference. Columns: what is
+      needed (in packs when the last pack divides it, the same rule as the email
+      and the screen), what was on the shelf, and blanks to write in packs,
+      pack size (with the unit printed), price and brand/store. No money on this
+      copy, for anyone. An empty list (sent on purpose every day) files nothing.
+- [x] **The owner email carries the same file**, byte for byte.
+- [x] **The list as booked**, filed when the request goes into stock: bought,
+      price per pack, amount, total, and what became of each line (In stock /
+      Nothing arrived / Back on the list). A later call that changes a line of
+      a request already in stock files a new numbered version. Lines put back
+      on the list are not priced into the total (they were never charged).
+- [x] **`GET /procure/requests/:id/pdf?copy=sent|booked`.** As sent: the filed
+      bytes, to every Procure role, even when costs are hidden from staff (safe
+      only because that copy has no prices). A list sent before this shipped is
+      drawn now and says "Reprinted ... on hand is the stock now". As booked:
+      the filed copy for those who see costs (drawn again if it is older than
+      the request's last change); drawn without money for everyone else.
+- [x] **Share PDF** on the request screen (SENT / BOUGHT / RECEIVED). The file is
+      fetched when the request opens, so the tap goes straight to the phone's
+      share sheet (Viber, Messenger); desktop downloads it. Cached per signed-in
+      user. PDF chips get a file icon; the receipts page reads photos only.
+- [x] Photo numbering counts photos only. The receipts zip leaves the buy-list
+      PDFs out (they would push a busy month past the 500-file cap).
+
+### Reviewed (14 agents, 7 confirmed, all fixed with tests)
+- **Database storage returned files one byte at a time.** Prisma gives BYTEA as a
+  plain Uint8Array and `Readable.from` iterates it as numbers, so every download
+  from the DB storage driver failed on the first chunk. Railway without R2 keys
+  uses that driver, so receipt-photo downloads in production were very likely
+  already broken. Fixed at the root in `StorageService.getStream`; checked
+  against a real row from the local database.
+- **Anyone uploading a document could use the label "Buy list — as sent"**, and
+  the PDF route would then hand their file (a priced invoice, or a forged list)
+  to the kitchen as Clerque's own. The two labels are now refused on the user
+  upload path.
+- The booked total counted lines that went back on the list; a line where
+  nothing arrived said "In stock"; the cached PDF on a shared tablet was not
+  keyed by who is signed in; the receipts zip filled with buy-list PDFs.
+- Also fixed from the unverified list: long shop names and units no longer wrap
+  over other text; amounts rounded to the centavo before totalling; the booked
+  copy prints "needed" in the unit (not in packs this request just bought);
+  version numbers survive a deleted copy; stale booked copies are redrawn; the
+  as-sent blob is not thrown away after a partial post; tests now filter mocked
+  documents the way the database would.
+
+### Proved
+API 1740 tests (145 suites), lint and type check clean, web type check clean.
+Live on carolina-test 21/21 with costs hidden from staff: send files one PDF and
+the route returns the same bytes; the cook shares it but cannot list documents
+(403) and gets the booked copy without prices; the owner gets the filed booked
+copy; every stock lot's reference equals the printed Line No.; an upload under
+the reserved label is refused and the shared copy is unchanged; today's receipts
+zip has the photo and no buy-list PDF. PDFs opened and looked at, including a
+3-page list, a long business name and long units.
+
+**Not seen on screen:** the Share PDF button (behind a login). KJ: tap it on a
+phone into a test Viber or Messenger chat.
+
+### Not done, on purpose
+- Two people pressing Send on the same list in the same instant could file two
+  as-sent copies (the send itself has that race today). Not fixed here.

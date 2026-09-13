@@ -11,7 +11,9 @@ import { MailService } from '../mail/mail.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
-import { appendNote, withTag, readTag, withoutTag } from './procure-notes';
+import { appendNote, withTag, readTag, withoutTag, plainNotes } from './procure-notes';
+import { buildBuyListModel, renderBuyListPdf } from './purchase-request-pdf';
+import { BuyListCopy, BUY_LIST_PDF_LABEL } from './buy-list-labels';
 import { sanityValueKey } from '@repo/shared-types';
 import { CostSanityService } from '../common/sanity/cost-sanity.service';
 import { SanityContext } from '../common/sanity/sanity.types';
@@ -434,7 +436,10 @@ export class ProcureService {
       data:    { status: 'SENT', sentAt: new Date(), sentById: userId },
       include: this.lineInclude(),
     });
-    await this.tellTheOwners(tenantId, updated);
+    // The copy for the group chat, filed now: on-hand is live and cannot be
+    // drawn again later as it was at the moment the list went out.
+    const pdf = await this.fileRequestPdf(tenantId, requestId, 'sent', userId);
+    await this.tellTheOwners(tenantId, updated, pdf);
     return { ...updated, empty: updated.lines.length === 0 };
   }
 
@@ -449,6 +454,7 @@ export class ProcureService {
     tenantId: string,
     req: { id: string; requestNumber: string; branchId: string; branch?: { name: string } | null;
            lines: Array<{ rawMaterialId: string; qtyRequested: Prisma.Decimal; rawMaterial: { name: string; unit: string } }> },
+    pdf: Buffer | null = null,
   ) {
     try {
       const people = await this.prisma.user.findMany({
@@ -492,7 +498,7 @@ export class ProcureService {
           });
         }
         if (this.mail && p.email) {
-          await this.mail.sendBuyListSent({ to: p.email, name: p.name, requestNumber: req.requestNumber, branchName: branch, lines, link });
+          await this.mail.sendBuyListSent({ to: p.email, name: p.name, requestNumber: req.requestNumber, branchName: branch, lines, link, pdf });
         }
       }
     } catch (err) {
@@ -1020,6 +1026,15 @@ export class ProcureService {
       },
       include: this.lineInclude(),
     });
+    /*
+      The copy as booked, for the owner: what was bought, at what price, what
+      became of each line. Filed when the request closes, and again as a new
+      version whenever a later call changes a line of a request already in
+      stock -- posted, or closed with nothing arriving.
+    */
+    if (updated.status === 'RECEIVED' && (closing || done.size > 0)) {
+      await this.fileRequestPdf(tenantId, requestId, 'booked', userId);
+    }
     return {
       request: updated, posted, skipped, failed, carried, charges, marginAlerts,
       short: short.map(({ line, name, packsBought, packsArrived, outcome }) => ({ line, name, packsBought, packsArrived, outcome })),
@@ -1227,13 +1242,146 @@ export class ProcureService {
     const mime  = dto.mediaType ?? 'image/jpeg';
     const ext   = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
     const label = dto.label ?? 'Receipt';
-    const n = await this.prisma.document.count({ where: { tenantId, entityType: 'PurchaseRequest', entityId: req.id } }) + 1;
+    // Among photos only: a filed buy-list PDF does not shift the numbering.
+    const n = await this.prisma.document.count({ where: { tenantId, entityType: 'PurchaseRequest', entityId: req.id, mimeType: { startsWith: 'image/' } } }) + 1;
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const doc = await this.documents.uploadBuffer(
       tenantId, 'PurchaseRequest', req.id, buffer, mime,
       `${slug}-${req.requestNumber}-${n}.${ext}`, label, userId,
     );
     return { id: doc.id, filename: doc.filename, label };
+  }
+
+  /**
+   * One copy of the buy list as a PDF, drawn from what the database holds now.
+   * `reprint` says the page stands in for a copy that was never filed, so the
+   * page can say its on-hand figures are today's.
+   */
+  private async drawRequestPdf(
+    tenantId: string,
+    requestId: string,
+    copy: BuyListCopy,
+    opts: { showMoney: boolean; reprint: boolean },
+  ): Promise<{ buffer: Buffer; requestNumber: string; lines: number }> {
+    const raw = await this.getRaw(tenantId, requestId);
+    const [req] = await this.enrich<(typeof raw.lines)[number], typeof raw>(tenantId, [raw]);
+    const [tenant, sender] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, businessName: true } }),
+      req.sentById ? this.prisma.user.findFirst({ where: { id: req.sentById, tenantId }, select: { name: true } }) : null,
+    ]);
+    const model = buildBuyListModel({
+      shopName:      tenant?.businessName || tenant?.name || 'Clerque',
+      requestNumber: req.requestNumber,
+      status:        req.status,
+      branchName:    req.branch?.name ?? null,
+      sentAt:        req.sentAt,
+      sentBy:        sender?.name ?? null,
+      receivedAt:    req.receivedAt,
+      notes:         plainNotes(req.notes),
+      lines: req.lines.map((l) => ({
+        lineNumber:   l.lineNumber,
+        name:         l.rawMaterial.name,
+        unit:         l.rawMaterial.unit,
+        qtyRequested: Number(l.qtyRequested),
+        onHand:       l.onHand,
+        counted:      l.counted?.qty ?? null,
+        lastPackSize: l.lastPack?.packSize ?? null,
+        packsBought:  l.packsBought != null ? Number(l.packsBought) : null,
+        packSize:     l.packSize != null ? Number(l.packSize) : null,
+        packCost:     l.packCost != null ? Number(l.packCost) : null,
+        brandNote:    l.brandNote,
+        receivedAt:   l.receivedAt,
+      })),
+    }, { copy, showMoney: opts.showMoney, printedAt: new Date(), reprint: opts.reprint });
+    return { buffer: await renderBuyListPdf(model), requestNumber: req.requestNumber, lines: req.lines.length };
+  }
+
+  /**
+   * File a copy of the buy list against the request, where the photos go.
+   *
+   * The copy as sent is filed once. The copy as booked is filed again, as a
+   * numbered version, whenever a post changes a request already in stock --
+   * the newest is the true one. An empty list is sent on purpose every day
+   * and files nothing.
+   *
+   * Best effort: filing never blocks a send or a post. Returns the bytes
+   * filed, so the owner email can carry the same file, or null.
+   */
+  async fileRequestPdf(tenantId: string, requestId: string, copy: BuyListCopy, userId: string): Promise<Buffer | null> {
+    if (!this.documents) return null;
+    try {
+      const label = BUY_LIST_PDF_LABEL[copy];
+      const filed = await this.prisma.document.findMany({
+        where:  { tenantId, entityType: 'PurchaseRequest', entityId: requestId, label },
+        select: { filename: true },
+      });
+      if (copy === 'sent' && filed.length > 0) return null;
+      const out = await this.drawRequestPdf(tenantId, requestId, copy, { showMoney: copy === 'booked', reprint: false });
+      if (out.lines === 0) return null;
+      /*
+        The next version after the highest one filed, not after how many are
+        left: a copy somebody deleted must not hand its number to the next.
+      */
+      const highest = filed.reduce((max, d) => {
+        const m = /-booked(?:-(\d+))?\.pdf$/.exec(d.filename);
+        return m ? Math.max(max, m[1] ? parseInt(m[1], 10) : 1) : max;
+      }, filed.length > 0 ? 1 : 0);
+      const version = copy === 'booked' && highest > 0 ? `-${highest + 1}` : '';
+      await this.documents.uploadBuffer(
+        tenantId, 'PurchaseRequest', requestId, out.buffer, 'application/pdf',
+        `buy-list-${out.requestNumber}-${copy}${version}.pdf`, label, userId,
+      );
+      return out.buffer;
+    } catch (err) {
+      this.logger.warn(`[procure] could not file the ${copy} buy list for request ${requestId}: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
+  }
+
+  /**
+   * The buy list as a PDF, for this viewer.
+   *
+   * As sent: the filed copy, byte for byte, so the file in the group chat and
+   * the file in Clerque are the same file. It carries no prices, which is why
+   * the kitchen may have it even on a shop that hides purchase costs from
+   * them -- a change that puts money on that copy must change this too. A
+   * request sent before copies were filed is drawn now and says so.
+   *
+   * As booked: the filed copy (the newest version) for someone who may see
+   * purchase costs; drawn now without the money for everyone else.
+   */
+  async requestPdf(tenantId: string, requestId: string, copy: BuyListCopy, viewerRole?: string | null): Promise<{ buffer: Buffer; filename: string }> {
+    const req = await this.getRaw(tenantId, requestId);
+    const seeCosts = copy === 'booked' && await this.costsVisibleTo(tenantId, viewerRole);
+    const filename = `${req.requestNumber}-${copy === 'sent' ? 'buy-list' : 'in-stock'}.pdf`;
+
+    if (this.documents && (copy === 'sent' || seeCosts)) {
+      const filed = await this.prisma.document.findFirst({
+        where:   { tenantId, entityType: 'PurchaseRequest', entityId: req.id, label: BUY_LIST_PDF_LABEL[copy], mimeType: 'application/pdf' },
+        orderBy: { createdAt: 'desc' },
+        select:  { id: true, createdAt: true },
+      });
+      /*
+        A booked copy older than the request's last change missed a re-filing
+        (storage was down when the post landed). Draw it now rather than serve
+        a copy that no longer says what happened. The as-sent copy is meant to
+        be old: it is the list as it went out.
+      */
+      const stale = copy === 'booked' && !!filed && filed.createdAt < req.updatedAt;
+      if (filed && !stale) {
+        try {
+          return { buffer: await this.documents.readFiled(tenantId, filed.id), filename };
+        } catch (err) {
+          // The row is there and the file is not. Draw it now rather than fail the share.
+          this.logger.warn(`[procure] filed buy list ${filed.id} for ${req.requestNumber} could not be read: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+    }
+    const out = await this.drawRequestPdf(tenantId, requestId, copy, {
+      showMoney: seeCosts,
+      reprint:   copy === 'sent' && req.status !== 'OPEN',
+    });
+    return { buffer: out.buffer, filename };
   }
 
   async cancel(tenantId: string, requestId: string) {

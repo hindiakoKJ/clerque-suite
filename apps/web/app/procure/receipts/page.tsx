@@ -44,7 +44,7 @@ interface RequestForReceipt {
   id: string; requestNumber: string; status: string; boughtAt?: string | null; notes?: string | null;
   branchId?: string; branch?: { id: string; name: string } | null; lines: RequestLine[];
 }
-interface FiledPhoto { id: string; filename: string; label: string | null }
+interface FiledPhoto { id: string; filename: string; label: string | null; mimeType?: string }
 
 interface Suggested {
   index: number;
@@ -319,8 +319,10 @@ export default function ReceiptsPage() {
     staleTime: 30_000,
   });
   const { data: filed = [] } = useQuery<FiledPhoto[]>({
-    queryKey: ['request-docs', requestId],
-    queryFn:  () => api.get('/documents', { params: { entityType: 'PurchaseRequest', entityId: requestId } }).then((r) => r.data),
+    queryKey: ['request-docs', requestId, 'photos'],
+    // Photos only: the buy-list PDF filed on the same request is not something to read.
+    queryFn:  () => api.get('/documents', { params: { entityType: 'PurchaseRequest', entityId: requestId } })
+      .then((r) => (r.data as FiledPhoto[]).filter((d) => (d.mimeType ?? '').startsWith('image/'))),
     enabled:  !!user && !!requestId,
     staleTime: 60_000,
   });

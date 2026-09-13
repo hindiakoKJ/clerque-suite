@@ -41,6 +41,11 @@ describe('ProcureService', () => {
     mailFails?: boolean;
     /** A ledger that refuses -- a locked month, a chart with no 1063. */
     ledgerFails?: boolean;
+    /** Documents already filed against requests; the mock filters them like the database. */
+    filed?: Array<{ id?: string; entityId?: string; label: string | null; filename: string; mimeType?: string; createdAt?: Date }>;
+    /** Storage that will not take a file, or will not give one back. */
+    uploadFails?: boolean;
+    readFails?: boolean;
   } = {}) {
     const created: any[] = [];
     const createdRequests: any[] = [];
@@ -61,6 +66,19 @@ describe('ProcureService', () => {
       lines: (opts.lines ?? []).map((l: any) => ({ ...l })),
       ...(opts.open ?? {}),
     };
+
+    const filedDocs = (opts.filed ?? []).map((d, i) => ({
+      id: `filed${i + 1}`, tenantId: TENANT, entityType: 'PurchaseRequest', entityId: 'req1',
+      mimeType: 'application/pdf', createdAt: new Date('2026-08-30T10:00:00Z'), ...d,
+    }));
+    // Tenant, entity, label and type, the way the documents table would filter them.
+    const filedWhere = (where: any) => filedDocs.filter((d: any) =>
+      (where.tenantId == null || d.tenantId === where.tenantId)
+      && (where.entityType == null || d.entityType === where.entityType)
+      && (where.entityId == null || d.entityId === where.entityId)
+      && (where.label === undefined || d.label === where.label)
+      && (where.mimeType == null
+        || (typeof where.mimeType === 'string' ? d.mimeType === where.mimeType : d.mimeType.startsWith(where.mimeType.startsWith))));
 
     const prisma: any = {
       // Whether staff see delivery costs. These tests are about the list
@@ -106,7 +124,12 @@ describe('ProcureService', () => {
         // What each ingredient held and cost the last time it was received.
         findMany:   jest.fn().mockResolvedValue(opts.lastPacks ?? []),
       },
-      document: { count: jest.fn().mockResolvedValue(0) },
+      document: {
+        count:     jest.fn(({ where }: any) => Promise.resolve(filedWhere(where).length)),
+        findMany:  jest.fn(({ where }: any) => Promise.resolve(filedWhere(where))),
+        findFirst: jest.fn(({ where }: any) => Promise.resolve(
+          filedWhere(where).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null)),
+      },
       // Prices somebody confirmed on the buy list, read when the goods are posted.
       auditLog: { findMany: jest.fn().mockResolvedValue([]) },
       user: {
@@ -114,6 +137,8 @@ describe('ProcureService', () => {
           const alts: any[] = where.OR ?? [];
           return alts.some((a) => a.role === p.role && (!a.OR || a.OR.some((b: any) => b.branchId === (p.branchId ?? null))));
         }).map(({ id, email, name }) => ({ id, email, name })))),
+        // Who sent the list, for the stamp on its PDF.
+        findFirst: jest.fn(({ where }: any) => Promise.resolve({ name: where.id === USER ? 'Mia' : 'Someone' })),
       },
       rawMaterialInventory: {
         findMany:   jest.fn(({ where }: any) => Promise.resolve((opts.onHand ?? []).filter((x) => where.rawMaterialId.in.includes(x.rawMaterialId)).map((x) => ({ branchId: BRANCH, ...x })))),
@@ -156,9 +181,13 @@ describe('ProcureService', () => {
     };
     const documents: any = {
       uploadBuffer: jest.fn((_t: string, type: string, id: string, buf: Buffer, mime: string, name: string, label: string, by: string) => {
-        docs.push({ type, id, size: buf.length, mime, name, label, by });
+        if (opts.uploadFails) return Promise.reject(new Error('R2 is down'));
+        docs.push({ type, id, size: buf.length, mime, name, label, by, buf });
         return Promise.resolve({ id: 'doc1', filename: name });
       }),
+      readFiled: jest.fn((_t: string, id: string) => opts.readFails
+        ? Promise.reject(new Error('NoSuchKey'))
+        : Promise.resolve(Buffer.from(`%PDF-filed:${id}`))),
     };
     const warehouse: any = { nextCountNumber: jest.fn().mockResolvedValue('CC-2026-000007') };
     const notified: any[] = [];
@@ -867,6 +896,167 @@ describe('ProcureService', () => {
     const res = await svc.sendRequest(TENANT, 'req1', USER);
     expect(res.status).toBe('SENT');
     expect(notified).toHaveLength(1);
+  });
+
+  // ── the buy list as a PDF: for the group chat, and filed in Clerque ───────
+
+  const PDF_LINES = [
+    { id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-haz', qtyRequested: 1500, shortBy: null, packsBought: null, packSize: null, packCost: null, brandNote: null, receivedAt: null, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } },
+    { id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-sug', qtyRequested: 500,  shortBy: null, packsBought: null, packSize: null, packCost: null, brandNote: null, receivedAt: null, rawMaterial: { name: 'White Sugar',    unit: 'g' } },
+  ];
+
+  it('sending files the list as a PDF on the request, and mails the owner the same file', async () => {
+    const { svc, docs, mailed } = build({ status: 'OPEN', lines: PDF_LINES, people: PEOPLE.slice(0, 1) });
+    const warn = jest.spyOn(svc.logger, 'warn');
+    await svc.sendRequest(TENANT, 'req1', USER);
+
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({
+      type: 'PurchaseRequest', id: 'req1', mime: 'application/pdf',
+      name: 'buy-list-REQ-20260830-001-sent.pdf', label: 'Buy list — as sent', by: USER,
+    });
+    expect(docs[0].buf.subarray(0, 5).toString()).toBe('%PDF-');
+    // The file in the group chat and the file in Clerque are the same file.
+    expect(Buffer.compare(mailed[0].pdf, docs[0].buf)).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('an empty list is sent but files no PDF', async () => {
+    const { svc, docs, mailed } = build({ status: 'OPEN', lines: [], people: PEOPLE.slice(0, 1) });
+    await svc.sendRequest(TENANT, 'req1', USER);
+    expect(docs).toHaveLength(0);
+    expect(mailed[0].pdf).toBeNull();
+  });
+
+  it('the copy as sent is filed once', async () => {
+    const { svc, docs } = build({ status: 'SENT', lines: PDF_LINES, filed: [{ label: 'Buy list — as sent', filename: 'buy-list-REQ-20260830-001-sent.pdf' }] });
+    expect(await svc.fileRequestPdf(TENANT, 'req1', 'sent', USER)).toBeNull();
+    expect(docs).toHaveLength(0);
+  });
+
+  it('a receipt photo or another request\'s copy does not count as this list filed', async () => {
+    const { svc, docs } = build({ status: 'SENT', lines: PDF_LINES, filed: [
+      { label: 'Receipt', filename: 'receipt-REQ-20260830-001-1.jpg', mimeType: 'image/jpeg' },
+      { label: 'Buy list — as sent', filename: 'buy-list-REQ-20260830-002-sent.pdf', entityId: 'req2' },
+    ] });
+    await svc.fileRequestPdf(TENANT, 'req1', 'sent', USER);
+    expect(docs.map((d: any) => d.name)).toEqual(['buy-list-REQ-20260830-001-sent.pdf']);
+  });
+
+  it('storage that will not take the PDF never blocks the send', async () => {
+    const { svc, notified, mailed } = build({ status: 'OPEN', lines: PDF_LINES, people: PEOPLE.slice(0, 1), uploadFails: true });
+    const warn = jest.spyOn(svc.logger, 'warn');
+    const res = await svc.sendRequest(TENANT, 'req1', USER);
+    expect(res.status).toBe('SENT');
+    expect(notified).toHaveLength(1);
+    expect(mailed[0].pdf).toBeNull();          // nothing filed, so nothing that differs from the filed copy is mailed
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not file the sent buy list/));
+  });
+
+  const BOUGHT_PDF = PDF_LINES.map((l, i) => ({ ...l, packsBought: 2, packSize: i === 0 ? 750 : 1000, packCost: i === 0 ? 540 : 85 }));
+
+  it('posting the last line files the copy as booked; a later post files a new version', async () => {
+    const first = build({ status: 'BOUGHT', lines: BOUGHT_PDF });
+    await first.svc.receiveRequest(TENANT, 'req1', USER, 'CASH');
+    expect(first.docs).toHaveLength(1);
+    expect(first.docs[0]).toMatchObject({ mime: 'application/pdf', label: 'Buy list — as booked', name: 'buy-list-REQ-20260830-001-booked.pdf' });
+
+    const later = build({
+      status: 'RECEIVED', lines: [{ ...BOUGHT_PDF[0], receivedAt: new Date() }, BOUGHT_PDF[1]],
+      filed: [{ label: 'Buy list — as booked', filename: 'buy-list-REQ-20260830-001-booked.pdf' }],
+    });
+    await later.svc.receiveRequest(TENANT, 'req1', USER, 'CASH');
+    expect(later.docs.map((d: any) => d.name)).toEqual(['buy-list-REQ-20260830-001-booked-2.pdf']);
+  });
+
+  it('a deleted booked copy does not hand its version number to the next one', async () => {
+    const { svc, docs } = build({
+      status: 'RECEIVED', lines: [{ ...BOUGHT_PDF[0], receivedAt: new Date() }, BOUGHT_PDF[1]],
+      filed: [{ label: 'Buy list — as booked', filename: 'buy-list-REQ-20260830-001-booked-2.pdf' }],   // version 1 was deleted
+    });
+    await svc.receiveRequest(TENANT, 'req1', USER, 'CASH');
+    expect(docs.map((d: any) => d.name)).toEqual(['buy-list-REQ-20260830-001-booked-3.pdf']);
+  });
+
+  it('a later call that closes a line with nothing arriving files a new booked version too', async () => {
+    // Nothing reaches the shelf, but the line now says "lost" -- the owner's copy must say so.
+    const { svc, docs, received } = build({
+      status: 'RECEIVED', lines: [{ ...BOUGHT_PDF[0], receivedAt: new Date() }, BOUGHT_PDF[1]],
+      filed: [{ label: 'Buy list — as booked', filename: 'buy-list-REQ-20260830-001-booked.pdf' }],
+    });
+    await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l2', packsArrived: 0 }], closeShort: [{ lineId: 'l2', outcome: 'LOST' }] });
+    expect(received).toHaveLength(0);
+    expect(docs.map((d: any) => d.name)).toEqual(['buy-list-REQ-20260830-001-booked-2.pdf']);
+  });
+
+  it('a post that leaves the request open files no booked copy', async () => {
+    const half = [{ ...PDF_LINES[0], packsBought: 2, packSize: 750, packCost: 540 }, { ...PDF_LINES[1], packsBought: 1, packSize: 1000, packCost: 85 }];
+    const { svc, docs } = build({ status: 'BOUGHT', lines: half });
+    await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }] });
+    expect(docs).toHaveLength(0);
+  });
+
+  const SENT_COPY  = { id: 'doc-sent',   label: 'Buy list — as sent',   filename: 'buy-list-REQ-20260830-001-sent.pdf' };
+  const BOOKED_OLD = { id: 'doc-booked', label: 'Buy list — as booked', filename: 'buy-list-REQ-20260830-001-booked.pdf', createdAt: new Date('2026-08-30T10:00:00Z') };
+
+  it('the kitchen gets this request\'s filed copy as sent, byte for byte, even when costs are hidden from them', async () => {
+    const { svc, prisma } = build({
+      status: 'SENT', lines: PDF_LINES, showCostsToStaff: false,
+      filed: [SENT_COPY, { ...SENT_COPY, id: 'doc-other', entityId: 'req2', createdAt: new Date('2026-08-31T10:00:00Z') }],
+    });
+    const out = await svc.requestPdf(TENANT, 'req1', 'sent', 'GENERAL_EMPLOYEE');
+    expect(out.buffer.toString()).toBe('%PDF-filed:doc-sent');
+    expect(out.filename).toBe('REQ-20260830-001-buy-list.pdf');
+    expect(prisma.document.findFirst.mock.calls[0][0].where).toEqual({
+      tenantId: TENANT, entityType: 'PurchaseRequest', entityId: 'req1', label: 'Buy list — as sent', mimeType: 'application/pdf',
+    });
+    expect(svc.documents.readFiled).toHaveBeenCalledWith(TENANT, 'doc-sent');
+  });
+
+  it('the booked copy with prices never reaches someone costs are hidden from; it is drawn without them', async () => {
+    const { svc } = build({ status: 'RECEIVED', lines: PDF_LINES, showCostsToStaff: false, filed: [BOOKED_OLD] });
+    const out = await svc.requestPdf(TENANT, 'req1', 'booked', 'CASHIER');
+    expect(svc.documents.readFiled).not.toHaveBeenCalled();
+    expect(out.buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(out.buffer.toString()).not.toMatch(/^%PDF-filed/);
+    expect(out.filename).toBe('REQ-20260830-001-in-stock.pdf');
+  });
+
+  it('the owner gets the filed booked copy', async () => {
+    const { svc } = build({ status: 'RECEIVED', lines: PDF_LINES, filed: [BOOKED_OLD], open: { updatedAt: new Date('2026-08-30T09:59:00Z') } });
+    const out = await svc.requestPdf(TENANT, 'req1', 'booked', 'BUSINESS_OWNER');
+    expect(out.buffer.toString()).toBe('%PDF-filed:doc-booked');
+  });
+
+  it('a booked copy older than the request\'s last change is drawn again, not served stale', async () => {
+    // The re-filing after a later post failed (storage down): the filed copy no longer says what happened.
+    const { svc } = build({ status: 'RECEIVED', lines: PDF_LINES, filed: [BOOKED_OLD], open: { updatedAt: new Date('2026-08-30T11:00:00Z') } });
+    const out = await svc.requestPdf(TENANT, 'req1', 'booked', 'BUSINESS_OWNER');
+    expect(svc.documents.readFiled).not.toHaveBeenCalled();
+    expect(out.buffer.toString()).not.toMatch(/^%PDF-filed/);
+  });
+
+  it('a request sent before copies were filed is drawn now', async () => {
+    const { svc } = build({ status: 'SENT', lines: PDF_LINES });
+    const out = await svc.requestPdf(TENANT, 'req1', 'sent', 'BUSINESS_OWNER');
+    expect(svc.documents.readFiled).not.toHaveBeenCalled();
+    expect(out.buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(out.buffer.toString()).not.toMatch(/^%PDF-filed/);
+  });
+
+  it('a filed copy whose file is gone is drawn now, and the gap is logged', async () => {
+    const { svc } = build({ status: 'SENT', lines: PDF_LINES, filed: [SENT_COPY], readFails: true });
+    const warn = jest.spyOn(svc.logger, 'warn');
+    const out = await svc.requestPdf(TENANT, 'req1', 'sent', 'BUSINESS_OWNER');
+    expect(svc.documents.readFiled).toHaveBeenCalledTimes(1);
+    expect(out.buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/doc-sent .*could not be read: NoSuchKey/));
+  });
+
+  it('a buy-list PDF on the request does not shift the photo numbering', async () => {
+    const { svc } = build({ status: 'SENT', lines: [], filed: [SENT_COPY, { label: 'Receipt', filename: 'receipt-REQ-20260830-001-1.jpg', mimeType: 'image/jpeg' }] });
+    const out = await svc.attachPhoto(TENANT, 'req1', 'cook', { imageBase64: Buffer.from('jpg').toString('base64') });
+    expect(out.filename).toBe('receipt-REQ-20260830-001-2.jpg');
   });
 
   // ── paid ahead: the shop's own GR/IR ──────────────────────────────────────

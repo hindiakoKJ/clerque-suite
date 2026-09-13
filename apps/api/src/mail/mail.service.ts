@@ -550,6 +550,8 @@ export class MailService {
     branchName:    string | null;
     lines:         Array<{ name: string; amount: string }>;
     link:          string;
+    /** The same PDF Clerque filed on the request, when it could be made. */
+    pdf?:          Buffer | null;
   }): Promise<void> {
     const url = `${this.appUrl}${opts.link}`;
     const rows = opts.lines.map((l) => `
@@ -582,6 +584,7 @@ export class MailService {
           Whoever shops records what they bought on this list; you add it to stock when it arrives.
         </p>
       `),
+      ...(opts.pdf ? { attachments: [{ filename: `${opts.requestNumber}-buy-list.pdf`, content: opts.pdf }] } : {}),
     });
   }
 

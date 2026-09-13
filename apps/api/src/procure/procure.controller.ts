@@ -1,6 +1,7 @@
 import {
-  Controller, Get, Post, Delete, Body, Param, Query, UseGuards, HttpCode, HttpStatus, Headers,
+  Controller, Get, Post, Delete, Body, Param, Query, UseGuards, HttpCode, HttpStatus, Headers, Res, BadRequestException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PurchaseRequestStatus } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -82,6 +83,36 @@ export class ProcureController {
   @ApiOperation({ summary: 'Pack size and last price per ingredient, from the last delivery' })
   packMemory(@CurrentUser() user: JwtPayload) {
     return this.procure.packMemory(user.tenantId!, user.role);
+  }
+
+  /**
+   * The buy list as a PDF, for the group chat. `copy=sent` (default) is the
+   * list as it went out, with no prices, so the kitchen may share it;
+   * `copy=booked` is what was bought and put in stock, with prices only for
+   * those the shop shows purchase costs to.
+   *
+   * Declared BEFORE :id, the same as the routes above.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @Get(':id/pdf')
+  @ApiOperation({ summary: 'The buy list as a PDF: as sent, or as booked into stock' })
+  async pdf(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Res() res: Response,
+    @Query('copy') copy?: string,
+  ) {
+    if (copy != null && copy !== 'sent' && copy !== 'booked') {
+      throw new BadRequestException('copy is "sent" or "booked".');
+    }
+    const out = await this.procure.requestPdf(user.tenantId!, id, copy === 'booked' ? 'booked' : 'sent', user.role);
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `inline; filename="${out.filename}"`,
+      'Content-Length':      out.buffer.length.toString(),
+      'Cache-Control':       'no-store',
+    });
+    res.send(out.buffer);
   }
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')

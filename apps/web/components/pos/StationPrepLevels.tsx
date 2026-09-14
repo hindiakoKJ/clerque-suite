@@ -11,6 +11,9 @@
  * Read-only on purpose: a tablet on the wall is often paired rather than
  * logged in, and recording a batch belongs to the person who made it, on the
  * prep board.
+ *
+ * `compact` is the quarter-width column beside the orders: what needs doing
+ * as small cards, what is fine as one line each.
  */
 import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -66,6 +69,17 @@ const CHIP: Record<PrepStatus, string> = {
   NO_PAR:  'bg-stone-700 text-stone-200',
 };
 const LEVEL: Record<string, string> = { '1': 'Ready to use', '2': 'Parked' };
+/** The coloured edge of a compact card. */
+const EDGE: Record<PrepStatus, string> = {
+  EXPIRED: 'border-red-500',
+  OUT:     'border-red-500',
+  DO_NOW:  'border-amber-400',
+  SOON:    'border-orange-400',
+  LOW:     'border-sky-400',
+  OK:      'border-emerald-600',
+  NO_PAR:  'border-stone-700',
+};
+const FINE = new Set<PrepStatus>(['OK', 'NO_PAR']);
 const RED = new Set<PrepStatus>(['EXPIRED', 'OUT', 'DO_NOW']);
 
 const amount = (n: number, unit: string) => `${Math.max(0, n).toLocaleString('en-PH', { maximumFractionDigits: 1 })} ${unit}`;
@@ -85,8 +99,8 @@ function todo(r: PrepRow): string | null {
 }
 
 export function StationPrepLevels({
-  stationId, enabled, onNewRed, visible = true,
-}: { stationId: string; enabled: boolean; onNewRed?: () => void; visible?: boolean }) {
+  stationId, enabled, onNewRed, visible = true, compact = false,
+}: { stationId: string; enabled: boolean; onNewRed?: () => void; visible?: boolean; compact?: boolean }) {
   const { data, isPending, isError, error, dataUpdatedAt, isFetching } = useQuery<StationPrep>({
     queryKey: ['kds-prep', stationId],
     queryFn:  () => api.get(`/kds/stations/${stationId}/prep`).then((r) => r.data),
@@ -117,16 +131,20 @@ export function StationPrepLevels({
 
   if (!visible) return null;
   if (isPending) {
-    return <div className="flex items-center justify-center gap-2 py-32 text-stone-400"><Loader2 className="h-5 w-5 animate-spin" /> Loading prep levels…</div>;
+    return (
+      <div className={`flex items-center justify-center gap-2 text-stone-400 ${compact ? 'py-8 text-sm' : 'py-32'}`}>
+        <Loader2 className={compact ? 'h-4 w-4 animate-spin' : 'h-5 w-5 animate-spin'} /> Loading prep levels…
+      </div>
+    );
   }
   // A failed refresh keeps the last good tiles, and says so; only no data at all is an error screen.
   if (!data) {
     const message = (error as { response?: { data?: { message?: string } } } | null)?.response?.data?.message;
     return (
-      <div className="flex flex-col items-center justify-center py-32 text-stone-400">
-        <AlertTriangle className="mb-3 h-10 w-10 text-amber-400" />
-        <p className="text-lg font-semibold text-white">Could not load prep levels</p>
-        <p className="mt-1 text-sm">{message ?? 'Check the connection. It tries again every minute.'}</p>
+      <div className={`flex flex-col items-center justify-center text-center text-stone-400 ${compact ? 'py-8' : 'py-32'}`}>
+        <AlertTriangle className={`text-amber-400 ${compact ? 'mb-2 h-6 w-6' : 'mb-3 h-10 w-10'}`} />
+        <p className={`font-semibold text-white ${compact ? 'text-sm' : 'text-lg'}`}>Could not load prep levels</p>
+        <p className={`mt-1 ${compact ? 'text-xs' : 'text-sm'}`}>{message ?? 'Check the connection. It tries again every minute.'}</p>
       </div>
     );
   }
@@ -134,12 +152,77 @@ export function StationPrepLevels({
   const now = new Date(data.at);
   const mine = data.rows.filter((r) => r.assigned);
   const loose = data.rows.filter((r) => !r.assigned);
+  const updated = isFetching
+    ? 'Refreshing…'
+    : `${isError ? 'Could not refresh — showing' : 'Updated'} ${new Date(dataUpdatedAt).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' })}`;
   if (data.rows.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-32 text-stone-500">
-        <UtensilsCrossed className="mb-4 h-14 w-14 opacity-30" />
-        <p className="text-2xl font-semibold">No pre-made items here</p>
-        <p className="mt-1 text-sm">Items made in batches show up once their dishes are routed to this station.</p>
+      <div className={`flex flex-col items-center justify-center text-center text-stone-500 ${compact ? 'py-8' : 'py-32'}`}>
+        <UtensilsCrossed className={`opacity-30 ${compact ? 'mb-2 h-8 w-8' : 'mb-4 h-14 w-14'}`} />
+        <p className={`font-semibold ${compact ? 'text-base' : 'text-2xl'}`}>No pre-made items here</p>
+        <p className={`mt-1 ${compact ? 'text-xs' : 'text-sm'}`}>Items made in batches show up once their dishes are routed to this station.</p>
+      </div>
+    );
+  }
+
+  if (compact) {
+    // Worst first already; unrouted items join the same two lists, marked.
+    const attention = [...mine, ...loose].filter((r) => !FINE.has(r.status))
+      .sort((a, b) => PREP_STATUS_ORDER[a.status] - PREP_STATUS_ORDER[b.status] || Number(!a.assigned) - Number(!b.assigned));
+    const fine = [...mine, ...loose].filter((r) => FINE.has(r.status));
+    return (
+      <div className="space-y-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <h2 className="text-lg font-bold">Prep levels</h2>
+          <span className="text-[11px] text-stone-500">{updated}</span>
+        </div>
+        {attention.length === 0 ? (
+          <p className="rounded-xl border border-emerald-700/50 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300">
+            Every prep level is fine.
+          </p>
+        ) : attention.map((r) => {
+          const what = todo(r);
+          const dates = useBySentences(r.useBy, r.unit, now);
+          return (
+            <div key={r.id} className={`rounded-xl border-l-4 bg-stone-900 px-3 py-2 ${EDGE[r.status]}`}>
+              {/* The name gets the whole width of a narrow column; the chip sits with the amount. */}
+              <p className="text-base font-semibold leading-tight">
+                {r.level === 2 && <Snowflake className="mr-1 inline h-3.5 w-3.5 align-[-2px] text-sky-300" aria-label="Parked" />}
+                {r.name}
+              </p>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                <p className="text-sm tabular-nums text-stone-300">
+                  {amount(r.onHand, r.unit)}
+                  {r.parLevel != null && <span className="text-stone-500"> / par {amount(r.parLevel, r.unit)}</span>}
+                </p>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${CHIP[r.status]}`}>
+                  {PREP_STATUS_LABEL[r.status]}
+                </span>
+              </div>
+              {what && <p className="mt-1 text-sm font-medium leading-snug text-amber-200">{what}</p>}
+              {dates.map((d) => (
+                <p key={d} className={`mt-0.5 text-xs leading-snug ${r.useBy.expired && d.includes('past') ? 'text-red-300' : 'text-orange-200'}`}>{d}</p>
+              ))}
+              {!r.assigned && <p className="mt-0.5 text-[10px] uppercase tracking-wider text-stone-500">Not routed to a station</p>}
+            </div>
+          );
+        })}
+        {fine.length > 0 && (
+          <div>
+            <p className="mb-1 text-[11px] uppercase tracking-wider text-stone-500">Fine</p>
+            <ul className="divide-y divide-stone-800">
+              {fine.map((r) => (
+                <li key={r.id} className="flex items-baseline justify-between gap-2 py-1.5 text-sm">
+                  <span className="min-w-0 truncate text-stone-300" title={r.name}>{r.name}</span>
+                  <span className="shrink-0 tabular-nums text-stone-400">
+                    {amount(r.onHand, r.unit)}{r.status === 'NO_PAR' && <span className="ml-1 text-[10px] text-stone-600">no par</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <p className="text-[10px] leading-snug text-stone-600">Use-by amounts are estimates: the oldest batch is taken to be used first.</p>
       </div>
     );
   }
@@ -186,7 +269,7 @@ export function StationPrepLevels({
   return (
     <div className="space-y-6">
       <p className="text-xs uppercase tracking-wider text-stone-500">
-        {data.branchName} · {isFetching ? 'Refreshing…' : `${isError ? 'Could not refresh — showing' : 'Updated'} ${new Date(dataUpdatedAt).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' })} · every minute`}
+        {data.branchName} · {isFetching ? updated : `${updated} · every minute`}
         {' · '}use-by amounts are estimates: the oldest batch is taken to be used first
       </p>
       {mine.length > 0 && (

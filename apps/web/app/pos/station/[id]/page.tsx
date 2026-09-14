@@ -9,6 +9,7 @@ import { useKioskMode } from '@/hooks/pos/useKioskMode';
 import { buildStationTicket, sendViaRawBt, isLikelyAndroid } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { StationPrepLevels } from '@/components/pos/StationPrepLevels';
+import { StationScreenLayout, STATION_VIEWS, type StationView } from '@/components/pos/StationScreenLayout';
 import { useAuthStore } from '@/store/auth';
 import {
   readDeviceToken,
@@ -125,16 +126,20 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   const chime = useKitchenChime();
 
   /*
-    Orders or prep levels. The orders keep polling underneath either way, so
-    the bell still rings for a new ticket while the prep levels are showing.
-    Remembered per station on this tablet.
+    Orders and prep levels side by side (the default: three quarters and one),
+    orders only, or prep levels only. The orders keep polling underneath every
+    view, so the bell still rings for a new ticket. Remembered per station on
+    this tablet.
   */
   const viewKey = `clerque.station.view.${stationId}`;
-  const [view, setView] = useState<'orders' | 'prep'>('orders');
+  const [view, setView] = useState<StationView>('split');
   useEffect(() => {
-    try { if (localStorage.getItem(viewKey) === 'prep') setView('prep'); } catch { /* storage blocked: start on orders */ }
+    try {
+      const saved = localStorage.getItem(viewKey);
+      if (saved && (STATION_VIEWS as string[]).includes(saved)) setView(saved as StationView);
+    } catch { /* storage blocked: start side by side */ }
   }, [viewKey]);
-  const chooseView = (v: 'orders' | 'prep') => {
+  const chooseView = (v: StationView) => {
     setView(v);
     try { localStorage.setItem(viewKey, v); } catch { /* not remembered, still switched */ }
   };
@@ -280,10 +285,11 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-stone-950 text-white">
+    // A fixed height, so the orders and the prep column each scroll on their own under a header that stays put.
+    <div className="h-screen flex flex-col bg-stone-950 text-white">
       {/* Header */}
-      <header className="px-8 py-5 flex items-center justify-between border-b-2 border-amber-500/50 bg-stone-900">
-        <div className="flex items-center gap-3">
+      <header className="px-4 sm:px-8 py-5 flex flex-wrap items-center justify-between gap-3 border-b-2 border-amber-500/50 bg-stone-900">
+        <div className="flex flex-wrap items-center gap-3">
           <Icon className="h-8 w-8 text-amber-400" />
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{stationName}</h1>
@@ -291,8 +297,8 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
               Kitchen Display · {items.filter((i) => i.prepStatus === 'PENDING').length} pending
             </p>
           </div>
-          <div className="ml-4 flex overflow-hidden rounded-xl border border-stone-700 text-sm font-semibold">
-            {([['orders', `Orders (${items.filter((i) => i.prepStatus === 'PENDING').length})`], ['prep', 'Prep levels']] as const).map(([v, label]) => (
+          <div className="sm:ml-4 flex overflow-hidden rounded-xl border border-stone-700 text-sm font-semibold">
+            {([['split', 'Orders + prep'], ['orders', `Orders (${items.filter((i) => i.prepStatus === 'PENDING').length})`], ['prep', 'Prep levels']] as const).map(([v, label]) => (
               <button key={v} onClick={() => chooseView(v)}
                 className={`px-4 py-2 transition-colors ${view === v ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'}`}>
                 {label}
@@ -364,19 +370,20 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
         </div>
       )}
 
-      {/* Queue grid */}
-      <main className="flex-1 overflow-y-auto p-6">
-        {/* Always mounted, so prep levels keep watching (and ring) while the orders are showing. */}
-        <StationPrepLevels stationId={stationId} enabled={!!stationId && pairState === 'ok'} visible={view === 'prep'}
-          onNewRed={() => { if (chime.enabled) chime.ring(); }} />
-        {view === 'prep' ? null : orderNumbers.length === 0 ? (
+      <StationScreenLayout
+        view={view}
+        // Always mounted, so prep levels keep watching (and ring) while only the orders are showing.
+        prep={<StationPrepLevels stationId={stationId} enabled={!!stationId && pairState === 'ok'} visible={view !== 'orders'}
+          compact={view === 'split'} onNewRed={() => { if (chime.enabled) chime.ring(); }} />}
+        orders={orderNumbers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-32 text-stone-500">
             <Check className="h-16 w-16 opacity-30 mb-4" />
             <p className="text-2xl font-semibold">All caught up</p>
             <p className="text-sm mt-1">Waiting for new orders…</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          // Three quarters of the width when side by side: one fewer column at each size.
+          <div className={view === 'split' ? 'grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'}>
             {orderNumbers.map((orderNumber) => {
               const orderItems = grouped[orderNumber];
               const allReady = orderItems.every((i) => i.prepStatus === 'READY');
@@ -448,7 +455,7 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
             })}
           </div>
         )}
-      </main>
+      />
     </div>
   );
 }

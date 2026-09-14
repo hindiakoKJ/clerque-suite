@@ -309,10 +309,12 @@ export default function ReceiptsPage() {
   const [documentKind, setDocumentKind] = useState<DocumentKind>('receipt');
   // What kind of place the vendor is, for the where-bought report. An order screen is online, a delivery slip a supplier.
   const [placeKind, setPlaceKind] = useState<SourceKind | ''>('');
+  // Picked by the person rather than guessed from the kind of photo.
+  const [placeByHand, setPlaceByHand] = useState(false);
   const chooseKind = (k: DocumentKind) => {
     setDocumentKind(k);
-    if (k === 'order_screen') { setPaidAhead(true); setPlaceKind('ONLINE'); }
-    if (k === 'delivery_receipt') setPlaceKind('SUPPLIER');
+    if (k === 'order_screen') setPaidAhead(true);
+    if (!placeByHand) setPlaceKind(k === 'order_screen' ? 'ONLINE' : k === 'delivery_receipt' ? 'SUPPLIER' : '');
   };
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -578,7 +580,8 @@ export default function ReceiptsPage() {
         ...(branchId ? { branchId } : {}),
         ...(requestId ? { purchaseRequestId: requestId, postNow, ...(!postNow && paidAhead ? { paidAhead: true } : {}) } : {}),
         ...(vendor.trim() ? { vendor: vendor.trim() } : {}),
-        ...(placeKind ? { sourceKind: placeKind } : {}),
+        // A guessed kind with no store named would relabel whatever store the lines already have.
+        ...(placeKind && (vendor.trim() || placeByHand) ? { sourceKind: placeKind } : {}),
         receiptDate: date,
         ...(ref.trim() ? { referenceNumber: ref.trim() } : {}),
         paymentMethod: paidBy,
@@ -646,6 +649,9 @@ export default function ReceiptsPage() {
     if (ask && hasWork && !result && !window.confirm(`Throw away the ${rows.length} line${rows.length === 1 ? '' : 's'} on screen?`)) return;
     setPhoto(null); setIdemKey(mintKey()); setRows([]); setVendor(''); setDate(todayPH()); setRef('');
     setReading(null); setResult(null);
+    // The next receipt starts from its own kind of photo, not the last one's choice.
+    setPlaceByHand(false);
+    setPlaceKind(documentKind === 'order_screen' ? 'ONLINE' : documentKind === 'delivery_receipt' ? 'SUPPLIER' : '');
   }
 
   /** Back to the lines with the same key: the replay applies the corrections. */
@@ -841,7 +847,7 @@ export default function ReceiptsPage() {
         </label>
         <label className="text-[11px] text-muted-foreground">
           Kind of place
-          <select value={placeKind} onChange={(e) => setPlaceKind(e.target.value as SourceKind | '')}
+          <select value={placeKind} onChange={(e) => { setPlaceKind(e.target.value as SourceKind | ''); setPlaceByHand(true); }}
             className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]">
             <option value="">—</option>
             {SOURCE_KINDS.map((k) => <option key={k} value={k}>{SOURCE_KIND_LABEL[k]}</option>)}

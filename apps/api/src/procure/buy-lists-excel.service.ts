@@ -160,6 +160,9 @@ export class BuyListsExcelService {
     ws.getColumn(COL.packSize).numFmt = '#,##0.###';
     ws.getColumn(COL.pricePerPack).numFmt = '#,##0.00';
     ws.getColumn(COL.amount).numFmt = '#,##0.00';
+    // Text, so a store typed as "7-11" or "3/4" is not turned into a date by Excel.
+    ws.getColumn(COL.brand).numFmt = '@';
+    ws.getColumn(COL.store).numFmt = '@';
     const lastRow = data.length + 1;
     const existingRows = data.length - SPARE_ROWS;
     for (let r = 2; r <= lastRow; r++) {
@@ -406,6 +409,7 @@ export class BuyListsExcelService {
         // "Brand / store" is the heading on files downloaded before the store had its own column.
         pricePerPack: get(row, 'price per pack (php)'), brand: colOf.has('brand') ? get(row, 'brand') : get(row, 'brand / store'),
         boughtAt: get(row, 'bought at'), store: get(row, 'store'), rowKey: get(row, 'row key'),
+        storeIsDate: colOf.has('store') && row.getCell(colOf.get('store')!).value instanceof Date,
         was: hasWas ? {
           item: get(row, 'was item'), boughtOn: get(row, 'was bought on'), packs: get(row, 'was packs'),
           packSize: get(row, 'was pack size'), pricePerPack: get(row, 'was price'), brand: get(row, 'was brand'),

@@ -57,11 +57,18 @@ describe('where it was bought', () => {
       { rawMaterialId: 'milk', rawMaterial: MILK, packsBought: 1, packSize: 1000, packCost: 95, sourceKind: null, sourceName: null, purchaseRequest: { id: 'r1', boughtAt: at('2026-09-01'), notes: null } },
     ];
 
-    function build(showCostsToStaff = true) {
+    // The original request each balance belongs to, as the database would find it by number.
+    const ORIGINALS = [{ rawMaterialId: 'milk', packsBought: 2, purchaseRequest: { requestNumber: 'REQ-20260911-001' } }];
+
+    function build(showCostsToStaff = true, rows: any[] = ROWS, originals: any[] = ORIGINALS) {
       const prisma: any = {
         tenant: { findUnique: jest.fn().mockResolvedValue({ showPurchaseCostsToStaff: showCostsToStaff }) },
         branch: { findFirst: jest.fn(({ where }: any) => Promise.resolve(where.tenantId === TENANT ? { id: where.id } : null)) },
-        purchaseRequestLine: { findMany: jest.fn().mockResolvedValue(ROWS) },
+        purchaseRequestLine: {
+          findMany: jest.fn(({ where }: any) => Promise.resolve(where.purchaseRequest?.requestNumber
+            ? originals.filter((o) => where.purchaseRequest.requestNumber.in.includes(o.purchaseRequest.requestNumber))
+            : rows)),
+        },
       };
       return { svc: new ProcureService(prisma, {} as never), prisma };
     }
@@ -70,8 +77,12 @@ describe('where it was bought', () => {
       const { svc, prisma } = build();
       const res = await svc.whereBought(TENANT, { from: '2026-09-01', to: '2026-09-14' }, 'BUSINESS_OWNER');
 
-      const where = prisma.purchaseRequestLine.findMany.mock.calls[0][0].where;
+      const { where, orderBy } = prisma.purchaseRequestLine.findMany.mock.calls[0][0];
       expect(where.purchaseRequest).toMatchObject({ tenantId: TENANT, status: { in: ['BOUGHT', 'RECEIVED'] } });
+      // Really bought: in stock, or bought and waiting to be posted. A line put back on the list when its request closed is neither.
+      expect(where).toMatchObject({ packsBought: { gt: 0 }, OR: [{ receivedAt: { not: null } }, { purchaseRequest: { status: 'BOUGHT' } }] });
+      // Two lists bought the same day: the later one first.
+      expect(orderBy).toEqual([{ purchaseRequest: { boughtAt: 'desc' } }, { purchaseRequest: { requestNumber: 'desc' } }, { lineNumber: 'asc' }]);
       expect(where.purchaseRequest.boughtAt.gte).toEqual(at('2026-09-01'));
       expect(where.purchaseRequest.boughtAt.lt).toEqual(at('2026-09-15'));
 
@@ -91,6 +102,19 @@ describe('where it was bought', () => {
         ['shopee', 1, 1, 1],
         ['MARKET', 1, 1, 1],
       ]);
+    });
+
+    it('when nothing came the first time, the balance still coming is the purchase', async () => {
+      // The Shopee milk: 0 of 3 arrived, so the original line is 0 packs and drops out; the balance holds all 3.
+      const rows = [
+        { rawMaterialId: 'milk', rawMaterial: MILK, packsBought: 3, packSize: 1000, packCost: 90, sourceKind: 'ONLINE', sourceName: 'Shopee', purchaseRequest: { id: 'rb', boughtAt: at('2026-09-12'), notes: '[BALANCEOF:REQ-20260911-004] [ONTHEWAY:2026-09-12]' } },
+      ];
+      const { svc } = build(true, rows, [{ rawMaterialId: 'milk', packsBought: 0, purchaseRequest: { requestNumber: 'REQ-20260911-004' } }]);
+      const res = await svc.whereBought(TENANT, { from: '2026-09-01', to: '2026-09-14' }, 'BUSINESS_OWNER');
+      expect(res.totals).toMatchObject({ buys: 1, withStore: 1, trips: 1, stores: 1, spend: 270 });
+      const milk = res.items[0];
+      expect(milk).toMatchObject({ buys: 1, usuallyFrom: { kind: 'ONLINE', name: 'Shopee', times: 1, of: 1 } });
+      expect(milk.stores[0]).toMatchObject({ times: 1, lastPackCost: 90 });
     });
 
     it('staff on a shop that hides purchase costs see where, not what it cost', async () => {
@@ -126,14 +150,20 @@ describe('where it was bought', () => {
         rawMaterialId: 'milk',
         sourceKind: i < 10 ? 'GROCERY' : 'ONLINE',
         sourceName: i < 10 ? (i < 4 ? 'Puregold' : 'S&R') : 'Shopee',
-        purchaseRequest: { branchId: 'b1', boughtAt: new Date(Date.UTC(2026, 8, 12 - i)) },
+        purchaseRequest: { id: `r${i}`, branchId: 'b1', boughtAt: new Date(Date.UTC(2026, 8, 12 - i)), notes: null },
       }));
       const prisma: any = { purchaseRequestLine: { findMany: jest.fn().mockResolvedValue(rows) } };
       const svc: any = new ProcureService(prisma, {} as never);
       const map = await svc.usualSources('t1', ['b1'], ['milk']);
       expect(map.get('b1:milk')).toEqual({ kind: 'GROCERY', name: 'S&R', times: 6, of: 10 });
       const where = prisma.purchaseRequestLine.findMany.mock.calls[0][0].where;
-      expect(where.purchaseRequest.OR).toEqual([{ notes: null }, { NOT: { notes: { contains: '[BALANCEOF:' } } }]);
+      expect(where).toMatchObject({ packsBought: { gt: 0 }, OR: [{ receivedAt: { not: null } }, { purchaseRequest: { status: 'BOUGHT' } }] });
+
+      // A balance of a purchase that did arrive in part is not a second buy.
+      prisma.purchaseRequestLine.findMany.mockImplementation(({ where }: any) => Promise.resolve(where.purchaseRequest?.requestNumber
+        ? [{ rawMaterialId: 'milk', packsBought: 1, purchaseRequest: { requestNumber: 'REQ-20260901-001' } }]
+        : [{ rawMaterialId: 'milk', sourceKind: 'ONLINE', sourceName: 'Shopee', purchaseRequest: { id: 'rb', branchId: 'b1', boughtAt: new Date(Date.UTC(2026, 8, 13)), notes: '[BALANCEOF:REQ-20260901-001]' } }, ...rows]));
+      expect((await svc.usualSources('t1', ['b1'], ['milk'])).get('b1:milk')).toEqual({ kind: 'GROCERY', name: 'S&R', times: 6, of: 10 });
 
       prisma.purchaseRequestLine.findMany.mockRejectedValueOnce(new Error('connection reset'));
       await expect(svc.usualSources('t1', ['b1'], ['milk'])).resolves.toBeNull();

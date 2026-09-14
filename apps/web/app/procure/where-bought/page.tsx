@@ -54,10 +54,13 @@ export default function WhereBoughtPage() {
   const [view, setView] = useState<'items' | 'stores'>('items');
   const [q, setQ] = useState('');
 
-  const { data, isLoading, isError, error, refetch, isFetching } = useQuery<Report>({
+  // A cleared or backwards date asks for nothing, and says why, instead of an error.
+  const datesOk = !!from && !!to && from <= to;
+  // The server keeps a branch's staff to their own branch; an owner sees the whole shop.
+  const { data, isPending, isError, error, refetch, isFetching } = useQuery<Report>({
     queryKey: ['procure-where-bought', from, to, user?.sub],
     queryFn:  () => api.get('/procure/requests/where-bought', { params: { from, to } }).then((r) => r.data),
-    enabled:  !!user && !!from && !!to && from <= to,
+    enabled:  !!user && datesOk,
     staleTime: 60_000,
   });
 
@@ -100,9 +103,11 @@ export default function WhereBoughtPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {!datesOk ? (
+        <p className="text-sm text-muted-foreground">Pick a From date on or before the To date.</p>
+      ) : isPending && isFetching ? (
         <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
-      ) : isError || !data ? (
+      ) : isError ? (
         <div className="rounded-xl border border-border bg-card p-5 text-sm">
           <p className="flex items-center gap-2 font-medium"><AlertTriangle className="h-4 w-4 text-amber-500" /> Could not load where things are bought</p>
           <p className="mt-1 text-muted-foreground">
@@ -110,6 +115,8 @@ export default function WhereBoughtPage() {
           </p>
           <button type="button" onClick={() => void refetch()} disabled={isFetching} className="mt-3 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50">Try again</button>
         </div>
+      ) : !data ? (
+        <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
       ) : (
         <>
           <p className="text-sm">

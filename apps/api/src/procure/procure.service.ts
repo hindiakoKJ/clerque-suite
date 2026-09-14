@@ -101,6 +101,8 @@ const USUALLY_DAYS = 90;
 const USUALLY_BUYS = 10;
 /** The where-bought report reads at most this many purchase lines; past that it says so. */
 const WHERE_BOUGHT_MAX_LINES = 20_000;
+/** A request that holds the balance of another's short delivery. */
+const isBalance = (notes: string | null | undefined) => !!readTag(notes, 'BALANCEOF');
 
 /** What somebody counted on the shelf while building the list, waiting to be posted. */
 export interface CountedLine {
@@ -1703,21 +1705,22 @@ export class ProcureService {
   private async usualSources(tenantId: string, branchIds: string[], itemIds: string[]): Promise<Map<string, UsuallyFrom | null> | null> {
     if (itemIds.length === 0) return new Map();
     try {
-      const rows = await this.prisma.purchaseRequestLine.findMany({
+      const found = await this.prisma.purchaseRequestLine.findMany({
         where: {
           rawMaterialId: { in: itemIds },
-          packsBought:   { gt: 0 },
+          ...this.reallyBought(),
           purchaseRequest: {
             tenantId,
             branchId: { in: branchIds },
             status:   { in: ['BOUGHT', 'RECEIVED'] },
             boughtAt: { gte: new Date(Date.now() - USUALLY_DAYS * 86_400_000) },
-            ...this.notABalance(),
           },
         },
-        orderBy: { purchaseRequest: { boughtAt: 'desc' } },
-        select:  { rawMaterialId: true, sourceKind: true, sourceName: true, purchaseRequest: { select: { branchId: true, boughtAt: true } } },
+        orderBy: [{ purchaseRequest: { boughtAt: 'desc' } }, { purchaseRequest: { requestNumber: 'desc' } }],
+        select:  { rawMaterialId: true, sourceKind: true, sourceName: true, purchaseRequest: { select: { id: true, branchId: true, boughtAt: true, notes: true } } },
       });
+      const balanceIsTheBuy = await this.balancesThatAreTheBuy(tenantId, found);
+      const rows = found.filter((r) => !isBalance(r.purchaseRequest.notes) || balanceIsTheBuy.has(`${r.purchaseRequest.id}:${r.rawMaterialId}`));
       const byKey = new Map<string, Array<{ sourceKind: string | null; sourceName: string | null; on: Date }>>();
       for (const r of rows) {
         const key = `${r.purchaseRequest.branchId}:${r.rawMaterialId}`;
@@ -1733,12 +1736,47 @@ export class ProcureService {
   }
 
   /**
-   * Leaves out a request that only holds the balance of a short delivery. Notes
-   * can be empty, and NOT(contains) on an empty note is not true in SQL, so the
-   * empty case is said out loud.
+   * A line that was really bought: packs recorded, and either already in stock
+   * or on a request still waiting to be posted. A request closed with a line
+   * never posted put that line back on the shopping list -- its packs and
+   * price are still on it, but nothing was bought or paid, and counting it
+   * would count the same purchase again when it is bought for real.
    */
-  private notABalance() {
-    return { OR: [{ notes: null }, { NOT: { notes: { contains: '[BALANCEOF:' } } }] };
+  private reallyBought() {
+    return {
+      packsBought: { gt: 0 },
+      OR: [{ receivedAt: { not: null } }, { purchaseRequest: { status: 'BOUGHT' as const } }],
+    };
+  }
+
+  /**
+   * The balance requests, of those given, that ARE the purchase rather than
+   * part of one.
+   *
+   * A short delivery splits one purchase: what came stays on the original
+   * line, what is still coming goes onto a balance request. Normally the
+   * original is the buy and the balance only adds money. But when nothing at
+   * all came, the original line is rewritten to zero packs and drops out, and
+   * the balance is all that is left of the purchase -- so it counts as the buy.
+   * Keyed `balanceRequestId:rawMaterialId`.
+   */
+  private async balancesThatAreTheBuy(
+    tenantId: string,
+    rows: Array<{ rawMaterialId: string; purchaseRequest: { id: string; notes: string | null } }>,
+  ): Promise<Set<string>> {
+    const balances = rows.filter((r) => isBalance(r.purchaseRequest.notes));
+    if (balances.length === 0) return new Set();
+    const numbers = [...new Set(balances.map((r) => readTag(r.purchaseRequest.notes, 'BALANCEOF')).filter((n): n is string => !!n))];
+    const originals = numbers.length === 0 ? [] : await this.prisma.purchaseRequestLine.findMany({
+      where:  { rawMaterialId: { in: [...new Set(balances.map((r) => r.rawMaterialId))] }, purchaseRequest: { tenantId, requestNumber: { in: numbers } } },
+      select: { rawMaterialId: true, packsBought: true, purchaseRequest: { select: { requestNumber: true } } },
+    });
+    const counted = new Set(originals
+      .filter((o) => o.packsBought != null && Number(o.packsBought) > 0)
+      .map((o) => `${o.purchaseRequest.requestNumber}:${o.rawMaterialId}`));
+    return new Set(balances
+      .filter((r) => !counted.has(`${readTag(r.purchaseRequest.notes, 'BALANCEOF')}:${r.rawMaterialId}`))
+      .map((r) => `${r.purchaseRequest.id}:${r.rawMaterialId}`));
   }
 
   /**
@@ -1751,7 +1789,9 @@ export class ProcureService {
    * how much was spent.
    *
    * A trip is a request; a buy is one line. The balance of a short delivery is
-   * part of the same buy -- its money counts, its line is not a second buy.
+   * part of the same buy -- its money counts, its line is not a second buy --
+   * unless nothing came the first time, when the balance is the buy. A line
+   * put back on the list when its request closed was never bought at all.
    * Prices and spend only for people who may see purchase costs; store names
    * are not a cost and are shown to everyone who can open Procure.
    */
@@ -1771,7 +1811,7 @@ export class ProcureService {
 
     const rows = await this.prisma.purchaseRequestLine.findMany({
       where: {
-        packsBought: { gt: 0 },
+        ...this.reallyBought(),
         purchaseRequest: {
           tenantId,
           status:   { in: ['BOUGHT', 'RECEIVED'] },
@@ -1779,7 +1819,8 @@ export class ProcureService {
           ...(branchId ? { branchId } : {}),
         },
       },
-      orderBy: [{ purchaseRequest: { boughtAt: 'desc' } }, { lineNumber: 'asc' }],
+      // Two lists bought the same day: the later one is the newer purchase.
+      orderBy: [{ purchaseRequest: { boughtAt: 'desc' } }, { purchaseRequest: { requestNumber: 'desc' } }, { lineNumber: 'asc' }],
       take:    WHERE_BOUGHT_MAX_LINES + 1,
       select: {
         rawMaterialId: true, packsBought: true, packSize: true, packCost: true, sourceKind: true, sourceName: true,
@@ -1789,6 +1830,7 @@ export class ProcureService {
     });
     const truncated = rows.length > WHERE_BOUGHT_MAX_LINES;
     if (truncated) rows.length = WHERE_BOUGHT_MAX_LINES;
+    const balanceIsTheBuy = await this.balancesThatAreTheBuy(tenantId, rows);
 
     const round = (n: number, dp: number) => Math.round(n * 10 ** dp) / 10 ** dp;
     /*
@@ -1816,7 +1858,7 @@ export class ProcureService {
     // Newest first, so the first time a store is met is its latest purchase and spelling.
     for (const r of rows) {
       const on = r.purchaseRequest.boughtAt!;
-      const balance = (r.purchaseRequest.notes ?? '').includes('[BALANCEOF:');
+      const balance = isBalance(r.purchaseRequest.notes) && !balanceIsTheBuy.has(`${r.purchaseRequest.id}:${r.rawMaterialId}`);
       const packs = Number(r.packsBought), size = r.packSize != null ? Number(r.packSize) : null;
       const cost = r.packCost != null ? Number(r.packCost) : null;
       const amount = cost != null ? round(packs * cost, 2) : 0;

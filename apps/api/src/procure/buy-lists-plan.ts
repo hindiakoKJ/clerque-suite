@@ -40,6 +40,8 @@ export interface SheetRow {
   boughtAt: string;
   /** The store itself: "Puregold", "Shopee". */
   store: string;
+  /** Excel turned what was typed under Store into a date ("7-11" became 11-Jul); what was typed cannot be recovered. */
+  storeIsDate?: boolean;
   /** A spare row's hidden key: once recorded, the purchase is found by it again. */
   rowKey: string;
   /**
@@ -173,9 +175,11 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
     const brand = clean(row.brand) || null;
     // Blank keeps what Clerque has, the way a blank brand does.
     const where = sourceKindFromLabel(row.boughtAt);
-    const store = cleanSourceName(row.store)?.slice(0, 80) ?? null;
+    // Cut, then tidy, the way the app stores it: a cut on a space must not leave one behind.
+    const store = cleanSourceName(cleanSourceName(row.store)?.slice(0, 80));
     if ([packs, size, price].some((n) => Number.isNaN(n))) { refuse('Packs, pack size and price have to be numbers.'); continue; }
     if (clean(row.boughtAt) && !where) { refuse(`Bought at has to be one of ${KIND_WORDS}.`); continue; }
+    if (row.storeIsDate) { refuse('Excel turned the Store into a date. Type the store again with an apostrophe in front, like \'7-11.'); continue; }
     if (bought === 'bad') { refuse('Bought on has to be a date (YYYY-MM-DD).'); continue; }
     if (bought && bought > input.today) { refuse('Bought on is in the future.'); continue; }
     const filled = [packs, size, price].filter((n) => n != null).length;
@@ -244,11 +248,11 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
         // Edited in the file, and Clerque already says the same -- this file was uploaded before.
         const alreadyInClerque = (packs == null || same(packs, line.packsBought)) && (typedSize == null || same(typedSize, line.packSize))
           && (price == null || same(price, line.packCost)) && (brand == null || brand === line.brandNote) && (bought == null || bought === line.boughtOn)
-          && (where == null || where === kindOf(line.sourceKind)) && (store == null || store === (line.sourceName ?? null));
+          && (where == null || where === kindOf(line.sourceKind)) && (store == null || store === cleanSourceName(line.sourceName));
         if (alreadyInClerque) { out.push({ kind: 'UNCHANGED', rowNumber: row.rowNumber, lineNumber, item: line.itemName }); continue; }
         const drifted = !same(line.packsBought, wasPacks) || !same(line.packSize, wasSize) || !same(line.packCost, wasPrice)
           || (line.brandNote ?? null) !== wasBrand || (wasDay !== 'bad' && (line.boughtOn ?? null) !== wasDay)
-          || (hasWasSource && (kindOf(line.sourceKind) !== wasWhere || (line.sourceName ?? null) !== wasStore));
+          || (hasWasSource && (kindOf(line.sourceKind) !== wasWhere || cleanSourceName(line.sourceName) !== wasStore));
         if (drifted) {
           refuse(`${line.itemName} (${lineNumber}) was changed in Clerque after this file was downloaded. Download the file again and make the change there.`);
           continue;
@@ -263,15 +267,22 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
       const next = {
         packsBought: packs ?? line.packsBought, packSize: typedSize ?? line.packSize, packCost: price ?? line.packCost,
         brandNote: brand ?? line.brandNote, boughtOn: bought,
-        sourceKind: where ?? kindOf(line.sourceKind), sourceName: store ?? line.sourceName ?? null,
+        sourceKind: where ?? kindOf(line.sourceKind), sourceName: store ?? cleanSourceName(line.sourceName),
       };
-      const unchanged = same(next.packsBought, line.packsBought) && same(next.packSize, line.packSize)
-        && same(next.packCost, line.packCost) && next.brandNote === line.brandNote && (bought == null || bought === line.boughtOn)
-        && next.sourceKind === kindOf(line.sourceKind) && next.sourceName === (line.sourceName ?? null);
+      const sameBuy = same(next.packsBought, line.packsBought) && same(next.packSize, line.packSize)
+        && same(next.packCost, line.packCost) && next.brandNote === line.brandNote && (bought == null || bought === line.boughtOn);
+      const unchanged = sameBuy && next.sourceKind === kindOf(line.sourceKind) && next.sourceName === cleanSourceName(line.sourceName);
       if (unchanged) { out.push({ kind: 'UNCHANGED', rowNumber: row.rowNumber, lineNumber, item: line.itemName }); continue; }
 
       const why = cannotChange(line);
-      if (why) { refuse(why); continue; }
+      if (why) {
+        // Only where it was bought changed: "correct it under Stock on hand" would send them somewhere with no store to set.
+        const whereOnly = sameBuy && (line.receivedAt || line.prepaid);
+        refuse(whereOnly
+          ? `Bought at and Store can only be filled in from the sheet before ${line.itemName} (${line.lineNumber}) is ${line.receivedAt ? 'in stock' : 'paid ahead'}; it stays as recorded.`
+          : why);
+        continue;
+      }
       if (!(next.packsBought! > 0) || !(next.packSize! > 0) || !(next.packCost! > 0)) {
         refuse(filled < 3 && line.packsBought == null
           ? 'Fill in packs, pack size and price per pack together.'
@@ -336,10 +347,10 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
     const earlier = keyed ?? input.lines.find((l) => l.fromSheet && l.requestStatus !== 'CANCELLED'
       && l.branchId === branch.id && l.boughtOn === bought && l.rawMaterialId === material.id);
     if (earlier) {
-      const nextKind = where ?? kindOf(earlier.sourceKind), nextStore = store ?? earlier.sourceName ?? null;
+      const nextKind = where ?? kindOf(earlier.sourceKind), nextStore = store ?? cleanSourceName(earlier.sourceName);
       const unchanged = same(packs, earlier.packsBought) && same(sizeInUnit, earlier.packSize) && same(price, earlier.packCost)
         && (brand ?? earlier.brandNote) === earlier.brandNote
-        && nextKind === kindOf(earlier.sourceKind) && nextStore === (earlier.sourceName ?? null);
+        && nextKind === kindOf(earlier.sourceKind) && nextStore === cleanSourceName(earlier.sourceName);
       if (unchanged) { out.push({ kind: 'UNCHANGED', rowNumber: row.rowNumber, lineNumber: earlier.lineNumber, item: material.name }); continue; }
       const why = cannotChange(earlier);
       if (why) { refuse(`Already recorded as ${earlier.lineNumber}. ${why}`); continue; }

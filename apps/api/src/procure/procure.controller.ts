@@ -17,6 +17,7 @@ import { RequireIdempotency } from '../common/decorators/require-idempotency.dec
 import { ProcureService, AddLineDto } from './procure.service';
 import { ReceiveRequestDto, RecordBoughtDto, AttachPhotoDto, RecordCountDto } from './dto/receive-request.dto';
 import { SANITY_HEADER, sanityContext } from '../common/sanity/sanity.types';
+import { effectiveBranchId } from '../common/branch-scope';
 
 /**
  * Clerque Procure.
@@ -107,7 +108,8 @@ export class ProcureController {
     @Query('to') to?: string,
     @Query('branchId') branchId?: string,
   ) {
-    return this.procure.whereBought(user.tenantId!, { from, to, branchId }, user.role);
+    // A branch's staff see their own branch; an owner sees the branch asked for, or the whole shop.
+    return this.procure.whereBought(user.tenantId!, { from, to, branchId: effectiveBranchId(user, branchId) }, user.role);
   }
 
   /**

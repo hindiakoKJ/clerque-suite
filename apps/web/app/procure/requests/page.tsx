@@ -281,6 +281,9 @@ export default function ProcurePage() {
   // Where this trip's shopping was done. Written on the lines saved with it.
   const [whereKind, setWhereKind] = useState<SourceKind | ''>('');
   const [whereName, setWhereName] = useState('');
+  // Lines already recorded that the person chose to mark as bought at the picked store.
+  const [moveHere, setMoveHere] = useState<Set<string>>(() => new Set());
+  const clearWhere = () => { setWhereKind(''); setWhereName(''); setMoveHere(new Set()); };
   const [ordered, setOrdered]   = useState(false);
   /** Paid on order day, from this pocket -- the money leaves now and waits for the goods. */
   const [paidFrom, setPaidFrom] = useState<Pocket | ''>('');
@@ -357,6 +360,8 @@ export default function ProcurePage() {
     setReceivedAt(req?.boughtAt && (req.notes ?? '').includes('Recorded from an Excel upload')
       ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(req.boughtAt))
       : manilaToday());
+    // A store picked for one request is not where the next one was bought.
+    clearWhere();
     // Only when a different request is opened; a later edit of the date stands.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [req?.id]);
@@ -645,22 +650,28 @@ export default function ProcurePage() {
   const [postKey, setPostKey] = useState<string>(mintKey);
 
   /*
-    The store picked below goes onto a line that has none yet, or one changed
-    on screen in this go. A line recorded earlier at another store keeps it:
-    a trip to Puregold saved first, then the palengke, must not turn the
-    Puregold lines into palengke ones just because they are still ticked.
+    The store picked below goes onto the lines being recorded now -- the ones
+    with nothing recorded yet -- and onto a recorded line only when the person
+    says so ("set to" on the line, or "also mark" under the picker). Every
+    recorded line is sent again with each Save, so anything broader relabels a
+    trip saved earlier: Puregold lines saved first become palengke lines when
+    the palengke part of the trip is saved, and a price fixed while the picker
+    still says Palengke moves that line too.
   */
   const whereFor = (l: Line): { sourceKind: SourceKind | null; sourceName: string | null } | null => {
     const name = cleanSourceName(whereName);
     if (!whereKind && !name) return null;
-    const hasOne = !!(l.sourceKind || l.sourceName);
-    if (hasOne && !bought[l.id]) return null;
+    if (l.packsBought != null && !moveHere.has(l.id)) return null;
     return { sourceKind: whereKind || null, sourceName: name };
   };
+  const wherePicked = !!(whereKind || cleanSourceName(whereName));
+  // Recorded, not in stock, no store yet: what "also mark" would label.
+  const storeless = (req?.lines ?? []).filter((l) => canDecide && !l.receivedAt && l.packsBought != null
+    && !l.sourceKind && !l.sourceName && !moveHere.has(l.id));
 
-  /** Packs, size or price typed on screen that the request has not been told about. */
+  /** Packs, size, price or store changed on screen that the request has not been told about. */
   const pendingFixes = () => (req?.lines ?? [])
-    .filter((l) => !l.receivedAt && bought[l.id])
+    .filter((l) => !l.receivedAt && (bought[l.id] || moveHere.has(l.id)))
     .map((l) => {
       const b = valuesFor(l);
       const packs = parseFloat(b.packs), size = parseFloat(b.size), cost = parseFloat(b.cost);
@@ -710,7 +721,7 @@ export default function ProcurePage() {
     onSuccess: (d) => {
       refresh(); setBuyKey(mintKey()); setBought({});
       setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
-      setWhereKind(''); setWhereName('');
+      clearWhere();
       if (d?.paidAhead) {
         const bad = d.paidAhead.entries.find((e) => e.error);
         // What the ledger took, not what was asked for: a locked month or a
@@ -795,6 +806,7 @@ export default function ProcurePage() {
     onSuccess: (d) => {
       refresh(); setPostKey(mintKey());
       setCharges([]); setArrived({}); setOutcome({}); setNote(''); setAcceptCost(false);
+      clearWhere();
       const bits: string[] = [];
       if (d.posted.length) bits.push(`${d.posted.length} item${d.posted.length === 1 ? '' : 's'} added to stock`);
       if (d.carried?.length) bits.push(`${d.carried.map((c) => c.name).join(', ')} back on the list`);
@@ -877,11 +889,11 @@ export default function ProcurePage() {
         // The tightest dish only, so the message stays one line per item -- and
         // from the count when "left:" shows one, so the two figures agree.
         const serves = servesSummary(l.serves, 1, { fromCount: !!l.counted });
-        const usually = l.usuallyFrom ? sourceText(l.usuallyFrom.kind, l.usuallyFrom.name) : null;
+        const usually = usuallyFromText(l.usuallyFrom);
         return `• ${l.rawMaterial.name} — ${packsLabel(l)}`
           + (l.counted ? ` · left: ${shelfLabel(l.counted.qty, l)}` : '')
           + (serves ? ` · ${serves}` : '')
-          + (usually ? ` · usually ${usually}` : '');
+          + (usually ? ` · ${usually}` : '');
       }),
     ].join('\n');
     // On a phone the share sheet opens Messenger or Viber directly; elsewhere, the clipboard.
@@ -1531,14 +1543,17 @@ export default function ProcurePage() {
                         )}
                         {b.source === 'none' && !bought[l.id] && <span>first time buying this — fill it in once</span>}
                         {staffLocked && <span>recorded — the owner or manager can change it</span>}
-                        {sourceText(l.sourceKind, l.sourceName) && (
+                        {l.packsBought != null && (sourceText(l.sourceKind, l.sourceName) || (canDecide && wherePicked)) && (
                           <span className="inline-flex items-center gap-1">
-                            <Store className="h-3 w-3" /> at {sourceText(l.sourceKind, l.sourceName)}
-                            {!staffLocked && !bought[l.id] && (whereKind || cleanSourceName(whereName))
+                            <Store className="h-3 w-3" />
+                            {moveHere.has(l.id)
+                              ? <>will be marked at {sourceText(whereKind, whereName)}</>
+                              : sourceText(l.sourceKind, l.sourceName) ? <>at {sourceText(l.sourceKind, l.sourceName)}</> : <>no store recorded</>}
+                            {canDecide && wherePicked && !moveHere.has(l.id)
                               && sourceKey(whereKind, whereName) !== sourceKey(l.sourceKind, l.sourceName) && (
-                              <button type="button" onClick={() => setBought((prev) => ({ ...prev, [l.id]: b }))}
+                              <button type="button" onClick={() => setMoveHere((prev) => new Set(prev).add(l.id))}
                                 className="rounded border border-border px-1.5 py-0.5 hover:bg-muted">
-                                change to {sourceText(whereKind, whereName)}
+                                set to {sourceText(whereKind, whereName)}
                               </button>
                             )}
                           </span>
@@ -1648,6 +1663,17 @@ export default function ProcurePage() {
                   </button>
                 ))}
               </div>
+              {wherePicked && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Goes on the items recorded now.
+                  {storeless.length > 0 && (
+                    <> <button type="button" onClick={() => setMoveHere((prev) => new Set([...prev, ...storeless.map((l) => l.id)]))}
+                      className="ml-1 rounded border border-border bg-background px-1.5 py-0.5 hover:bg-muted">
+                      Also mark the {storeless.length} recorded item{storeless.length === 1 ? '' : 's'} with no store
+                    </button></>
+                  )}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <label className="text-[11px] text-muted-foreground sm:col-span-2">

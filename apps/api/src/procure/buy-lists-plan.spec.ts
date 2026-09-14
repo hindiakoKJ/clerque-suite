@@ -62,6 +62,14 @@ describe('buy-list sheet plan', () => {
     // Changed in Clerque since the download, and in the file too: download again.
     expect(reason(plan([r({ store: 'S&R' })], { lines: [{ ...atPuregold, sourceName: 'Robinsons' }] })[0])).toMatch(/was changed in Clerque after this file was downloaded/);
     expect(reason(plan([r({ boughtAt: 'Sari-sari' })], { lines: [atPuregold] })[0])).toBe('Bought at has to be one of Palengke, Grocery, Online, Supplier, Other.');
+    // Only the store changed on a line already in stock: said as that, not "correct it under Stock on hand".
+    expect(reason(plan([r({ store: 'S&R' })], { lines: [{ ...atPuregold, receivedAt: new Date() }] })[0]))
+      .toBe('Bought at and Store can only be filled in from the sheet before Full Cream Milk (REQ-20260913-001-01) is in stock; it stays as recorded.');
+    // A long name cut on a space is stored without the space, and reads back as the same store.
+    const long = `${'A'.repeat(79)} Plaza`;
+    const cut = plan([r({ store: long })], { lines: [atPuregold] })[0] as { sourceName: string };
+    expect(cut.sourceName).toBe('A'.repeat(79));
+    expect(plan([r({ store: long })], { lines: [{ ...atPuregold, sourceName: 'A'.repeat(79) }] })[0].kind).toBe('UNCHANGED');
     // A file made before the store columns existed: no "was", nothing to drift from.
     const oldWas = { item: 'Full Cream Milk', boughtOn: '2026-09-13', packs: '3', packSize: '1000', pricePerPack: '86.5', brand: 'Emborg' };
     expect(plan([r({ was: oldWas, boughtAt: '', store: '', pricePerPack: '88' })], { lines: [atPuregold] })[0]).toMatchObject({ kind: 'FILL', packCost: 88, sourceName: 'Puregold' });

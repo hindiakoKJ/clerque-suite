@@ -30,7 +30,7 @@ describe('buy lists in Excel — out and back in', () => {
       id: 'r2', requestNumber: 'REQ-20260913-002', status: 'BOUGHT', notes: '[PREPAID:BANK] Shopee order',
       createdAt: d('2026-09-13T03:00:00Z'), sentAt: d('2026-09-13T03:00:00Z'), boughtAt: d('2026-09-12T16:00:00Z'),
       lines: [
-        { id: 'l3', lineNumber: 'REQ-20260913-002-01', rawMaterialId: salt.id, rawMaterial: salt, qtyRequested: 500, packsBought: 1, packSize: 500, packCost: 20, brandNote: 'Iodized', receivedAt: null },
+        { id: 'l3', lineNumber: 'REQ-20260913-002-01', rawMaterialId: salt.id, rawMaterial: salt, qtyRequested: 500, packsBought: 1, packSize: 500, packCost: 20, brandNote: 'Iodized', sourceKind: 'ONLINE', sourceName: 'Shopee', receivedAt: null },
       ],
     }),
     // Another shop, same control number: must never be read.
@@ -119,6 +119,11 @@ describe('buy lists in Excel — out and back in', () => {
     expect(ws.getCell('L4').value).toMatchObject({ formula: 'IF(OR(H4="",K4=""),"",H4*K4)', result: 20 });
     expect(String(ws.getCell('R5').value)).toMatch(/^[0-9a-f]{12}$/);  // a spare row's key
     expect(ws.getCell('D5').dataValidation).toMatchObject({ type: 'list', formulae: ['Items!$A$2:$A$4'] });
+    // Where the paid-ahead salt was bought: the visible pair, and the same pair hidden as downloaded.
+    expect([ws.getCell('M4').value, ws.getCell('N4').value, ws.getCell('O4').value]).toEqual(['Iodized', 'Online', 'Shopee']);
+    expect([ws.getCell('X4').value, ws.getCell('Y4').value, ws.getCell('Z4').value]).toEqual(['Iodized', 'Online', 'Shopee']);
+    // Typed as text, so "7-11" stays 7-11.
+    expect([ws.getColumn(13).numFmt, ws.getColumn(15).numFmt]).toEqual(['@', '@']);
     expect((wb.getWorksheet('Requests')!.getRow(3).values as unknown[]).slice(1)).toEqual(['REQ-20260913-002', 'Main', 'Bought', '2026-09-13', '2026-09-13', '2026-09-13', '', 'the shop bank or GCash', 'Shopee order']);
   });
 
@@ -181,6 +186,28 @@ describe('buy lists in Excel — out and back in', () => {
       [2, 'failed', 'A request has to be sent before it can be bought against.'],
       [6, 'done', undefined],
     ]);
+  });
+
+  it('a file downloaded before the store columns existed still reads, and a store Excel turned into a date is refused', async () => {
+    const { svc } = build();
+    const wb = new ExcelJS.Workbook();
+    wb.keywords = `clerque-tenant:${TENANT}`;
+    const ws = wb.addWorksheet('Lines');
+    ws.addRow(['Line No.', 'Request No.', 'Branch', 'Item', 'Unit', 'Needed', 'Bought on', 'Packs bought', 'Pack size', 'Pack unit',
+      'Price per pack (PHP)', 'Amount (PHP)', 'Brand / store', 'Status', 'In stock on', 'Row key', 'Was item', 'Was bought on', 'Was packs', 'Was pack size', 'Was price', 'Was brand']);
+    ws.addRow(['REQ-20260913-001-01', 'REQ-20260913-001', 'Main', 'Full Cream Milk', 'ml', 3000, '2026-09-13', 3, 1000, 'ml', 86.5, null, 'Emborg', 'Not bought yet', null,
+      '', 'Full Cream Milk', '', null, null, null, '']);
+    const res = await svc.importWorkbook(TENANT, asUpload(await write(wb)), OWNER, true);
+    expect(res.rows).toEqual([expect.objectContaining({ kind: 'FILL', rowNumber: 2, brandNote: 'Emborg', packCost: 86.5, sourceKind: null, sourceName: null })]);
+
+    const { wb: fresh } = await exported();
+    const lines = fresh.getWorksheet('Lines')!;
+    lines.getCell('H2').value = 3; lines.getCell('I2').value = 1000; lines.getCell('J2').value = 'ml'; lines.getCell('K2').value = 86.5;
+    // "7-11" typed into a file from before the text format: Excel stores a date, shown 11-Jul.
+    lines.getCell('O2').value = new Date(Date.UTC(2026, 6, 11));
+    lines.getCell('O2').numFmt = 'd-mmm';
+    const dated = await svc.importWorkbook(TENANT, asUpload(await write(fresh)), OWNER, true);
+    expect(dated.rows.find((r) => r.rowNumber === 2)).toMatchObject({ kind: 'REFUSED', reason: expect.stringMatching(/Excel turned the Store into a date/) });
   });
 
   it('refuses a file from another shop, a CSV, a file that is not a workbook, and a sheet without its headings', async () => {

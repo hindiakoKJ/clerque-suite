@@ -2442,11 +2442,47 @@ Taken as yes to the database change ("please finish all phases"). Built on the b
   and cheapest per unit; per store, purchases and spend. Money only for people who may see
   purchase costs.
 
-- [ ] schema + migration (local DB only), shared SOURCE_KINDS
-- [ ] API writes (bought, receipts, follow-up, sheet), memory, enrich, report route
-- [ ] PDF + Excel columns
-- [ ] web: Bought at picker, usually from, report page + tile
-- [ ] specs, live check, review, push branch
+- [x] schema + migration (applied to the local DB only), shared SOURCE_KINDS
+- [x] API writes (bought, receipts, follow-up, sheet), pack memory, enrich, report route
+- [x] PDF + Excel columns
+- [x] web: Where was it bought? picker, usually from, report page + tile
+- [x] specs, live check, review, push branch
+
+### Reviewed (3 reviewers, each finding checked by a skeptic: 7 confirmed, all fixed, plus 6 smaller ones)
+- The report counted a line put back on the list when its request closed as a purchase (and
+  again when it was really bought). Now only lines in stock, or bought and waiting, count.
+- A short delivery where nothing came dropped the purchase out of the report. The balance
+  still coming is now the purchase when the original line is zero.
+- The buy-list picker could relabel lines saved earlier (Puregold lines turned palengke),
+  and a store picked while posting was silently ignored and carried to the next request.
+  Now: the store goes on items recorded now; recorded items only by "set to" on the line or
+  "Also mark the N recorded items with no store"; cleared after a save, a post, or a new request.
+- The report mixed branches for a branch's staff. Now staff see their own branch (403 for
+  another); an owner sees the whole shop.
+- Excel turned a store typed "7-11" into a date. Brand and Store are text columns now, and a
+  date under Store from an older file is refused with how to retype it.
+- The Excel upload preview did not show the store it would record. It does now.
+- Smaller: a receipt no longer wipes the kind or name it was not told; a guessed kind is only
+  sent with a vendor; copy-as-message uses the same "usually" wording as the screen; a cleared
+  date on the report says what to fix instead of an error; a long store name cut on a space;
+  same-day purchases take the later list as the newer; a store-only edit on a posted line
+  says why it cannot be changed.
+
+### Proved
+API 1834 tests, lint, API and web type checks clean. Live on carolina-test 15/15: Save with
+a store (tidied), unknown kind refused, a price fix keeps the store, a receipt onto the list
+writes its vendor and kind and leaves other lines, the report (owner with prices, kitchen
+opens it, kitchen refused another branch, backwards dates refused), the next list says where
+Salt is usually bought, its PDF draws, the Excel file carries Bought at / Store, re-upload
+changes nothing, a store changed in the file is recorded. Nothing posted to stock; test
+requests cancelled.
+
+**Not seen on screen:** the picker, the report page and the Excel preview (behind a login).
+
+### For KJ
+The migration only adds two empty columns. Merge `procure-where-bought` into master when
+ready; Railway runs the migration on boot. Nothing breaks if it waits.
+
 ## 2026-09-14 — Bar and kitchen: every pre-made ingredient on the station screen
 
 > "check if its possible that a warning alert or visibility dashboard can be built and used by

@@ -6,7 +6,7 @@ import { AiService } from '../ai/ai.service';
 import { DocumentsService } from '../documents/documents.service';
 import { ProcureService, PostedExpense } from './procure.service';
 import { ProcurePocket } from './dto/receive-request.dto';
-import { PH_TIMEZONE, cleanSourceName, isSourceKind, type SourceKind } from '@repo/shared-types';
+import { PH_TIMEZONE, cleanSourceName, isSourceKind, sourceKey, type SourceKind } from '@repo/shared-types';
 import {
   promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount,
   MaterialRef, ParsedLine,
@@ -325,7 +325,7 @@ export class ProcureReceiptsService {
               packSize:     new Prisma.Decimal(m.packSize),
               packCost:     new Prisma.Decimal(m.packCost),
               brandNote:    m.brandNote ?? null,
-              ...this.whereFrom(dto),
+              ...this.whereFrom(dto, row ?? null),
             };
             if (row) {
               await this.prisma.purchaseRequestLine.update({ where: { id: row.id }, data });
@@ -459,14 +459,25 @@ export class ProcureReceiptsService {
 
   /**
    * Where the receipt says it was bought, for each line it writes: the vendor
-   * as the store, and the kind of place when the person said. A receipt with
-   * neither leaves a line's store as it was.
+   * as the store, and the kind of place when the person said.
+   *
+   * Each field only when the receipt says it. A receipt with a vendor and no
+   * kind keeps the kind the shopper recorded for that same store (or for an
+   * unnamed stall); a different store's kind does not carry over. A kind with
+   * no vendor keeps the store name. Neither leaves the line as it was.
    */
-  private whereFrom(dto: ConfirmReceiptDto): { sourceKind?: SourceKind | null; sourceName?: string | null } {
-    const name = cleanSourceName(dto.vendor)?.slice(0, 80) ?? null;
+  private whereFrom(
+    dto: ConfirmReceiptDto,
+    existing: { sourceKind: string | null; sourceName: string | null } | null = null,
+  ): { sourceKind?: SourceKind | null; sourceName?: string | null } {
+    // Cut, then tidy: a cut on a space must not leave one behind.
+    const name = cleanSourceName(cleanSourceName(dto.vendor)?.slice(0, 80));
     const kind = isSourceKind(dto.sourceKind) ? dto.sourceKind : null;
-    if (!name && !kind) return {};
-    return { sourceKind: kind, sourceName: name };
+    const out: { sourceKind?: SourceKind | null; sourceName?: string | null } = {};
+    if (name) out.sourceName = name;
+    if (kind) out.sourceKind = kind;
+    else if (name && (!existing || (existing.sourceName && sourceKey(null, existing.sourceName) !== sourceKey(null, name)))) out.sourceKind = null;
+    return out;
   }
 
   /**
@@ -529,7 +540,7 @@ export class ProcureReceiptsService {
         packSize:    new Prisma.Decimal(m.packSize),
         packCost:    new Prisma.Decimal(m.packCost),
         brandNote:   m.brandNote ?? null,
-        ...this.whereFrom(dto),
+        ...this.whereFrom(dto, own ?? null),
       };
       if (own?.receivedAt) {
         skipped.push({ line: own.lineNumber, name: own.rawMaterial.name, reason: 'Already in stock; this receipt did not change it.' });

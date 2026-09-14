@@ -15,6 +15,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '@repo/shared-types';
 import { KdsService } from './kds.service';
 import { SubRecipesService } from '../sub-recipes/sub-recipes.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * KDS endpoints — used by the station-screen route /pos/station/[id].
@@ -29,6 +30,7 @@ export class KdsController {
   constructor(
     private kds: KdsService,
     private subRecipes: SubRecipesService,
+    private prisma: PrismaService,
   ) {}
 
   /**
@@ -41,11 +43,23 @@ export class KdsController {
          'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'MDM', 'WAREHOUSE_STAFF',
          'KIOSK_DISPLAY')
   @Get('stations/:id/prep')
-  prep(@CurrentUser() user: JwtPayload & { isDevice?: boolean; stationId?: string | null }, @Param('id') stationId: string) {
-    if (user.isDevice && user.stationId && user.stationId !== stationId) {
-      throw new ForbiddenException('This screen is paired to another station.');
+  async prep(
+    @CurrentUser() user: JwtPayload & { isDevice?: boolean; deviceRole?: string; stationId?: string | null },
+    @Param('id') stationId: string,
+  ) {
+    let branchId = user.branchId ?? null;
+    if (user.isDevice) {
+      // The customer-facing screen is paired too; back-of-house stock is not for it.
+      if (!String(user.deviceRole ?? '').startsWith('KDS_')) {
+        throw new ForbiddenException('Only a kitchen or bar display can show prep levels.');
+      }
+      if (user.stationId && user.stationId !== stationId) {
+        throw new ForbiddenException('This screen is paired to another station.');
+      }
+      // A tablet has no branch of its own: it belongs to the branch of whoever paired it.
+      branchId = (await this.prisma.user.findFirst({ where: { id: user.sub, tenantId: user.tenantId! }, select: { branchId: true } }))?.branchId ?? null;
     }
-    return this.subRecipes.stationPrep(user.tenantId!, stationId, user.branchId ?? null);
+    return this.subRecipes.stationPrep(user.tenantId!, stationId, branchId);
   }
 
   /** Pending + recently-bumped items for one station. KDS polls every ~3s. */

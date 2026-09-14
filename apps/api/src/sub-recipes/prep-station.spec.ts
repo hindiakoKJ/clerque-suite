@@ -57,8 +57,9 @@ describe('pre-made items on the station screen', () => {
       expect(prepStatusOf(ready(1000, 2000), null, NONE)).toBe('LOW');
       expect(prepStatusOf(ready(3000, 400), rot('OK'), NONE)).toBe('OK');
       expect(prepStatusOf(ready(3000, null), rot('NO_PAR'), NONE)).toBe('NO_PAR');
-      // No par and nothing on hand is still worth saying.
-      expect(prepStatusOf(ready(0, null), null, NONE)).toBe('OUT');
+      // No par and nothing on hand is not a warning: a one-tub backup is empty after every move.
+      expect(prepStatusOf(ready(0, null), null, NONE)).toBe('NO_PAR');
+      expect(prepStatusOf(ready(0, null), null, expired)).toBe('EXPIRED');
       const order = ['EXPIRED', 'OUT', 'DO_NOW', 'SOON', 'LOW', 'OK', 'NO_PAR'] as const;
       expect([...order].sort((a, b) => PREP_STATUS_ORDER[a] - PREP_STATUS_ORDER[b])).toEqual([...order]);
     });
@@ -82,15 +83,20 @@ describe('pre-made items on the station screen', () => {
       row({ id: 'rm-garlic', name: 'Garlic Confit', onHand: 800, station: null }),
     ];
 
-    function build(stationBranch: string | null = 'b1') {
+    const LOTS = [
+      { id: 'old', rawMaterialId: 'rm-frozen', qtyRemaining: 2000, receivedAt: h(-80), expirationDate: h(-3) },
+      { id: 'new', rawMaterialId: 'rm-frozen', qtyRemaining: 2000, receivedAt: h(-5), expirationDate: h(300) },
+    ];
+    function build(stationBranch: string | null = 'b1', lots: any[] = LOTS) {
       const prisma: any = {
         station: { findFirst: jest.fn(({ where }: any) => Promise.resolve(
           where.tenantId === 't1' ? [{ ...KITCHEN, branchId: stationBranch }, { ...BAR, branchId: stationBranch }].find((s) => s.id === where.id) ?? null : null)) },
         branch: { findFirst: jest.fn(({ where }: any) => Promise.resolve(where.tenantId === 't1' ? { id: where.id ?? 'b-first', name: 'Main' } : null)) },
-        rawMaterialLot: { findMany: jest.fn().mockResolvedValue([
-          { id: 'old', rawMaterialId: 'rm-frozen', qtyRemaining: 2000, receivedAt: h(-80), expirationDate: h(-3) },
-          { id: 'new', rawMaterialId: 'rm-frozen', qtyRemaining: 2000, receivedAt: h(-5), expirationDate: h(300) },
-        ]) },
+        // One item at a time, newest first, a page at a time -- like the database.
+        rawMaterialLot: { findMany: jest.fn(({ where, skip, take }: any) => Promise.resolve(lots
+          .filter((l) => where.tenantId === 't1' && where.branchId && l.rawMaterialId === where.rawMaterialId)
+          .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime() || (a.id < b.id ? 1 : -1))
+          .slice(skip, skip + take))) },
       };
       const svc = new SubRecipesService(prisma, {} as never);
       const list = jest.spyOn(svc, 'list').mockResolvedValue(BOARD as never);
@@ -111,12 +117,34 @@ describe('pre-made items on the station screen', () => {
       expect(ready.rotation).toMatchObject({ state: 'TOP_UP', canDoNow: true });
       expect(ready.serves).toEqual({ productId: 'p1', productName: 'Teriyaki Wings', servingsLeft: 6 });
       expect(res.rows[0].useBy.expired).toMatchObject({ qty: 2000, lotIds: ['old'] });
-      const lotWhere = prisma.rawMaterialLot.findMany.mock.calls[0][0].where;
-      expect(lotWhere).toMatchObject({ tenantId: 't1', branchId: 'b1', qtyRemaining: { gt: 0 } });
-      expect(lotWhere.rawMaterialId.in.sort()).toEqual(['rm-frozen', 'rm-garlic', 'rm-ready']);
+      const lotWheres = prisma.rawMaterialLot.findMany.mock.calls.map((c: any) => c[0].where);
+      expect(lotWheres.every((w: any) => w.tenantId === 't1' && w.branchId === 'b1' && w.qtyRemaining.gt === 0)).toBe(true);
+      expect(lotWheres.map((w: any) => w.rawMaterialId).sort()).toEqual(['rm-frozen', 'rm-garlic', 'rm-ready']);
     });
 
-    it('reads the caller\'s branch for a station with none, the first branch otherwise, and refuses another shop\'s station', async () => {
+    it('finds an old batch past its use-by behind many newer ones, and stops reading once on hand is covered', async () => {
+      // 120 tiny newer tubs of ready sauce (1 ml each) cover 120 of the 300 on hand; the old 2 L tub holds the rest.
+      const many = Array.from({ length: 120 }, (_, i) => ({ id: `t${String(i).padStart(3, '0')}`, rawMaterialId: 'rm-ready', qtyRemaining: 1, receivedAt: h(-1 - i / 100), expirationDate: h(200) }));
+      const lots = [...many, { id: 'ancient', rawMaterialId: 'rm-ready', qtyRemaining: 2000, receivedAt: h(-900), expirationDate: h(-10) },
+        { id: 'older-still', rawMaterialId: 'rm-ready', qtyRemaining: 5000, receivedAt: h(-2000), expirationDate: h(-1500) }];
+      const { svc, prisma } = build('b1', lots);
+      const res = await svc.stationPrep('t1', KITCHEN.id, null, NOW);
+      const ready = res.rows.find((r) => r.id === 'rm-ready')!;
+      expect(ready.status).toBe('EXPIRED');
+      expect(ready.useBy.expired).toMatchObject({ qty: 180, lotIds: ['ancient'] });
+      // Three pages for the ready sauce (50, 50, then the page holding the old tub), and no fourth.
+      const pages = prisma.rawMaterialLot.findMany.mock.calls.filter((c: any) => c[0].where.rawMaterialId === 'rm-ready');
+      expect(pages.map((c: any) => c[0].skip)).toEqual([0, 50, 100]);
+    });
+
+    it('reads the caller\'s branch before the station\'s, then the station\'s, then the first branch, and refuses another shop\'s station', async () => {
+      // One Bar station for the whole shop, stamped with the first branch: Branch B's barista sees Branch B.
+      const shared = build('b-main');
+      await shared.svc.stationPrep('t1', BAR.id, 'b-B', NOW);
+      expect(shared.list).toHaveBeenCalledWith('t1', 'b-B', null);
+      const ownerNoBranch = build('b-main');
+      await ownerNoBranch.svc.stationPrep('t1', BAR.id, null, NOW);
+      expect(ownerNoBranch.list).toHaveBeenCalledWith('t1', 'b-main', null);
       const noBranch = build(null);
       await noBranch.svc.stationPrep('t1', BAR.id, 'b-caller', NOW);
       expect(noBranch.list).toHaveBeenCalledWith('t1', 'b-caller', null);

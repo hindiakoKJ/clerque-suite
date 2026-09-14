@@ -42,7 +42,8 @@ const round = (n: number) => Math.round(n * 10_000) / 10_000;
 export function lotsStillHere(onHand: number, lots: PrepLot[]): Array<{ lot: PrepLot; qty: number }> {
   let left = Math.max(0, onHand);
   const out: Array<{ lot: PrepLot; qty: number }> = [];
-  for (const lot of [...lots].sort((a, b) => ms(b.receivedAt) - ms(a.receivedAt))) {
+  // Newest first; two batches made the same moment in a fixed order, the same order they are read in.
+  for (const lot of [...lots].sort((a, b) => ms(b.receivedAt) - ms(a.receivedAt) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))) {
     if (left <= 1e-9) break;
     const qty = Math.min(left, Math.max(0, lot.qtyRemaining));
     if (qty > 1e-9) out.push({ lot, qty: round(qty) });
@@ -77,14 +78,19 @@ export type PrepStatus = 'EXPIRED' | 'OUT' | 'DO_NOW' | 'SOON' | 'LOW' | 'OK' | 
 
 export const PREP_STATUS_ORDER: Record<PrepStatus, number> = { EXPIRED: 0, OUT: 1, DO_NOW: 2, SOON: 3, LOW: 4, OK: 5, NO_PAR: 6 };
 
+/**
+ * With no par level, empty is not a warning: a backup that holds one tub is
+ * empty after every move by design, and the rotation already says a warning
+ * nobody configured is one everyone learns to ignore. Past its use-by is
+ * said whatever the par.
+ */
 export function prepStatusOf(item: { onHand: number; parLevel: number | null }, rotation: RotationRow | null, useBy: UseBy): PrepStatus {
   if (useBy.expired) return 'EXPIRED';
-  if (item.onHand <= 0 && (item.parLevel != null || rotation)) return 'OUT';
+  if (item.onHand <= 0 && item.parLevel != null) return 'OUT';
   if (rotation && (rotation.state === 'TOP_UP' || rotation.state === 'COOK_NOW')) return 'DO_NOW';
   if (useBy.soon) return 'SOON';
-  if (item.parLevel != null && item.onHand <= item.parLevel) return 'LOW';
-  if (item.parLevel == null && !rotation) return item.onHand <= 0 ? 'OUT' : 'NO_PAR';
   if (item.parLevel == null) return 'NO_PAR';
+  if (item.onHand <= item.parLevel) return 'LOW';
   return 'OK';
 }
 

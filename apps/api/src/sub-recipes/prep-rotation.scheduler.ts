@@ -140,32 +140,41 @@ export class PrepRotationScheduler {
     dayStart: Date,
   ): Promise<number> {
     if (board.length === 0) return 0;
-    const lots = await this.prisma.rawMaterialLot.findMany({
-      where:   { tenantId, branchId: branch.id, rawMaterialId: { in: board.map((r) => r.id) }, qtyRemaining: { gt: 0 } },
-      select:  { id: true, rawMaterialId: true, qtyRemaining: true, receivedAt: true, expirationDate: true },
-      orderBy: { receivedAt: 'desc' },
-      take:    2000,
+    // Only items that have a dated batch at all, then the same per-item read the station screen uses.
+    const dated = await this.prisma.rawMaterialLot.findMany({
+      where:    { tenantId, branchId: branch.id, rawMaterialId: { in: board.map((r) => r.id) }, qtyRemaining: { gt: 0 }, expirationDate: { not: null } },
+      select:   { rawMaterialId: true },
+      distinct: ['rawMaterialId'],
     });
-    if (!lots.some((l) => l.expirationDate)) return 0;
+    if (dated.length === 0) return 0;
+    const lotsOf = await this.subRecipes.batchesOnHand(tenantId, branch.id, board.filter((r) => dated.some((d) => d.rawMaterialId === r.id)));
     const shopKinds: string[] = [...new Set(board.map((r) => r.station?.kind).filter(Boolean).map(String))];
     const where = multiBranch ? ` (${branch.name})` : '';
     const staleBefore = now.getTime() - USE_BY_STALE_DAYS * 86_400_000;
     let created = 0;
 
     for (const r of board) {
-      const mine: PrepLot[] = lots.filter((l) => l.rawMaterialId === r.id)
-        .map((l) => ({ id: l.id, rawMaterialId: l.rawMaterialId, qtyRemaining: Number(l.qtyRemaining), receivedAt: l.receivedAt, expirationDate: l.expirationDate }));
+      const mine: PrepLot[] = lotsOf.get(r.id) ?? [];
       if (!mine.some((l) => l.expirationDate)) continue;
       const useBy = useByOf(r.onHand, mine, now, USE_BY_SOON_HOURS);
-      // Only a use-by gone in the last few days is still news.
-      const expiredNews = useBy.expired
-        && mine.some((l) => useBy.expired!.lotIds.includes(l.id) && new Date(l.expirationDate!).getTime() >= staleBefore);
-      const news = { expired: expiredNews ? useBy.expired : null, soon: useBy.soon };
+      // Only a use-by gone in the last few days is still news; of those, the newest is what the words carry.
+      const freshExpired = useBy.expired
+        ? mine.filter((l) => useBy.expired!.lotIds.includes(l.id) && new Date(l.expirationDate!).getTime() >= staleBefore)
+        : [];
+      const newestPast = freshExpired.length
+        ? new Date(Math.max(...freshExpired.map((l) => new Date(l.expirationDate!).getTime()))).toISOString()
+        : null;
+      const news = { expired: newestPast ? useBy.expired : null, soon: useBy.soon };
       const title = useByAlertTitle(r.name, news, where);
       if (!title) continue;
-      // No quantity in the words: a sale must not make the same batch a new alert.
-      const body = news.expired
-        ? `Past its use-by (${useByWhen(news.expired.at, now)}). Check it; if it is thrown out, take it off under Stock on hand.`
+      /*
+        No quantity in the words: a sale must not make the same batch a new
+        alert. The dates change only when a batch does -- another one passes
+        its use-by, or a new one comes due -- and that IS news.
+      */
+      const body = newestPast
+        ? `Past its use-by (${useByWhen(newestPast, now)}). Check it; if it is thrown out, take it off under Stock on hand.`
+          + (news.soon ? ` Another batch is due by ${useByWhen(news.soon.at, now)}.` : '')
         : `Use by ${useByWhen(news.soon!.at, now)}. Use this batch first.`;
       for (const p of recipientsFor(people, branch.id, r.station?.kind ?? null, shopKinds)) {
         const res = await this.notifications.create({

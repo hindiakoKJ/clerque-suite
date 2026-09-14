@@ -16,7 +16,7 @@ import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Loader2, Snowflake, UtensilsCrossed } from 'lucide-react';
 import {
-  rotationInstruction, useBySentences, PREP_STATUS_LABEL,
+  rotationInstruction, useBySentences, PREP_STATUS_LABEL, PREP_STATUS_ORDER,
   type PrepStatus, type RotationRow, type UseBy,
 } from '@repo/shared-types';
 import { api } from '@/lib/api';
@@ -76,7 +76,8 @@ function todo(r: PrepRow): string | null {
     const said = rotationInstruction(r.rotation);
     if (said) return said;
   }
-  if (r.status === 'OUT' || r.status === 'LOW') {
+  // From the numbers, not the chip: a backup under par whose tub is also due soon still needs its next batch.
+  if (r.onHand <= 0 || (r.parLevel != null && r.onHand <= r.parLevel)) {
     if (r.batches > 0) return r.kind === 'MOVE' && r.movesFrom ? `Move a batch across from ${r.movesFrom}.` : 'Make a batch.';
     if (r.limitedBy) return r.batchesWithPrep && r.batchesWithPrep > 0 ? `Make ${r.limitedBy} first.` : `Out of ${r.rootLimitedBy ?? r.limitedBy}. Buy it first.`;
   }
@@ -84,8 +85,8 @@ function todo(r: PrepRow): string | null {
 }
 
 export function StationPrepLevels({
-  stationId, enabled, onNewRed,
-}: { stationId: string; enabled: boolean; onNewRed?: () => void }) {
+  stationId, enabled, onNewRed, visible = true,
+}: { stationId: string; enabled: boolean; onNewRed?: () => void; visible?: boolean }) {
   const { data, isPending, isError, error, dataUpdatedAt, isFetching } = useQuery<StationPrep>({
     queryKey: ['kds-prep', stationId],
     queryFn:  () => api.get(`/kds/stations/${stationId}/prep`).then((r) => r.data),
@@ -95,21 +96,31 @@ export function StationPrepLevels({
     refetchIntervalInBackground: true,
   });
 
-  // A tile that turns red since the last look rings the bell once. The first load only seeds.
-  const seenRed = useRef<Set<string> | null>(null);
+  /*
+    The bell rings when a tile turns red, or a red tile gets worse (do now, then
+    out, then past its use-by). Not when it gets better: throwing out the old
+    tub turns "past use-by" into "do now", and ringing for work just finished
+    teaches the kitchen to ignore the bell. The first load only seeds.
+    This runs whichever view is showing -- the screen stays mounted, hidden,
+    behind the orders.
+  */
+  const seenRed = useRef<Map<string, number> | null>(null);
   const ring = useRef(onNewRed);
   ring.current = onNewRed;
   useEffect(() => {
     if (!data) return;
-    const red = new Set(data.rows.filter((r) => RED.has(r.status)).map((r) => `${r.id}:${r.status}`));
-    if (seenRed.current && [...red].some((k) => !seenRed.current!.has(k))) ring.current?.();
+    const red = new Map(data.rows.filter((r) => RED.has(r.status)).map((r) => [r.id, PREP_STATUS_ORDER[r.status]]));
+    const prev = seenRed.current;
+    if (prev && [...red].some(([id, rank]) => !prev.has(id) || rank < prev.get(id)!)) ring.current?.();
     seenRed.current = red;
   }, [data]);
 
+  if (!visible) return null;
   if (isPending) {
     return <div className="flex items-center justify-center gap-2 py-32 text-stone-400"><Loader2 className="h-5 w-5 animate-spin" /> Loading prep levels…</div>;
   }
-  if (isError || !data) {
+  // A failed refresh keeps the last good tiles, and says so; only no data at all is an error screen.
+  if (!data) {
     const message = (error as { response?: { data?: { message?: string } } } | null)?.response?.data?.message;
     return (
       <div className="flex flex-col items-center justify-center py-32 text-stone-400">
@@ -175,7 +186,7 @@ export function StationPrepLevels({
   return (
     <div className="space-y-6">
       <p className="text-xs uppercase tracking-wider text-stone-500">
-        {data.branchName} · {isFetching ? 'Refreshing…' : `Updated ${new Date(dataUpdatedAt).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' })} · every minute`}
+        {data.branchName} · {isFetching ? 'Refreshing…' : `${isError ? 'Could not refresh — showing' : 'Updated'} ${new Date(dataUpdatedAt).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' })} · every minute`}
         {' · '}use-by amounts are estimates: the oldest batch is taken to be used first
       </p>
       {mine.length > 0 && (

@@ -520,8 +520,10 @@ export class SubRecipesService {
    * the rotation's what-to-do, batches that can be made now, the dish it
    * runs out for first, and how much is past its use-by or due within a day.
    *
-   * The branch is the station's own; a station with none (a one-branch shop)
-   * reads the caller's branch, or the shop's first.
+   * The branch is the caller's -- the logged-in person's, or for a paired
+   * tablet the branch of whoever paired it. A station is one per kind for the
+   * whole shop (stamped with the first branch when it was set up), so its own
+   * branch is only the fallback, then the shop's first.
    */
   async stationPrep(tenantId: string, stationId: string, callerBranchId?: string | null, now: Date = new Date()) {
     const station = await this.prisma.station.findFirst({
@@ -529,7 +531,7 @@ export class SubRecipesService {
       select: { id: true, name: true, kind: true, branchId: true },
     });
     if (!station) throw new NotFoundException('Station not found.');
-    const wanted = station.branchId ?? callerBranchId ?? null;
+    const wanted = callerBranchId ?? station.branchId ?? null;
     const branch = wanted
       ? await this.prisma.branch.findFirst({ where: { id: wanted, tenantId }, select: { id: true, name: true } })
       : await this.prisma.branch.findFirst({ where: { tenantId, isActive: true }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } });
@@ -538,22 +540,7 @@ export class SubRecipesService {
     const board = await this.list(tenantId, branch.id, null);
     const rotation = new Map(rotationFromBoard(board).map((r) => [r.prepId, r]));
     const shown = board.filter((r) => !r.station || r.station.id === station.id);
-    /*
-      The newest batches first, and enough of them: what is on hand is read as
-      the newest batches, so older ones only matter until on hand runs out.
-    */
-    const lots = shown.length === 0 ? [] : await this.prisma.rawMaterialLot.findMany({
-      where:   { tenantId, branchId: branch.id, rawMaterialId: { in: shown.map((r) => r.id) }, qtyRemaining: { gt: 0 } },
-      select:  { id: true, rawMaterialId: true, qtyRemaining: true, receivedAt: true, expirationDate: true },
-      orderBy: { receivedAt: 'desc' },
-      take:    2000,
-    });
-    const lotsOf = new Map<string, PrepLot[]>();
-    for (const l of lots) {
-      const list = lotsOf.get(l.rawMaterialId) ?? [];
-      list.push({ id: l.id, rawMaterialId: l.rawMaterialId, qtyRemaining: Number(l.qtyRemaining), receivedAt: l.receivedAt, expirationDate: l.expirationDate });
-      lotsOf.set(l.rawMaterialId, list);
-    }
+    const lotsOf = await this.batchesOnHand(tenantId, branch.id, shown);
 
     const rows = shown.map((r) => {
       const rot = rotation.get(r.id) ?? null;
@@ -591,6 +578,42 @@ export class SubRecipesService {
       at:         now.toISOString(),
       rows,
     };
+  }
+
+  /**
+   * The batches that make up each item's stock on hand, newest first, read per
+   * item until they cover what is on hand.
+   *
+   * On a shop that costs by average, a sale does not drain batch lots, so an
+   * item's lots pile up for months. One capped read across every item would
+   * drop the OLDEST batches first -- exactly the ones past their use-by. What
+   * is on hand is read as the newest batches, so nothing older than the batch
+   * that completes on hand can matter, and the read stops there.
+   */
+  async batchesOnHand(tenantId: string, branchId: string, items: Array<{ id: string; onHand: number }>): Promise<Map<string, PrepLot[]>> {
+    const out = new Map<string, PrepLot[]>();
+    const PAGE = 50;
+    for (const item of items) {
+      if (!(item.onHand > 0)) continue;
+      const got: PrepLot[] = [];
+      let covered = 0;
+      for (let skip = 0; covered < item.onHand; skip += PAGE) {
+        const page = await this.prisma.rawMaterialLot.findMany({
+          where:   { tenantId, branchId, rawMaterialId: item.id, qtyRemaining: { gt: 0 } },
+          select:  { id: true, rawMaterialId: true, qtyRemaining: true, receivedAt: true, expirationDate: true },
+          orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
+          skip,
+          take:    PAGE,
+        });
+        for (const l of page) {
+          got.push({ id: l.id, rawMaterialId: l.rawMaterialId, qtyRemaining: Number(l.qtyRemaining), receivedAt: l.receivedAt, expirationDate: l.expirationDate });
+          covered += Number(l.qtyRemaining);
+        }
+        if (page.length < PAGE) break;
+      }
+      if (got.length) out.set(item.id, got);
+    }
+    return out;
   }
 
   /**

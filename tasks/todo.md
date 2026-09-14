@@ -2446,7 +2446,36 @@ station, a view for it, and any alert about use-by dates.
   station's prep staff) when a batch is past its use-by or expires within 12 hours; once per
   batch per day.
 
-- [ ] shared wording + estimate (prep-station.ts) with specs
-- [ ] API route + service + scheduler, specs
-- [ ] station screen view
-- [ ] live check, review, push
+- [x] shared wording + estimate (prep-station.ts) with specs
+- [x] API route + service + scheduler, specs
+- [x] station screen view
+- [x] live check, review, push
+
+### Reviewed (2 reviewers, each finding checked by a skeptic: 5 confirmed, all fixed, plus 4 smaller)
+- A shop has one Bar and one Kitchen station for all branches, stamped with the first branch,
+  so Branch B's screen showed Main's stock. Now the caller's branch comes first; a paired
+  tablet uses the branch of whoever paired it.
+- The batch read was capped at the newest 2,000 for the whole branch, which drops the OLDEST
+  batches -- the ones past their use-by -- once a busy kitchen has months of batches (sales do
+  not drain batch lots on an average-cost shop). Now read per item, a page at a time, only until
+  on hand is covered; the screen and the alert share that read.
+- The alert carried the earliest past date, so a second batch expiring the same day was
+  swallowed as a repeat. It now carries the newest fresh past date, and a batch due soon.
+- The bell rang when the cook fixed a red tile (past use-by -> do now). It rings only when a
+  tile turns red or gets worse.
+- An empty item with no par showed red "Out" and rang every rotation. No par is never a
+  warning; past its use-by still is.
+- Smaller: the customer-facing display cannot read prep levels (kitchen/bar displays only);
+  a failed refresh keeps the last tiles; prep levels keep watching and ringing while Orders is
+  showing; a backup under par still says to make its next batch when its tub is also due.
+
+### Proved
+API 1836 tests, lint, API and web type checks clean. Live on carolina-test 12/12: kitchen and
+bar screens load their own items and never each other's, worst first; the cook opens it; a
+station from nowhere is 404; a kitchen tablet pairs and reads its station with no login and is
+refused the bar (403); a batch set past its use-by shows first as "Past use-by" with its amount,
+and set five hours out shows "Use first". The batch date was restored and the test tablet revoked.
+On the test shop the ready-to-use Teriyaki Sauce is really past its use-by.
+
+**Not seen on screen:** the station tablet view itself (behind pairing or a login); the use-by
+alerts were proved in specs, not by waiting for the half-hour run.

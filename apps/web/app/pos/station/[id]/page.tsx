@@ -366,9 +366,10 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
 
       {/* Queue grid */}
       <main className="flex-1 overflow-y-auto p-6">
-        {view === 'prep' ? (
-          <StationPrepLevels stationId={stationId} enabled={!!stationId && pairState === 'ok'} onNewRed={() => { if (chime.enabled) chime.ring(); }} />
-        ) : orderNumbers.length === 0 ? (
+        {/* Always mounted, so prep levels keep watching (and ring) while the orders are showing. */}
+        <StationPrepLevels stationId={stationId} enabled={!!stationId && pairState === 'ok'} visible={view === 'prep'}
+          onNewRed={() => { if (chime.enabled) chime.ring(); }} />
+        {view === 'prep' ? null : orderNumbers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-32 text-stone-500">
             <Check className="h-16 w-16 opacity-30 mb-4" />
             <p className="text-2xl font-semibold">All caught up</p>

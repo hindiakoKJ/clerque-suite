@@ -62,9 +62,10 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
         // Batches with a use-by in the window the scheduler asks about.
         count: jest.fn(({ where }: any) => Promise.resolve((opts.batches ?? []).filter((b) => b.expirationDate
           && b.expirationDate >= where.expirationDate.gte && b.expirationDate <= where.expirationDate.lte && b.qtyRemaining > 0).length)),
-        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.batches ?? [])
-          .filter((b) => b.branchId === where.branchId && where.rawMaterialId.in.includes(b.rawMaterialId) && b.qtyRemaining > 0)
-          .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime()))),
+        // Which items have a dated batch here (distinct).
+        findMany: jest.fn(({ where }: any) => Promise.resolve([...new Set((opts.batches ?? [])
+          .filter((b) => b.branchId === where.branchId && where.rawMaterialId.in.includes(b.rawMaterialId) && b.qtyRemaining > 0 && b.expirationDate)
+          .map((b) => b.rawMaterialId))].map((rawMaterialId) => ({ rawMaterialId })))),
         // Newest lot per ingredient, for the branch and ingredients asked about -- like the database.
         groupBy: jest.fn(({ where }: any) => {
           const hits = lots.filter((l) => l.branchId === where.branchId && where.rawMaterialId.in.includes(l.rawMaterialId));
@@ -80,7 +81,13 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
         create: jest.fn(({ data }: any) => { const row = { id: `n${table.length + 1}`, createdAt: clock, ...data }; table.push(row); return Promise.resolve(row); }),
       },
     };
-    const subRecipes: any = { list: jest.fn((_t: string, branchId: string) => Promise.resolve(boards[branchId] ?? [])) };
+    const subRecipes: any = {
+      list: jest.fn((_t: string, branchId: string) => Promise.resolve(boards[branchId] ?? [])),
+      // The per-item read the station screen shares, over the same batches.
+      batchesOnHand: jest.fn((_t: string, branchId: string, items: Array<{ id: string }>) => Promise.resolve(new Map(items.map((i) => [i.id,
+        (opts.batches ?? []).filter((b) => b.branchId === branchId && b.rawMaterialId === i.id && b.qtyRemaining > 0)
+          .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())])))),
+    };
     const svc = new PrepRotationScheduler(prisma, subRecipes, new NotificationsService(prisma));
     return {
       svc, table, prisma, subRecipes,
@@ -216,6 +223,29 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
     expect(await past.run(T0)).toBe(3);
     expect(past.table[0]).toMatchObject({ kind: 'ERROR', title: 'Teriyaki Sauce (ready): past its use-by' });
     expect(past.table[0].body).toMatch(/^Past its use-by \(8:00\sAM\)\. Check it; if it is thrown out, take it off under Stock on hand\.$/);
+  });
+
+  it('a second batch passing its use-by is news, and the words carry the newest date', async () => {
+    // Tub A past its use-by at 8 AM and still counted; tub B due at 4 PM. At 10 AM: past use-by, and B due.
+    const batches = [tub('a', 1000, 30, -2), tub('b', 1000, 20, 6), tub('c', 1000, 1, 90)];
+    const { run, table, setBoard } = build({ watched: 0, boards: { [MAIN]: [frozen(4000), ready(3000), breve()] }, batches });
+    await run(T0);
+    expect(table.filter((n) => n.userId === 'owner').map((n) => n.body)).toEqual([
+      expect.stringMatching(/^Past its use-by \(8:00\sAM\)\. .* Another batch is due by 4:00\sPM\.$/),
+    ]);
+    // 4:30 PM: B has passed its use-by too, while A is still counted. A new alert, dated 4 PM.
+    setBoard(MAIN, [frozen(4000), ready(3000), breve()]);
+    await run(hours(6.5));
+    const owner = table.filter((n) => n.userId === 'owner');
+    expect(owner).toHaveLength(2);
+    expect(owner[1].body).toMatch(/^Past its use-by \(4:00\sPM\)\. Check it/);
+  });
+
+  it('a batch four days gone next to one just gone carries the fresh date', async () => {
+    const batches = [tub('stale', 1000, 200, -96), tub('fresh', 1000, 20, -1), tub('c', 1000, 1, 90)];
+    const { run, table } = build({ watched: 0, boards: { [MAIN]: [frozen(4000), ready(3000), breve()] }, batches });
+    await run(T0);
+    expect(table[0].body).toMatch(/^Past its use-by \(9:00\sAM\)\./);
   });
 
   it('leaves a use-by more than three days gone to the station screen, and skips the board when nothing is dated', async () => {

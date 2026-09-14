@@ -2420,6 +2420,33 @@ proven with the same axios configuration the page uses.
 - Restore does not read the buy lists back yet (and restore already fails for shops
   that use Procure -- a separate fix).
 
+## 2026-09-14 — Procure as the one place: where it was bought (Phase 5 of 5)
+
+> "history reports of where items are usually bought (Shopee, grocery)"
+
+Taken as yes to the database change ("please finish all phases"). Built on the branch
+`procure-where-bought`: the migration runs on Railway at boot, so KJ merges it.
+
+### Spec
+- Two new nullable columns on a purchase line: `sourceKind` (MARKET, GROCERY, ONLINE,
+  SUPPLIER, OTHER) and `sourceName` (free text, "Puregold", "Shopee"). Additive, no backfill.
+- Written wherever a purchase is recorded: the buy list's Save (one "Bought at" for the
+  lines saved in that go; a line that already has a store keeps it unless edited), the
+  receipt reader (order screen -> Online, delivery receipt -> Supplier, store = vendor),
+  the Excel sheet ("Bought at" and "Store" columns; blank keeps what Clerque has), and
+  the follow-up of a short delivery (same store). Not sent = unchanged.
+- "Usually from" on each line of a list being built or just sent (most frequent store for
+  that ingredient over the last 90 days), on screen and on the as-sent PDF.
+- Where bought report (`GET /procure/requests/where-bought`, Procure > Where bought): per
+  ingredient, usually from, each store with times bought, last bought, last price per pack
+  and cheapest per unit; per store, purchases and spend. Money only for people who may see
+  purchase costs.
+
+- [ ] schema + migration (local DB only), shared SOURCE_KINDS
+- [ ] API writes (bought, receipts, follow-up, sheet), memory, enrich, report route
+- [ ] PDF + Excel columns
+- [ ] web: Bought at picker, usually from, report page + tile
+- [ ] specs, live check, review, push branch
 ## 2026-09-14 — Bar and kitchen: every pre-made ingredient on the station screen
 
 > "check if its possible that a warning alert or visibility dashboard can be built and used by

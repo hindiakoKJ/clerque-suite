@@ -78,7 +78,8 @@ describe('buy lists in Excel — out and back in', () => {
           id: `rs${requests.length}`, requestNumber, status: 'BOUGHT', branchId, createdAt: new Date(), sentAt: new Date(), boughtAt: new Date(`${day}T00:00:00+08:00`),
           notes: `${note}${keys.length ? ` · Sheet rows: ${keys.join(', ')}` : ''}`,
           lines: lines.map((l, i) => ({ id: `ls${i}`, lineNumber: `${requestNumber}-${String(i + 1).padStart(2, '0')}`, rawMaterialId: l.rawMaterialId,
-            rawMaterial: MATERIALS.find((m) => m.id === l.rawMaterialId), qtyRequested: l.packsBought * l.packSize, packsBought: l.packsBought, packSize: l.packSize, packCost: l.packCost, brandNote: l.brandNote, receivedAt: null })),
+            rawMaterial: MATERIALS.find((m) => m.id === l.rawMaterialId), qtyRequested: l.packsBought * l.packSize, packsBought: l.packsBought, packSize: l.packSize, packCost: l.packCost, brandNote: l.brandNote,
+            sourceKind: l.sourceKind ?? null, sourceName: l.sourceName ?? null, receivedAt: null })),
         }));
         return Promise.resolve({ requestNumber });
       }),
@@ -103,18 +104,20 @@ describe('buy lists in Excel — out and back in', () => {
     expect(wb.worksheets.map((w) => w.name)).toEqual(['Lines', 'Requests', 'Stock on hand', 'Items', 'How to use']);
     expect(wb.getWorksheet('Items')!.state).toBe('hidden');
     const ws = wb.getWorksheet('Lines')!;
-    expect((ws.getRow(1).values as unknown[]).slice(1, 16)).toEqual([
+    expect((ws.getRow(1).values as unknown[]).slice(1, 18)).toEqual([
       'Line No.', 'Request No.', 'Branch', 'Item', 'Unit', 'Needed', 'Bought on', 'Packs bought', 'Pack size', 'Pack unit',
-      'Price per pack (PHP)', 'Amount (PHP)', 'Brand / store', 'Status', 'In stock on',
+      'Price per pack (PHP)', 'Amount (PHP)', 'Brand', 'Bought at', 'Store', 'Status', 'In stock on',
     ]);
-    expect(ws.getColumn(16).hidden).toBe(true);                       // the row key and the as-downloaded values
+    expect(ws.getColumn(17).hidden).toBe(false);
+    expect(ws.getColumn(18).hidden).toBe(true);                       // the row key and the as-downloaded values
+    expect(ws.getCell('N5').dataValidation).toMatchObject({ type: 'list', formulae: ['"Palengke,Grocery,Online,Supplier,Other"'] });
     expect(ws.getCell('A2').value).toBe('REQ-20260913-001-01');       // this shop's line, not the other shop's
     expect(ws.getCell('F2').value).toBe(3000);
-    expect(ws.getCell('N2').value).toBe('Not bought yet');
-    expect(ws.getCell('N3').value).toBe('In stock');
+    expect(ws.getCell('P2').value).toBe('Not bought yet');
+    expect(ws.getCell('P3').value).toBe('In stock');
     expect(ws.getCell('G4').value).toBe('2026-09-13');
     expect(ws.getCell('L4').value).toMatchObject({ formula: 'IF(OR(H4="",K4=""),"",H4*K4)', result: 20 });
-    expect(String(ws.getCell('P5').value)).toMatch(/^[0-9a-f]{12}$/);  // a spare row's key
+    expect(String(ws.getCell('R5').value)).toMatch(/^[0-9a-f]{12}$/);  // a spare row's key
     expect(ws.getCell('D5').dataValidation).toMatchObject({ type: 'list', formulae: ['Items!$A$2:$A$4'] });
     expect((wb.getWorksheet('Requests')!.getRow(3).values as unknown[]).slice(1)).toEqual(['REQ-20260913-002', 'Main', 'Bought', '2026-09-13', '2026-09-13', '2026-09-13', '', 'the shop bank or GCash', 'Shopee order']);
   });
@@ -143,14 +146,16 @@ describe('buy lists in Excel — out and back in', () => {
     const ws = wb.getWorksheet('Lines')!;
     ws.getCell('H2').value = 3; ws.getCell('I2').value = 1000; ws.getCell('J2').value = 'ml'; ws.getCell('K2').value = 86.5; ws.getCell('G2').value = '2026-09-13';
     ws.getCell('D6').value = 'White Sugar'; ws.getCell('G6').value = '2026-09-12'; ws.getCell('H6').value = 2; ws.getCell('I6').value = 1000; ws.getCell('J6').value = 'g'; ws.getCell('K6').value = 80;
-    const key = String(ws.getCell('P6').value);
+    ws.getCell('N2').value = 'Grocery'; ws.getCell('O2').value = 'Puregold';
+    ws.getCell('N6').value = 'Palengke';
+    const key = String(ws.getCell('R6').value);
     const res = await svc.importWorkbook(TENANT, asUpload(await write(wb)), OWNER, false);
 
     expect(procure.recordBought).toHaveBeenCalledWith(TENANT, 'r1',
-      [{ lineId: 'l1', packsBought: 3, packSize: 1000, packCost: 86.5, brandNote: undefined }], OWNER, { boughtAt: '2026-09-13' });
+      [{ lineId: 'l1', packsBought: 3, packSize: 1000, packCost: 86.5, brandNote: undefined, sourceKind: 'GROCERY', sourceName: 'Puregold' }], OWNER, { boughtAt: '2026-09-13' });
     const [, branchId, day, lines, actor, note] = procure.recordFromSheet.mock.calls[0];
     expect([branchId, day, actor]).toEqual(['b1', '2026-09-12', OWNER]);
-    expect(lines).toEqual([{ rawMaterialId: 'rm-sugar', packsBought: 2, packSize: 1000, packCost: 80, brandNote: null, rowKey: key }]);
+    expect(lines).toEqual([{ rawMaterialId: 'rm-sugar', packsBought: 2, packSize: 1000, packCost: 80, brandNote: null, rowKey: key, sourceKind: 'MARKET', sourceName: null }]);
     expect(note).toMatch(/^Recorded from an Excel upload \(clerque-buy-lists\.xlsx · [0-9a-f]{12}\)$/);
     expect(res.counts).toEqual({ unchanged: 2, fill: 1, new: 1, refused: 0 });
     expect(res.rows.filter((r) => r.kind !== 'UNCHANGED').map((r) => [r.rowNumber, r.applied, r.requestNumber])).toEqual([[2, 'done', undefined], [6, 'done', 'REQ-20260914-003']]);

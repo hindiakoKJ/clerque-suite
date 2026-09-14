@@ -6,7 +6,7 @@ import { AiService } from '../ai/ai.service';
 import { DocumentsService } from '../documents/documents.service';
 import { ProcureService, PostedExpense } from './procure.service';
 import { ProcurePocket } from './dto/receive-request.dto';
-import { PH_TIMEZONE } from '@repo/shared-types';
+import { PH_TIMEZONE, cleanSourceName, isSourceKind, type SourceKind } from '@repo/shared-types';
 import {
   promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount,
   MaterialRef, ParsedLine,
@@ -325,6 +325,7 @@ export class ProcureReceiptsService {
               packSize:     new Prisma.Decimal(m.packSize),
               packCost:     new Prisma.Decimal(m.packCost),
               brandNote:    m.brandNote ?? null,
+              ...this.whereFrom(dto),
             };
             if (row) {
               await this.prisma.purchaseRequestLine.update({ where: { id: row.id }, data });
@@ -393,6 +394,7 @@ export class ProcureReceiptsService {
             packSize:      new Prisma.Decimal(l.packSize),
             packCost:      new Prisma.Decimal(l.packCost),
             brandNote:     l.brandNote ?? null,
+            ...this.whereFrom(dto),
           })),
         },
       },
@@ -456,6 +458,18 @@ export class ProcureReceiptsService {
   }
 
   /**
+   * Where the receipt says it was bought, for each line it writes: the vendor
+   * as the store, and the kind of place when the person said. A receipt with
+   * neither leaves a line's store as it was.
+   */
+  private whereFrom(dto: ConfirmReceiptDto): { sourceKind?: SourceKind | null; sourceName?: string | null } {
+    const name = cleanSourceName(dto.vendor)?.slice(0, 80) ?? null;
+    const kind = isSourceKind(dto.sourceKind) ? dto.sourceKind : null;
+    if (!name && !kind) return {};
+    return { sourceKind: kind, sourceName: name };
+  }
+
+  /**
    * The receipt written ONTO the request the kitchen sent.
    *
    * One trip, one request, one control number. Before this, every
@@ -515,6 +529,7 @@ export class ProcureReceiptsService {
         packSize:    new Prisma.Decimal(m.packSize),
         packCost:    new Prisma.Decimal(m.packCost),
         brandNote:   m.brandNote ?? null,
+        ...this.whereFrom(dto),
       };
       if (own?.receivedAt) {
         skipped.push({ line: own.lineNumber, name: own.rawMaterial.name, reason: 'Already in stock; this receipt did not change it.' });

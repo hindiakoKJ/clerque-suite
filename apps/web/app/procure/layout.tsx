@@ -58,6 +58,8 @@ function rolesFor(pathname: string): string[] {
   // milk is low is exactly who should be able to check it, so it sits with
   // the buy list rather than with the stock screens.
   if (pathname.startsWith('/procure/ceiling'))  return REQUEST_ROLES;
+  // Where things are bought: store names for everyone who builds the list; the API leaves out the money for those not shown costs.
+  if (pathname.startsWith('/procure/where-bought')) return REQUEST_ROLES;
   /*
     Recording a batch is a floor action, and the API already says so: CASHIER,
     SALES_LEAD and WAREHOUSE_STAFF may all post one, because the person who

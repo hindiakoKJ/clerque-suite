@@ -5,14 +5,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   Plus, Send, ShoppingCart, PackageCheck, Loader2, Trash2, Sparkles, Check, AlertTriangle, Paperclip,
-  Camera, Copy, Truck, Sparkle, FileText, Share2,
+  Camera, Copy, Truck, Sparkle, FileText, Share2, Store,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
-import { servesSentences, servesSummary, type LineServes } from '@repo/shared-types';
+import {
+  servesSentences, servesSummary, type LineServes,
+  SOURCE_KINDS, SOURCE_KIND_LABEL, cleanSourceName, sourceKey, sourceText, usuallyFromText, type SourceKind, type UsuallyFrom,
+} from '@repo/shared-types';
 
 /**
  * The whole of Procure on one screen.
@@ -33,7 +36,10 @@ type Outcome = 'STILL_COMING' | 'REFUNDED' | 'LOST' | 'NOT_COMING';
 type PhotoLabel = 'Receipt' | 'Order' | 'Delivery receipt' | 'Sales invoice';
 type ChargeKind = 'FREIGHT' | 'TRANSPORT' | 'OTHER';
 
-interface LastPack { packSize: number; packCost: number | null; brandNote: string | null; receivedAt: string | null }
+interface LastPack {
+  packSize: number; packCost: number | null; brandNote: string | null; receivedAt: string | null;
+  sourceKind?: string | null; sourceName?: string | null;
+}
 interface Line {
   id: string;
   lineNumber: string;
@@ -44,6 +50,9 @@ interface Line {
   packSize: string | number | null;
   packCost: string | number | null;
   brandNote: string | null;
+  /** Where it was bought: the kind of place, and the store as the shopper called it. */
+  sourceKind?: string | null;
+  sourceName?: string | null;
   receivedAt: string | null;
   rawMaterial: { id: string; name: string; unit: string; costPrice: string | number | null };
   /** What this ingredient held and cost the last time it was received. */
@@ -54,8 +63,13 @@ interface Line {
   counted?: { qty: number; expected: number; countId: string; countNumber: string } | null;
   /** What this item's stock still serves -- sent only while the list is being built or has just gone out. */
   serves?: LineServes | null;
+  /** Where this item is usually bought -- sent with the servings, on a list being built or just sent. */
+  usuallyFrom?: UsuallyFrom | null;
 }
-interface PackMemory { rawMaterialId: string; packSize: number; packCost: number | null; brandNote: string | null }
+interface PackMemory {
+  rawMaterialId: string; packSize: number; packCost: number | null; brandNote: string | null;
+  sourceKind?: string | null; sourceName?: string | null;
+}
 
 /**
  * How a quantity is asked for. Staff count in containers -- "2 bottles",
@@ -264,6 +278,9 @@ export default function ProcurePage() {
   const [outcome, setOutcome]   = useState<Record<string, Outcome>>({});
   const [boughtNote, setBoughtNote] = useState('');
   const [boughtDate, setBoughtDate] = useState('');
+  // Where this trip's shopping was done. Written on the lines saved with it.
+  const [whereKind, setWhereKind] = useState<SourceKind | ''>('');
+  const [whereName, setWhereName] = useState('');
   const [ordered, setOrdered]   = useState(false);
   /** Paid on order day, from this pocket -- the money leaves now and waits for the goods. */
   const [paidFrom, setPaidFrom] = useState<Pocket | ''>('');
@@ -455,6 +472,17 @@ export default function ProcurePage() {
     staleTime: 120_000,
   });
   const memoryOf = (rawMaterialId: string): PackMemory | undefined => packMemory.find((m) => m.rawMaterialId === rawMaterialId);
+  // The stores this shop has bought from, newest spelling each, for one-tap picking.
+  const knownStores = (() => {
+    const seen = new Map<string, { kind: SourceKind | null; name: string }>();
+    for (const m of packMemory) {
+      const name = cleanSourceName(m.sourceName);
+      const key = sourceKey(m.sourceKind, m.sourceName);
+      if (!name || !key || seen.has(key)) continue;
+      seen.set(key, { kind: (SOURCE_KINDS as readonly string[]).includes(m.sourceKind ?? '') ? (m.sourceKind as SourceKind) : null, name });
+    }
+    return [...seen.values()].slice(0, 8);
+  })();
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['procure-requests'] });
@@ -616,6 +644,20 @@ export default function ProcurePage() {
   const [buyKey,  setBuyKey]  = useState<string>(mintKey);
   const [postKey, setPostKey] = useState<string>(mintKey);
 
+  /*
+    The store picked below goes onto a line that has none yet, or one changed
+    on screen in this go. A line recorded earlier at another store keeps it:
+    a trip to Puregold saved first, then the palengke, must not turn the
+    Puregold lines into palengke ones just because they are still ticked.
+  */
+  const whereFor = (l: Line): { sourceKind: SourceKind | null; sourceName: string | null } | null => {
+    const name = cleanSourceName(whereName);
+    if (!whereKind && !name) return null;
+    const hasOne = !!(l.sourceKind || l.sourceName);
+    if (hasOne && !bought[l.id]) return null;
+    return { sourceKind: whereKind || null, sourceName: name };
+  };
+
   /** Packs, size or price typed on screen that the request has not been told about. */
   const pendingFixes = () => (req?.lines ?? [])
     .filter((l) => !l.receivedAt && bought[l.id])
@@ -628,11 +670,13 @@ export default function ProcurePage() {
         and 85.5 saved are the same price, and re-sending it would ask the
         price question again about a number nobody changed.
       */
+      const where = whereFor(l);
       const same = l.packsBought != null
         && packs === num(l.packsBought) && size === num(l.packSize) && cost === num(l.packCost)
-        && b.brand.trim() === (l.brandNote ?? '').trim();
+        && b.brand.trim() === (l.brandNote ?? '').trim()
+        && (!where || (where.sourceKind === (l.sourceKind ?? null) && where.sourceName === (l.sourceName ?? null)));
       if (same) return null;
-      return { lineId: l.id, packsBought: packs, packSize: size, packCost: cost, brandNote: b.brand.trim() || undefined };
+      return { lineId: l.id, packsBought: packs, packSize: size, packCost: cost, brandNote: b.brand.trim() || undefined, ...(where ?? {}) };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
@@ -649,6 +693,7 @@ export default function ProcurePage() {
             lineId: l.id, name: l.rawMaterial.name,
             packsBought: parseFloat(b.packs), packSize: parseFloat(b.size), packCost: parseFloat(b.cost),
             brandNote: b.brand.trim() || undefined,
+            ...(whereFor(l) ?? {}),
           };
         });
       const half = rows.find((r) => !(r.packsBought > 0) || !(r.packSize > 0) || !(r.packCost > 0));
@@ -665,6 +710,7 @@ export default function ProcurePage() {
     onSuccess: (d) => {
       refresh(); setBuyKey(mintKey()); setBought({});
       setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
+      setWhereKind(''); setWhereName('');
       if (d?.paidAhead) {
         const bad = d.paidAhead.entries.find((e) => e.error);
         // What the ledger took, not what was asked for: a locked month or a
@@ -831,9 +877,11 @@ export default function ProcurePage() {
         // The tightest dish only, so the message stays one line per item -- and
         // from the count when "left:" shows one, so the two figures agree.
         const serves = servesSummary(l.serves, 1, { fromCount: !!l.counted });
+        const usually = l.usuallyFrom ? sourceText(l.usuallyFrom.kind, l.usuallyFrom.name) : null;
         return `• ${l.rawMaterial.name} — ${packsLabel(l)}`
           + (l.counted ? ` · left: ${shelfLabel(l.counted.qty, l)}` : '')
-          + (serves ? ` · ${serves}` : '');
+          + (serves ? ` · ${serves}` : '')
+          + (usually ? ` · usually ${usually}` : '');
       }),
     ].join('\n');
     // On a phone the share sheet opens Messenger or Viber directly; elsewhere, the clipboard.
@@ -1400,6 +1448,11 @@ export default function ProcurePage() {
                             {servesSentences(l.serves).map((sentence) => <li key={sentence}>{sentence}</li>)}
                           </ul>
                         )}
+                        {(req.status === 'OPEN' || req.status === 'SENT') && usuallyFromText(l.usuallyFrom) && (
+                          <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                            <Store className="h-3 w-3 shrink-0" /> {usuallyFromText(l.usuallyFrom)}
+                          </p>
+                        )}
                       </div>
                     </div>
                     {req.status === 'OPEN' ? (
@@ -1478,6 +1531,18 @@ export default function ProcurePage() {
                         )}
                         {b.source === 'none' && !bought[l.id] && <span>first time buying this — fill it in once</span>}
                         {staffLocked && <span>recorded — the owner or manager can change it</span>}
+                        {sourceText(l.sourceKind, l.sourceName) && (
+                          <span className="inline-flex items-center gap-1">
+                            <Store className="h-3 w-3" /> at {sourceText(l.sourceKind, l.sourceName)}
+                            {!staffLocked && !bought[l.id] && (whereKind || cleanSourceName(whereName))
+                              && sourceKey(whereKind, whereName) !== sourceKey(l.sourceKind, l.sourceName) && (
+                              <button type="button" onClick={() => setBought((prev) => ({ ...prev, [l.id]: b }))}
+                                className="rounded border border-border px-1.5 py-0.5 hover:bg-muted">
+                                change to {sourceText(whereKind, whereName)}
+                              </button>
+                            )}
+                          </span>
+                        )}
                         {lineTotal > 0 && (
                           <span>
                             {b.packs} × {peso(parseFloat(b.cost) || 0)} = <strong className="font-mono text-foreground">{peso(lineTotal)}</strong>
@@ -1554,11 +1619,41 @@ export default function ProcurePage() {
         {/* the recorder's footer: where it came from, and when */}
         {recording && postable.length + unposted.length > 0 && (
           <div className="border-t border-border bg-muted/20 px-4 py-3">
+            {/*
+              Where the shopping was done, for "where do we usually buy this".
+              Goes onto the lines saved now that have no store yet, or that
+              were changed on screen.
+            */}
+            <div className="mb-2">
+              <p className="text-[11px] text-muted-foreground">Where was it bought? (optional)</p>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {SOURCE_KINDS.map((k) => (
+                  <button key={k} type="button" onClick={() => setWhereKind((prev) => (prev === k ? '' : k))}
+                    className={`rounded-full border px-2.5 py-1 text-xs ${whereKind === k ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-border bg-background hover:bg-muted'}`}>
+                    {SOURCE_KIND_LABEL[k]}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <input value={whereName} onChange={(e) => setWhereName(e.target.value)} maxLength={80} list="procure-known-stores"
+                  placeholder="Store: Puregold, Shopee, Aling Nena's stall"
+                  className="min-w-[12rem] flex-1 rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" />
+                <datalist id="procure-known-stores">
+                  {knownStores.map((st) => <option key={st.name} value={st.name} />)}
+                </datalist>
+                {knownStores.map((st) => (
+                  <button key={st.name} type="button" onClick={() => { setWhereName(st.name); if (st.kind) setWhereKind(st.kind); }}
+                    className="rounded border border-border bg-background px-1.5 py-0.5 text-[11px] hover:bg-muted">
+                    {st.name}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <label className="text-[11px] text-muted-foreground sm:col-span-2">
-                Where from / order no. (optional)
+                Note / order no. (optional)
                 <input value={boughtNote} onChange={(e) => setBoughtNote(e.target.value)}
-                  placeholder="Aling Nena's stall · Shopee order 2609041234 · DR 4471" className={inputCls} />
+                  placeholder="Shopee order 2609041234 · DR 4471 · no receipt" className={inputCls} />
               </label>
               <label className="text-[11px] text-muted-foreground">
                 Bought or ordered on

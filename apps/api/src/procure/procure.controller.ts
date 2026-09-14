@@ -93,6 +93,24 @@ export class ProcureController {
   }
 
   /**
+   * Where each item was bought, and what it cost there, for a date range
+   * (the last 90 days when none is given). Store names for everyone who can
+   * open Procure; prices only for people who may see purchase costs.
+   * Declared BEFORE :id.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @Get('where-bought')
+  @ApiOperation({ summary: 'Where each item is usually bought, per item and per store' })
+  whereBought(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.procure.whereBought(user.tenantId!, { from, to, branchId }, user.role);
+  }
+
+  /**
    * The buy lists as an Excel file, for a date range: the backup the owner can
    * read, edit and upload back. Declared BEFORE :id.
    */

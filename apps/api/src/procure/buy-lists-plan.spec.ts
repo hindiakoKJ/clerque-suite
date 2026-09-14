@@ -10,13 +10,13 @@ describe('buy-list sheet plan', () => {
   const TODAY = '2026-09-14';
   const MAIN = { id: 'b1', name: 'Main' };
   const row = (n: number, over: Partial<SheetRow> = {}): SheetRow => ({
-    rowNumber: n, lineNumber: '', branch: '', item: '', boughtOn: '', packs: '', packSize: '', packUnit: '', pricePerPack: '', brand: '',
+    rowNumber: n, lineNumber: '', branch: '', item: '', boughtOn: '', packs: '', packSize: '', packUnit: '', pricePerPack: '', brand: '', boughtAt: '', store: '',
     rowKey: '', was: null, ...over,
   });
   const line = (over: Partial<ExistingLine> = {}): ExistingLine => ({
     lineId: 'l1', lineNumber: 'REQ-20260913-001-01', requestId: 'r1', requestNumber: 'REQ-20260913-001', requestStatus: 'SENT',
     prepaid: false, fromSheet: false, sheetRowKey: null, branchId: 'b1', branchName: 'Main', rawMaterialId: 'rm-milk', itemName: 'Full Cream Milk', unit: 'ml',
-    packsBought: null, packSize: null, packCost: null, brandNote: null, boughtOn: null, receivedAt: null, ...over,
+    packsBought: null, packSize: null, packCost: null, brandNote: null, sourceKind: null, sourceName: null, boughtOn: null, receivedAt: null, ...over,
   });
   const MATERIALS = [
     { id: 'rm-milk', name: 'Full Cream Milk', unit: 'ml', isActive: true, isPrep: false },
@@ -34,11 +34,37 @@ describe('buy-list sheet plan', () => {
   // ── lines already on a request ────────────────────────────────────────────
 
   it('fills a line not yet in stock, with the pack size turned into the ingredient\'s unit', () => {
-    const [v] = plan([row(2, { lineNumber: 'REQ-20260913-001-01', item: 'Full Cream Milk', packs: '3', packSize: '1', packUnit: 'L', pricePerPack: '₱86.50', brand: 'Emborg', boughtOn: '2026-09-13' })]);
+    const [v] = plan([row(2, {
+      lineNumber: 'REQ-20260913-001-01', item: 'Full Cream Milk', packs: '3', packSize: '1', packUnit: 'L', pricePerPack: '₱86.50', brand: 'Emborg', boughtOn: '2026-09-13',
+      boughtAt: 'grocery', store: '  Puregold   Tagaytay ',
+    })]);
     expect(v).toEqual({
       kind: 'FILL', rowNumber: 2, lineNumber: 'REQ-20260913-001-01', item: 'Full Cream Milk', unit: 'ml', lineId: 'l1', requestId: 'r1',
       packsBought: 3, packSize: 1000, packCost: 86.5, brandNote: 'Emborg', boughtOn: '2026-09-13',
+      sourceKind: 'GROCERY', sourceName: 'Puregold Tagaytay',
     });
+  });
+
+  it('where it was bought: blank keeps what Clerque has, a change is an edit, a word it does not know is refused', () => {
+    const atPuregold = line({ packsBought: 3, packSize: 1000, packCost: 86.5, brandNote: 'Emborg', boughtOn: '2026-09-13', requestStatus: 'BOUGHT', sourceKind: 'GROCERY', sourceName: 'Puregold' });
+    const was = { item: 'Full Cream Milk', boughtOn: '2026-09-13', packs: '3', packSize: '1000', pricePerPack: '86.5', brand: 'Emborg', boughtAt: 'Grocery', store: 'Puregold' };
+    const r = (over: Partial<SheetRow>) => row(2, {
+      lineNumber: 'REQ-20260913-001-01', item: 'Full Cream Milk', boughtOn: '2026-09-13', packs: '3', packSize: '1000', packUnit: 'ml', pricePerPack: '86.5', brand: 'Emborg',
+      boughtAt: 'Grocery', store: 'Puregold', was, ...over,
+    });
+    expect(plan([r({})], { lines: [atPuregold] })[0].kind).toBe('UNCHANGED');
+    // Cleared in the file: blank keeps the store, like a blank brand.
+    expect(plan([r({ boughtAt: '', store: '' })], { lines: [atPuregold] })[0].kind).toBe('UNCHANGED');
+    // A price fix leaves the store as it is.
+    expect(plan([r({ pricePerPack: '88' })], { lines: [atPuregold] })[0]).toMatchObject({ kind: 'FILL', packCost: 88, sourceKind: 'GROCERY', sourceName: 'Puregold' });
+    // The store changed in the file only.
+    expect(plan([r({ boughtAt: 'Online', store: 'Shopee' })], { lines: [atPuregold] })[0]).toMatchObject({ kind: 'FILL', sourceKind: 'ONLINE', sourceName: 'Shopee' });
+    // Changed in Clerque since the download, and in the file too: download again.
+    expect(reason(plan([r({ store: 'S&R' })], { lines: [{ ...atPuregold, sourceName: 'Robinsons' }] })[0])).toMatch(/was changed in Clerque after this file was downloaded/);
+    expect(reason(plan([r({ boughtAt: 'Sari-sari' })], { lines: [atPuregold] })[0])).toBe('Bought at has to be one of Palengke, Grocery, Online, Supplier, Other.');
+    // A file made before the store columns existed: no "was", nothing to drift from.
+    const oldWas = { item: 'Full Cream Milk', boughtOn: '2026-09-13', packs: '3', packSize: '1000', pricePerPack: '86.5', brand: 'Emborg' };
+    expect(plan([r({ was: oldWas, boughtAt: '', store: '', pricePerPack: '88' })], { lines: [atPuregold] })[0]).toMatchObject({ kind: 'FILL', packCost: 88, sourceName: 'Puregold' });
   });
 
   const filledLine = line({ packsBought: 3, packSize: 1000, packCost: 86.5, brandNote: 'Emborg', boughtOn: '2026-09-13', requestStatus: 'BOUGHT' });
@@ -123,7 +149,9 @@ describe('buy-list sheet plan', () => {
     expect(v).toEqual({
       kind: 'NEW', rowNumber: 9, item: 'White Sugar', unit: 'g', branchId: 'b1', branchName: 'Main', rawMaterialId: 'rm-sugar',
       boughtOn: '2026-09-12', packsBought: 2, packSize: 1000, packCost: 80, brandNote: 'S&R', rowKey: 'aabbccddeeff',
+      sourceKind: null, sourceName: null,
     });
+    expect(plan([row(9, { ...NEW_ROW, boughtAt: 'Palengke', store: '' })])[0]).toMatchObject({ kind: 'NEW', sourceKind: 'MARKET', sourceName: null });
   });
 
   it('refuses a new purchase it cannot place, in words that say what to fix', () => {
@@ -169,6 +197,9 @@ describe('buy-list sheet plan', () => {
     expect(plan([row(4, { ...r, pricePerPack: '85' })], { lines: [sheetLine()] })[0].kind).toBe('UNCHANGED');
     // A blank Brand keeps the brand recorded in the app.
     expect(plan([row(4, { ...r, brand: '' })], { lines: [sheetLine()] })[0]).toMatchObject({ kind: 'FILL', brandNote: 'S&R' });
+    // Only the store typed in afterwards: that alone corrects the purchase.
+    expect(plan([row(4, { ...r, pricePerPack: '85', store: 'S&R Nuvali' })], { lines: [sheetLine()] })[0]).toMatchObject({ kind: 'FILL', sourceName: 'S&R Nuvali' });
+    expect(plan([row(4, { ...r, pricePerPack: '85', store: 'S&R Nuvali' })], { lines: [sheetLine({ sourceName: 'S&R Nuvali' })] })[0].kind).toBe('UNCHANGED');
   });
 
   it('an earlier sheet purchase that was paid ahead, closed or put in stock since is not changed from the file', () => {

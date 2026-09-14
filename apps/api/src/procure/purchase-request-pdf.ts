@@ -45,6 +45,10 @@ export interface BuyListSourceLine {
   counted:      number | null;
   /** What the stock still serves, already in words ("enough for 10 Spaghetti"). As-sent copy only. */
   serves?:      string | null;
+  /** "Usually from Puregold (grocery): 3 of the last 4 buys". As-sent copy only. */
+  usuallyFrom?: string | null;
+  /** Where this line was bought, in words ("Puregold (grocery)"). */
+  source?:      string | null;
   /** What one pack held last time, for "2 packs (2,000 ml)". */
   lastPackSize: number | null;
   packsBought:  number | null;
@@ -75,6 +79,7 @@ export interface BuyListRow {
   // as sent
   onHand?:    string;
   serves?:    string;
+  usually?:   string;
   // as booked
   bought?:       string;
   pricePerPack?: string;
@@ -194,13 +199,14 @@ export function buildBuyListModel(src: BuyListSource, opts: BuyListBuildOpts): B
         ...base,
         onHand: l.counted != null ? `${onHand} · counted ${qty(l.counted)}` : onHand,
         ...(l.serves ? { serves: l.serves.charAt(0).toUpperCase() + l.serves.slice(1) } : {}),
+        ...(l.usuallyFrom ? { usually: l.usuallyFrom } : {}),
       };
     }
     const hasPacks = l.packsBought != null && l.packSize != null;
     const row: BuyListRow = {
       ...base,
       bought: hasPacks ? `${qty(l.packsBought!)} × ${qty(l.packSize!)} ${l.unit}` : '—',
-      brand:  l.brandNote ?? '',
+      brand:  [l.brandNote, l.source].filter(Boolean).join(' · '),
       result: resultOf(l, src.status),
     };
     if (showMoney) {
@@ -300,7 +306,7 @@ function columnsFor(m: BuyListModel, W: number): Column[] {
       { key: 'bought',       header: 'BOUGHT',          width: 100 },
       { key: 'pricePerPack', header: 'PRICE/PACK PHP',  width: 72, align: 'right' },
       { key: 'amount',       header: 'AMOUNT PHP',      width: 76, align: 'right' },
-      { key: 'brand',        header: 'BRAND',           width: 76 },
+      { key: 'brand',        header: 'BRAND / STORE',   width: 76 },
       { key: 'result',       header: 'RESULT',          width: 88 },
     ];
   } else {
@@ -309,7 +315,7 @@ function columnsFor(m: BuyListModel, W: number): Column[] {
       { key: 'item',       header: 'ITEM',     width: 190 },
       { key: 'need',       header: 'NEEDED',   width: 120 },
       { key: 'bought',     header: 'BOUGHT',   width: 130 },
-      { key: 'brand',      header: 'BRAND',    width: 100 },
+      { key: 'brand',      header: 'BRAND / STORE', width: 100 },
       { key: 'result',     header: 'RESULT',   width: 122 },
     ];
   }
@@ -396,9 +402,11 @@ export function renderBuyListPdf(m: BuyListModel): Promise<Buffer> {
       if (c.writeIn) return '';
       return pdfSafe(String(row[c.key as keyof BuyListRow] ?? ''));
     };
-    // Under the item name, smaller: what the stock still serves.
+    // Under the item name, smaller: what the stock still serves, and where it is usually bought.
     const SERVES_SIZE = 7.5;
-    const servesOf = (row: BuyListRow, c: Column): string => (c.key === 'item' && row.serves ? pdfSafe(row.serves) : '');
+    const servesOf = (row: BuyListRow, c: Column): string => (c.key === 'item'
+      ? pdfSafe([row.serves, row.usually].filter(Boolean).join('\n'))
+      : '');
 
     head();
     if (m.rows.length === 0) {

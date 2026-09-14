@@ -156,6 +156,8 @@ export function StationPrepLevels({
     ? 'Refreshing…'
     : `${isError ? 'Could not refresh — showing' : 'Updated'} ${new Date(dataUpdatedAt).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' })}`;
   if (data.rows.length === 0) {
+    // Beside the orders, one quiet line: a bar with nothing made in batches should not lose a quarter of its screen to a notice.
+    if (compact) return <p className="text-sm text-stone-500">No pre-made items at this station.</p>;
     return (
       <div className={`flex flex-col items-center justify-center text-center text-stone-500 ${compact ? 'py-8' : 'py-32'}`}>
         <UtensilsCrossed className={`opacity-30 ${compact ? 'mb-2 h-8 w-8' : 'mb-4 h-14 w-14'}`} />
@@ -166,20 +168,36 @@ export function StationPrepLevels({
   }
 
   if (compact) {
-    // Worst first already; unrouted items join the same two lists, marked.
-    const attention = [...mine, ...loose].filter((r) => !FINE.has(r.status))
+    /*
+      A card for anything with something to do -- by its status, or because it
+      still has an instruction (an empty item with no par still says "make a
+      batch"; a ready sauce whose backup is low says to cook the next one).
+      One line each for the rest. Unrouted items join both lists, marked.
+    */
+    const needs = (r: PrepRow) => !FINE.has(r.status) || todo(r) != null;
+    const attention = [...mine, ...loose].filter(needs)
       .sort((a, b) => PREP_STATUS_ORDER[a.status] - PREP_STATUS_ORDER[b.status] || Number(!a.assigned) - Number(!b.assigned));
-    const fine = [...mine, ...loose].filter((r) => FINE.has(r.status));
+    const fine = [...mine, ...loose].filter((r) => !needs(r));
+    const allChecked = fine.every((r) => r.status === 'OK');
     return (
       <div className="space-y-3">
-        <div className="flex items-baseline justify-between gap-2">
+        <div>
           <h2 className="text-lg font-bold">Prep levels</h2>
-          <span className="text-[11px] text-stone-500">{updated}</span>
+          {/* Its own line, one height whatever it says, so a refresh never moves the list; stale data in amber. */}
+          <p className={`h-4 truncate text-[11px] leading-4 ${isError && !isFetching ? 'text-amber-300' : 'text-stone-500'}`}>
+            {data.branchName} · {updated}
+          </p>
         </div>
         {attention.length === 0 ? (
-          <p className="rounded-xl border border-emerald-700/50 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300">
-            Every prep level is fine.
-          </p>
+          allChecked ? (
+            <p className="rounded-xl border border-emerald-700/50 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300">
+              Every prep level is fine.
+            </p>
+          ) : (
+            <p className="rounded-xl border border-stone-700 px-3 py-2 text-sm text-stone-400">
+              Nothing needs doing. Items with no par set are not checked.
+            </p>
+          )
         ) : attention.map((r) => {
           const what = todo(r);
           const dates = useBySentences(r.useBy, r.unit, now);
@@ -209,13 +227,19 @@ export function StationPrepLevels({
         })}
         {fine.length > 0 && (
           <div>
-            <p className="mb-1 text-[11px] uppercase tracking-wider text-stone-500">Fine</p>
+            <p className="mb-1 text-[11px] uppercase tracking-wider text-stone-500">{allChecked ? 'Fine' : 'Fine, or no par set'}</p>
             <ul className="divide-y divide-stone-800">
               {fine.map((r) => (
-                <li key={r.id} className="flex items-baseline justify-between gap-2 py-1.5 text-sm">
-                  <span className="min-w-0 truncate text-stone-300" title={r.name}>{r.name}</span>
-                  <span className="shrink-0 tabular-nums text-stone-400">
-                    {amount(r.onHand, r.unit)}{r.status === 'NO_PAR' && <span className="ml-1 text-[10px] text-stone-600">no par</span>}
+                <li key={r.id} className={`flex items-start justify-between gap-2 py-1.5 text-sm ${r.assigned ? '' : 'opacity-70'}`}>
+                  {/* Wrapped, not cut: "Tomato Sauce (ready)" and "(frozen)" must stay tellable apart on a touch screen. */}
+                  <span className="min-w-0 leading-snug text-stone-300">
+                    {r.level === 2 && <Snowflake className="mr-1 inline h-3 w-3 align-[-1px] text-sky-300" aria-label="Parked" />}
+                    {r.name}
+                    {!r.assigned && <span className="ml-1 text-[10px] uppercase text-stone-500">not routed</span>}
+                  </span>
+                  <span className="shrink-0 text-right tabular-nums leading-snug text-stone-400">
+                    {amount(r.onHand, r.unit)}
+                    {r.status === 'NO_PAR' && <span className="block text-[10px] text-stone-600">no par</span>}
                   </span>
                 </li>
               ))}

@@ -9,7 +9,7 @@ import { useKioskMode } from '@/hooks/pos/useKioskMode';
 import { buildStationTicket, sendViaRawBt, isLikelyAndroid } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { StationPrepLevels } from '@/components/pos/StationPrepLevels';
-import { StationScreenLayout, STATION_VIEWS, type StationView } from '@/components/pos/StationScreenLayout';
+import { StationScreenLayout, STATION_VIEWS, stationRootHeight, type StationView } from '@/components/pos/StationScreenLayout';
 import { useAuthStore } from '@/store/auth';
 import {
   readDeviceToken,
@@ -285,8 +285,8 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    // A fixed height, so the orders and the prep column each scroll on their own under a header that stays put.
-    <div className="h-screen flex flex-col bg-stone-950 text-white">
+    // Side by side on a tablet: a fixed height, so the orders and the prep column each scroll on their own.
+    <div className={`${stationRootHeight(view)} flex flex-col bg-stone-950 text-white`}>
       {/* Header */}
       <header className="px-4 sm:px-8 py-5 flex flex-wrap items-center justify-between gap-3 border-b-2 border-amber-500/50 bg-stone-900">
         <div className="flex flex-wrap items-center gap-3">

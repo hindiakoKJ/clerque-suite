@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, Optional } from '@n
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { canPrepAtStation, rotationFromBoard } from '@repo/shared-types';
+import { canPrepAtStation, rotationFromBoard, useByOf, prepStatusOf, PREP_STATUS_ORDER, type PrepLot } from '@repo/shared-types';
 
 /**
  * Sub-recipes — prepared ingredients that are made in the shop rather than
@@ -508,6 +508,89 @@ export class SubRecipesService {
     }
     const rows = await this.list(tenantId, branch.id, personaKey);
     return { branchId: branch.id, branchName: branch.name, rows: rotationFromBoard(rows) };
+  }
+
+  /**
+   * Every pre-made item at one station, for the screen the bar or kitchen
+   * watches during service (prep-station.ts in shared-types).
+   *
+   * The items routed to this station, and the ones routed to no station --
+   * shown apart, since a shop that has not finished routing its menu would
+   * otherwise see an empty screen. Each with its level, stock against par,
+   * the rotation's what-to-do, batches that can be made now, the dish it
+   * runs out for first, and how much is past its use-by or due within a day.
+   *
+   * The branch is the station's own; a station with none (a one-branch shop)
+   * reads the caller's branch, or the shop's first.
+   */
+  async stationPrep(tenantId: string, stationId: string, callerBranchId?: string | null, now: Date = new Date()) {
+    const station = await this.prisma.station.findFirst({
+      where:  { id: stationId, tenantId },
+      select: { id: true, name: true, kind: true, branchId: true },
+    });
+    if (!station) throw new NotFoundException('Station not found.');
+    const wanted = station.branchId ?? callerBranchId ?? null;
+    const branch = wanted
+      ? await this.prisma.branch.findFirst({ where: { id: wanted, tenantId }, select: { id: true, name: true } })
+      : await this.prisma.branch.findFirst({ where: { tenantId, isActive: true }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } });
+    if (!branch) throw new BadRequestException('This organization has no branch yet.');
+
+    const board = await this.list(tenantId, branch.id, null);
+    const rotation = new Map(rotationFromBoard(board).map((r) => [r.prepId, r]));
+    const shown = board.filter((r) => !r.station || r.station.id === station.id);
+    /*
+      The newest batches first, and enough of them: what is on hand is read as
+      the newest batches, so older ones only matter until on hand runs out.
+    */
+    const lots = shown.length === 0 ? [] : await this.prisma.rawMaterialLot.findMany({
+      where:   { tenantId, branchId: branch.id, rawMaterialId: { in: shown.map((r) => r.id) }, qtyRemaining: { gt: 0 } },
+      select:  { id: true, rawMaterialId: true, qtyRemaining: true, receivedAt: true, expirationDate: true },
+      orderBy: { receivedAt: 'desc' },
+      take:    2000,
+    });
+    const lotsOf = new Map<string, PrepLot[]>();
+    for (const l of lots) {
+      const list = lotsOf.get(l.rawMaterialId) ?? [];
+      list.push({ id: l.id, rawMaterialId: l.rawMaterialId, qtyRemaining: Number(l.qtyRemaining), receivedAt: l.receivedAt, expirationDate: l.expirationDate });
+      lotsOf.set(l.rawMaterialId, list);
+    }
+
+    const rows = shown.map((r) => {
+      const rot = rotation.get(r.id) ?? null;
+      const useBy = useByOf(r.onHand, lotsOf.get(r.id) ?? [], now);
+      return {
+        id:            r.id,
+        name:          r.name,
+        unit:          r.unit,
+        level:         r.level,
+        kind:          r.kind,
+        movesFrom:     r.movesFrom,
+        onHand:        r.onHand,
+        parLevel:      r.parLevel,
+        status:        prepStatusOf(r, rot, useBy),
+        useBy,
+        rotation:      rot,
+        batches:       r.batches,
+        limitedBy:     r.limitedBy,
+        rootLimitedBy: r.rootLimitedBy,
+        batchesWithPrep: r.batchesWithPrep,
+        /** The dish it runs out for first. */
+        serves:        r.serves[0] ?? null,
+        /** Routed to this station; false for an item routed to none. */
+        assigned:      !!r.station,
+      };
+    }).sort((a, b) => Number(!a.assigned) - Number(!b.assigned)
+      || PREP_STATUS_ORDER[a.status] - PREP_STATUS_ORDER[b.status]
+      || (a.parLevel ? a.onHand / a.parLevel : Number.POSITIVE_INFINITY) - (b.parLevel ? b.onHand / b.parLevel : Number.POSITIVE_INFINITY)
+      || a.name.localeCompare(b.name));
+
+    return {
+      station:    { id: station.id, name: station.name, kind: String(station.kind) },
+      branchId:   branch.id,
+      branchName: branch.name,
+      at:         now.toISOString(),
+      rows,
+    };
   }
 
   /**

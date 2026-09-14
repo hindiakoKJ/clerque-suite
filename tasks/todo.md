@@ -2419,3 +2419,34 @@ proven with the same axios configuration the page uses.
   purchase twice (no lock); the button is disabled while one is running.
 - Restore does not read the buy lists back yet (and restore already fails for shops
   that use Procure -- a separate fix).
+
+## 2026-09-14 — Bar and kitchen: every pre-made ingredient on the station screen
+
+> "check if its possible that a warning alert or visibility dashboard can be built and used by
+> bar and kitchen for all pre-made ingredients ... if we have enough limit, try to do it"
+
+Feasible without a database change: the station tablet screen (/pos/station/[id]) already pairs
+without a login and polls; the prep board already knows each prep's station, level, par, stock
+and what to do; batch lots already carry a use-by date. Missing: one read of those for a
+station, a view for it, and any alert about use-by dates.
+
+### Spec
+- `GET /kds/stations/:id/prep` (logged-in staff or the paired tablet; a tablet paired to another
+  station is refused): every pre-made item routed to this station, plus the ones routed to no
+  station (shown apart). Each: level (ready to use / parked / other), on hand vs par, the
+  rotation's what-to-do for ready-to-use items, batches that can be made now or what blocks
+  them, the tightest dish it still serves, and use-by: how much is past it and how much expires
+  within 24 hours.
+- Use-by amounts are an estimate: sales do not say which batch they used, so what is left is
+  taken to be the newest batches (oldest used first), never more than on hand.
+- Station screen: "Orders | Prep levels" switch in the header. Prep levels refresh every minute,
+  worst first (past use-by, out, needs doing, expiring soon, low, fine, no par). Orders keep
+  polling underneath, so the bell still rings for new tickets.
+- Alerts: the half-hourly prep check also tells the same people (owner, branch manager, that
+  station's prep staff) when a batch is past its use-by or expires within 12 hours; once per
+  batch per day.
+
+- [ ] shared wording + estimate (prep-station.ts) with specs
+- [ ] API route + service + scheduler, specs
+- [ ] station screen view
+- [ ] live check, review, push

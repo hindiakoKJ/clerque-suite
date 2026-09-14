@@ -8,6 +8,7 @@ import { useKitchenChime } from '@/hooks/pos/useKitchenChime';
 import { useKioskMode } from '@/hooks/pos/useKioskMode';
 import { buildStationTicket, sendViaRawBt, isLikelyAndroid } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
+import { StationPrepLevels } from '@/components/pos/StationPrepLevels';
 import { useAuthStore } from '@/store/auth';
 import {
   readDeviceToken,
@@ -122,6 +123,21 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   // Kitchen bell. The hook owns the browser-audio awkwardness: one reused
   // AudioContext, unlocked on first touch, resumed before every ring.
   const chime = useKitchenChime();
+
+  /*
+    Orders or prep levels. The orders keep polling underneath either way, so
+    the bell still rings for a new ticket while the prep levels are showing.
+    Remembered per station on this tablet.
+  */
+  const viewKey = `clerque.station.view.${stationId}`;
+  const [view, setView] = useState<'orders' | 'prep'>('orders');
+  useEffect(() => {
+    try { if (localStorage.getItem(viewKey) === 'prep') setView('prep'); } catch { /* storage blocked: start on orders */ }
+  }, [viewKey]);
+  const chooseView = (v: 'orders' | 'prep') => {
+    setView(v);
+    try { localStorage.setItem(viewKey, v); } catch { /* not remembered, still switched */ }
+  };
 
   // Kiosk: fullscreen (a kitchen tablet has no business showing a URL bar),
   // wake lock so it never sleeps mid-service, pinned against pinch/pull.
@@ -275,6 +291,14 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
               Kitchen Display · {items.filter((i) => i.prepStatus === 'PENDING').length} pending
             </p>
           </div>
+          <div className="ml-4 flex overflow-hidden rounded-xl border border-stone-700 text-sm font-semibold">
+            {([['orders', `Orders (${items.filter((i) => i.prepStatus === 'PENDING').length})`], ['prep', 'Prep levels']] as const).map(([v, label]) => (
+              <button key={v} onClick={() => chooseView(v)}
+                className={`px-4 py-2 transition-colors ${view === v ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-4">
           {/* Kitchen bell. Browsers refuse to start audio without a gesture, so
@@ -342,7 +366,9 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
 
       {/* Queue grid */}
       <main className="flex-1 overflow-y-auto p-6">
-        {orderNumbers.length === 0 ? (
+        {view === 'prep' ? (
+          <StationPrepLevels stationId={stationId} enabled={!!stationId && pairState === 'ok'} onNewRed={() => { if (chime.enabled) chime.ring(); }} />
+        ) : orderNumbers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-32 text-stone-500">
             <Check className="h-16 w-16 opacity-30 mb-4" />
             <p className="text-2xl font-semibold">All caught up</p>

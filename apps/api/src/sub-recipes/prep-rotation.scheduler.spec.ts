@@ -46,7 +46,9 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
   ];
 
   type Lot = { branchId: string; rawMaterialId: string; createdAt: Date };
-  function build(opts: { boards: Record<string, any[]>; watched?: number; lots?: Lot[]; branches?: Array<{ id: string; name: string }> }) {
+  /** A batch with a use-by date, for the use-by alerts. */
+  type Batch = { id: string; branchId: string; rawMaterialId: string; qtyRemaining: number; receivedAt: Date; expirationDate: Date | null };
+  function build(opts: { boards: Record<string, any[]>; watched?: number; lots?: Lot[]; branches?: Array<{ id: string; name: string }>; batches?: Batch[] }) {
     const table: any[] = [];
     const boards = { ...opts.boards };
     const lots: Lot[] = [...(opts.lots ?? [])];
@@ -57,6 +59,12 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
       branch: { findMany: jest.fn().mockResolvedValue(opts.branches ?? [{ id: MAIN, name: 'Main' }]) },
       user: { findMany: jest.fn(({ where }: any) => Promise.resolve(PEOPLE.filter((p) => where.role.in.includes(p.role)))) },
       rawMaterialLot: {
+        // Batches with a use-by in the window the scheduler asks about.
+        count: jest.fn(({ where }: any) => Promise.resolve((opts.batches ?? []).filter((b) => b.expirationDate
+          && b.expirationDate >= where.expirationDate.gte && b.expirationDate <= where.expirationDate.lte && b.qtyRemaining > 0).length)),
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.batches ?? [])
+          .filter((b) => b.branchId === where.branchId && where.rawMaterialId.in.includes(b.rawMaterialId) && b.qtyRemaining > 0)
+          .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime()))),
         // Newest lot per ingredient, for the branch and ingredients asked about -- like the database.
         groupBy: jest.fn(({ where }: any) => {
           const hits = lots.filter((l) => l.branchId === where.branchId && where.rawMaterialId.in.includes(l.rawMaterialId));
@@ -176,6 +184,44 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
       ['mgr-b2', 'Teriyaki Sauce (ready) (Naga): move one across', `/procure/batches?branch=${NAGA}`],
       ['owner', 'Teriyaki Sauce (ready) (Naga): move one across', `/procure/batches?branch=${NAGA}`],
     ]);
+  });
+
+  // ── use-by ───────────────────────────────────────────────────────────────
+
+  const tub = (id: string, qty: number, madeHoursAgo: number, useByInHours: number | null): Batch => ({
+    id, branchId: MAIN, rawMaterialId: 'rm-ready', qtyRemaining: qty,
+    receivedAt: hours(-madeHoursAgo), expirationDate: useByInHours == null ? null : hours(useByInHours),
+  });
+
+  it('says a batch is due soon, once a day, to the people who hear about that sauce, with no quantity in the words', async () => {
+    // 3000 ml above par, so the rotation is quiet; the older 1000 ml tub is due at 4 PM (6 hours from 10 AM).
+    const { run, table } = build({ watched: 0, boards: { [MAIN]: [frozen(4000), ready(3000), breve()] }, batches: [tub('old', 1000, 30, 6), tub('new', 2000, 2, 72)] });
+    expect(await run(T0)).toBe(3);
+    expect(table.map((n) => n.userId).sort()).toEqual(['cook', 'mgr', 'owner']);
+    expect(table[0]).toMatchObject({ kind: 'WARNING', title: 'Teriyaki Sauce (ready): use it first', link: `/procure/batches?branch=${MAIN}` });
+    expect(table[0].body).toMatch(/^Use by 4:00\sPM\. Use this batch first\.$/);
+    // Half an hour and some sales later: the same words, so no repeat.
+    const again = build({ watched: 0, boards: { [MAIN]: [frozen(4000), ready(3000), breve()] }, batches: [tub('old', 1000, 30, 6), tub('new', 2000, 2, 72)] });
+    await again.run(T0);
+    again.setBoard(MAIN, [frozen(4000), ready(2800), breve()]);
+    await again.run(hours(0.5));
+    expect(again.table).toHaveLength(3);
+  });
+
+  it('a batch already used up by the newer stock on hand is not called due; one past its use-by is', async () => {
+    // 500 ml on hand is read as the newest tub: the old one is gone, whatever its lot still says.
+    const usedUp = build({ watched: 0, boards: { [MAIN]: [frozen(4000), ready(500), breve()] }, batches: [tub('old', 1000, 30, 6), tub('new', 2000, 2, 72)] });
+    expect(await usedUp.run(T0)).toBe(0);
+    const past = build({ watched: 0, boards: { [MAIN]: [frozen(4000), ready(2500), breve()] }, batches: [tub('old', 1000, 30, -2), tub('new', 2000, 2, 72)] });
+    expect(await past.run(T0)).toBe(3);
+    expect(past.table[0]).toMatchObject({ kind: 'ERROR', title: 'Teriyaki Sauce (ready): past its use-by' });
+    expect(past.table[0].body).toMatch(/^Past its use-by \(8:00\sAM\)\. Check it; if it is thrown out, take it off under Stock on hand\.$/);
+  });
+
+  it('leaves a use-by more than three days gone to the station screen, and skips the board when nothing is dated', async () => {
+    const stale = build({ watched: 0, boards: { [MAIN]: [frozen(4000), ready(2500)] }, batches: [tub('old', 1000, 200, -100), tub('new', 2000, 2, 72)] });
+    expect(await stale.run(T0)).toBe(0);
+    expect(stale.subRecipes.list).not.toHaveBeenCalled();
   });
 
   it('one tenant failing does not stop the next', async () => {

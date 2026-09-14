@@ -36,6 +36,20 @@ export class SubRecipesController {
   }
 
   /**
+   * The sauce rotation: ready to use, parked behind it, and what to do now.
+   * The owner's card and the Share-to-GC message read this.
+   *
+   * Declared BEFORE ':rawMaterialId', or "rotation" is read as an id and 404s.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM',
+         'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'GENERAL_EMPLOYEE')
+  @Get('rotation')
+  @ApiOperation({ summary: 'Each ready-to-use prep, its parked backup, and what to do now' })
+  rotation(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
+    return this.subRecipes.rotation(user.tenantId!, branchId ?? user.branchId, user.personaKey);
+  }
+
+  /**
    * Reading a sub-recipe is as broad as reading any other ingredient — a
    * barista about to make a batch needs to see what goes in it.
    */

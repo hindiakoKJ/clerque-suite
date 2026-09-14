@@ -2302,3 +2302,65 @@ same; a sent list keeps servings, a cancelled one has none; the PDF prints them.
 (Three test sales of Americano ( Hot ) were rung up on carolina-test.)
 
 **Not seen on screen:** the sentences on the request page (behind a login).
+
+## 2026-09-14 — Procure as the one place: sauce levels watched and said (Phase 3 of 5)
+
+> "it should have active monitoring of how many ready made sauce are still
+> available per level as we discussed earlier."
+
+Decision taken as recommended: alerts stay inside Clerque, with a Share-to-GC
+button; nothing posts into the group chat on its own.
+
+### Built
+- [x] **One rotation rule** (`@repo/shared-types` prep-rotation): each ready-to-use
+      prep (L1), the parked stage behind it (L2 -- of several, the one that runs
+      short first), and what to do: move one across / make a batch, cook the
+      backup first, buy the raw material that ran out, or cook the next backup
+      batch today. Only whole moves and batches are asked for (what the board can
+      record). Nothing is decided without a par on the ready-to-use prep; a backup
+      at zero is only news against its own par.
+- [x] **Alerts during service** (`PrepRotationScheduler`, every 30 min 06:00-22:30
+      Manila): one bell alert per person -- owner, the branch's managers, the
+      branch's kitchen account, and till accounts whose persona is prep staff (a
+      barista is a cashier account). Once per sauce per day per what-to-do, again
+      after a move or batch (newest stock lot), and when the line runs out. The
+      words carry no live quantity, so a sale does not repeat an alert. The link
+      opens the prep board on that branch. The bell is now in the Procure header.
+- [x] **Sauce levels card** on the POS dashboard (owner/manager) and the Procure
+      home: ready to use, parked, enough for N, what to do, Share to GC. Hidden for
+      a shop with no par levels; preps without a par are one summary line.
+- [x] **The cook's board** refreshes every minute and words its warning by the same
+      rule (also at zero).
+- [x] **Sauces off shopping lists**: the Buy Now slip and sheet leave preps out and
+      say so ("Nothing to buy right now. 1 kitchen prep is low"); a prep cannot be
+      added to a buy list (an old one can still be corrected) and is not carried to
+      the next list; the Procure home banner counts what Check stock adds.
+- [x] **The till**: when a dish is held back by a ready sauce and a whole move is
+      parked behind it, the tile says "move from Teriyaki Sauce (frozen)". The
+      count is unchanged (a tub that is empty IS empty).
+- [x] The nightly 3am alert no longer repeats sauces the rotation watches.
+
+### Reviewed (14 agents, 9 confirmed + unverified checked, all fixed)
+The ones that mattered: "move one across" for a part tub the board cannot record;
+only the first of two prep stages was checked, and the nightly alert then went
+quiet about the second; baristas (cashier accounts) never got bar alerts; the till
+said "move" for sauces that are cooked; the alert link opened an empty board for a
+branchless owner; the card showed rows of "no par" for shops with no rotation.
+
+### Proved
+API 1801 tests, lint and type check clean, web type check clean. Live on
+carolina-test: the route answers and pairs Teriyaki (ready) with Teriyaki (frozen);
+the cook (line cook persona) sees only kitchen preps; a sauce on a buy list is
+refused in words; with the par raised the slip says "Nothing to buy right now.
+1 kitchen prep is low"; after the review fixes the real 3:30 PM run created one
+alert each for the owner and the cook -- "Teriyaki Sauce (ready) (Main): cook a
+batch now / Teriyaki Sauce (frozen) is short of a full batch" (1,650 ml parked
+against a 2,000 ml move), linking to the board on that branch (13/13).
+
+### Not done, on purpose
+- The service window and "once a day" are Manila time for every shop (Tenant
+  timezone is not read yet).
+- Carolina must set a par on each ready-to-use sauce (and on the frozen stage for
+  "backup low") before anything alerts.
+- carolina-test has a leftover active branch "zz live-check branch (delete me)"
+  that now gets sauce alerts locally.

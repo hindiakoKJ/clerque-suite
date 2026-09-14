@@ -9,6 +9,7 @@ import {
   Timer, Activity, Hourglass, ArrowRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { SauceLevelsCard } from '@/components/shared/SauceLevelsCard';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
@@ -201,6 +202,13 @@ function SalesDashboard() {
           </button>
         </div>
       </div>
+
+      {/* ── What the kitchen needs to move or cook, while service is on. Its own query: it does not wait on the sales report. ── */}
+      {canSeeRevenue && (
+        <div className="px-4 sm:px-6 pt-4 sm:pt-6">
+          <SauceLevelsCard branchId={branchId || null} />
+        </div>
+      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">

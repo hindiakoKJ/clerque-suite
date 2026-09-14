@@ -282,6 +282,40 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
     }
   });
 
+  it('keeps what the kitchen makes off the shopping slip and the Buy Now sheet', async () => {
+    // A sauce short of its par needs a batch, not a trip to the market; the prep board and its alerts say that.
+    const sauce = {
+      quantity: '100',
+      rawMaterial: { id: 'rm-sauce', name: 'Teriyaki Sauce', unit: 'ml', lowStockAlert: '400', subRecipeItems: [{ id: 'x' }] },
+    };
+    const { svc } = build({ ingredients: [beans, sauce] });
+    const { text, count } = await svc.lowStockSlip(TENANT, BRANCH);
+    expect(count).toBe(1);
+    expect(text).toContain('Coffee Beans');
+    expect(text).not.toContain('Teriyaki');
+    const ws = await sheetOf(await svc.lowStockExport(TENANT, BRANCH));
+    const names: string[] = [];
+    ws.eachRow((row: any) => names.push(String(row.getCell(1).value ?? '')));
+    expect(names).toContain('Coffee Beans');
+    expect(names.some((n) => n.includes('Teriyaki'))).toBe(false);
+  });
+
+  it('when only kitchen preps are low, the slip says nothing to buy rather than nothing is low', async () => {
+    const sauce = {
+      quantity: '0',
+      rawMaterial: { id: 'rm-sauce', name: 'Teriyaki Sauce', unit: 'ml', lowStockAlert: '400', subRecipeItems: [{ id: 'x' }] },
+    };
+    const { svc } = build({ ingredients: [plenty, sauce] });
+    const { text, count } = await svc.lowStockSlip(TENANT, BRANCH);
+    expect(count).toBe(0);
+    expect(text).toContain('Nothing to buy right now.');
+    expect(text).toContain('1 kitchen prep is low:');
+    expect(text).not.toContain('Nothing is below');
+    for (const line of text.split('\n')) expect(line.length).toBeLessThanOrEqual(32);
+    const ws = await sheetOf(await svc.lowStockExport(TENANT, BRANCH));
+    expect(String(ws.getCell(2, 1).value)).toBe('Nothing to buy right now. 1 kitchen prep is low too: see the prep board.');
+  });
+
   it('ends the print with a feed and a cut', async () => {
     const { svc } = build({ ingredients: [beans] });
     const { InlineEscPosBuilder } = require('../close-and-plan/inline-escpos');

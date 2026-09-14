@@ -77,6 +77,14 @@ describe('NotificationsService.create — the dedupe that never fired', () => {
       .toMatchObject({ tenantId: TENANT, userId: 'u9' });
   });
 
+  it('looks back to the moment the caller names, when it names one', async () => {
+    // "Once today, and again after the sauce was moved" is a window only the caller knows.
+    const { svc, prisma } = build();
+    const since = new Date('2026-09-14T05:00:00Z');
+    await svc.create(args({ dedupeSince: since }) as never);
+    expect(prisma.notification.findFirst.mock.calls[0][0].where.createdAt.gte).toBe(since);
+  });
+
   it('only looks back an hour', async () => {
     const { svc, prisma } = build();
     const before = Date.now();

@@ -157,6 +157,18 @@ export class NotificationsScheduler {
             // parked batch is empty by design for half its life -- alerting on
             // it nightly would train everyone to ignore the alert.
             subRecipeItems: { select: { id: true }, take: 1 },
+            /*
+              Whether the sauce rotation already watches it, during the day and
+              with better timing: a ready-to-use prep (a dish uses it) with a par
+              level, or a parked batch behind one. Said here as well, it would
+              arrive twice.
+            */
+            bomItems:         { where: { product: { isActive: true } }, select: { id: true }, take: 1 },
+            usedInSubRecipes: { select: { quantity: true, parent: { select: {
+              isActive: true, lowStockAlert: true,
+              bomItems: { where: { product: { isActive: true } }, select: { id: true }, take: 1 },
+              subRecipeItems: { select: { quantity: true, rawMaterial: { select: { subRecipeItems: { select: { id: true }, take: 1 } } } } },
+            } } } },
           },
         });
         for (const r of rows) {
@@ -165,6 +177,12 @@ export class NotificationsScheduler {
           const where  = branches.length > 1 ? ` (${b.name})` : '';
           const isPrep = r.subRecipeItems.length > 0;
           if (isPrep) {
+            const readyToUse = (r.bomItems ?? []).length > 0;
+            // The only prep stage behind an active ready-to-use prep with a par: the rotation checks exactly that one.
+            const behindOne  = (r.usedInSubRecipes ?? []).some((u) =>
+              u.parent.isActive && u.parent.lowStockAlert != null && u.parent.bomItems.length > 0 && Number(u.quantity) > 0
+              && u.parent.subRecipeItems.filter((l) => Number(l.quantity) > 0 && l.rawMaterial.subRecipeItems.length > 0).length === 1);
+            if ((readyToUse && level != null) || behindOne) continue;   // the rotation alert says it
             // Only worth mentioning once someone has said what "low" means for
             // it. An empty parked batch with no par level is just Tuesday.
             if (level != null && level > 0 && onHand <= level) {
@@ -214,7 +232,8 @@ export class NotificationsScheduler {
             ? `${belowRe.length} ingredient${belowRe.length === 1 ? '' : 's'} running low`
             : `${toMake.length} item${toMake.length === 1 ? '' : 's'} to prep`,
         body:   parts.join(' · '),
-        link:   '/procure/requests',
+        // Only preps to make: the prep board is where that is done.
+        link:   atZero.length === 0 && belowRe.length === 0 ? '/procure/batches' : '/procure/requests',
         // Keyed on the counts, so a shop whose position has not changed is not
         // told again every night -- but a new shortage still gets through.
         dedupeKey: `low-ingredient-${atZero.length}-${belowRe.length}-${toMake.length}`,

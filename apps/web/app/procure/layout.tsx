@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, ShoppingBasket } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
 import { AppSwitcher } from '@/components/shell/AppSwitcher';
+import { NotificationBell } from '@/components/shell/NotificationBell';
 
 /**
  * Clerque Procure.
@@ -156,6 +157,9 @@ export default function ProcureLayout({ children }: { children: React.ReactNode 
               to be someone's only app, and the one where being stuck would be
               least obvious. It hides itself when there is nowhere else to go. */}
           <AppSwitcher align="down" />
+          {/* The sauce alerts reach the cook here: Procure has no AppShell to carry the bell.
+              Last in the row, so its right-anchored panel opens inside a phone's width. */}
+          <NotificationBell />
         </div>
       </header>
       {/*

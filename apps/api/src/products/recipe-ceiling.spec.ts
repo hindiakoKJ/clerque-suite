@@ -34,14 +34,17 @@ describe('recipe ceiling', () => {
   const STOCK = [{ rawMaterialId: MILK.id, quantity: 3000 }, { rawMaterialId: BEANS.id, quantity: 900 }];
   const stockOf = (id: string) => Number(STOCK.find((s) => s.rawMaterialId === id)?.quantity ?? 0);
 
-  async function tiles() {
+  async function tiles(extra: Record<string, any> = {}) {
     const prisma: any = {
+      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      ...extra,
       tenant: { findUnique: jest.fn().mockResolvedValue({ allowSaleWhenOutOfStock: false }) },
       customer: { findFirst: jest.fn().mockResolvedValue(null) },
       priceListItem: { findMany: jest.fn().mockResolvedValue([]) },
       product: { findMany: jest.fn().mockResolvedValue(PRODUCTS.map((p) => ({ ...p, price: 100, isActive: true, categoryId: null }))) },
       modifierGroup: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: { findMany: jest.fn().mockResolvedValue(STOCK) },
+      ...(extra.rawMaterialInventory ? { rawMaterialInventory: extra.rawMaterialInventory } : {}),
     };
     return new ProductsService(prisma).findForPos(TENANT, BRANCH);
   }
@@ -65,6 +68,44 @@ describe('recipe ceiling', () => {
       const c = productCeiling(p, stockOf);
       expect([c.maxProducible, c.limitedBy, c.variantCeilings]).toEqual([shown[i].maxProducible, shown[i].limitedBy, shown[i].variantCeilings]);
     });
+  });
+
+  it('when the ingredient holding a dish back is a ready sauce with stock parked behind it, the till says so', async () => {
+    // "needs Spaghetti Sauce" with 2 kg in the freezer: the count stays what is on the line; the hint says what to do.
+    const inventory = { findMany: jest.fn(({ where }: any) => Promise.resolve(
+      where.rawMaterialId.in.includes('frozen') && !where.rawMaterialId.in.includes(MILK.id)
+        ? [{ rawMaterialId: 'frozen', quantity: 2000 }]
+        : STOCK)) };
+    const shown = await tiles({
+      rawMaterialInventory: inventory,
+      subRecipeItem: { findMany: jest.fn(({ where }: any) => Promise.resolve(where.parentRawMaterialId.in.includes(SAUCE.id)
+        ? [{ parentRawMaterialId: SAUCE.id, quantity: 2000, parent: { batchYield: 2000, _count: { subRecipeItems: 1 } }, rawMaterial: { id: 'frozen', name: 'Spaghetti Sauce (frozen)', unit: 'g' } }]
+        : [])) },
+    });
+    const spag: any = shown.find((t: any) => t.id === 'spag');
+    expect(spag.maxProducible).toBe(0);
+    expect(spag.limitedBy).toMatchObject({ rawMaterialId: SAUCE.id, backup: { name: 'Spaghetti Sauce (frozen)', unit: 'g', onHand: 2000 } });
+    // Only where something is parked: milk has nothing behind it.
+    expect((shown.find((t: any) => t.id === 'latte') as any).limitedBy.backup).toBeUndefined();
+  });
+
+  it('no hint for a sauce that is cooked from its base, or when less than a whole move is parked', async () => {
+    const inventory = (qty: number) => ({ findMany: jest.fn(({ where }: any) => Promise.resolve(
+      where.rawMaterialId.in.includes('frozen') && !where.rawMaterialId.in.includes(MILK.id) ? [{ rawMaterialId: 'frozen', quantity: qty }] : STOCK)) });
+    const link = (over: object) => ({ subRecipeItem: { findMany: jest.fn().mockResolvedValue([{
+      parentRawMaterialId: SAUCE.id, quantity: 2000, parent: { batchYield: 2000, _count: { subRecipeItems: 1 } },
+      rawMaterial: { id: 'frozen', name: 'Spaghetti Sauce (frozen)', unit: 'g' }, ...over }]) } });
+    // Cooked: made from the base plus cream, so it yields more than the base that goes in.
+    const cooked = await tiles({ rawMaterialInventory: inventory(9000), ...link({ parent: { batchYield: 2400, _count: { subRecipeItems: 2 } } }) });
+    expect((cooked.find((t: any) => t.id === 'spag') as any).limitedBy.backup).toBeUndefined();
+    // A part tub: 1,500 g against a 2,000 g move cannot be recorded on the board.
+    const part = await tiles({ rawMaterialInventory: inventory(1500), ...link({}) });
+    expect((part.find((t: any) => t.id === 'spag') as any).limitedBy.backup).toBeUndefined();
+  });
+
+  it('a lookup that fails costs the hint, never the till', async () => {
+    const shown = await tiles({ subRecipeItem: { findMany: jest.fn().mockRejectedValue(new Error('connection reset')) } });
+    expect(shown.find((t: any) => t.id === 'latte')).toMatchObject({ maxProducible: 20, limitedBy: { name: 'Full Cream Milk' } });
   });
 
   it('decimal quantities give exact whole servings, not one short', () => {

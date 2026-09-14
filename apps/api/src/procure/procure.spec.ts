@@ -298,6 +298,35 @@ describe('ProcureService', () => {
     expect(prisma.purchaseRequestLine.update).toHaveBeenCalled();
   });
 
+  it('refuses to put something the kitchen makes on a buy list', async () => {
+    const { svc, prisma, created } = build();
+    prisma.rawMaterial.findFirst.mockResolvedValueOnce({ id: 'rm-sauce', name: 'Teriyaki Sauce (ready)', subRecipeItems: [{ id: 'x' }] });
+    await expect(svc.addLine(TENANT, 'req1', { rawMaterialId: 'rm-sauce', qtyRequested: 2000 }))
+      .rejects.toThrow('Teriyaki Sauce (ready) is made in the kitchen, not bought. Record it on the prep board.');
+    expect(created).toHaveLength(0);
+  });
+
+  it('a prep line already on a list from before can still be corrected', async () => {
+    const { svc, prisma } = build({ lines: [{ id: 'l1', rawMaterialId: 'rm-sauce', qtyRequested: 1000 }] });
+    prisma.rawMaterial.findFirst.mockResolvedValueOnce({ id: 'rm-sauce', name: 'Teriyaki Sauce (ready)', subRecipeItems: [{ id: 'x' }] });
+    await svc.addLine(TENANT, 'req1', { rawMaterialId: 'rm-sauce', qtyRequested: 500 });
+    expect(prisma.purchaseRequestLine.update).toHaveBeenCalled();
+  });
+
+  it('a prep left unbought on a closed list is not carried onto the next one', async () => {
+    const { svc, created } = build({
+      status: 'BOUGHT',
+      openList: { id: 'open1', requestNumber: 'REQ-20260831-001', lines: [] },
+      lines: [
+        { id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-sug', qtyRequested: 1000, shortBy: null, packsBought: null, packSize: null, packCost: null, receivedAt: null, rawMaterial: { name: 'White Sugar', unit: 'g', subRecipeItems: [] } },
+        { id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-sauce', qtyRequested: 2000, shortBy: null, packsBought: null, packSize: null, packCost: null, receivedAt: null, rawMaterial: { name: 'Teriyaki Sauce (ready)', unit: 'ml', subRecipeItems: [{ id: 'x' }] } },
+      ],
+    });
+    const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { closeRest: true, lines: [] });
+    expect(res.carried.map((c: any) => c.name)).toEqual(['White Sugar']);
+    expect(created.filter((c: any) => c.purchaseRequestId === 'open1').map((c: any) => c.rawMaterialId)).toEqual(['rm-sug']);
+  });
+
   it('refuses to add to a request that has already gone out', async () => {
     const { svc } = build({ status: 'SENT' });
     await expect(svc.addLine(TENANT, 'req1', { rawMaterialId: 'rm-x', qtyRequested: 1 }))

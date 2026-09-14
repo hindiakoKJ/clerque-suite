@@ -270,16 +270,22 @@ export class ProcureService {
       throw new BadRequestException('Enter how much is needed.');
     }
     const rm = await this.prisma.rawMaterial.findFirst({
-      where: { id: dto.rawMaterialId, tenantId }, select: { id: true, name: true },
+      where:  { id: dto.rawMaterialId, tenantId },
+      select: { id: true, name: true, subRecipeItems: { select: { id: true }, take: 1 } },
     });
     if (!rm) throw new BadRequestException('Ingredient not found in your list.');
 
     const existing = req.lines.find((l) => l.rawMaterialId === dto.rawMaterialId);
     if (existing) {
+      // A line already there -- even a prep added before preps were refused -- can still be corrected or removed.
       return this.prisma.purchaseRequestLine.update({
         where: { id: existing.id },
         data:  { qtyRequested: new Prisma.Decimal(dto.qtyRequested) },
       });
+    }
+    // Check stock already keeps preps off the list; a hand-added one would send someone to buy a sauce.
+    if ((rm.subRecipeItems ?? []).length > 0) {
+      throw new BadRequestException(`${rm.name} is made in the kitchen, not bought. Record it on the prep board.`);
     }
     return this.prisma.purchaseRequestLine.create({
       data: {
@@ -1054,10 +1060,12 @@ export class ProcureService {
   private async carryForward(
     tenantId: string,
     req: { branchId: string; requestNumber: string },
-    lines: Array<{ lineNumber: string; rawMaterialId: string; qtyRequested: Prisma.Decimal; shortBy: Prisma.Decimal | null; rawMaterial: { name: string } }>,
+    lines: Array<{ lineNumber: string; rawMaterialId: string; qtyRequested: Prisma.Decimal; shortBy: Prisma.Decimal | null; rawMaterial: { name: string; subRecipeItems?: Array<{ id: string }> } }>,
     userId: string,
   ) {
     const carried: Array<{ line: string; name: string; qtyRequested: number; to: string; alreadyThere: boolean }> = [];
+    // A prep left on an old list is made in the kitchen, not bought: it is not carried onto the next one.
+    lines = lines.filter((l) => (l.rawMaterial.subRecipeItems ?? []).length === 0);
     if (lines.length === 0) return carried;
     const open = await this.openRequestRaw(tenantId, req.branchId, userId);
     const onOpen = new Set(open.lines.map((l) => l.rawMaterialId));
@@ -1892,7 +1900,8 @@ export class ProcureService {
     return {
       lines: {
         include: {
-          rawMaterial: { select: { id: true, name: true, unit: true, costPrice: true } },
+          // Whether it is made in the kitchen: a prep is never carried onto the next list.
+          rawMaterial: { select: { id: true, name: true, unit: true, costPrice: true, subRecipeItems: { select: { id: true }, take: 1 } } },
         },
         orderBy: { lineNumber: 'asc' as const },
       },

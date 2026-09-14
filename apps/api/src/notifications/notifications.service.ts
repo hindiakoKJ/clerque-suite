@@ -28,6 +28,12 @@ export class NotificationsService {
     link?:      string;
     /** If set, suppress duplicate notifications within the last hour. */
     dedupeKey?: string;
+    /**
+     * With dedupeKey: suppress a duplicate created since this moment instead of
+     * within the last hour. "Once a day, and again after the sauce was moved"
+     * is a window only the caller knows.
+     */
+    dedupeSince?: Date;
   }) {
     /*
       The idempotency this promised never once fired.
@@ -54,7 +60,7 @@ export class NotificationsService {
       into each other.
     */
     if (args.dedupeKey) {
-      const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      const hourAgo = args.dedupeSince ?? new Date(Date.now() - 60 * 60 * 1000);
       const dup = await this.prisma.notification.findFirst({
         where: {
           tenantId: args.tenantId,

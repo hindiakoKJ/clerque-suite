@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, Optional } from '@n
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { canPrepAtStation } from '@repo/shared-types';
+import { canPrepAtStation, rotationFromBoard } from '@repo/shared-types';
 
 /**
  * Sub-recipes — prepared ingredients that are made in the shop rather than
@@ -489,6 +489,25 @@ export class SubRecipesService {
     )];
     return mapped.filter((row) =>
       canPrepAtStation(personaKey, row.station?.kind ?? null, shopKinds));
+  }
+
+  /**
+   * The sauce rotation at one branch: each ready-to-use prep, the parked stage
+   * behind it, and what to do now (prep-rotation.ts in shared-types).
+   *
+   * Given no branch, the shop's first one: an owner account often has none,
+   * and `user.branchId!` quietly asked for a branch of undefined and came back
+   * empty -- a card that says "no sauces" is worse than no card.
+   */
+  async rotation(tenantId: string, branchId: string | null | undefined, personaKey?: string | null) {
+    const branch = branchId
+      ? await this.prisma.branch.findFirst({ where: { id: branchId, tenantId }, select: { id: true, name: true } })
+      : await this.prisma.branch.findFirst({ where: { tenantId, isActive: true }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } });
+    if (!branch) {
+      throw new BadRequestException(branchId ? 'Branch not found in your organization.' : 'This organization has no branch yet.');
+    }
+    const rows = await this.list(tenantId, branch.id, personaKey);
+    return { branchId: branch.id, branchName: branch.name, rows: rotationFromBoard(rows) };
   }
 
   /**

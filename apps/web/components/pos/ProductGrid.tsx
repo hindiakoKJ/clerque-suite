@@ -54,7 +54,11 @@ interface Product {
    */
   maxProducible?: number | null;
   /** Which ingredient set that ceiling. Null for unit-based products. */
-  limitedBy?: { rawMaterialId: string; name: string; unit: string; stock: number; perUnit: number } | null;
+  limitedBy?: {
+    rawMaterialId: string; name: string; unit: string; stock: number; perUnit: number;
+    /** A ready-to-use prep with some parked behind it: the kitchen can move one across. */
+    backup?: { rawMaterialId: string; name: string; unit: string; onHand: number } | null;
+  } | null;
   isLowStock?: boolean;
   isOutOfStock?: boolean;
   imageUrl?: string | null;
@@ -353,6 +357,9 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                         ? `${isOut ? 'Out' : `${stock} left`} — limited by ${p.limitedBy.name}`
                           + ` (${p.limitedBy.stock.toLocaleString()} ${p.limitedBy.unit} in stock,`
                           + ` ${p.limitedBy.perUnit.toLocaleString()} ${p.limitedBy.unit} each)`
+                          + (p.limitedBy.backup
+                            ? `. ${p.limitedBy.backup.onHand.toLocaleString()} ${p.limitedBy.backup.unit} parked in ${p.limitedBy.backup.name}: ask the kitchen to move one across.`
+                            : '')
                         : undefined
                     }>
                       {isOut ? 'OUT' : isLow ? `LOW · ${stock}` : `${stock} left`}
@@ -362,7 +369,10 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                       a tooltip is no use on a tablet, which has no hover. */}
                   {(isLow || isOut) && p.limitedBy && (
                     <span className="absolute bottom-1 left-3 right-3 truncate text-[9px] leading-tight text-amber-600 dark:text-amber-400">
-                      needs {p.limitedBy.name}
+                      {/* The tile's one line is short: the name of the tub to move comes straight after the verb. */}
+                      {p.limitedBy.backup
+                        ? <>move from {p.limitedBy.backup.name}</>
+                        : <>needs {p.limitedBy.name}</>}
                     </span>
                   )}
                 </button>

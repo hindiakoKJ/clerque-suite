@@ -500,10 +500,13 @@ export class InventoryService {
    * 32 characters is the usable width of an 80mm thermal roll.
    */
   private async lowStockSlipLines(tenantId: string, branchId: string) {
-    const [low, branch] = await Promise.all([
+    const [lowAll, branch] = await Promise.all([
       this.getLowStock(tenantId, branchId),
       this.prisma.branch.findUnique({ where: { id: branchId }, select: { name: true } }),
     ]);
+    // A slip taken shopping: what the kitchen MAKES is not on it (the prep board and its alerts say that).
+    const low = lowAll.filter((r) => r.kind !== 'PREP');
+    const prepsLow = lowAll.length - low.length;
 
     const W = 32;
     const out    = low.filter((r) => r.quantity <= 0);
@@ -522,8 +525,15 @@ export class InventoryService {
     lines.push({ text: '', rule: '=' });
 
     if (!low.length) {
-      lines.push({ text: 'Nothing is below its alert', center: true });
-      lines.push({ text: 'level right now.', center: true });
+      if (prepsLow > 0) {
+        // Not "nothing is low": a sauce is. It is just not something to buy.
+        lines.push({ text: 'Nothing to buy right now.', center: true });
+        lines.push({ text: `${prepsLow} kitchen prep${prepsLow === 1 ? ' is' : 's are'} low:`, center: true });
+        lines.push({ text: 'see the prep board.', center: true });
+      } else {
+        lines.push({ text: 'Nothing is below its alert', center: true });
+        lines.push({ text: 'level right now.', center: true });
+      }
       return { lines, count: 0, outCount: 0, width: W };
     }
 
@@ -598,7 +608,7 @@ export class InventoryService {
    * whoever happens to be looking at the shelf.
    */
   async lowStockExport(tenantId: string, branchId: string): Promise<Buffer> {
-    const [low, vendors, branch, allMaterials] = await Promise.all([
+    const [lowAll, vendors, branch, allMaterials] = await Promise.all([
       this.getLowStock(tenantId, branchId),
       this.prisma.vendor.findMany({
         where: { tenantId }, select: { name: true }, orderBy: { name: 'asc' }, take: 100,
@@ -609,6 +619,10 @@ export class InventoryService {
         orderBy: { name: 'asc' }, take: 500,
       }),
     ]);
+
+    // The same list as the slip: made in the kitchen is not bought.
+    const low = lowAll.filter((r) => r.kind !== 'PREP');
+    const prepsLow = lowAll.length - low.length;
 
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Clerque';
@@ -626,9 +640,10 @@ export class InventoryService {
     title.value = `BUY NOW — ${branch?.name ?? 'this branch'}`;
     title.font = { bold: true, size: 15 };
 
-    ws.getCell(2, 1).value = low.length
+    ws.getCell(2, 1).value = (low.length
       ? `${low.length} item${low.length === 1 ? '' : 's'} at or below their alert level, most urgent first.`
-      : 'Nothing is below its alert level right now.';
+      : prepsLow > 0 ? 'Nothing to buy right now.' : 'Nothing is below its alert level right now.')
+      + (prepsLow > 0 ? ` ${prepsLow} kitchen prep${prepsLow === 1 ? ' is' : 's are'} low too: see the prep board.` : '');
     ws.getCell(3, 1).value =
       'Columns A-E come from the system. Fill in F onwards as you buy, then hand '
       + 'this to whoever keeps the expense report — it is already in that shape.';

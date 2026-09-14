@@ -42,6 +42,8 @@ describe('ProductsService — sell when out of stock', () => {
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue([{ rawMaterialId: MILK, quantity: milkStock }]),
       },
+      // Nothing parked behind the milk.
+      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     return new ProductsService(prisma as any);
   }

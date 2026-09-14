@@ -21,6 +21,10 @@ describe('NotificationsScheduler — the nightly ingredient alert', () => {
   type Row = {
     name: string; unit: string; lowStockAlert: number | null;
     qty: number; isPrep?: boolean;
+    /** A dish uses it: the ready-to-use prep of a rotation. */
+    usedByDish?: boolean;
+    /** The ready-to-use prep it is parked behind, when there is one. */
+    behind?: { lowStockAlert: number | null; usedByDish: boolean; isActive?: boolean; otherPreps?: number };
   };
 
   function build(rows: Row[], branches = [{ id: 'b1', name: 'Main' }]) {
@@ -32,6 +36,17 @@ describe('NotificationsScheduler — the nightly ingredient alert', () => {
           name: r.name, unit: r.unit, lowStockAlert: r.lowStockAlert,
           inventory: [{ quantity: r.qty }],
           subRecipeItems: r.isPrep ? [{ id: 'x' }] : [],
+          bomItems: r.usedByDish ? [{ id: 'b' }] : [],
+          usedInSubRecipes: r.behind ? [{
+            quantity: 2000,
+            parent: {
+              isActive: r.behind.isActive ?? true,
+              lowStockAlert: r.behind.lowStockAlert,
+              bomItems: r.behind.usedByDish ? [{ id: 'b' }] : [],
+              // This prep, plus any other prep stages the parent is made from.
+              subRecipeItems: Array.from({ length: 1 + (r.behind.otherPreps ?? 0) }, () => ({ quantity: 2000, rawMaterial: { subRecipeItems: [{ id: 'p' }] } })),
+            },
+          }] : [],
         }))),
       },
     };
@@ -128,6 +143,38 @@ describe('NotificationsScheduler — the nightly ingredient alert', () => {
     const b = build([BEANS, SAUCE]);
     await a.run(); await b.run();
     expect(a.sent[0].dedupeKey).not.toBe(b.sent[0].dedupeKey);
+  });
+
+  // ── the sauce rotation alerts during service; the nightly alert leaves it alone ─
+
+  it('leaves out a ready-to-use sauce with a par level, and the batch parked behind one', async () => {
+    const READY  = { name: 'Teriyaki (ready)',  unit: 'ml', lowStockAlert: 400, qty: 100, isPrep: true, usedByDish: true };
+    const FROZEN = { name: 'Teriyaki (frozen)', unit: 'ml', lowStockAlert: 2000, qty: 0, isPrep: true, behind: { lowStockAlert: 400, usedByDish: true } };
+    const { run, sent } = build([READY, FROZEN]);
+    await run();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('still names a prep behind a parent the rotation does not watch -- whichever condition is missing', async () => {
+    const BASE = { name: 'Tomato Base', unit: 'g', lowStockAlert: 500, qty: 100, isPrep: true };
+    const cases = [
+      { lowStockAlert: 400, usedByDish: false },               // the parent has a par but no dish uses it
+      { lowStockAlert: null, usedByDish: true },               // a dish uses the parent but it has no par
+      { lowStockAlert: 400, usedByDish: true, isActive: false }, // the parent was switched off
+      { lowStockAlert: 400, usedByDish: true, otherPreps: 1 },  // one of two prep stages behind it
+    ];
+    for (const behind of cases) {
+      const { run, sent } = build([{ ...BASE, behind }]);
+      await run();
+      expect(sent[0]?.body).toContain('To prep: Tomato Base — 100 g left');
+      expect(sent[0].link).toBe('/procure/batches');
+    }
+  });
+
+  it('keeps the buy list as the link when something has to be bought', async () => {
+    const { run, sent } = build([BEANS, SAUCE]);
+    await run();
+    expect(sent[0].link).toBe('/procure/requests');
   });
 
   it('survives a database failure without taking the other nightly jobs down', async () => {

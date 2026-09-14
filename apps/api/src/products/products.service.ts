@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { productCeiling, LimitedBy } from './recipe-ceiling';
 import { Prisma, DrugClass } from '@prisma/client';
@@ -48,11 +48,16 @@ function inferDrugClass(isRxRequired: boolean | undefined, isControlledDrug: boo
 import { CreateProductDto, CreateVariantDto, CreateBomItemDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { CostSanityService } from '../common/sanity/cost-sanity.service';
+
+/** A parked prep behind a ready-to-use one, with some on hand at the branch. */
+export interface ParkedBackup { rawMaterialId: string; name: string; unit: string; onHand: number }
 import { SanityContext } from '../common/sanity/sanity.types';
 export { CreateProductDto, UpdateProductDto, CreateVariantDto, CreateBomItemDto };
 
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     private prisma: PrismaService,
     @Optional() private sanity?: CostSanityService,
@@ -813,7 +818,7 @@ export class ProductsService {
       rmStockMap = new Map(rmInventory.map((r) => [r.rawMaterialId, Number(r.quantity)]));
     }
 
-    return products.map((p) => {
+    const tiles = products.map((p) => {
       let maxProducible: number | null = null;
       /*
         WHICH ingredient set the ceiling.
@@ -878,12 +883,71 @@ export class ProductsService {
           : null,
         maxProducible,
         // Null for unit-based products — nothing limits them but themselves.
-        limitedBy,
+        limitedBy: limitedBy as (LimitedBy & { backup?: ParkedBackup }) | null,
         // Empty unless a size carries its own recipe.
         variantCeilings,
         isLowStock,
         isOutOfStock,
       };
     });
+
+    /*
+      "Needs Teriyaki Sauce" with a full tub of it parked in the freezer.
+
+      The count stays what is on the line -- a tub that is empty IS empty, and
+      the sale refusal reads the same number -- but when the ingredient holding
+      the dish back is a ready-to-use prep with stock parked behind it, the
+      cashier can do something better than call the owner: ask the kitchen to
+      move one across.
+    */
+    const limiters = [...new Set(tiles.map((t) => t.limitedBy?.rawMaterialId).filter((x): x is string => !!x))];
+    const parked = await this.parkedBehind(tenantId, branchId, limiters);
+    for (const t of tiles) {
+      const backup = t.limitedBy ? parked.get(t.limitedBy.rawMaterialId) : undefined;
+      if (backup && t.limitedBy) t.limitedBy = { ...t.limitedBy, backup };
+    }
+    return tiles;
+  }
+
+  /**
+   * For each ready-to-use prep, the parked prep behind it and how much of that
+   * is on hand at the branch -- only where some is. A hint on the tile, so a
+   * failure here costs the hint, never the till.
+   */
+  private async parkedBehind(tenantId: string, branchId: string, prepIds: string[]): Promise<Map<string, ParkedBackup>> {
+    const out = new Map<string, ParkedBackup>();
+    if (prepIds.length === 0 || !branchId) return out;
+    try {
+      /*
+        Only a MOVE: the ready prep is one parked prep and nothing else, in the
+        same amount it yields (the board's own test). A sauce COOKED from a base
+        is not moved across, and saying so would send the cashier to ask for
+        something the kitchen cannot record.
+      */
+      const links = (await this.prisma.subRecipeItem.findMany({
+        where:  { parentRawMaterialId: { in: prepIds }, parent: { tenantId }, rawMaterial: { subRecipeItems: { some: {} } } },
+        select: {
+          parentRawMaterialId: true, quantity: true,
+          parent:      { select: { batchYield: true, _count: { select: { subRecipeItems: true } } } },
+          rawMaterial: { select: { id: true, name: true, unit: true } },
+        },
+      })).filter((l) => l.parent._count.subRecipeItems === 1 && l.parent.batchYield != null
+        && Math.abs(Number(l.quantity) - Number(l.parent.batchYield)) < 1e-6);
+      if (links.length === 0) return out;
+      const stock = await this.prisma.rawMaterialInventory.findMany({
+        where:  { branchId, rawMaterialId: { in: links.map((l) => l.rawMaterial.id) } },
+        select: { rawMaterialId: true, quantity: true },
+      });
+      for (const l of links) {
+        const onHand = Number(stock.find((s) => s.rawMaterialId === l.rawMaterial.id)?.quantity ?? 0);
+        // Enough parked for a whole move: a part tub cannot be recorded on the board.
+        if (onHand >= Number(l.quantity) && !out.has(l.parentRawMaterialId)) {
+          out.set(l.parentRawMaterialId, { rawMaterialId: l.rawMaterial.id, name: l.rawMaterial.name, unit: l.rawMaterial.unit, onHand });
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`[pos] could not look up parked backups for the till: ${err instanceof Error ? err.message : err}`);
+    }
+    return out;
   }
 }

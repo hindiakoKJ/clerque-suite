@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChefHat, AlertTriangle, Settings2, Check, SlidersHorizontal, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { rotationFromBoard, rotationAction } from '@repo/shared-types';
 import { useAuthStore } from '@/store/auth';
 import { formatUnitCost } from '@/lib/utils';
 
@@ -110,7 +111,18 @@ const peso = formatUnitCost;
 
 export default function BatchesPage() {
   const qc = useQueryClient();
-  const branchId = useAuthStore((s) => s.user?.branchId ?? '');
+  const ownBranch = useAuthStore((s) => s.user?.branchId ?? '');
+  /*
+    A sauce alert opens the board on the branch it is about (?branch=). An
+    owner has no branch of their own, so without it the link landed on "not
+    assigned to a branch"; a manager of one branch tapping another's alert saw
+    their own.
+  */
+  const [branchParam, setBranchParam] = useState('');
+  useEffect(() => {
+    if (typeof window !== 'undefined') setBranchParam(new URLSearchParams(window.location.search).get('branch') ?? '');
+  }, []);
+  const branchId = branchParam || ownBranch;
   const role     = useAuthStore((s) => s.user?.role ?? '');
   // Matches the API: defining a recipe is BUSINESS_OWNER / MDM only. Showing
   // the link to anyone else would offer a screen whose every Save is a 403.
@@ -186,7 +198,11 @@ export default function BatchesPage() {
     queryKey: ['sub-recipes', branchId],
     queryFn:  () => api.get('/inventory/sub-recipes', { params: { branchId } }).then((r) => r.data),
     enabled:  !!branchId,
+    // Sales drain the line all day; the board should not need a reload to say so.
+    refetchInterval: 60_000,
   });
+  // What to do about each ready-to-use prep: the same rule the owner's card and the alerts read.
+  const rotationOf = new Map(rotationFromBoard(recipes).map((r) => [r.prepId, r]));
 
   /*
     Kitchen preps with kitchen preps, bar preps with the bar. Anything the
@@ -569,15 +585,25 @@ export default function BatchesPage() {
               when starting a batch actually prevents the shortage. By the time
               the count is zero the decision has already been made for you.
             */}
-            {r.belowPar && r.onHand > 0 && (
-              <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span>
-                  Down to {r.onHand.toLocaleString('en-PH')} {r.unit} — time to
-                  {r.kind === 'MOVE' ? ' move the next one across' : ' make the next batch'}.
-                </span>
-              </p>
-            )}
+            {/*
+              An empty line is the loudest case, not a silent one; and "move the
+              next one across" is only said when there is something parked to move.
+            */}
+            {r.belowPar && (() => {
+              const rot = rotationOf.get(r.id);
+              const action = rot ? rotationAction(rot) : null;
+              // A prep the rotation does not cover (not used by a dish): only ask for what this card can record.
+              const where = r.onHand <= 0 ? 'Out' : `Down to ${r.onHand.toLocaleString('en-PH')} ${r.unit}`;
+              const fallback = r.batches > 0
+                ? `${where} — time to ${r.kind === 'MOVE' ? 'move the next one across' : 'make the next batch'}.`
+                : `${where} — nothing can be ${r.kind === 'MOVE' ? 'moved across' : 'made'} until what is below is ready.`;
+              return (
+                <p className={`flex items-start gap-1.5 text-xs ${r.onHand <= 0 ? 'text-red-700 dark:text-red-400' : 'text-amber-700 dark:text-amber-400'}`}>
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>{action ?? fallback}</span>
+                </p>
+              );
+            })()}
             {/*
               An unset par level is not a quiet default, it is a silent one:
               nothing on this screen and nothing in the nightly alert will ever

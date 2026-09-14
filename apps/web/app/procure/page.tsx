@@ -7,6 +7,7 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { STOCK_ROLES } from './layout';
+import { SauceLevelsCard } from '@/components/shared/SauceLevelsCard';
 
 /**
  * Procure's home.
@@ -16,7 +17,7 @@ import { STOCK_ROLES } from './layout';
  * thing that should ever pull someone into this app unprompted.
  */
 
-interface LowRow { name?: string; shortBy?: number | string; rawMaterialId?: string }
+interface LowRow { name?: string; shortBy?: number | string; rawMaterialId?: string; kind?: 'PRODUCT' | 'INGREDIENT' | 'PREP' }
 interface Request { id: string; requestNumber: string; status: string; lines: unknown[] }
 
 export default function ProcureHome() {
@@ -48,7 +49,13 @@ export default function ProcureHome() {
     enabled:  !!user,
   });
 
-  const shortages = low.filter((r) => Number(r.shortBy ?? 0) > 0).length;
+  /*
+    What Check stock will put on the list: ingredients at or below their level
+    (an item sitting exactly on it counts, the same as Check stock and the
+    nightly alert). A sauce the kitchen makes is on the card below, and a
+    finished product is not bought through this list.
+  */
+  const shortages = low.filter((r) => r.kind === 'INGREDIENT').length;
 
   // A barista is in REQUEST_ROLES but not STOCK_ROLES. Rendering all four
   // tiles to them meant three of these snapped straight back to this page with
@@ -208,6 +215,8 @@ export default function ProcureHome() {
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
         </div>
       </Link>
+
+      <SauceLevelsCard branchId={branchId ?? null} />
 
       <div className="grid gap-2 sm:grid-cols-2">
         {tiles.map(({ href, Icon, title, desc, note }) => (

@@ -8,7 +8,8 @@ import { DocumentsService } from '../documents/documents.service';
 import { WarehouseService } from '../warehouse/warehouse.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
-import { PH_TIMEZONE } from '@repo/shared-types';
+import { PH_TIMEZONE, LineServes, ServesDish, servesSummary } from '@repo/shared-types';
+import { productCeiling, servingsOf, LimitedBy } from '../products/recipe-ceiling';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
 import { appendNote, withTag, readTag, withoutTag, plainNotes } from './procure-notes';
@@ -470,6 +471,8 @@ export class ProcureService {
       if (people.length === 0) return;
 
       const packs = await this.lastPacks(tenantId, req.lines.map((l) => l.rawMaterialId));
+      // What each item still serves, in the same words as the list and the PDF.
+      const servesOf = await this.servesByItem(tenantId, [req.branchId], req.lines.map((l) => l.rawMaterialId));
       const lines = req.lines.map((l) => {
         const qty  = Number(l.qtyRequested);
         const pack = packs.get(l.rawMaterialId);
@@ -480,6 +483,7 @@ export class ProcureService {
           amount: whole
             ? `${n} pack${n === 1 ? '' : 's'} (${qty.toLocaleString()} ${l.rawMaterial.unit})`
             : `${qty.toLocaleString()} ${l.rawMaterial.unit}`,
+          serves: servesOf ? servesSummary(servesOf(req.branchId, l.rawMaterialId, null)) : null,
         };
       });
       const branch = req.branch?.name ?? null;
@@ -1285,6 +1289,9 @@ export class ProcureService {
         qtyRequested: Number(l.qtyRequested),
         onHand:       l.onHand,
         counted:      l.counted?.qty ?? null,
+        // On the copy filed at send, frozen as they were when the list went out;
+        // on a copy drawn later, today's, and the page says which.
+        serves:       copy === 'sent' ? servesSummary(l.serves) : null,
         lastPackSize: l.lastPack?.packSize ?? null,
         packsBought:  l.packsBought != null ? Number(l.packsBought) : null,
         packSize:     l.packSize != null ? Number(l.packSize) : null,
@@ -1583,15 +1590,16 @@ export class ProcureService {
   /**
    * Every line, with what the shop knows around it: what the ingredient held
    * and cost last time, what Clerque says is on the shelf at this branch,
-   * and what somebody counted while building the list.
+   * what somebody counted while building the list, and -- while the list is
+   * being built or has just gone out -- what that stock still serves.
    */
   private async enrich<
     L extends { rawMaterialId: string },
-    T extends { branchId: string; requestNumber: string; lines: L[] },
+    T extends { branchId: string; requestNumber: string; status?: string; lines: L[] },
   >(
     tenantId: string,
     reqs: T[],
-  ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & { lastPack: LastPack | null; onHand: number; counted: CountedLine | null }> }>> {
+  ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & { lastPack: LastPack | null; onHand: number; counted: CountedLine | null; serves: LineServes | null }> }>> {
     const ids = [...new Set(reqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))];
     const last = await this.lastPacks(tenantId, ids);
 
@@ -1618,6 +1626,20 @@ export class ProcureService {
     });
     const counted = new Map(countLines.map((x) => [`${x.countId}:${x.rawMaterialId}`, x]));
 
+    /*
+      What each line still serves, only while the list is being built or has
+      just gone out. On-hand is live: on a request already bought or in stock
+      the figure would describe today rather than the list. It also keeps the
+      work off the hundred requests list() may read.
+    */
+    const building = (r: T) => r.status === 'OPEN' || r.status === 'SENT';
+    const liveReqs = reqs.filter(building);
+    const servesOf = liveReqs.length === 0 ? null : await this.servesByItem(
+      tenantId,
+      [...new Set(liveReqs.map((r) => r.branchId))],
+      [...new Set(liveReqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))],
+    );
+
     return reqs.map((r) => {
       const c = countOf.get(r.requestNumber);
       return {
@@ -1629,10 +1651,133 @@ export class ProcureService {
             lastPack: last.get(l.rawMaterialId) ?? null,
             onHand:   onHand.get(`${r.branchId}:${l.rawMaterialId}`) ?? 0,
             counted:  cl && c ? { qty: Number(cl.countedQty), expected: Number(cl.expectedQty), countId: c.id, countNumber: c.countNumber } : null,
+            serves:   servesOf && building(r) ? servesOf(r.branchId, l.rawMaterialId, cl ? Number(cl.countedQty) : null) : null,
           };
         }),
       };
     });
+  }
+
+  /**
+   * What the stock of each item still serves, at each branch.
+   *
+   * "Remaining: 1 bottle" tells the owner how much is left, not whether it
+   * matters. What decides whether to buy today is how many plates or cups
+   * that bottle still makes, and whether the menu can sell them.
+   *
+   * Every active product whose recipe uses the item -- its own recipe, or a
+   * size's recipe -- is counted. A recipe product is judged by the POS tile's
+   * rule (recipe-ceiling.ts) on the same stock, so "the till shows 3 Spaghetti
+   * left" on the buy list is the "3 left" on the till. A product the till
+   * counts as finished stock still uses up its recipe on every sale, so it is
+   * counted by the item too, with no till number to compare. An item that only
+   * goes into a kitchen prep says which prep, and what that prep's own stock
+   * serves. Add-ons are named and not counted, like on the tile.
+   *
+   * Servings are information, not the list: if they cannot be worked out the
+   * list still loads, without them, and the failure is logged.
+   */
+  private async servesByItem(
+    tenantId: string,
+    branchIds: string[],
+    itemIds: string[],
+  ): Promise<((branchId: string, itemId: string, counted: number | null) => LineServes) | null> {
+    if (itemIds.length === 0) return () => ({ dishes: [], addOns: [], goesInto: [] });
+    try {
+      const prepLinks = await this.prisma.subRecipeItem.findMany({
+        where:  { rawMaterialId: { in: itemIds }, parent: { tenantId, isActive: true } },
+        select: { rawMaterialId: true, parent: { select: { id: true, name: true } } },
+      });
+      const targets = [...new Set([...itemIds, ...prepLinks.map((p) => p.parent.id)])];
+      const recipeLine = {
+        select: { rawMaterialId: true, quantity: true, rawMaterial: { select: { name: true, unit: true } } },
+      } as const;
+      const [products, addOnRows] = await Promise.all([
+        this.prisma.product.findMany({
+          where: {
+            // Any inventory mode: a sale deducts the recipe whenever one exists.
+            tenantId, isActive: true,
+            OR: [
+              { bomItems: { some: { rawMaterialId: { in: targets } } } },
+              { variants: { some: { isActive: true, variantBomItems: { some: { rawMaterialId: { in: targets } } } } } },
+            ],
+          },
+          select: {
+            id: true, name: true, inventoryMode: true,
+            bomItems: recipeLine,
+            // The same sizes the till reads: active ones only.
+            variants: { where: { isActive: true }, select: { id: true, name: true, variantBomItems: recipeLine } },
+          },
+          orderBy: { name: 'asc' },
+        }),
+        this.prisma.modifierOptionIngredient.findMany({
+          where:  { rawMaterialId: { in: itemIds }, option: { isActive: true, group: { tenantId, isActive: true } } },
+          select: { rawMaterialId: true, option: { select: { name: true } } },
+        }),
+      ]);
+
+      // Every ingredient those recipes touch, so each dish's own ceiling is the tile's.
+      const everyIngredient = [...new Set([
+        ...targets,
+        ...products.flatMap((p) => [...p.bomItems, ...p.variants.flatMap((v) => v.variantBomItems)].map((b) => b.rawMaterialId)),
+      ])];
+      const stockRows = await this.prisma.rawMaterialInventory.findMany({
+        where:  { tenantId, branchId: { in: branchIds }, rawMaterialId: { in: everyIngredient } },
+        select: { branchId: true, rawMaterialId: true, quantity: true },
+      });
+      const stock = new Map(stockRows.map((x) => [`${x.branchId}:${x.rawMaterialId}`, Number(x.quantity)]));
+
+      /** One dish. `till` is null for a product the till counts as finished stock, not by recipe. */
+      const dish = (productId: string, name: string, perServing: number, onHand: number, counted: number | null,
+                    till: { max: number; limitedBy: LimitedBy } | null): ServesDish => {
+        const byThisItem = Math.max(0, servingsOf(onHand, perServing));
+        return {
+          productId, name, perServing, byThisItem,
+          byCounted:   counted != null ? Math.max(0, servingsOf(counted, perServing)) : null,
+          sellableNow: till ? till.max : byThisItem,
+          limitedBy:   till?.limitedBy?.name ?? null,
+        };
+      };
+      const tiles = new Map<string, ReturnType<typeof productCeiling>>();
+      const dishesOf = (branchId: string, itemId: string, counted: number | null): ServesDish[] => {
+        const stockOf = (id: string) => stock.get(`${branchId}:${id}`) ?? 0;
+        const onHand = stockOf(itemId);
+        const out: ServesDish[] = [];
+        for (const p of products) {
+          const byRecipe = p.inventoryMode === 'RECIPE_BASED';
+          let tile = tiles.get(`${branchId}:${p.id}`);
+          if (!tile) { tile = productCeiling(p, stockOf); tiles.set(`${branchId}:${p.id}`, tile); }
+          const own = p.bomItems.find((b) => b.rawMaterialId === itemId && Number(b.quantity) > 0);
+          if (own) {
+            out.push(dish(p.id, p.name, Number(own.quantity), onHand, counted,
+              byRecipe ? { max: tile.maxProducible, limitedBy: tile.limitedBy } : null));
+          }
+          // A size that carries its own recipe is sold, and counted, on its own.
+          for (const v of p.variants) {
+            const line = v.variantBomItems.find((b) => b.rawMaterialId === itemId && Number(b.quantity) > 0);
+            if (!line) continue;
+            const size = tile.variantCeilings.find((c) => c.variantId === v.id);
+            out.push(dish(p.id, `${p.name} (${v.name})`, Number(line.quantity), onHand, counted,
+              byRecipe ? { max: size?.maxProducible ?? 0, limitedBy: size?.limitedBy ?? null } : null));
+          }
+        }
+        return out.sort((a, b) => a.byThisItem - b.byThisItem || a.name.localeCompare(b.name));
+      };
+
+      return (branchId, itemId, counted) => ({
+        dishes:   dishesOf(branchId, itemId, counted),
+        addOns:   [...new Set(addOnRows.filter((a) => a.rawMaterialId === itemId).map((a) => a.option.name))].sort(),
+        goesInto: prepLinks
+          .filter((l) => l.rawMaterialId === itemId)
+          .map((l) => ({
+            prepName: l.parent.name,
+            dishes:   dishesOf(branchId, l.parent.id, null).map((d) => ({ name: d.name, byThisItem: d.byThisItem })),
+          })),
+      });
+    } catch (err) {
+      this.logger.warn(`[procure] could not work out what the buy list still serves: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
   }
 
   // ── what is left on the shelf ─────────────────────────────────────────────

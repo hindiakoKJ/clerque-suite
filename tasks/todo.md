@@ -2257,3 +2257,48 @@ phone into a test Viber or Messenger chat.
 ### Not done, on purpose
 - Two people pressing Send on the same list in the same instant could file two
   as-sent copies (the send itself has that race today). Not fixed here.
+
+## 2026-09-14 — Procure as the one place: what each line still serves (Phase 2 of 5)
+
+> "request should be backed up by real data also shown in the POS right? like,
+> the POS can show how many can still be served."
+
+### Built
+- [x] **One rule for "N left"** (`products/recipe-ceiling.ts`). The POS tile's
+      loop moved out of `findForPos` unchanged (pinned by a spec first), so the
+      till and the buy list read one rule.
+- [x] **Servings on every line of an open or just-sent list** (`servesByItem` in
+      procure.service). For each product whose recipe (or a size's recipe) uses
+      the item: what this item alone covers, what the typed count covers, and
+      what the till shows for that dish on the same stock. Items that go into a
+      kitchen prep say which prep and what the prep serves; add-ons are named,
+      not counted; an item in no recipe says so. Bought and in-stock requests
+      carry none (the figure would describe today, not the list). If servings
+      cannot be worked out, the list still loads without them (logged).
+- [x] **One set of words** (`@repo/shared-types` procure-serves): the request
+      screen ("By this item alone: enough for 4 Lasagna or 10 Spaghetti." /
+      "The till shows 3 Spaghetti left — Spaghetti Noodles runs out first."),
+      the copied Viber/Messenger message (tightest dish, from the count when a
+      count is shown), the as-sent PDF (under the item, with a note on what is
+      not counted) and the owner email.
+
+### Reviewed (13 agents, 7 confirmed, all fixed)
+- The copied message put Clerque's servings right after the typed count ("left:
+  200 g · enough for 20") -- now worked from the count.
+- "or 1 more dish" read as one more plate -- now "(1 other menu item uses it too)".
+- The PDF note said "stock when the list was sent" on a reprint or a draft.
+- Decimal quantities counted one serving short (1.2 kg / 0.4 kg said 2) -- fixed
+  in the shared rule, so **the POS tile gets the same correction**.
+- Also: products counted as finished stock still deduct their recipe on sale,
+  so they are counted now; "The menu can sell" became "The till shows ... left"
+  (true even for shops that sell past zero); "only" vs "also" an add-on; a new
+  spec runs the real till and the real buy list on one fake database.
+
+### Proved
+API 1758 tests (147 suites), lint and type check clean, web type check clean.
+Live on carolina-test 15/15: Water on the list said the till shows 416
+Americano ( Hot ), the till said 416; one sold, both said 415; the cook sees the
+same; a sent list keeps servings, a cancelled one has none; the PDF prints them.
+(Three test sales of Americano ( Hot ) were rung up on carolina-test.)
+
+**Not seen on screen:** the sentences on the request page (behind a login).

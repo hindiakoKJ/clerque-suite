@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { productCeiling, LimitedBy } from './recipe-ceiling';
 import { Prisma, DrugClass } from '@prisma/client';
 import { hasPermission, planFeaturesFor } from '@repo/shared-types';
 
@@ -823,58 +824,22 @@ export class ProductsService {
         what for. Keeping the line costs nothing — it is the same loop — and
         turns the alert into an instruction.
       */
-      type LimitedBy = {
-        rawMaterialId: string; name: string; unit: string;
-        stock: number; perUnit: number;
-      } | null;
       let limitedBy: LimitedBy = null;
-
-      // The ceiling of one recipe: the ingredient that runs out first sets it.
-      const ceilingOf = (bom: Array<{ rawMaterialId: string; quantity: unknown; rawMaterial?: { name: string; unit: string } | null }>) => {
-        let min = Number.POSITIVE_INFINITY;
-        let limit: LimitedBy = null;
-        for (const line of bom) {
-          const stock = rmStockMap.get(line.rawMaterialId) ?? 0;
-          const perUnit = Number(line.quantity);
-          if (perUnit <= 0) continue;
-          const producible = Math.floor(stock / perUnit);
-          if (producible < min) {
-            min = producible;
-            limit = {
-              rawMaterialId: line.rawMaterialId,
-              name:          line.rawMaterial?.name ?? 'Unknown ingredient',
-              unit:          line.rawMaterial?.unit ?? '',
-              stock,
-              perUnit,
-            };
-          }
-        }
-        return { max: min === Number.POSITIVE_INFINITY ? 0 : min, limitedBy: limit };
-      };
       // One ceiling per size that carries its own recipe, so the till can
       // tell a size that is out from a product that is out.
       let variantCeilings: Array<{ variantId: string; maxProducible: number; limitedBy: LimitedBy }> = [];
 
       if (p.inventoryMode === 'RECIPE_BASED') {
-        variantCeilings = p.variants
-          .filter((v) => v.variantBomItems.length > 0)
-          .map((v) => { const c = ceilingOf(v.variantBomItems); return { variantId: v.id, maxProducible: c.max, limitedBy: c.limitedBy }; });
-
-        if (p.bomItems.length > 0) {
-          const base = ceilingOf(p.bomItems);
-          maxProducible = base.max;
-          limitedBy     = base.limitedBy;
-        } else if (variantCeilings.length > 0) {
-          // No product recipe, but the sizes have theirs. The tile can sell
-          // whichever size still has stock, so the best size is the ceiling.
-          // Before this the tile read 0 and was greyed out with stock on hand.
-          const best = variantCeilings.reduce((a, b) => (b.maxProducible > a.maxProducible ? b : a));
-          maxProducible = best.maxProducible;
-          limitedBy     = best.limitedBy;
-        } else {
-          // No BOM at all → cannot produce; treat as 0 so cashier can't sell it.
-          maxProducible = 0;
-        }
+        /*
+          The ingredient that runs out first sets it; no product recipe means
+          the best size; no recipe at all means 0, so the cashier cannot sell
+          it. One rule in recipe-ceiling.ts, so the buy list's "menu can sell
+          now" is the number this tile shows.
+        */
+        const ceiling = productCeiling(p, (id) => rmStockMap.get(id) ?? 0);
+        maxProducible   = ceiling.maxProducible;
+        limitedBy       = ceiling.limitedBy;
+        variantCeilings = ceiling.variantCeilings;
       } else {
         // UNIT_BASED: same as before — finished-goods inventory at branch.
         const inv = p.inventory[0];

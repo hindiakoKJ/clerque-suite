@@ -70,6 +70,29 @@ describe('buy list PDF', () => {
     expect(m.footer).toMatch(/Line No\./);
   });
 
+  it('the copy as sent says what each item still serves, and what that count leaves out', () => {
+    const m = buildBuyListModel(source([
+      line('01', { name: 'Spaghetti Sauce', serves: 'enough for 4 Lasagna or 10 Spaghetti' }),
+      line('02', { name: 'Sugar', serves: 'goes into White Sugar Syrup' }),
+      line('03', { name: 'Cups', serves: null }),
+    ]), { copy: 'sent', showMoney: false, printedAt: NOW, reprint: false });
+    expect(m.rows.map((r) => r.serves)).toEqual(['Enough for 4 Lasagna or 10 Spaghetti', 'Goes into White Sugar Syrup', undefined]);
+    expect(m.servesNote).toMatch(/each item on its own, from Clerque's stock when the list was sent.*add-ons are not counted/);
+
+    // Drawn later, or never sent: the servings are today's, and the note says so beside the caveat.
+    const lines = [line('01', { serves: 'enough for 4 Lasagna' })];
+    const reprint = buildBuyListModel(source(lines), { copy: 'sent', showMoney: false, printedAt: NOW, reprint: true });
+    const draft = buildBuyListModel(source(lines, { status: 'OPEN', sentAt: null, sentBy: null }), { copy: 'sent', showMoney: false, printedAt: NOW, reprint: false });
+    for (const copy of [reprint, draft]) {
+      expect(copy.servesNote).toMatch(/from Clerque's stock now\./);
+      expect(copy.servesNote).not.toMatch(/when the list was sent/);
+    }
+
+    const booked = buildBuyListModel(source([line('01', { serves: 'enough for 4 Lasagna' })], { status: 'RECEIVED' }), { copy: 'booked', showMoney: true, printedAt: NOW, reprint: false });
+    expect(booked.rows[0].serves).toBeUndefined();
+    expect(booked.servesNote).toBeNull();
+  });
+
   it('a copy drawn later for a list that was never filed says its stock is today\'s', () => {
     const m = buildBuyListModel(source([line('01')]), { copy: 'sent', showMoney: false, printedAt: NOW, reprint: true });
     expect(m.caveat).toMatch(/^Reprinted .*stock now, not when the list was sent/);

@@ -43,6 +43,8 @@ export interface BuyListSourceLine {
   onHand:       number | null;
   /** What somebody counted while building the list, not yet posted. */
   counted:      number | null;
+  /** What the stock still serves, already in words ("enough for 10 Spaghetti"). As-sent copy only. */
+  serves?:      string | null;
   /** What one pack held last time, for "2 packs (2,000 ml)". */
   lastPackSize: number | null;
   packsBought:  number | null;
@@ -72,6 +74,7 @@ export interface BuyListRow {
   need:       string;
   // as sent
   onHand?:    string;
+  serves?:    string;
   // as booked
   bought?:       string;
   pricePerPack?: string;
@@ -95,6 +98,8 @@ export interface BuyListModel {
   rows:          BuyListRow[];
   total:         string | null;
   footer:        string;
+  /** What the servings under each item count and do not count, when any are shown. */
+  servesNote:    string | null;
 }
 
 /** When the page was printed, and whether it stands in for a copy that was never filed. */
@@ -185,7 +190,11 @@ export function buildBuyListModel(src: BuyListSource, opts: BuyListBuildOpts): B
     const base = { lineNumber: l.lineNumber, item: l.name, unit: l.unit, need: need(l, copy) };
     if (copy === 'sent') {
       const onHand = l.onHand == null ? '—' : `${qty(l.onHand)} ${l.unit}`;
-      return { ...base, onHand: l.counted != null ? `${onHand} · counted ${qty(l.counted)}` : onHand };
+      return {
+        ...base,
+        onHand: l.counted != null ? `${onHand} · counted ${qty(l.counted)}` : onHand,
+        ...(l.serves ? { serves: l.serves.charAt(0).toUpperCase() + l.serves.slice(1) } : {}),
+      };
     }
     const hasPacks = l.packsBought != null && l.packSize != null;
     const row: BuyListRow = {
@@ -227,6 +236,10 @@ export function buildBuyListModel(src: BuyListSource, opts: BuyListBuildOpts): B
     footer: copy === 'sent'
       ? 'Each item is booked into stock by its Line No. Write what was bought next to it; pack size in the unit shown.'
       : 'Each line went into stock under its Line No., the same number as on the list that was sent.',
+    // Which stock the servings came from: the moment it was sent, or now (a draft, or a copy drawn later).
+    servesNote: rows.some((r) => r.serves)
+      ? `Servings count each item on its own, from Clerque's stock ${src.sentAt && !opts.reprint ? 'when the list was sent' : 'now'}. A dish can run out of something else first; add-ons are not counted.`
+      : null,
   };
 }
 
@@ -383,6 +396,9 @@ export function renderBuyListPdf(m: BuyListModel): Promise<Buffer> {
       if (c.writeIn) return '';
       return pdfSafe(String(row[c.key as keyof BuyListRow] ?? ''));
     };
+    // Under the item name, smaller: what the stock still serves.
+    const SERVES_SIZE = 7.5;
+    const servesOf = (row: BuyListRow, c: Column): string => (c.key === 'item' && row.serves ? pdfSafe(row.serves) : '');
 
     head();
     if (m.rows.length === 0) {
@@ -399,7 +415,10 @@ export function renderBuyListPdf(m: BuyListModel): Promise<Buffer> {
         const t = textOf(row, c);
         if (!t) continue;
         setCellFont(c);
-        h = Math.max(h, doc.heightOfString(t, { width: c.width - PAD * 2 }) + 10);
+        let cellH = doc.heightOfString(t, { width: c.width - PAD * 2 });
+        const sv = servesOf(row, c);
+        if (sv) cellH += doc.font('Helvetica').fontSize(SERVES_SIZE).heightOfString(sv, { width: c.width - PAD * 2 }) + 2;
+        h = Math.max(h, cellH + 10);
       }
       if (y + h > bottom()) {
         doc.addPage();
@@ -428,12 +447,25 @@ export function renderBuyListPdf(m: BuyListModel): Promise<Buffer> {
           setCellFont(c)
              .fillColor(c.key === 'result' && t !== 'In stock' ? '#9A6B12' : INK)
              .text(t, x + PAD, y + 5, { width: c.width - PAD * 2, align: c.align ?? 'left' });
+          const sv = servesOf(row, c);
+          if (sv) {
+            doc.font('Helvetica').fontSize(SERVES_SIZE).fillColor(MUTED)
+               .text(sv, x + PAD, doc.y + 2, { width: c.width - PAD * 2 });
+          }
         }
         x += c.width;
       }
       doc.moveTo(L, y + h).lineTo(L + W, y + h).lineWidth(0.4).stroke(RULE);
       y += h;
     });
+
+    if (m.servesNote) {
+      doc.font('Helvetica-Oblique').fontSize(7.5);
+      const noteH = doc.heightOfString(pdfSafe(m.servesNote), { width: W }) + 8;
+      if (y + noteH > bottom()) { doc.addPage(); y = doc.page.margins.top; }
+      doc.fillColor(MUTED).text(pdfSafe(m.servesNote), L, y + 6, { width: W });
+      y += noteH;
+    }
 
     if (m.total != null) {
       if (y + 22 > bottom()) { doc.addPage(); y = doc.page.margins.top; }

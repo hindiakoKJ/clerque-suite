@@ -1,5 +1,7 @@
 import { ProcureService } from './procure.service';
 import { Prisma } from '@prisma/client';
+import { servesSentences } from '@repo/shared-types';
+import { productCeiling } from '../products/recipe-ceiling';
 
 const PrismaKnownError = Prisma.PrismaClientKnownRequestError;
 
@@ -46,6 +48,14 @@ describe('ProcureService', () => {
     /** Storage that will not take a file, or will not give one back. */
     uploadFails?: boolean;
     readFails?: boolean;
+    /** Recipe products, as the servings query selects them. */
+    products?: any[];
+    /** Kitchen preps an item goes into. */
+    preps?: Array<{ rawMaterialId: string; parent: { id: string; name: string } }>;
+    /** Add-on options that use an item. */
+    addOns?: Array<{ rawMaterialId: string; option: { name: string } }>;
+    /** The servings query fails -- the list must still load. */
+    productsFail?: boolean;
   } = {}) {
     const created: any[] = [];
     const createdRequests: any[] = [];
@@ -154,6 +164,23 @@ describe('ProcureService', () => {
         findFirst: jest.fn(({ where }: any) => Promise.resolve(openCount?.lines.find((l: any) => l.rawMaterialId === where.rawMaterialId) ?? null)),
         create:    jest.fn(({ data }: any) => { const l = { id: `ccl${(openCount?.lines.length ?? 0) + 1}`, ...data }; openCount?.lines.push(l); countLines.push(data); return Promise.resolve(l); }),
         update:    jest.fn(({ where, data }: any) => { const l = openCount?.lines.find((x: any) => x.id === where.id); if (l) Object.assign(l, data); countLines.push({ ...where, ...data }); return Promise.resolve(l); }),
+      },
+      // What each line still serves: the products, preps and add-ons that use an item.
+      subRecipeItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.preps ?? []).filter((p) => where.rawMaterialId.in.includes(p.rawMaterialId)))),
+      },
+      product: {
+        findMany: jest.fn(({ where }: any) => {
+          if (opts.productsFail) return Promise.reject(new Error('connection reset'));
+          const ids: string[] = where.OR[0].bomItems.some.rawMaterialId.in;
+          const uses = (bom: any[]) => bom.some((b: any) => ids.includes(b.rawMaterialId));
+          return Promise.resolve((opts.products ?? [])
+            .map((p: any) => ({ bomItems: [], variants: [], ...p }))
+            .filter((p: any) => uses(p.bomItems) || p.variants.some((v: any) => uses(v.variantBomItems))));
+        }),
+      },
+      modifierOptionIngredient: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.addOns ?? []).filter((a) => where.rawMaterialId.in.includes(a.rawMaterialId)))),
       },
       rawMaterial: {
         findFirst: jest.fn(({ where }: any) => Promise.resolve({ id: where.id, name: 'White Sugar' })),
@@ -881,7 +908,7 @@ describe('ProcureService', () => {
     expect(notified[0].body).toBe('Hazelnut Syrup 2 packs (1,500 ml) · White Sugar 500 g');
     expect(mailed).toHaveLength(1);                                             // the manager has no email
     expect(mailed[0]).toMatchObject({ to: 'anne@carolina.test', name: 'Anne', requestNumber: 'REQ-20260830-001' });
-    expect(mailed[0].lines[0]).toEqual({ name: 'Hazelnut Syrup', amount: '2 packs (1,500 ml)' });
+    expect(mailed[0].lines[0]).toEqual({ name: 'Hazelnut Syrup', amount: '2 packs (1,500 ml)', serves: null });   // in no recipe here
   });
 
   it('an empty list is still announced: silence would mean nothing', async () => {
@@ -1057,6 +1084,131 @@ describe('ProcureService', () => {
     const { svc } = build({ status: 'SENT', lines: [], filed: [SENT_COPY, { label: 'Receipt', filename: 'receipt-REQ-20260830-001-1.jpg', mimeType: 'image/jpeg' }] });
     const out = await svc.attachPhoto(TENANT, 'req1', 'cook', { imageBase64: Buffer.from('jpg').toString('base64') });
     expect(out.filename).toBe('receipt-REQ-20260830-001-2.jpg');
+  });
+
+  // ── what each line still serves ───────────────────────────────────────────
+
+  const rm = (id: string, name: string, unit = 'g') => ({ id, name, unit });
+  const SAUCE = rm('rm-sauce', 'Spaghetti Sauce');
+  const NOODLES = rm('rm-noodle', 'Spaghetti Noodles');
+  const BEANS = rm('rm-beans', 'Coffee Beans');
+  const SYRUP = rm('rm-syrup', 'White Sugar Syrup', 'ml');
+  const on = (x: { id: string; name: string; unit: string }, quantity: number) => ({ rawMaterialId: x.id, quantity, rawMaterial: x });
+  const MENU = [
+    { id: 'p-spag', name: 'Spaghetti', inventoryMode: 'RECIPE_BASED', bomItems: [on(SAUCE, 200), on(NOODLES, 100)] },
+    { id: 'p-lasagna', name: 'Lasagna', inventoryMode: 'RECIPE_BASED', bomItems: [on(SAUCE, 500)] },
+    { id: 'p-americano', name: 'Americano', inventoryMode: 'RECIPE_BASED', bomItems: [], variants: [
+      { id: 'v12', name: '12oz', variantBomItems: [on(BEANS, 18)] },
+      { id: 'v16', name: '16oz', variantBomItems: [on(BEANS, 36)] },
+    ] },
+    { id: 'p-latte', name: 'Iced Latte', inventoryMode: 'RECIPE_BASED', bomItems: [on(SYRUP, 30)] },
+  ];
+  const STOCK = [
+    { rawMaterialId: SAUCE.id, quantity: 2000 }, { rawMaterialId: NOODLES.id, quantity: 300 },
+    { rawMaterialId: BEANS.id, quantity: 900 },  { rawMaterialId: SYRUP.id, quantity: 1200 },
+  ];
+  const stockOf = (id: string) => STOCK.find((x) => x.rawMaterialId === id)?.quantity ?? 0;
+  const lineFor = (id: string, x: { id: string; name: string; unit: string }, n = '01') => ({
+    id, lineNumber: `REQ-20260830-001-${n}`, rawMaterialId: x.id, qtyRequested: 1000, shortBy: null,
+    packsBought: null, packSize: null, packCost: null, brandNote: null, receivedAt: null, rawMaterial: x,
+  });
+
+  it('a shared ingredient lists every dish it serves, tightest first, joined by "or" and never added up', async () => {
+    const { svc } = build({ status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK });
+    const [line] = (await svc.get(TENANT, 'req1', 'GENERAL_EMPLOYEE')).lines;
+    expect(line.serves.dishes.map((d: any) => [d.name, d.perServing, d.byThisItem])).toEqual([['Lasagna', 500, 4], ['Spaghetti', 200, 10]]);
+    expect(servesSentences(line.serves)).toEqual([
+      'By this item alone: enough for 4 Lasagna or 10 Spaghetti.',
+      // 300 g of noodles at 100 g a plate: the till says 3, and so does the list.
+      'The till shows 3 Spaghetti left — Spaghetti Noodles runs out first.',
+    ]);
+  });
+
+  it('a product the till counts as finished stock still uses its recipe, so it is counted, with no till figure to compare', async () => {
+    // A sale deducts the recipe whenever one exists (orders.service), whatever the product's inventory mode.
+    const burger = { id: 'p-burger', name: 'Burger', inventoryMode: 'UNIT_BASED', bomItems: [on(SAUCE, 50)] };
+    const { svc } = build({ status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: [burger], onHand: STOCK });
+    const [line] = (await svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+    expect(line.serves.dishes).toEqual([expect.objectContaining({ name: 'Burger', byThisItem: 40, sellableNow: 40, limitedBy: null })]);
+    expect(servesSentences(line.serves)).toEqual(['By this item alone: enough for 40 Burger.']);
+  });
+
+  it('decimal quantities count exact servings, not one short', async () => {
+    // 1.2 kg at 0.4 kg a plate is 3 plates (plain division says 2.9999999999999996); a count of 2.8 kg is 7, not 6.
+    const RICE = rm('rm-rice', 'Rice', 'kg');
+    const bowl = { id: 'p-bowl', name: 'Rice Bowl', inventoryMode: 'RECIPE_BASED', bomItems: [on(RICE, 0.4)] };
+    const { svc } = build({
+      status: 'OPEN', lines: [lineFor('l1', RICE)], products: [bowl], onHand: [{ rawMaterialId: RICE.id, quantity: 1.2 }],
+      openCount: { id: 'cc1', countNumber: 'CC-1', notes: '[REQ:REQ-20260830-001] Counted', lines: [{ id: 'ccl1', rawMaterialId: RICE.id, countedQty: 2.8, expectedQty: 1.2 }] },
+    });
+    const [line] = (await svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+    expect(line.serves.dishes[0]).toMatchObject({ byThisItem: 3, sellableNow: 3, byCounted: 7 });
+  });
+
+  it('"the menu can sell now" is the POS tile\'s own number for the same product and stock', async () => {
+    const { svc } = build({ status: 'SENT', lines: [lineFor('l1', SAUCE), lineFor('l2', BEANS, '02')], products: MENU, onHand: STOCK });
+    const lines = (await svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+    const spag = lines[0].serves.dishes.find((d: any) => d.productId === 'p-spag');
+    const tile = productCeiling({ variants: [], ...MENU[0] } as any, stockOf);
+    expect([spag.sellableNow, spag.limitedBy]).toEqual([tile.maxProducible, tile.limitedBy!.name]);
+
+    // A size with its own recipe is its own dish, judged by that size's ceiling on the till.
+    const americano = productCeiling(MENU[2] as any, stockOf);
+    expect(lines[1].serves.dishes.map((d: any) => [d.name, d.byThisItem, d.sellableNow])).toEqual([
+      ['Americano (16oz)', 25, americano.variantCeilings.find((v) => v.variantId === 'v16')!.maxProducible],
+      ['Americano (12oz)', 50, americano.variantCeilings.find((v) => v.variantId === 'v12')!.maxProducible],
+    ]);
+  });
+
+  it('an item in no recipe says so; one that goes into a prep says which, and what the prep serves; add-ons are named, not counted', async () => {
+    const CUPS = rm('rm-cups', 'Cups 16oz', 'pcs');
+    const SUGAR = rm('rm-sugar', 'White Sugar');
+    const MILK = rm('rm-milk', 'Full Cream Milk', 'ml');
+    const { svc } = build({
+      status: 'OPEN', lines: [lineFor('l1', CUPS), lineFor('l2', SUGAR, '02'), lineFor('l3', MILK, '03')],
+      products: MENU, onHand: STOCK,
+      preps: [{ rawMaterialId: SUGAR.id, parent: { id: SYRUP.id, name: 'White Sugar Syrup' } }],
+      addOns: [{ rawMaterialId: MILK.id, option: { name: 'Extra milk' } }],
+    });
+    const [cups, sugar, milk] = (await svc.get(TENANT, 'req1', 'CASHIER')).lines;
+    expect(servesSentences(cups.serves)).toEqual(['Not in any recipe.']);
+    expect(sugar.serves.goesInto).toEqual([{ prepName: 'White Sugar Syrup', dishes: [{ name: 'Iced Latte', byThisItem: 40 }] }]);
+    expect(servesSentences(sugar.serves)).toEqual(['Goes into White Sugar Syrup (it has enough for 40 Iced Latte).']);
+    expect(servesSentences(milk.serves)).toEqual(['Used only as an add-on, not counted: Extra milk.']);
+  });
+
+  it('a count typed while building the list is worked out too, beside Clerque\'s own figure', async () => {
+    const { svc } = build({
+      status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK,
+      openCount: { id: 'cc1', countNumber: 'CC-1', notes: '[REQ:REQ-20260830-001] Counted', lines: [{ id: 'ccl1', rawMaterialId: SAUCE.id, countedQty: 1000, expectedQty: 2000 }] },
+    });
+    const [line] = (await svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+    expect(line.serves.dishes.map((d: any) => [d.name, d.byThisItem, d.byCounted])).toEqual([['Lasagna', 4, 2], ['Spaghetti', 10, 5]]);
+    expect(servesSentences(line.serves)[1]).toBe('By the count: 2 Lasagna or 5 Spaghetti.');
+  });
+
+  it('a request already bought or in stock carries no servings, and does not pay for working them out', async () => {
+    for (const status of ['BOUGHT', 'RECEIVED']) {
+      const { svc, prisma } = build({ status, lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK });
+      const [line] = (await svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+      expect(line.serves).toBeNull();
+      expect(prisma.product.findMany).not.toHaveBeenCalled();
+    }
+  });
+
+  it('when servings cannot be worked out the list still loads, without them, and the failure is logged', async () => {
+    const { svc } = build({ status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK, productsFail: true });
+    const warn = jest.spyOn(svc.logger, 'warn');
+    const req = await svc.get(TENANT, 'req1', 'BUSINESS_OWNER');
+    expect(req.lines[0].onHand).toBe(2000);
+    expect(req.lines[0].serves).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not work out what the buy list still serves: connection reset/));
+  });
+
+  it('the owner email says what each item still serves', async () => {
+    const { svc, mailed } = build({ status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK, people: PEOPLE.slice(0, 1) });
+    await svc.sendRequest(TENANT, 'req1', USER);
+    expect(mailed[0].lines[0].serves).toBe('enough for 4 Lasagna or 10 Spaghetti');
   });
 
   // ── paid ahead: the shop's own GR/IR ──────────────────────────────────────

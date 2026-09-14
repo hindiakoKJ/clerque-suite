@@ -548,7 +548,8 @@ export class MailService {
     name:          string;
     requestNumber: string;
     branchName:    string | null;
-    lines:         Array<{ name: string; amount: string }>;
+    /** `serves`: what the item's stock still covers, e.g. "enough for 10 Spaghetti". */
+    lines:         Array<{ name: string; amount: string; serves?: string | null }>;
     link:          string;
     /** The same PDF Clerque filed on the request, when it could be made. */
     pdf?:          Buffer | null;
@@ -556,7 +557,8 @@ export class MailService {
     const url = `${this.appUrl}${opts.link}`;
     const rows = opts.lines.map((l) => `
           <tr>
-            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:14px;color:#1a1a1a;">${this.escape(l.name)}</td>
+            <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:14px;color:#1a1a1a;">${this.escape(l.name)}${l.serves
+              ? `<div style="margin-top:2px;font-size:12px;color:#777;">${this.escape(l.serves.charAt(0).toUpperCase() + l.serves.slice(1))}</div>` : ''}</td>
             <td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:14px;color:#1a1a1a;text-align:right;white-space:nowrap;">${this.escape(l.amount)}</td>
           </tr>`).join('');
     await this.send({

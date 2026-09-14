@@ -12,6 +12,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
+import { servesSentences, servesSummary, type LineServes } from '@repo/shared-types';
 
 /**
  * The whole of Procure on one screen.
@@ -51,6 +52,8 @@ interface Line {
   onHand?: number;
   /** What somebody counted while building the list, waiting for the owner to post it. */
   counted?: { qty: number; expected: number; countId: string; countNumber: string } | null;
+  /** What this item's stock still serves -- sent only while the list is being built or has just gone out. */
+  serves?: LineServes | null;
 }
 interface PackMemory { rawMaterialId: string; packSize: number; packCost: number | null; brandNote: string | null }
 
@@ -811,9 +814,14 @@ export default function ProcurePage() {
     if (!req) return;
     const text = [
       `${req.requestNumber}${req.branch?.name ? ` — ${req.branch.name}` : ''}`,
-      ...req.lines.map((l) =>
-        `• ${l.rawMaterial.name} — ${packsLabel(l)}`
-        + (l.counted ? ` · left: ${shelfLabel(l.counted.qty, l)}` : '')),
+      ...req.lines.map((l) => {
+        // The tightest dish only, so the message stays one line per item -- and
+        // from the count when "left:" shows one, so the two figures agree.
+        const serves = servesSummary(l.serves, 1, { fromCount: !!l.counted });
+        return `• ${l.rawMaterial.name} — ${packsLabel(l)}`
+          + (l.counted ? ` · left: ${shelfLabel(l.counted.qty, l)}` : '')
+          + (serves ? ` · ${serves}` : '');
+      }),
     ].join('\n');
     // On a phone the share sheet opens Messenger or Viber directly; elsewhere, the clipboard.
     if (typeof navigator !== 'undefined' && 'share' in navigator) {
@@ -1368,6 +1376,16 @@ export default function ProcurePage() {
                               </form>
                             )}
                           </div>
+                        )}
+                        {/*
+                          What that stock still serves: by this item alone, and
+                          what the menu can actually sell now -- the POS tile's
+                          own number, from the same stock.
+                        */}
+                        {(req.status === 'OPEN' || req.status === 'SENT') && l.serves && (
+                          <ul className="mt-1 space-y-0.5 text-[11px] leading-snug text-muted-foreground">
+                            {servesSentences(l.serves).map((sentence) => <li key={sentence}>{sentence}</li>)}
+                          </ul>
                         )}
                       </div>
                     </div>

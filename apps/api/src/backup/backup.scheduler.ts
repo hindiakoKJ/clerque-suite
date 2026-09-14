@@ -162,6 +162,7 @@ export class BackupScheduler {
       customers, vendors, expenseEntries, vendorBills,
       laundryOrders, laundryMachines, laundryWashCycles,
       tripTickets, fleetAssets, jobOrders, projects,
+      purchaseRequests,
     ] = await this.prisma.$transaction([
       this.prisma.tenant.findUnique({ where: { id: tenantId } }),
       this.prisma.branch.findMany({ where: { tenantId } }),
@@ -204,6 +205,8 @@ export class BackupScheduler {
       this.prisma.fleetAsset.findMany({ where: { tenantId } }),
       this.prisma.jobOrder.findMany({ where: { tenantId } }),
       this.prisma.project.findMany({ where: { tenantId } }),
+      // The buy lists, with their lines: where purchases are recorded. (Restore does not read these yet.)
+      this.prisma.purchaseRequest.findMany({ where: { tenantId }, include: { lines: true } }),
     ]);
 
     return {
@@ -219,6 +222,7 @@ export class BackupScheduler {
       customers, vendors, expenseEntries, vendorBills,
       laundryOrders, laundryMachines, laundryWashCycles,
       tripTickets, fleetAssets, jobOrders, projects,
+      purchaseRequests,
     };
   }
 

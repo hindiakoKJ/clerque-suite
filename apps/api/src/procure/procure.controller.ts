@@ -1,6 +1,10 @@
 import {
   Controller, Get, Post, Delete, Body, Param, Query, UseGuards, HttpCode, HttpStatus, Headers, Res, BadRequestException,
+  UseInterceptors, UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { BuyListsExcelService } from './buy-lists-excel.service';
+import { IMPORT_UPLOAD } from '../import/import-upload.options';
 import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PurchaseRequestStatus } from '@prisma/client';
@@ -33,7 +37,10 @@ import { SANITY_HEADER, sanityContext } from '../common/sanity/sanity.types';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('procure/requests')
 export class ProcureController {
-  constructor(private readonly procure: ProcureService) {}
+  constructor(
+    private readonly procure: ProcureService,
+    private readonly excel: BuyListsExcelService,
+  ) {}
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get()
@@ -83,6 +90,46 @@ export class ProcureController {
   @ApiOperation({ summary: 'Pack size and last price per ingredient, from the last delivery' })
   packMemory(@CurrentUser() user: JwtPayload) {
     return this.procure.packMemory(user.tenantId!, user.role);
+  }
+
+  /**
+   * The buy lists as an Excel file, for a date range: the backup the owner can
+   * read, edit and upload back. Declared BEFORE :id.
+   */
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM')
+  @Get('excel')
+  @ApiOperation({ summary: 'Download the buy lists as an Excel file' })
+  async excelExport(
+    @CurrentUser() user: JwtPayload,
+    @Res() res: Response,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    const out = await this.excel.exportWorkbook(user.tenantId!, { from, to, branchId });
+    res.set({
+      'Content-Type':        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${out.filename}"`,
+      'Content-Length':      out.buffer.length.toString(),
+    });
+    res.send(out.buffer);
+  }
+
+  /**
+   * The same file uploaded back. Shows what would change unless preview=false:
+   * nothing is written by a preview, and nothing goes into stock either way.
+   */
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM')
+  @Post('excel')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', IMPORT_UPLOAD))
+  @ApiOperation({ summary: 'Upload the buy-lists Excel file: preview, then record' })
+  excelImport(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: Express.Multer.File,
+    @Query('preview') preview?: string,
+  ) {
+    return this.excel.importWorkbook(user.tenantId!, file, { userId: user.sub, role: user.role }, preview !== 'false');
   }
 
   /**

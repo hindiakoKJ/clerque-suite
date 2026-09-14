@@ -715,6 +715,68 @@ export class ProcureService {
   }
 
   /**
+   * A purchase made away from the app, recorded from the buy-lists sheet.
+   *
+   * Becomes a request like any other -- numbered, one line per ingredient,
+   * each with its own control number -- created already sent and then
+   * recorded as bought through recordBought, so every rule that guards a
+   * typed-in purchase guards this one. The note says it came from the sheet,
+   * which is also how a second upload of the same file finds it again.
+   * Nothing is posted: stock goes in when someone taps Post to stock.
+   *
+   * If recording fails, the half-made request is removed rather than left on
+   * the list with no packs on it.
+   */
+  async recordFromSheet(
+    tenantId: string,
+    branchId: string,
+    boughtOn: string,
+    lines: Array<{ rawMaterialId: string; packsBought: number; packSize: number; packCost: number; brandNote: string | null; rowKey?: string | null }>,
+    actor: { userId: string; role?: string | null },
+    note: string,
+  ) {
+    if (lines.length === 0) throw new BadRequestException('Nothing to record.');
+    // Which spare row each line came from, so a later upload of the same row finds this purchase whatever it now says.
+    const keys = lines.map((l, i) => (l.rowKey ? `${l.rowKey}=${String(i + 1).padStart(2, '0')}` : null)).filter(Boolean);
+    const notes = keys.length ? appendNote(appendNote(null, note), `Sheet rows: ${keys.join(', ')}`) : appendNote(null, note);
+    const day = this.dayOf(boughtOn);
+    const branch = await this.resolveBranch(tenantId, branchId);
+    const now = new Date();
+    const created = await this.withNumber((requestNumber) => {
+      const numbered: Array<{ lineNumber: string }> = [];
+      return this.prisma.purchaseRequest.create({
+        data: {
+          tenantId, branchId: branch, requestNumber, status: 'SENT', sentAt: now,
+          sentById: actor.userId, createdById: actor.userId, notes,
+          lines: {
+            create: lines.map((l) => {
+              const lineNumber = this.nextLineNumber(requestNumber, numbered);
+              numbered.push({ lineNumber });
+              return { lineNumber, rawMaterialId: l.rawMaterialId, qtyRequested: new Prisma.Decimal(+(l.packsBought * l.packSize).toFixed(4)) };
+            }),
+          },
+        },
+        include: this.lineInclude(),
+      });
+    }, () => this.nextNumber(tenantId));
+    try {
+      return await this.recordBought(
+        tenantId, created.id,
+        created.lines.map((cl) => {
+          const l = lines.find((x) => x.rawMaterialId === cl.rawMaterialId)!;
+          return { lineId: cl.id, packsBought: l.packsBought, packSize: l.packSize, packCost: l.packCost, brandNote: l.brandNote ?? undefined };
+        }),
+        actor, { boughtAt: day },
+      );
+    } catch (err) {
+      await this.prisma.purchaseRequest.delete({ where: { id: created.id } }).catch((e) => {
+        this.logger.warn(`[procure] could not remove the half-made sheet request ${created.requestNumber}: ${e instanceof Error ? e.message : e}`);
+      });
+      throw err;
+    }
+  }
+
+  /**
    * The money left on order day; the goods have not.
    *
    * A Shopee order or a deposit to a supplier is paid days before the

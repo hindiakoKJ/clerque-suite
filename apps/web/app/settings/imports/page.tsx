@@ -355,7 +355,7 @@ export default function ImportTemplatesPage() {
     {
       id: 'stock-receipts',
       name: 'Stock Receipts (incoming deliveries)',
-      desc: 'Bulk-load past supplier deliveries with lot + expiry. Posts to inventory + creates lots. Useful when migrating from another system.',
+      desc: 'Opening stock and old history only: posts straight to inventory and creates lots. Day-to-day buying goes through Procure (the buy list, or Procure > Buy lists in Excel), where each purchase keeps its line number and is checked before it reaches stock.',
       endpoint: '/import/template/stock-receipts',
       upload:   '/import/stock-receipts',
       filename: 'clerque-stock-receipts.xlsx',

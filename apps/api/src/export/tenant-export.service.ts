@@ -110,6 +110,7 @@ export class TenantExportService {
       apBills, apBillLines, apPayments,
       expenseClaims, expenseClaimItems,
       settlements, auditLog, accountingEvents,
+      purchaseRequests, purchaseRequestLines, rawMaterialStock,
     ] = await Promise.all([
       this.prisma.tenant.findMany({ where: { id: tenantId } }),
       f(this.prisma.branch.findMany({ where: { tenantId } })),
@@ -140,6 +141,10 @@ export class TenantExportService {
       f(this.prisma.settlementBatch.findMany({ where: { tenantId } }).catch(() => [])),
       f(this.prisma.auditLog.findMany({ where: { tenantId } }).catch(() => [])),
       f(this.prisma.accountingEvent.findMany({ where: { tenantId } }).catch(() => [])),
+      // The buy lists and the stock they move: Procure is where purchases are recorded.
+      f(this.prisma.purchaseRequest.findMany({ where: { tenantId } }).catch(() => [])),
+      f(this.prisma.purchaseRequestLine.findMany({ where: { purchaseRequest: { tenantId } } }).catch(() => [])),
+      f(this.prisma.rawMaterialInventory.findMany({ where: { tenantId } }).catch(() => [])),
     ]);
 
     addSheet('Tenant',            tenantRow.map((r) => r as unknown as Record<string, unknown>));
@@ -171,6 +176,9 @@ export class TenantExportService {
     addSheet('Settlements',       settlements.map((r) => r as unknown as Record<string, unknown>));
     addSheet('AuditLog',          auditLog.map((r) => r as unknown as Record<string, unknown>));
     addSheet('AccountingEvents',  accountingEvents.map((r) => r as unknown as Record<string, unknown>));
+    addSheet('PurchaseRequests',  purchaseRequests.map((r) => r as unknown as Record<string, unknown>));
+    addSheet('PurchaseRequestLines', purchaseRequestLines.map((r) => r as unknown as Record<string, unknown>));
+    addSheet('IngredientStock',   rawMaterialStock.map((r) => r as unknown as Record<string, unknown>));
 
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     return {

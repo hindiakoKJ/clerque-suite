@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle, ChefHat, Receipt,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -81,6 +82,15 @@ export default function ProcureHome() {
       desc:  'Photograph a receipt. Ingredients go into stock, the rest into the books, the photo is filed.',
       note:  null,
       show:  canPost,
+    },
+    {
+      // The backup: the buy lists as a file to keep, fill in and upload back.
+      href:  '/procure/excel',
+      Icon:  FileSpreadsheet,
+      title: 'Buy lists in Excel',
+      desc:  'Download the buy lists, fill in what was bought, upload it back. Nothing goes into stock from the file.',
+      note:  null,
+      show:  !!user && ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM'].includes(user.role),
     },
     {
       href:  '/procure/requests',

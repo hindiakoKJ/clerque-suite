@@ -331,6 +331,19 @@ export default function ProcurePage() {
 
   const req = (viewing ? all.find((r) => r.id === viewing) : null) ?? byNeed ?? opened;
   /*
+    A purchase recorded from the Excel sheet was bought on the day the sheet
+    says, often days ago: posting it defaults to that day, so the stock lot and
+    the average cost land where the purchase happened.
+  */
+  useEffect(() => {
+    // Every other request starts from today again: a date left over from a sheet request must not backdate the next one.
+    setReceivedAt(req?.boughtAt && (req.notes ?? '').includes('Recorded from an Excel upload')
+      ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(req.boughtAt))
+      : manilaToday());
+    // Only when a different request is opened; a later edit of the date stands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [req?.id]);
+  /*
     What each ingredient on this list usually costs, so a price box can say
     "usually ₱86 to ₱89 — is this right?" the moment a number is entered,
     while it can still just be fixed. The hint shows once the person leaves

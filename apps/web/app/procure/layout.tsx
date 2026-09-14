@@ -80,6 +80,8 @@ function rolesFor(pathname: string): string[] {
     what the ingredient costs.
   */
   if (pathname.startsWith('/procure/batches/setup')) return ['BUSINESS_OWNER', 'MDM'];
+  // The Excel round trip records purchases for any request: the roles the API lets record and send.
+  if (pathname.startsWith('/procure/excel'))         return ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM'];
   // Posting a receipt moves stock and money in one tap, so it sits with the
   // roles the API already lets record a purchase and receive it.
   if (pathname.startsWith('/procure/receipts'))      return ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM'];

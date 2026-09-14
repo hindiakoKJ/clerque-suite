@@ -2364,3 +2364,58 @@ against a 2,000 ml move), linking to the board on that branch (13/13).
   "backup low") before anything alerts.
 - carolina-test has a leftover active branch "zz live-check branch (delete me)"
   that now gets sauce alerts locally.
+
+## 2026-09-14 — Procure as the one place: Excel as the backup (Phase 4 of 5)
+
+> "then excel is the back up process. this should be easy to understand
+> export, and easy to use import"
+
+Decision taken as recommended: an upload only RECORDS what was bought. Stock
+goes in only through "Post to stock" on the request; money only moves in Clerque.
+
+### Built
+- [x] **Download** (Procure > Buy lists in Excel, `GET /procure/requests/excel`,
+      owner/manager/MDM): a Lines table (one row per line with its Line No., real
+      numbers, a live Amount, an Item dropdown, 30 empty rows for purchases made away
+      from the app), Requests, Stock on hand (with Ready to use / Parked), How to use.
+      Refuses a range over a year or over 2,000 lists instead of cutting it short.
+- [x] **Upload back, preview first** (`POST /procure/requests/excel?preview=`): every
+      row gets a verdict with its real Excel row number -- fill a line, a new purchase,
+      unchanged, or refused with the reason in words. Confirm records: fills through
+      the same recordBought as the app; new purchases become a bought request marked
+      "Recorded from an Excel upload", dated the day they were bought.
+- [x] **Never twice, never backwards**: hidden columns keep each row's key and what it
+      held when downloaded. Uploading the same file again changes nothing; a price typo
+      fixed and uploaded again corrects the purchase; a date, branch or item changed
+      after recording is refused (cancel in Clerque first); an old file does not undo a
+      correction made in the app since; a row edited in both is refused ("download again").
+- [x] **Refused, in words**: a line in stock, a paid-ahead order (a price change there
+      would post money), a closed or cancelled request, a prep, an unknown or twin
+      ingredient, a blank pack unit on a new purchase, a unit that cannot be converted,
+      two rows for one line, two bought-on dates for one request, a file from another shop.
+- [x] Posting a sheet purchase defaults to the day it was bought. The Stock Receipts
+      importer in Settings is labelled "opening stock and old history only". The
+      tenant export and the nightly backup now carry the buy lists.
+
+### Reviewed (9 agents, 6 confirmed + unverified checked, all fixed)
+The ones that mattered: the web page sent the file as JSON so every upload failed
+(the live API test could not see it -- proven fixed with the web client's own axios
+setup); re-uploading a sheet purchase later marked paid ahead would post a money
+correction; fixing a date typo recorded the purchase twice; an old file undid app
+corrections; the post-to-stock date stayed backdated for the next request.
+
+### Proved
+API 1821 tests, lint and type check clean, web type check clean. Live on carolina-test
+16/16: download; kitchen account 403; preview by real Excel rows writes nothing; confirm
+fills the Salt line (2 x 100 g at 13) and records Uncooked Rice bought yesterday
+(1 x 5 kg at 280) as its own request; no stock lot created; the same file again changes
+nothing; a price typo fixed becomes a correction of that purchase. Test requests cancelled.
+
+**Not seen on screen:** the Buy lists in Excel page (behind a login); the upload call was
+proven with the same axios configuration the page uses.
+
+### Not done, on purpose
+- Two people confirming the same upload at the same second could still record a new
+  purchase twice (no lock); the button is disabled while one is running.
+- Restore does not read the buy lists back yet (and restore already fails for shops
+  that use Procure -- a separate fix).

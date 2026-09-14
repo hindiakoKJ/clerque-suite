@@ -3,6 +3,7 @@ import { ProcureService } from './procure.service';
 import { ProcureController } from './procure.controller';
 import { ProcureReceiptsService } from './procure-receipts.service';
 import { ProcureReceiptsController } from './procure-receipts.controller';
+import { BuyListsExcelService } from './buy-lists-excel.service';
 import { ReceiptReadLimitGuard, ReceiptReadLedger, ReleaseReceiptReadInterceptor } from './receipt-read-limit.guard';
 import { InventoryModule } from '../inventory/inventory.module';
 import { AiModule } from '../ai/ai.module';
@@ -23,7 +24,7 @@ import { MailModule } from '../mail/mail.module';
     MailModule,
   ],
   controllers: [ProcureController, ProcureReceiptsController],
-  providers:   [ProcureService, ProcureReceiptsService, ReceiptReadLedger, ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor],
+  providers:   [ProcureService, ProcureReceiptsService, BuyListsExcelService, ReceiptReadLedger, ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor],
   exports:     [ProcureService],
 })
 export class ProcureModule {}

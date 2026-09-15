@@ -102,8 +102,11 @@ export class DocumentsService {
     // Sprint 19 — abstracted via StorageService. Falls back to local disk
     // when S3_BUCKET isn't configured; uses Cloudflare R2 / AWS S3 in prod
     // so uploads survive Railway redeploys.
+    // tenantId: the database storage driver (what Railway runs without S3)
+    // refuses a blob without one, so every attachment upload used to fail there.
     await this.storage.putFromTempPath(file.path, storagePath, {
       contentType: file.mimetype,
+      tenantId,
     });
 
     return this.prisma.document.create({

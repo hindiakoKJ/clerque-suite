@@ -29,4 +29,11 @@ describe('DocumentsService.upload — labels Clerque keeps for itself', () => {
     expect(storage.putFromTempPath).toHaveBeenCalledTimes(1);
     expect(prisma.document.create.mock.calls[0][0].data.label).toBe(label ?? null);
   });
+
+  it('tells storage which shop the file belongs to, which the database storage driver requires', async () => {
+    // Without it every attachment upload failed with a 500 on Railway, which stores files in Postgres.
+    const { svc, storage } = build();
+    await svc.upload('t1', 'Order', 'o1', file(), undefined, 'u1');
+    expect(storage.putFromTempPath.mock.calls[0][2]).toMatchObject({ tenantId: 't1', contentType: 'application/pdf' });
+  });
 });

@@ -13,7 +13,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '@repo/shared-types';
-import { KdsService } from './kds.service';
+import { KdsService, KdsActor } from './kds.service';
 import { SubRecipesService } from '../sub-recipes/sub-recipes.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -24,6 +24,11 @@ import { PrismaService } from '../prisma/prisma.service';
  * are typically GENERAL_EMPLOYEE who clock in via /payroll/clock; they don't
  * need POS app-access). Tenant ownership is enforced inside the service.
  */
+/** Who tapped: a person, or a paired screen (whose sub is the person who paired it). */
+function actorOf(user: JwtPayload & { isDevice?: boolean; deviceRole?: string; stationId?: string | null }): KdsActor {
+  return { userId: user.sub ?? null, isDevice: !!user.isDevice, deviceRole: user.deviceRole ?? null, stationId: user.stationId ?? null };
+}
+
 @UseGuards(JwtOrDeviceTokenAuthGuard, RolesGuard)
 @Controller('kds')
 export class KdsController {
@@ -77,8 +82,8 @@ export class KdsController {
          'KIOSK_DISPLAY')
   @Post('items/:id/bump')
   @HttpCode(HttpStatus.OK)
-  bump(@CurrentUser() user: JwtPayload, @Param('id') orderItemId: string) {
-    return this.kds.bumpReady(user.tenantId!, orderItemId);
+  bump(@CurrentUser() user: JwtPayload & { isDevice?: boolean; deviceRole?: string; stationId?: string | null }, @Param('id') orderItemId: string) {
+    return this.kds.bumpReady(user.tenantId!, orderItemId, actorOf(user));
   }
 
   /** Mark an item served. */
@@ -86,8 +91,8 @@ export class KdsController {
          'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'KIOSK_DISPLAY')
   @Post('items/:id/serve')
   @HttpCode(HttpStatus.OK)
-  serve(@CurrentUser() user: JwtPayload, @Param('id') orderItemId: string) {
-    return this.kds.markServed(user.tenantId!, orderItemId);
+  serve(@CurrentUser() user: JwtPayload & { isDevice?: boolean; deviceRole?: string; stationId?: string | null }, @Param('id') orderItemId: string) {
+    return this.kds.markServed(user.tenantId!, orderItemId, actorOf(user));
   }
 
   /** Undo a bump (mistake recovery). */

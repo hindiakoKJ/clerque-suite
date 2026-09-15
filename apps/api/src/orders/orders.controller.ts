@@ -204,6 +204,8 @@ export class OrdersController {
         // already happened. A machine caller never gets this flag: it prices
         // through the catalog and is not a till.
         skipStockCeiling:    !service && replayed,
+        // ...and nothing on it waits for a kitchen tap: the drink was already handed over.
+        replayedOffline:     !service && replayed,
         // SOD: the service checks discount authority against the real caller.
         // Service principals price through the catalog already, so their
         // totals are authoritative and the role check does not apply.

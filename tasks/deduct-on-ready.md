@@ -100,6 +100,40 @@ comes later.
       not a kitchen time, so the lead-time figure (readyAt - paidAt) counts them; it should skip orders
       with no bumped line.
 
+### Stage 2 -- design as built (2026-09-15, KJ AFK: "finish all phases and stages ... push")
+
+Map of the current code: 4 readers + 1 checker (workflow wf_ce067fe5-894). Decisions taken, tell KJ:
+
+- **Which lines wait.** A live till sale (channel POS, not an offline replay -- a new `replayedOffline` option,
+  set by the replay header and by /orders/sync), recipe deduction not paused, the line's category waits at an
+  active station with a screen, and the line actually uses ingredients. Everything else is used at the sale as
+  today. `USAGE_ON_READY=off` on Railway stops marking new lines; lines already waiting still confirm.
+- **Only ingredients wait.** A shelf item (InventoryItem) in a routed category still comes off the shelf at the
+  sale; void and refund restock it as today.
+- **Confirm** (bump, serve, or the 02:30 nightly job for lines paid before today): once, guarded on
+  `usagePostedAt IS NULL`, under the order lock. Recipe x (quantity - refunded) comes off stock (relative
+  decrement, floor 0, lots drained when FIFO/lot-tracked) unless deduction is paused; cost by the sale's own
+  waterfall; one COGS event per confirmed line dated to the sale (completedAt = paidAt), carrying orderItemId,
+  lineKey, the ingredients and lots taken. Recipe edits between sale and ready are read live by both the hold
+  and the confirm, so they agree with each other.
+- **Hold.** `heldUsage()` = recipe usage of waiting lines (PAID/COMPLETED, net qty > 0) per branch. Subtracted
+  wherever stock decides availability or an expectation (till N-left and refusal, buy list and menu ceiling,
+  low-stock and alerts, prep board and batches, transfers, project issues, cycle-count start, depletion,
+  variance). Not subtracted where stock is a physical record (write-off cap, receiving WAC, count posting,
+  valuation, exports).
+- **Unbump** of a confirmed line: same Manila day as the confirm, sale's period open, and no refund on the line
+  since the confirm; gives back exactly the confirm's ingredients and lots, and posts a new COGS_ADJUSTMENT
+  USAGE_RETURNED (Dr 1051 or 1050 / Cr 5010) dated to the sale. Never through the VOID handler.
+- **Void / refund.** A waiting line gives nothing back and books no waste. A used line (at sale, or confirmed)
+  that is not restocked is waste: COGS_ADJUSTMENT WASTE, Dr 5070 / Cr 5010 at the cost the COGS entry booked,
+  dated to the void or refund; the handler waits for the order's COGS entries to post first.
+- **Books.** New enum value COGS_ADJUSTMENT with its handler; confirm uses the plain COGS handler.
+- **Period close** refuses while lines from the period wait (Manila end of day) or while the period's COGS /
+  usage-returned entries are unposted; same in the checklist and year close.
+- **Also fixed on the way:** write-off and cycle-count post write stock relatively (a bump is now a concurrent
+  writer); a customer-display tablet cannot bump or serve; serve takes the order lock; the SALE event no longer
+  copies a pharmacist's attest PIN; lead time counts only orders a kitchen or bar bumped.
+
 ### Stage 2 -- the rule, branch `procure-deduct-on-ready` with the migration (KJ merges)
 - [ ] 2a Migration: OrderItem.usageOnReady (default false), usagePostedAt, readyById. Existing rows read
       as "used at sale", which is true.

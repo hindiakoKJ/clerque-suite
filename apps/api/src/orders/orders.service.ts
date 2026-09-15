@@ -1,5 +1,8 @@
 import { WAITS_AT_A_SCREEN, stillToMake, waitsAtAScreen } from '../kds/station-routing';
 import { lockOrder } from './order-lock';
+import { heldUsage, heldAt } from './held-usage';
+import { usageOnReadyEnabled } from './usage-confirm';
+import { orderCogsEvents, recipeCostedProductIds, recordWaste, stillWaiting } from './waste';
 import { recipeUsagePerUnit, recipeKey, drainLots } from './recipe-usage';
 import {
   Injectable,
@@ -50,6 +53,12 @@ export interface CreateOrderOptions {
    * would lose a real sale rather than prevent one. A live till never sets it.
    */
   skipStockCeiling?: boolean;
+  /**
+   * A sale replayed from a till that was offline (the web /orders/sync queue,
+   * or the Counter app's X-Replayed-Offline). It already happened -- the drink
+   * was made and handed over -- so none of its lines waits for a ready tap.
+   */
+  replayedOffline?: boolean;
   /** The caller's per-user permission grants, if any. */
   callerCustomPermissions?: readonly string[] | null;
   /**
@@ -59,11 +68,13 @@ export interface CreateOrderOptions {
   enforceDiscountAuthority?: boolean;
 }
 
-/** Products on this order whose sale cost came from a recipe walk (credited raw materials, not 1050). */
+/**
+ * Products on this order whose cost came from a recipe walk (credited raw
+ * materials, not 1050). Every COGS entry of the order, not the first: a line
+ * confirmed at the kitchen's ready tap books its own.
+ */
 async function recipeCostedProducts(tx: Prisma.TransactionClient, orderId: string): Promise<Set<string>> {
-  const cogs = await tx.accountingEvent.findFirst({ where: { orderId, type: 'COGS' }, select: { payload: true } });
-  const lines = ((cogs?.payload as { lines?: Array<{ productId?: string; costMethod?: string }> } | null)?.lines) ?? [];
-  return new Set(lines.filter((l) => String(l.costMethod ?? '').startsWith('RECIPE')).map((l) => String(l.productId)));
+  return recipeCostedProductIds(await orderCogsEvents(tx, orderId));
 }
 
 @Injectable()
@@ -156,6 +167,7 @@ export class OrdersService {
         live till can be stopped before the customer pays.
       */
       skipStockCeiling        = false,
+      replayedOffline         = false,
       callerCustomPermissions = null,
     } = opts;
 
@@ -607,6 +619,7 @@ export class OrdersService {
         so it showed "Preparing" for good and could not get its e-invoice.
       */
       const hasAnyRoutedItem = productsForRouting.some((p) => waitsAtAScreen(p.category));
+      const routingByProduct = new Map(productsForRouting.map((p) => [p.id, p.category]));
       // Per-product revenue account (from its category). Baked into each SALE
       // line below so the journal can split revenue by stream — Court Rental
       // vs Open Play vs Tournament vs Retail — instead of dumping everything
@@ -924,6 +937,8 @@ export class OrdersService {
       const shortfalls: Array<{
         name: string; unit: string; needed: number; have: number;
         perUnit: number; product: string;
+        /** Promised to other tickets still waiting at a screen. */
+        held: number;
       }> = [];
 
       // ── Which costing does this sale use? ────────────────────────────────
@@ -1101,6 +1116,29 @@ export class OrdersService {
       const stockAtStart = new Map(stockNow);
       const rmTouched = new Set<string>();
 
+      /*
+        Owner's rule: a recipe line waiting at a kitchen or bar screen takes its
+        ingredients and its cost when it is marked ready, not here. Only a live
+        till sale waits: an offline replay already happened, a machine caller
+        records something made elsewhere, a paused shop deducts nothing anyway,
+        and USAGE_ON_READY=off stops new lines waiting. Decided per line by what
+        the line is (product routing, size, add-ons) -- the same thing recipeKey
+        names -- so two lines with one key always decide alike.
+      */
+      const markWaiting = channel === 'POS' && !replayedOffline && !deductionPaused && usageOnReadyEnabled();
+      const waitingKeys = new Set<string>();
+      /*
+        What can still be made: on hand less what OTHER tickets still waiting
+        at a screen hold, then less each line of this order as it is walked --
+        waiting lines too, so a later line cannot promise the same milk. The
+        book figure (stockNow) stays apart: it feeds the relative write below,
+        and a waiting line must not reach that write.
+      */
+      const held = markWaiting || allRmIds.length > 0
+        ? await heldUsage(tx, tenantId, [payload.branchId], { rawMaterialIds: allRmIds, excludeOrderId: order.id })
+        : new Map<string, Map<string, number>>();
+      const available = new Map(allRmIds.map((id) => [id, Math.max(0, (stockNow.get(id) ?? 0) - heldAt(held, payload.branchId, id))]));
+
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
 
@@ -1137,6 +1175,9 @@ export class OrdersService {
         ).map((l) => ({ rawMaterialId: l.rawMaterialId, quantity: new Prisma.Decimal(l.perUnit), rawMaterial: l.rawMaterial }));
 
         if (consumptionLines.length === 0) continue; // not a recipe product, no add-ons
+
+        const waits = markWaiting && waitsAtAScreen(routingByProduct.get(item.productId));
+        if (waits) waitingKeys.add(recipeKey(item.productId, item.variantId, optionIdsOf(item)));
 
         // Per-unit cost accumulator for this product (₱ per single unit).
         let perUnitCost = 0;
@@ -1184,7 +1225,7 @@ export class OrdersService {
             Only the DEDUCTION needs a row. Deciding whether the kitchen can
             make the dish does not.
           */
-          const onHand = stockNow.get(bom.rawMaterialId) ?? 0;
+          const onHand = available.get(bom.rawMaterialId) ?? 0;
           if (onHand < consumeQty) {
             shortfalls.push({
               name:   bom.rawMaterial?.name ?? 'an ingredient',
@@ -1193,8 +1234,13 @@ export class OrdersService {
               have:   onHand,
               perUnit: perUnitQty,
               product: item.productName ?? 'this item',
+              held:   heldAt(held, payload.branchId, bom.rawMaterialId),
             });
           }
+          available.set(bom.rawMaterialId, Math.max(onHand - consumeQty, 0));
+
+          // Waiting: checked and promised above, taken and costed at the ready tap.
+          if (waits) continue;
 
           if (hasStockRow) {
             const before = stockNow.get(bom.rawMaterialId)!;
@@ -1238,7 +1284,7 @@ export class OrdersService {
         // Ingredients were deducted above regardless; only REGISTER the cost
         // when recipe costing is on for this product, otherwise the flat
         // Product.costPrice stays in charge.
-        if (costFromRecipe(item.productId)) {
+        if (!waits && costFromRecipe(item.productId)) {
           const key = recipeKey(item.productId, item.variantId, optionIdsOf(item));
           const acc = recipeCostByKey.get(key) ?? { cost: 0, qty: 0 };
           acc.cost += perUnitCost * soldQty;
@@ -1287,7 +1333,9 @@ export class OrdersService {
           message:
             `Not enough ${worst.name} for ${worst.product}${others}. ` +
             `It needs ${worst.needed} ${worst.unit} and there ${worst.have === 1 ? 'is' : 'are'} ` +
-            `${worst.have} ${worst.unit} left — enough for ${canMake}. ` +
+            `${worst.have} ${worst.unit} left` +
+            (worst.held > 0 ? ` after ${worst.held} ${worst.unit} for tickets still being made` : '') +
+            ` — enough for ${canMake}. ` +
             'Change the order before taking payment.',
           ingredient: worst.name,
           canMake,
@@ -1338,10 +1386,25 @@ export class OrdersService {
       // Keying on productId is exact rather than approximate: the loop above
       // runs once per LINE, so if the same product appears on two lines both
       // were deducted, and both must be stamped.
+      const keyOfItem = (it: { productId: string; variantId: string | null; modifiers?: Array<{ modifierOptionId: string | null }> }) =>
+        recipeKey(it.productId, it.variantId, (it.modifiers ?? []).map((m) => m.modifierOptionId));
+      const waitingItemIds = (order.items ?? []).filter((it) => waitingKeys.has(keyOfItem(it))).map((it) => it.id);
       if (deductedProductIds.size > 0) {
+        // Per line, not per product: a waiting Large and a Regular used now can share a product.
+        const deductedItemIds = (order.items ?? [])
+          .filter((it) => deductedProductIds.has(it.productId) && !waitingKeys.has(keyOfItem(it)))
+          .map((it) => it.id);
+        if (deductedItemIds.length > 0) {
+          await tx.orderItem.updateMany({
+            where: { id: { in: deductedItemIds } },
+            data:  { ingredientsDeductedAt: new Date() },
+          });
+        }
+      }
+      if (waitingItemIds.length > 0) {
         await tx.orderItem.updateMany({
-          where: { orderId: order.id, productId: { in: [...deductedProductIds] } },
-          data:  { ingredientsDeductedAt: new Date() },
+          where: { id: { in: waitingItemIds } },
+          data:  { usageOnReady: true },
         });
       }
 
@@ -1360,7 +1423,8 @@ export class OrdersService {
             // Each line carries its resolved revenue account so the SALE
             // handler can split revenue by stream. Lines without a code fall
             // back to 4010 in the handler.
-            lines: payload.items.map((i) => ({
+            // Never the pharmacist's attest PIN: it is a credential, and event payloads are not.
+            lines: payload.items.map(({ attestPin: _pin, ...i }: typeof payload.items[number] & { attestPin?: unknown }) => ({
               ...i,
               revenueAccountCode: revenueCodeByProduct.get(i.productId) ?? null,
             })),
@@ -1401,6 +1465,8 @@ export class OrdersService {
         up disagreeing about what a sale cost.
       */
       const cogsLines = payload.items
+              // A waiting line books its cost when it is marked ready (usage-confirm.ts).
+              .filter((i) => !waitingKeys.has(recipeKey(i.productId, i.variantId, optionIdsOf(i))))
               .map((i) => {
                 // Cost resolution precedence (most → least authoritative):
                 //   1. RECIPE     — sum of actual ingredient costs (FIFO lot
@@ -1461,7 +1527,8 @@ export class OrdersService {
             // event row was written -- for an offline sale, the day it synced.
             completedAt: payload.createdAt,
             overheadRate,                      // 0 for non-manufacturing tenants
-            lines: cogsLines.map(({ lineKey: _k, ...l }) => l),
+            // lineKey kept: a later void or refund finds the cost this line booked by it.
+            lines: cogsLines,
           } as unknown as Prisma.JsonObject,
         },
       });
@@ -1670,10 +1737,13 @@ export class OrdersService {
       // tenantId added to orderItem query for defense-in-depth (HIGH-3 fix)
       const items = await tx.orderItem.findMany({
         where:   { orderId, order: { tenantId } },
-        include: { product: { select: { inventoryMode: true } } },
+        include: { product: { select: { inventoryMode: true } }, modifiers: { select: { modifierOptionId: true } } },
       });
       let restockedCogsTotal = 0;
-      const costedFromRecipe = await recipeCostedProducts(tx, orderId);
+      const cogsEvents = await orderCogsEvents(tx, orderId);
+      const costedFromRecipe = recipeCostedProductIds(cogsEvents);
+      // Lines whose units went back on a shelf: their cost is reversed, not wasted.
+      const restockedItemIds = new Set<string>();
       for (const item of items) {
         // RECIPE_BASED items skip restock entirely — ingredients are waste.
         // Their cost stays in COGS. (Defense in depth: even if an
@@ -1725,8 +1795,23 @@ export class OrdersService {
           if (itemCost != null) {
             restockedCogsTotal += Number(itemCost) * backQty;
           }
+          restockedItemIds.add(item.id);
         }
       }
+
+      /*
+        What was made and is not coming back is waste. A line still waiting at
+        a kitchen or bar screen was never made: its ingredients were never
+        taken and its cost never booked, so it gives back nothing and wastes
+        nothing (and, the order being void, it will never be confirmed).
+      */
+      await recordWaste(
+        tx, tenantId, { id: orderId, orderNumber: order.orderNumber },
+        items
+          .filter((it) => !restockedItemIds.has(it.id) && !stillWaiting(it))
+          .map((it) => ({ item: it, units: Number(it.quantity) - Number(it.refundedQty) })),
+        'VOID', reason, cogsEvents,
+      );
 
       // Queue reversal accounting event — include full financial data so the
       // journal processor can generate a correct reversal even if the original
@@ -1928,6 +2013,7 @@ export class OrdersService {
           product: {
             select: { id: true, costPrice: true, name: true, inventoryMode: true },
           },
+          modifiers: { select: { modifierOptionId: true } },
         },
       });
       if (!item) throw new NotFoundException('Order item not found.');
@@ -1981,7 +2067,8 @@ export class OrdersService {
             select: { id: true, quantity: true },
           })
         : null;
-      const actuallyRestocked = inv != null && !(await recipeCostedProducts(tx, orderId)).has(item.productId);
+      const cogsEvents = await orderCogsEvents(tx, orderId);
+      const actuallyRestocked = inv != null && !recipeCostedProductIds(cogsEvents).has(item.productId);
 
       const refundRow = await tx.orderItemRefund.create({
         data: {
@@ -2057,6 +2144,14 @@ export class OrdersService {
         },
       });
 
+      // Made and not put back: waste. Still waiting at a screen: nothing was used, nothing to waste.
+      if (!actuallyRestocked && !stillWaiting(item)) {
+        await recordWaste(
+          tx, tenantId, { id: orderId, orderNumber: item.order.orderNumber },
+          [{ item, units: quantity }], 'REFUND', reason.trim(), cogsEvents,
+        );
+      }
+
       /*
         Refunded the last thing the kitchen or bar was still making: nothing
         is left to bump, so the order stops waiting. Otherwise it showed
@@ -2126,6 +2221,7 @@ export class OrdersService {
           // These sales already happened offline; refusing one now would lose
           // a real sale rather than prevent one.
           skipStockCeiling:        true,
+          replayedOffline:         true,
         });
         results.push({ clientUuid: order.clientUuid!, orderId: created.id, ok: true });
       } catch (err: any) {

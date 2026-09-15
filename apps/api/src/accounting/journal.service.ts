@@ -1372,6 +1372,73 @@ export class JournalService {
         }
         lines.push({ accountId: await getAccount('1037'), credit: releasedAmount,   description: `Release retention — ${billingNumber}` });
 
+      } else if (event.type === 'COGS_ADJUSTMENT') {
+        /*
+          A correction to cost of goods already booked for an order line.
+
+          USAGE_RETURNED -- a kitchen or bar ticket un-bumped after its
+          ingredients were taken. The confirm's own COGS lines come back as
+          they were booked: Dr the stock account each line relieved (1051 for a
+          recipe cost, 1050 otherwise) / Cr 5010. Dated to the sale through
+          completedAt, so it nets against the confirm in the same day.
+
+          WASTE -- a made item voided or refunded and not put back on a shelf.
+          The cost stays an expense but moves out of cost of goods sold:
+          Dr 5070 Spoilage & Waste / Cr 5010, dated to the void or refund. It
+          waits for the order's own cost-of-goods entries to post first, so
+          5010 is never credited for a cost it has not been debited yet.
+
+          Never lines inside the VOID entry: a full void nets every refund line
+          against revenue and money, and would read a 5070 line as either.
+        */
+        const kind = String(payload['kind'] ?? '');
+        const adjLines = (payload['lines'] as Array<{ totalCost?: number; costMethod?: string }>) ?? [];
+        const total = Math.round(adjLines.reduce((t, l) => t + Number(l.totalCost ?? 0), 0) * 100) / 100;
+        if (kind !== 'USAGE_RETURNED' && kind !== 'WASTE') {
+          throw new BadRequestException(`COGS_ADJUSTMENT.kind must be USAGE_RETURNED or WASTE, got "${kind}"`);
+        }
+        if (total <= 0) {
+          await this.prisma.accountingEvent.update({
+            where: { id: eventId },
+            data:  { status: 'SYNCED', syncedAt: new Date() },
+          });
+          return { skipped: true };
+        }
+        reference = typeof payload['orderItemId'] === 'string' ? payload['orderItemId'] : null;
+
+        if (kind === 'WASTE') {
+          const unposted = event.orderId
+            ? await this.prisma.accountingEvent.count({
+                where: { tenantId, orderId: event.orderId, type: 'COGS', status: { in: ['PENDING', 'FAILED'] } },
+              })
+            : 0;
+          if (unposted > 0) {
+            throw new BadRequestException(
+              `Waste for order ${payload['orderNumber'] ?? event.orderId} waits for its cost of goods to post first.`,
+            );
+          }
+          description = `Waste — ${payload['orderNumber'] ?? payload['orderId'] ?? event.id}`;
+          lines.push({ accountId: await getAccount('5070'), debit: total, description: 'Spoilage & waste: made item voided or refunded' });
+          lines.push({ accountId: await getAccount('5010'), credit: total, description: 'Out of cost of goods sold' });
+        } else {
+          description = `Usage given back — ${payload['orderNumber'] ?? payload['orderId'] ?? event.id}`;
+          const relief = new Map<string, number>();
+          for (const l of adjLines) {
+            const account = String(l.costMethod ?? '').startsWith('RECIPE') ? '1051' : PRODUCT_INVENTORY_ACCOUNT;
+            relief.set(account, (relief.get(account) ?? 0) + Number(l.totalCost ?? 0));
+          }
+          let debited = 0;
+          const entries = [...relief.entries()].filter(([, amount]) => amount > 0);
+          entries.forEach(([account, amount], i) => {
+            // The last account takes the rounding, so the entry balances to the centavo.
+            const value = i === entries.length - 1 ? Math.round((total - debited) * 100) / 100 : Math.round(amount * 100) / 100;
+            debited += value;
+            lines.push({ accountId: account, debit: value, description: account === '1051' ? 'Raw materials given back (un-bumped)' : 'Inventory given back (un-bumped)' });
+          });
+          for (const l of lines) l.accountId = await getAccount(l.accountId);
+          lines.push({ accountId: await getAccount('5010'), credit: total, description: 'Cost of goods sold reversed (un-bumped)' });
+        }
+
       } else {
         await this.prisma.accountingEvent.update({
           where: { id: eventId },

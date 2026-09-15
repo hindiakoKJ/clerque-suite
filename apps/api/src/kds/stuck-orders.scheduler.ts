@@ -1,31 +1,117 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { lockOrder } from '../orders/order-lock';
+import { HOLDING_STATUSES, WAITING_LINE } from '../orders/held-usage';
+import { confirmLineUsage } from '../orders/usage-confirm';
 import { WAITS_AT_A_SCREEN, stillToMake } from './station-routing';
 
 const PAGE = 200;
 
 /**
- * Releases orders left at "Preparing" (PAID) from before today with nothing
- * left to make at any screen.
+ * The 02:30 Manila pass over kitchen and bar tickets from before today.
  *
- * Before the station-routing fix an order waited on every routed line, even
- * one sent to a station with no screen or a line refunded away -- nothing
- * could ever bump those, so the order sat at PAID for good: no e-invoice,
- * wrong on the orders list. The fix stops new ones; this clears the old ones
- * and any a crash leaves behind. Its first run will release the backlog.
+ * 1. Confirms waiting lines nobody marked ready. Under the owner's rule a
+ *    ticket takes its ingredients and cost when it is marked ready; a drink
+ *    handed over without a tap would otherwise hold its milk and keep its cost
+ *    out of the books for good. It runs before the 03:00 stock alerts, so they
+ *    see the real shelf. Selected by the line's own flag, not by today's
+ *    routing: a station switched off after the sale must not strand its lines.
+ *    The cost is dated to the sale, as a tap would have dated it. The owner is
+ *    told how many were counted this way.
  *
- * Status only. Stock and the books were settled at the sale.
+ * 2. Releases orders left at "Preparing" (PAID) with nothing left to make.
+ *    Before the station-routing fix an order waited on every routed line, even
+ *    one sent to a station with no screen or a line refunded away; this clears
+ *    those and any a crash leaves behind.
  */
 @Injectable()
 export class StuckOrdersScheduler {
   private readonly logger = new Logger(StuckOrdersScheduler.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {}
 
   @Cron('30 2 * * *', { timeZone: PH_TIMEZONE })
+  async nightly(now = new Date()) {
+    const confirmed = await this.confirmUntapped(now);
+    const released = await this.releaseStuckOrders(now);
+    return { ...released, confirmed };
+  }
+
+  /** Step 1: waiting lines from before today, confirmed as made. Returns how many lines were confirmed. */
+  async confirmUntapped(now = new Date()): Promise<number> {
+    const dayStart = manilaDayStart(now);
+    const perTenant = new Map<string, number>();
+    let cursor: string | undefined;
+
+    for (;;) {
+      const page = await this.prisma.orderItem.findMany({
+        where: {
+          ...WAITING_LINE,
+          order: { status: { in: [...HOLDING_STATUSES] }, deletedAt: null, paidAt: { lt: dayStart } },
+        },
+        select:  { id: true, orderId: true, order: { select: { tenantId: true } } },
+        orderBy: { id: 'asc' },
+        take:    PAGE,
+        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      });
+      if (page.length === 0) break;
+      cursor = page[page.length - 1].id;
+
+      const byOrder = new Map<string, { tenantId: string; ids: string[] }>();
+      for (const l of page) {
+        const o = byOrder.get(l.orderId) ?? { tenantId: l.order.tenantId, ids: [] };
+        o.ids.push(l.id);
+        byOrder.set(l.orderId, o);
+      }
+      for (const [orderId, { tenantId, ids }] of byOrder) {
+        try {
+          const n = await this.prisma.$transaction(async (tx) => {
+            await lockOrder(tx, orderId);
+            let done = 0;
+            for (const id of ids) {
+              if (await confirmLineUsage(tx, tenantId, id, { actorId: null, trigger: 'NIGHTLY', now })) done++;
+            }
+            // Counted as made: off the screen, and the order can be released below.
+            await tx.orderItem.updateMany({
+              where: { id: { in: ids }, prepStatus: 'PENDING' },
+              data:  { prepStatus: 'READY', readyAt: now },
+            });
+            return done;
+          }, { maxWait: 10_000, timeout: 60_000 });
+          if (n > 0) perTenant.set(tenantId, (perTenant.get(tenantId) ?? 0) + n);
+        } catch (err) {
+          this.logger.error(`Could not confirm the waiting lines of order ${orderId}: ${(err as Error).message}`);
+        }
+      }
+      if (page.length < PAGE) break;
+    }
+
+    let total = 0;
+    for (const [tenantId, n] of perTenant) {
+      total += n;
+      try {
+        await this.notifications?.create({
+          tenantId, userId: null, kind: 'INFO',
+          title: `${n} kitchen/bar item${n === 1 ? '' : 's'} counted as made overnight`,
+          body:  'Nobody marked them ready on the station screen yesterday, so Clerque took their ingredients and booked their cost at 2:30 AM, dated to the sale. If some were never made, void or refund them.',
+          link:  '/pos/orders',
+          dedupeKey: `nightly-confirm-${manilaDayStart(now).toISOString().slice(0, 10)}`,
+        });
+      } catch (err) {
+        this.logger.warn(`Could not tell shop ${tenantId} about the overnight confirm: ${(err as Error).message}`);
+      }
+    }
+    this.logger.log(`Confirmed ${total} waiting kitchen/bar line(s) from before today.`);
+    return total;
+  }
+
+  /** Step 2: orders at "Preparing" from before today with nothing left to make. */
   async releaseStuckOrders(now = new Date()): Promise<{ released: number; stillWaiting: number }> {
     const dayStart = manilaDayStart(now);
     let released = 0;

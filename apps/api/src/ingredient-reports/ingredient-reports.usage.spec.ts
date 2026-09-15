@@ -56,6 +56,8 @@ describe('IngredientReportsService — days of cover counts prep', () => {
         ]),
       },
       accountingEvent: { findMany: jest.fn().mockResolvedValue(prepEvents) },
+      // No ticket waits at a screen here (ingredient-reports.waiting-tickets.spec.ts covers those).
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     return new IngredientReportsService(prisma) as any;
   }

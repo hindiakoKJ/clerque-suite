@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { availableQty, heldAcross, heldUsage } from '../orders/held-usage';
+import { stillWaiting } from '../orders/waste';
 
 /**
  * Ingredient (raw-material) reporting.
@@ -14,7 +16,8 @@ import { PrismaService } from '../prisma/prisma.service';
  * joining completed Orders × OrderItem × Product → BomItem (× variantBom for
  * variant orders). This keeps the schema lean and means consumption history
  * is always perfectly consistent with sales history (no drift between two
- * separately-maintained tables).
+ * separately-maintained tables). A line still waiting at a kitchen or bar
+ * screen is left out: its ingredients leave stock when it is marked ready.
  */
 export interface IngredientMovementRow {
   id:            string;
@@ -88,10 +91,11 @@ export class IngredientReportsService {
     }));
 
     // Consumption — derived from paid orders (PAID + COMPLETED) that
-    // include products whose BOM contains this raw material. Sprint 7:
-    // ingredients are deducted at sale-time on the orders.service.create
-    // path, so PAID orders DID consume their ingredients even if the bar
-    // hasn't bumped them ready yet.
+    // include products whose BOM contains this raw material. Most lines
+    // take their ingredients at the sale, so a PAID order has used them even
+    // before production finishes. A line that waits at a kitchen or bar
+    // screen takes them only when it is marked ready, so while it waits it
+    // has used nothing and is left out below.
     const orders = await this.prisma.order.findMany({
       where: {
         tenantId,
@@ -110,9 +114,11 @@ export class IngredientReportsService {
         branchId:    true,
         items: {
           select: {
-            quantity:  true,
-            productId: true,
-            product:   { select: { name: true } },
+            quantity:      true,
+            productId:     true,
+            usageOnReady:  true,
+            usagePostedAt: true,
+            product:       { select: { name: true } },
           },
         },
       },
@@ -137,6 +143,7 @@ export class IngredientReportsService {
       let totalQty = 0;
       const productNames: string[] = [];
       for (const it of order.items) {
+        if (stillWaiting(it)) continue;   // nothing has left the shelf for it yet
         const perUnit = bomByProduct.get(it.productId);
         if (!perUnit) continue;
         totalQty += Number(it.quantity) * perUnit;
@@ -226,7 +233,10 @@ export class IngredientReportsService {
   //   purchasesQty / purchasesValue
   //   consumptionQty / consumptionValue
   //   closingQty   / closingValue  — current RawMaterialInventory snapshot
-  //   daysOfStock  — closingQty ÷ avgDailyConsumption (null if no consumption)
+  //   heldQty      — what tickets still waiting at a kitchen or bar screen hold
+  //   availableQty — closingQty less heldQty, never below zero
+  //   daysOfStock  — availableQty ÷ avgDailyConsumption (null if no consumption)
+  //   isLowStock   — availableQty at or under the ingredient's alert level
   //
   // Date range defaults to the last 30 days.
 
@@ -278,9 +288,23 @@ export class IngredientReportsService {
       purchasesValByRm.set(lot.rawMaterialId, (purchasesValByRm.get(lot.rawMaterialId) ?? 0) + val);
     }
 
-    // 4. Consumption in range (derived from paid orders × BOM). Sprint 7:
-    // PAID orders consumed their ingredients at sale time, so they count
-    // toward consumption even if production hasn't completed.
+    /*
+      2b. What tickets still waiting at a kitchen or bar screen hold.
+
+      That stock is still on the books -- closing stays the book figure, the
+      same number the stock screen and the valuation show -- but it is already
+      promised and leaves the moment the tickets are marked ready. Days of
+      cover and the low-stock flag are warnings about what is left to sell, so
+      they read the stock less what is held. Every branch when none is asked.
+    */
+    const held = await heldUsage(this.prisma, tenantId, opts.branchId ? [opts.branchId] : null);
+
+    // 4. Consumption in range (derived from paid orders × BOM). Most lines
+    // take their ingredients at the sale, so a PAID order counts even if
+    // production hasn't completed. A line waiting at a kitchen or bar screen
+    // takes them only when marked ready; until then nothing has left stock,
+    // and counting it would also throw opening (closing - purchases +
+    // consumption) off by what it holds.
     const orders = await this.prisma.order.findMany({
       where: {
         tenantId,
@@ -291,7 +315,7 @@ export class IngredientReportsService {
       },
       select: {
         items: {
-          select: { productId: true, quantity: true },
+          select: { productId: true, quantity: true, usageOnReady: true, usagePostedAt: true },
         },
       },
     });
@@ -314,6 +338,7 @@ export class IngredientReportsService {
     const consumptionQtyByRm = new Map<string, number>();
     for (const order of orders) {
       for (const item of order.items) {
+        if (stillWaiting(item)) continue;
         const recipe = bomByProduct.get(item.productId);
         if (!recipe) continue;
         for (const r of recipe) {
@@ -373,9 +398,11 @@ export class IngredientReportsService {
       const openingQty   = closingQty - purchasesQty + consumptionQty;
       const openingValue = openingQty * cost;
       const closingValue = closingQty * cost;
+      const heldQty      = heldAcross(held, rm.id);
+      const available    = availableQty(closingQty, heldQty);
       const avgDailyConsumption = consumptionQty / days;
       const daysOfStock = avgDailyConsumption > 0
-        ? Math.round((closingQty / avgDailyConsumption) * 10) / 10
+        ? Math.round((available / avgDailyConsumption) * 10) / 10
         : null;
       return {
         id:                rm.id,
@@ -391,9 +418,11 @@ export class IngredientReportsService {
         consumptionValue,
         closingQty,
         closingValue,
+        heldQty,
+        availableQty: available,
         daysOfStock,
         isLowStock:
-          rm.lowStockAlert != null && closingQty <= Number(rm.lowStockAlert),
+          rm.lowStockAlert != null && available <= Number(rm.lowStockAlert),
       };
     });
 

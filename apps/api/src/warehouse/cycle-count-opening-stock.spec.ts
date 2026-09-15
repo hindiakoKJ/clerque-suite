@@ -19,11 +19,15 @@ describe('WarehouseService — posting a count creates stock that does not exist
   const TENANT = 't1';
   const BRANCH = 'b1';
 
-  function build(opts: { existing?: Set<string>; lines?: any[]; live?: Record<string, number>; periods?: any } = {}) {
+  function build(opts: {
+    existing?: Set<string>; lines?: any[]; live?: Record<string, number>; periods?: any;
+    /* A ready tap that takes this much between the post's read and its write. */
+    tapBetween?: Record<string, number>;
+  } = {}) {
     const existing = opts.existing ?? new Set<string>();
     /* What is on the shelf RIGHT NOW, for rows that already exist. */
     const liveQty = new Map<string, number>(Object.entries(opts.live ?? {}));
-    const upserts: Array<{ rawMaterialId: string; qty: number; created: boolean }> = [];
+    const upserts: Array<{ rawMaterialId: string; qty: number; created: boolean; write?: any }> = [];
     const events: any[] = [];
 
     const tx: any = {
@@ -47,16 +51,27 @@ describe('WarehouseService — posting a count creates stock that does not exist
         */
         findUnique: jest.fn(({ where }: any) => {
           const rm = where.branchId_rawMaterialId.rawMaterialId;
-          return Promise.resolve(existing.has(rm) ? { quantity: liveQty.get(rm) ?? 0 } : null);
+          const row = existing.has(rm) ? { quantity: liveQty.get(rm) ?? 0 } : null;
+          // The kitchen taps after this read has been taken.
+          if (row && opts.tapBetween?.[rm]) liveQty.set(rm, row.quantity - opts.tapBetween[rm]);
+          return Promise.resolve(row);
         }),
+        /*
+          Applies the write the way the database would: a created row takes
+          the figure given, an existing row moves by the increment or
+          decrement from wherever it is NOW -- which is what lets a tap that
+          landed in between survive.
+        */
         upsert: jest.fn(({ where, create, update }: any) => {
           const rm = where.branchId_rawMaterialId.rawMaterialId;
           const created = !existing.has(rm);
-          upserts.push({
-            rawMaterialId: rm,
-            qty: Number(created ? create.quantity : update.quantity),
-            created,
-          });
+          const now = liveQty.get(rm) ?? 0;
+          const q = update.quantity;
+          const qty = created
+            ? Number(create.quantity)
+            : q.increment != null ? now + Number(q.increment) : now - Number(q.decrement);
+          liveQty.set(rm, qty);
+          upserts.push({ rawMaterialId: rm, qty, created, write: update.quantity });
           existing.add(rm);
           return Promise.resolve({});
         }),
@@ -205,6 +220,56 @@ describe('WarehouseService — posting a count creates stock that does not exist
       });
       await svc.postCycleCount(TENANT, 'cc1', 'u1');
       expect(upserts[0].qty).toBe(0);
+    });
+  });
+
+  /*
+    A kitchen or bar ready tap now takes a waiting ticket's ingredients with
+    its own relative decrement, and it can land between the post reading the
+    live row and writing it. Writing an absolute figure would put that milk
+    back on the shelf; the post moves the row by the variance instead.
+  */
+  describe('a ready tap that lands between the read and the write', () => {
+    it('keeps the tap\'s share taken', async () => {
+      // Expected 5,000, counted 4,800: 200 missing. The post reads 5,000, then
+      // a latte is bumped and takes 100. The shelf ends at 4,900 - 200 = 4,700,
+      // not at the 4,800 an absolute write would restore.
+      const { svc, upserts } = build({
+        existing: new Set(['milk']),
+        live: { milk: 5000 },
+        tapBetween: { milk: 100 },
+        lines: [{ id: 'l1', rawMaterialId: 'milk', countedQty: '4800', expectedQty: '5000' }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts).toHaveLength(1);
+      expect(upserts[0].qty).toBe(4700);
+    });
+
+    it('writes a found surplus as an increment and a shortfall as a decrement', async () => {
+      const { svc, upserts } = build({
+        existing: new Set(['milk', 'beans']),
+        live: { milk: 5000, beans: 1000 },
+        lines: [
+          { id: 'l1', rawMaterialId: 'milk',  countedQty: '4800', expectedQty: '5000' },
+          { id: 'l2', rawMaterialId: 'beans', countedQty: '1250', expectedQty: '1000' },
+        ],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(Number(upserts[0].write.decrement)).toBe(200);
+      expect(upserts[0].write.increment).toBeUndefined();
+      expect(Number(upserts[1].write.increment)).toBe(250);
+      expect(upserts[1].write.decrement).toBeUndefined();
+    });
+
+    it('still floors at empty by moving only as far as the live row it read', async () => {
+      // Live 50, shortfall 4,900: the change is -50, landing on zero.
+      const { svc, upserts } = build({
+        existing: new Set(['beans']),
+        live: { beans: 50 },
+        lines: [{ id: 'l1', rawMaterialId: 'beans', countedQty: '100', expectedQty: '5000' }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(Number(upserts[0].write.decrement)).toBe(50);
     });
   });
 });

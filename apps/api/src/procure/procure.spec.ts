@@ -33,8 +33,13 @@ describe('ProcureService', () => {
     openList?: any;
     /** What the newest received line of each ingredient says it held and cost. */
     lastPacks?: any[];
-    /** RawMaterialInventory rows at the branch. */
-    onHand?: Array<{ rawMaterialId: string; quantity: number }>;
+    /** RawMaterialInventory rows, at the branch unless a row names another. */
+    onHand?: Array<{ rawMaterialId: string; quantity: number; branchId?: string }>;
+    /** Lines on tickets at kitchen and bar screens: waiting, at this branch, on a paid order, unless a ticket says otherwise. */
+    tickets?: Array<{
+      productId: string; variantId?: string | null; quantity: number; refundedQty?: number;
+      branchId?: string; status?: string; usageOnReady?: boolean; usagePostedAt?: Date | null;
+    }>;
     /** A cycle count already started from this list. */
     openCount?: { id: string; countNumber: string; notes: string; lines: any[] } | null;
     /** The owners and managers on the account. */
@@ -89,6 +94,8 @@ describe('ProcureService', () => {
       && (where.label === undefined || d.label === where.label)
       && (where.mimeType == null
         || (typeof where.mimeType === 'string' ? d.mimeType === where.mimeType : d.mimeType.startsWith(where.mimeType.startsWith))));
+
+    const stockRows = () => (opts.onHand ?? []).map((x) => ({ branchId: BRANCH, ...x }));
 
     const prisma: any = {
       // Whether staff see delivery costs. These tests are about the list
@@ -152,9 +159,37 @@ describe('ProcureService', () => {
         findFirst: jest.fn(({ where }: any) => Promise.resolve({ name: where.id === USER ? 'Mia' : 'Someone' })),
       },
       rawMaterialInventory: {
-        findMany:   jest.fn(({ where }: any) => Promise.resolve((opts.onHand ?? []).filter((x) => where.rawMaterialId.in.includes(x.rawMaterialId)).map((x) => ({ branchId: BRANCH, ...x })))),
-        findUnique: jest.fn(({ where }: any) => Promise.resolve((opts.onHand ?? []).find((x) => x.rawMaterialId === where.branchId_rawMaterialId.rawMaterialId) ?? null)),
+        findMany:   jest.fn(({ where }: any) => Promise.resolve(stockRows().filter((x) =>
+          where.rawMaterialId.in.includes(x.rawMaterialId)
+          && (where.branchId == null || (typeof where.branchId === 'string' ? x.branchId === where.branchId : where.branchId.in.includes(x.branchId)))))),
+        findUnique: jest.fn(({ where }: any) => Promise.resolve(stockRows().find((x) =>
+          x.rawMaterialId === where.branchId_rawMaterialId.rawMaterialId && x.branchId === where.branchId_rawMaterialId.branchId) ?? null)),
       },
+      // Tickets at kitchen and bar screens, filtered the way the orders table would filter them.
+      orderItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.tickets ?? [])
+          .map((t) => ({ branchId: BRANCH, status: 'PAID', usageOnReady: true, usagePostedAt: null, variantId: null, refundedQty: 0, ...t }))
+          .filter((t) => t.usageOnReady === where.usageOnReady && t.usagePostedAt === where.usagePostedAt
+            && where.order.tenantId === TENANT && where.order.deletedAt === null && where.order.status.in.includes(t.status)
+            && (!where.order.branchId || where.order.branchId.in.includes(t.branchId)))
+          .map((t) => ({
+            productId: t.productId, variantId: t.variantId, quantity: t.quantity, refundedQty: t.refundedQty,
+            modifiers: [], order: { branchId: t.branchId },
+          })))),
+      },
+      // The recipes those tickets are read by: the same products the servings read.
+      bomItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.products ?? [])
+          .filter((p: any) => where.productId.in.includes(p.id))
+          .flatMap((p: any) => (p.bomItems ?? []).map((b: any) => ({ productId: p.id, ...b }))))),
+      },
+      variantBomItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.products ?? [])
+          .flatMap((p: any) => p.variants ?? [])
+          .filter((v: any) => where.variantId.in.includes(v.id))
+          .flatMap((v: any) => v.variantBomItems.map((b: any) => ({ variantId: v.id, ...b }))))),
+      },
+      modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
       cycleCount: {
         findMany:  jest.fn(() => Promise.resolve(openCount ? [{ id: openCount.id, countNumber: openCount.countNumber, notes: openCount.notes }] : [])),
         findFirst: jest.fn(({ where }: any) => Promise.resolve(openCount && openCount.notes.startsWith(where.notes.startsWith) ? { id: openCount.id, countNumber: openCount.countNumber } : null)),
@@ -173,6 +208,12 @@ describe('ProcureService', () => {
       product: {
         findMany: jest.fn(({ where }: any) => {
           if (opts.productsFail) return Promise.reject(new Error('connection reset'));
+          // The menu ceiling asks for every recipe product, not the ones using an item.
+          if (!where.OR) {
+            return Promise.resolve((opts.products ?? [])
+              .map((p: any) => ({ bomItems: [], variants: [], ...p }))
+              .filter((p: any) => where.inventoryMode === undefined || p.inventoryMode === where.inventoryMode));
+          }
           const ids: string[] = where.OR[0].bomItems.some.rawMaterialId.in;
           const uses = (bom: any[]) => bom.some((b: any) => ids.includes(b.rawMaterialId));
           return Promise.resolve((opts.products ?? [])
@@ -996,6 +1037,37 @@ describe('ProcureService', () => {
     await expect(open.svc.recordCount(TENANT, 'req1', 'nope', 'cook', 1)).rejects.toThrow(/not on this request/i);
   });
 
+  // A drink that waits at the bar screen, 30 ml of the syrup a cup.
+  const HAZEL_LATTE = { id: 'p-hazel', name: 'Hazelnut Latte', inventoryMode: 'RECIPE_BASED', bomItems: [{ rawMaterialId: 'rm-haz', quantity: 30, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } }] };
+
+  it('a count started while tickets wait expects the shelf less what they hold -- this branch, live orders, not yet made', async () => {
+    const { svc, countLines } = build({
+      status: 'OPEN', lines: ASKED, products: [HAZEL_LATTE], onHand: [{ rawMaterialId: 'rm-haz', quantity: 2250 }],
+      tickets: [
+        { productId: 'p-hazel', quantity: 5 },                               // 150 ml held here
+        { productId: 'p-hazel', quantity: 10, branchId: 'b2' },              // another branch's bar
+        { productId: 'p-hazel', quantity: 20, status: 'VOIDED' },            // will never be made
+        { productId: 'p-hazel', quantity: 4, usagePostedAt: new Date() },    // already taken at ready
+        { productId: 'p-hazel', quantity: 3, refundedQty: 3 },               // refunded in full
+      ],
+    });
+    const out = await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 2000);
+    expect(Number(countLines[0].expectedQty)).toBe(2100);
+    expect(out).toMatchObject({ expectedQty: 2100, countedQty: 2000, variance: -100 });
+  });
+
+  it('with nothing waiting the count expects the book, and a book already below zero is expected as it is', async () => {
+    const none = build({ status: 'OPEN', lines: ASKED, products: [HAZEL_LATTE], onHand: [{ rawMaterialId: 'rm-haz', quantity: 2250 }] });
+    expect((await none.svc.recordCount(TENANT, 'req1', 'l1', 'cook', 2000)).expectedQty).toBe(2250);
+
+    // A tap takes nothing from an empty book, so the hold cannot lower it; the count must still lift it to what was seen.
+    const below = build({
+      status: 'OPEN', lines: ASKED, products: [HAZEL_LATTE], onHand: [{ rawMaterialId: 'rm-haz', quantity: -600 }],
+      tickets: [{ productId: 'p-hazel', quantity: 5 }],
+    });
+    expect(await below.svc.recordCount(TENANT, 'req1', 'l1', 'cook', 0)).toMatchObject({ expectedQty: -600, variance: 600 });
+  });
+
   // ── send to the owners, and they hear it ──────────────────────────────────
 
   const PEOPLE = [
@@ -1300,6 +1372,62 @@ describe('ProcureService', () => {
     expect(servesSentences(line.serves)[1]).toBe('By the count: 2 Lasagna or 5 Spaghetti.');
   });
 
+  it('tickets waiting at this branch lower what the list says is on hand, what it serves and the till\'s number', async () => {
+    // Two Spaghetti at the kitchen screen hold 400 g of sauce and 200 g of noodles.
+    const { svc } = build({ status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK, tickets: [{ productId: 'p-spag', quantity: 2 }] });
+    const [line] = (await svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+    expect([line.onHand, line.heldQty]).toEqual([1600, 400]);
+    expect(line.serves.dishes.map((d: any) => [d.name, d.byThisItem])).toEqual([['Lasagna', 3], ['Spaghetti', 8]]);
+
+    const held: Record<string, number> = { [SAUCE.id]: 400, [NOODLES.id]: 200 };
+    const tile = productCeiling({ variants: [], ...MENU[0] } as any, (id) => stockOf(id) - (held[id] ?? 0));
+    const spag = line.serves.dishes.find((d: any) => d.productId === 'p-spag');
+    expect([spag.sellableNow, spag.limitedBy]).toEqual([tile.maxProducible, 'Spaghetti Noodles']);
+    expect(spag.sellableNow).toBe(1);
+  });
+
+  it('a ticket at another branch, on a voided order, already made or refunded holds nothing: the list reads as with none waiting', async () => {
+    const plain = build({ status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK });
+    const [before] = (await plain.svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+    const { svc } = build({
+      status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK,
+      tickets: [
+        { productId: 'p-spag', quantity: 2, branchId: 'b2' },
+        { productId: 'p-lasagna', quantity: 1, status: 'VOIDED' },
+        { productId: 'p-spag', quantity: 3, usagePostedAt: new Date() },
+        { productId: 'p-lasagna', quantity: 2, refundedQty: 2, status: 'COMPLETED' },
+      ],
+    });
+    const [line] = (await svc.get(TENANT, 'req1', 'BUSINESS_OWNER')).lines;
+    expect([line.onHand, line.heldQty]).toEqual([2000, 0]);
+    expect(line).toEqual(before);
+  });
+
+  it('lists at two branches each take off only their own branch\'s tickets, read once for both', async () => {
+    const { svc, prisma } = build({
+      products: MENU,
+      onHand: [
+        { rawMaterialId: SAUCE.id, quantity: 2000 }, { rawMaterialId: NOODLES.id, quantity: 300 },
+        { rawMaterialId: SAUCE.id, quantity: 2000, branchId: 'b2' }, { rawMaterialId: NOODLES.id, quantity: 300, branchId: 'b2' },
+      ],
+      tickets: [
+        { productId: 'p-spag', quantity: 2 },                                    // 400 g sauce at b1
+        { productId: 'p-lasagna', quantity: 1, branchId: 'b2' },                 // 500 g sauce at b2
+        { productId: 'p-lasagna', quantity: 3, branchId: 'b2', status: 'VOIDED' },
+      ],
+    });
+    const [atMain, atCourt] = await svc.enrich(TENANT, [
+      { branchId: BRANCH, requestNumber: 'REQ-A', status: 'OPEN', lines: [lineFor('l1', SAUCE)] },
+      { branchId: 'b2',   requestNumber: 'REQ-B', status: 'SENT', lines: [lineFor('l2', SAUCE)] },
+    ]);
+    expect([atMain.lines[0].onHand, atMain.lines[0].heldQty]).toEqual([1600, 400]);
+    expect(atMain.lines[0].serves.dishes.map((d: any) => [d.name, d.byThisItem])).toEqual([['Lasagna', 3], ['Spaghetti', 8]]);
+    expect([atCourt.lines[0].onHand, atCourt.lines[0].heldQty]).toEqual([1500, 500]);
+    expect(atCourt.lines[0].serves.dishes.map((d: any) => [d.name, d.byThisItem])).toEqual([['Lasagna', 3], ['Spaghetti', 7]]);
+    // The servings reuse the hold the list's own figure took off.
+    expect(prisma.orderItem.findMany).toHaveBeenCalledTimes(1);
+  });
+
   it('a request already bought or in stock carries no servings, and does not pay for working them out', async () => {
     for (const status of ['BOUGHT', 'RECEIVED']) {
       const { svc, prisma } = build({ status, lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK });
@@ -1322,6 +1450,43 @@ describe('ProcureService', () => {
     const { svc, mailed } = build({ status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK, people: PEOPLE.slice(0, 1) });
     await svc.sendRequest(TENANT, 'req1', USER);
     expect(mailed[0].lines[0].serves).toBe('enough for 4 Lasagna or 10 Spaghetti');
+  });
+
+  it('the owner email counts what this branch\'s waiting tickets hold, and nobody else\'s', async () => {
+    const { svc, mailed } = build({
+      status: 'OPEN', lines: [lineFor('l1', SAUCE)], products: MENU, onHand: STOCK, people: PEOPLE.slice(0, 1),
+      tickets: [{ productId: 'p-spag', quantity: 2 }, { productId: 'p-lasagna', quantity: 1, branchId: 'b2' }, { productId: 'p-lasagna', quantity: 1, status: 'VOIDED' }],
+    });
+    await svc.sendRequest(TENANT, 'req1', USER);
+    expect(mailed[0].lines[0].serves).toBe('enough for 3 Lasagna or 8 Spaghetti');
+  });
+
+  // ── what is capping the menu ──────────────────────────────────────────────
+
+  const ceilingRows = (out: any) => out.ingredients.map((i: any) => [i.name, i.stock, i.heldQty, i.servingsLeft]);
+
+  it('the menu ceiling reads stock less what tickets waiting at this branch hold', async () => {
+    const { svc } = build({ products: MENU, onHand: STOCK, tickets: [{ productId: 'p-spag', quantity: 2 }] });
+    const out = await svc.menuCeiling(TENANT, BRANCH);
+    expect(ceilingRows(out)).toEqual([
+      ['Spaghetti Noodles', 100, 200, 1],
+      ['Spaghetti Sauce', 1600, 400, 3],
+      ['White Sugar Syrup', 1200, 0, 40],
+    ]);
+  });
+
+  it('a ticket at another branch or on a voided order leaves the menu ceiling as it is with none waiting', async () => {
+    const none = await build({ products: MENU, onHand: STOCK }).svc.menuCeiling(TENANT, BRANCH);
+    expect(ceilingRows(none)).toEqual([
+      ['Spaghetti Noodles', 300, 0, 3],
+      ['Spaghetti Sauce', 2000, 0, 4],
+      ['White Sugar Syrup', 1200, 0, 40],
+    ]);
+    const { svc } = build({
+      products: MENU, onHand: STOCK,
+      tickets: [{ productId: 'p-spag', quantity: 2, branchId: 'b2' }, { productId: 'p-lasagna', quantity: 1, status: 'VOIDED' }],
+    });
+    expect(await svc.menuCeiling(TENANT, BRANCH)).toEqual(none);
   });
 
   // ── paid ahead: the shop's own GR/IR ──────────────────────────────────────

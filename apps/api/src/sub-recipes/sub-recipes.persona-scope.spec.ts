@@ -133,6 +133,8 @@ describe('Prep station scope — barista and line cook', () => {
             rawMaterial: { id: 'raw', name: 'Raw', unit: 'g', costPrice: 0.05 } }],
         }))),
       },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'raw', quantity: 99999 }]),
       },
@@ -233,6 +235,8 @@ describe('Prep levels — derived, not configured', () => {
           },
         ]),
       },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue([
           { rawMaterialId: 'tom', quantity: 50000 },

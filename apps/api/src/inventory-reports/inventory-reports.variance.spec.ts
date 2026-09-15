@@ -50,10 +50,12 @@ describe('Stock variance, measured from the last real count', () => {
         findMany: jest.fn().mockResolvedValue((opts.lots ?? []).map((l) => ({ ...l, receivedAt: new Date(l.receivedAt) }))),
       },
       orderItem: {
-        findMany: jest.fn().mockResolvedValue((opts.sold ?? []).map((o) => ({
+        // Nothing here waits at a screen, so the query for held stock finds nothing
+        // (inventory-reports.waiting-tickets.spec.ts covers the tickets that do).
+        findMany: jest.fn(({ where }: any) => Promise.resolve(where?.usageOnReady ? [] : (opts.sold ?? []).map((o) => ({
           productId: o.productId, quantity: o.quantity, refundedQty: o.refundedQty ?? 0,
           order: { createdAt: new Date(o.at) },
-        }))),
+        })))),
       },
       bomItem: { findMany: jest.fn().mockResolvedValue(opts.boms ?? []) },
     };

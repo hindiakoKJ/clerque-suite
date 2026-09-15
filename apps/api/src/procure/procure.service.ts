@@ -22,9 +22,23 @@ import { sanityValueKey } from '@repo/shared-types';
 import { CostSanityService } from '../common/sanity/cost-sanity.service';
 import { SanityContext } from '../common/sanity/sanity.types';
 import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
+import { heldUsage, heldAt, availableQty, type HeldMap } from '../orders/held-usage';
 
 /** Where a price somebody confirmed on the buy list is written down, per line. */
 const CONFIRMED_LINE = 'PurchaseRequestLine';
+
+/**
+ * Stock left to promise once the tickets waiting at a kitchen or bar screen
+ * take their share: the book less what they hold, never below zero.
+ *
+ * A book already at or below zero is left as it is. A ready tap takes nothing
+ * from an empty book, so a hold cannot lower it further -- and a count must
+ * still see the shortfall, or posting it could never bring the book back up.
+ * With nothing waiting every figure is the book, as before.
+ */
+function afterHeld(book: number, held: number): number {
+  return book > 0 ? availableQty(book, held) : book;
+}
 
 /** What each pocket is called in a sentence a shop owner reads. */
 const POCKET_WORDS: Record<ProcurePocket, string> = {
@@ -1599,12 +1613,20 @@ export class ProcureService {
       where:  { branchId, rawMaterialId: { in: rawMaterialIds } },
       select: { rawMaterialId: true, quantity: true },
     });
-    const stockOf = new Map(stockRows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+    /*
+      Tickets waiting at a kitchen or bar screen have not taken their
+      ingredients off the book yet, but the next customer cannot have them.
+      Read on the book alone, this page would promise lattes the till is
+      already refusing.
+    */
+    const held = await heldUsage(this.prisma, tenantId, [branchId], { rawMaterialIds });
+    const heldOf = (id: string) => heldAt(held, branchId, id);
+    const stockOf = new Map(stockRows.map((r) => [r.rawMaterialId, afterHeld(Number(r.quantity), heldOf(r.rawMaterialId))]));
 
     // ingredientId -> what it is holding back
     const capping = new Map<string, {
       rawMaterialId: string; name: string; unit: string;
-      stock: number; servingsLeft: number;
+      stock: number; heldQty: number; servingsLeft: number;
       products: Array<{ id: string; name: string; canMake: number }>;
     }>();
 
@@ -1627,6 +1649,8 @@ export class ProcureService {
         name: limiter.rawMaterial?.name ?? 'Unknown ingredient',
         unit: limiter.rawMaterial?.unit ?? '',
         stock: stockOf.get(key) ?? 0,
+        // So the page can say why stock reads below what is on the shelf.
+        heldQty: heldOf(key),
         servingsLeft: min,
         products: [],
       };
@@ -1974,9 +1998,10 @@ export class ProcureService {
 
   /**
    * Every line, with what the shop knows around it: what the ingredient held
-   * and cost last time, what Clerque says is on the shelf at this branch,
-   * what somebody counted while building the list, and -- while the list is
-   * being built or has just gone out -- what that stock still serves.
+   * and cost last time, what Clerque says is on the shelf at this branch
+   * (less what tickets waiting at a screen hold), what somebody counted while
+   * building the list, and -- while the list is being built or has just gone
+   * out -- what that stock still serves.
    */
   private async enrich<
     L extends { rawMaterialId: string },
@@ -1985,7 +2010,7 @@ export class ProcureService {
     tenantId: string,
     reqs: T[],
   ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & {
-    lastPack: LastPack | null; onHand: number; counted: CountedLine | null; serves: LineServes | null; usuallyFrom: UsuallyFrom | null;
+    lastPack: LastPack | null; onHand: number; heldQty: number; counted: CountedLine | null; serves: LineServes | null; usuallyFrom: UsuallyFrom | null;
   }> }>> {
     const ids = [...new Set(reqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))];
     const last = await this.lastPacks(tenantId, ids);
@@ -1996,6 +2021,16 @@ export class ProcureService {
       select: { branchId: true, rawMaterialId: true, quantity: true },
     });
     const onHand = new Map(stock.map((x) => [`${x.branchId}:${x.rawMaterialId}`, Number(x.quantity)]));
+    /*
+      Tickets waiting at a kitchen or bar screen still sit on the book, but
+      their ingredients are spoken for. What to buy is decided on what is left
+      once they are made, so "on hand" here -- the screen's figure and the
+      PDF's -- is the book less what they hold, the same figure a count started
+      from this list expects. Read once for every branch these lists are at,
+      every ingredient the tickets use, and handed to the servings below so the
+      two never disagree.
+    */
+    const held: HeldMap = ids.length === 0 ? new Map() : await heldUsage(this.prisma, tenantId, branches);
 
     // Counts typed while these lists were being built, still waiting to be posted.
     const counts = reqs.length === 0 ? [] : await this.prisma.cycleCount.findMany({
@@ -2025,6 +2060,7 @@ export class ProcureService {
       tenantId,
       [...new Set(liveReqs.map((r) => r.branchId))],
       [...new Set(liveReqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))],
+      held,
     );
     // Where each item is usually bought, for the shopper -- the same lists only.
     const usualOf = liveReqs.length === 0 ? null : await this.usualSources(
@@ -2039,10 +2075,13 @@ export class ProcureService {
         ...r,
         lines: r.lines.map((l) => {
           const cl = c ? counted.get(`${c.id}:${l.rawMaterialId}`) : undefined;
+          const heldQty = heldAt(held, r.branchId, l.rawMaterialId);
           return {
             ...l,
             lastPack: last.get(l.rawMaterialId) ?? null,
-            onHand:   onHand.get(`${r.branchId}:${l.rawMaterialId}`) ?? 0,
+            onHand:   afterHeld(onHand.get(`${r.branchId}:${l.rawMaterialId}`) ?? 0, heldQty),
+            // So a person holding the bottle can see why the figure is lower than the shelf.
+            heldQty,
             counted:  cl && c ? { qty: Number(cl.countedQty), expected: Number(cl.expectedQty), countId: c.id, countNumber: c.countNumber } : null,
             serves:   servesOf && building(r) ? servesOf(r.branchId, l.rawMaterialId, cl ? Number(cl.countedQty) : null) : null,
             usuallyFrom: usualOf && building(r) ? (usualOf.get(`${r.branchId}:${l.rawMaterialId}`) ?? null) : null,
@@ -2068,6 +2107,9 @@ export class ProcureService {
    * goes into a kitchen prep says which prep, and what that prep's own stock
    * serves. Add-ons are named and not counted, like on the tile.
    *
+   * Stock is the book less what tickets waiting at a screen hold, as on the
+   * till. A count is what somebody saw, so it is used as counted.
+   *
    * Servings are information, not the list: if they cannot be worked out the
    * list still loads, without them, and the failure is logged.
    */
@@ -2075,6 +2117,8 @@ export class ProcureService {
     tenantId: string,
     branchIds: string[],
     itemIds: string[],
+    /** What waiting tickets hold, when the caller already read it for these branches. */
+    held?: HeldMap,
   ): Promise<((branchId: string, itemId: string, counted: number | null) => LineServes) | null> {
     if (itemIds.length === 0) return () => ({ dishes: [], addOns: [], goesInto: [] });
     try {
@@ -2120,6 +2164,8 @@ export class ProcureService {
         select: { branchId: true, rawMaterialId: true, quantity: true },
       });
       const stock = new Map(stockRows.map((x) => [`${x.branchId}:${x.rawMaterialId}`, Number(x.quantity)]));
+      // The owner email comes here without a hold in hand; the list passes the one its "on hand" took off.
+      const heldNow = held ?? await heldUsage(this.prisma, tenantId, branchIds, { rawMaterialIds: everyIngredient });
 
       /** One dish. `till` is null for a product the till counts as finished stock, not by recipe. */
       const dish = (productId: string, name: string, perServing: number, onHand: number, counted: number | null,
@@ -2134,7 +2180,8 @@ export class ProcureService {
       };
       const tiles = new Map<string, ReturnType<typeof productCeiling>>();
       const dishesOf = (branchId: string, itemId: string, counted: number | null): ServesDish[] => {
-        const stockOf = (id: string) => stock.get(`${branchId}:${id}`) ?? 0;
+        // Every ingredient of the dish, not just this one: the till's number is set by whichever runs out first.
+        const stockOf = (id: string) => afterHeld(stock.get(`${branchId}:${id}`) ?? 0, heldAt(heldNow, branchId, id));
         const onHand = stockOf(itemId);
         const out: ServesDish[] = [];
         for (const p of products) {
@@ -2182,11 +2229,11 @@ export class ProcureService {
    *
    * It becomes a line on an ordinary cycle count for the branch, one count
    * per buy list, started the moment the first line is counted. Expected is
-   * what Clerque had on the shelf right then; counted is what the person
-   * saw. Nothing moves until the owner or manager posts the count from the
-   * counts screen, and then the existing rules apply: the variance is
-   * measured against that snapshot and applied to the live figure, so a
-   * delivery in between is not undone.
+   * what Clerque had on the shelf right then, less what waiting tickets hold;
+   * counted is what the person saw. Nothing moves until the owner or manager
+   * posts the count from the counts screen, and then the existing rules
+   * apply: the variance is measured against that snapshot and applied to the
+   * live figure, so a delivery in between is not undone.
    */
   async recordCount(tenantId: string, requestId: string, lineId: string, userId: string, countedQty: number) {
     if (!this.warehouse) throw new BadRequestException('Counting is not available on this deployment.');
@@ -2246,7 +2293,16 @@ export class ProcureService {
         where:  { branchId_rawMaterialId: { branchId: req.branchId, rawMaterialId: line.rawMaterialId } },
         select: { quantity: true },
       });
-      expected = live ? Number(live.quantity) : 0;
+      /*
+        A ticket waiting at a screen is being made or about to be: its share is
+        the kitchen's, not the shelf's, though the book keeps it until the
+        ready tap. Posting applies counted-minus-expected to the live figure
+        and the tap then takes the ticket's share -- so expecting the whole
+        book would take those ingredients off twice. The same expectation a
+        cycle count started from the counts screen takes.
+      */
+      const held = await heldUsage(this.prisma, tenantId, [req.branchId], { rawMaterialIds: [line.rawMaterialId] });
+      expected = afterHeld(live ? Number(live.quantity) : 0, heldAt(held, req.branchId, line.rawMaterialId));
       await this.prisma.cycleCountLine.create({
         data: {
           countId: count.id, rawMaterialId: line.rawMaterialId,

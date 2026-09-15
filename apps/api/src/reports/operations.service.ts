@@ -12,6 +12,9 @@ import { PrismaService } from '../prisma/prisma.service';
  * `completedAt`. Orders still in PAID status have `readyAt = null` and
  * are excluded from lead-time aggregates but shown in the "in-flight"
  * count separately.
+ *
+ * Only orders a person at a kitchen or bar screen actually marked ready are
+ * timed (see timedByAStation).
  */
 @Injectable()
 export class OperationsService {
@@ -46,6 +49,9 @@ export class OperationsService {
             productId:   true,
             productName: true,
             quantity:    true,
+            readyById:   true,
+            readyAt:     true,
+            usageOnReady: true,
             product:     { select: { category: { select: { stationId: true, name: true } } } },
           },
         },
@@ -62,6 +68,7 @@ export class OperationsService {
         inFlightCount++;
         continue;
       }
+      if (!timedByAStation(o)) continue;
       const seconds = Math.floor((o.readyAt.getTime() - (o.paidAt?.getTime() ?? 0)) / 1000);
       if (seconds >= 0) leadTimesSec.push(seconds);
     }
@@ -83,7 +90,7 @@ export class OperationsService {
     // lead time counts toward EACH station that was involved.
     const stationStats = new Map<string, { stationId: string; stationName: string; samples: number[] }>();
     for (const o of orders) {
-      if (o.status !== 'COMPLETED' || !o.readyAt || !o.paidAt) continue;
+      if (o.status !== 'COMPLETED' || !o.readyAt || !o.paidAt || !timedByAStation(o)) continue;
       const seconds = Math.floor((o.readyAt.getTime() - o.paidAt.getTime()) / 1000);
       if (seconds < 0) continue;
       const stationsTouched = new Set<string>();
@@ -140,7 +147,7 @@ export class OperationsService {
     // wait is the same as its order's wait — they're entangled in service).
     const productStats = new Map<string, { productId: string; productName: string; samples: number[]; totalQty: number }>();
     for (const o of orders) {
-      if (o.status !== 'COMPLETED' || !o.readyAt || !o.paidAt) continue;
+      if (o.status !== 'COMPLETED' || !o.readyAt || !o.paidAt || !timedByAStation(o)) continue;
       const seconds = Math.floor((o.readyAt.getTime() - o.paidAt.getTime()) / 1000);
       if (seconds < 0) continue;
       for (const it of o.items) {
@@ -174,7 +181,7 @@ export class OperationsService {
     for (let h = 0; h < 24; h++) byHour.push({ hour: h, orderCount: 0, avgSec: null });
     const hourBuckets: number[][] = Array.from({ length: 24 }, () => []);
     for (const o of orders) {
-      if (o.status !== 'COMPLETED' || !o.readyAt || !o.paidAt) continue;
+      if (o.status !== 'COMPLETED' || !o.readyAt || !o.paidAt || !timedByAStation(o)) continue;
       const seconds = Math.floor((o.readyAt.getTime() - o.paidAt.getTime()) / 1000);
       if (seconds < 0) continue;
       // PH local hour — paidAt is UTC; offset 8h.
@@ -206,6 +213,25 @@ export class OperationsService {
   }
 }
 
+/**
+ * An order is timed only when a person at a kitchen or bar screen marked at
+ * least one of its lines ready -- the bump records who did it.
+ *
+ * readyAt alone is not a kitchen time. An order with nothing to make is
+ * COMPLETED at the till with readyAt = paidAt, and read as an instant order;
+ * one completed by refunding what was left, or released by the nightly job
+ * for orders stuck at "Preparing", carries the refund's or the job's time and
+ * read as a wait of hours. Both dragged the shop's average away from how long
+ * customers really wait.
+ */
+function timedByAStation(o: { items: Array<{ readyById: string | null; readyAt?: Date | null; usageOnReady?: boolean }> }): boolean {
+  return o.items.some((it) =>
+    it.readyById != null
+    // Bumped before the bump recorded anyone: the line has its own readyAt. The
+    // overnight confirm also stamps one, but only on a line that waited, with no bumper.
+    || (it.readyAt != null && !it.usageOnReady));
+}
+
 // ── Statistics helpers ──────────────────────────────────────────────────────
 
 function mean(xs: number[]): number {
@@ -229,7 +255,7 @@ export interface DailyLeadTimeReport {
   date:             string;     // YYYY-MM-DD
   branchId:         string;
   totalOrders:      number;     // PAID + COMPLETED
-  completedCount:   number;     // orders with readyAt set
+  completedCount:   number;     // orders with readyAt set that a person at a screen marked ready
   inFlightCount:    number;     // orders still PAID (in production)
   avgSec:           number | null;
   p50Sec:           number | null;

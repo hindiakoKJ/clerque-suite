@@ -68,15 +68,6 @@ export interface CreateOrderOptions {
   enforceDiscountAuthority?: boolean;
 }
 
-/**
- * Products on this order whose cost came from a recipe walk (credited raw
- * materials, not 1050). Every COGS entry of the order, not the first: a line
- * confirmed at the kitchen's ready tap books its own.
- */
-async function recipeCostedProducts(tx: Prisma.TransactionClient, orderId: string): Promise<Set<string>> {
-  return recipeCostedProductIds(await orderCogsEvents(tx, orderId));
-}
-
 @Injectable()
 export class OrdersService {
   constructor(

@@ -37,6 +37,8 @@ describe('recipe ceiling', () => {
   async function tiles(extra: Record<string, any> = {}) {
     const prisma: any = {
       subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket waiting at a screen: the tile counts from the book.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       ...extra,
       tenant: { findUnique: jest.fn().mockResolvedValue({ allowSaleWhenOutOfStock: false }) },
       customer: { findFirst: jest.fn().mockResolvedValue(null) },

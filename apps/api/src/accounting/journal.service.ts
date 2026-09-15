@@ -8,6 +8,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Prisma, JournalSource } from '@prisma/client';
 import { accountsForMaterial, PRODUCT_INVENTORY_ACCOUNT } from './material-accounts';
+import { ticketsHoldingMessage, ticketsHoldingPeriod } from '../accounting-periods/kitchen-tickets';
 
 type LineInput = { accountId: string; debit?: number; credit?: number; description?: string };
 
@@ -1732,6 +1733,10 @@ export class JournalService {
           `Cannot close FY${year} — ${stuckEvents} accounting event(s) are still PENDING/FAILED. Process them first via Ledger → Events.`,
         );
       }
+      // Kitchen/bar tickets sold this year book their cost when marked ready, dated to the sale.
+      const tickets = await ticketsHoldingPeriod(this.prisma, tenantId, new Date(`${year}-12-31T23:59:59.999+08:00`));
+      const ticketsMessage = ticketsHoldingMessage(`FY${year}`, tickets);
+      if (ticketsMessage) throw new BadRequestException(`Cannot close FY${year} — ${ticketsMessage}`);
 
       const openInvoices = await this.prisma.aRInvoice.count({
         where: {

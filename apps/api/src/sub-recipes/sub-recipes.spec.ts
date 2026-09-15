@@ -102,6 +102,8 @@ describe('SubRecipesService — making a batch', () => {
         findMany: jest.fn().mockResolvedValue(lines.map((l) => ({ id: l.id, name: l.name }))),
       },
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue(
           Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),
@@ -319,6 +321,8 @@ describe('SubRecipesService — how many batches could still be made', () => {
           ],
         }),
       },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue(
           Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),

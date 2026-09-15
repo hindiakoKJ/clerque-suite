@@ -1,6 +1,22 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
+import { stillWaiting } from '../orders/waste';
+
+/**
+ * Lines still waiting at a kitchen or bar screen.
+ *
+ * Their cost of goods is booked when they are marked ready, from the recipe
+ * and stock as they are then; the cost on the line until that moment is only
+ * the till's guess. So a report's cost and gross profit leave it out, and
+ * this says how much of the revenue is still waiting for its cost, the same
+ * way itemsMissingCost warns about a line with no cost at all.
+ */
+export interface CostPending {
+  lineCount: number;
+  /** What those lines rang up to (gross, as rung). Still counted in revenue. */
+  revenue: number;
+}
 
 export interface PaymentBreakdown {
   method: string;
@@ -47,7 +63,7 @@ export interface SalesSummary {
   byPaymentMethod: PaymentBreakdown[];
   topProducts: TopProduct[];
   byHour: HourlyBreakdown[];
-  /** Sum of (qty × costPrice) for all sold items that had a costPrice set. */
+  /** Sum of (qty × costPrice) for all sold items that had a costPrice set, less lines whose cost is pending. */
   totalCogs: number;
   /** Net of VAT, then minus COGS. The "true profit" number. */
   grossProfit: number;
@@ -59,6 +75,13 @@ export interface SalesSummary {
    * should warn whenever this is > 0.
    */
   itemsMissingCost: { lineCount: number; revenueLeak: number };
+  /**
+   * Lines still waiting at a kitchen or bar screen. Their revenue is counted,
+   * their cost is not booked yet -- so grossProfit does not carry that cost
+   * until they are marked ready. The UI should say "cost pending" whenever
+   * this is > 0.
+   */
+  costPending: CostPending;
 }
 
 export interface DailyReport extends SalesSummary {
@@ -274,6 +297,7 @@ export class ReportsService {
     let netRevenue = 0;
     let leakLines = 0;
     let leakRevenue = 0;
+    const costPending: CostPending = { lineCount: 0, revenue: 0 };
     for (const order of completed) {
       const orderVat = Number(order.vatAmount ?? 0);
       const orderTotal = Number(order.totalAmount);
@@ -286,7 +310,11 @@ export class ReportsService {
           ? lineRevGross - (orderVat * (lineRevGross / orderLineSum))
           : lineRevGross;
         netRevenue += lineNet;
-        if (item.costPrice != null) {
+        if (stillWaiting(item)) {
+          // Cost is booked at the ready tap; the snapshot on the line is not it.
+          costPending.lineCount += 1;
+          costPending.revenue   += lineRevGross;
+        } else if (item.costPrice != null) {
           totalCogs += Number(item.quantity) * Number(item.costPrice);
         } else if (!isServiceBusiness) {
           leakLines  += 1;
@@ -378,6 +406,7 @@ export class ReportsService {
       grossProfit,
       grossMargin,
       itemsMissingCost: { lineCount: leakLines, revenueLeak: leakRevenue },
+      costPending: { lineCount: costPending.lineCount, revenue: +costPending.revenue.toFixed(2) },
     };
   }
 
@@ -572,7 +601,7 @@ export class ReportsService {
    * /pos/reports/sales owner-only page. Returns:
    *   - Per-day buckets (date, totalRevenue, orderCount, voidCount)
    *   - Totals across the range (revenue, orders, AOV, voidCount, totalCogs,
-   *     grossProfit)
+   *     grossProfit, and the lines whose cost is still pending at a screen)
    *   - Top 20 products across the range (qty, revenue, lineCount)
    *   - Per-payment-method totals
    *
@@ -610,6 +639,7 @@ export class ReportsService {
       refundTotal:  number;
       netSales:     number;
       totalCogs:    number;
+      costPending:  CostPending;
     }>();
     const isoDay = (d: Date) => {
       // PH = UTC+8; shift before slicing so day boundaries align.
@@ -621,6 +651,7 @@ export class ReportsService {
     let totalCogs    = 0;
     let totalOrders  = 0;
     let voidCount    = 0;
+    const costPending: CostPending = { lineCount: 0, revenue: 0 };
     const byPayment      = new Map<string, { method: string; total: number; count: number }>();
     const byProduct      = new Map<string, { productName: string; qty: number; revenue: number; lineCount: number }>();
 
@@ -628,7 +659,10 @@ export class ReportsService {
       const day = isoDay(new Date(o.paidAt ?? o.createdAt));
       let bucket = buckets.get(day);
       if (!bucket) {
-        bucket = { date: day, orderCount: 0, voidCount: 0, totalRevenue: 0, refundTotal: 0, netSales: 0, totalCogs: 0 };
+        bucket = {
+          date: day, orderCount: 0, voidCount: 0, totalRevenue: 0, refundTotal: 0, netSales: 0, totalCogs: 0,
+          costPending: { lineCount: 0, revenue: 0 },
+        };
         buckets.set(day, bucket);
       }
 
@@ -639,7 +673,18 @@ export class ReportsService {
       }
 
       const orderTotal = Number(o.totalAmount);
-      const orderCogs  = o.items.reduce((s, it) => s + Number(it.costPrice ?? 0) * Number(it.quantity), 0);
+      let orderCogs = 0;
+      for (const it of o.items) {
+        if (stillWaiting(it)) {
+          // Cost is booked at the ready tap; the snapshot on the line is not it.
+          costPending.lineCount        += 1;
+          costPending.revenue          += Number(it.lineTotal);
+          bucket.costPending.lineCount += 1;
+          bucket.costPending.revenue   += Number(it.lineTotal);
+          continue;
+        }
+        orderCogs += Number(it.costPrice ?? 0) * Number(it.quantity);
+      }
       totalRevenue += orderTotal;
       totalCogs    += orderCogs;
       totalOrders  += 1;
@@ -707,6 +752,7 @@ export class ReportsService {
         totalOrders,
         voidCount,
         avgOrderValue: Math.round(avgOrderValue * 100) / 100,
+        costPending:   { lineCount: costPending.lineCount, revenue: Math.round(costPending.revenue * 100) / 100 },
       },
       byDay: Array.from(buckets.values())
         .sort((a, b) => a.date.localeCompare(b.date))
@@ -715,6 +761,7 @@ export class ReportsService {
           totalRevenue: Math.round(b.totalRevenue * 100) / 100,
           totalCogs:    Math.round(b.totalCogs * 100) / 100,
           grossProfit:  Math.round((b.totalRevenue - b.totalCogs) * 100) / 100,
+          costPending:  { lineCount: b.costPending.lineCount, revenue: Math.round(b.costPending.revenue * 100) / 100 },
         })),
       byPaymentMethod: Array.from(byPayment.values())
         .sort((a, b) => b.total - a.total)
@@ -751,7 +798,7 @@ export class ReportsService {
         select: {
           id: true, branchId: true, status: true,
           totalAmount: true, paidAt: true,
-          items: { select: { quantity: true, costPrice: true } },
+          items: { select: { quantity: true, costPrice: true, lineTotal: true, usageOnReady: true, usagePostedAt: true } },
         },
       }),
       this.prisma.aPBill.findMany({
@@ -791,6 +838,7 @@ export class ReportsService {
       arInvoiced:      number;
       arOutstanding:   number;
       inventoryValue:  number;
+      costPending:     CostPending;
     }
     const initBucket = (b: { id: string; name: string }): Bucket => ({
       branchId:       b.id,
@@ -806,6 +854,7 @@ export class ReportsService {
       arInvoiced:     0,
       arOutstanding:  0,
       inventoryValue: 0,
+      costPending:    { lineCount: 0, revenue: 0 },
     });
     const map = new Map<string, Bucket>(branches.map((b) => [b.id, initBucket(b)]));
 
@@ -818,7 +867,16 @@ export class ReportsService {
         continue;
       }
       const total = Number(o.totalAmount);
-      const cogs  = o.items.reduce((s, it) => s + Number(it.costPrice ?? 0) * Number(it.quantity), 0);
+      let cogs = 0;
+      for (const it of o.items) {
+        if (stillWaiting(it)) {
+          // Cost is booked at the ready tap; the snapshot on the line is not it.
+          bucket.costPending.lineCount += 1;
+          bucket.costPending.revenue   += Number(it.lineTotal);
+          continue;
+        }
+        cogs += Number(it.costPrice ?? 0) * Number(it.quantity);
+      }
       bucket.revenue   += total;
       bucket.cogs      += cogs;
       bucket.orderCount++;
@@ -830,6 +888,7 @@ export class ReportsService {
       orderCount: 0, voidCount: 0, avgOrderValue: 0,
       apBilled: 0, apOutstanding: 0, arInvoiced: 0, arOutstanding: 0,
       inventoryValue: 0,
+      costPending: { lineCount: 0, revenue: 0 },
     };
     for (const b of apBills) {
       const bucket = b.branchId ? (map.get(b.branchId) ?? sharedBucket) : sharedBucket;
@@ -870,6 +929,7 @@ export class ReportsService {
       arInvoiced:     round(b.arInvoiced),
       arOutstanding:  round(b.arOutstanding),
       inventoryValue: round(b.inventoryValue),
+      costPending:    { lineCount: b.costPending.lineCount, revenue: round(b.costPending.revenue) },
     });
 
     const branchRows = Array.from(map.values()).map(finalize);
@@ -890,10 +950,15 @@ export class ReportsService {
         arInvoiced:     acc.arInvoiced + b.arInvoiced,
         arOutstanding:  acc.arOutstanding + b.arOutstanding + (sharedRow[0]?.arOutstanding ?? 0),
         inventoryValue: acc.inventoryValue + b.inventoryValue,
+        costPending:    {
+          lineCount: acc.costPending.lineCount + b.costPending.lineCount,
+          revenue:   round(acc.costPending.revenue + b.costPending.revenue),
+        },
       }),
       {
         revenue: 0, cogs: 0, grossProfit: 0, orderCount: 0, voidCount: 0,
         apBilled: 0, apOutstanding: 0, arInvoiced: 0, arOutstanding: 0, inventoryValue: 0,
+        costPending: { lineCount: 0, revenue: 0 } as CostPending,
       },
     );
     const grossMargin = totals.revenue > 0 ? totals.grossProfit / totals.revenue : 0;

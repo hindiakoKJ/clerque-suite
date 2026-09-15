@@ -44,6 +44,8 @@ describe('ProductsService — sell when out of stock', () => {
       },
       // Nothing parked behind the milk.
       subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket waiting at a screen holds any of it.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     return new ProductsService(prisma as any);
   }

@@ -16,8 +16,32 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
   const TENANT = 't1';
   const BRANCH = 'b1';
 
-  function build(opts: { products?: any[]; ingredients?: any[]; vendors?: any[] } = {}) {
+  /** A ticket line waiting at a kitchen or bar screen, and the order it belongs to. */
+  type Ticket = { branchId: string; status: string; productId: string; quantity: number };
+
+  function build(opts: { products?: any[]; ingredients?: any[]; vendors?: any[]; tickets?: Ticket[]; recipes?: any[] } = {}) {
     const prisma: any = {
+      /*
+        Waiting lines, filtered the way the database would: by the order's
+        status and branch as heldUsage asks for them. A spec that got the
+        branch or the status wrong in the query would see the wrong ticket.
+      */
+      orderItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.tickets ?? [])
+          .filter(() => where.usageOnReady === true && where.usagePostedAt === null)
+          .filter((t) => where.order.tenantId === TENANT && where.order.status.in.includes(t.status))
+          .filter((t) => !where.order.branchId || where.order.branchId.in.includes(t.branchId))
+          .map((t) => ({
+            productId: t.productId, variantId: null, quantity: t.quantity, refundedQty: 0,
+            modifiers: [], order: { branchId: t.branchId },
+          })))),
+      },
+      bomItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve(
+          (opts.recipes ?? []).filter((b: any) => where.productId.in.includes(b.productId)))),
+      },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
       inventoryItem: {
         findMany: jest.fn().mockResolvedValue(opts.products ?? []),
       },
@@ -155,6 +179,117 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
     expect(out.map((r: any) => r.name)).toEqual(['Vanilla Syrup']);
     expect(out[0].quantity).toBe(0);
     expect(out[0].shortBy).toBe(500);
+  });
+
+  // ── tickets waiting at the kitchen or bar hold their ingredients ─────────
+
+  /*
+    A latte waiting at the bar screen has not taken its milk off the books yet;
+    it takes it when marked ready. Until then the milk is on the shelf but
+    promised, and a buying decision made on the shelf figure is made too late.
+  */
+  const LATTE = [{ productId: 'latte', rawMaterialId: 'rm2', quantity: '200', rawMaterial: null }];
+  const milkOnShelf = {
+    quantity: '5400',
+    rawMaterial: { id: 'rm2', name: 'Fresh Milk', unit: 'ml', lowStockAlert: '5000' },
+  };
+
+  it('a ticket waiting at this branch lowers what is available, and says how much it holds', async () => {
+    const { svc } = build({
+      ingredients: [milkOnShelf], recipes: LATTE,
+      tickets: [{ branchId: BRANCH, status: 'PAID', productId: 'latte', quantity: 4 }],
+    });
+    const out = await svc.getLowStock(TENANT, BRANCH);
+
+    // 5400 on the shelf, 800 promised to four lattes: 4600 left, 400 under the line.
+    expect(out).toHaveLength(1);
+    expect(out[0].quantity).toBe(4600);
+    expect(out[0].heldQty).toBe(800);
+    expect(out[0].shortBy).toBe(400);
+  });
+
+  it('a ticket at another branch, or on a voided order, holds nothing here', async () => {
+    const { svc } = build({
+      ingredients: [milkOnShelf], recipes: LATTE,
+      tickets: [
+        { branchId: 'b2', status: 'PAID', productId: 'latte', quantity: 4 },
+        { branchId: BRANCH, status: 'VOIDED', productId: 'latte', quantity: 4 },
+      ],
+    });
+    // 5400 is above 5000 once nothing here is held.
+    expect(await svc.getLowStock(TENANT, BRANCH)).toEqual([]);
+  });
+
+  it('with nothing waiting, the figures are the shelf figures', async () => {
+    const { svc } = build({ ingredients: [beans], recipes: LATTE });
+    const out = await svc.getLowStock(TENANT, BRANCH);
+    expect(out[0].quantity).toBe(1500);
+    expect(out[0].heldQty).toBe(0);
+    expect(out[0].shortBy).toBe(500);
+  });
+
+  it('the slip says where the rest of the shelf is going, within the roll', async () => {
+    const { svc } = build({
+      ingredients: [milkOnShelf], recipes: LATTE,
+      tickets: [{ branchId: BRANCH, status: 'COMPLETED', productId: 'latte', quantity: 4 }],
+    });
+    const { text, count } = await svc.lowStockSlip(TENANT, BRANCH);
+    expect(count).toBe(1);
+    expect(text).toContain('have 4600 ml');
+    expect(text).toContain('800 ml held for orders');
+    expect(text).toContain('SHORT 400 ml');
+    for (const line of text.split('\n')) expect(line.length).toBeLessThanOrEqual(32);
+  });
+
+  it('the slip adds no held line when nothing is waiting', async () => {
+    const { svc } = build({ ingredients: [milk] });
+    const { text } = await svc.lowStockSlip(TENANT, BRANCH);
+    expect(text).not.toContain('held for orders');
+  });
+
+  // Stock on hand: the shelf figure stays, what is held is said beside it.
+
+  it('Stock on hand keeps the shelf figure, adds what waiting tickets hold, and judges low on the rest', async () => {
+    const { svc } = build({
+      ingredients: [milkOnShelf], recipes: LATTE,
+      tickets: [{ branchId: BRANCH, status: 'PAID', productId: 'latte', quantity: 4 }],
+    });
+    const [row] = await svc.listRawMaterials(TENANT, false, BRANCH);
+
+    // Counts and write-offs are checked against stockQty, so it is what is physically there.
+    expect(row.stockQty).toBe(5400);
+    expect(row.heldQty).toBe(800);
+    expect(row.availableQty).toBe(4600);
+    expect(row.isLowStock).toBe(true);
+  });
+
+  it('Stock on hand holds nothing for a ticket at another branch or on a voided order', async () => {
+    const { svc } = build({
+      ingredients: [milkOnShelf], recipes: LATTE,
+      tickets: [
+        { branchId: 'b2', status: 'PAID', productId: 'latte', quantity: 4 },
+        { branchId: BRANCH, status: 'VOIDED', productId: 'latte', quantity: 4 },
+      ],
+    });
+    const [row] = await svc.listRawMaterials(TENANT, false, BRANCH);
+    expect(row.stockQty).toBe(5400);
+    expect(row.heldQty).toBe(0);
+    expect(row.availableQty).toBe(5400);
+    expect(row.isLowStock).toBe(false);
+  });
+
+  it('Stock on hand is unchanged when nothing is waiting', async () => {
+    const { svc } = build({ ingredients: [beans, plenty], recipes: LATTE });
+    const rows = await svc.listRawMaterials(TENANT, false, BRANCH);
+    expect(rows.map((r: any) => [r.stockQty, r.heldQty, r.availableQty, r.isLowStock]))
+      .toEqual([[1500, 0, 1500, true], [9000, 0, 9000, false]]);
+  });
+
+  it('the ingredient library without a branch asks nothing about tickets', async () => {
+    const { svc, prisma } = build({ ingredients: [milkOnShelf], recipes: LATTE });
+    const [row] = await svc.listRawMaterials(TENANT, false);
+    expect(prisma.orderItem.findMany).not.toHaveBeenCalled();
+    expect(row).not.toHaveProperty('heldQty');
   });
 
   // ── the printable version ────────────────────────────────────────────────

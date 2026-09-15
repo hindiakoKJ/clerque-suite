@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma, ProjectStatus } from '@prisma/client';
+import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
 
 export interface CreateProjectDto {
   name:          string;
@@ -145,6 +146,14 @@ export class ProjectsService {
       }
       const costByRm = new Map(rms.map((r) => [r.id, Number(r.costPrice ?? 0)]));
 
+      /*
+        Tickets still waiting at a kitchen or bar screen at this branch have not
+        taken their ingredients off the books yet, but the ready tap will. What
+        they hold is not free to hand to a project: issuing it would leave the
+        tap with nothing to take. The decrement below is still the amount issued.
+      */
+      const held = await heldUsage(tx, tenantId, [dto.branchId], { rawMaterialIds: rmIds });
+
       // Verify stock + decrement.
       let totalIssuedCost = 0;
       for (const l of dto.lines) {
@@ -152,9 +161,15 @@ export class ProjectsService {
           where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId: l.rawMaterialId } },
         });
         const onHand = Number(inv?.quantity ?? 0);
-        if (onHand < l.quantity) {
+        const heldQty = heldAt(held, dto.branchId, l.rawMaterialId);
+        const free = availableQty(onHand, heldQty);
+        if (free < l.quantity) {
+          const name = rms.find((r) => r.id === l.rawMaterialId)?.name ?? l.rawMaterialId;
           throw new BadRequestException(
-            `Insufficient stock for ${rms.find((r) => r.id === l.rawMaterialId)?.name ?? l.rawMaterialId}: have ${onHand}, need ${l.quantity}.`,
+            heldQty > 0
+              ? `Insufficient stock for ${name}: have ${onHand}, of which ${heldQty} is held for kitchen/bar ` +
+                `tickets still waiting to be made, so ${free} can be issued; need ${l.quantity}.`
+              : `Insufficient stock for ${name}: have ${onHand}, need ${l.quantity}.`,
           );
         }
         await tx.rawMaterialInventory.update({

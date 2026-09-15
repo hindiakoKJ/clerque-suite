@@ -48,7 +48,7 @@ describe('OrdersService — void and refund', () => {
       product: { findUnique: jest.fn().mockResolvedValue({ costPrice: 40 }) },
       accountingEvent: {
         create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve(data); }),
-        findFirst: jest.fn().mockResolvedValue(opts.cogsLines ? { payload: { lines: opts.cogsLines } } : null),
+        findMany: jest.fn().mockResolvedValue(opts.cogsLines ? [{ payload: { lines: opts.cogsLines } }] : []),
       },
     };
     const prisma: any = {

@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
+import { stillWaiting } from '../orders/waste';
 
 export interface VarianceRow {
   rawMaterialId: string;
@@ -18,7 +20,10 @@ export interface VarianceRow {
   receiptsQty:   number;
   expectedConsumption: number;
   expectedEndingQty:   number | null;
+  /** On hand less what tickets still waiting at a screen hold (never below zero). */
   actualEndingQty:     number;
+  /** What tickets still waiting at a kitchen or bar screen hold; already taken off actualEndingQty. */
+  heldQty:             number;
   /** Actual on hand minus what the recipes say should be there. */
   deltaQty:            number | null;
   deltaPct:            number | null;
@@ -31,16 +36,25 @@ export interface MarginRow {
   productName:  string;
   qtySold:      number;
   revenue:      number;
+  /** Booked cost only: lines still waiting at a screen have none yet. */
   cogs:         number;
+  /** Revenue of the lines with a booked cost, less that cost. */
   grossMargin:  number;
   marginPct:    number | null;
+  /** Units still waiting at a kitchen or bar screen: sold, but their cost is booked only when marked ready. */
+  costPendingQty:     number;
+  /** What those units rang up to. In revenue, left out of grossMargin and marginPct. */
+  costPendingRevenue: number;
 }
 
 export interface DepletionRow {
   rawMaterialId: string;
   name:          string;
   unit:          string;
+  /** On hand less what tickets still waiting at a screen hold (never below zero). */
   currentStock:  number;
+  /** What tickets still waiting at a kitchen or bar screen hold; already taken off currentStock. */
+  heldQty:       number;
   avgDailyConsumption: number;
   /** Predicted days until stockout; null when consumption is zero. */
   daysUntilStockout: number | null;
@@ -122,6 +136,16 @@ export class InventoryReportsService {
       select: { rawMaterialId: true, quantity: true },
     });
     const currentByMat = new Map(currentInv.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+    /*
+      A ticket still waiting at a kitchen or bar screen is already in expected
+      consumption below -- it was sold -- but its ingredients leave the books
+      only when it is marked ready. Comparing against the book figure read
+      every open ticket as stock that should have gone and had not, which hid
+      a real shortage until the tickets were bumped. What they hold comes off
+      the actual figure, floored at zero the way the ready tap floors the book,
+      so the figure does not move when a ticket is bumped.
+    */
+    const held = await heldUsage(this.prisma, tenantId, [branchId], { rawMaterialIds: materials.map((m) => m.id) });
 
     /*
       Deliveries since the count, not since the date asked for. An ingredient
@@ -192,7 +216,8 @@ export class InventoryReportsService {
       const anchor          = anchorByMat.get(m.id) ?? null;
       const receipts        = receiptsByMat.get(m.id) ?? 0;
       const expectedConsume = consumptionByMat.get(m.id) ?? 0;
-      const actualEnd       = currentByMat.get(m.id) ?? 0;
+      const heldQty         = heldAt(held, branchId, m.id);
+      const actualEnd       = availableQty(currentByMat.get(m.id) ?? 0, heldQty);
       if (!anchor) {
         return {
           rawMaterialId: m.id, name: m.name, unit: m.unit,
@@ -202,6 +227,7 @@ export class InventoryReportsService {
           expectedConsumption: round(expectedConsume),
           expectedEndingQty: null,
           actualEndingQty: round(actualEnd),
+          heldQty: round(heldQty),
           deltaQty: null,
           deltaPct: null,
           cannotTell: 'Never counted. Count this ingredient once and every count after it shows what went missing in between.',
@@ -221,6 +247,7 @@ export class InventoryReportsService {
         expectedConsumption: round(expectedConsume),
         expectedEndingQty:   round(expectedEndingQty),
         actualEndingQty:     round(actualEnd),
+        heldQty:             round(heldQty),
         deltaQty:            round(deltaQty),
         deltaPct:            deltaPct == null ? null : Math.round(deltaPct * 100) / 100,
         cannotTell:          null,
@@ -230,8 +257,9 @@ export class InventoryReportsService {
 
   /**
    * Per-product margin: revenue (sum of lineTotal) vs COGS (sum of qty × costPrice)
-   * over the window. Pulls COGS from OrderItem.costPrice (frozen at sale time);
-   * falls back to 0 when absent.
+   * over the window. Pulls COGS from OrderItem.costPrice (frozen at sale time,
+   * or at the ready tap for a line that waited at a screen); falls back to 0
+   * when absent.
    */
   async margin(tenantId: string, from?: string, to?: string): Promise<MarginRow[]> {
     const { fromD, toD } = this.parseRange(from, to);
@@ -240,21 +268,23 @@ export class InventoryReportsService {
         order: { tenantId, deletedAt: null, ...SOLD, createdAt: { gte: fromD, lte: toD } },
       },
       select: {
-        productId:   true,
-        productName: true,
-        quantity:    true,
-        lineTotal:   true,
-        costPrice:   true,
-        refundedQty: true,
+        productId:     true,
+        productName:   true,
+        quantity:      true,
+        lineTotal:     true,
+        costPrice:     true,
+        refundedQty:   true,
+        usageOnReady:  true,
+        usagePostedAt: true,
       },
     });
 
     const agg = new Map<string, MarginRow>();
+    const costedRevenue = new Map<string, number>();
     for (const it of items) {
       const qtyNet = Number(it.quantity) - Number(it.refundedQty);
       if (qtyNet <= 0) continue;
       const revenue = Number(it.lineTotal) * (qtyNet / Number(it.quantity || 1));
-      const cogs    = Number(it.costPrice ?? 0) * qtyNet;
       const existing = agg.get(it.productId) ?? {
         productId:   it.productId,
         productName: it.productName,
@@ -263,12 +293,27 @@ export class InventoryReportsService {
         cogs:        0,
         grossMargin: 0,
         marginPct:   null,
+        costPendingQty:     0,
+        costPendingRevenue: 0,
       };
       existing.qtySold     += qtyNet;
       existing.revenue     += revenue;
-      existing.cogs        += cogs;
-      existing.grossMargin  = existing.revenue - existing.cogs;
-      existing.marginPct    = existing.revenue !== 0 ? (existing.grossMargin / existing.revenue) * 100 : null;
+      if (stillWaiting(it)) {
+        /*
+          Still waiting at a kitchen or bar screen: its cost is booked when it
+          is marked ready, from the recipe and stock as they are then. The cost
+          on the line until then is only the till's guess, so it stays out of
+          cost and margin and is reported as pending instead.
+        */
+        existing.costPendingQty     += qtyNet;
+        existing.costPendingRevenue += revenue;
+      } else {
+        existing.cogs += Number(it.costPrice ?? 0) * qtyNet;
+        costedRevenue.set(it.productId, (costedRevenue.get(it.productId) ?? 0) + revenue);
+      }
+      const costed = costedRevenue.get(it.productId) ?? 0;
+      existing.grossMargin  = costed - existing.cogs;
+      existing.marginPct    = costed !== 0 ? (existing.grossMargin / costed) * 100 : null;
       agg.set(it.productId, existing);
     }
     return Array.from(agg.values()).sort((a, b) => b.revenue - a.revenue);
@@ -276,8 +321,9 @@ export class InventoryReportsService {
 
   /**
    * Depletion forecast: avg daily raw-material consumption over the last 30
-   * days (from BOM × OrderItem) divided into current stock. Only includes
-   * materials with `lotsTracked=true`.
+   * days (from BOM × OrderItem) divided into current stock, less what tickets
+   * still waiting at a screen hold. Only includes materials with
+   * `lotsTracked=true`.
    */
   async depletionForecast(tenantId: string, branchId: string | undefined): Promise<DepletionRow[]> {
     if (!branchId) throw new BadRequestException('branchId is required.');
@@ -296,6 +342,12 @@ export class InventoryReportsService {
       select: { rawMaterialId: true, quantity: true },
     });
     const stockByMat = new Map(inv.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+    /*
+      Milk promised to tickets still waiting at a screen is on the shelf but
+      not there to sell: it leaves the moment they are marked ready. Counting
+      it pushed the stockout later than it will really come.
+    */
+    const held = await heldUsage(this.prisma, tenantId, [branchId], { rawMaterialIds: materials.map((m) => m.id) });
 
     const items = await this.prisma.orderItem.findMany({
       where: {
@@ -322,12 +374,14 @@ export class InventoryReportsService {
     return materials.map((m) => {
       const total = consumeByMat.get(m.id) ?? 0;
       const avg   = total / days;
-      const stock = stockByMat.get(m.id) ?? 0;
+      const heldQty = heldAt(held, branchId, m.id);
+      const stock = availableQty(stockByMat.get(m.id) ?? 0, heldQty);
       return {
         rawMaterialId:       m.id,
         name:                m.name,
         unit:                m.unit,
         currentStock:        stock,
+        heldQty,
         avgDailyConsumption: avg,
         daysUntilStockout:   avg > 0 ? stock / avg : null,
       };

@@ -239,7 +239,7 @@ const SECTIONS: HelpSection[] = [
             <li>If you&apos;re a CASHIER, a yellow <strong>Supervisor authorisation required</strong> box appears with a PIN input.</li>
             <li>Hand the device to your manager (Sales Lead, Branch Manager, or Owner). They tap their 4-6 digit PIN into the box.</li>
             <li>Tap <strong>Confirm Void</strong>. System verifies the PIN, identifies the supervisor, and logs the void with both names.</li>
-            <li>The journal entry is reversed. Inventory is restocked. Audit log captures: order #, reason, cashier name, supervisor name, timestamp.</li>
+            <li>The journal entry is reversed. Shelf items go back to stock. Kitchen or bar items not yet marked ready were never made, so their ingredients were never used; items already made are recorded as waste. Audit log captures: order #, reason, cashier name, supervisor name, timestamp.</li>
           </ol>
         ),
       },

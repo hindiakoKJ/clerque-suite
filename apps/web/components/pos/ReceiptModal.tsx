@@ -737,7 +737,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Voiding reverses the sale and is logged to the audit trail with your name and the reason below. Shelf items go back to stock; made-to-order items stay used, because their ingredients are gone. If part of the order was already refunded, only the rest is handed back. This cannot be undone.
+            Voiding reverses the sale and is logged to the audit trail with your name and the reason below. Shelf items go back to stock. An item the kitchen or bar has not marked ready was never made, so nothing of it is used; an item already made is recorded as waste. If part of the order was already refunded, only the rest is handed back. This cannot be undone.
           </p>
           <textarea
             value={voidReason}

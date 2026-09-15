@@ -63,6 +63,9 @@ describe('WarehouseService — transfers leave a trail and move lots', () => {
       accountingEvent: {
         create: jest.fn().mockImplementation((a: any) => { events.push(a.data); return Promise.resolve(a.data); }),
       },
+      // Nothing waits at a kitchen or bar screen here, so send holds nothing
+      // back; warehouse.held-stock.spec pins what a waiting ticket does.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const prisma: any = { $transaction: (fn: any) => fn(tx) };
     const svc = new WarehouseService(prisma, undefined as any);

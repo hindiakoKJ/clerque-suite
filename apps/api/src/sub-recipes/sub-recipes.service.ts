@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, Optional } from '@n
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { availableQty, heldUsage } from '../orders/held-usage';
 import { canPrepAtStation, rotationFromBoard, useByOf, prepStatusOf, PREP_STATUS_ORDER, type PrepLot } from '@repo/shared-types';
 
 /**
@@ -155,7 +156,10 @@ export class SubRecipesService {
       ...rows.map((r) => r.id),
       ...rows.flatMap((r) => r.subRecipeItems.map((l) => l.rawMaterial.id)),
     ])];
-    const stock = await this.stockOf(branchId, allIds);
+    // Every figure below decides something -- what to prep, whether it is time,
+    // how many plates are left -- so all of it reads what is free, not the book.
+    const { available: stock, held } = await this.stockOf(tenantId, branchId, allIds);
+    const heldOf = (id: string) => held.get(id) ?? 0;
     const prepById = new Map(rows.map((r) => [r.id, r]));
 
     /*
@@ -341,13 +345,25 @@ export class SubRecipesService {
         && r.batchYield != null
         && Math.abs(Number(only.quantity) - Number(r.batchYield)) < 1e-6;
 
+      /*
+        What is left to serve from. A plate sold and still waiting at the
+        kitchen screen has not taken its sauce off the books yet, but that
+        sauce is gone as far as the next plate is concerned: counting it would
+        show the tub above par, the rotation "OK" and ten plates left while it
+        is really at five.
+      */
+      const onHand = availableQty(Number(r.inventory[0]?.quantity ?? 0), heldOf(r.id));
+
       return {
         id:            r.id,
         name:          r.name,
         unit:          r.unit,
         costPrice:     r.costPrice != null ? Number(r.costPrice) : null,
         batchYield:    r.batchYield != null ? Number(r.batchYield) : null,
-        onHand:        Number(r.inventory[0]?.quantity ?? 0),
+        /** On hand less what tickets waiting at a screen hold; never below zero. */
+        onHand,
+        /** Still on the books but promised to tickets waiting at a screen. */
+        heldQty:       heldOf(r.id),
         /**
          * When to start the next batch, and whether it is time.
          *
@@ -372,8 +388,7 @@ export class SubRecipesService {
           ? 1 as const
           : feedsAnotherPrep.has(r.id) ? 2 as const : null,
         parLevel:      r.lowStockAlert != null ? Number(r.lowStockAlert) : null,
-        belowPar:      r.lowStockAlert != null
-                        && Number(r.inventory[0]?.quantity ?? 0) <= Number(r.lowStockAlert),
+        belowPar:      r.lowStockAlert != null && onHand <= Number(r.lowStockAlert),
         /**
          * 'MOVE' when this is the same thing in a different state — thawed,
          * decanted, portioned — and 'MAKE' when it is genuinely produced from
@@ -395,7 +410,7 @@ export class SubRecipesService {
             productId:    b.product.id,
             productName:  b.product.name,
             perServing:   Number(b.quantity),
-            servingsLeft: Math.floor(Number(r.inventory[0]?.quantity ?? 0) / Number(b.quantity)),
+            servingsLeft: Math.floor(onHand / Number(b.quantity)),
           }))
           .sort((a, b) => a.servingsLeft - b.servingsLeft),
         /*
@@ -431,7 +446,9 @@ export class SubRecipesService {
           name:          l.rawMaterial.name,
           unit:          l.rawMaterial.unit,
           quantity:      Number(l.quantity),
+          /** Free to go into a batch: on hand less what waiting tickets hold. */
           onHand:        stock.get(l.rawMaterial.id) ?? 0,
+          heldQty:       heldOf(l.rawMaterial.id),
           /** True when this component is itself something the shop preps. */
           isPrep:        prepById.has(l.rawMaterial.id),
         })),
@@ -793,7 +810,9 @@ export class SubRecipesService {
     if (rm.subRecipeItems.length === 0 || rm.batchYield == null) {
       return { batches: null, limitedBy: null, yieldPerBatch: null };
     }
-    const stock = await this.stockOf(branchId, rm.subRecipeItems.map((l) => l.rawMaterial.id));
+    // What is free, not the book: sugar a sold ticket still has to take cannot
+    // go into syrup as well.
+    const { available: stock } = await this.stockOf(tenantId, branchId, rm.subRecipeItems.map((l) => l.rawMaterial.id));
 
     let batches = Number.POSITIVE_INFINITY;
     let limitedBy: string | null = null;
@@ -904,20 +923,33 @@ export class SubRecipesService {
       station = { id: prepStation.id, name: prepStation.name, kind: String(prepStation.kind) };
     }
 
-    const stock  = await this.stockOf(dto.branchId, rm.subRecipeItems.map((l) => l.rawMaterial.id));
+    /*
+      Checked against what is free, not the book. A ticket waiting at the
+      kitchen screen has not taken its ingredients yet, and a batch that used
+      them would leave that ticket to be made from stock that is already syrup.
+      The writes below stay relative to the book: the ticket takes its share
+      when it is marked ready.
+    */
+    const { available: stock, held } = await this.stockOf(tenantId, dto.branchId, rm.subRecipeItems.map((l) => l.rawMaterial.id));
     const short  = rm.subRecipeItems
       .map((l) => ({
         name:   l.rawMaterial.name,
         unit:   l.rawMaterial.unit,
         need:   Number(l.quantity) * batches,
         have:   stock.get(l.rawMaterial.id) ?? 0,
+        held:   held.get(l.rawMaterial.id) ?? 0,
       }))
       .filter((l) => l.have < l.need);
     if (short.length) {
       const worst = short[0];
+      // Said when it is the reason, so a cook looking at a full shelf is not
+      // told there is less than they can see without being told why.
+      const kept = worst.held > 0
+        ? ` free -- another ${worst.held} ${worst.unit} is kept for tickets still waiting at a kitchen or bar screen`
+        : '';
       throw new BadRequestException(
         `Not enough ${worst.name}: ${batches} batch(es) needs ${worst.need} ${worst.unit}, ` +
-        `and there is ${worst.have}. Receive more before recording this.`,
+        `and there is ${worst.have}${kept}. Receive more before recording this.`,
       );
     }
 
@@ -1191,12 +1223,37 @@ export class SubRecipesService {
     }, { timeout: 30_000, maxWait: 10_000 });
   }
 
-  private async stockOf(branchId: string, ids: string[]): Promise<Map<string, number>> {
-    if (ids.length === 0) return new Map();
-    const rows = await this.prisma.rawMaterialInventory.findMany({
-      where:  { branchId, rawMaterialId: { in: ids } },
-      select: { rawMaterialId: true, quantity: true },
-    });
-    return new Map(rows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+  /**
+   * What each ingredient at one branch is free for, and what is held of it.
+   *
+   * Under the deduct-on-ready rule a sold line waiting at a kitchen or bar
+   * screen takes its ingredients when it is marked ready, so until then the
+   * book still counts them. Everything this service reads stock for decides
+   * something -- what can be prepped, whether it is time, how many plates are
+   * left, whether a batch may be recorded -- so it gets the book less that
+   * hold. Only the batch's own writes and its cost blend use the book, and they
+   * read it inside the transaction.
+   *
+   * `held` is for this branch only; tickets at another branch hold their own
+   * branch's stock.
+   */
+  private async stockOf(
+    tenantId: string,
+    branchId: string,
+    ids: string[],
+  ): Promise<{ available: Map<string, number>; held: Map<string, number> }> {
+    if (ids.length === 0) return { available: new Map(), held: new Map() };
+    const [rows, heldMap] = await Promise.all([
+      this.prisma.rawMaterialInventory.findMany({
+        where:  { branchId, rawMaterialId: { in: ids } },
+        select: { rawMaterialId: true, quantity: true },
+      }),
+      heldUsage(this.prisma, tenantId, [branchId], { rawMaterialIds: ids }),
+    ]);
+    const held = heldMap.get(branchId) ?? new Map<string, number>();
+    return {
+      available: new Map(rows.map((r) => [r.rawMaterialId, availableQty(Number(r.quantity), held.get(r.rawMaterialId) ?? 0)])),
+      held,
+    };
   }
 }

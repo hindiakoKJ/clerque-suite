@@ -22,6 +22,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
+import { heldUsage, heldAt, availableQty } from '../orders/held-usage';
 
 @Injectable()
 export class NotificationsScheduler {
@@ -147,11 +148,19 @@ export class NotificationsScheduler {
       const toMake:  string[] = [];
       let unwatched = 0;
 
+      /*
+        Tickets still waiting at a kitchen or bar screen have not taken their
+        ingredients yet, but they will. The 02:30 job confirms yesterday's, so
+        what is left here is the night's late tickets -- and milk promised to
+        them is not milk the morning can use.
+      */
+      const held = await heldUsage(this.prisma, tenantId, branches.map((b) => b.id));
+
       for (const b of branches) {
         const rows = await this.prisma.rawMaterial.findMany({
           where:  { tenantId, isActive: true },
           select: {
-            name: true, unit: true, lowStockAlert: true,
+            id: true, name: true, unit: true, lowStockAlert: true,
             inventory: { where: { branchId: b.id }, select: { quantity: true } },
             // Something the shop MAKES is not something to go and buy, and a
             // parked batch is empty by design for half its life -- alerting on
@@ -172,7 +181,7 @@ export class NotificationsScheduler {
           },
         });
         for (const r of rows) {
-          const onHand = Number(r.inventory[0]?.quantity ?? 0);
+          const onHand = availableQty(Number(r.inventory[0]?.quantity ?? 0), heldAt(held, b.id, r.id));
           const level  = r.lowStockAlert != null ? Number(r.lowStockAlert) : null;
           const where  = branches.length > 1 ? ` (${b.name})` : '';
           const isPrep = r.subRecipeItems.length > 0;

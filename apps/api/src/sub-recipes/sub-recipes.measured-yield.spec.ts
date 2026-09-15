@@ -49,6 +49,8 @@ describe('SubRecipesService.makeBatch — what actually came out', () => {
       },
       branch:  { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       station: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'soy', quantity: 999999 }]) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },

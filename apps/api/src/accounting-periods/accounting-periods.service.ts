@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreatePeriodDto } from './dto/create-period.dto';
+import { manilaEndOfDay, ticketsHoldingMessage, ticketsHoldingPeriod } from './kitchen-tickets';
 export { CreatePeriodDto };
 
 @Injectable()
@@ -120,6 +121,11 @@ export class AccountingPeriodsService {
         'try again shortly, or review them under Ledger → Accounting Events.',
       );
     }
+
+    // Kitchen/bar tickets book their cost when marked ready, dated to the sale (kitchen-tickets.ts).
+    const tickets = await ticketsHoldingPeriod(this.prisma, tenantId, manilaEndOfDay(period.endDate));
+    const ticketsMessage = ticketsHoldingMessage('this period', tickets);
+    if (ticketsMessage) throw new BadRequestException(ticketsMessage);
 
     const updated = await this.prisma.accountingPeriod.update({
       where: { id: periodId },
@@ -313,6 +319,17 @@ export class AccountingPeriodsService {
       count: pendingClaims,
       hint: pendingClaims > 0 ? `${pendingClaims} pending approval.` : 'All processed.',
       link: '/ledger/expense-approvals',
+    });
+
+    const tickets = await ticketsHoldingPeriod(this.prisma, tenantId, manilaEndOfDay(period.endDate));
+    checks.push({
+      id: 'kitchen-tickets', group: 'Transactions',
+      title: 'Kitchen and bar tickets marked ready',
+      detail: 'A kitchen or bar item books its cost when it is marked ready, dated to the sale. Items sold in the period that are still waiting would be locked out of it.',
+      status: tickets.waiting + tickets.unposted === 0 ? 'PASS' : 'FAIL',
+      count: tickets.waiting + tickets.unposted,
+      hint: ticketsHoldingMessage('the period', tickets) ?? 'Nothing waiting.',
+      link: '/pos/orders',
     });
 
     // ── Group: ACCOUNTING ─────────────────────────────────────────────────

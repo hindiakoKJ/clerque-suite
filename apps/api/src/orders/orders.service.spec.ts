@@ -47,7 +47,8 @@ function makePrismaMock() {
         orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
         inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null) },
         inventoryLog:    { create: jest.fn() },
-        accountingEvent: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
+        // Voids read every cost entry of the order (the sale's, and any from a ready tap).
+        accountingEvent: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]) },
         orderPayment:    { findMany: jest.fn().mockResolvedValue([]) },
         // Nothing refunded on these orders before the void.
         orderItemRefund: { aggregate: jest.fn().mockResolvedValue({ _sum: { refundAmount: null } }) },

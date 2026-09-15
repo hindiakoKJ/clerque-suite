@@ -64,6 +64,8 @@ describe('Purchase costs — whose eyes', () => {
         rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
         cycleCount:           { findMany: jest.fn().mockResolvedValue([]) },
         cycleCountLine:       { findMany: jest.fn().mockResolvedValue([]) },
+        // Tickets waiting at a screen: none, so on hand is the book.
+        orderItem:            { findMany: jest.fn().mockResolvedValue([]) },
       };
       return { svc: new ProcureService(prisma, {} as any), prisma };
     }

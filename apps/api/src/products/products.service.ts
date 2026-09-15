@@ -1,8 +1,22 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { productCeiling, LimitedBy } from './recipe-ceiling';
+import { heldUsage, heldAt, availableQty, HeldMap } from '../orders/held-usage';
 import { Prisma, DrugClass } from '@prisma/client';
 import { hasPermission, planFeaturesFor } from '@repo/shared-types';
+
+/**
+ * An ingredient's stock as the menu may count it: on hand less what tickets
+ * waiting at a kitchen or bar screen have already spoken for.
+ *
+ * The milk for a latte still at the bar is on the books until the ready tap,
+ * but the next customer cannot have it. With nothing held the book figure
+ * passes through untouched, so a shop with no waiting tickets sees exactly the
+ * numbers it saw before.
+ */
+function freeStock(onHand: number, held: number): number {
+  return held > 0 ? availableQty(onHand, held) : onHand;
+}
 
 /**
  * Sprint 19 — Single source of truth for the Product.isRxRequired and
@@ -68,11 +82,17 @@ export class ProductsService {
    *
    * For UNIT_BASED products: stock = InventoryItem.quantity at the branch.
    * For RECIPE_BASED products: stock = maxProducible = MIN(rawMatStock / bom.qty)
-   *   across all BOM lines. Same derivation as findForPos() so the management
-   *   table and the cashier terminal agree on what's sellable.
+   *   across all BOM lines, where rawMatStock is on hand less what waiting
+   *   kitchen/bar tickets hold. Same derivation as findForPos() so the
+   *   management table and the cashier terminal agree on what's sellable.
+   *   The products page labels this number "max" -- a ceiling, never a count
+   *   of anything on a shelf -- so it follows the free figure rather than the
+   *   book. A UNIT_BASED product's shelf stock is never held (only
+   *   ingredients wait for the ready tap), so it stays the book quantity.
    *
    * branchId is optional — when omitted, stock is null (mostly for accountants
-   * / multi-branch supervisors who don't have a branch context).
+   * / multi-branch supervisors who don't have a branch context), so there is
+   * no ceiling to take holds from either.
    */
   async findAll(tenantId: string, includeInactive = false, branchId?: string) {
     const products = await this.prisma.product.findMany({
@@ -112,11 +132,18 @@ export class ProductsService {
 
         // Stocks (only when a branch is in scope — used for max-producible)
         if (branchId) {
+          const rawMaterialIds = Array.from(allRmIds);
           const stockRows = await this.prisma.rawMaterialInventory.findMany({
-            where:  { branchId, rawMaterialId: { in: Array.from(allRmIds) } },
+            where:  { branchId, rawMaterialId: { in: rawMaterialIds } },
             select: { rawMaterialId: true, quantity: true },
           });
-          rmStockMap = new Map(stockRows.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+          // The till counts from on hand less held; without the same here the
+          // table would say 20 lattes while the till says 18.
+          const held = await heldUsage(this.prisma, tenantId, [branchId], { rawMaterialIds });
+          rmStockMap = new Map(stockRows.map((r) => [
+            r.rawMaterialId,
+            freeStock(Number(r.quantity), heldAt(held, branchId, r.rawMaterialId)),
+          ]));
         }
       }
     }
@@ -660,6 +687,9 @@ export class ProductsService {
    * stock — instead we compute "maxProducible" = MIN(ingredient.stock / bom.qty)
    * across all BOM lines. When chocolate syrup runs out, every drink that uses
    * chocolate syrup automatically shows "0 left" because it's a derived value.
+   * ingredient.stock is on hand less what tickets still waiting at a kitchen or
+   * bar screen hold, since those drinks have been sold and will take it at the
+   * ready tap.
    *
    * The terminal uses this number to:
    *   - Show "X left" badge on each tile
@@ -807,6 +837,16 @@ export class ProductsService {
     }
 
     let rmStockMap = new Map<string, number>();
+    /*
+      What waiting tickets at this branch hold, per ingredient.
+
+      Six lattes paid and still at the bar have not taken their milk yet, so
+      the book still counts it. Counting from the book, the tile would offer
+      those cups a second time and the next sale would be refused against the
+      same milk. Loaded for every ingredient (the helper reads all waiting
+      lines either way), so the parked-prep hint below reads the same holds.
+    */
+    let held: HeldMap = new Map();
     if (allRawMaterialIds.size > 0 && branchId) {
       const rmInventory = await this.prisma.rawMaterialInventory.findMany({
         where: {
@@ -815,8 +855,19 @@ export class ProductsService {
         },
         select: { rawMaterialId: true, quantity: true },
       });
-      rmStockMap = new Map(rmInventory.map((r) => [r.rawMaterialId, Number(r.quantity)]));
+      held = await heldUsage(this.prisma, tenantId, [branchId]);
+      rmStockMap = new Map(rmInventory.map((r) => [
+        r.rawMaterialId,
+        freeStock(Number(r.quantity), heldAt(held, branchId, r.rawMaterialId)),
+      ]));
     }
+    // The limiting line's `stock` is the free figure the count came from; `held`
+    // says how much more is on the books, spoken for by waiting tickets. Only
+    // added when something is held, so an idle kitchen changes nothing.
+    const withHeld = (limit: LimitedBy): (NonNullable<LimitedBy> & { held?: number }) | null => {
+      const onTickets = limit ? heldAt(held, branchId, limit.rawMaterialId) : 0;
+      return limit && onTickets > 0 ? { ...limit, held: onTickets } : limit;
+    };
 
     const tiles = products.map((p) => {
       let maxProducible: number | null = null;
@@ -843,8 +894,8 @@ export class ProductsService {
         */
         const ceiling = productCeiling(p, (id) => rmStockMap.get(id) ?? 0);
         maxProducible   = ceiling.maxProducible;
-        limitedBy       = ceiling.limitedBy;
-        variantCeilings = ceiling.variantCeilings;
+        limitedBy       = withHeld(ceiling.limitedBy);
+        variantCeilings = ceiling.variantCeilings.map((v) => ({ ...v, limitedBy: withHeld(v.limitedBy) }));
       } else {
         // UNIT_BASED: same as before — finished-goods inventory at branch.
         const inv = p.inventory[0];
@@ -883,7 +934,7 @@ export class ProductsService {
           : null,
         maxProducible,
         // Null for unit-based products — nothing limits them but themselves.
-        limitedBy: limitedBy as (LimitedBy & { backup?: ParkedBackup }) | null,
+        limitedBy: limitedBy as (LimitedBy & { backup?: ParkedBackup; held?: number }) | null,
         // Empty unless a size carries its own recipe.
         variantCeilings,
         isLowStock,
@@ -901,7 +952,7 @@ export class ProductsService {
       move one across.
     */
     const limiters = [...new Set(tiles.map((t) => t.limitedBy?.rawMaterialId).filter((x): x is string => !!x))];
-    const parked = await this.parkedBehind(tenantId, branchId, limiters);
+    const parked = await this.parkedBehind(tenantId, branchId, limiters, held);
     for (const t of tiles) {
       const backup = t.limitedBy ? parked.get(t.limitedBy.rawMaterialId) : undefined;
       if (backup && t.limitedBy) t.limitedBy = { ...t.limitedBy, backup };
@@ -913,8 +964,10 @@ export class ProductsService {
    * For each ready-to-use prep, the parked prep behind it and how much of that
    * is on hand at the branch -- only where some is. A hint on the tile, so a
    * failure here costs the hint, never the till.
+   *
+   * `held` is what waiting tickets at the branch hold (see findForPos).
    */
-  private async parkedBehind(tenantId: string, branchId: string, prepIds: string[]): Promise<Map<string, ParkedBackup>> {
+  private async parkedBehind(tenantId: string, branchId: string, prepIds: string[], held: HeldMap): Promise<Map<string, ParkedBackup>> {
     const out = new Map<string, ParkedBackup>();
     if (prepIds.length === 0 || !branchId) return out;
     try {
@@ -941,7 +994,11 @@ export class ProductsService {
       for (const l of links) {
         const onHand = Number(stock.find((s) => s.rawMaterialId === l.rawMaterial.id)?.quantity ?? 0);
         // Enough parked for a whole move: a part tub cannot be recorded on the board.
-        if (onHand >= Number(l.quantity) && !out.has(l.parentRawMaterialId)) {
+        // Judged on what is free: a tub a waiting ticket already counts on cannot
+        // be moved across whole. `onHand` stays the book figure -- the tub is
+        // physically there, and that is what the hint tells the cashier.
+        const free = freeStock(onHand, heldAt(held, branchId, l.rawMaterial.id));
+        if (free >= Number(l.quantity) && !out.has(l.parentRawMaterialId)) {
           out.set(l.parentRawMaterialId, { rawMaterialId: l.rawMaterial.id, name: l.rawMaterial.name, unit: l.rawMaterial.unit, onHand });
         }
       }

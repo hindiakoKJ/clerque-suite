@@ -319,7 +319,7 @@ export class BuyListsExcelService {
       try {
         await this.procure.recordBought(tenantId, requestId,
           group.map((v) => ({ lineId: v.lineId, packsBought: v.packsBought, packSize: v.packSize, packCost: v.packCost, brandNote: v.brandNote ?? undefined })),
-          actor, { boughtAt: group.find((v) => v.boughtOn)?.boughtOn ?? undefined });
+          actor, { boughtAt: group.find((v) => v.boughtOn)?.boughtOn ?? undefined, quiet: true });
         mark('done');
       } catch (err) {
         mark('failed', err instanceof Error ? err.message : 'Could not record these lines.');

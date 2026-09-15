@@ -45,6 +45,7 @@ import { AiModule } from './ai/ai.module';
 import { LedgerMetricsModule } from './ledger-metrics/ledger-metrics.module';
 import { SimpleEntriesModule } from './simple-entries/simple-entries.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { TelegramModule } from './telegram/telegram.module';
 import { BankReconciliationModule } from './bank-recon/bank-recon.module';
 import { JournalTemplatesModule } from './journal-templates/journal-templates.module';
 import { AdminModule } from './admin/admin.module';
@@ -138,6 +139,7 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     LedgerMetricsModule,
     SimpleEntriesModule,
     NotificationsModule,
+    TelegramModule,
     BankReconciliationModule,
     JournalTemplatesModule,
     AdminModule,

@@ -548,6 +548,8 @@ export class UsersService {
           separationReason:       (reason?.trim() ?? 'Deprovisioned').slice(0, 240),
         },
       });
+      // Their phone stops being a place this shop's alerts could go, even if the account is switched back on.
+      await tx.telegramLink.updateMany({ where: { userId: id }, data: { chatId: null, telegramUsername: null } });
       return revoked.count;
     });
     // Audit D3-07 — dedicated USER_DEPROVISIONED action (replaces the prior

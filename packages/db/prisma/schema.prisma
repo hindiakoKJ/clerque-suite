@@ -719,6 +719,7 @@ model Tenant {
   autoBackupConfigJson       Json                       @default("{}")
   documentSequences          DocumentNumberSequence[]
   notifications              Notification[]
+  telegramLinks              TelegramLink[]
   bankReconciliations        BankReconciliation[]
   journalTemplates           JournalTemplate[]
   laundryOrders              LaundryOrder[]
@@ -1080,6 +1081,7 @@ model User {
   timeEntries              TimeEntry[]
   payslips                 Payslip[]
   notifications            Notification[]
+  telegramLink             TelegramLink?
   bankReconciliations      BankReconciliation[]
   orderItemRefunds         OrderItemRefund[]
   leaveRequests            LeaveRequest[]       @relation("UserLeaves")
@@ -4084,6 +4086,37 @@ model Notification {
   @@index([tenantId, userId, readAt])
   @@index([tenantId, createdAt])
   @@map("notifications")
+}
+
+/// A Clerque user's private Telegram chat, for alerts on their phone.
+///
+/// Linked only from inside the user's own shop: Clerque hands the signed-in
+/// owner or manager a one-time code, they open the bot with it, and the bot
+/// stores the chat against that user of that shop. Nobody types a chat
+/// number, so one shop's sales cannot be routed to another shop's owner by a
+/// typo. Alerts for a shop go to the chats of its own active owners and
+/// managers, re-checked at every send. One chat per user; linking again
+/// replaces it. Unlinking clears the chat but keeps the row, so linkedAt
+/// still marks every code issued before it as used -- across restarts.
+model TelegramLink {
+  id               String   @id @default(cuid())
+  tenantId         String
+  userId           String   @unique
+  /// Telegram's private chat id. A string: it can exceed a 32-bit integer.
+  /// Null once unlinked.
+  chatId           String?
+  telegramUsername String?
+  /// The person can mute each kind without unlinking.
+  alertSales       Boolean  @default(true)
+  alertBuying      Boolean  @default(true)
+  linkedAt         DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([chatId])
+  @@map("telegram_links")
 }
 
 /// Bank reconciliation — match a bank statement to GL cash account entries.

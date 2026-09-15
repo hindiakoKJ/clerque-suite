@@ -558,6 +558,25 @@ describe('ProcureReceiptsService', () => {
     expect(docs).toHaveLength(1);
   });
 
+  it('saved onto a sent list without a photo or posting, it tells Telegram it was bought -- once', async () => {
+    const { svc } = build({ kitchen: kitchen() });
+    const alerts = { bought: jest.fn(), purchasePhoto: jest.fn(), postedToStock: jest.fn() };
+    (svc as any).telegramAlerts = alerts;
+    await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k9', postNow: false, receiptDate: '2026-09-04' });
+    await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', idempotencyKey: 'k9', postNow: false, receiptDate: '2026-09-04' });
+    expect(alerts.bought).toHaveBeenCalledTimes(1);
+    expect(alerts.bought).toHaveBeenCalledWith(TENANT, 'req-k', USER);
+  });
+
+  it('with a photo, the photo alert says it instead of a second message', async () => {
+    const { svc } = build({ kitchen: kitchen() });
+    const alerts = { bought: jest.fn(), purchasePhoto: jest.fn(), postedToStock: jest.fn() };
+    (svc as any).telegramAlerts = alerts;
+    await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', postNow: false, receiptDate: '2026-09-04', imageBase64: 'AAAA' });
+    expect(alerts.bought).not.toHaveBeenCalled();
+    expect(alerts.purchasePhoto).toHaveBeenCalledWith(TENANT, 'req-k', Buffer.from('AAAA', 'base64'), 'image/jpeg', 'Receipt', USER);
+  });
+
   it('record-only with paid-ahead posts the money into 1063 now, fees too, and tags the request', async () => {
     const { svc, received, requests, entries } = build({ kitchen: kitchen() });
     const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', postNow: false, paidAhead: true, paymentMethod: 'BANK', receiptDate: '2026-09-04' });

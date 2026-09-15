@@ -1188,6 +1188,8 @@ export class PayrollService {
       });
       // Revoke active sessions — the credential is now inert.
       await tx.userSession.deleteMany({ where: { userId: targetUserId } });
+      // And their Telegram stops getting this shop's alerts, even if the separation is reversed later.
+      await tx.telegramLink.updateMany({ where: { userId: targetUserId }, data: { chatId: null, telegramUsername: null } });
       return updated;
     });
   }

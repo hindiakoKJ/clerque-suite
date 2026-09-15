@@ -7,7 +7,7 @@ import {
   ChevronDown, Shield, FileText, AlertTriangle, Info,
   KeyRound, Eye, EyeOff, ShieldCheck,
   LayoutGrid, CreditCard, ShieldAlert, ChevronRight, Sparkles,
-  Stamp, Tv, FileSpreadsheet, Database, BookOpen,
+  Stamp, Tv, FileSpreadsheet, Database, BookOpen, Send,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -456,6 +456,15 @@ export default function SettingsPage() {
                 icon={ShieldAlert}
                 title="SOD Violations"
                 desc="Audit-trail of permission overrides"
+              />
+            )}
+            {/* Telegram alerts: each owner or branch manager links their own phone. */}
+            {(isOwner || user?.role === 'BRANCH_MANAGER') && (
+              <SettingsCard
+                href="/settings/telegram"
+                icon={Send}
+                title="Telegram alerts"
+                desc="Every sale and buying step on your phone"
               />
             )}
             {/* Sprint 19 — Stamp Cards: owner + branch manager (run promotions). */}

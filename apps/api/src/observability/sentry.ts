@@ -7,6 +7,9 @@ import { logger } from './logger';
  *
  * Call this once at app startup BEFORE NestFactory.create.
  */
+/** /bot<id>:<secret>/ -- the shape of a Telegram Bot API path. */
+const BOT_API_PATH = /\/bot\d+:[^/]+\//;
+
 export function initSentry(): void {
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) {
@@ -22,6 +25,15 @@ export function initSentry(): void {
     // Don't ship PII unless explicitly opted in. Keep PH BIR-sensitive fields
     // out of error reports unless we add explicit scrubbing per release.
     sendDefaultPii:     false,
+    // The Telegram bot token is part of every Bot API URL. Without this, each
+    // call became a fetch breadcrumb and span carrying the token into Sentry.
+    integrations: [
+      Sentry.nativeNodeFetchIntegration({ ignoreOutgoingRequests: (url) => BOT_API_PATH.test(url) }),
+    ],
+    beforeBreadcrumb(crumb) {
+      const url = crumb.data?.url;
+      return typeof url === 'string' && BOT_API_PATH.test(url) ? null : crumb;
+    },
     // Filter known noise.
     beforeSend(event) {
       // Skip 4xx client errors — they're not actionable.

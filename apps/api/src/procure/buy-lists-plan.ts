@@ -1,3 +1,4 @@
+import { cleanSourceName, sourceKindFromLabel, SOURCE_KINDS, SOURCE_KIND_LABEL, type SourceKind } from '@repo/shared-types';
 import { unitFactor, normUnit } from '../inventory/unit-conversion';
 
 /**
@@ -5,8 +6,9 @@ import { unitFactor, normUnit } from '../inventory/unit-conversion';
  * is written.
  *
  * The Excel file is the backup, not a second front door: it may RECORD what
- * was bought -- fill in packs, pack size, price and brand on a line not yet
- * in stock, or add a purchase made away from the app -- and nothing more.
+ * was bought -- fill in packs, pack size, price, brand and where it was bought
+ * on a line not yet in stock, or add a purchase made away from the app -- and
+ * nothing more.
  * Stock goes in only when someone taps "Post to stock" on the request, and
  * money only moves in Clerque: anything that would correct a paid-ahead order
  * is refused here and done on the request.
@@ -34,10 +36,23 @@ export interface SheetRow {
   packUnit: string;
   pricePerPack: string;
   brand: string;
+  /** Where it was bought, in words: Palengke, Grocery, Online, Supplier, Other. */
+  boughtAt: string;
+  /** The store itself: "Puregold", "Shopee". */
+  store: string;
+  /** Excel turned what was typed under Store into a date ("7-11" became 11-Jul); what was typed cannot be recovered. */
+  storeIsDate?: boolean;
   /** A spare row's hidden key: once recorded, the purchase is found by it again. */
   rowKey: string;
-  /** What the row held when the file was downloaded; null for a file without those columns. */
-  was: { item: string; boughtOn: string; packs: string; packSize: string; pricePerPack: string; brand: string } | null;
+  /**
+   * What the row held when the file was downloaded; null for a file without
+   * those columns. boughtAt and store are absent on a file made before those
+   * columns existed.
+   */
+  was: {
+    item: string; boughtOn: string; packs: string; packSize: string; pricePerPack: string; brand: string;
+    boughtAt?: string; store?: string;
+  } | null;
 }
 
 /** A line already on a request, with what the sheet may compare against. */
@@ -62,6 +77,8 @@ export interface ExistingLine {
   packSize: number | null;
   packCost: number | null;
   brandNote: string | null;
+  sourceKind: string | null;
+  sourceName: string | null;
   boughtOn: string | null;
   receivedAt: Date | null;
 }
@@ -72,9 +89,11 @@ export interface SheetBranch { id: string; name: string }
 export type PlanVerdict =
   | { kind: 'UNCHANGED'; rowNumber: number; lineNumber: string; item: string }
   | { kind: 'FILL'; rowNumber: number; lineNumber: string; item: string; unit: string; lineId: string; requestId: string;
-      packsBought: number; packSize: number; packCost: number; brandNote: string | null; boughtOn: string | null }
+      packsBought: number; packSize: number; packCost: number; brandNote: string | null; boughtOn: string | null;
+      sourceKind: SourceKind | null; sourceName: string | null }
   | { kind: 'NEW'; rowNumber: number; item: string; unit: string; branchId: string; branchName: string; rawMaterialId: string; boughtOn: string;
-      packsBought: number; packSize: number; packCost: number; brandNote: string | null; rowKey: string | null }
+      packsBought: number; packSize: number; packCost: number; brandNote: string | null; rowKey: string | null;
+      sourceKind: SourceKind | null; sourceName: string | null }
   | { kind: 'REFUSED'; rowNumber: number; lineNumber: string; item: string; reason: string };
 
 export interface PlanInput {
@@ -112,6 +131,9 @@ function dayOf(raw: string): string | null | 'bad' {
 }
 
 const UNIT_HINT: Record<string, string> = { g: ' or kg', ml: ' or L' };
+const KIND_WORDS = SOURCE_KINDS.map((k) => SOURCE_KIND_LABEL[k]).join(', ');
+/** A stored kind, only when it is one of ours. */
+const kindOf = (v: string | null | undefined): SourceKind | null => (v && (SOURCE_KINDS as readonly string[]).includes(v) ? (v as SourceKind) : null);
 
 /**
  * Pack size in the ingredient's own unit. A pack typed "1" with unit "L" on a
@@ -143,7 +165,7 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
     const lineNumber = clean(row.lineNumber);
     const item = clean(row.item);
     const refuse = (reason: string): void => { out.push({ kind: 'REFUSED', rowNumber: row.rowNumber, lineNumber, item, reason }); };
-    const typedAnything = [row.boughtOn, row.packs, row.packSize, row.pricePerPack, row.brand].some((s) => clean(s) !== '');
+    const typedAnything = [row.boughtOn, row.packs, row.packSize, row.pricePerPack, row.brand, row.boughtAt, row.store].some((s) => clean(s) !== '');
     if (!lineNumber && !item && !typedAnything) continue;   // a blank row (Branch may be filled in for you)
 
     const packs = numberOf(row.packs);
@@ -151,13 +173,22 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
     const price = numberOf(row.pricePerPack);
     const bought = dayOf(row.boughtOn);
     const brand = clean(row.brand) || null;
+    // Blank keeps what Clerque has, the way a blank brand does.
+    const where = sourceKindFromLabel(row.boughtAt);
+    // Cut, then tidy, the way the app stores it: a cut on a space must not leave one behind.
+    const store = cleanSourceName(cleanSourceName(row.store)?.slice(0, 80));
     if ([packs, size, price].some((n) => Number.isNaN(n))) { refuse('Packs, pack size and price have to be numbers.'); continue; }
+    if (clean(row.boughtAt) && !where) { refuse(`Bought at has to be one of ${KIND_WORDS}.`); continue; }
+    if (row.storeIsDate) { refuse('Excel turned the Store into a date. Type the store again with an apostrophe in front, like \'7-11.'); continue; }
     if (bought === 'bad') { refuse('Bought on has to be a date (YYYY-MM-DD).'); continue; }
     if (bought && bought > input.today) { refuse('Bought on is in the future.'); continue; }
     const filled = [packs, size, price].filter((n) => n != null).length;
 
     /** A FILL, once it has passed the checks every fill must pass. */
-    const fill = (line: ExistingLine, next: { packsBought: number; packSize: number; packCost: number; brandNote: string | null; boughtOn: string | null }): void => {
+    const fill = (line: ExistingLine, next: {
+      packsBought: number; packSize: number; packCost: number; brandNote: string | null; boughtOn: string | null;
+      sourceKind: SourceKind | null; sourceName: string | null;
+    }): void => {
       const first = claimed.get(line.lineId);
       if (first != null) { refuse(`${line.lineNumber} (${line.itemName}) is filled on row ${first} too. Keep one row per purchase.`); return; }
       if (next.boughtOn) {
@@ -205,16 +236,23 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
         }
         const wasPacks = numberOf(row.was.packs), wasSize = numberOf(row.was.packSize), wasPrice = numberOf(row.was.pricePerPack);
         const wasBrand = clean(row.was.brand) || null, wasDay = dayOf(row.was.boughtOn);
+        // A file from before the store columns has nothing to compare them with, and nothing typed in them either.
+        const hasWasSource = row.was.boughtAt !== undefined && row.was.store !== undefined;
+        const wasWhere = hasWasSource ? sourceKindFromLabel(row.was.boughtAt) : null;
+        const wasStore = hasWasSource ? cleanSourceName(row.was.store) : null;
         const edited = (packs != null && !same(packs, wasPacks)) || (typedSize != null && !same(typedSize, wasSize))
           || (price != null && !same(price, wasPrice)) || (brand != null && brand !== wasBrand)
-          || (bought != null && bought !== wasDay);
+          || (bought != null && bought !== wasDay)
+          || (where != null && where !== wasWhere) || (store != null && store !== wasStore);
         if (!edited) { out.push({ kind: 'UNCHANGED', rowNumber: row.rowNumber, lineNumber, item: line.itemName }); continue; }
         // Edited in the file, and Clerque already says the same -- this file was uploaded before.
         const alreadyInClerque = (packs == null || same(packs, line.packsBought)) && (typedSize == null || same(typedSize, line.packSize))
-          && (price == null || same(price, line.packCost)) && (brand == null || brand === line.brandNote) && (bought == null || bought === line.boughtOn);
+          && (price == null || same(price, line.packCost)) && (brand == null || brand === line.brandNote) && (bought == null || bought === line.boughtOn)
+          && (where == null || where === kindOf(line.sourceKind)) && (store == null || store === cleanSourceName(line.sourceName));
         if (alreadyInClerque) { out.push({ kind: 'UNCHANGED', rowNumber: row.rowNumber, lineNumber, item: line.itemName }); continue; }
         const drifted = !same(line.packsBought, wasPacks) || !same(line.packSize, wasSize) || !same(line.packCost, wasPrice)
-          || (line.brandNote ?? null) !== wasBrand || (wasDay !== 'bad' && (line.boughtOn ?? null) !== wasDay);
+          || (line.brandNote ?? null) !== wasBrand || (wasDay !== 'bad' && (line.boughtOn ?? null) !== wasDay)
+          || (hasWasSource && (kindOf(line.sourceKind) !== wasWhere || cleanSourceName(line.sourceName) !== wasStore));
         if (drifted) {
           refuse(`${line.itemName} (${lineNumber}) was changed in Clerque after this file was downloaded. Download the file again and make the change there.`);
           continue;
@@ -229,20 +267,32 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
       const next = {
         packsBought: packs ?? line.packsBought, packSize: typedSize ?? line.packSize, packCost: price ?? line.packCost,
         brandNote: brand ?? line.brandNote, boughtOn: bought,
+        sourceKind: where ?? kindOf(line.sourceKind), sourceName: store ?? cleanSourceName(line.sourceName),
       };
-      const unchanged = same(next.packsBought, line.packsBought) && same(next.packSize, line.packSize)
+      const sameBuy = same(next.packsBought, line.packsBought) && same(next.packSize, line.packSize)
         && same(next.packCost, line.packCost) && next.brandNote === line.brandNote && (bought == null || bought === line.boughtOn);
+      const unchanged = sameBuy && next.sourceKind === kindOf(line.sourceKind) && next.sourceName === cleanSourceName(line.sourceName);
       if (unchanged) { out.push({ kind: 'UNCHANGED', rowNumber: row.rowNumber, lineNumber, item: line.itemName }); continue; }
 
       const why = cannotChange(line);
-      if (why) { refuse(why); continue; }
+      if (why) {
+        // Only where it was bought changed: "correct it under Stock on hand" would send them somewhere with no store to set.
+        const whereOnly = sameBuy && (line.receivedAt || line.prepaid);
+        refuse(whereOnly
+          ? `Bought at and Store can only be filled in from the sheet before ${line.itemName} (${line.lineNumber}) is ${line.receivedAt ? 'in stock' : 'paid ahead'}; it stays as recorded.`
+          : why);
+        continue;
+      }
       if (!(next.packsBought! > 0) || !(next.packSize! > 0) || !(next.packCost! > 0)) {
         refuse(filled < 3 && line.packsBought == null
           ? 'Fill in packs, pack size and price per pack together.'
           : 'Packs, pack size and price per pack all have to be more than zero.');
         continue;
       }
-      fill(line, { packsBought: next.packsBought!, packSize: next.packSize!, packCost: next.packCost!, brandNote: next.brandNote, boughtOn: bought });
+      fill(line, {
+        packsBought: next.packsBought!, packSize: next.packSize!, packCost: next.packCost!, brandNote: next.brandNote, boughtOn: bought,
+        sourceKind: next.sourceKind, sourceName: next.sourceName,
+      });
       continue;
     }
 
@@ -297,12 +347,17 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
     const earlier = keyed ?? input.lines.find((l) => l.fromSheet && l.requestStatus !== 'CANCELLED'
       && l.branchId === branch.id && l.boughtOn === bought && l.rawMaterialId === material.id);
     if (earlier) {
+      const nextKind = where ?? kindOf(earlier.sourceKind), nextStore = store ?? cleanSourceName(earlier.sourceName);
       const unchanged = same(packs, earlier.packsBought) && same(sizeInUnit, earlier.packSize) && same(price, earlier.packCost)
-        && (brand ?? earlier.brandNote) === earlier.brandNote;
+        && (brand ?? earlier.brandNote) === earlier.brandNote
+        && nextKind === kindOf(earlier.sourceKind) && nextStore === cleanSourceName(earlier.sourceName);
       if (unchanged) { out.push({ kind: 'UNCHANGED', rowNumber: row.rowNumber, lineNumber: earlier.lineNumber, item: material.name }); continue; }
       const why = cannotChange(earlier);
       if (why) { refuse(`Already recorded as ${earlier.lineNumber}. ${why}`); continue; }
-      fill(earlier, { packsBought: packs!, packSize: sizeInUnit, packCost: price!, brandNote: brand ?? earlier.brandNote, boughtOn: null });
+      fill(earlier, {
+        packsBought: packs!, packSize: sizeInUnit, packCost: price!, brandNote: brand ?? earlier.brandNote, boughtOn: null,
+        sourceKind: nextKind, sourceName: nextStore,
+      });
       continue;
     }
 
@@ -314,6 +369,7 @@ export function planBuyListRows(input: PlanInput): PlanVerdict[] {
     out.push({
       kind: 'NEW', rowNumber: row.rowNumber, item: material.name, unit: material.unit, branchId: branch.id, branchName: branch.name, rawMaterialId: material.id,
       boughtOn: bought, packsBought: packs!, packSize: sizeInUnit, packCost: price!, brandNote: brand, rowKey,
+      sourceKind: where, sourceName: store,
     });
   }
   return out;

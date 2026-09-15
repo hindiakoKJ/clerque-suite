@@ -4,7 +4,7 @@
  *
  * Procure stays where purchases are recorded. The file is the same lines seen
  * another way -- each row carries its control number -- and uploading it can
- * only RECORD what was bought: packs, pack size, price and brand on a line not
+ * only RECORD what was bought: packs, pack size, price, brand and store on a line not
  * yet in stock, or a purchase made away from the app. The upload is shown
  * first, row by row, and nothing is saved until it is confirmed. Nothing goes
  * into stock from the file; each request's "Post to stock" does that.
@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { Download, Upload, Loader2, FileSpreadsheet, Check, AlertTriangle, Plus, PencilLine } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatPeso } from '@/lib/utils';
+import { sourceText } from '@repo/shared-types';
 
 type Kind = 'UNCHANGED' | 'FILL' | 'NEW' | 'REFUSED';
 interface PlanRow {
@@ -28,6 +29,8 @@ interface PlanRow {
   packSize?: number;
   packCost?: number;
   brandNote?: string | null;
+  sourceKind?: string | null;
+  sourceName?: string | null;
   boughtOn?: string | null;
   branchName?: string;
   applied?: 'done' | 'failed';
@@ -221,6 +224,7 @@ function PlanTable({ rows }: { rows: PlanRow[] }) {
                       {r.kind === 'NEW' ? `New purchase${r.branchName ? ` at ${r.branchName}` : ''}, bought ${r.boughtOn}: ` : 'Fill in: '}
                       {r.packsBought?.toLocaleString('en-PH')} × {r.packSize?.toLocaleString('en-PH')}{r.unit ? ` ${r.unit}` : ''} at {r.packCost != null ? formatPeso(r.packCost) : '—'}
                       {r.brandNote ? ` · ${r.brandNote}` : ''}
+                      {sourceText(r.sourceKind, r.sourceName) ? ` · at ${sourceText(r.sourceKind, r.sourceName)}` : ''}
                       {r.applied === 'done' && <strong className="ml-1 text-emerald-700 dark:text-emerald-400">Recorded{r.requestNumber ? ` as ${r.requestNumber}` : ''}</strong>}
                       {r.applied === 'failed' && <strong className="ml-1 text-red-700 dark:text-red-400">Not recorded: {r.message}</strong>}
                     </span>

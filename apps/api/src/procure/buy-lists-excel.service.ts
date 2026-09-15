@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import * as crypto from 'crypto';
-import { PH_TIMEZONE } from '@repo/shared-types';
+import { PH_TIMEZONE, SOURCE_KINDS, SOURCE_KIND_LABEL } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProcureService } from './procure.service';
 import { plainNotes, readTag } from './procure-notes';
@@ -14,7 +14,7 @@ import { planBuyListRows, SheetRow, ExistingLine, PlanVerdict } from './buy-list
  * Procure stays the one place purchases are recorded. The file is the same
  * lines seen another way -- every row carries the line's control number, so
  * an upload lands on exactly the line it came from -- and it can only RECORD:
- * packs, pack size, price and brand on a line not yet in stock, or a purchase
+ * packs, pack size, price, brand and where it was bought on a line not yet in stock, or a purchase
  * made away from the app, which becomes a bought request marked as coming
  * from the sheet. Nothing goes into stock or the books from the file; "Post
  * to stock" on the request does that, with its usual checks.
@@ -43,7 +43,9 @@ const COLUMNS = [
   { key: 'packUnit',     header: 'Pack unit',            width: 8 },
   { key: 'pricePerPack', header: 'Price per pack (PHP)', width: 12 },
   { key: 'amount',       header: 'Amount (PHP)',         width: 12 },
-  { key: 'brand',        header: 'Brand / store',        width: 20 },
+  { key: 'brand',        header: 'Brand',                width: 18 },
+  { key: 'boughtAt',     header: 'Bought at',            width: 11 },
+  { key: 'store',        header: 'Store',                width: 16 },
   { key: 'status',       header: 'Status',               width: 16 },
   { key: 'inStockOn',    header: 'In stock on',          width: 12 },
   // Hidden: the row's key, and what it held when downloaded (so an edit is told from a change made in Clerque since).
@@ -54,8 +56,11 @@ const COLUMNS = [
   { key: 'wasPackSize',  header: 'Was pack size',        width: 10 },
   { key: 'wasPrice',     header: 'Was price',            width: 10 },
   { key: 'wasBrand',     header: 'Was brand',            width: 14 },
+  { key: 'wasBoughtAt',  header: 'Was bought at',        width: 11 },
+  { key: 'wasStore',     header: 'Was store',            width: 14 },
 ] as const;
-const HIDDEN = ['rowKey', 'wasItem', 'wasBoughtOn', 'wasPacks', 'wasPackSize', 'wasPrice', 'wasBrand'] as const;
+const HIDDEN = ['rowKey', 'wasItem', 'wasBoughtOn', 'wasPacks', 'wasPackSize', 'wasPrice', 'wasBrand', 'wasBoughtAt', 'wasStore'] as const;
+const kindWords = (k: string | null) => (k && (SOURCE_KINDS as readonly string[]).includes(k) ? SOURCE_KIND_LABEL[k as keyof typeof SOURCE_KIND_LABEL] : '');
 const COL = Object.fromEntries(COLUMNS.map((c, i) => [c.key, i + 1])) as Record<(typeof COLUMNS)[number]['key'], number>;
 const letter = (n: number) => String.fromCharCode(64 + n);
 /** Filled in by Clerque; an edit there is ignored or refused. */
@@ -131,16 +136,16 @@ export class BuyListsExcelService {
           l.lineNumber, r.requestNumber, r.branch?.name ?? '', l.rawMaterial.name, l.rawMaterial.unit, Number(l.qtyRequested),
           boughtOn || null, packs, size, l.rawMaterial.unit, cost,
           this.amountFormula(i, packs != null && cost != null ? +(packs * cost).toFixed(2) : ''),
-          l.brandNote ?? '', lineStatus(r.status, l), l.receivedAt ? manilaDay(l.receivedAt) : null,
-          '', l.rawMaterial.name, boughtOn || '', packs, size, cost, l.brandNote ?? '',
+          l.brandNote ?? '', kindWords(l.sourceKind), l.sourceName ?? '', lineStatus(r.status, l), l.receivedAt ? manilaDay(l.receivedAt) : null,
+          '', l.rawMaterial.name, boughtOn || '', packs, size, cost, l.brandNote ?? '', kindWords(l.sourceKind), l.sourceName ?? '',
         ]);
       }
     }
     // Blank rows to add a purchase made away from the app: Line No. left empty.
     for (let k = 0; k < SPARE_ROWS; k++) {
       const i = data.length + 2;
-      data.push(['', '', branches.length === 1 ? branches[0].name : '', '', '', null, null, null, null, '', null, this.amountFormula(i, ''), '', '', null,
-        crypto.randomBytes(6).toString('hex'), '', '', null, null, null, '']);
+      data.push(['', '', branches.length === 1 ? branches[0].name : '', '', '', null, null, null, null, '', null, this.amountFormula(i, ''), '', '', '', '', null,
+        crypto.randomBytes(6).toString('hex'), '', '', null, null, null, '', '', '']);
     }
     ws.addTable({
       name: 'BuyListLines', ref: 'A1', headerRow: true,
@@ -155,6 +160,9 @@ export class BuyListsExcelService {
     ws.getColumn(COL.packSize).numFmt = '#,##0.###';
     ws.getColumn(COL.pricePerPack).numFmt = '#,##0.00';
     ws.getColumn(COL.amount).numFmt = '#,##0.00';
+    // Text, so a store typed as "7-11" or "3/4" is not turned into a date by Excel.
+    ws.getColumn(COL.brand).numFmt = '@';
+    ws.getColumn(COL.store).numFmt = '@';
     const lastRow = data.length + 1;
     const existingRows = data.length - SPARE_ROWS;
     for (let r = 2; r <= lastRow; r++) {
@@ -168,6 +176,10 @@ export class BuyListsExcelService {
         // A named range on its own sheet: an inline list longer than 255 characters is dropped by Excel.
         formulae: [`Items!$A$2:$A$${Math.max(2, materials.length + 1)}`],
       };
+      ws.getCell(r, COL.boughtAt).dataValidation = {
+        type: 'list', allowBlank: true, showErrorMessage: false,
+        formulae: [`"${SOURCE_KINDS.map((k) => SOURCE_KIND_LABEL[k]).join(',')}"`],
+      };
       ws.getCell(r, COL.boughtOn).numFmt = 'yyyy-mm-dd';
       ws.getCell(r, COL.inStockOn).numFmt = 'yyyy-mm-dd';
     }
@@ -178,6 +190,8 @@ export class BuyListsExcelService {
     }
     ws.getCell(1, COL.lineNumber).note = 'The line\'s control number. Leave it as it is. Leave it BLANK on a row that adds a purchase made away from the app.';
     ws.getCell(1, COL.packSize).note = 'What one pack holds, in the Pack unit (g, kg, ml, L, pcs).';
+    ws.getCell(1, COL.boughtAt).note = 'What kind of place: Palengke, Grocery, Online, Supplier or Other. Left blank, Clerque keeps what it has.';
+    ws.getCell(1, COL.store).note = 'The store itself: Puregold, Shopee, the stall. Left blank, Clerque keeps what it has.';
 
     // ── Requests ─────────────────────────────────────────────────────────────
     const rs = wb.addWorksheet('Requests', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -221,7 +235,7 @@ export class BuyListsExcelService {
       '',
       'This file is a copy of the buy lists in Clerque. Clerque is still where purchases are recorded; the file is the backup.',
       '',
-      'To fill in what was bought on a line: in the Lines sheet, type Packs bought, Pack size, Pack unit, Price per pack and Brand / store on its row.',
+      'To fill in what was bought on a line: in the Lines sheet, type Packs bought, Pack size, Pack unit, Price per pack and Brand on its row, and where it was bought under Bought at (Palengke, Grocery, Online, Supplier, Other) and Store (Puregold, Shopee).',
       'To add something bought away from the app: use a blank row at the bottom. Leave Line No. blank; fill Branch, Item (pick from the list), Bought on (YYYY-MM-DD), packs, pack size, unit and price.',
       'Pack size is what ONE pack holds. 1 in Pack unit L on a millilitre item is read as 1,000 ml. A pack unit like "bottle" cannot be converted and is refused.',
       'Grey cells are filled in by Clerque. Changing them changes nothing.',
@@ -293,6 +307,7 @@ export class BuyListsExcelService {
       rawMaterialId: l.rawMaterialId, itemName: l.rawMaterial.name, unit: l.rawMaterial.unit,
       packsBought: l.packsBought != null ? Number(l.packsBought) : null, packSize: l.packSize != null ? Number(l.packSize) : null,
       packCost: l.packCost != null ? Number(l.packCost) : null, brandNote: l.brandNote,
+      sourceKind: l.sourceKind, sourceName: l.sourceName,
       boughtOn: l.purchaseRequest.boughtAt ? manilaDay(l.purchaseRequest.boughtAt) : null, receivedAt: l.receivedAt,
     }));
     const verdicts = planBuyListRows({
@@ -318,7 +333,10 @@ export class BuyListsExcelService {
       };
       try {
         await this.procure.recordBought(tenantId, requestId,
-          group.map((v) => ({ lineId: v.lineId, packsBought: v.packsBought, packSize: v.packSize, packCost: v.packCost, brandNote: v.brandNote ?? undefined })),
+          group.map((v) => ({
+            lineId: v.lineId, packsBought: v.packsBought, packSize: v.packSize, packCost: v.packCost, brandNote: v.brandNote ?? undefined,
+            sourceKind: v.sourceKind, sourceName: v.sourceName,
+          })),
           actor, { boughtAt: group.find((v) => v.boughtOn)?.boughtOn ?? undefined, quiet: true });
         mark('done');
       } catch (err) {
@@ -335,7 +353,10 @@ export class BuyListsExcelService {
       };
       try {
         const req = await this.procure.recordFromSheet(tenantId, group[0].branchId, group[0].boughtOn,
-          group.map((v) => ({ rawMaterialId: v.rawMaterialId, packsBought: v.packsBought, packSize: v.packSize, packCost: v.packCost, brandNote: v.brandNote, rowKey: v.rowKey })),
+          group.map((v) => ({
+            rawMaterialId: v.rawMaterialId, packsBought: v.packsBought, packSize: v.packSize, packCost: v.packCost, brandNote: v.brandNote, rowKey: v.rowKey,
+            sourceKind: v.sourceKind, sourceName: v.sourceName,
+          })),
           actor, `${SHEET_MARK} (${source})`);
         at('done', { requestNumber: req.requestNumber });
       } catch (err) {
@@ -377,6 +398,7 @@ export class BuyListsExcelService {
     if (missing.length) throw new BadRequestException(`The Lines sheet is missing: ${missing.join(', ')}.`);
     const get = (row: ExcelJS.Row, header: string) => { const c = colOf.get(header); return c ? text(row.getCell(c).value) : ''; };
     const hasWas = ['was item', 'was packs', 'was pack size', 'was price'].every((h) => colOf.has(h));
+    const hasWasSource = colOf.has('was bought at') && colOf.has('was store');
     const rows: SheetRow[] = [];
     for (let r = headerRow + 1; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
@@ -384,10 +406,14 @@ export class BuyListsExcelService {
         rowNumber: r,
         lineNumber: get(row, 'line no.'), branch: get(row, 'branch'), item: get(row, 'item'), boughtOn: get(row, 'bought on'),
         packs: get(row, 'packs bought'), packSize: get(row, 'pack size'), packUnit: get(row, 'pack unit'),
-        pricePerPack: get(row, 'price per pack (php)'), brand: get(row, 'brand / store'), rowKey: get(row, 'row key'),
+        // "Brand / store" is the heading on files downloaded before the store had its own column.
+        pricePerPack: get(row, 'price per pack (php)'), brand: colOf.has('brand') ? get(row, 'brand') : get(row, 'brand / store'),
+        boughtAt: get(row, 'bought at'), store: get(row, 'store'), rowKey: get(row, 'row key'),
+        storeIsDate: colOf.has('store') && row.getCell(colOf.get('store')!).value instanceof Date,
         was: hasWas ? {
           item: get(row, 'was item'), boughtOn: get(row, 'was bought on'), packs: get(row, 'was packs'),
           packSize: get(row, 'was pack size'), pricePerPack: get(row, 'was price'), brand: get(row, 'was brand'),
+          ...(hasWasSource ? { boughtAt: get(row, 'was bought at'), store: get(row, 'was store') } : {}),
         } : null,
       });
     }

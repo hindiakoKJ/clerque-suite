@@ -134,6 +134,24 @@ describe('ProcureReceiptsService', () => {
 
   // ── parse ──────────────────────────────────────────────────────────────────
 
+  describe('where the receipt says it was bought', () => {
+    it('writes the vendor and kind it was given, and keeps what it was not told', () => {
+      const { svc } = build();
+      const where = (dto: any, existing: any = null) => (svc as any).whereFrom(dto, existing);
+      // A new line: the vendor and the kind, or the vendor with no kind.
+      expect(where({ vendor: '  Puregold  Tagaytay ', sourceKind: 'GROCERY' })).toEqual({ sourceName: 'Puregold Tagaytay', sourceKind: 'GROCERY' });
+      expect(where({ vendor: 'Puregold' })).toEqual({ sourceName: 'Puregold', sourceKind: null });
+      expect(where({})).toEqual({});
+      // The same store with no kind on the receipt keeps the shopper's kind; a stall recorded only as the palengke keeps it too.
+      expect(where({ vendor: 'aling nena' }, { sourceKind: 'MARKET', sourceName: 'Aling Nena' })).toEqual({ sourceName: 'aling nena' });
+      expect(where({ vendor: 'Aling Nena' }, { sourceKind: 'MARKET', sourceName: null })).toEqual({ sourceName: 'Aling Nena' });
+      // A different store does not inherit the old one's kind.
+      expect(where({ vendor: 'S&R' }, { sourceKind: 'MARKET', sourceName: 'Aling Nena' })).toEqual({ sourceName: 'S&R', sourceKind: null });
+      // A kind with no vendor keeps the store name.
+      expect(where({ sourceKind: 'ONLINE' }, { sourceKind: null, sourceName: 'Shopee' })).toEqual({ sourceKind: 'ONLINE' });
+    });
+  });
+
   describe('parse — a suggestion, never a posting', () => {
     it('matches each printed line to the shop\'s own ingredient and writes nothing', async () => {
       const { svc, ai, received, requests } = build({ aiText: READING });

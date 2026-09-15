@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
+import { SOURCE_KINDS, SOURCE_KIND_LABEL, type SourceKind } from '@repo/shared-types';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -306,7 +307,15 @@ export default function ReceiptsPage() {
   const [paidAhead, setPaidAhead] = useState(false);
   /** What the photo is of. An order screen is usually paid already; the tick follows the kind, and can be untied. */
   const [documentKind, setDocumentKind] = useState<DocumentKind>('receipt');
-  const chooseKind = (k: DocumentKind) => { setDocumentKind(k); if (k === 'order_screen') setPaidAhead(true); };
+  // What kind of place the vendor is, for the where-bought report. An order screen is online, a delivery slip a supplier.
+  const [placeKind, setPlaceKind] = useState<SourceKind | ''>('');
+  // Picked by the person rather than guessed from the kind of photo.
+  const [placeByHand, setPlaceByHand] = useState(false);
+  const chooseKind = (k: DocumentKind) => {
+    setDocumentKind(k);
+    if (k === 'order_screen') setPaidAhead(true);
+    if (!placeByHand) setPlaceKind(k === 'order_screen' ? 'ONLINE' : k === 'delivery_receipt' ? 'SUPPLIER' : '');
+  };
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const id = new URLSearchParams(window.location.search).get('request');
@@ -571,6 +580,8 @@ export default function ReceiptsPage() {
         ...(branchId ? { branchId } : {}),
         ...(requestId ? { purchaseRequestId: requestId, postNow, ...(!postNow && paidAhead ? { paidAhead: true } : {}) } : {}),
         ...(vendor.trim() ? { vendor: vendor.trim() } : {}),
+        // A guessed kind with no store named would relabel whatever store the lines already have.
+        ...(placeKind && (vendor.trim() || placeByHand) ? { sourceKind: placeKind } : {}),
         receiptDate: date,
         ...(ref.trim() ? { referenceNumber: ref.trim() } : {}),
         paymentMethod: paidBy,
@@ -638,6 +649,9 @@ export default function ReceiptsPage() {
     if (ask && hasWork && !result && !window.confirm(`Throw away the ${rows.length} line${rows.length === 1 ? '' : 's'} on screen?`)) return;
     setPhoto(null); setIdemKey(mintKey()); setRows([]); setVendor(''); setDate(todayPH()); setRef('');
     setReading(null); setResult(null);
+    // The next receipt starts from its own kind of photo, not the last one's choice.
+    setPlaceByHand(false);
+    setPlaceKind(documentKind === 'order_screen' ? 'ONLINE' : documentKind === 'delivery_receipt' ? 'SUPPLIER' : '');
   }
 
   /** Back to the lines with the same key: the replay applies the corrections. */
@@ -826,10 +840,18 @@ export default function ReceiptsPage() {
 
       {/* 2. the header */}
       <div className="grid gap-2 rounded-xl border border-border bg-card p-4 sm:grid-cols-4">
-        <label className="text-[11px] text-muted-foreground sm:col-span-2">
+        <label className="text-[11px] text-muted-foreground">
           Bought from
           <input value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Puregold, the market, Shopee…"
             className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" />
+        </label>
+        <label className="text-[11px] text-muted-foreground">
+          Kind of place
+          <select value={placeKind} onChange={(e) => { setPlaceKind(e.target.value as SourceKind | ''); setPlaceByHand(true); }}
+            className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]">
+            <option value="">—</option>
+            {SOURCE_KINDS.map((k) => <option key={k} value={k}>{SOURCE_KIND_LABEL[k]}</option>)}
+          </select>
         </label>
         <label className="text-[11px] text-muted-foreground">
           Receipt date

@@ -17,6 +17,7 @@ import { RequireIdempotency } from '../common/decorators/require-idempotency.dec
 import { ProcureService, AddLineDto } from './procure.service';
 import { ReceiveRequestDto, RecordBoughtDto, AttachPhotoDto, RecordCountDto } from './dto/receive-request.dto';
 import { SANITY_HEADER, sanityContext } from '../common/sanity/sanity.types';
+import { effectiveBranchId } from '../common/branch-scope';
 
 /**
  * Clerque Procure.
@@ -90,6 +91,25 @@ export class ProcureController {
   @ApiOperation({ summary: 'Pack size and last price per ingredient, from the last delivery' })
   packMemory(@CurrentUser() user: JwtPayload) {
     return this.procure.packMemory(user.tenantId!, user.role);
+  }
+
+  /**
+   * Where each item was bought, and what it cost there, for a date range
+   * (the last 90 days when none is given). Store names for everyone who can
+   * open Procure; prices only for people who may see purchase costs.
+   * Declared BEFORE :id.
+   */
+  @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
+  @Get('where-bought')
+  @ApiOperation({ summary: 'Where each item is usually bought, per item and per store' })
+  whereBought(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    // A branch's staff see their own branch; an owner sees the branch asked for, or the whole shop.
+    return this.procure.whereBought(user.tenantId!, { from, to, branchId: effectiveBranchId(user, branchId) }, user.role);
   }
 
   /**

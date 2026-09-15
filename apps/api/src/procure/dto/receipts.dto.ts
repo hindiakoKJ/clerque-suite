@@ -14,6 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { SOURCE_KINDS, type SourceKind } from '@repo/shared-types';
 import { SanityConfirmationDto } from '../../common/sanity/sanity.types';
 import { RAW_MATERIAL_CATEGORIES, RawMaterialCategoryValue } from '../../inventory/dto/create-raw-material.dto';
 import { EXPENSE_CATEGORIES, ExpenseCategory, DOCUMENT_KINDS, DocumentKind } from '../receipt-parser';
@@ -208,6 +209,15 @@ export class ConfirmReceiptDto {
   @IsString()
   @MaxLength(120)
   vendor?: string;
+
+  /**
+   * What kind of place the vendor is: the palengke, a grocery, online, a
+   * supplier. Written on every line with the vendor as the store, for the
+   * where-bought report. Left out, the lines carry the vendor name only.
+   */
+  @IsOptional()
+  @IsIn(SOURCE_KINDS)
+  sourceKind?: SourceKind;
 
   /** The date printed on the receipt (YYYY-MM-DD). Stock and expenses post on this day. */
   @IsOptional()

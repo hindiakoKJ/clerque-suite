@@ -93,6 +93,20 @@ describe('buy list PDF', () => {
     expect(booked.servesNote).toBeNull();
   });
 
+  it('the copy as sent says where an item is usually bought; the booked copy says where each line was', () => {
+    const sent = buildBuyListModel(source([
+      line('01', { name: 'Full Cream Milk', usuallyFrom: 'Usually from Puregold (grocery): 3 of the last 4 buys' }),
+      line('02', { name: 'Salt' }),
+    ]), { copy: 'sent', showMoney: false, printedAt: NOW, reprint: false });
+    expect(sent.rows[0].usually).toBe('Usually from Puregold (grocery): 3 of the last 4 buys');
+    expect(sent.rows[1]).not.toHaveProperty('usually');
+    const booked = buildBuyListModel(source([
+      line('01', { packsBought: 2, packSize: 1000, packCost: 86, brandNote: 'Emborg', source: 'Puregold (grocery)', receivedAt: new Date() }),
+      line('02', { packsBought: 1, packSize: 500, packCost: 20, source: 'Palengke', receivedAt: new Date() }),
+    ], { status: 'RECEIVED' }), { copy: 'booked', showMoney: true, printedAt: NOW, reprint: false });
+    expect(booked.rows.map((r) => r.brand)).toEqual(['Emborg · Puregold (grocery)', 'Palengke']);
+  });
+
   it('a copy drawn later for a list that was never filed says its stock is today\'s', () => {
     const m = buildBuyListModel(source([line('01')]), { copy: 'sent', showMoney: false, printedAt: NOW, reprint: true });
     expect(m.caveat).toMatch(/^Reprinted .*stock now, not when the list was sent/);

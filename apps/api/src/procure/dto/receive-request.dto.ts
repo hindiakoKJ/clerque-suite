@@ -15,6 +15,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { SOURCE_KINDS, type SourceKind } from '@repo/shared-types';
 import { SanityConfirmationDto } from '../../common/sanity/sanity.types';
 import { EXPENSE_CATEGORIES, ExpenseCategory } from '../../simple-entries/dto/simple-entry.dto';
 
@@ -150,6 +151,17 @@ export class BoughtLineInputDto {
   @IsString()
   @MaxLength(200)
   brandNote?: string;
+
+  /** Where it was bought. Left out = the line keeps what it has; null clears it. */
+  @IsOptional()
+  @IsIn(SOURCE_KINDS)
+  sourceKind?: SourceKind | null;
+
+  /** The store, as the shopper calls it: "Puregold", "Shopee". Left out = unchanged; blank or null clears it. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  sourceName?: string | null;
 }
 
 export class RecordBoughtDto {

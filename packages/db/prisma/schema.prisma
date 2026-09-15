@@ -5842,6 +5842,12 @@ model PurchaseRequestLine {
   packCost    Decimal?  @db.Decimal(12, 4)
   /// Free text: "Monin", "Kirkland Organic Blue Agave". Never affects matching.
   brandNote   String?
+  /// Where it was bought: MARKET, GROCERY, ONLINE, SUPPLIER or OTHER. Checked
+  /// in the API (SOURCE_KINDS), not an enum, so a new kind is not a migration.
+  sourceKind  String?
+  /// The store itself, as the shopper calls it: "Puregold", "Shopee". Grouped
+  /// case-insensitively in the where-bought report; never affects stock.
+  sourceName  String?
   /// Set once the line has been posted to stock, so a re-post is a no-op.
   receivedAt  DateTime?
 

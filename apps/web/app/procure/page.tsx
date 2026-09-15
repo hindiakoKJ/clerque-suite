@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle, ChefHat, Receipt,
-  FileSpreadsheet,
+  FileSpreadsheet, Store,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -108,6 +108,15 @@ export default function ProcureHome() {
       Icon:  Gauge,
       title: 'What is limiting the menu',
       desc:  'The ingredient behind the number on each POS tile.',
+      note:  null,
+      show:  true,
+    },
+    {
+      // "Where do we usually get this, and is that the cheap place?"
+      href:  '/procure/where-bought',
+      Icon:  Store,
+      title: 'Where things are bought',
+      desc:  'Where each item is usually bought, and what it cost there.',
       note:  null,
       show:  true,
     },

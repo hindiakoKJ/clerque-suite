@@ -8,7 +8,10 @@ import { DocumentsService } from '../documents/documents.service';
 import { WarehouseService } from '../warehouse/warehouse.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { MailService } from '../mail/mail.service';
-import { PH_TIMEZONE, LineServes, ServesDish, servesSummary } from '@repo/shared-types';
+import {
+  PH_TIMEZONE, LineServes, ServesDish, servesSummary,
+  cleanSourceName, isSourceKind, sourceKey, sourceText, usuallyFrom, usuallyFromText, type SourceKind, type UsuallyFrom,
+} from '@repo/shared-types';
 import { productCeiling, servingsOf, LimitedBy } from '../products/recipe-ceiling';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
@@ -61,6 +64,9 @@ export interface BoughtLineDto {
   packSize:    number;
   packCost:    number;
   brandNote?:  string;
+  /** Where it was bought. Undefined leaves the line's store as it is; null clears it. */
+  sourceKind?: SourceKind | null;
+  sourceName?: string | null;
 }
 
 /** What one post to stock may carry beyond the pocket. */
@@ -87,7 +93,17 @@ export interface LastPack {
   packCost:   number | null;
   brandNote:  string | null;
   receivedAt: Date | null;
+  sourceKind: string | null;
+  sourceName: string | null;
 }
+
+/** How far back "usually from" looks, and how many purchases of one item it weighs at most. */
+const USUALLY_DAYS = 90;
+const USUALLY_BUYS = 10;
+/** The where-bought report reads at most this many purchase lines; past that it says so. */
+const WHERE_BOUGHT_MAX_LINES = 20_000;
+/** A request that holds the balance of another's short delivery. */
+const isBalance = (notes: string | null | undefined) => !!readTag(notes, 'BALANCEOF');
 
 /** What somebody counted on the shelf while building the list, waiting to be posted. */
 export interface CountedLine {
@@ -684,6 +700,10 @@ export class ProcureService {
             packSize:    new Prisma.Decimal(l.packSize),
             packCost:    new Prisma.Decimal(l.packCost),
             brandNote:   l.brandNote?.trim() || null,
+            // Only when said: a price fixed later, by a screen or a sheet that
+            // does not mention the store, must not wipe where it was bought.
+            ...(l.sourceKind !== undefined ? { sourceKind: isSourceKind(l.sourceKind) ? l.sourceKind : null } : {}),
+            ...(l.sourceName !== undefined ? { sourceName: cleanSourceName(l.sourceName) } : {}),
           },
         }),
       ),
@@ -752,7 +772,10 @@ export class ProcureService {
     tenantId: string,
     branchId: string,
     boughtOn: string,
-    lines: Array<{ rawMaterialId: string; packsBought: number; packSize: number; packCost: number; brandNote: string | null; rowKey?: string | null }>,
+    lines: Array<{
+      rawMaterialId: string; packsBought: number; packSize: number; packCost: number; brandNote: string | null; rowKey?: string | null;
+      sourceKind?: SourceKind | null; sourceName?: string | null;
+    }>,
     actor: { userId: string; role?: string | null },
     note: string,
   ) {
@@ -785,7 +808,10 @@ export class ProcureService {
         tenantId, created.id,
         created.lines.map((cl) => {
           const l = lines.find((x) => x.rawMaterialId === cl.rawMaterialId)!;
-          return { lineId: cl.id, packsBought: l.packsBought, packSize: l.packSize, packCost: l.packCost, brandNote: l.brandNote ?? undefined };
+          return {
+            lineId: cl.id, packsBought: l.packsBought, packSize: l.packSize, packCost: l.packCost, brandNote: l.brandNote ?? undefined,
+            sourceKind: l.sourceKind ?? undefined, sourceName: l.sourceName ?? undefined,
+          };
         }),
         actor, { boughtAt: day, quiet: true },
       );
@@ -979,6 +1005,7 @@ export class ProcureService {
     const short:   Array<{
       line: string; name: string; rawMaterialId: string;
       packsBought: number; packsArrived: number; packSize: number; packCost: number; brandNote: string | null;
+      sourceKind: string | null; sourceName: string | null;
       outcome: ShortOutcome;
     }> = [];
     const done = new Set<string>();
@@ -1043,6 +1070,7 @@ export class ProcureService {
         short.push({
           line: line.lineNumber, name, rawMaterialId: line.rawMaterialId,
           packsBought: bought, packsArrived: arrived, packSize: size, packCost: cost, brandNote: line.brandNote,
+          sourceKind: line.sourceKind, sourceName: line.sourceName,
           outcome: outcomeOf.get(line.id) ?? 'STILL_COMING',
         });
       }
@@ -1189,7 +1217,10 @@ export class ProcureService {
     tenantId: string,
     req: { branchId: string; requestNumber: string },
     userId: string,
-    short: Array<{ rawMaterialId: string; packsBought: number; packsArrived: number; packSize: number; packCost: number; brandNote: string | null }>,
+    short: Array<{
+      rawMaterialId: string; packsBought: number; packsArrived: number; packSize: number; packCost: number; brandNote: string | null;
+      sourceKind?: string | null; sourceName?: string | null;
+    }>,
     prepaidPocket: ProcurePocket | null = null,
   ) {
     const numbered: Array<{ lineNumber: string }> = [];
@@ -1220,6 +1251,9 @@ export class ProcureService {
               packSize:      new Prisma.Decimal(x.packSize),
               packCost:      new Prisma.Decimal(x.packCost),
               brandNote:     x.brandNote,
+              // The balance comes from the store the rest came from.
+              sourceKind:    x.sourceKind ?? null,
+              sourceName:    x.sourceName ?? null,
             };
           }),
         },
@@ -1385,6 +1419,8 @@ export class ProcureService {
         // On the copy filed at send, frozen as they were when the list went out;
         // on a copy drawn later, today's, and the page says which.
         serves:       copy === 'sent' ? servesSummary(l.serves) : null,
+        usuallyFrom:  copy === 'sent' ? usuallyFromText(l.usuallyFrom) : null,
+        source:       sourceText(l.sourceKind, l.sourceName),
         lastPackSize: l.lastPack?.packSize ?? null,
         packsBought:  l.packsBought != null ? Number(l.packsBought) : null,
         packSize:     l.packSize != null ? Number(l.packSize) : null,
@@ -1652,13 +1688,15 @@ export class ProcureService {
       },
       orderBy:  { receivedAt: 'desc' },
       distinct: ['rawMaterialId'],
-      select:   { rawMaterialId: true, packSize: true, packCost: true, brandNote: true, receivedAt: true },
+      select:   { rawMaterialId: true, packSize: true, packCost: true, brandNote: true, receivedAt: true, sourceKind: true, sourceName: true },
     });
     return new Map<string, LastPack>(rows.map((r) => [r.rawMaterialId, {
       packSize:   Number(r.packSize),
       packCost:   Number(r.packCost),
       brandNote:  r.brandNote,
       receivedAt: r.receivedAt,
+      sourceKind: r.sourceKind,
+      sourceName: r.sourceName,
     }]));
   }
 
@@ -1674,7 +1712,261 @@ export class ProcureService {
       packCost:   seeCosts ? p.packCost : null,
       brandNote:  p.brandNote,
       receivedAt: p.receivedAt,
+      sourceKind: p.sourceKind,
+      sourceName: p.sourceName,
     }));
+  }
+
+  /**
+   * Where each item is usually bought at each branch: the most frequent store
+   * over its last few purchases in the last three months. A short delivery's
+   * balance is the same purchase, so it is not counted twice.
+   *
+   * Information, not the list: if it cannot be worked out the list still
+   * loads without it, and the failure is logged.
+   */
+  private async usualSources(tenantId: string, branchIds: string[], itemIds: string[]): Promise<Map<string, UsuallyFrom | null> | null> {
+    if (itemIds.length === 0) return new Map();
+    try {
+      const found = await this.prisma.purchaseRequestLine.findMany({
+        where: {
+          rawMaterialId: { in: itemIds },
+          ...this.reallyBought(),
+          purchaseRequest: {
+            tenantId,
+            branchId: { in: branchIds },
+            status:   { in: ['BOUGHT', 'RECEIVED'] },
+            boughtAt: { gte: new Date(Date.now() - USUALLY_DAYS * 86_400_000) },
+          },
+        },
+        orderBy: [{ purchaseRequest: { boughtAt: 'desc' } }, { purchaseRequest: { requestNumber: 'desc' } }],
+        select:  { rawMaterialId: true, sourceKind: true, sourceName: true, purchaseRequest: { select: { id: true, branchId: true, boughtAt: true, notes: true } } },
+      });
+      const balanceIsTheBuy = await this.balancesThatAreTheBuy(tenantId, found);
+      const rows = found.filter((r) => !isBalance(r.purchaseRequest.notes) || balanceIsTheBuy.has(`${r.purchaseRequest.id}:${r.rawMaterialId}`));
+      const byKey = new Map<string, Array<{ sourceKind: string | null; sourceName: string | null; on: Date }>>();
+      for (const r of rows) {
+        const key = `${r.purchaseRequest.branchId}:${r.rawMaterialId}`;
+        const list = byKey.get(key) ?? [];
+        if (list.length < USUALLY_BUYS) list.push({ sourceKind: r.sourceKind, sourceName: r.sourceName, on: r.purchaseRequest.boughtAt! });
+        byKey.set(key, list);
+      }
+      return new Map([...byKey.entries()].map(([k, list]) => [k, usuallyFrom(list)]));
+    } catch (err) {
+      this.logger.warn(`[procure] could not work out where items are usually bought: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
+  }
+
+  /**
+   * A line that was really bought: packs recorded, and either already in stock
+   * or on a request still waiting to be posted. A request closed with a line
+   * never posted put that line back on the shopping list -- its packs and
+   * price are still on it, but nothing was bought or paid, and counting it
+   * would count the same purchase again when it is bought for real.
+   */
+  private reallyBought() {
+    return {
+      packsBought: { gt: 0 },
+      OR: [{ receivedAt: { not: null } }, { purchaseRequest: { status: 'BOUGHT' as const } }],
+    };
+  }
+
+  /**
+   * The balance requests, of those given, that ARE the purchase rather than
+   * part of one.
+   *
+   * A short delivery splits one purchase: what came stays on the original
+   * line, what is still coming goes onto a balance request. Normally the
+   * original is the buy and the balance only adds money. But when nothing at
+   * all came, the original line is rewritten to zero packs and drops out, and
+   * the balance is all that is left of the purchase -- so it counts as the buy.
+   * Keyed `balanceRequestId:rawMaterialId`.
+   */
+  private async balancesThatAreTheBuy(
+    tenantId: string,
+    rows: Array<{ rawMaterialId: string; purchaseRequest: { id: string; notes: string | null } }>,
+  ): Promise<Set<string>> {
+    const balances = rows.filter((r) => isBalance(r.purchaseRequest.notes));
+    if (balances.length === 0) return new Set();
+    const numbers = [...new Set(balances.map((r) => readTag(r.purchaseRequest.notes, 'BALANCEOF')).filter((n): n is string => !!n))];
+    const originals = numbers.length === 0 ? [] : await this.prisma.purchaseRequestLine.findMany({
+      where:  { rawMaterialId: { in: [...new Set(balances.map((r) => r.rawMaterialId))] }, purchaseRequest: { tenantId, requestNumber: { in: numbers } } },
+      select: { rawMaterialId: true, packsBought: true, purchaseRequest: { select: { requestNumber: true } } },
+    });
+    const counted = new Set(originals
+      .filter((o) => o.packsBought != null && Number(o.packsBought) > 0)
+      .map((o) => `${o.purchaseRequest.requestNumber}:${o.rawMaterialId}`));
+    return new Set(balances
+      .filter((r) => !counted.has(`${readTag(r.purchaseRequest.notes, 'BALANCEOF')}:${r.rawMaterialId}`))
+      .map((r) => `${r.purchaseRequest.id}:${r.rawMaterialId}`));
+  }
+
+  /**
+   * Where each item was bought, and what it cost there.
+   *
+   * The owner's question is "where do we usually get this, and is that the
+   * cheap place?". Per item: how many times it was bought, the store it is
+   * usually bought from, and for each store the times, the last purchase and
+   * the cheapest price per unit. Per store: how many trips, how many items and
+   * how much was spent.
+   *
+   * A trip is a request; a buy is one line. The balance of a short delivery is
+   * part of the same buy -- its money counts, its line is not a second buy --
+   * unless nothing came the first time, when the balance is the buy. A line
+   * put back on the list when its request closed was never bought at all.
+   * Prices and spend only for people who may see purchase costs; store names
+   * are not a cost and are shown to everyone who can open Procure.
+   */
+  async whereBought(
+    tenantId: string,
+    opts: { from?: string; to?: string; branchId?: string },
+    viewerRole?: string | null,
+  ) {
+    const to = opts.to ? this.dayOf(opts.to) : this.today();
+    const from = opts.from
+      ? this.dayOf(opts.from)
+      : new Date(this.manilaMidnight(to).getTime() - (USUALLY_DAYS - 1) * 86_400_000 + 8 * 3_600_000).toISOString().slice(0, 10);
+    if (from > to) throw new BadRequestException('The From date is after the To date.');
+    if ((Date.parse(to) - Date.parse(from)) / 86_400_000 > 366) throw new BadRequestException('A year at most. Narrow the dates.');
+    const branchId = opts.branchId ? await this.resolveBranch(tenantId, opts.branchId) : null;
+    const seeCosts = await this.costsVisibleTo(tenantId, viewerRole);
+
+    const rows = await this.prisma.purchaseRequestLine.findMany({
+      where: {
+        ...this.reallyBought(),
+        purchaseRequest: {
+          tenantId,
+          status:   { in: ['BOUGHT', 'RECEIVED'] },
+          boughtAt: { gte: this.manilaMidnight(from), lt: new Date(this.manilaMidnight(to).getTime() + 86_400_000) },
+          ...(branchId ? { branchId } : {}),
+        },
+      },
+      // Two lists bought the same day: the later one is the newer purchase.
+      orderBy: [{ purchaseRequest: { boughtAt: 'desc' } }, { purchaseRequest: { requestNumber: 'desc' } }, { lineNumber: 'asc' }],
+      take:    WHERE_BOUGHT_MAX_LINES + 1,
+      select: {
+        rawMaterialId: true, packsBought: true, packSize: true, packCost: true, sourceKind: true, sourceName: true,
+        rawMaterial:     { select: { name: true, unit: true } },
+        purchaseRequest: { select: { id: true, boughtAt: true, notes: true } },
+      },
+    });
+    const truncated = rows.length > WHERE_BOUGHT_MAX_LINES;
+    if (truncated) rows.length = WHERE_BOUGHT_MAX_LINES;
+    const balanceIsTheBuy = await this.balancesThatAreTheBuy(tenantId, rows);
+
+    const round = (n: number, dp: number) => Math.round(n * 10 ** dp) / 10 ** dp;
+    /*
+      "Last" is the newest real purchase. A balance request is dated the day the
+      short delivery was booked, not the day the goods were bought, so it adds
+      money and nothing else.
+    */
+    type StoreOfItem = {
+      key: string; kind: SourceKind | null; name: string | null; times: number; lastOn: Date | null;
+      lastPackSize: number | null; lastPackCost: number | null; bestPerUnit: number | null; spend: number;
+    };
+    const items = new Map<string, {
+      rawMaterialId: string; name: string; unit: string; buys: number; withoutStore: number; spend: number;
+      lastOn: Date | null; forUsual: Array<{ sourceKind: string | null; sourceName: string | null; on: Date }>;
+      stores: Map<string, StoreOfItem>;
+    }>();
+    const stores = new Map<string, {
+      key: string; kind: SourceKind | null; name: string | null; trips: Set<string>; items: Set<string>;
+      buys: number; spend: number; lastOn: Date | null;
+    }>();
+    const newest = (d: Date | null) => d?.getTime() ?? 0;
+    let buys = 0, withStore = 0, spend = 0;
+    const trips = new Set<string>();
+
+    // Newest first, so the first time a store is met is its latest purchase and spelling.
+    for (const r of rows) {
+      const on = r.purchaseRequest.boughtAt!;
+      const balance = isBalance(r.purchaseRequest.notes) && !balanceIsTheBuy.has(`${r.purchaseRequest.id}:${r.rawMaterialId}`);
+      const packs = Number(r.packsBought), size = r.packSize != null ? Number(r.packSize) : null;
+      const cost = r.packCost != null ? Number(r.packCost) : null;
+      const amount = cost != null ? round(packs * cost, 2) : 0;
+      const perUnit = cost != null && size != null && size > 0 ? cost / size : null;
+      const key = sourceKey(r.sourceKind, r.sourceName);
+      const kind = isSourceKind(r.sourceKind) ? r.sourceKind : null;
+      const name = cleanSourceName(r.sourceName);
+
+      let item = items.get(r.rawMaterialId);
+      if (!item) {
+        item = { rawMaterialId: r.rawMaterialId, name: r.rawMaterial.name, unit: r.rawMaterial.unit, buys: 0, withoutStore: 0, spend: 0, lastOn: null, forUsual: [], stores: new Map() };
+        items.set(r.rawMaterialId, item);
+      }
+      item.spend += amount;
+      spend += amount;
+      if (!balance) {
+        item.buys += 1;
+        buys += 1;
+        trips.add(r.purchaseRequest.id);
+        item.lastOn ??= on;
+        item.forUsual.push({ sourceKind: r.sourceKind, sourceName: r.sourceName, on });
+        if (key) withStore += 1; else item.withoutStore += 1;
+      }
+      if (!key) continue;
+
+      let st = item.stores.get(key);
+      if (!st) {
+        st = { key, kind, name, times: 0, lastOn: null, lastPackSize: null, lastPackCost: null, bestPerUnit: null, spend: 0 };
+        item.stores.set(key, st);
+      }
+      if (!balance) {
+        st.times += 1;
+        if (!st.lastOn) Object.assign(st, { lastOn: on, lastPackSize: size, lastPackCost: cost, kind, name });
+      }
+      st.spend += amount;
+      if (perUnit != null && (st.bestPerUnit == null || perUnit < st.bestPerUnit)) st.bestPerUnit = perUnit;
+
+      let store = stores.get(key);
+      if (!store) {
+        store = { key, kind, name, trips: new Set(), items: new Set(), buys: 0, spend: 0, lastOn: null };
+        stores.set(key, store);
+      }
+      store.spend += amount;
+      store.items.add(r.rawMaterialId);
+      if (!balance) {
+        store.buys += 1;
+        store.trips.add(r.purchaseRequest.id);
+        if (!store.lastOn) Object.assign(store, { lastOn: on, kind, name });
+      }
+    }
+
+    const money = (n: number | null) => (seeCosts && n != null ? round(n, 2) : null);
+    return {
+      from, to, branchId, showMoney: seeCosts, truncated,
+      totals: { buys, withStore, trips: trips.size, stores: stores.size, spend: money(spend) },
+      items: [...items.values()]
+        .map((it) => {
+          const storesOf = [...it.stores.values()].sort((a, b) => b.times - a.times || newest(b.lastOn) - newest(a.lastOn));
+          const cheapest = seeCosts
+            ? storesOf.filter((x) => x.bestPerUnit != null).sort((a, b) => a.bestPerUnit! - b.bestPerUnit!)[0] ?? null
+            : null;
+          return {
+            rawMaterialId: it.rawMaterialId,
+            name:          it.name,
+            unit:          it.unit,
+            buys:          it.buys,
+            withoutStore:  it.withoutStore,
+            lastOn:        it.lastOn,
+            spend:         money(it.spend),
+            usuallyFrom:   usuallyFrom(it.forUsual),
+            cheapestKey:   cheapest && storesOf.length > 1 ? cheapest.key : null,
+            stores: storesOf.map((x) => ({
+              key: x.key, kind: x.kind, name: x.name, times: x.times, lastOn: x.lastOn,
+              lastPackSize: x.lastPackSize,
+              lastPackCost: money(x.lastPackCost),
+              bestPerUnit:  seeCosts && x.bestPerUnit != null ? round(x.bestPerUnit, 4) : null,
+              spend:        money(x.spend),
+            })),
+          };
+        })
+        .sort((a, b) => b.buys - a.buys || a.name.localeCompare(b.name)),
+      stores: [...stores.values()]
+        .map((x) => ({ key: x.key, kind: x.kind, name: x.name, trips: x.trips.size, buys: x.buys, items: x.items.size, lastOn: x.lastOn, spend: money(x.spend) }))
+        .sort((a, b) => b.trips - a.trips || b.buys - a.buys || newest(b.lastOn) - newest(a.lastOn)),
+    };
   }
 
   /** The tag on a cycle count that was started from a buy list, one line at a time. */
@@ -1692,7 +1984,9 @@ export class ProcureService {
   >(
     tenantId: string,
     reqs: T[],
-  ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & { lastPack: LastPack | null; onHand: number; counted: CountedLine | null; serves: LineServes | null }> }>> {
+  ): Promise<Array<Omit<T, 'lines'> & { lines: Array<L & {
+    lastPack: LastPack | null; onHand: number; counted: CountedLine | null; serves: LineServes | null; usuallyFrom: UsuallyFrom | null;
+  }> }>> {
     const ids = [...new Set(reqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))];
     const last = await this.lastPacks(tenantId, ids);
 
@@ -1732,6 +2026,12 @@ export class ProcureService {
       [...new Set(liveReqs.map((r) => r.branchId))],
       [...new Set(liveReqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))],
     );
+    // Where each item is usually bought, for the shopper -- the same lists only.
+    const usualOf = liveReqs.length === 0 ? null : await this.usualSources(
+      tenantId,
+      [...new Set(liveReqs.map((r) => r.branchId))],
+      [...new Set(liveReqs.flatMap((r) => r.lines.map((l) => l.rawMaterialId)))],
+    );
 
     return reqs.map((r) => {
       const c = countOf.get(r.requestNumber);
@@ -1745,6 +2045,7 @@ export class ProcureService {
             onHand:   onHand.get(`${r.branchId}:${l.rawMaterialId}`) ?? 0,
             counted:  cl && c ? { qty: Number(cl.countedQty), expected: Number(cl.expectedQty), countId: c.id, countNumber: c.countNumber } : null,
             serves:   servesOf && building(r) ? servesOf(r.branchId, l.rawMaterialId, cl ? Number(cl.countedQty) : null) : null,
+            usuallyFrom: usualOf && building(r) ? (usualOf.get(`${r.branchId}:${l.rawMaterialId}`) ?? null) : null,
           };
         }),
       };

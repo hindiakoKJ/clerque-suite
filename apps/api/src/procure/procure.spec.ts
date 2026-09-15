@@ -131,8 +131,9 @@ describe('ProcureService', () => {
           return Promise.resolve({});
         }),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-        // What each ingredient held and cost the last time it was received.
-        findMany:   jest.fn().mockResolvedValue(opts.lastPacks ?? []),
+        // What each ingredient held and cost the last time it was received. The
+        // where-it-is-usually-bought query (it asks by request status) finds none.
+        findMany:   jest.fn(({ where }: any = {}) => Promise.resolve(where?.purchaseRequest?.status ? [] : (opts.lastPacks ?? []))),
       },
       document: {
         count:     jest.fn(({ where }: any) => Promise.resolve(filedWhere(where).length)),
@@ -484,6 +485,22 @@ describe('ProcureService', () => {
     expect(updatedLines[0].brandNote).toBe('Da Vinci');
   });
 
+  it('records where it was bought when told, and a later fix that does not mention the store leaves it alone', async () => {
+    const { svc, updatedLines } = build({ status: 'SENT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz' }] });
+    await svc.recordBought(TENANT, 'req1', [
+      { lineId: 'l1', packsBought: 3, packSize: 750, packCost: 540, sourceKind: 'ONLINE', sourceName: '  Shopee   Monin PH ' },
+    ]);
+    expect(updatedLines[0]).toMatchObject({ sourceKind: 'ONLINE', sourceName: 'Shopee Monin PH' });
+
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 750, packCost: 520 }]);
+    expect('sourceKind' in updatedLines[1]).toBe(false);
+    expect('sourceName' in updatedLines[1]).toBe(false);
+
+    // Said as empty: cleared.
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 750, packCost: 520, sourceKind: null, sourceName: '   ' }]);
+    expect(updatedLines[2]).toMatchObject({ sourceKind: null, sourceName: null });
+  });
+
   it('refuses to record shopping against a request that was never sent', async () => {
     const { svc } = build({ status: 'OPEN', lines: [{ id: 'l1' }] });
     await expect(svc.recordBought(TENANT, 'req1', [
@@ -495,7 +512,7 @@ describe('ProcureService', () => {
 
   const BOUGHT = [{
     id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-haz',
-    packsBought: 3, packSize: 750, packCost: 540, brandNote: 'Da Vinci',
+    packsBought: 3, packSize: 750, packCost: 540, brandNote: 'Da Vinci', sourceKind: 'ONLINE', sourceName: 'Shopee',
     receivedAt: null, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' },
   }];
 
@@ -717,6 +734,8 @@ describe('ProcureService', () => {
     expect(Number(line.packsBought)).toBe(1);
     expect(Number(line.packSize)).toBe(750);
     expect(Number(line.packCost)).toBe(540);
+    // The balance comes from the same store as the rest of the order.
+    expect(line).toMatchObject({ sourceKind: 'ONLINE', sourceName: 'Shopee' });
     expect(Number(line.qtyRequested)).toBe(750);
     expect(line.lineNumber).toBe(`${follow.requestNumber}-01`);
     expect(res.request.notes).toMatch(/bought 3, 2 arrived, 1 still coming/);

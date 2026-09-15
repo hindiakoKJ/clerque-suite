@@ -854,6 +854,61 @@ describe('ProcureService', () => {
     expect(out).toEqual({ id: 'doc1', filename: 'delivery-receipt-REQ-20260830-001-1.jpg', label: 'Delivery receipt' });
   });
 
+  // ── Telegram alerts ───────────────────────────────────────────────────────
+
+  describe('Telegram alerts', () => {
+    const alertsOn = (svc: any) => {
+      const alerts = { buyListSent: jest.fn(), bought: jest.fn(), purchasePhoto: jest.fn(), postedToStock: jest.fn() };
+      svc.telegramAlerts = alerts;
+      return alerts;
+    };
+
+    it("sending a list alerts, in the email's words, naming who sent it", async () => {
+      const { svc } = build({ lines: [{ id: 'l1', rawMaterialId: 'rm-haz', qtyRequested: 1500, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } }], people: [{ id: 'o1', email: null, name: 'Anne', role: 'BUSINESS_OWNER' }] });
+      const alerts = alertsOn(svc);
+      await svc.sendRequest(TENANT, 'req1', USER);
+      expect(alerts.buyListSent).toHaveBeenCalledWith(TENANT, 'req1', [expect.objectContaining({ name: 'Hazelnut Syrup' })], USER);
+    });
+
+    it('the first recording of what was bought alerts; a correction to a bought request does not', async () => {
+      const first = build({ status: 'SENT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz' }] });
+      const a1 = alertsOn(first.svc);
+      await first.svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 750, packCost: 540 }], { userId: USER, role: 'BUSINESS_OWNER' });
+      expect(a1.bought).toHaveBeenCalledWith(TENANT, 'req1', USER);
+
+      const again = build({ status: 'BOUGHT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz' }] });
+      const a2 = alertsOn(again.svc);
+      await again.svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 750, packCost: 500 }], { userId: USER, role: 'BUSINESS_OWNER' });
+      expect(a2.bought).not.toHaveBeenCalled();
+    });
+
+    it('a bulk sheet upload does not alert once per request', async () => {
+      const { svc } = build({ status: 'SENT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz' }] });
+      const alerts = alertsOn(svc);
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 750, packCost: 540 }], { userId: USER, role: 'BUSINESS_OWNER' }, { quiet: true });
+      expect(alerts.bought).not.toHaveBeenCalled();
+    });
+
+    it('a filed photo is forwarded as filed, bytes and all', async () => {
+      const { svc } = build({ status: 'SENT', lines: [] });
+      const alerts = alertsOn(svc);
+      await svc.attachPhoto(TENANT, 'req1', 'cook', { imageBase64: Buffer.from('jpg-bytes').toString('base64'), label: 'Delivery receipt' });
+      expect(alerts.purchasePhoto).toHaveBeenCalledWith(TENANT, 'req1', Buffer.from('jpg-bytes'), 'image/jpeg', 'Delivery receipt', 'cook');
+    });
+
+    it('closing a request into stock alerts once; a post that leaves it open does not', async () => {
+      const { svc } = build({ status: 'BOUGHT', lines: BOUGHT });
+      const alerts = alertsOn(svc);
+      await svc.receiveRequest(TENANT, 'req1', USER);
+      expect(alerts.postedToStock).toHaveBeenCalledWith(TENANT, 'req1', USER);
+
+      const open = build({ status: 'BOUGHT', lines: [BOUGHT[0], { ...BOUGHT[0], id: 'l2', lineNumber: 'REQ-20260830-001-02' }] });
+      const a2 = alertsOn(open.svc);
+      await open.svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }] });
+      expect(a2.postedToStock).not.toHaveBeenCalled();
+    });
+  });
+
   // ── what the shelf says ───────────────────────────────────────────────────
 
   const ASKED = [{ id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-haz', qtyRequested: 1500, packsBought: null, packCost: null, receivedAt: null, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } }];

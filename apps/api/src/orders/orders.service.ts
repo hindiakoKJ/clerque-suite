@@ -6,6 +6,7 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +19,7 @@ import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
 import { OfflineOrder, planFeaturesFor, hasPermission, PH_TIMEZONE } from '@repo/shared-types';
 import { OrderQuoteService } from './order-quote.service';
+import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 
 /** Peso tolerance when comparing a caller's totals against our own. One
  *  centavo absorbs float noise without letting a real discrepancy through. */
@@ -75,6 +77,7 @@ export class OrdersService {
     private loyalty:   LoyaltyService,
     private voidApprovals: VoidApprovalsService,
     private quotes:    OrderQuoteService,
+    @Optional() private telegramAlerts?: TelegramAlertsService,
   ) {}
 
   /**
@@ -1523,6 +1526,9 @@ export class OrdersService {
         );
       }
     }
+
+    // The owner's Telegram alert, once the sale is saved. Not awaited: it can never slow or fail the sale.
+    void this.telegramAlerts?.saleConfirmed(tenantId, order.id);
 
     return order;
   }

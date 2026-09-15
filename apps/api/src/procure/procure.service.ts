@@ -18,6 +18,7 @@ import { BuyListCopy, BUY_LIST_PDF_LABEL } from './buy-list-labels';
 import { sanityValueKey } from '@repo/shared-types';
 import { CostSanityService } from '../common/sanity/cost-sanity.service';
 import { SanityContext } from '../common/sanity/sanity.types';
+import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 
 /** Where a price somebody confirmed on the buy list is written down, per line. */
 const CONFIRMED_LINE = 'PurchaseRequestLine';
@@ -119,6 +120,7 @@ export class ProcureService {
     @Optional() private readonly notifications?: NotificationsService,
     @Optional() private readonly mail?: MailService,
     @Optional() private readonly sanity?: CostSanityService,
+    @Optional() private readonly telegramAlerts?: TelegramAlertsService,
   ) {}
 
   private readonly logger = new Logger(ProcureService.name);
@@ -446,7 +448,7 @@ export class ProcureService {
     // The copy for the group chat, filed now: on-hand is live and cannot be
     // drawn again later as it was at the moment the list went out.
     const pdf = await this.fileRequestPdf(tenantId, requestId, 'sent', userId);
-    await this.tellTheOwners(tenantId, updated, pdf);
+    await this.tellTheOwners(tenantId, updated, pdf, userId);
     return { ...updated, empty: updated.lines.length === 0 };
   }
 
@@ -462,6 +464,7 @@ export class ProcureService {
     req: { id: string; requestNumber: string; branchId: string; branch?: { name: string } | null;
            lines: Array<{ rawMaterialId: string; qtyRequested: Prisma.Decimal; rawMaterial: { name: string; unit: string } }> },
     pdf: Buffer | null = null,
+    sentById: string | null = null,
   ) {
     try {
       const people = await this.prisma.user.findMany({
@@ -492,6 +495,8 @@ export class ProcureService {
           serves: servesOf ? servesSummary(servesOf(req.branchId, l.rawMaterialId, null)) : null,
         };
       });
+      // Telegram too, in the same words as the email. Not awaited.
+      void this.telegramAlerts?.buyListSent(tenantId, req.id, lines, sentById);
       const branch = req.branch?.name ?? null;
       const link   = `/procure/requests?view=${req.requestNumber}`;
       const body   = lines.length === 0
@@ -539,6 +544,8 @@ export class ProcureService {
       paidFrom?: ProcurePocket;
       charges?: Array<{ description: string; amount: number; category?: ExpenseCategory }>;
       sanity?: SanityContext;
+      /** A purchase typed into the buy-lists sheet and uploaded in bulk: no alert per request. */
+      quiet?: boolean;
     } = {},
   ) {
     const req = await this.getRaw(tenantId, requestId);
@@ -701,6 +708,8 @@ export class ProcureService {
       },
       include: this.lineInclude(),
     });
+    // The first recording is news; a correction to a request already bought is not.
+    if (req.status === 'SENT' && !extra.quiet) void this.telegramAlerts?.bought(tenantId, requestId, actor?.userId ?? null);
     /*
       Already paid ahead? Then a corrected price is a correction to the
       money too, and the pocket is the one the request remembers -- the
@@ -766,7 +775,7 @@ export class ProcureService {
           const l = lines.find((x) => x.rawMaterialId === cl.rawMaterialId)!;
           return { lineId: cl.id, packsBought: l.packsBought, packSize: l.packSize, packCost: l.packCost, brandNote: l.brandNote ?? undefined };
         }),
-        actor, { boughtAt: day },
+        actor, { boughtAt: day, quiet: true },
       );
     } catch (err) {
       await this.prisma.purchaseRequest.delete({ where: { id: created.id } }).catch((e) => {
@@ -1107,6 +1116,7 @@ export class ProcureService {
     if (updated.status === 'RECEIVED' && (closing || done.size > 0)) {
       await this.fileRequestPdf(tenantId, requestId, 'booked', userId);
     }
+    if (closing) void this.telegramAlerts?.postedToStock(tenantId, requestId, userId);
     return {
       request: updated, posted, skipped, failed, carried, charges, marginAlerts,
       short: short.map(({ line, name, packsBought, packsArrived, outcome }) => ({ line, name, packsBought, packsArrived, outcome })),
@@ -1323,6 +1333,7 @@ export class ProcureService {
       tenantId, 'PurchaseRequest', req.id, buffer, mime,
       `${slug}-${req.requestNumber}-${n}.${ext}`, label, userId,
     );
+    void this.telegramAlerts?.purchasePhoto(tenantId, req.id, buffer, mime, label, userId);
     return { id: doc.id, filename: doc.filename, label };
   }
 

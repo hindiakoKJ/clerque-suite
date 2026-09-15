@@ -147,6 +147,27 @@ describe('OrdersService.create — variant recipes', () => {
     return call?.[0].data.payload.lines[0];
   };
 
+  it("tells the owner's Telegram only once the sale is saved, and never waits for it", async () => {
+    const { svc, tx } = build([{ variantId: LARGE, quantity: 250 }]);
+    let release: () => void = () => undefined;
+    const alerts = { saleConfirmed: jest.fn(() => new Promise<void>((r) => { release = r; })) };
+    (svc as any).telegramAlerts = alerts;
+    const order = await svc.create(TENANT, 'cashier-1', payload(LARGE) as never);
+    // create() returned while the alert is still pending.
+    expect(alerts.saleConfirmed).toHaveBeenCalledWith(TENANT, order.id);
+    expect(alerts.saleConfirmed.mock.invocationCallOrder[0]).toBeGreaterThan(tx.order.create.mock.invocationCallOrder[0]);
+    release();
+  });
+
+  it('a sale that fails to save sends no alert', async () => {
+    const { svc, tx } = build([{ variantId: LARGE, quantity: 250 }]);
+    const alerts = { saleConfirmed: jest.fn() };
+    (svc as any).telegramAlerts = alerts;
+    tx.order.create.mockRejectedValueOnce(new Error('insert failed'));
+    await expect(svc.create(TENANT, 'cashier-1', payload(LARGE) as never)).rejects.toThrow();
+    expect(alerts.saleConfirmed).not.toHaveBeenCalled();
+  });
+
   it('pours the LARGE recipe when the line is a Large', async () => {
     const { svc } = build([{ variantId: LARGE, quantity: 250 }]);
     await svc.create(TENANT, 'cashier-1', payload(LARGE) as never);

@@ -2,7 +2,7 @@
 import { Network } from 'lucide-react';
 
 export default function SubprocessorsPage() {
-  const lastUpdated = 'July 31, 2026';
+  const lastUpdated = 'September 15, 2026';
 
   const subprocessors = [
     {
@@ -25,6 +25,13 @@ export default function SubprocessorsPage() {
       data: 'Recipient email address and message content of transactional emails',
       location: 'United States',
       safeguard: 'Data-processing agreement; contractual safeguards under Sec. 21, RA 10173',
+    },
+    {
+      name: 'Telegram (activated only when an owner or manager links their own Telegram)',
+      purpose: "Alerts to the linked person's private Telegram chat: sales, buying steps and receipt photos",
+      data: "Sale and purchase details, supplier prices and receipt photos of that shop; the linked person's Telegram chat id and username. No PWD/senior ID numbers or customer details are sent",
+      location: 'As disclosed by Telegram (outside the Philippines)',
+      safeguard: "Opt-in per person; limited to the shop's own owner and branch managers; can be unlinked at any time from Clerque or by sending /stop",
     },
     {
       name: 'Error-monitoring provider (Sentry)',

@@ -147,7 +147,7 @@ describe('buy lists in Excel — out and back in', () => {
     const res = await svc.importWorkbook(TENANT, asUpload(await write(wb)), OWNER, false);
 
     expect(procure.recordBought).toHaveBeenCalledWith(TENANT, 'r1',
-      [{ lineId: 'l1', packsBought: 3, packSize: 1000, packCost: 86.5, brandNote: undefined }], OWNER, { boughtAt: '2026-09-13' });
+      [{ lineId: 'l1', packsBought: 3, packSize: 1000, packCost: 86.5, brandNote: undefined }], OWNER, { boughtAt: '2026-09-13', quiet: true });
     const [, branchId, day, lines, actor, note] = procure.recordFromSheet.mock.calls[0];
     expect([branchId, day, actor]).toEqual(['b1', '2026-09-12', OWNER]);
     expect(lines).toEqual([{ rawMaterialId: 'rm-sugar', packsBought: 2, packSize: 1000, packCost: 80, brandNote: null, rowKey: key }]);

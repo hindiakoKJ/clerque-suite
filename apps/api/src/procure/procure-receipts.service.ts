@@ -16,6 +16,7 @@ import { readTag, withTag, appendNote } from './procure-notes';
 import { CostSanityService, IngredientCostLine } from '../common/sanity/cost-sanity.service';
 import { sanityValueKey } from '@repo/shared-types';
 import { SanityContext, SanityWarning } from '../common/sanity/sanity.types';
+import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -55,6 +56,7 @@ export class ProcureReceiptsService {
     private readonly ai:        AiService,
     private readonly documents: DocumentsService,
     @Optional() private readonly sanity?: CostSanityService,
+    @Optional() private readonly telegramAlerts?: TelegramAlertsService,
   ) {}
 
   // ── reading ───────────────────────────────────────────────────────────────
@@ -432,12 +434,14 @@ export class ProcureReceiptsService {
       try {
         const mime = dto.mediaType ?? 'image/jpeg';
         const ext  = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+        const photo = Buffer.from(dto.imageBase64, 'base64');
         const doc = await this.documents.uploadBuffer(
           tenantId, 'PurchaseRequest', request.id,
-          Buffer.from(dto.imageBase64, 'base64'), mime,
+          photo, mime,
           `receipt-${requestNumber}.${ext}`, 'Receipt', userId,
         );
         document = { id: doc.id, filename: doc.filename };
+        void this.telegramAlerts?.purchasePhoto(tenantId, request.id, photo, mime, 'Receipt', userId);
       } catch {
         document = null;
       }
@@ -571,12 +575,14 @@ export class ProcureReceiptsService {
       try {
         const mime = dto.mediaType ?? 'image/jpeg';
         const ext  = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+        const photo = Buffer.from(dto.imageBase64, 'base64');
         const doc = await this.documents.uploadBuffer(
           tenantId, 'PurchaseRequest', req.id,
-          Buffer.from(dto.imageBase64, 'base64'), mime,
+          photo, mime,
           `receipt-${req.requestNumber}.${ext}`, 'Receipt', userId,
         );
         document = { id: doc.id, filename: doc.filename };
+        void this.telegramAlerts?.purchasePhoto(tenantId, req.id, photo, mime, 'Receipt', userId);
       } catch {
         document = null;
       }

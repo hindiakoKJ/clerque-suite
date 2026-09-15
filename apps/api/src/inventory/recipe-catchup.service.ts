@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { recipeUsagePerUnit, drainLots } from '../orders/recipe-usage';
 
 /**
  * Recipe catch-up — replay ingredient usage for sale lines that never deducted.
@@ -17,10 +18,11 @@ import { AuditService } from '../audit/audit.service';
  *
  * This reconstructs the missed usage from the sales themselves. Everything it
  * needs was persisted at sale time: OrderItem.productId, quantity,
- * refundedQty, and the exact modifier options chosen. It applies the CURRENT
- * recipe to those historical lines using the same netting, size-multiplier and
- * zero-floor rules as the live sale path, so a substitution rung up weeks ago
- * still resolves correctly when replayed today.
+ * refundedQty, the size (variant) and the exact modifier options chosen. It
+ * applies the CURRENT recipe to those historical lines through the same shared
+ * walk the live sale uses (orders/recipe-usage.ts) -- size recipe, netting,
+ * size-multiplier and zero floor -- so a substitution or a Large rung up weeks
+ * ago still resolves correctly when replayed today.
  *
  * HOW DOUBLE-DEDUCTION IS PREVENTED
  * ---------------------------------
@@ -264,6 +266,12 @@ export class RecipeCatchupService {
           select: { rawMaterialId: true, quantity: true },
         });
         const stockByRm = new Map(stockRows.map((s) => [s.rawMaterialId, Number(s.quantity)]));
+        // The lot order a live sale takes each ingredient in: soonest expiry first only for a lot-tracked one.
+        const lotsTrackedRows = await tx.rawMaterial.findMany({
+          where:  { id: { in: rmIds }, tenantId },
+          select: { id: true, lotsTracked: true },
+        });
+        const lotsTracked = new Map(lotsTrackedRows.map((m) => [m.id, m.lotsTracked === true]));
 
         const lines: CatchupLine[] = [];
         for (const rmId of rmIds) {
@@ -278,10 +286,10 @@ export class RecipeCatchupService {
             data: { quantity: { decrement: new Prisma.Decimal(used) } },
           });
 
-          // Drain lot layers in the same FEFO/FIFO order a live sale uses.
-          // Skipping this would leave layers full while the pool fell, which
-          // breaks expiry ordering and re-inflates the balance later.
-          await this.drainLots(tx, branchId, rmId, used);
+          // Drain lot layers in the same FEFO/FIFO order a live sale uses, with the
+          // sale's guarded takes. Skipping this would leave layers full while the
+          // pool fell, which breaks expiry ordering and re-inflates the balance later.
+          await drainLots(tx, { branchId, rawMaterialId: rmId }, used, lotsTracked.get(rmId) ?? false);
 
           lines.push({
             rawMaterialId: rmId,
@@ -406,6 +414,7 @@ export class RecipeCatchupService {
         orderId: true,
         productId: true,
         productName: true,
+        variantId: true,
         quantity: true,
         refundedQty: true,
         modifiers: { select: { modifierOptionId: true } },
@@ -417,7 +426,7 @@ export class RecipeCatchupService {
     });
 
     const unitsByProduct = new Map<string, { name: string; units: number }>();
-    const servings: Array<{ itemId: string; orderId: string; productId: string; qty: number; optionIds: string[] }> = [];
+    const servings: Array<{ itemId: string; orderId: string; productId: string; variantId: string | null; qty: number; optionIds: string[] }> = [];
 
     for (const item of items) {
       // Refunded quantity nets out: a drink rung up and then refunded never
@@ -433,6 +442,7 @@ export class RecipeCatchupService {
         itemId: item.id,
         orderId: item.orderId,
         productId: item.productId,
+        variantId: item.variantId ?? null,
         qty: netQty,
         optionIds: item.modifiers.map((m) => m.modifierOptionId),
       });
@@ -451,11 +461,26 @@ export class RecipeCatchupService {
       }
     }
 
+    // A size with its own recipe replaces the product's -- a Large replays a Large's milk.
+    const variantIds = [...new Set(servings.map((sv) => sv.variantId).filter((v): v is string => !!v))];
+    const bomByVariant = new Map<string, Array<{ rawMaterialId: string; quantity: number }>>();
+    if (variantIds.length > 0) {
+      const vboms = await db.variantBomItem.findMany({
+        where: { variantId: { in: variantIds }, variant: { product: { tenantId } } },
+        select: { variantId: true, rawMaterialId: true, quantity: true },
+      });
+      for (const b of vboms) {
+        const list = bomByVariant.get(b.variantId) ?? [];
+        list.push({ rawMaterialId: b.rawMaterialId, quantity: Number(b.quantity) });
+        bomByVariant.set(b.variantId, list);
+      }
+    }
+
     // `productIds` narrows a run — chiefly for lines predating the marker,
     // where null cannot be distinguished from "already deducted".
     const requested = productIds?.length ? new Set(productIds) : null;
-    const inScope = (pid: string) =>
-      bomByProduct.has(pid) && (requested === null || requested.has(pid));
+    const inScope = (pid: string, variantId: string | null) =>
+      (bomByProduct.has(pid) || (variantId != null && bomByVariant.has(variantId))) && (requested === null || requested.has(pid));
 
     const allOptionIds = [...new Set(servings.flatMap((s) => s.optionIds))];
     const options = allOptionIds.length
@@ -475,41 +500,18 @@ export class RecipeCatchupService {
     const orderIds = new Set<string>();
 
     for (const s of servings) {
-      if (!inScope(s.productId)) continue;
+      if (!inScope(s.productId, s.variantId)) continue;
 
       const chosen = s.optionIds
         .map((id) => optionById.get(id))
         .filter((o): o is (typeof options)[number] => o !== undefined);
 
-      // Highest multiplier wins — never compounded. Mirrors orders.service.
-      const multiplier = chosen.reduce((max, o) => {
-        const m = Number(o.recipeMultiplier);
-        return Number.isFinite(m) && m > max ? m : max;
-      }, 1);
-
-      const netted = new Map<string, number>();
-      for (const line of bomByProduct.get(s.productId) ?? []) {
-        netted.set(
-          line.rawMaterialId,
-          (netted.get(line.rawMaterialId) ?? 0) + line.quantity * multiplier,
-        );
-      }
-      // Modifier ingredients are signed: a negative line cancels the base
-      // recipe. That is how substitution is expressed.
-      for (const o of chosen) {
-        for (const ing of o.ingredients) {
-          netted.set(
-            ing.rawMaterialId,
-            (netted.get(ing.rawMaterialId) ?? 0) + Number(ing.quantity),
-          );
-        }
-      }
-
+      // The one recipe walk the live sale uses: size recipe or product recipe,
+      // highest multiplier (never compounded), signed add-on ingredients netted
+      // in, floored at zero.
       let contributed = false;
-      for (const [rmId, perUnit] of netted) {
-        const floored = Math.max(perUnit, 0); // over-cancelling settles at "none used"
-        if (floored <= 0) continue;
-        usageByRm.set(rmId, (usageByRm.get(rmId) ?? 0) + floored * s.qty);
+      for (const u of recipeUsagePerUnit(bomByProduct.get(s.productId) ?? [], s.variantId ? bomByVariant.get(s.variantId) : null, chosen)) {
+        usageByRm.set(u.rawMaterialId, (usageByRm.get(u.rawMaterialId) ?? 0) + u.perUnit * s.qty);
         contributed = true;
       }
 
@@ -530,33 +532,6 @@ export class RecipeCatchupService {
       alreadyDeductedCount,
       itemLines: () => itemIds.length,
     };
-  }
-
-  /** Drain lot layers FEFO (expiry first, nulls last) then FIFO, as a sale does. */
-  private async drainLots(
-    tx: Prisma.TransactionClient,
-    branchId: string,
-    rawMaterialId: string,
-    qty: number,
-  ): Promise<void> {
-    let remaining = qty;
-    const lots = await tx.rawMaterialLot.findMany({
-      where: { branchId, rawMaterialId, qtyRemaining: { gt: 0 } },
-      orderBy: [
-        { expirationDate: { sort: 'asc', nulls: 'last' } },
-        { receivedAt: 'asc' },
-      ],
-    });
-    for (const lot of lots) {
-      if (remaining <= 0) break;
-      const lotRem = Number(lot.qtyRemaining);
-      const drain = Math.min(lotRem, remaining);
-      await tx.rawMaterialLot.update({
-        where: { id: lot.id },
-        data: { qtyRemaining: new Prisma.Decimal(lotRem - drain) },
-      });
-      remaining -= drain;
-    }
   }
 
   // ───────────────────────────── warnings ─────────────────────────────

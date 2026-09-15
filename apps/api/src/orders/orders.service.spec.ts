@@ -47,6 +47,8 @@ function makePrismaMock() {
         inventoryLog:    { create: jest.fn() },
         accountingEvent: { create: jest.fn() },
         orderPayment:    { findMany: jest.fn().mockResolvedValue([]) },
+        // Nothing refunded on these orders before the void.
+        orderItemRefund: { aggregate: jest.fn().mockResolvedValue({ _sum: { refundAmount: null } }) },
       });
     }),
   };

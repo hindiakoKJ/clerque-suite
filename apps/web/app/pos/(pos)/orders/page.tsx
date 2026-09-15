@@ -450,7 +450,7 @@ export default function OrdersPage() {
             </div>
             <div className="p-6 space-y-4">
               <div className="bg-red-500/10 border border-red-200 dark:border-red-900 rounded-xl p-3 text-xs text-red-600 dark:text-red-400">
-                ⚠️ This will reverse the sale and restore inventory. Voids are only allowed on same-day orders. This action cannot be undone.
+                ⚠️ This will reverse the sale. Shelf items go back to stock; made-to-order items stay used, because their ingredients are gone. Voids are only allowed on same-day orders. This action cannot be undone.
               </div>
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">

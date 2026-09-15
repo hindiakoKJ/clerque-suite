@@ -179,6 +179,30 @@ describe('OrdersService.create — variant recipes', () => {
     expect(consumed[MILK.id]).toBe(150);
   });
 
+  it('a Regular and a Large of one product on one order each carry their own cost, in the books and on the line', async () => {
+    const { svc, tx } = build([{ variantId: LARGE, quantity: 250 }]);
+    // The created order comes back with its lines, as the database returns them.
+    tx.order.create.mockResolvedValue({
+      id: 'o-1', orderNumber: 'ORD-1',
+      items: [
+        { id: 'it-regular', productId: PRODUCT, variantId: null, modifiers: [] },
+        { id: 'it-large', productId: PRODUCT, variantId: LARGE, modifiers: [] },
+      ],
+    });
+    tx.orderItem.update = jest.fn().mockResolvedValue({});
+    const both = payload(undefined);
+    both.items = [both.items[0], { ...both.items[0], variantId: LARGE } as never];
+    await svc.create(TENANT, 'cashier-1', both as never);
+
+    const call = (tx.accountingEvent.create as jest.Mock).mock.calls.find((c) => c[0]?.data?.type === 'COGS');
+    expect(call[0].data.payload.lines.map((l: any) => Number(l.unitCost))).toEqual([150 * MILK.costPrice, 250 * MILK.costPrice].map((n) => expect.closeTo(n, 4)));
+    // The cost of goods entry is dated to the sale, not to when the event row was written.
+    expect(call[0].data.payload.completedAt).toBe(both.createdAt);
+    const written = Object.fromEntries((tx.orderItem.update as jest.Mock).mock.calls.map((c) => [c[0].where.id, Number(c[0].data.costPrice)]));
+    expect(written['it-regular']).toBeCloseTo(150 * MILK.costPrice, 4);
+    expect(written['it-large']).toBeCloseTo(250 * MILK.costPrice, 4);
+  });
+
   it('does not go looking for variant recipes when no line has one', async () => {
     const { svc, tx } = build([]);
     await svc.create(TENANT, 'cashier-1', payload(undefined) as never);

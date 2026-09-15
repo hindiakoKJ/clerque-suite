@@ -79,11 +79,14 @@ describe('OrdersService — ingredient deduction pause', () => {
         findMany: jest.fn(() =>
           Promise.resolve(lotState.filter((l) => l.qtyRemaining > 0).map((l) => ({ ...l }))),
         ),
-        update: jest.fn(({ where, data }: any) => {
-          lotWrites++;
+        // A guarded relative take, like the database: only when the layer still holds that much.
+        updateMany: jest.fn(({ where, data }: any) => {
           const lot = lotState.find((l) => l.id === where.id);
-          if (lot) lot.qtyRemaining = Number(data.qtyRemaining);
-          return Promise.resolve({});
+          const take = Number(data.qtyRemaining.decrement);
+          if (!lot || lot.qtyRemaining < Number(where.qtyRemaining.gte)) return Promise.resolve({ count: 0 });
+          lotWrites++;
+          lot.qtyRemaining -= take;
+          return Promise.resolve({ count: 1 });
         }),
       },
       accountingEvent: { create: jest.fn() },

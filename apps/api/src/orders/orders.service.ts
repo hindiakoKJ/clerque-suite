@@ -1,3 +1,5 @@
+import { WAITS_AT_A_SCREEN, stillToMake, waitsAtAScreen } from '../kds/station-routing';
+import { recipeUsagePerUnit, recipeKey, drainLots } from './recipe-usage';
 import {
   Injectable,
   BadRequestException,
@@ -13,7 +15,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { Prisma, InventoryLogType } from '@prisma/client';
-import { OfflineOrder, planFeaturesFor, hasPermission } from '@repo/shared-types';
+import { OfflineOrder, planFeaturesFor, hasPermission, PH_TIMEZONE } from '@repo/shared-types';
 import { OrderQuoteService } from './order-quote.service';
 
 /** Peso tolerance when comparing a caller's totals against our own. One
@@ -578,7 +580,7 @@ export class OrdersService {
             where:  { id: { in: productIds }, tenantId },
             select: {
               id: true,
-              category: { select: { stationId: true, revenueAccountCode: true } },
+              category: { select: { stationId: true, revenueAccountCode: true, station: { select: { hasKds: true, isActive: true } } } },
             },
           })
         : [];
@@ -587,9 +589,13 @@ export class OrdersService {
           'One or more products in this order do not belong to your tenant.',
         );
       }
-      const hasAnyRoutedItem = productsForRouting.some(
-        (p) => p.category?.stationId != null,
-      );
+      /*
+        Only a station with a screen can mark an item ready. An order routed
+        to one without (a counter station that only prints, a pastry pass from
+        a template) used to wait at PAID forever: nothing could ever bump it,
+        so it showed "Preparing" for good and could not get its e-invoice.
+      */
+      const hasAnyRoutedItem = productsForRouting.some((p) => waitsAtAScreen(p.category));
       // Per-product revenue account (from its category). Baked into each SALE
       // line below so the journal can split revenue by stream — Court Rental
       // vs Open Play vs Tournament vs Retail — instead of dumping everything
@@ -881,10 +887,16 @@ export class OrdersService {
       // earlier (right before the inventory-deduction loop) and reused here.
       void drainProductLots; // explicit reference for readability
 
-      // productId -> per-unit recipe cost (₱ per single finished unit).
-      // Populated only where recipe costing is actually switched on — see
-      // `costFromRecipe` below.
-      const recipeUnitCostByProduct = new Map<string, number>();
+      /*
+        Recipe cost per RECIPE (product, size, add-ons), not per product: the
+        total cost and units of every line with that recipe, averaged. Keyed by
+        product alone, a Regular and a Large of one product on the same order
+        both took whichever line was walked last. Populated only where recipe
+        costing is switched on -- see `costFromRecipe` below.
+      */
+      const recipeCostByKey = new Map<string, { cost: number; qty: number }>();
+      const optionIdsOf = (i: { modifiers?: Array<{ modifierOptionId?: string | null }> | null }) =>
+        (i.modifiers ?? []).map((m) => m.modifierOptionId);
       /*
         Every recipe line this order cannot actually satisfy.
 
@@ -1092,78 +1104,20 @@ export class OrdersService {
           .map((id) => optionsById.get(id))
           .filter((o): o is NonNullable<typeof o> => o != null);
 
-        const recipeMultiplier = modifierOptions.reduce((max, o) => {
-          const m = Number(o.recipeMultiplier);
-          return Number.isFinite(m) && m > max ? m : max;
-        }, 1);
-
         // BOM walk: defense-in-depth tenant scope on the JOIN side too.
         // The productId guard above already rejects cross-tenant productIds,
         // but scoping the bomItem query by product.tenantId makes this
         // resilient to any future code path that bypasses the upstream guard.
-        // A variant's own recipe wins; without one it uses the product's.
-        const variantBom = item.variantId ? bomsByVariant.get(item.variantId) : undefined;
-        const bomItems: Array<{
-          rawMaterialId: string;
-          quantity: Prisma.Decimal;
-          // name and unit so a refusal can say WHICH ingredient ran short.
-          rawMaterial: {
-            name: string; unit: string;
-            costPrice: Prisma.Decimal | null; lotsTracked: boolean;
-          } | null;
-        }> = variantBom && variantBom.length > 0
-          ? variantBom
-          : (bomsByProduct.get(item.productId) ?? []);
-
-        // Build the unified consumption list: scaled base BOM + modifier
-        // add-ons. Both shapes match `{ rawMaterialId, quantity, rawMaterial }`
-        // so the downstream loop can stay one path.
-        const modifierBomLines = modifierOptions.flatMap((o) =>
-          o.ingredients.map((ing) => ({
-            rawMaterialId: ing.rawMaterialId,
-            quantity:      new Prisma.Decimal(Number(ing.quantity)),  // per finished unit
-            rawMaterial:   ing.rawMaterial,
-          })),
-        );
-        const baseScaled = bomItems.map((b) => ({
-          rawMaterialId: b.rawMaterialId,
-          quantity:      new Prisma.Decimal(Number(b.quantity) * recipeMultiplier),
-          rawMaterial:   b.rawMaterial,
-        }));
-        // Net the base recipe against the modifier lines PER INGREDIENT before
-        // anything is deducted or costed.
         //
-        // This is what makes substitution real. "Oat milk" is expressed as two
-        // modifier lines — minus the dairy the base recipe calls for, plus the
-        // oat milk actually poured — so an oat latte must consume NO whole
-        // milk and cost oat-milk money. Deducting the lines separately (as
-        // before) would drain dairy that was never poured and bill the drink
-        // for both milks.
-        //
-        // Netting also fixes a quieter case: an "extra shot" add-on naming the
-        // same beans as the base recipe used to walk the lot/FEFO path twice
-        // for one ingredient.
-        const nettedByRm = new Map<string, { rawMaterialId: string; quantity: number; rawMaterial: (typeof baseScaled)[number]['rawMaterial'] }>();
-        for (const line of [...baseScaled, ...modifierBomLines]) {
-          const existing = nettedByRm.get(line.rawMaterialId);
-          if (existing) {
-            existing.quantity += Number(line.quantity);
-          } else {
-            nettedByRm.set(line.rawMaterialId, {
-              rawMaterialId: line.rawMaterialId,
-              quantity:      Number(line.quantity),
-              rawMaterial:   line.rawMaterial,
-            });
-          }
-        }
-
-        // Floor every net at zero. A substitution may CANCEL a base ingredient
-        // but must never credit stock back or subtract cost — over-cancelling
-        // (say -500ml against a 200ml base) settles at "none used" rather than
-        // inventing 300ml of milk and a negative COGS.
-        const consumptionLines = [...nettedByRm.values()]
-          .map((l) => ({ ...l, quantity: new Prisma.Decimal(Math.max(l.quantity, 0)) }))
-          .filter((l) => Number(l.quantity) > 0);
+        // The recipe of the line -- size recipe or product recipe, scaled by
+        // the add-ons, add-on ingredients netted in (oat milk instead of
+        // dairy uses NO dairy), floored at zero -- comes from the one shared
+        // walk in recipe-usage.ts, the same one Recipe Catch-Up uses.
+        const consumptionLines = recipeUsagePerUnit(
+          bomsByProduct.get(item.productId) ?? [],
+          item.variantId ? bomsByVariant.get(item.variantId) : undefined,
+          modifierOptions,
+        ).map((l) => ({ rawMaterialId: l.rawMaterialId, quantity: new Prisma.Decimal(l.perUnit), rawMaterial: l.rawMaterial }));
 
         if (consumptionLines.length === 0) continue; // not a recipe product, no add-ons
 
@@ -1243,34 +1197,10 @@ export class OrdersService {
           // sort to the end and behave like classic FIFO.
           const lotsTracked = bom.rawMaterial?.lotsTracked === true;
           if ((useFifo || lotsTracked) && !deductionPaused) {
-            let remaining = consumeQty;
-            let drainedCost = 0;        // total ₱ drained from lots for this BOM line
-            let drainedQty  = 0;        // total qty actually drained (may be < consumeQty if under-stocked)
-            const lots = await tx.rawMaterialLot.findMany({
-              where: {
-                branchId:      payload.branchId,
-                rawMaterialId: bom.rawMaterialId,
-                qtyRemaining:  { gt: 0 },
-              },
-              orderBy: lotsTracked
-                ? [
-                    { expirationDate: { sort: 'asc', nulls: 'last' } as const },
-                    { receivedAt:     'asc' as const },
-                  ]
-                : [{ receivedAt: 'asc' as const }],
-            });
-            for (const lot of lots) {
-              if (remaining <= 0) break;
-              const lotRem = Number(lot.qtyRemaining);
-              const drain  = Math.min(lotRem, remaining);
-              await tx.rawMaterialLot.update({
-                where: { id: lot.id },
-                data:  { qtyRemaining: new Prisma.Decimal(lotRem - drain) },
-              });
-              drainedCost += drain * Number(lot.unitCost);
-              drainedQty  += drain;
-              remaining   -= drain;
-            }
+            // Guarded relative takes (recipe-usage.ts): two tills on the same layer cannot erase each other's drain.
+            const drained = await drainLots(tx, { branchId: payload.branchId, rawMaterialId: bom.rawMaterialId }, consumeQty, lotsTracked);
+            const drainedCost = drained.cost;   // total ₱ drained from lots for this BOM line
+            const drainedQty  = drained.qty;    // total qty actually drained (may be < consumeQty if under-stocked)
             // Per-unit cost contribution from this ingredient. If we couldn't
             // fully drain (under-stocked), fall back to RawMaterial.costPrice
             // for the remaining portion so COGS is never zero.
@@ -1292,7 +1222,11 @@ export class OrdersService {
         // when recipe costing is on for this product, otherwise the flat
         // Product.costPrice stays in charge.
         if (costFromRecipe(item.productId)) {
-          recipeUnitCostByProduct.set(item.productId, perUnitCost);
+          const key = recipeKey(item.productId, item.variantId, optionIdsOf(item));
+          const acc = recipeCostByKey.get(key) ?? { cost: 0, qty: 0 };
+          acc.cost += perUnitCost * soldQty;
+          acc.qty  += soldQty;
+          recipeCostByKey.set(key, acc);
         }
       }
 
@@ -1464,7 +1398,8 @@ export class OrdersService {
                 //                   tenants on the WAC valuation method).
                 //   5. SNAPSHOT   — till's snapshot of Product.costPrice
                 //                   (legacy fallback).
-                const recipe   = recipeUnitCostByProduct.get(i.productId);
+                const recipeAcc = recipeCostByKey.get(recipeKey(i.productId, i.variantId, optionIdsOf(i)));
+                const recipe   = recipeAcc ? (recipeAcc.qty > 0 ? recipeAcc.cost / recipeAcc.qty : 0) : undefined;
                 const lotCost  = lotUnitCostByProduct.get(i.productId);
                 const wac      = avgCostByProduct.get(i.productId);
                 const unitCost =
@@ -1484,6 +1419,7 @@ export class OrdersService {
                                     'SNAPSHOT';
                 return {
                   productId:    i.productId,
+                  lineKey:      recipeKey(i.productId, i.variantId, optionIdsOf(i)),
                   quantity:     i.quantity,
                   unitCost,
                   totalCost:    qty * unitCost + overhead,
@@ -1503,8 +1439,12 @@ export class OrdersService {
           payload: {
             orderId: order.id,
             branchId: payload.branchId,
+            // The sale's own moment, so the cost of goods lands on the same day as
+            // the revenue. Without it the journal dated this entry to when the
+            // event row was written -- for an offline sale, the day it synced.
+            completedAt: payload.createdAt,
             overheadRate,                      // 0 for non-manufacturing tenants
-            lines: cogsLines,
+            lines: cogsLines.map(({ lineKey: _k, ...l }) => l),
           } as unknown as Prisma.JsonObject,
         },
       });
@@ -1524,10 +1464,14 @@ export class OrdersService {
         up — so it becomes the number of record. Written after the COGS event
         is built so there is exactly one place the cost is decided.
       */
-      for (const line of cogsLines) {
-        await tx.orderItem.updateMany({
-          where: { orderId: order.id, productId: line.productId },
-          data:  { costPrice: new Prisma.Decimal(line.unitCost) },
+      // Per order line, by its recipe: a Regular and a Large of one product each get their own cost.
+      const unitCostByKey = new Map(cogsLines.map((l) => [l.lineKey, l.unitCost]));
+      for (const it of order.items ?? []) {
+        const unitCost = unitCostByKey.get(recipeKey(it.productId, it.variantId, (it.modifiers ?? []).map((m) => m.modifierOptionId)));
+        if (unitCost == null) continue;
+        await tx.orderItem.update({
+          where: { id: it.id },
+          data:  { costPrice: new Prisma.Decimal(unitCost) },
         });
       }
 
@@ -1667,17 +1611,16 @@ export class OrdersService {
         throw new BadRequestException('Only paid or completed orders can be voided');
       }
 
-      const today = new Date();
       // Voids are scoped to the same calendar day as the SALE (paidAt), not
       // the production-complete moment. A drink ordered at 11:55 PM that
       // didn't get bumped READY until 12:05 AM still belongs to yesterday's
       // shift for void purposes.
+      //
+      // The shop's calendar, not the server's: on a server keeping UTC, a
+      // 7 AM Manila sale was "yesterday" by 8 AM and could no longer be voided.
+      const manilaDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: PH_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
       const saleDate = order.paidAt ?? order.completedAt ?? order.createdAt;
-      if (
-        saleDate.getFullYear() !== today.getFullYear() ||
-        saleDate.getMonth() !== today.getMonth() ||
-        saleDate.getDate() !== today.getDate()
-      ) {
+      if (manilaDay(saleDate) !== manilaDay(new Date())) {
         throw new ForbiddenException('Voids are only allowed on the same day as the sale');
       }
 
@@ -1714,12 +1657,20 @@ export class OrdersService {
         // InventoryItem somehow exists for a recipe product, don't restock.)
         if (item.product?.inventoryMode === 'RECIPE_BASED') continue;
 
+        /*
+          Only what is still on the sale. Units already refunded were either
+          put back by that refund or written off with it; putting the whole
+          line back here added them to the shelf a second time.
+        */
+        const backQty = Number(item.quantity) - Number(item.refundedQty);
+        if (!(backQty > 0)) continue;
+
         const invItem = await tx.inventoryItem.findUnique({
           where: { branchId_productId: { branchId: order.branchId!, productId: item.productId } },
         });
         if (invItem) {
           const qtyBefore = Number(invItem.quantity);
-          const qtyAfter = qtyBefore + Number(item.quantity);
+          const qtyAfter = qtyBefore + backQty;
           await tx.inventoryItem.update({
             where: { branchId_productId: { branchId: order.branchId!, productId: item.productId } },
             data: { quantity: new Prisma.Decimal(qtyAfter) },
@@ -1730,7 +1681,7 @@ export class OrdersService {
               branchId: order.branchId!,
               productId: item.productId,
               type: InventoryLogType.VOID_REVERSAL,
-              quantity: new Prisma.Decimal(Number(item.quantity)),
+              quantity: new Prisma.Decimal(backQty),
               quantityBefore: new Prisma.Decimal(qtyBefore),
               quantityAfter: new Prisma.Decimal(qtyAfter),
               reason: `Void — Order ${order.orderNumber}: ${reason}`,
@@ -1748,7 +1699,7 @@ export class OrdersService {
                 select: { costPrice: true },
               }))?.costPrice ?? null;
           if (itemCost != null) {
-            restockedCogsTotal += Number(itemCost) * Number(item.quantity);
+            restockedCogsTotal += Number(itemCost) * backQty;
           }
         }
       }
@@ -1757,6 +1708,12 @@ export class OrdersService {
       // journal processor can generate a correct reversal even if the original
       // SALE event hasn't been synced yet (out-of-order processing fallback).
       const payments = await tx.orderPayment.findMany({ where: { orderId } });
+      // Money already given back by item refunds: the void reverses only the rest of the sale.
+      const refundedAgg = await tx.orderItemRefund.aggregate({
+        where: { orderItem: { orderId } },
+        _sum:  { refundAmount: true },
+      });
+      const refundedAmount = Number(refundedAgg?._sum?.refundAmount ?? 0);
       await tx.accountingEvent.create({
         data: {
           tenantId,
@@ -1780,6 +1737,8 @@ export class OrdersService {
             // (recipe ingredients consumed = waste). Equal to the original
             // COGS for retail (everything goes back on the shelf).
             restockedCogsTotal,
+            // Already reversed, line by line, by earlier item refunds.
+            refundedAmount,
           } as unknown as Prisma.JsonObject,
         },
       });
@@ -1973,6 +1932,20 @@ export class OrdersService {
         data:  { refundedQty: new Prisma.Decimal(alreadyRefunded + quantity) },
       });
 
+      /*
+        Restocked means something went back on a shelf. Asked to restock a
+        product with no shelf row -- a recipe item still marked unit-based --
+        nothing is put back, and neither is its cost: the refund used to book
+        Dr Inventory / Cr COGS for stock that never existed.
+      */
+      const inv = effectiveRestock && item.order.branchId
+        ? await tx.inventoryItem.findFirst({
+            where: { tenantId, branchId: item.order.branchId, productId: item.productId },
+            select: { id: true, quantity: true },
+          })
+        : null;
+      const actuallyRestocked = inv != null;
+
       const refundRow = await tx.orderItemRefund.create({
         data: {
           orderItemId,
@@ -1980,40 +1953,34 @@ export class OrdersService {
           refundAmount: new Prisma.Decimal(refundAmount.toFixed(2)),
           reason:       reason.trim(),
           refundMethod: refundMethod as Prisma.OrderItemRefundCreateInput['refundMethod'],
-          restocked:    effectiveRestock,
+          restocked:    actuallyRestocked,
           refundedById,
         },
       });
 
-      // Inventory restock — only if requested and the order had a branchId.
+      // Inventory restock — only if requested, the order had a branchId, and there is a shelf row.
       // H9: `effectiveRestock` already coerced to false for RECIPE_BASED.
-      if (effectiveRestock && item.order.branchId) {
-        const inv = await tx.inventoryItem.findFirst({
-          where: { tenantId, branchId: item.order.branchId, productId: item.productId },
-          select: { id: true, quantity: true },
+      if (inv && item.order.branchId) {
+        const before = Number(inv.quantity);
+        const after  = before + quantity;
+        await tx.inventoryItem.update({
+          where: { id: inv.id },
+          data:  { quantity: new Prisma.Decimal(after) },
         });
-        if (inv) {
-          const before = Number(inv.quantity);
-          const after  = before + quantity;
-          await tx.inventoryItem.update({
-            where: { id: inv.id },
-            data:  { quantity: new Prisma.Decimal(after) },
-          });
-          await tx.inventoryLog.create({
-            data: {
-              tenantId,
-              branchId:       item.order.branchId,
-              productId:      item.productId,
-              type:           InventoryLogType.STOCK_IN,
-              quantity:       new Prisma.Decimal(quantity),
-              quantityBefore: new Prisma.Decimal(before),
-              quantityAfter:  new Prisma.Decimal(after),
-              reason:         `Refund — Order ${item.order.orderNumber}`,
-              referenceId:    refundRow.id,
-              createdById:    refundedById,
-            },
-          });
-        }
+        await tx.inventoryLog.create({
+          data: {
+            tenantId,
+            branchId:       item.order.branchId,
+            productId:      item.productId,
+            type:           InventoryLogType.STOCK_IN,
+            quantity:       new Prisma.Decimal(quantity),
+            quantityBefore: new Prisma.Decimal(before),
+            quantityAfter:  new Prisma.Decimal(after),
+            reason:         `Refund — Order ${item.order.orderNumber}`,
+            referenceId:    refundRow.id,
+            createdById:    refundedById,
+          },
+        });
       }
 
       // Compute the COGS portion attributable to the refunded units, but
@@ -2024,7 +1991,7 @@ export class OrdersService {
       const itemUnitCost = item.costPrice != null
         ? Number(item.costPrice)
         : (item.product?.costPrice != null ? Number(item.product.costPrice) : 0);
-      const restockedCogsAmount = effectiveRestock ? itemUnitCost * quantity : 0;
+      const restockedCogsAmount = actuallyRestocked ? itemUnitCost * quantity : 0;
 
       // Queue a partial reversal accounting event. The journal processor
       // posts: DR Sales (proportional) / DR Output VAT / CR Cash (or AR)
@@ -2044,7 +2011,7 @@ export class OrdersService {
             originalQty:    Number(item.quantity),
             refundAmount,
             refundMethod,
-            restocked:      effectiveRestock,
+            restocked:      actuallyRestocked,
             // Sprint 9: pre-computed proportional COGS reversal. Zero for
             // non-restocked refunds (waste); cost × qty for restocked items.
             restockedCogsTotal: restockedCogsAmount,
@@ -2052,6 +2019,25 @@ export class OrdersService {
           } as unknown as Prisma.JsonObject,
         },
       });
+
+      /*
+        Refunded the last thing the kitchen or bar was still making: nothing
+        is left to bump, so the order stops waiting. Otherwise it showed
+        "Preparing" forever and could not get its e-invoice.
+      */
+      if (item.order.status === 'PAID') {
+        const waiting = stillToMake(await tx.orderItem.findMany({
+          where:  { orderId, prepStatus: 'PENDING', product: WAITS_AT_A_SCREEN },
+          select: { quantity: true, refundedQty: true },
+        }));
+        if (waiting === 0) {
+          const now = new Date();
+          await tx.order.updateMany({
+            where: { id: orderId, status: 'PAID' },
+            data:  { status: 'COMPLETED', readyAt: now, completedAt: now },
+          });
+        }
+      }
 
       return {
         refundId:        refundRow.id,

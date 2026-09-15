@@ -3,7 +3,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WAITS_AT_A_SCREEN, stillToMake, waitsAtAScreen } from './station-routing';
+/** Orders a station may still act on. A voided order is not made, and its lines are not bumped. */
+const LIVE_ORDER = ['PAID', 'COMPLETED'] as const;
+const QUEUE_SIZE = 50;
 
 /**
  * KDS (Kitchen Display System) service — Sprint 5 MVP.
@@ -42,12 +47,12 @@ export class KdsService {
     // Cutoff: include READY items bumped within the last 30 seconds.
     const recentReadyCutoff = new Date(Date.now() - 30_000);
 
-    const items = await this.prisma.orderItem.findMany({
+    const fetched = await this.prisma.orderItem.findMany({
       where: {
         // Sprint 7: orders flow PAID → COMPLETED. KDS sees items on either —
         // PAID items still need prep; COMPLETED items show briefly while the
         // bumped ticket lingers as a courtesy to the runner.
-        order:     { tenantId, status: { in: ['PAID', 'COMPLETED'] } },
+        order:     { tenantId, status: { in: [...LIVE_ORDER] } },
         product:   { category: { stationId } },
         OR: [
           { prepStatus: 'PENDING' },
@@ -61,10 +66,16 @@ export class KdsService {
       // FIFO by paidAt — items entered the production queue when payment landed.
       // Falls back to completedAt for legacy rows where paidAt was backfilled.
       orderBy: [{ order: { paidAt: 'asc' } }, { order: { completedAt: 'asc' } }],
-      take: 50,
+      // Read past the screen's size: fully refunded lines are dropped below, and must not push a live ticket off.
+      take: QUEUE_SIZE * 2,
     });
+    // What is left to make: a refunded part is not made, and a fully refunded line is not on the screen at all.
+    const items = fetched
+      .map((it) => ({ it, left: Number(it.quantity) - Number(it.refundedQty) }))
+      .filter(({ left }) => left > 1e-9)
+      .slice(0, QUEUE_SIZE);
 
-    return items.map((it) => {
+    return items.map(({ it, left }) => {
       const queuedAt = it.order.paidAt ?? it.order.completedAt;
       return {
         id:           it.id,
@@ -72,7 +83,7 @@ export class KdsService {
         orderNumber:  it.order.orderNumber,
         branchId:     it.order.branchId,
         productName:  it.productName,
-        quantity:     Number(it.quantity),
+        quantity:     left,
         modifiers:    it.modifiers.map((m) => `${m.groupName}: ${m.optionName}`),
         notes:        it.notes,
         prepStatus:   it.prepStatus,
@@ -95,60 +106,80 @@ export class KdsService {
    * timestamp is stamped at the same moment, which feeds the lead-time KPI
    * (readyAt - paidAt = production lead time).
    *
-   * Items not routed to a station (no category.stationId) never sit in
-   * PENDING in the first place — only routed items count toward "all done".
+   * Only lines that wait at a station with a screen count toward "all done":
+   * every line starts PENDING, and a line nobody can bump -- not routed, or
+   * routed to a station without a screen -- would otherwise hold the order
+   * forever. A fully refunded line is not made, so it does not count either.
+   *
+   * The flip from PENDING is one conditional write, so two tablets bumping
+   * the same line at the same moment cannot both count as the bump.
    */
   async bumpReady(tenantId: string, orderItemId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const item = await tx.orderItem.findFirst({
-        where:  { id: orderItemId, order: { tenantId } },
-        select: { id: true, orderId: true, prepStatus: true },
-      });
-      if (!item) throw new NotFoundException('Order item not found.');
-
-      const updated = item.prepStatus !== 'PENDING'
-        ? item // Idempotent — already bumped is a no-op
-        : await tx.orderItem.update({
-            where: { id: orderItemId },
-            data:  { prepStatus: 'READY', readyAt: new Date() },
-            select: { id: true, prepStatus: true, readyAt: true },
-          });
-
-      // Check whether this was the LAST routed item still pending.
-      // Routed items = items whose product.category has a stationId set.
-      const stillPendingRouted = await tx.orderItem.count({
-        where: {
-          orderId:    item.orderId,
-          prepStatus: 'PENDING',
-          product:    { category: { stationId: { not: null } } },
-        },
-      });
-
-      if (stillPendingRouted === 0) {
-        // All routed items done — promote the order from PAID to COMPLETED
-        // and stamp readyAt. Idempotent: only fires when status is still PAID.
-        const now = new Date();
-        await tx.order.updateMany({
-          where: { id: item.orderId, status: 'PAID' },
-          data:  { status: 'COMPLETED', readyAt: now, completedAt: now },
-        });
-      }
-
-      return updated;
-    });
+    return this.prisma.$transaction((tx) => this.bumpInTx(tx, tenantId, orderItemId));
   }
 
-  /** Mark an item as SERVED (delivered to customer). */
-  async markServed(tenantId: string, orderItemId: string) {
-    const item = await this.prisma.orderItem.findFirst({
-      where: { id: orderItemId, order: { tenantId } },
-      select: { id: true, prepStatus: true },
+  private async bumpInTx(tx: Prisma.TransactionClient, tenantId: string, orderItemId: string) {
+    const item = await tx.orderItem.findFirst({
+      where:  { id: orderItemId, order: { tenantId } },
+      select: { id: true, orderId: true, prepStatus: true, readyAt: true, quantity: true, refundedQty: true, order: { select: { status: true } } },
     });
     if (!item) throw new NotFoundException('Order item not found.');
-    return this.prisma.orderItem.update({
-      where: { id: orderItemId },
-      data:  { prepStatus: 'SERVED', servedAt: new Date() },
-      select: { id: true, prepStatus: true, servedAt: true },
+    if (!(LIVE_ORDER as readonly string[]).includes(item.order.status)) {
+      throw new BadRequestException('This order was voided. There is nothing to make.');
+    }
+    if (item.prepStatus === 'PENDING' && Number(item.refundedQty) >= Number(item.quantity)) {
+      throw new BadRequestException('This item was refunded. There is nothing to make.');
+    }
+
+    const now = new Date();
+    const flipped = item.prepStatus === 'PENDING'
+      ? await tx.orderItem.updateMany({
+          where: { id: orderItemId, prepStatus: 'PENDING' },
+          data:  { prepStatus: 'READY', readyAt: now },
+        })
+      : { count: 0 };
+    // Idempotent: already bumped (here, or by the other tablet a moment ago) is a no-op.
+    const updated = flipped.count === 1
+      ? { id: item.id, prepStatus: 'READY' as const, readyAt: now }
+      : await tx.orderItem.findFirst({ where: { id: orderItemId }, select: { id: true, prepStatus: true, readyAt: true } });
+
+    // Check whether this was the LAST line still waiting at a screen.
+    const stillWaiting = stillToMake(await tx.orderItem.findMany({
+      where:  { orderId: item.orderId, prepStatus: 'PENDING', product: WAITS_AT_A_SCREEN },
+      select: { quantity: true, refundedQty: true },
+    }));
+
+    if (stillWaiting === 0) {
+      // All routed items done — promote the order from PAID to COMPLETED
+      // and stamp readyAt. Idempotent: only fires when status is still PAID.
+      await tx.order.updateMany({
+        where: { id: item.orderId, status: 'PAID' },
+        data:  { status: 'COMPLETED', readyAt: now, completedAt: now },
+      });
+    }
+
+    return updated;
+  }
+
+  /**
+   * Mark an item as SERVED (delivered to customer).
+   *
+   * Served without being bumped first is still made: it goes through the bump,
+   * so the order is promoted and it is recorded as ready, not skipped past.
+   */
+  async markServed(tenantId: string, orderItemId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const item = await tx.orderItem.findFirst({
+        where: { id: orderItemId, order: { tenantId } },
+        select: { id: true, prepStatus: true },
+      });
+      if (!item) throw new NotFoundException('Order item not found.');
+      if (item.prepStatus === 'PENDING') await this.bumpInTx(tx, tenantId, orderItemId);
+      await tx.orderItem.update({
+        where: { id: orderItemId },
+        data:  { prepStatus: 'SERVED', servedAt: new Date() },
+      });
+      return tx.orderItem.findFirst({ where: { id: orderItemId }, select: { id: true, prepStatus: true, servedAt: true } });
     });
   }
 
@@ -163,12 +194,21 @@ export class KdsService {
   async unbump(tenantId: string, orderItemId: string) {
     return this.prisma.$transaction(async (tx) => {
       const item = await tx.orderItem.findFirst({
-        where:  { id: orderItemId, order: { tenantId } },
-        select: { id: true, orderId: true, prepStatus: true },
+        where:  {
+          id: orderItemId, order: { tenantId },
+        },
+        select: {
+          id: true, orderId: true, prepStatus: true,
+          order: { select: { status: true } },
+          product: { select: { category: { select: { stationId: true, station: { select: { hasKds: true, isActive: true } } } } } },
+        },
       });
       if (!item) throw new NotFoundException('Order item not found.');
       if (item.prepStatus === 'SERVED') {
         throw new BadRequestException('Cannot un-bump an item that has been served.');
+      }
+      if (!(LIVE_ORDER as readonly string[]).includes(item.order.status)) {
+        throw new BadRequestException('This order was voided. There is nothing to un-bump.');
       }
 
       const updated = await tx.orderItem.update({
@@ -177,15 +217,18 @@ export class KdsService {
         select: { id: true, prepStatus: true },
       });
 
-      // Roll the parent order back to PAID if it had been auto-promoted.
-      // We only roll back orders that were COMPLETED via the auto-transition
-      // (signaled by readyAt being set). Manually-completed retail orders
-      // shouldn't be touched, but those have no routed items so they
-      // never reach this code path anyway.
-      await tx.order.updateMany({
-        where: { id: item.orderId, status: 'COMPLETED' },
-        data:  { status: 'PAID', readyAt: null, completedAt: null },
-      });
+      /*
+        Back to PAID only when this line is one the order actually waited on:
+        a line at a station with a screen. A line nobody could bump never held
+        the order, so un-bumping it must not reopen an order that was complete
+        at the till.
+      */
+      if (waitsAtAScreen(item.product?.category)) {
+        await tx.order.updateMany({
+          where: { id: item.orderId, status: 'COMPLETED' },
+          data:  { status: 'PAID', readyAt: null, completedAt: null },
+        });
+      }
 
       return updated;
     });

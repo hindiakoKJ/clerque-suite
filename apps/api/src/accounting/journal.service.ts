@@ -682,19 +682,39 @@ export class JournalService {
             include: { journalEntry: { include: { lines: { include: { account: true } } } } },
           });
 
+          /*
+            What is left of the sale to reverse. Item refunds earlier on this
+            order already reversed their share of revenue, VAT and cash; the
+            void used to reverse the whole sale again on top, taking that
+            money out of the books twice. The refunded share comes off every
+            line in proportion -- exactly how each refund was worked out.
+          */
+          const saleTotal      = Number(payload['totalAmount'] ?? 0);
+          const refundedAmount = Number(payload['refundedAmount'] ?? 0);
+          const leftShare      = saleTotal > 0 ? Math.max(0, 1 - Math.min(refundedAmount, saleTotal) / saleTotal) : 1;
+          const r2 = (n: number) => Math.round(n * 100) / 100;
+
           // Step 1: Reverse the SALE journal (revenue + VAT + cash).
           if (origSale?.journalEntry) {
-            for (const line of origSale.journalEntry.lines) {
-              lines.push({
-                accountId: line.accountId,
-                debit:     Number(line.credit),
-                credit:    Number(line.debit),
-                description: `Reversal: ${line.description ?? ''}`,
-              });
+            const reversal = origSale.journalEntry.lines.map((line) => ({
+              accountId: line.accountId,
+              debit:     r2(Number(line.credit) * leftShare),
+              credit:    r2(Number(line.debit) * leftShare),
+              description: `Reversal: ${line.description ?? ''}`,
+            }));
+            // A scaled reversal can round a centavo apart; the difference goes on the largest line so it still balances.
+            if (leftShare < 1) {
+              const diff = r2(reversal.reduce((t, l) => t + l.debit - l.credit, 0));
+              if (diff !== 0) {
+                const side = diff > 0 ? 'credit' : 'debit';
+                const biggest = reversal.reduce((a, b) => (b[side] > a[side] ? b : a));
+                biggest[side] = r2(biggest[side] + Math.abs(diff));
+              }
             }
+            lines.push(...reversal);
           } else {
-            const total  = Number(payload['totalAmount'] ?? 0);
-            const vatAmt = Number(payload['vatAmount']   ?? 0);
+            const total  = r2(Number(payload['totalAmount'] ?? 0) * leftShare);
+            const vatAmt = r2(Number(payload['vatAmount']   ?? 0) * leftShare);
             // #43 — a CHARGE order's SALE debited 1030 Accounts Receivable,
             // so its void must credit 1030; crediting 1010 would fabricate
             // cash leaving a drawer it never entered. Missing/undefined

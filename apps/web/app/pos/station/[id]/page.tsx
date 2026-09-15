@@ -2,6 +2,7 @@
 import { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff, Maximize, Printer } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useKitchenChime } from '@/hooks/pos/useKitchenChime';
@@ -209,21 +210,41 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
     if (isNew) chime.ring();
   }, [items, chime]);
 
+  /*
+    A refusal is said on screen. A dropped connection is not: the next poll
+    shows the ticket as it really is. An un-bump was silently swallowed when a
+    tablet (which cannot un-bump) tried it, so the cook believed it had worked.
+  */
+  const refusal = (e: unknown): { status?: number; message?: string } | null => {
+    const r = (e as { response?: { status?: number; data?: { message?: string | string[] } } })?.response;
+    if (!r) return null;
+    const m = r.data?.message;
+    return { status: r.status, message: Array.isArray(m) ? m.join(' ') : m };
+  };
+
   async function bump(orderItemId: string) {
     try {
       await api.post(`/kds/items/${orderItemId}/bump`);
+    } catch (e) {
+      const r = refusal(e);
+      if (r) toast.error(r.message ?? 'Could not mark it ready.');
+    } finally {
       qc.invalidateQueries({ queryKey: ['kds-queue', stationId] });
-    } catch {
-      /* poll will retry */
     }
   }
 
   async function unbump(orderItemId: string) {
     try {
       await api.post(`/kds/items/${orderItemId}/unbump`);
+    } catch (e) {
+      const r = refusal(e);
+      if (r) {
+        toast.error(r.status === 403
+          ? 'Only a supervisor or manager can undo a bump. Ask them to undo it while logged in on this screen.'
+          : (r.message ?? 'Could not undo the bump.'));
+      }
+    } finally {
       qc.invalidateQueries({ queryKey: ['kds-queue', stationId] });
-    } catch {
-      /* ignore */
     }
   }
 

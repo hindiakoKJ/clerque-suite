@@ -122,11 +122,16 @@ describe('RecipeCatchupService', () => {
         findMany: jest.fn(({ where }: any) =>
           Promise.resolve((opts.lots ?? []).filter((l: any) => l.rawMaterialId === where.rawMaterialId)),
         ),
-        update: jest.fn(({ where, data }: any) => {
-          lotDrains.push({ id: where.id, to: Number(data.qtyRemaining) });
-          return Promise.resolve({});
+        // The sale's guarded relative take (orders/recipe-usage.ts).
+        updateMany: jest.fn(({ where, data }: any) => {
+          const lot = (opts.lots ?? []).find((l: any) => l.id === where.id);
+          if (!lot || Number(lot.qtyRemaining) < Number(where.qtyRemaining.gte)) return Promise.resolve({ count: 0 });
+          lot.qtyRemaining = Number(lot.qtyRemaining) - Number(data.qtyRemaining.decrement);
+          lotDrains.push({ id: where.id, to: lot.qtyRemaining });
+          return Promise.resolve({ count: 1 });
         }),
       },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
       auditLog: { findMany: jest.fn().mockResolvedValue(opts.prior ?? []) },
       $executeRaw: jest.fn().mockResolvedValue(1),   // the advisory lock
     };
@@ -291,6 +296,15 @@ describe('RecipeCatchupService', () => {
     expect(out.stampedLineCount).toBe(1);
     // The cake is still waiting for its recipe.
     expect(out.skippedNoRecipe.map((s: any) => s.productId)).toEqual([CAKE]);
+  });
+
+  it('replays a Large with the Large recipe, the same walk a live sale uses', async () => {
+    const { svc, db } = build({ items: [{ ...line('i-large', LATTE, 2), variantId: 'v-large' }, line('i-regular', LATTE, 1)] });
+    // The Large pours 250 ml and no beans of its own recipe line; the Regular uses the product recipe.
+    db.variantBomItem.findMany.mockResolvedValue([{ variantId: 'v-large', rawMaterialId: MILK, quantity: 250 }]);
+    const p = await svc.preview(TENANT, RANGE);
+    expect(lineFor(p, MILK).quantityUsed).toBe(250 * 2 + 150);
+    expect(lineFor(p, BEANS).quantityUsed).toBe(18);
   });
 
   it('drains lot layers so FIFO/FEFO does not go stale', async () => {

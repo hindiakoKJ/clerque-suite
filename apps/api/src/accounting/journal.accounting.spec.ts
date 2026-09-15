@@ -714,6 +714,36 @@ describe('JournalService — accounting correctness across business types', () =
     });
   });
 
+  describe('VOID event — FULL_VOID after an item refund', () => {
+    it('reverses only what the refund left, so the refunded money does not come out of the books twice', async () => {
+      const lines = await runProcessEvent({
+        orderId: 'order-9', orderNumber: 'ORD-2026-0009', totalAmount: 360, vatAmount: 38.57,
+        payments: [{ method: 'CASH', amount: 360 }], restockedCogsTotal: 0,
+        refundedAmount: 120,   // 1 of 3 drinks refunded earlier (its own entry reversed 120)
+      }, 'VOID', {
+        payload: { totalAmount: 360, vatAmount: 38.57 },
+        lines: [
+          { accountId: ACCOUNT_IDS['1010'], debit: 360, credit: 0,      description: 'Cash sales' },
+          { accountId: ACCOUNT_IDS['4010'], debit: 0,   credit: 321.43, description: 'Sales revenue' },
+          { accountId: ACCOUNT_IDS['2020'], debit: 0,   credit: 38.57,  description: 'Output VAT 12%' },
+        ],
+      }) as CapturedLine[];
+      const s = summarise(lines);
+      expect(s.credits.get('1010')).toBeCloseTo(240, 2);
+      expect(s.debits.get('4010')).toBeCloseTo(214.29, 2);
+      expect(s.debits.get('2020')).toBeCloseTo(25.71, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('an old void event without the refunded amount reverses the whole sale, as before', async () => {
+      const lines = await runProcessEvent({
+        orderId: 'order-8', orderNumber: 'ORD-2026-0008', totalAmount: 120, vatAmount: 12.86,
+        payments: [{ method: 'CASH', amount: 120 }], restockedCogsTotal: 0,
+      }, 'VOID') as CapturedLine[];
+      expect(summarise(lines).credits.get('1010')).toBeCloseTo(120, 2);
+    });
+  });
+
   // ── 4. VOID handler — ITEM_REFUND mode ────────────────────────────────────
 
   describe('VOID event — ITEM_REFUND (partial)', () => {

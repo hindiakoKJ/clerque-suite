@@ -737,7 +737,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Voiding reverses the sale, restocks inventory, and is logged to the audit trail with your name and the reason below. This cannot be undone.
+            Voiding reverses the sale and is logged to the audit trail with your name and the reason below. Shelf items go back to stock; made-to-order items stay used, because their ingredients are gone. This cannot be undone.
           </p>
           <textarea
             value={voidReason}

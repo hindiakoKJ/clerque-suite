@@ -38,7 +38,7 @@ export default function TelegramAlertsPage() {
   const [pending, setPending] = useState<LinkResp | null>(null);
 
   const waiting = !!pending && new Date(pending.expiresAt).getTime() > Date.now();
-  const { data: status, isLoading } = useQuery<StatusResp>({
+  const { data: status, isLoading, isError, error, refetch } = useQuery<StatusResp>({
     queryKey: ['telegram-status'],
     queryFn: () => api.get('/telegram/me').then((r) => r.data),
     enabled: !!user?.sub,
@@ -111,7 +111,15 @@ export default function TelegramAlertsPage() {
       </div>
 
       <div className="flex-1 p-4 sm:p-6 max-w-2xl space-y-6">
-        {isLoading || !status ? (
+        {isError ? (
+          <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 flex items-center gap-3">
+            <Info className="h-5 w-5 text-red-600 shrink-0" />
+            <p className="text-sm text-foreground flex-1">{errText(error, 'Could not load Telegram alerts.')}</p>
+            <button type="button" onClick={() => refetch()} className="px-3 py-1.5 rounded-lg border border-border text-sm hover:bg-muted">
+              Try again
+            </button>
+          </div>
+        ) : isLoading || !status ? (
           <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Loading…</span>
@@ -122,9 +130,27 @@ export default function TelegramAlertsPage() {
             <p className="text-sm text-muted-foreground">Telegram alerts are not switched on for Clerque yet.</p>
           </div>
         ) : !status.canLink ? (
-          <div className="rounded-xl border border-border bg-card p-4 flex gap-3">
-            <Info className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
-            <p className="text-sm text-muted-foreground">{status.blockedReason ?? 'Only the owner or a branch manager can get Telegram alerts.'}</p>
+          <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+            <div className="flex gap-3">
+              <Info className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+              <p className="text-sm text-muted-foreground">{status.blockedReason ?? 'Only the owner or a branch manager can get Telegram alerts.'}</p>
+            </div>
+            {/* A link made before a change of role is still yours to remove. */}
+            {link && (
+              <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+                <p className="text-xs text-muted-foreground">
+                  Still linked to {link.telegramUsername ? `@${link.telegramUsername}` : 'a Telegram chat'}. No alerts are sent to it.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => unlink.mutate()}
+                  disabled={unlink.isPending}
+                  className="px-3 py-2 rounded-lg border border-red-500/40 text-red-600 text-sm hover:bg-red-500/10 disabled:opacity-50"
+                >
+                  Unlink
+                </button>
+              </div>
+            )}
           </div>
         ) : link ? (
           <>

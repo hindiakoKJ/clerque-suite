@@ -72,7 +72,8 @@ export class TelegramController {
    */
   @Post('webhook')
   @HttpCode(HttpStatus.OK)
-  @SkipThrottle()
+  // Named: a bare @SkipThrottle() only skips a throttler called 'default', and this app's are short/medium/long.
+  @SkipThrottle({ short: true, medium: true, long: true })
   @ApiExcludeEndpoint()
   async webhook(
     @Headers('x-telegram-bot-api-secret-token') secret: string | undefined,

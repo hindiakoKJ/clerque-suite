@@ -15,7 +15,7 @@ describe('TelegramLinksService', () => {
   const sec = Math.floor(NOW / 1000);
 
   type User = { id: string; name: string; role: string; isActive: boolean; tenantId: string; branchId: string | null };
-  type Link = { id: string; tenantId: string; userId: string; chatId: string; telegramUsername: string | null; alertSales: boolean; alertBuying: boolean; linkedAt: Date };
+  type Link = { id: string; tenantId: string; userId: string; chatId: string | null; telegramUsername: string | null; alertSales: boolean; alertBuying: boolean; linkedAt: Date };
 
   function build(opts: { enabled?: boolean } = {}) {
     const tenants: Record<string, { name: string; status: string; isDemoTenant: boolean }> = {
@@ -41,7 +41,8 @@ describe('TelegramLinksService', () => {
     const linkMatches = (l: Link, where: any) => {
       if (where.id && l.id !== where.id) return false;
       if (where.userId && l.userId !== where.userId) return false;
-      if (where.chatId && l.chatId !== where.chatId) return false;
+      if (typeof where.chatId === 'string' && l.chatId !== where.chatId) return false;
+      if (where.chatId && typeof where.chatId === 'object' && 'not' in where.chatId && l.chatId === where.chatId.not) return false;
       if (where.tenantId && l.tenantId !== where.tenantId) return false;
       if (where.alertSales === true && !l.alertSales) return false;
       if (where.alertBuying === true && !l.alertBuying) return false;
@@ -103,6 +104,7 @@ describe('TelegramLinksService', () => {
       secrets: { jwtSecret: JWT, botToken: BOT },
       botUsername: jest.fn(async () => 'ClerqueAlertsBot'),
       sendMessage: jest.fn((chatId: string, text: string) => { sent.push({ chatId, text }); }),
+      leaveChat: jest.fn(),
       onChatGone: jest.fn(),
     } as unknown as TelegramClient;
     const notifications = { create: jest.fn(async () => ({})) };
@@ -158,8 +160,8 @@ describe('TelegramLinksService', () => {
       expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'carolina', userId: 'anne', title: 'Telegram alerts linked' }));
     });
 
-    it('a used code cannot link a second chat -- not even after the first one unlinked', async () => {
-      const { links, sent, start, codeFor, svc } = build();
+    it('a used code cannot link a second chat -- not even after the first one unlinked and the API restarted', async () => {
+      const { links, sent, start, codeFor, svc, prisma, client } = build();
       const code = codeFor('anne');
       await start('9001', code);
       await start('6666', code);
@@ -168,8 +170,20 @@ describe('TelegramLinksService', () => {
       expect(sent.at(-1)!.text).toContain('already used');
 
       await svc.unlinkMine(session('anne', 'BUSINESS_OWNER'));
-      await start('6666', code);
-      expect(links).toHaveLength(0);
+      expect(links.map((l) => l.chatId)).toEqual([null]);   // the row stays, with its linkedAt
+      const restarted = new TelegramLinksService(prisma, client, undefined, undefined);
+      await restarted.handleUpdate({ message: { chat: { id: '6666', type: 'private' }, from: { id: 6666 }, text: `/start ${code}` } }, NOW);
+      expect(links.map((l) => l.chatId)).toEqual([null]);
+      expect(await svc.recipients('carolina', 'b1', 'sales')).toEqual([]);
+    });
+
+    it('after unlinking, a new code links again', async () => {
+      const { links, start, codeFor, svc } = build();
+      await start('9001', codeFor('anne', sec - 30));
+      await svc.unlinkMine(session('anne', 'BUSINESS_OWNER'));
+      await start('9002', codeFor('anne', sec + 5));
+      expect(links.map((l) => l.chatId)).toEqual(['9002']);
+      expect(await svc.recipients('carolina', 'b1', 'sales')).toEqual(['9002']);
     });
 
     it('a code issued before the current link is refused by the database check alone (after a restart)', async () => {
@@ -199,13 +213,22 @@ describe('TelegramLinksService', () => {
       expect(links).toHaveLength(0);
     });
 
-    it('only in a private chat, and never from another bot', async () => {
-      const { links, sent, svc, codeFor } = build();
+    it('only in a private chat, and never from another bot; a group is left without a word', async () => {
+      const { links, sent, svc, codeFor, client } = build();
       await svc.handleUpdate({ message: { chat: { id: '-100', type: 'group' }, from: { id: 5 }, text: `/start ${codeFor('anne')}` } }, NOW);
       await svc.handleUpdate({ message: { chat: { id: '5', type: 'private' }, from: { id: 5, is_bot: true }, text: `/start ${codeFor('anne')}` } }, NOW);
       expect(links).toHaveLength(0);
-      expect(sent).toHaveLength(1);
-      expect(sent[0].text).toContain('private chat');
+      expect(sent).toHaveLength(0);
+      expect(client.leaveChat).toHaveBeenCalledWith('-100');
+    });
+
+    it('chatter gets one reply per ten minutes, so strangers cannot make the bot talk non-stop', async () => {
+      const { sent, svc } = build();
+      const say = (at: number) => svc.handleUpdate({ message: { chat: { id: '42', type: 'private' }, from: { id: 42 }, text: 'hello?' } }, at);
+      await say(NOW);
+      await say(NOW + 1000);
+      await say(NOW + 11 * 60_000);
+      expect(sent.map((m) => m.chatId)).toEqual(['42', '42']);
     });
 
     it('linking again from a new phone moves the alerts and tells the old chat', async () => {
@@ -222,7 +245,8 @@ describe('TelegramLinksService', () => {
       await start('9002', codeFor('mgr1'));
       await svc.handleUpdate({ message: { chat: { id: '9001', type: 'private' }, from: { id: 9001 }, text: '/stop' } }, NOW);
       await svc.handleUpdate({ my_chat_member: { chat: { id: '9002', type: 'private' }, new_chat_member: { status: 'kicked' } } }, NOW);
-      expect(links).toHaveLength(0);
+      expect(links.map((l) => l.chatId)).toEqual([null, null]);
+      expect(await svc.recipients('carolina', 'b1', 'sales')).toEqual([]);
     });
   });
 

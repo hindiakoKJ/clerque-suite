@@ -187,7 +187,7 @@ export function buyListSentMessage(
   return fitItems(build, blocks, MESSAGE_LIMIT);
 }
 
-export function boughtMessage(req: RequestForAlert, recordedBy: string | null, at: Date): string {
+export function boughtMessage(req: RequestForAlert, recordedBy: string | null, at: Date, added: { items: number; value: number } | null = null): string {
   const lines = boughtLines(req);
   const blocks = lines.map((l) => [
     clip(l.name, WIDTH),
@@ -198,9 +198,12 @@ export function boughtMessage(req: RequestForAlert, recordedBy: string | null, a
     if (more > 0) body.push(`…and ${more} more`);
     body.push(RULE, row('TOTAL', `₱${money(boughtTotal(req))}`));
     return [
-      `✅ <b>Bought: ${escapeHtml(req.requestNumber)}</b>  ₱${money(boughtTotal(req))}`,
+      added
+        ? `✅ <b>Bought more: ${escapeHtml(req.requestNumber)}</b>  +₱${money(added.value)}`
+        : `✅ <b>Bought: ${escapeHtml(req.requestNumber)}</b>  ₱${money(boughtTotal(req))}`,
       place(req.shopName, req.branchName),
       escapeHtml(`${recordedBy ? `Recorded by ${recordedBy} · ` : ''}${manilaTime(at)}`),
+      ...(added ? [escapeHtml(`Added now: ${added.items} item${added.items === 1 ? '' : 's'}, ₱${money(added.value)}. Request total ₱${money(boughtTotal(req))}.`)] : []),
       `<pre>${escapeHtml(body.join('\n'))}</pre>`,
     ].join('\n');
   };

@@ -667,6 +667,14 @@ export class ProcureService {
       confirmedCosts = this.sanity.enforce(warnings, extra.sanity);
     }
 
+    /*
+      For the Telegram alert, read before anything is written. News is the
+      first recording, or a later trip that fills lines nobody had filled
+      (milk from the market this morning, beans from the grocery this
+      afternoon). A correction to a line already recorded is not news.
+    */
+    const filledBlank = lines.filter((l) => req.lines.find((x) => x.id === l.lineId)?.packsBought == null);
+
     await this.prisma.$transaction(
       lines.map((l) =>
         this.prisma.purchaseRequestLine.update({
@@ -708,8 +716,12 @@ export class ProcureService {
       },
       include: this.lineInclude(),
     });
-    // The first recording is news; a correction to a request already bought is not.
-    if (req.status === 'SENT' && !extra.quiet) void this.telegramAlerts?.bought(tenantId, requestId, actor?.userId ?? null);
+    if (!extra.quiet && (req.status === 'SENT' || filledBlank.length > 0)) {
+      void this.telegramAlerts?.bought(tenantId, requestId, actor?.userId ?? null, req.status === 'SENT' ? null : {
+        items: filledBlank.length,
+        value: filledBlank.reduce((t, l) => t + l.packsBought * l.packCost, 0),
+      });
+    }
     /*
       Already paid ahead? Then a corrected price is a correction to the
       money too, and the pocket is the one the request remembers -- the

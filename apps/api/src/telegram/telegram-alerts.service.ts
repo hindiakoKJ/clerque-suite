@@ -90,13 +90,14 @@ export class TelegramAlertsService {
     });
   }
 
-  bought(tenantId: string, requestId: string, recordedById: string | null): Promise<void> {
+  /** `added`: a later trip onto a request already bought -- what this recording added. */
+  bought(tenantId: string, requestId: string, recordedById: string | null, added: { items: number; value: number } | null = null): Promise<void> {
     return this.fire('bought', tenantId, 'buying', async () => {
       const req = await this.request(tenantId, requestId);
       if (!req) return;
       const chats = await this.links.recipients(tenantId, req.branchId, 'buying');
       if (chats.length === 0) return;
-      const text = boughtMessage(req.alert, await this.nameOf(tenantId, recordedById), new Date());
+      const text = boughtMessage(req.alert, await this.nameOf(tenantId, recordedById), new Date(), added);
       for (const chat of chats) this.client.sendMessage(chat, text);
     });
   }

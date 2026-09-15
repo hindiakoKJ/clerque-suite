@@ -27,13 +27,6 @@ export default function SubprocessorsPage() {
       safeguard: 'Data-processing agreement; contractual safeguards under Sec. 21, RA 10173',
     },
     {
-      name: 'Telegram (activated only when an owner or manager links their own Telegram)',
-      purpose: "Alerts to the linked person's private Telegram chat: sales, buying steps and receipt photos",
-      data: "Sale and purchase details, supplier prices and receipt photos of that shop; the linked person's Telegram chat id and username. No PWD/senior ID numbers or customer details are sent",
-      location: 'As disclosed by Telegram (outside the Philippines)',
-      safeguard: "Opt-in per person; limited to the shop's own owner and branch managers; can be unlinked at any time from Clerque or by sending /stop",
-    },
-    {
       name: 'Error-monitoring provider (Sentry)',
       purpose: 'Application error and performance monitoring to keep the Service reliable',
       data: 'Diagnostic and technical data; may incidentally include identifiers present in an error context',
@@ -110,6 +103,24 @@ export default function SubprocessorsPage() {
           Our infrastructure sub-processors operate data centers outside the Philippines, principally in the
           United States. By using the Service you acknowledge these cross-border transfers, which are subject to
           the safeguards required by Section 21 of RA 10173. See Privacy Policy §7 (Cross-Border Data Transfers).
+        </p>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="text-lg font-semibold mb-2">Optional: Telegram alerts you switch on</h2>
+        <p>
+          Telegram is not one of our sub-processors and is not engaged under a data-processing agreement. It is a
+          channel that an owner or branch manager of your shop may turn on for themselves, by linking their own
+          Telegram account from Settings &rarr; Telegram alerts. Nothing is sent to Telegram for a shop until someone
+          there links it.
+        </p>
+        <p className="mt-2">
+          Once linked, Clerque sends that person&rsquo;s private Telegram chat: sale details (items, totals, payment
+          method, time); buying details (items, quantities, supplier prices, receipt photos); and the names of the
+          staff who rang up the sale or sent, recorded, filed or posted a buying step. PWD and senior citizen ID
+          numbers and customer names, TINs and addresses are not sent. Telegram then holds these messages under
+          its own terms, outside the Philippines. Each person can mute sales or buying alerts, or unlink at any time
+          from Clerque or by sending /stop to the bot; removing a staff member&rsquo;s access also stops their alerts.
         </p>
       </section>
 

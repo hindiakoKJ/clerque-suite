@@ -3,7 +3,7 @@ CREATE TABLE "telegram_links" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
-    "chatId" TEXT NOT NULL,
+    "chatId" TEXT,
     "telegramUsername" TEXT,
     "alertSales" BOOLEAN NOT NULL DEFAULT true,
     "alertBuying" BOOLEAN NOT NULL DEFAULT true,

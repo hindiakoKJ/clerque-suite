@@ -6,7 +6,12 @@ import { webhookSecret } from './link-token';
  *
  * Built on what the Trade Bot learned:
  *   - Sending never blocks the work that caused it. A sale or a purchase puts
- *     its alert in an outbox and returns; one loop drains it in order.
+ *     its alert in an outbox and returns; one loop drains it.
+ *   - Paced per chat: one message a second to any one chat, which is what
+ *     Telegram allows, and in order within that chat. A chat that is waiting
+ *     -- paced, told to slow down with a 429, or backing off after a 5xx --
+ *     never holds up another chat: one cafe's offline sync of 300 sales reaches
+ *     that owner over five minutes while every other cafe's alerts go on.
  *   - 429 waits exactly as long as Telegram asks. A 5xx or a network failure
  *     backs off (1 s doubling to 30 s) and gives up on that message after six
  *     tries. A 400 is dropped at once and logged with Telegram's reason, and a
@@ -28,13 +33,18 @@ export interface TelegramClientOptions {
   /** Public https base of this API, for the webhook. Null: no webhook is registered. */
   webhookBase: string | null;
   jwtSecret: string;
-  /** Pause between sends. Telegram allows about 30 messages a second per bot. */
+  /** Pause between any two sends. Telegram allows about 30 messages a second per bot. */
   gapMs: number;
+  /** Pause between two sends to the same chat. Telegram allows about one a second per chat. */
+  perChatGapMs: number;
+  /** One chat cannot take more of the outbox than this. */
+  maxPerChat: number;
   maxAttempts: number;
   maxQueued: number;
   maxQueuedPhotos: number;
-  /** For tests: replaces setTimeout-based waiting. */
+  /** For tests: replaces setTimeout-based waiting and the clock. */
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
   fetch?: typeof fetch;
 }
 
@@ -53,6 +63,8 @@ function fromEnv(): TelegramClientOptions {
     webhookBase: (process.env.TELEGRAM_WEBHOOK_BASE?.trim() || (railway ? `https://${railway}` : '') || null)?.replace(/\/+$/, '') ?? null,
     jwtSecret: process.env.JWT_ACCESS_SECRET ?? '',
     gapMs: 40,
+    perChatGapMs: 1000,
+    maxPerChat: 1000,
     maxAttempts: 6,
     maxQueued: 5000,
     maxQueuedPhotos: 50,
@@ -65,6 +77,8 @@ export class TelegramClient implements OnModuleInit {
   private readonly opts: TelegramClientOptions;
   private readonly outbox: Outgoing[] = [];
   private draining = false;
+  /** A chat may not be sent to before this time: paced, throttled or backing off. */
+  private readonly holdUntil = new Map<string, number>();
   private username: string | null = null;
   private chatGone: Array<(chatId: string) => Promise<void> | void> = [];
   /** Seen in logs and in tests: what was given up on. */
@@ -130,11 +144,7 @@ export class TelegramClient implements OnModuleInit {
 
   sendMessage(chatId: string, html: string): void {
     if (!this.enabled) return;
-    if (this.outbox.length >= this.opts.maxQueued) {
-      this.dropped++;
-      this.logger.warn(`Outbox full (${this.opts.maxQueued}); an alert was not sent.`);
-      return;
-    }
+    if (!this.roomFor(chatId)) return;
     this.outbox.push({ kind: 'message', chatId, text: html, attempts: 0 });
     void this.drain();
   }
@@ -148,9 +158,30 @@ export class TelegramClient implements OnModuleInit {
       this.sendMessage(chatId, textIfNoRoom);
       return;
     }
+    if (!this.roomFor(chatId)) return;
     const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
     this.outbox.push({ kind: 'photo', chatId, photo, mime, filename: `receipt.${ext}`, caption: captionHtml, attempts: 0 });
     void this.drain();
+  }
+
+  /** Leaves a group the bot was added to. Not queued and not retried: it is housekeeping, not an alert. */
+  leaveChat(chatId: string): void {
+    if (!this.enabled) return;
+    void this.call('leaveChat', { chat_id: chatId });
+  }
+
+  private roomFor(chatId: string): boolean {
+    if (this.outbox.length >= this.opts.maxQueued) {
+      this.dropped++;
+      this.logger.warn(`Outbox full (${this.opts.maxQueued}); an alert was not sent.`);
+      return false;
+    }
+    if (this.outbox.filter((o) => o.chatId === chatId).length >= this.opts.maxPerChat) {
+      this.dropped++;
+      this.logger.warn(`One chat already has ${this.opts.maxPerChat} alerts waiting; this one was not sent.`);
+      return false;
+    }
+    return true;
   }
 
   /** How many alerts are waiting. For tests and the logs. */
@@ -168,24 +199,32 @@ export class TelegramClient implements OnModuleInit {
     this.draining = true;
     try {
       while (this.outbox.length > 0) {
-        const item = this.outbox[0];
+        const now = this.now();
+        // The oldest message of any chat that may be sent to now. Holds are per chat, so order within a chat is kept.
+        const item = this.outbox.find((o) => (this.holdUntil.get(o.chatId) ?? 0) <= now);
+        if (!item) {
+          const soonest = Math.min(...this.outbox.map((o) => this.holdUntil.get(o.chatId) ?? 0));
+          await this.sleep(Math.min(1000, Math.max(10, soonest - now)));
+          continue;
+        }
         const res = item.kind === 'message'
           ? await this.call('sendMessage', { chat_id: item.chatId, text: item.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
           : await this.callMultipart('sendPhoto', item);
 
         if (res.ok) {
           this.remove(item);
+          this.hold(item.chatId, this.opts.perChatGapMs);
           await this.sleep(this.opts.gapMs);
           continue;
         }
         const code = res.error_code ?? 0;
         if (code === 429) {
-          const wait = Math.min(60, Math.max(1, res.parameters?.retry_after ?? 1));
-          await this.sleep(wait * 1000);
+          this.hold(item.chatId, Math.min(60, Math.max(1, res.parameters?.retry_after ?? 1)) * 1000);
           continue;
         }
         if (code === 403) {
-          this.remove(item);
+          // Everything else waiting for this chat would be refused too.
+          for (const o of this.outbox.filter((x) => x.chatId === item.chatId)) this.remove(o);
           this.logger.warn(`Chat refused the bot (${this.scrub(res.description ?? '403')}); unlinking it.`);
           for (const fn of this.chatGone) {
             try { await fn(item.chatId); } catch (err) { this.logger.warn(`Could not unlink a refused chat: ${this.scrub(String(err))}`); }
@@ -205,12 +244,24 @@ export class TelegramClient implements OnModuleInit {
           this.logger.warn(`Gave up on a ${item.kind} after ${item.attempts} tries: ${this.scrub(res.description ?? 'unreachable')}`);
           continue;
         }
-        const backoff = Math.min(30_000, 1000 * 2 ** (item.attempts - 1));
-        await this.sleep(backoff + Math.floor(Math.random() * 250));
+        this.hold(item.chatId, Math.min(30_000, 1000 * 2 ** (item.attempts - 1)) + Math.floor(Math.random() * 250));
       }
     } finally {
       this.draining = false;
     }
+  }
+
+  private hold(chatId: string, ms: number) {
+    this.holdUntil.set(chatId, Math.max(this.holdUntil.get(chatId) ?? 0, this.now() + ms));
+    // Forget chats whose hold has long passed, so the map does not grow for ever.
+    if (this.holdUntil.size > 10_000) {
+      const now = this.now();
+      for (const [c, until] of this.holdUntil) if (until < now) this.holdUntil.delete(c);
+    }
+  }
+
+  private now(): number {
+    return this.opts.now ? this.opts.now() : Date.now();
   }
 
   private remove(item: Outgoing) {

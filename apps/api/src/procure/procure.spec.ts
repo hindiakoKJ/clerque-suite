@@ -874,12 +874,22 @@ describe('ProcureService', () => {
       const first = build({ status: 'SENT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz' }] });
       const a1 = alertsOn(first.svc);
       await first.svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 750, packCost: 540 }], { userId: USER, role: 'BUSINESS_OWNER' });
-      expect(a1.bought).toHaveBeenCalledWith(TENANT, 'req1', USER);
+      expect(a1.bought).toHaveBeenCalledWith(TENANT, 'req1', USER, null);
 
-      const again = build({ status: 'BOUGHT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz' }] });
+      const again = build({ status: 'BOUGHT', lines: [{ id: 'l1', rawMaterialId: 'rm-haz', packsBought: 3, packSize: 750, packCost: 540 }] });
       const a2 = alertsOn(again.svc);
       await again.svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 750, packCost: 500 }], { userId: USER, role: 'BUSINESS_OWNER' });
       expect(a2.bought).not.toHaveBeenCalled();
+    });
+
+    it('a second trip that fills lines nobody had filled alerts, saying what it added', async () => {
+      const { svc } = build({ status: 'BOUGHT', lines: [
+        { id: 'l1', rawMaterialId: 'rm-haz', packsBought: 3, packSize: 750, packCost: 540 },
+        { id: 'l2', rawMaterialId: 'rm-beans', packsBought: null, packSize: null, packCost: null },
+      ] });
+      const alerts = alertsOn(svc);
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l2', packsBought: 2, packSize: 1000, packCost: 850 }], { userId: USER, role: 'BUSINESS_OWNER' });
+      expect(alerts.bought).toHaveBeenCalledWith(TENANT, 'req1', USER, { items: 1, value: 1700 });
     });
 
     it('a bulk sheet upload does not alert once per request', async () => {

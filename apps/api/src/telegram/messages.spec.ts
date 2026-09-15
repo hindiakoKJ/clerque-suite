@@ -91,6 +91,12 @@ describe('Telegram alert messages', () => {
     expect(text).not.toContain('Ice');   // not bought yet
   });
 
+  it('a later trip onto a bought request says what it added and the new total', () => {
+    const text = boughtMessage(req, 'Maria', at, { items: 1, value: 1700 });
+    expect(text).toContain('<b>Bought more: PR-2026-0012</b>  +₱1,700.00');
+    expect(text).toContain('Added now: 1 item, ₱1,700.00. Request total ₱2,080.00.');
+  });
+
   it('a photo caption stays under Telegram\'s 1024 characters', () => {
     const cap = photoCaption({ ...req, shopName: 'X'.repeat(2000) }, 'Receipt', 'Maria', at);
     expect(cap.length).toBeLessThanOrEqual(CAPTION_LIMIT);

@@ -2,7 +2,7 @@
 import { ShieldCheck } from 'lucide-react';
 
 export default function PrivacyPolicyPage() {
-  const lastUpdated = 'May 3, 2026';
+  const lastUpdated = 'September 15, 2026';
 
   return (
     <article className="prose prose-sm max-w-none dark:prose-invert">
@@ -121,6 +121,12 @@ export default function PrivacyPolicyPage() {
             <strong>Infrastructure service providers</strong> bound by data-processing agreements: cloud
             hosting (Railway, Inc.), application hosting (Vercel, Inc.), email delivery (Resend), and
             error tracking
+          </li>
+          <li>
+            <strong>Telegram, only if you switch it on</strong> &mdash; when an owner or branch manager links their own
+            Telegram account for alerts, sale and buying details for that shop are sent to their private chat. See
+            the <a className="text-[var(--accent)]" href="/legal/subprocessors">Sub-processors</a> page for exactly
+            what is sent.
           </li>
           <li>
             <strong>Government authorities</strong> when required by law, court order, or valid NPC directive

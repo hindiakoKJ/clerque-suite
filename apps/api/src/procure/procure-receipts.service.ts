@@ -559,6 +559,7 @@ export class ProcureReceiptsService {
     let notes = req.notes;
     if (dto.idempotencyKey && !replay) notes = withTag(notes, 'RCPT', dto.idempotencyKey);
     if (label && !(notes ?? '').includes(label)) notes = appendNote(notes, label);
+    const wasSent = req.status === 'SENT';
     const request = await this.prisma.purchaseRequest.update({
       where: { id: req.id },
       data: {
@@ -568,6 +569,14 @@ export class ProcureReceiptsService {
       },
       include: this.include(),
     });
+    /*
+      Written onto a sent list and saved without posting or a photo: nothing
+      else will say it was bought. A photo alert carries the total itself, and
+      posting now ends in the "in stock" alert.
+    */
+    if (wasSent && !replay && dto.postNow === false && !dto.imageBase64) {
+      void this.telegramAlerts?.bought(tenantId, req.id, userId);
+    }
 
     // The photo, once per key; a posting failure below does not lose it.
     let document: { id: string; filename: string } | null = null;

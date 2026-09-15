@@ -37,12 +37,8 @@ export interface TgUpdate {
 @Injectable()
 export class TelegramLinksService implements OnModuleInit {
   private readonly logger = new Logger('TelegramLinks');
-  /**
-   * Codes already used, until they expire. The database check below covers a
-   * code issued before the current link; this also covers one used and then
-   * unlinked, which leaves no row to compare against.
-   */
-  private readonly consumed = new Map<string, number>();
+  /** When each chat was last told "this bot only sends alerts", so chatter cannot fill the outbox. */
+  private readonly toldRecently = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -64,7 +60,7 @@ export class TelegramLinksService implements OnModuleInit {
     const canLink = blockedReason == null;
     const link = user.tenantId
       ? await this.prisma.telegramLink.findFirst({
-          where:  { userId: user.sub, tenantId: user.tenantId },
+          where:  { userId: user.sub, tenantId: user.tenantId, chatId: { not: null } },
           select: { telegramUsername: true, alertSales: true, alertBuying: true, linkedAt: true },
         })
       : null;
@@ -111,17 +107,21 @@ export class TelegramLinksService implements OnModuleInit {
     if (typeof dto.alertSales === 'boolean') data.alertSales = dto.alertSales;
     if (typeof dto.alertBuying === 'boolean') data.alertBuying = dto.alertBuying;
     if (Object.keys(data).length === 0) throw new BadRequestException('Nothing to change.');
-    const res = await this.prisma.telegramLink.updateMany({ where: { userId: user.sub, tenantId: user.tenantId }, data });
+    const res = await this.prisma.telegramLink.updateMany({ where: { userId: user.sub, tenantId: user.tenantId, chatId: { not: null } }, data });
     if (res.count === 0) throw new NotFoundException('Telegram is not linked for you yet.');
     return this.status(user);
   }
 
   async unlinkMine(user: JwtPayload) {
     if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
-    const link = await this.prisma.telegramLink.findFirst({ where: { userId: user.sub, tenantId: user.tenantId } });
-    if (!link) return { unlinked: false };
-    await this.prisma.telegramLink.deleteMany({ where: { id: link.id } });
-    this.client.sendMessage(link.chatId, 'Unlinked from Clerque. This chat will get no more alerts.');
+    const link = await this.prisma.telegramLink.findFirst({
+      where:  { userId: user.sub, tenantId: user.tenantId, chatId: { not: null } },
+      select: { id: true, chatId: true, telegramUsername: true, tenant: { select: { name: true } } },
+    });
+    if (!link?.chatId) return { unlinked: false };
+    // Cleared, not deleted: the row's linkedAt keeps old link codes dead.
+    await this.prisma.telegramLink.updateMany({ where: { id: link.id }, data: { chatId: null, telegramUsername: null } });
+    this.client.sendMessage(link.chatId, `Unlinked from Clerque. This chat will get no more alerts for ${escapeHtml(link.tenant.name)}.`);
     await this.record(user.tenantId, user.sub, 'Telegram alerts unlinked', { telegramUsername: link.telegramUsername }, null);
     return { unlinked: true };
   }
@@ -129,10 +129,10 @@ export class TelegramLinksService implements OnModuleInit {
   async sendTest(user: JwtPayload) {
     if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
     const link = await this.prisma.telegramLink.findFirst({
-      where:  { userId: user.sub, tenantId: user.tenantId },
+      where:  { userId: user.sub, tenantId: user.tenantId, chatId: { not: null } },
       select: { chatId: true, tenant: { select: { name: true } } },
     });
-    if (!link) throw new NotFoundException('Telegram is not linked for you yet.');
+    if (!link?.chatId) throw new NotFoundException('Telegram is not linked for you yet.');
     this.client.sendMessage(link.chatId, `✅ Test alert from Clerque. Alerts for <b>${escapeHtml(link.tenant.name)}</b> will arrive in this chat.`);
     return { sent: true };
   }
@@ -156,6 +156,7 @@ export class TelegramLinksService implements OnModuleInit {
     const links = await this.prisma.telegramLink.findMany({
       where: {
         tenantId,
+        chatId: { not: null },
         ...(topic === 'sales' ? { alertSales: true } : { alertBuying: true }),
         tenant: { status: { not: 'SUSPENDED' }, isDemoTenant: false },
         user: {
@@ -169,13 +170,13 @@ export class TelegramLinksService implements OnModuleInit {
       },
       select: { chatId: true },
     });
-    return [...new Set(links.map((l) => l.chatId))];
+    return [...new Set(links.map((l) => l.chatId).filter((c): c is string => !!c))];
   }
 
   /** Cheap first check before an alert loads anything: does this shop have anyone linked for this kind at all? */
   async anyoneListening(tenantId: string, topic: AlertTopic): Promise<boolean> {
     const n = await this.prisma.telegramLink.count({
-      where: { tenantId, ...(topic === 'sales' ? { alertSales: true } : { alertBuying: true }) },
+      where: { tenantId, chatId: { not: null }, ...(topic === 'sales' ? { alertSales: true } : { alertBuying: true }) },
     });
     return n > 0;
   }
@@ -194,13 +195,14 @@ export class TelegramLinksService implements OnModuleInit {
     const text = (msg.text ?? '').trim();
 
     if (msg.chat.type !== 'private') {
-      this.client.sendMessage(chatId, 'Clerque alerts only work in a private chat with this bot.');
+      // Never alerts there, so never a reply either: a group could otherwise make the bot talk until Telegram throttles it.
+      this.client.leaveChat(chatId);
       return;
     }
     if (/^\/start(@\w+)?(\s|$)/.test(text)) {
       const code = text.split(/\s+/)[1];
       if (!code) {
-        this.client.sendMessage(chatId, 'To get alerts, open Clerque, go to Settings → Telegram alerts and tap <b>Link my Telegram</b>.');
+        this.client.sendMessage(chatId, 'To get alerts, open Clerque, go to Settings → Telegram alerts and tap <b>Make my link</b>.');
         return;
       }
       await this.consume(chatId, msg.from?.username ?? null, code, nowMs);
@@ -211,6 +213,11 @@ export class TelegramLinksService implements OnModuleInit {
       this.client.sendMessage(chatId, n > 0 ? 'Unlinked. This chat will get no more Clerque alerts.' : 'This chat is not linked to Clerque.');
       return;
     }
+    // At most once every ten minutes per chat.
+    const last = this.toldRecently.get(chatId) ?? 0;
+    if (nowMs - last < 10 * 60_000) return;
+    if (this.toldRecently.size > 10_000) this.toldRecently.clear();
+    this.toldRecently.set(chatId, nowMs);
     this.client.sendMessage(chatId, 'This bot only sends alerts. To stop them, send /stop.');
   }
 
@@ -219,14 +226,8 @@ export class TelegramLinksService implements OnModuleInit {
     const check = verifyLinkCode(code, Math.floor(nowMs / 1000), jwtSecret, botToken);
     if (!check.ok) {
       this.client.sendMessage(chatId, check.reason === 'expired'
-        ? 'That link has expired. In Clerque, open Settings → Telegram alerts and tap Link again.'
-        : 'That link is not valid. In Clerque, open Settings → Telegram alerts and tap Link again.');
-      return;
-    }
-
-    for (const [c, until] of this.consumed) if (until <= nowMs) this.consumed.delete(c);
-    if (this.consumed.has(code)) {
-      this.client.sendMessage(chatId, 'This link was already used. If that was not you, open Clerque → Settings → Telegram alerts and unlink.');
+        ? 'That link has expired. In Clerque, open Settings → Telegram alerts and tap <b>Make my link</b> again.'
+        : 'That link is not valid. In Clerque, open Settings → Telegram alerts and tap <b>Make my link</b> again.');
       return;
     }
 
@@ -246,7 +247,7 @@ export class TelegramLinksService implements OnModuleInit {
         return { kind: 'refused' as const };
       }
       const existing = await tx.telegramLink.findUnique({ where: { userId: user.id } });
-      // A link made at or after this code was issued means the code was already used.
+      // A link made at or after this code was issued means the code was already used -- the row stays after an unlink, so this holds across restarts.
       if (existing && existing.linkedAt.getTime() >= check.issuedAt * 1000) {
         return { kind: 'used' as const, sameChat: existing.chatId === chatId };
       }
@@ -255,7 +256,7 @@ export class TelegramLinksService implements OnModuleInit {
         create: { tenantId: user.tenantId, userId: user.id, chatId, telegramUsername: username },
         update: { tenantId: user.tenantId, chatId, telegramUsername: username, linkedAt: new Date(nowMs) },
       });
-      return { kind: 'linked' as const, user, link, previousChat: existing && existing.chatId !== chatId ? existing.chatId : null };
+      return { kind: 'linked' as const, user, link, previousChat: existing?.chatId && existing.chatId !== chatId ? existing.chatId : null };
     });
 
     if (outcome.kind === 'refused') {
@@ -270,7 +271,6 @@ export class TelegramLinksService implements OnModuleInit {
     }
 
     const { user, link, previousChat } = outcome;
-    this.consumed.set(code, check.issuedAt * 1000 + LINK_TTL_SECONDS * 1000 + 60_000);
     const shop = user.tenant!.name;
     const role = ROLE_WORDS[user.role] ?? user.role;
     const scope = user.role === 'BRANCH_MANAGER' && user.branch ? ` (${user.branch.name})` : '';
@@ -298,7 +298,7 @@ export class TelegramLinksService implements OnModuleInit {
 
   /** Unlinks every user on a chat: /stop, the bot blocked, or the chat refusing messages. */
   async forgetChat(chatId: string): Promise<number> {
-    const res = await this.prisma.telegramLink.deleteMany({ where: { chatId } });
+    const res = await this.prisma.telegramLink.updateMany({ where: { chatId }, data: { chatId: null, telegramUsername: null } });
     if (res.count > 0) this.logger.log(`Unlinked ${res.count} Clerque user(s) from a Telegram chat that stopped the bot.`);
     return res.count;
   }

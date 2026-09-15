@@ -4096,13 +4096,15 @@ model Notification {
 /// number, so one shop's sales cannot be routed to another shop's owner by a
 /// typo. Alerts for a shop go to the chats of its own active owners and
 /// managers, re-checked at every send. One chat per user; linking again
-/// replaces it.
+/// replaces it. Unlinking clears the chat but keeps the row, so linkedAt
+/// still marks every code issued before it as used -- across restarts.
 model TelegramLink {
   id               String   @id @default(cuid())
   tenantId         String
   userId           String   @unique
   /// Telegram's private chat id. A string: it can exceed a 32-bit integer.
-  chatId           String
+  /// Null once unlinked.
+  chatId           String?
   telegramUsername String?
   /// The person can mute each kind without unlinking.
   alertSales       Boolean  @default(true)

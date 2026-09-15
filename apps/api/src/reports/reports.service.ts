@@ -108,12 +108,17 @@ export class ReportsService {
    *
    * Every method, not only cash: a reversed GCash payment is money the shop
    * does not have either.
+   *
+   * Not the refunds of an order that was then voided: sales leave a voided
+   * order out entirely, and its void gives back only what the refunds left,
+   * so subtracting its refunds as well took them off twice. A void is only
+   * allowed on the sale's own day, so the refund and the void share that day.
    */
   private async refundsIn(tenantId: string, from: Date, to: Date, branchId?: string): Promise<number> {
     const rows = await this.prisma.orderItemRefund.findMany({
       where: {
         createdAt: { gte: from, lte: to },
-        orderItem: { order: { tenantId, ...(branchId ? { branchId } : {}) } },
+        orderItem: { order: { tenantId, status: { not: 'VOIDED' }, ...(branchId ? { branchId } : {}) } },
       },
       select: { refundAmount: true },
     });

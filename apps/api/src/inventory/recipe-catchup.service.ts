@@ -124,6 +124,8 @@ interface CatchupPlan {
   usageByRm: Map<string, number>;
   unitsByProduct: Map<string, { name: string; units: number }>;
   bomByProduct: Map<string, Array<{ rawMaterialId: string; quantity: number }>>;
+  /** Products whose lines produced usage -- a product recipe or a size recipe. */
+  productsWithUsage: Set<string>;
   /** OrderItem ids that contributed usage — exactly what gets stamped. */
   itemIds: string[];
   orderIds: Set<string>;
@@ -186,8 +188,10 @@ export class RecipeCatchupService {
       })
       .sort((a, b) => b.quantityUsed - a.quantityUsed);
 
+    // A product counts as having a recipe when its lines produced usage: its own recipe or a size's.
+    const hasRecipe = (pid: string) => plan.bomByProduct.has(pid) || plan.productsWithUsage.has(pid);
     const inScope = (pid: string) =>
-      plan.bomByProduct.has(pid) &&
+      hasRecipe(pid) &&
       (!range.productIds?.length || range.productIds.includes(pid));
 
     const products = [...plan.unitsByProduct.entries()]
@@ -196,7 +200,7 @@ export class RecipeCatchupService {
       .sort((a, b) => b.unitsSold - a.unitsSold);
 
     const skippedNoRecipe = [...plan.unitsByProduct.entries()]
-      .filter(([pid]) => !plan.bomByProduct.has(pid))
+      .filter(([pid]) => !hasRecipe(pid))
       .map(([pid, v]) => ({ productId: pid, name: v.name, unitsSold: v.units }))
       .sort((a, b) => b.unitsSold - a.unitsSold);
 
@@ -371,11 +375,11 @@ export class RecipeCatchupService {
       alreadyDeductedCount: applied.plan.alreadyDeductedCount,
       deductionPausedAt: null,
       products: [...applied.plan.unitsByProduct.entries()]
-        .filter(([pid]) => applied.plan.bomByProduct.has(pid))
+        .filter(([pid]) => applied.plan.bomByProduct.has(pid) || applied.plan.productsWithUsage.has(pid))
         .map(([pid, v]) => ({ productId: pid, name: v.name, unitsSold: v.units, hasRecipe: true })),
       lines: applied.lines,
       skippedNoRecipe: [...applied.plan.unitsByProduct.entries()]
-        .filter(([pid]) => !applied.plan.bomByProduct.has(pid))
+        .filter(([pid]) => !applied.plan.bomByProduct.has(pid) && !applied.plan.productsWithUsage.has(pid))
         .map(([pid, v]) => ({ productId: pid, name: v.name, unitsSold: v.units })),
       priorRuns: [],
       warnings: [],
@@ -496,6 +500,7 @@ export class RecipeCatchupService {
     const optionById = new Map(options.map((o) => [o.id, o]));
 
     const usageByRm = new Map<string, number>();
+    const productsWithUsage = new Set<string>();
     const itemIds: string[] = [];
     const orderIds = new Set<string>();
 
@@ -520,6 +525,7 @@ export class RecipeCatchupService {
       if (contributed) {
         itemIds.push(s.itemId);
         orderIds.add(s.orderId);
+        productsWithUsage.add(s.productId);
       }
     }
 
@@ -527,6 +533,7 @@ export class RecipeCatchupService {
       usageByRm,
       unitsByProduct,
       bomByProduct,
+      productsWithUsage,
       itemIds,
       orderIds,
       alreadyDeductedCount,

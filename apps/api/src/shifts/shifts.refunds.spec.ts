@@ -130,6 +130,59 @@ describe('ShiftsService — refunds and expected cash', () => {
 });
 
 /**
+ * Refunded one drink, then voided the order.
+ *
+ * The refund's cash is taken off expected cash as handed back, and the void
+ * hands back only the rest -- so the refunded part was collected at this till
+ * and has to stay in expected cash until the refund row takes it out. Dropping
+ * the whole voided order made the drawer come up short by the refund.
+ */
+describe('ShiftsService — a refund then a void of the same order', () => {
+  function build(voided: { totalAmount: number; payments: Array<{ method: string; amount: number }> }, refundedCash: number) {
+    const prisma: any = {
+      order: {
+        findMany: jest.fn(({ where }: any) => {
+          if (where?.shiftId === null) return Promise.resolve([]);
+          return Promise.resolve([
+            { id: 'sold', status: 'COMPLETED', totalAmount: 500, payments: [{ method: 'CASH', amount: 500 }] },
+            { id: 'v1', status: 'VOIDED', ...voided },
+          ]);
+        }),
+      },
+      shiftCashOut: { findMany: jest.fn().mockResolvedValue([]) },
+      auditLog: { findFirst: jest.fn().mockResolvedValue(null) },
+      orderItemRefund: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve(where.orderItem?.orderId
+          ? [{ refundAmount: refundedCash, orderItem: { orderId: 'v1' } }]   // refunds on the voided orders
+          : [{ refundAmount: refundedCash }])),                              // refunds given during the shift
+      },
+    };
+    const svc = new ShiftsService(prisma, { log: jest.fn() } as any, { generateZRead: jest.fn() } as any) as any;
+    const shift = {
+      id: 's1', tenantId: 't1', branchId: 'b1', cashierId: 'u1',
+      openingCash: 1000, openedAt: new Date('2026-08-30T07:00:00Z'), closedAt: null,
+      closingCashDeclared: null, closingCashExpected: null, variance: null, notes: null,
+    };
+    return { svc, shift };
+  }
+
+  it('expected cash is what is really in the drawer: the refunded part was collected, then handed back', async () => {
+    // 1000 opening + 500 sold. The ₱300 order: ₱100 refunded (out of the drawer), ₱200 voided (never kept).
+    const { svc, shift } = build({ totalAmount: 300, payments: [{ method: 'CASH', amount: 300 }] }, 100);
+    const s = await svc.buildSummary(shift);
+    expect(s.expectedCash).toBe(1500);
+    expect(s.voidCount).toBe(1);
+  });
+
+  it('never adds back more cash than the order brought in', async () => {
+    // Paid ₱250 by GCash and ₱50 cash; ₱100 refunded in cash. Only ₱50 of cash ever came in.
+    const { svc, shift } = build({ totalAmount: 300, payments: [{ method: 'GCASH_BUSINESS', amount: 250 }, { method: 'CASH', amount: 50 }] }, 100);
+    const s = await svc.buildSummary(shift);
+    expect(s.expectedCash).toBe(1000 + 500 + 50 - 100);
+  });
+});
+
+/**
  * Cash in the drawer that no shift claims.
  *
  * Supervisors bypass the shift gate entirely (ShiftGate.tsx), so when the owner

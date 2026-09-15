@@ -445,7 +445,15 @@ export default function OrdersPage() {
             <div className="px-6 py-4 border-b border-border">
               <h2 className="font-semibold text-foreground">Void Order</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {voidModal.orderNumber} · {formatPeso(Number(voidModal.totalAmount))}
+                {(() => {
+                  // Refunded lines were already handed back; the void gives back only the rest.
+                  const refunded = (voidModal.items ?? []).reduce((t, it) =>
+                    t + (Number(it.quantity) > 0 ? Number(it.lineTotal) * Number(it.refundedQty ?? 0) / Number(it.quantity) : 0), 0);
+                  const back = Math.max(0, Number(voidModal.totalAmount) - refunded);
+                  return refunded > 0.005
+                    ? <>{voidModal.orderNumber} · hand back {formatPeso(back)} ({formatPeso(refunded)} already refunded)</>
+                    : <>{voidModal.orderNumber} · {formatPeso(Number(voidModal.totalAmount))}</>;
+                })()}
               </p>
             </div>
             <div className="p-6 space-y-4">

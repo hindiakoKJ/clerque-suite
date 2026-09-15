@@ -18,9 +18,12 @@ describe('OrdersService — void and refund', () => {
     inventory?: { id: string; quantity: number } | null;
     refunded?: number;
     waiting?: Array<{ quantity: number; refundedQty: number }>;
+    /** The sale's cost-of-goods lines: which products were costed from a recipe. */
+    cogsLines?: Array<{ productId: string; costMethod: string }>;
   }) {
     const events: any[] = [];
     const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       order: {
         findFirst: jest.fn().mockResolvedValue({ id: 'o1', tenantId: TENANT, branchId: 'b1', orderNumber: 'ORD-1', totalAmount: 360, vatAmount: 38.57, discountAmount: 0, ...opts.order }),
         update: jest.fn().mockResolvedValue({ id: 'o1', status: 'VOIDED' }),
@@ -43,7 +46,10 @@ describe('OrdersService — void and refund', () => {
         create: jest.fn(({ data }: any) => Promise.resolve({ id: 'rf1', ...data })),
       },
       product: { findUnique: jest.fn().mockResolvedValue({ costPrice: 40 }) },
-      accountingEvent: { create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve(data); }) },
+      accountingEvent: {
+        create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve(data); }),
+        findFirst: jest.fn().mockResolvedValue(opts.cogsLines ? { payload: { lines: opts.cogsLines } } : null),
+      },
     };
     const prisma: any = {
       tenant: { findUnique: jest.fn().mockResolvedValue({ planCode: 'CLERQUE', voidApprovalThresholdCents: 0, returnsOwnerOnly: false }) },
@@ -104,6 +110,40 @@ describe('OrdersService — void and refund', () => {
     expect(tx.orderItemRefund.create.mock.calls[0][0].data.restocked).toBe(false);
     expect(tx.inventoryItem.update).not.toHaveBeenCalled();
     expect(events.find((e) => e.type === 'VOID').payload).toMatchObject({ restocked: false, restockedCogsTotal: 0 });
+  });
+
+  it('a refund of a line the sale costed from its recipe puts the unit back but books no stock value', async () => {
+    // A shop costing from recipes, product still marked unit-based: its cost came out of raw materials, not 1050.
+    const { svc, tx, events } = build({
+      order: { status: 'COMPLETED' },
+      items: [{
+        id: 'it1', orderId: 'o1', productId: 'p-cookie', quantity: 2, refundedQty: 0, lineTotal: 200, costPrice: 30,
+        order: { status: 'COMPLETED', branchId: 'b1', orderNumber: 'ORD-1' },
+        product: { id: 'p-cookie', costPrice: 30, name: 'Cookie', inventoryMode: 'UNIT_BASED' },
+      }],
+      inventory: { id: 'inv1', quantity: 5 },
+      cogsLines: [{ productId: 'p-cookie', costMethod: 'RECIPE_WAC' }],
+    });
+    await svc.refundItem({ tenantId: TENANT, orderId: 'o1', orderItemId: 'it1', quantity: 1, reason: 'Dropped', refundMethod: 'CASH', restock: true, refundedById: 'owner', callerRole: 'BUSINESS_OWNER' });
+    expect(events.find((e) => e.type === 'VOID').payload).toMatchObject({ restockedCogsTotal: 0 });
+  });
+
+  it('a refund of a shelf item costed from its own stock books the stock value back', async () => {
+    const { svc, tx, events } = build({
+      order: { status: 'COMPLETED' },
+      items: [{
+        id: 'it1', orderId: 'o1', productId: 'p-water', quantity: 2, refundedQty: 0, lineTotal: 60, costPrice: 12,
+        order: { status: 'COMPLETED', branchId: 'b1', orderNumber: 'ORD-1' },
+        product: { id: 'p-water', costPrice: 12, name: 'Water', inventoryMode: 'UNIT_BASED' },
+      }],
+      inventory: { id: 'inv1', quantity: 5 },
+      cogsLines: [{ productId: 'p-water', costMethod: 'WAC' }],
+    });
+    await svc.refundItem({ tenantId: TENANT, orderId: 'o1', orderItemId: 'it1', quantity: 1, reason: 'Unopened', refundMethod: 'CASH', restock: true, refundedById: 'owner', callerRole: 'BUSINESS_OWNER' });
+    expect(Number(tx.inventoryItem.update.mock.calls[0][0].data.quantity)).toBe(6);
+    expect(events.find((e) => e.type === 'VOID').payload).toMatchObject({ restocked: true, restockedCogsTotal: 12 });
+    // The order row is locked before the line is read for the refund.
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.orderItem.findFirst.mock.invocationCallOrder[1]);
   });
 
   it('refunding the last thing the kitchen was still making ends the order\'s wait; anything left keeps it', async () => {

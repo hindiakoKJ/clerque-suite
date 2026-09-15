@@ -739,8 +739,35 @@ ${line}` : line },
     let voidCount = 0;
     const digitalBreakdown: Record<string, number> = {};
 
+    /*
+      A voided order that was partly refunded first. The refund's cash is
+      counted as handed back (refundTotal, above), and the void hands back
+      only what is left of the sale -- so the refunded part WAS collected at
+      this till and stays in expected cash until the refund row takes it out.
+      Dropping the whole voided order made expected cash come up short by the
+      refund, and the count booked made-up income to cover it.
+    */
+    const voidedIds = orders.filter((o) => o.status === 'VOIDED').map((o) => o.id);
+    const voidedRefundedCash = new Map<string, number>();
+    if (voidedIds.length > 0) {
+      const rows = await this.prisma.orderItemRefund.findMany({
+        where:  { refundMethod: 'CASH', orderItem: { orderId: { in: voidedIds } } },
+        select: { refundAmount: true, orderItem: { select: { orderId: true } } },
+      });
+      for (const r of rows) voidedRefundedCash.set(r.orderItem.orderId, (voidedRefundedCash.get(r.orderItem.orderId) ?? 0) + Number(r.refundAmount));
+    }
+
     for (const order of orders) {
-      if (order.status === 'VOIDED') { voidCount++; continue; }
+      if (order.status === 'VOIDED') {
+        voidCount++;
+        const refundedCash = voidedRefundedCash.get(order.id) ?? 0;
+        if (refundedCash > 0) {
+          const nonCash = order.payments.filter((p) => p.method !== 'CASH').reduce((t, p) => t + Number(p.amount), 0);
+          // Never more than the cash this order actually brought in.
+          cashSales += Math.min(refundedCash, Math.max(0, Number(order.totalAmount) - nonCash));
+        }
+        continue;
+      }
       orderCount++;
 
       // Sum non-cash payments first (these are always exact — no change given)

@@ -41,11 +41,13 @@ function makePrismaMock() {
     branch:      { findFirst: jest.fn().mockResolvedValue({ id: 'branch-1' }) },
     $transaction: jest.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
       return cb({
+        // The order row lock taken before the void reads the order.
+        $queryRaw:       jest.fn().mockResolvedValue([]),
         order:           { findFirst: orderFindFirst, update: orderUpdate },
         orderItem:       { findMany: jest.fn().mockResolvedValue([]) },
         inventoryItem:   { findUnique: jest.fn().mockResolvedValue(null) },
         inventoryLog:    { create: jest.fn() },
-        accountingEvent: { create: jest.fn() },
+        accountingEvent: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
         orderPayment:    { findMany: jest.fn().mockResolvedValue([]) },
         // Nothing refunded on these orders before the void.
         orderItemRefund: { aggregate: jest.fn().mockResolvedValue({ _sum: { refundAmount: null } }) },

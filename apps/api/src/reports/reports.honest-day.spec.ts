@@ -100,6 +100,13 @@ describe('A day of sales, counted honestly', () => {
     expect(day.avgOrderValue).toBe(100);   // 200 kept over 2 sales
   });
 
+  it('does not take a voided order\'s refunds off the day again', async () => {
+    // Refunded one drink, then voided the order: the void already left the whole order out of sales.
+    const { svc, prisma } = build({ orders: [] });
+    await svc.getDaily(TENANT, BRANCH, DAY);
+    expect(prisma.orderItemRefund.findMany.mock.calls[0][0].where.orderItem.order.status).toEqual({ not: 'VOIDED' });
+  });
+
   it('asks the database for the voids as well as the sales', async () => {
     const { svc, queries } = build({ orders: [] });
     await svc.getDaily(TENANT, BRANCH, DAY);

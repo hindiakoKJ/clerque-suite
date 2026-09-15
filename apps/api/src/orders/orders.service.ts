@@ -1,4 +1,5 @@
 import { WAITS_AT_A_SCREEN, stillToMake, waitsAtAScreen } from '../kds/station-routing';
+import { lockOrder } from './order-lock';
 import { recipeUsagePerUnit, recipeKey, drainLots } from './recipe-usage';
 import {
   Injectable,
@@ -54,6 +55,13 @@ export interface CreateOrderOptions {
    * till (offline sync), where the approving supervisor is not re-presented.
    */
   enforceDiscountAuthority?: boolean;
+}
+
+/** Products on this order whose sale cost came from a recipe walk (credited raw materials, not 1050). */
+async function recipeCostedProducts(tx: Prisma.TransactionClient, orderId: string): Promise<Set<string>> {
+  const cogs = await tx.accountingEvent.findFirst({ where: { orderId, type: 'COGS' }, select: { payload: true } });
+  const lines = ((cogs?.payload as { lines?: Array<{ productId?: string; costMethod?: string }> } | null)?.lines) ?? [];
+  return new Set(lines.filter((l) => String(l.costMethod ?? '').startsWith('RECIPE')).map((l) => String(l.productId)));
 }
 
 @Injectable()
@@ -733,6 +741,7 @@ export class OrdersService {
       // after the inventory loop, since OrderItem.id is created with `order`
       // higher up in this transaction).
       const lotUnitCostByProduct = new Map<string, number>();
+      const lotCostAccByProduct  = new Map<string, { cost: number; qty: number }>();
       const firstLotIdByProduct  = new Map<string, string>();
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
@@ -812,7 +821,12 @@ export class OrdersService {
             const blendedUnitCost  = soldQty > 0
               ? (totalLotCost + shortfallUnitCost) / soldQty
               : drainedUnitCost;
-            lotUnitCostByProduct.set(item.productId, blendedUnitCost);
+            // Accumulated over every line of the product, then averaged: two lines draining different layers each count.
+            const lotAcc = lotCostAccByProduct.get(item.productId) ?? { cost: 0, qty: 0 };
+            lotAcc.cost += blendedUnitCost * soldQty;
+            lotAcc.qty  += soldQty;
+            lotCostAccByProduct.set(item.productId, lotAcc);
+            lotUnitCostByProduct.set(item.productId, lotAcc.qty > 0 ? lotAcc.cost / lotAcc.qty : blendedUnitCost);
           }
         }
 
@@ -1600,6 +1614,8 @@ export class OrdersService {
     //    are atomic. The outer findFirst was removed to prevent a race where the
     //    order could change tenants between the check and the update (defense-in-depth).
     const result = await this.prisma.$transaction(async (tx) => {
+      // The order row first, the way a bump and a refund take it: they must not interleave with a void.
+      await lockOrder(tx, orderId);
       const order = await tx.order.findFirst({
         where: { id: orderId, tenantId },   // tenant-scoped check inside transaction
       });
@@ -1651,11 +1667,13 @@ export class OrdersService {
         include: { product: { select: { inventoryMode: true } } },
       });
       let restockedCogsTotal = 0;
+      const costedFromRecipe = await recipeCostedProducts(tx, orderId);
       for (const item of items) {
         // RECIPE_BASED items skip restock entirely — ingredients are waste.
         // Their cost stays in COGS. (Defense in depth: even if an
         // InventoryItem somehow exists for a recipe product, don't restock.)
-        if (item.product?.inventoryMode === 'RECIPE_BASED') continue;
+        // Same for a line the sale costed from its recipe: its ingredients are gone too.
+        if (item.product?.inventoryMode === 'RECIPE_BASED' || costedFromRecipe.has(item.productId)) continue;
 
         /*
           Only what is still on the sale. Units already refunded were either
@@ -1888,6 +1906,15 @@ export class OrdersService {
     if (!reason?.trim()) throw new BadRequestException('Refund reason is required.');
 
     return this.prisma.$transaction(async (tx) => {
+      /*
+        Lock the order before reading the line. Two refunds of one line read
+        the same refundedQty and both wrote +1, losing one; a refund and a bump
+        of the order's other line each saw the other still waiting, and the
+        order stayed PAID forever.
+      */
+      const owned = await tx.orderItem.findFirst({ where: { id: orderItemId, orderId, order: { tenantId } }, select: { id: true } });
+      if (!owned) throw new NotFoundException('Order item not found.');
+      await lockOrder(tx, orderId);
       const item = await tx.orderItem.findFirst({
         where: { id: orderItemId, orderId, order: { tenantId } },
         include: {
@@ -1937,6 +1964,10 @@ export class OrdersService {
         product with no shelf row -- a recipe item still marked unit-based --
         nothing is put back, and neither is its cost: the refund used to book
         Dr Inventory / Cr COGS for stock that never existed.
+
+        Nor when the sale costed the line from its recipe (a shop costing from
+        recipes, product still marked unit-based): that cost came out of raw
+        materials, not 1050, so debiting 1050 back made up stock value.
       */
       const inv = effectiveRestock && item.order.branchId
         ? await tx.inventoryItem.findFirst({
@@ -1944,7 +1975,7 @@ export class OrdersService {
             select: { id: true, quantity: true },
           })
         : null;
-      const actuallyRestocked = inv != null;
+      const actuallyRestocked = inv != null && !(await recipeCostedProducts(tx, orderId)).has(item.productId);
 
       const refundRow = await tx.orderItemRefund.create({
         data: {

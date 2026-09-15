@@ -28,6 +28,7 @@ describe('KdsService', () => {
       return true;
     };
     const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       orderItem: {
         findFirst: jest.fn(({ where }: any) => Promise.resolve(rows.filter((l) => matches(l, where)).map(view)[0] ?? null)),
         findMany: jest.fn(({ where }: any) => Promise.resolve(rows.filter((l) => matches(l, where)).map(view))),
@@ -84,10 +85,12 @@ describe('KdsService', () => {
     const { svc, rows, tx } = build([line({ id: 'latte' }), line({ id: 'pasta' })]);
     // The second tablet read PENDING too, but the first one's write landed first.
     const readFirst = tx.orderItem.findFirst.getMockImplementation();
-    tx.orderItem.findFirst.mockImplementationOnce((args: any) => readFirst(args).then((r: any) => {
-      rows[0].prepStatus = 'READY';   // the other tablet
-      return r;
-    }));
+    tx.orderItem.findFirst
+      .mockImplementationOnce((args: any) => readFirst(args))   // which order to lock
+      .mockImplementationOnce((args: any) => readFirst(args).then((r: any) => {
+        rows[0].prepStatus = 'READY';   // the other tablet
+        return r;
+      }));
     const res = await svc.bumpReady(TENANT, 'latte');
     expect(res).toMatchObject({ id: 'latte', prepStatus: 'READY' });
     const flips = tx.orderItem.updateMany.mock.calls.filter((c: any) => c[0].where.prepStatus === 'PENDING');
@@ -100,6 +103,29 @@ describe('KdsService', () => {
     const res = await svc.markServed(TENANT, 'latte');
     expect(res).toMatchObject({ prepStatus: 'SERVED' });
     expect(rows[0].readyAt).toBeInstanceOf(Date);
+    expect(order.status).toBe('COMPLETED');
+  });
+
+  it('bump, serve and un-bump take the order\'s lock before reading it', async () => {
+    const { svc, tx } = build([line({ id: 'latte' }), line({ id: 'pasta', prepStatus: 'READY', readyAt: new Date() })]);
+    await svc.bumpReady(TENANT, 'latte');
+    await svc.unbump(TENANT, 'pasta');
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw.mock.calls[0].slice(1)).toEqual(['o1']);
+    // The lock comes before the read that decides anything.
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.orderItem.findFirst.mock.invocationCallOrder[1]);
+  });
+
+  it('a fully refunded line cannot be un-bumped: back at PENDING it would hold the order with nothing to make', async () => {
+    const { svc, order } = build([line({ id: 'cake', prepStatus: 'READY', readyAt: new Date(), quantity: 1, refundedQty: 1 })], 'COMPLETED');
+    await expect(svc.unbump(TENANT, 'cake')).rejects.toThrow('This item was refunded. There is nothing to un-bump.');
+    expect(order.status).toBe('COMPLETED');
+  });
+
+  it('un-bumping a line that was never ready does not reopen the order', async () => {
+    // Completed at the till while the screen was off; the line never got its bump.
+    const { svc, order } = build([line({ id: 'latte', prepStatus: 'PENDING' })], 'COMPLETED');
+    await svc.unbump(TENANT, 'latte');
     expect(order.status).toBe('COMPLETED');
   });
 

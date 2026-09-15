@@ -75,15 +75,30 @@ comes later.
 ## Plan
 
 ### Stage 1 -- no database change, master
-- [ ] 1a Kitchen screen and routing: an order waits at "Preparing" only for a station with a screen; bump
+- [x] 1a Kitchen screen and routing: an order waits at "Preparing" only for a station with a screen; bump
       refuses voided/refunded/non-paid orders and is atomic (two tablets cannot both win); the queue hides
       refunded quantity; serve without bump goes through bump; unbump rolls the order back only when right;
       the station page shows a refused unbump.
-- [ ] 1b One recipe-usage function for the sale and Recipe Catch-Up (size recipes, add-on ingredients);
+- [x] 1b One recipe-usage function for the sale and Recipe Catch-Up (size recipes, add-on ingredients);
       cost per order line, not per product; lot drains written relative and guarded.
-- [ ] 1c Voids and refunds: no double reversal after a partial refund; no restock value without a stock
+- [x] 1c Voids and refunds: no double reversal after a partial refund; no restock value without a stock
       row; restock only what was not refunded; the void window on the Manila calendar; the cost of goods
       entry dated to the sale day; the void dialog says what really happens.
+
+- [x] Review fixes on top of Stage 1:
+      a refund then a void: the void entry reverses revenue/VAT to zero and hands back only what the
+      refunds left, per payment account (cash refunded on a GCash sale stays out of the drawer); it waits
+      for a refund entry that has not posted; the shift close and the daily report count it once; the void
+      dialog shows what is handed back. Bump, un-bump, serve, refund and void take the order's row lock
+      first. A nightly 02:30 job (kds/stuck-orders.scheduler.ts) releases orders from before today left at
+      "Preparing" with nothing to make -- its first production run releases the old backlog; Stage 2g
+      extends this job. Un-bump refuses a fully refunded line and reopens the order only from READY. A
+      refund or void books stock value back only for a line costed from its own stock, not from a recipe.
+      Catch-up lists size-recipe products as having a recipe. FIFO shelf cost averages over all lines of
+      a product. Verified: 1870 API tests, live_stage1.js 18/18 on local carolina-test.
+- [ ] Not done, noted: orders completed by a refund or by the nightly release carry a readyAt that is
+      not a kitchen time, so the lead-time figure (readyAt - paidAt) counts them; it should skip orders
+      with no bumped line.
 
 ### Stage 2 -- the rule, branch `procure-deduct-on-ready` with the migration (KJ merges)
 - [ ] 2a Migration: OrderItem.usageOnReady (default false), usagePostedAt, readyById. Existing rows read

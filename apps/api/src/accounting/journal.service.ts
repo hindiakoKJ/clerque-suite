@@ -683,36 +683,91 @@ export class JournalService {
           });
 
           /*
-            What is left of the sale to reverse. Item refunds earlier on this
-            order already reversed their share of revenue, VAT and cash; the
-            void used to reverse the whole sale again on top, taking that
-            money out of the books twice. The refunded share comes off every
-            line in proportion -- exactly how each refund was worked out.
-          */
-          const saleTotal      = Number(payload['totalAmount'] ?? 0);
-          const refundedAmount = Number(payload['refundedAmount'] ?? 0);
-          const leftShare      = saleTotal > 0 ? Math.max(0, 1 - Math.min(refundedAmount, saleTotal) / saleTotal) : 1;
-          const r2 = (n: number) => Math.round(n * 100) / 100;
+            What is left of the sale to reverse, after the item refunds.
 
-          // Step 1: Reverse the SALE journal (revenue + VAT + cash).
+            A refund always debits 4010 and credits the till or a wallet, while
+            the sale may have credited a category's own revenue account, taken
+            GCash as well as cash, or debited receivables. Reversing the whole
+            sale again took the refunded money out twice; a flat share of each
+            sale line left category revenue holding money on an order that no
+            longer exists.
+
+            Two sides, read from the sale's entry and every posted refund entry:
+              - Revenue and VAT (the sale's credits, the refunds' debits): netted
+                per account and reversed, so each ends at zero.
+              - Money (the sale's debits, the refunds' credits): the void hands
+                back what the refunds left -- per payment account, what came in
+                there less what a refund already paid out of it. A refund paid
+                from an account the sale never used (cash back on a GCash sale)
+                really did leave that drawer, so it stays out, and the excess
+                comes off what the other accounts hand back. The shift close
+                counts the drawer the same way.
+            A refund's restock lines (Dr 1050 / Cr 5010) are left out; Step 2
+            reverses only the units not refunded. A refund on this order that has
+            not posted yet makes the void wait for it.
+          */
+          const r2 = (n: number) => Math.round(n * 100) / 100;
+          const refundedAmount = Number(payload['refundedAmount'] ?? 0);
+
+          // Step 1: Reverse the SALE journal (revenue + VAT + cash), net of refunds.
           if (origSale?.journalEntry) {
-            const reversal = origSale.journalEntry.lines.map((line) => ({
-              accountId: line.accountId,
-              debit:     r2(Number(line.credit) * leftShare),
-              credit:    r2(Number(line.debit) * leftShare),
-              description: `Reversal: ${line.description ?? ''}`,
-            }));
-            // A scaled reversal can round a centavo apart; the difference goes on the largest line so it still balances.
-            if (leftShare < 1) {
-              const diff = r2(reversal.reduce((t, l) => t + l.debit - l.credit, 0));
-              if (diff !== 0) {
-                const side = diff > 0 ? 'credit' : 'debit';
-                const biggest = reversal.reduce((a, b) => (b[side] > a[side] ? b : a));
-                biggest[side] = r2(biggest[side] + Math.abs(diff));
+            const refundEvents = event.orderId
+              ? await this.prisma.accountingEvent.findMany({
+                  where:   { tenantId, orderId: event.orderId, type: 'VOID', id: { not: event.id }, payload: { path: ['mode'], equals: 'ITEM_REFUND' } },
+                  include: { journalEntry: { include: { lines: { include: { account: true } } } } },
+                })
+              : [];
+            const unposted = refundEvents.filter((e) => e.status !== 'SYNCED');
+            if (unposted.length > 0) {
+              throw new BadRequestException(
+                `Void of ${payload['orderNumber'] ?? event.orderId}: ${unposted.length} item refund(s) on this order have not posted yet. It will post after them.`,
+              );
+            }
+
+            type Acc = { amount: number; description: string };
+            const bump = (m: Map<string, Acc>, accountId: string, amount: number, description: string) => {
+              const cur = m.get(accountId) ?? { amount: 0, description };
+              cur.amount += amount;
+              m.set(accountId, cur);
+            };
+            const earned = new Map<string, Acc>();   // revenue/VAT, credit positive
+            const kept   = new Map<string, Acc>();   // money per payment account, debit positive
+            for (const line of origSale.journalEntry.lines) {
+              const d = Number(line.debit), c = Number(line.credit);
+              if (d > 0) bump(kept, line.accountId, d, line.description ?? '');
+              if (c > 0) bump(earned, line.accountId, c, line.description ?? '');
+            }
+            for (const ev of refundEvents) {
+              for (const line of ev.journalEntry?.lines ?? []) {
+                const code = (line as { account?: { code?: string } }).account?.code;
+                if (code === '1050' || code === '5010') continue;   // restock lines: Step 2's business
+                const d = Number(line.debit), c = Number(line.credit);
+                if (d > 0) bump(earned, line.accountId, -d, line.description ?? '');
+                if (c > 0) bump(kept, line.accountId, -c, line.description ?? '');
               }
             }
-            lines.push(...reversal);
+
+            for (const [accountId, e] of earned) {
+              const amount = r2(e.amount);
+              if (Math.abs(amount) < 0.005) continue;
+              lines.push({ accountId, debit: amount > 0 ? amount : 0, credit: amount < 0 ? -amount : 0, description: `Reversal: ${e.description}` });
+            }
+
+            // What each payment account hands back; an overdrawn one gives nothing and its excess comes off the rest.
+            const handBack = r2([...earned.values()].reduce((t, e) => t + e.amount, 0));
+            const positive = [...kept.entries()].filter(([, k]) => k.amount > 0.005);
+            const positiveTotal = positive.reduce((t, [, k]) => t + k.amount, 0);
+            if (handBack > 0.005 && positiveTotal > 0.005) {
+              const shares = positive.map(([accountId, k]) => ({ accountId, description: k.description, amount: r2(handBack * (k.amount / positiveTotal)) }));
+              const drift = r2(handBack - shares.reduce((t, x) => t + x.amount, 0));
+              if (drift !== 0) shares.sort((a, b) => b.amount - a.amount)[0].amount = r2(shares[0].amount + drift);
+              for (const x of shares) {
+                if (x.amount > 0) lines.push({ accountId: x.accountId, credit: x.amount, description: `Reversal: ${x.description}` });
+              }
+            }
           } else {
+            const saleTotal = Number(payload['totalAmount'] ?? 0);
+            const leftShare = saleTotal > 0 ? Math.max(0, 1 - Math.min(refundedAmount, saleTotal) / saleTotal) : 1;
             const total  = r2(Number(payload['totalAmount'] ?? 0) * leftShare);
             const vatAmt = r2(Number(payload['vatAmount']   ?? 0) * leftShare);
             // #43 — a CHARGE order's SALE debited 1030 Accounts Receivable,

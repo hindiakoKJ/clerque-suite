@@ -108,6 +108,8 @@ async function runProcessEvent(
     | 'PROGRESS_BILLING' | 'RETENTION_RELEASE',
   origSale?: { payload: Record<string, unknown>; lines: Array<{ accountId: string; debit: unknown; credit: unknown; description: string }> },
   tenantTaxStatus: 'VAT' | 'NON_VAT' | 'EXEMPT' | 'PERCENTAGE_TAX' = 'VAT',
+  // Item refunds already on the order (a FULL_VOID nets the sale against them).
+  refundEvents: Array<{ status: string; lines: Array<{ accountId: string; debit: unknown; credit: unknown; description: string }> }> = [],
 ): Promise<CapturedLine[] | { skipped: true }> {
   let captured: CapturedLine[] | { skipped: true } = { skipped: true };
 
@@ -151,6 +153,10 @@ async function runProcessEvent(
   const prisma = {
     accountingEvent: {
       findFirst: accountingEventFindFirst,
+      findMany:  jest.fn().mockResolvedValue(refundEvents.map((r, i) => ({
+        id: `evt-refund-${i}`, type: 'VOID', status: r.status, payload: { mode: 'ITEM_REFUND' },
+        journalEntry: r.status === 'SYNCED' ? { lines: r.lines.map((l) => ({ ...l, account: { code: ID_TO_CODE[l.accountId] } })) } : null,
+      }))),
       update:    jest.fn().mockResolvedValue({}),
     },
     journalEntry: {
@@ -715,23 +721,109 @@ describe('JournalService — accounting correctness across business types', () =
   });
 
   describe('VOID event — FULL_VOID after an item refund', () => {
+    const cashSale = {
+      payload: { totalAmount: 360, vatAmount: 38.57 },
+      lines: [
+        { accountId: ACCOUNT_IDS['1010'], debit: 360, credit: 0,      description: 'Cash sales' },
+        { accountId: ACCOUNT_IDS['4010'], debit: 0,   credit: 321.43, description: 'Sales revenue' },
+        { accountId: ACCOUNT_IDS['2020'], debit: 0,   credit: 38.57,  description: 'Output VAT 12%' },
+      ],
+    };
+    // 1 of 3 drinks refunded in cash earlier; its own entry is posted.
+    const cashRefund = {
+      status: 'SYNCED',
+      lines: [
+        { accountId: ACCOUNT_IDS['4010'], debit: 107.14, credit: 0,   description: 'Refund (1 of 3 units)' },
+        { accountId: ACCOUNT_IDS['2020'], debit: 12.86,  credit: 0,   description: 'Refund - reverse VAT' },
+        { accountId: ACCOUNT_IDS['1010'], debit: 0,      credit: 120, description: 'Refund - cash returned' },
+      ],
+    };
+    const voidPayload = {
+      orderId: 'order-9', orderNumber: 'ORD-2026-0009', totalAmount: 360, vatAmount: 38.57,
+      payments: [{ method: 'CASH', amount: 360 }], restockedCogsTotal: 0, refundedAmount: 120,
+    };
+
     it('reverses only what the refund left, so the refunded money does not come out of the books twice', async () => {
-      const lines = await runProcessEvent({
-        orderId: 'order-9', orderNumber: 'ORD-2026-0009', totalAmount: 360, vatAmount: 38.57,
-        payments: [{ method: 'CASH', amount: 360 }], restockedCogsTotal: 0,
-        refundedAmount: 120,   // 1 of 3 drinks refunded earlier (its own entry reversed 120)
-      }, 'VOID', {
-        payload: { totalAmount: 360, vatAmount: 38.57 },
-        lines: [
-          { accountId: ACCOUNT_IDS['1010'], debit: 360, credit: 0,      description: 'Cash sales' },
-          { accountId: ACCOUNT_IDS['4010'], debit: 0,   credit: 321.43, description: 'Sales revenue' },
-          { accountId: ACCOUNT_IDS['2020'], debit: 0,   credit: 38.57,  description: 'Output VAT 12%' },
-        ],
-      }) as CapturedLine[];
+      const lines = await runProcessEvent(voidPayload, 'VOID', cashSale, 'VAT', [cashRefund]) as CapturedLine[];
       const s = summarise(lines);
       expect(s.credits.get('1010')).toBeCloseTo(240, 2);
       expect(s.debits.get('4010')).toBeCloseTo(214.29, 2);
       expect(s.debits.get('2020')).toBeCloseTo(25.71, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('a sale to a category revenue account paid part by GCash: every account the order touched ends at zero', async () => {
+      // The refund always debits 4010 and credits the till; the sale credited 4110 and took GCash too.
+      const sale = {
+        payload: { totalAmount: 360, vatAmount: 38.57 },
+        lines: [
+          { accountId: ACCOUNT_IDS['1010'], debit: 200, credit: 0,      description: 'Cash sales' },
+          { accountId: ACCOUNT_IDS['1031'], debit: 160, credit: 0,      description: 'GCash sales' },
+          { accountId: ACCOUNT_IDS['4110'], debit: 0,   credit: 321.43, description: 'Court rental revenue' },
+          { accountId: ACCOUNT_IDS['2020'], debit: 0,   credit: 38.57,  description: 'Output VAT 12%' },
+        ],
+      };
+      const lines = await runProcessEvent(voidPayload, 'VOID', sale, 'VAT', [cashRefund]) as CapturedLine[];
+      const balance = new Map<string, number>();
+      const add = (code: string, d: number, c: number) => balance.set(code, round((balance.get(code) ?? 0) + d - c));
+      for (const l of sale.lines) add(ID_TO_CODE[l.accountId], l.debit, l.credit);
+      for (const l of cashRefund.lines) add(ID_TO_CODE[l.accountId], l.debit, l.credit);
+      for (const l of lines) add(l.account, l.debit, l.credit);
+      for (const [code, left] of balance) expect([code, left]).toEqual([code, 0]);
+      const s = summarise(lines);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('cash handed back on a GCash sale really left the drawer: the void hands back the rest from GCash and leaves cash alone', async () => {
+      const gcashSale = {
+        payload: { totalAmount: 360, vatAmount: 0 },
+        lines: [
+          { accountId: ACCOUNT_IDS['1031'], debit: 360, credit: 0,   description: 'Digital wallet sales' },
+          { accountId: ACCOUNT_IDS['4010'], debit: 0,   credit: 360, description: 'Sales revenue' },
+        ],
+      };
+      const cashBack = {
+        status: 'SYNCED',
+        lines: [
+          { accountId: ACCOUNT_IDS['4010'], debit: 120, credit: 0,   description: 'Refund (1 of 3 units)' },
+          { accountId: ACCOUNT_IDS['1010'], debit: 0,   credit: 120, description: 'Refund - cash returned' },
+        ],
+      };
+      const lines = await runProcessEvent({ ...voidPayload, vatAmount: 0 }, 'VOID', gcashSale, 'VAT', [cashBack]) as CapturedLine[];
+      const s = summarise(lines);
+      expect(s.credits.get('1031')).toBeCloseTo(240, 2);
+      expect(s.debits.get('1010') ?? 0).toBe(0);
+      expect(s.credits.get('1010') ?? 0).toBe(0);
+      expect(s.debits.get('4010')).toBeCloseTo(240, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('a refund\'s restock lines are left out: the void restocks only the units not refunded', async () => {
+      const restockedRefund = {
+        status: 'SYNCED',
+        lines: [
+          ...cashRefund.lines,
+          { accountId: ACCOUNT_IDS['1050'], debit: 50, credit: 0,  description: 'Refund - restock inventory' },
+          { accountId: ACCOUNT_IDS['5010'], debit: 0,  credit: 50, description: 'Refund - reverse COGS (restocked)' },
+        ],
+      };
+      const lines = await runProcessEvent({ ...voidPayload, restockedCogsTotal: 100 }, 'VOID', cashSale, 'VAT', [restockedRefund]) as CapturedLine[];
+      const s = summarise(lines);
+      expect(s.debits.get('1050')).toBeCloseTo(100, 2);
+      expect(s.credits.get('5010')).toBeCloseTo(100, 2);
+      expect(s.credits.get('1050') ?? 0).toBe(0);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('a refund on the order that has not posted yet makes the void wait for it', async () => {
+      await expect(runProcessEvent(voidPayload, 'VOID', cashSale, 'VAT', [{ ...cashRefund, status: 'PENDING' }]))
+        .rejects.toThrow('have not posted yet');
+    });
+
+    it('with no sale entry to read, it falls back to the payload scaled to what the refunds left', async () => {
+      const lines = await runProcessEvent(voidPayload, 'VOID') as CapturedLine[];
+      const s = summarise(lines);
+      expect(s.credits.get('1010')).toBeCloseTo(240, 2);
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
 

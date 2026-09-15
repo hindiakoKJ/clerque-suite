@@ -6,6 +6,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { WAITS_AT_A_SCREEN, stillToMake, waitsAtAScreen } from './station-routing';
+import { lockOrder } from '../orders/order-lock';
 /** Orders a station may still act on. A voided order is not made, and its lines are not bumped. */
 const LIVE_ORDER = ['PAID', 'COMPLETED'] as const;
 const QUEUE_SIZE = 50;
@@ -119,6 +120,10 @@ export class KdsService {
   }
 
   private async bumpInTx(tx: Prisma.TransactionClient, tenantId: string, orderItemId: string) {
+    // The order's lock before anything is read that decides the order (see lockOrder).
+    const ref = await tx.orderItem.findFirst({ where: { id: orderItemId, order: { tenantId } }, select: { orderId: true } });
+    if (!ref) throw new NotFoundException('Order item not found.');
+    await lockOrder(tx, ref.orderId);
     const item = await tx.orderItem.findFirst({
       where:  { id: orderItemId, order: { tenantId } },
       select: { id: true, orderId: true, prepStatus: true, readyAt: true, quantity: true, refundedQty: true, order: { select: { status: true } } },
@@ -193,12 +198,15 @@ export class KdsService {
    */
   async unbump(tenantId: string, orderItemId: string) {
     return this.prisma.$transaction(async (tx) => {
+      const ref = await tx.orderItem.findFirst({ where: { id: orderItemId, order: { tenantId } }, select: { orderId: true } });
+      if (!ref) throw new NotFoundException('Order item not found.');
+      await lockOrder(tx, ref.orderId);
       const item = await tx.orderItem.findFirst({
         where:  {
           id: orderItemId, order: { tenantId },
         },
         select: {
-          id: true, orderId: true, prepStatus: true,
+          id: true, orderId: true, prepStatus: true, quantity: true, refundedQty: true,
           order: { select: { status: true } },
           product: { select: { category: { select: { stationId: true, station: { select: { hasKds: true, isActive: true } } } } } },
         },
@@ -210,6 +218,11 @@ export class KdsService {
       if (!(LIVE_ORDER as readonly string[]).includes(item.order.status)) {
         throw new BadRequestException('This order was voided. There is nothing to un-bump.');
       }
+      // Nothing left to make: back to PENDING it could never be bumped again, and would hold the order open for good.
+      if (Number(item.quantity) - Number(item.refundedQty) <= 1e-9) {
+        throw new BadRequestException('This item was refunded. There is nothing to un-bump.');
+      }
+      const wasReady = item.prepStatus === 'READY';
 
       const updated = await tx.orderItem.update({
         where: { id: orderItemId },
@@ -223,7 +236,7 @@ export class KdsService {
         the order, so un-bumping it must not reopen an order that was complete
         at the till.
       */
-      if (waitsAtAScreen(item.product?.category)) {
+      if (wasReady && waitsAtAScreen(item.product?.category)) {
         await tx.order.updateMany({
           where: { id: item.orderId, status: 'COMPLETED' },
           data:  { status: 'PAID', readyAt: null, completedAt: null },

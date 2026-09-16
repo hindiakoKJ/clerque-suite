@@ -55,6 +55,8 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         than how many batches. Empty here: these cases are about the chain.
       */
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue(
           Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),
@@ -187,6 +189,8 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         than how many batches. Empty here: these cases are about the chain.
       */
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
           findMany: jest.fn().mockResolvedValue(
             Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),
@@ -229,6 +233,8 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         than how many batches. Empty here: these cases are about the chain.
       */
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
       };
       const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
@@ -246,6 +252,8 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         than how many batches. Empty here: these cases are about the chain.
       */
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
       };
       const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);
@@ -268,6 +276,8 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         than how many batches. Empty here: these cases are about the chain.
       */
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
       };
       const rows = await (new SubRecipesService(prisma) as any).list(TENANT, BRANCH);

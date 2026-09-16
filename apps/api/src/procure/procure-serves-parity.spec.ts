@@ -85,6 +85,8 @@ describe('buy list and till read the same menu', () => {
     cycleCount:               { findMany: jest.fn().mockResolvedValue([]) },
     cycleCountLine:           { findMany: jest.fn().mockResolvedValue([]) },
     subRecipeItem:            { findMany: jest.fn().mockResolvedValue([]) },
+    // No ticket waits at a kitchen or bar screen here, so both sides read the book.
+    orderItem:                { findMany: jest.fn().mockResolvedValue([]) },
     modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
   };
 

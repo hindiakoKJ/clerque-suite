@@ -45,6 +45,9 @@ interface UnifiedReport {
     apBilled: number; apOutstanding: number;
     arInvoiced: number; arOutstanding: number;
     inventoryValue: number;
+    // Kitchen/bar lines not marked ready yet: sold, but their cost is not booked,
+    // so grossProfit leaves it out. Optional because an older API does not send it.
+    costPending?: { lineCount: number; revenue: number };
   };
 }
 
@@ -201,6 +204,13 @@ export default function UnifiedReportPage() {
             <Kpi label="Net working" value={fmtPeso(data.totals.arOutstanding + data.totals.inventoryValue - data.totals.apOutstanding)}
               sub="(AR + inv) − AP" />
           </div>
+          {/* Said out loud so the margin is not read as final while tickets are still on the screen. */}
+          {(data.totals.costPending?.lineCount ?? 0) > 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              Cost still to come for {data.totals.costPending!.lineCount} kitchen/bar item{data.totals.costPending!.lineCount === 1 ? '' : 's'} not yet
+              marked ready ({fmtPeso(data.totals.costPending!.revenue)} of sales). Gross profit and margin do not include it yet.
+            </p>
+          )}
 
           {/* Per-branch breakdown */}
           <div className="rounded-xl border border-border overflow-x-auto">

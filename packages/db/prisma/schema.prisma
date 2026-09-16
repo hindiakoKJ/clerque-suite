@@ -324,6 +324,11 @@ enum AccountingEventType {
   /// Construction: retention released — moved into current AR for normal
   /// collection (default) or paid directly as cash. DR 1030 or 1010 / CR 1037.
   RETENTION_RELEASE
+  /// A correction to cost of goods already booked for an order line:
+  /// payload.kind USAGE_RETURNED (a kitchen/bar ticket un-bumped after its
+  /// ingredients were taken: Dr 1051 or 1050 / Cr 5010, dated to the sale) or
+  /// WASTE (a made item voided or refunded: Dr 5070 / Cr 5010).
+  COGS_ADJUSTMENT
 }
 
 enum InventoryLogType {
@@ -1779,6 +1784,17 @@ model OrderItem {
   /// When the runner/cashier marked it as delivered.
   servedAt   DateTime?
 
+  /// Owner's rule: a recipe line waiting at a kitchen/bar screen takes its
+  /// ingredients and cost of goods only when it is marked ready (or by the
+  /// 02:30 nightly confirm). True = this line waited; false = used at the
+  /// sale, which is what every line written before this column says.
+  usageOnReady  Boolean   @default(false)
+  /// When a waiting line's ingredients and cost were taken. Null while it waits.
+  usagePostedAt DateTime?
+  /// Who marked it ready. Null for the nightly confirm. From a paired tablet
+  /// this is the person who paired it.
+  readyById     String?
+
   // ── Sprint 13 — Compliance-Engine (Pharmacy) ──────────────────────────
   /// Link to a Prescription when the dispensed item required one. Pharmacy
   /// POS attaches this at till; backend rejects sale of `isRxRequired`
@@ -1811,6 +1827,7 @@ model OrderItem {
   lot          ProductLot?         @relation(fields: [lotId], references: [id])
 
   @@index([orderId])
+  @@index([usageOnReady, usagePostedAt])
   @@index([prescriptionId])
   @@index([lotId])
   @@map("order_items")
@@ -2005,6 +2022,7 @@ model AccountingEvent {
   order        Order?        @relation(fields: [orderId], references: [id])
   journalEntry JournalEntry?
 
+  @@index([orderId, type])
   @@index([tenantId, status])
   @@index([tenantId, status, createdAt]) // CRON processor: PENDING events ordered by age
   @@map("accounting_events")

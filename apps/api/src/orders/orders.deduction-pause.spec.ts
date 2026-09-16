@@ -47,7 +47,7 @@ describe('OrdersService — ingredient deduction pause', () => {
 
     const tx: any = {
       order: {
-        create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-1' }),
+        create: jest.fn().mockResolvedValue({ id: 'o-1', orderNumber: 'ORD-1', items: [{ id: 'it-1', productId: LATTE, variantId: null, modifiers: [] }] }),
         findFirst: jest.fn().mockResolvedValue(null),
         count: jest.fn().mockResolvedValue(0),
         update: jest.fn().mockResolvedValue({}),
@@ -55,6 +55,7 @@ describe('OrdersService — ingredient deduction pause', () => {
       orderItem: {
         findMany: jest.fn().mockResolvedValue([]),
         updateMany: jest.fn((args: any) => { itemStamps.push(args); return Promise.resolve({ count: 1 }); }),
+        update: jest.fn().mockResolvedValue({}),
       },
       bomItem: {
         findMany: jest.fn().mockResolvedValue([
@@ -194,7 +195,8 @@ describe('OrdersService — ingredient deduction pause', () => {
     // The LINE records that its ingredients left the building.
     const stamp = itemStamps.find((u) => u.data?.ingredientsDeductedAt);
     expect(stamp).toBeDefined();
-    expect(stamp.where.productId.in).toContain(LATTE);
+    // Stamped by line: a product can have one line used now and one waiting at a screen.
+    expect(stamp.where.id.in).toEqual(['it-1']);
   });
 
   it('writes no stock and leaves the order unstamped while paused', async () => {

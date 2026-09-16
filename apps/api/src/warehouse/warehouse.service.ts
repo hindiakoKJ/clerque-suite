@@ -3,6 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, StockTransferStatus, CycleCountStatus } from '@prisma/client';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { noCostWarning } from '../inventory/inventory.service';
+import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
+import { releasedHolds } from './released-holds';
 
 // ── Stock Transfer DTOs ────────────────────────────────────────────────────────
 
@@ -172,16 +174,34 @@ export class WarehouseService {
         include: { lines: true },
       });
 
+      /*
+        Tickets still waiting at a kitchen or bar screen at the source have not
+        taken their ingredients off the books yet, but that milk is promised:
+        the ready tap will take it. Letting a transfer carry it away would leave
+        the tap with nothing to take and the next branch holding stock the
+        first one already sold. So the check is against what is free; the
+        decrement below is still the plain amount moved.
+      */
+      const held = await heldUsage(tx, tenantId, [t.fromBranchId], {
+        rawMaterialIds: t.lines.map((l) => l.rawMaterialId),
+      });
+
       for (const line of t.lines) {
         const inv = await tx.rawMaterialInventory.findUnique({
           where: { branchId_rawMaterialId: { branchId: t.fromBranchId, rawMaterialId: line.rawMaterialId } },
         });
         const onHand = Number(inv?.quantity ?? 0);
-        if (onHand < Number(line.quantity)) {
+        const heldQty = heldAt(held, t.fromBranchId, line.rawMaterialId);
+        const free = availableQty(onHand, heldQty);
+        if (free < Number(line.quantity)) {
           // Roll the status flip back so the caller can retry after restocking.
           await tx.stockTransfer.update({ where: { id }, data: { status: 'DRAFT', sentAt: null } });
           throw new BadRequestException(
-            `Insufficient stock at source for raw-material ${line.rawMaterialId}: have ${onHand}, need ${line.quantity}.`,
+            heldQty > 0
+              ? `Insufficient stock at source for raw-material ${line.rawMaterialId}: have ${onHand}, ` +
+                `of which ${heldQty} is held for kitchen/bar tickets still waiting to be made, ` +
+                `so ${free} can be sent; need ${line.quantity}.`
+              : `Insufficient stock at source for raw-material ${line.rawMaterialId}: have ${onHand}, need ${line.quantity}.`,
           );
         }
         await tx.rawMaterialInventory.update({
@@ -324,8 +344,9 @@ export class WarehouseService {
 
   /**
    * Starts a cycle count for a branch. Snapshots the current
-   * RawMaterialInventory.quantity for every active raw material as
-   * `expectedQty`. Counter then enters `countedQty` per line. On post,
+   * RawMaterialInventory.quantity, less what waiting kitchen/bar tickets
+   * hold, for every active raw material as `expectedQty`. Counter then
+   * enters `countedQty` per line. On post,
    * variances become InventoryLog adjustments and RawMaterialInventory
    * updates atomically.
    */
@@ -370,6 +391,20 @@ export class WarehouseService {
         })).map((i) => [i.rawMaterialId, i.quantity]),
       );
 
+      /*
+        Expect the shelf to be short by what waiting kitchen/bar tickets hold.
+
+        Those tickets have not taken their ingredients off the books yet -- the
+        ready tap does that -- but the milk for a drink on the bar screen is in
+        the jug, not in the carton the counter is looking at. Expecting the
+        book figure would book it as missing now, and the tap would take it
+        again later. Posting applies the variance relatively, so the tap that
+        lands after the count still takes exactly its share. A ticket voided or
+        refunded instead is never made, and posting gives its share back to
+        what the count expected (releasedHolds).
+      */
+      const held = await heldUsage(tx, tenantId, [branchId]);
+
       const countNumber = await this.nextCountNumber(tx, tenantId);
       return tx.cycleCount.create({
         data: {
@@ -377,7 +412,10 @@ export class WarehouseService {
           status: 'OPEN', notes: notes ?? null, startedById: userId,
           lines: {
             create: materials.map((m) => {
-              const qty = onHand.get(m.id) ?? new Prisma.Decimal(0);
+              const book = new Prisma.Decimal(onHand.get(m.id) ?? 0);
+              const heldQty = heldAt(held, branchId, m.id);
+              // Nothing held keeps the book figure exactly as it was snapshotted before.
+              const qty = heldQty > 0 ? Prisma.Decimal.max(book.minus(heldQty), 0) : book;
               return {
                 rawMaterialId: m.id,
                 expectedQty:   qty,
@@ -470,13 +508,46 @@ export class WarehouseService {
       // Variances the books could not value. Said back, not swallowed.
       const noCost: string[] = [];
 
+      /*
+        Give back what a waiting ticket stopped holding without being made.
+
+        The expected figures were taken less what waiting kitchen/bar tickets
+        held when the count was opened. One voided or refunded since was never
+        made, so its share never comes off the book -- measured against the
+        snapshot as it stands, that share reads as stock found. It goes back
+        onto what the count expected before the variance is worked out.
+
+        Only where the snapshot was above zero: there the whole hold was taken
+        off, so the whole release goes back. A snapshot stopped at zero took
+        off an unknown part of it, and giving it all back could invent a loss.
+
+        A buy list's count takes each line's snapshot when that line is first
+        counted, which can be later than the count was opened; those lines are
+        measured from the opening too, as nothing records the later moment.
+      */
+      const snapshotted = [...new Set(
+        c.lines.filter((l) => new Prisma.Decimal(l.expectedQty).greaterThan(0)).map((l) => l.rawMaterialId),
+      )];
+      const released = await releasedHolds(tx, tenantId, c.branchId, snapshotted, c.createdAt);
+
       for (const line of c.lines) {
         const counted  = new Prisma.Decimal(line.countedQty);
-        const expected = new Prisma.Decimal(line.expectedQty);
+        const snapshot = new Prisma.Decimal(line.expectedQty);
+        const giveBack = snapshot.greaterThan(0) ? (released.get(line.rawMaterialId) ?? 0) : 0;
+        const expected = giveBack > 0 ? snapshot.plus(giveBack) : snapshot;
         const variance = counted.minus(expected);
 
         // Skip zero-variance (within 1g / 1ml precision).
-        if (variance.abs().lessThan(new Prisma.Decimal('0.001'))) continue;
+        if (variance.abs().lessThan(new Prisma.Decimal('0.001'))) {
+          // Nothing moves, but the line still says what it was measured against.
+          if (giveBack > 0) {
+            await tx.cycleCountLine.update({
+              where: { id: line.id },
+              data:  { expectedQty: expected, varianceQty: variance },
+            });
+          }
+          continue;
+        }
 
         // Refuse to post a count that would drive inventory negative.
         if (counted.lessThan(0)) {
@@ -508,6 +579,15 @@ export class WarehouseService {
         const live = liveRow ? new Prisma.Decimal(liveRow.quantity) : new Prisma.Decimal(0);
         // Never negative: a correction cannot drive the shelf below empty.
         const settled = Prisma.Decimal.max(live.plus(variance), new Prisma.Decimal(0));
+        /*
+          Written as a change, not as `settled`. A kitchen or bar ready tap is
+          a writer too: it takes a waiting ticket's ingredients with its own
+          relative decrement, and it can land between the read above and the
+          write below. Writing the absolute figure would put that milk back on
+          the shelf; moving the row by the same amount keeps the tap's share
+          taken. With nothing in between it lands on `settled` exactly.
+        */
+        const change = settled.minus(live);
 
         // upsert, not update.
         //
@@ -524,7 +604,9 @@ export class WarehouseService {
         // recording purchases that never happened.
         await tx.rawMaterialInventory.upsert({
           where:  { branchId_rawMaterialId: { branchId: c.branchId, rawMaterialId: line.rawMaterialId } },
-          update: { quantity: settled },
+          update: {
+            quantity: change.isNegative() ? { decrement: change.negated() } : { increment: change },
+          },
           create: {
             tenantId,
             branchId:      c.branchId,
@@ -534,9 +616,15 @@ export class WarehouseService {
             quantity:      counted,
           },
         });
+        // A change cannot clamp itself: a tap that took its share between the read and the write can leave the row just below zero.
+        await tx.rawMaterialInventory.updateMany({
+          where: { branchId: c.branchId, rawMaterialId: line.rawMaterialId, quantity: { lt: 0 } },
+          data:  { quantity: new Prisma.Decimal(0) },
+        });
         await tx.cycleCountLine.update({
           where: { id: line.id },
-          data:  { varianceQty: variance },
+          // The expected figure too when a released hold was given back, so counted less expected is still the variance.
+          data:  giveBack > 0 ? { expectedQty: expected, varianceQty: variance } : { varianceQty: variance },
         });
 
         /*

@@ -62,9 +62,13 @@ describe('RecipeCatchupService', () => {
       tenant: {
         findUnique: jest.fn().mockResolvedValue({ recipeDeductionPausedAt: opts.pausedAt ?? null }),
       },
-      // The service always filters lines on ingredientsDeductedAt: null.
+      // The service always filters lines on ingredientsDeductedAt: null. The
+      // NOT clause is honoured here so a waiting line in a fixture is really
+      // left out, the way the database leaves it out.
       orderItem: {
-        findMany: jest.fn().mockResolvedValue(items),
+        findMany: jest.fn(({ where }: any) => Promise.resolve(
+          items.filter((i: any) => !(where?.NOT && Object.entries(where.NOT).every(([k, v]) => (i[k] ?? null) === v))),
+        )),
         count: jest.fn().mockResolvedValue(opts.alreadyDeducted ?? 0),
         updateMany: jest.fn(({ where }: any) => {
           stampedItemIds.push(...where.id.in);
@@ -354,6 +358,48 @@ describe('RecipeCatchupService', () => {
 
     const out = await svc.apply(TENANT, USER, { ...RANGE, expectedLineCount: 1 });
     expect(out.applied).toBe(true);
+  });
+
+  // ─────────────────── lines waiting at a kitchen or bar screen ───────────────────
+  //
+  // A waiting line has used nothing yet: its ready tap takes the ingredients.
+  // Replaying it would take them early -- counted twice while it waits, and
+  // gone for good if the ticket is voided, because a waiting void gives nothing back.
+
+  it('never replays a line still waiting at a kitchen or bar screen', async () => {
+    const waiting = { ...line('i-wait', LATTE, 2), usageOnReady: true, usagePostedAt: null };
+    const { svc, db } = build({ items: [waiting, line('i-1', LATTE, 4)] });
+
+    const p = await svc.preview(TENANT, RANGE);
+    expect(lineFor(p, MILK).quantityUsed).toBe(600);   // i-1 only: 150 x 4
+    expect(p.lineCount).toBe(1);
+    expect(db.orderItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ NOT: { usageOnReady: true, usagePostedAt: null } }) }),
+    );
+
+    const out = await svc.apply(TENANT, USER, { ...RANGE, expectedLineCount: 1 });
+    expect(decremented[MILK]).toBe(600);
+    expect(stampedItemIds).toEqual(['i-1']);
+    expect(out.stampedLineCount).toBe(1);
+  });
+
+  it('still replays a line that waited and was marked ready while deduction was paused', async () => {
+    // The confirm booked its cost but left stock alone; Catch-Up is what takes it.
+    const confirmed = { ...line('i-conf', LATTE, 2), usageOnReady: true, usagePostedAt: new Date('2026-09-05T03:00:00.000Z') };
+    const { svc } = build({ items: [confirmed] });
+
+    const out = await svc.apply(TENANT, USER, { ...RANGE, expectedLineCount: 1 });
+    expect(decremented[MILK]).toBe(300);
+    expect(stampedItemIds).toEqual(['i-conf']);
+  });
+
+  it('leaves the already-deducted count alone: only the replay skips waiting lines', async () => {
+    const { svc, db } = build({ items: [line('i-1', LATTE, 1)], alreadyDeducted: 5 });
+    const p = await svc.preview(TENANT, RANGE);
+
+    expect(db.orderItem.count.mock.calls[0][0].where.NOT).toBeUndefined();
+    expect(p.alreadyDeductedCount).toBe(5);
+    expect(lineFor(p, MILK).quantityUsed).toBe(150);   // nothing waiting: the replay is as before
   });
 
   it('records the run, including how many lines it closed', async () => {

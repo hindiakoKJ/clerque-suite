@@ -27,13 +27,40 @@ describe('NotificationsScheduler — the nightly ingredient alert', () => {
     behind?: { lowStockAlert: number | null; usedByDish: boolean; isActive?: boolean; otherPreps?: number };
   };
 
-  function build(rows: Row[], branches = [{ id: 'b1', name: 'Main' }]) {
+  /** A ticket line waiting at a kitchen or bar screen: `uses` of one ingredient per unit. */
+  type Ticket = { branchId: string; status: string; quantity: number; ingredient: string; uses: number };
+
+  function build(rows: Row[], branches = [{ id: 'b1', name: 'Main' }], tickets: Ticket[] = []) {
     const sent: any[] = [];
+    const idOf = (name: string) => `rm:${name}`;
     const prisma: any = {
       branch: { findMany: jest.fn().mockResolvedValue(branches) },
+      /*
+        Waiting lines, filtered the way the database would: by the order's
+        status and branch as heldUsage asks for them. Each ticket is its own
+        product so its recipe can name one ingredient.
+      */
+      orderItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve(tickets
+          .map((t, i) => ({ t, productId: `p${i}` }))
+          .filter(() => where.usageOnReady === true && where.usagePostedAt === null)
+          .filter(({ t }) => where.order.tenantId === TENANT && where.order.status.in.includes(t.status))
+          .filter(({ t }) => !where.order.branchId || where.order.branchId.in.includes(t.branchId))
+          .map(({ t, productId }) => ({
+            productId, variantId: null, quantity: t.quantity, refundedQty: 0,
+            modifiers: [], order: { branchId: t.branchId },
+          })))),
+      },
+      bomItem: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve(tickets
+          .map((t, i) => ({ productId: `p${i}`, rawMaterialId: idOf(t.ingredient), quantity: t.uses, rawMaterial: null }))
+          .filter((b) => where.productId.in.includes(b.productId)))),
+      },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterial: {
         findMany: jest.fn().mockResolvedValue(rows.map((r) => ({
-          name: r.name, unit: r.unit, lowStockAlert: r.lowStockAlert,
+          id: idOf(r.name), name: r.name, unit: r.unit, lowStockAlert: r.lowStockAlert,
           inventory: [{ quantity: r.qty }],
           subRecipeItems: r.isPrep ? [{ id: 'x' }] : [],
           bomItems: r.usedByDish ? [{ id: 'b' }] : [],
@@ -175,6 +202,52 @@ describe('NotificationsScheduler — the nightly ingredient alert', () => {
     const { run, sent } = build([BEANS, SAUCE]);
     await run();
     expect(sent[0].link).toBe('/procure/requests');
+  });
+
+  // ── tickets still waiting at the kitchen or bar hold their ingredients ───
+
+  it('counts milk promised to a waiting ticket at the branch as gone', async () => {
+    // 3000 on the shelf is above the 2000 line; 1200 of it is for six lattes still at the bar.
+    const { run, sent } = build(
+      [{ ...MILK, qty: 3000 }],
+      [{ id: 'b1', name: 'Main' }],
+      [{ branchId: 'b1', status: 'PAID', quantity: 6, ingredient: 'Fresh Milk', uses: 200 }],
+    );
+    await run();
+    expect(sent[0].body).toContain('Low: Fresh Milk — 1800 ml left');
+  });
+
+  it('calls it out when waiting tickets hold everything on the shelf', async () => {
+    const { run, sent } = build(
+      [{ ...MILK, qty: 1000 }],
+      [{ id: 'b1', name: 'Main' }],
+      [{ branchId: 'b1', status: 'COMPLETED', quantity: 6, ingredient: 'Fresh Milk', uses: 200 }],
+    );
+    await run();
+    expect(sent[0].kind).toBe('ERROR');
+    expect(sent[0].body).toContain('OUT: Fresh Milk');
+  });
+
+  it('holds nothing for a ticket at another branch or on a voided order', async () => {
+    const branches = [{ id: 'b1', name: 'Main' }, { id: 'b2', name: 'Annex' }];
+    const { run, sent } = build(
+      [{ ...MILK, qty: 3000 }],
+      branches,
+      [
+        // Held at the Annex only, so only the Annex reads low.
+        { branchId: 'b2', status: 'PAID', quantity: 6, ingredient: 'Fresh Milk', uses: 200 },
+        { branchId: 'b1', status: 'VOIDED', quantity: 6, ingredient: 'Fresh Milk', uses: 200 },
+      ],
+    );
+    await run();
+    expect(sent[0].body).toContain('Fresh Milk — 1800 ml left (Annex)');
+    expect(sent[0].body).not.toContain('(Main)');
+  });
+
+  it('with nothing waiting, reads the shelf as before', async () => {
+    const { run, sent } = build([{ ...MILK, qty: 3000 }], [{ id: 'b1', name: 'Main' }], []);
+    await run();
+    expect(sent).toHaveLength(0);
   });
 
   it('survives a database failure without taking the other nightly jobs down', async () => {

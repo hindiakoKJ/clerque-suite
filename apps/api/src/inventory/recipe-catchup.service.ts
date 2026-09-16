@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { recipeUsagePerUnit, drainLots } from '../orders/recipe-usage';
+import { WAITING_LINE } from '../orders/held-usage';
 
 /**
  * Recipe catch-up — replay ingredient usage for sale lines that never deducted.
@@ -412,7 +413,19 @@ export class RecipeCatchupService {
 
     // Line-level scoping. This single clause is what makes the replay safe.
     const items = await db.orderItem.findMany({
-      where: { ingredientsDeductedAt: null, order: orderWhere },
+      where: {
+        ingredientsDeductedAt: null,
+        /*
+          Never a line still waiting at a kitchen or bar screen. It has used
+          nothing yet -- its ready tap takes the ingredients. Taking them here
+          would count them twice while it waits (off the books, and again in
+          what waiting tickets hold), and a void of the ticket gives nothing
+          back, so they would stay gone for a drink that was never made. The
+          tap, or the nightly confirm, takes them at the right time.
+        */
+        NOT: WAITING_LINE,
+        order: orderWhere,
+      },
       select: {
         id: true,
         orderId: true,

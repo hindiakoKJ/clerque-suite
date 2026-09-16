@@ -15,7 +15,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -127,8 +127,16 @@ export default function KdsScreen({ pairing, onUnpaired }: Props): React.ReactEl
       await pairedClient.post(`/kds/items/${encodeURIComponent(id)}/bump`, pairing.deviceToken, {});
       // Optimistic flip
       setItems((prev) => prev.map((i) => (i.id === id ? { ...i, prepStatus: 'READY' as const } : i)));
-    } catch {
-      // Poll will reconcile.
+    } catch (err) {
+      /*
+        A network blip: the next poll reconciles. A refusal is different -- a
+        voided order, a refunded item, a screen paired to another station --
+        and marking ready now takes the ingredients, so the cook must see it
+        rather than watch the ticket silently come back.
+      */
+      if (err instanceof ApiHttpError && err.status >= 400 && err.status < 500) {
+        Alert.alert('Not marked ready', err.message);
+      }
     }
   };
 

@@ -39,6 +39,8 @@ describe('SubRecipesService.list — available servings, by station', () => {
     const prisma: any = {
       rawMaterial: { findMany: jest.fn().mockResolvedValue(rows) },
       bomItem: { findMany: jest.fn().mockResolvedValue(bom) },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue(
           Object.entries(stock).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity })),

@@ -56,6 +56,7 @@ function makePrismaMock() {
         branch:                { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
         rawMaterial:           { findMany: jest.fn().mockResolvedValue([{ id: 'rm-1', name: 'Cement bag', costPrice: 250 }]) },
         rawMaterialInventory:  { findUnique: jest.fn().mockResolvedValue({ quantity: 100 }), update: jest.fn() },
+        orderItem:             { findMany: jest.fn().mockResolvedValue([]) },  // no kitchen/bar ticket waiting
         materialIssuance:      {
           findFirst: jest.fn(),
           create:    jest.fn().mockResolvedValue({
@@ -102,6 +103,7 @@ describe('ProjectsService.issueMaterials — JE posting', () => {
       branch:                { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       rawMaterial:           { findMany: jest.fn().mockResolvedValue([{ id: 'rm-1', name: 'Cement bag', costPrice: 250 }]) },
       rawMaterialInventory:  { findUnique: jest.fn().mockResolvedValue({ quantity: 100 }), update: jest.fn() },
+      orderItem:             { findMany: jest.fn().mockResolvedValue([]) },  // no kitchen/bar ticket waiting
       materialIssuance:      {
         findFirst: jest.fn(),
         create:    jest.fn().mockResolvedValue({ id: 'iss-1', issuanceNumber: 'ISS-2026-000001', lines: [] }),
@@ -152,6 +154,7 @@ describe('ProjectsService.issueMaterials — JE posting', () => {
       branch:                { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       rawMaterial:           { findMany: jest.fn().mockResolvedValue([{ id: 'rm-1', name: 'Cement bag', costPrice: 250 }]) },
       rawMaterialInventory:  { findUnique: jest.fn().mockResolvedValue({ quantity: 100 }), update: jest.fn() },
+      orderItem:             { findMany: jest.fn().mockResolvedValue([]) },  // no kitchen/bar ticket waiting
       materialIssuance:      {
         findFirst: jest.fn(),
         create:    jest.fn().mockResolvedValue({ id: 'iss-1', issuanceNumber: 'ISS-2026-000001', lines: [] }),
@@ -175,6 +178,7 @@ describe('ProjectsService.issueMaterials — JE posting', () => {
       branch:                { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       rawMaterial:           { findMany: jest.fn().mockResolvedValue([{ id: 'rm-1', name: 'Cement bag', costPrice: 250 }]) },
       rawMaterialInventory:  { findUnique: jest.fn().mockResolvedValue({ quantity: 100 }), update: jest.fn() },
+      orderItem:             { findMany: jest.fn().mockResolvedValue([]) },  // no kitchen/bar ticket waiting
       materialIssuance:      {
         findFirst: jest.fn(),
         create:    jest.fn().mockResolvedValue({ id: 'iss-1', issuanceNumber: 'ISS-2026-000001', lines: [] }),
@@ -220,6 +224,7 @@ describe('ProjectsService.issueMaterials — JE posting', () => {
       branch:                { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       rawMaterial:           { findMany: jest.fn().mockResolvedValue([{ id: 'rm-1', name: 'Cement bag', costPrice: 250 }]) },
       rawMaterialInventory:  { findUnique: jest.fn().mockResolvedValue({ quantity: 5 }), update: jest.fn() },  // only 5 on hand
+      orderItem:             { findMany: jest.fn().mockResolvedValue([]) },  // no kitchen/bar ticket waiting
       materialIssuance:      { findFirst: jest.fn(), create: jest.fn() },
       account: { findMany: jest.fn() },
       journalEntry: { create: jest.fn() },

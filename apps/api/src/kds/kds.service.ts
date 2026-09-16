@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,6 +8,28 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { WAITS_AT_A_SCREEN, stillToMake, waitsAtAScreen } from './station-routing';
 import { lockOrder } from '../orders/order-lock';
+import { confirmLineUsage, returnLineUsage } from '../orders/usage-confirm';
+
+/**
+ * Who is tapping. From a paired tablet, `userId` is the person who paired it
+ * and `stationId` the station it is paired to.
+ */
+export interface KdsActor {
+  userId: string | null;
+  isDevice?: boolean;
+  deviceRole?: string | null;
+  stationId?: string | null;
+}
+
+/** A tap on a ticket takes stock and books cost now: allow a kitchen/bar screen or a signed-in person, never the customer display. */
+function assertMayMarkReady(actor: KdsActor | undefined) {
+  if (actor?.isDevice && !String(actor.deviceRole ?? '').startsWith('KDS_')) {
+    throw new ForbiddenException('Only a kitchen or bar screen can mark items ready.');
+  }
+}
+
+/** Interactive transactions for a tap: the confirm walks a recipe and may drain lots, like a sale. */
+const TAP_TX = { maxWait: 10_000, timeout: 30_000 } as const;
 /** Orders a station may still act on. A voided order is not made, and its lines are not bumped. */
 const LIVE_ORDER = ['PAID', 'COMPLETED'] as const;
 const QUEUE_SIZE = 50;
@@ -115,20 +138,30 @@ export class KdsService {
    * The flip from PENDING is one conditional write, so two tablets bumping
    * the same line at the same moment cannot both count as the bump.
    */
-  async bumpReady(tenantId: string, orderItemId: string) {
-    return this.prisma.$transaction((tx) => this.bumpInTx(tx, tenantId, orderItemId));
+  async bumpReady(tenantId: string, orderItemId: string, actor?: KdsActor) {
+    assertMayMarkReady(actor);
+    return this.prisma.$transaction((tx) => this.bumpInTx(tx, tenantId, orderItemId, actor), TAP_TX);
   }
 
-  private async bumpInTx(tx: Prisma.TransactionClient, tenantId: string, orderItemId: string) {
+  private async bumpInTx(tx: Prisma.TransactionClient, tenantId: string, orderItemId: string, actor?: KdsActor) {
     // The order's lock before anything is read that decides the order (see lockOrder).
     const ref = await tx.orderItem.findFirst({ where: { id: orderItemId, order: { tenantId } }, select: { orderId: true } });
     if (!ref) throw new NotFoundException('Order item not found.');
     await lockOrder(tx, ref.orderId);
     const item = await tx.orderItem.findFirst({
       where:  { id: orderItemId, order: { tenantId } },
-      select: { id: true, orderId: true, prepStatus: true, readyAt: true, quantity: true, refundedQty: true, order: { select: { status: true } } },
+      select: {
+        id: true, orderId: true, prepStatus: true, readyAt: true, quantity: true, refundedQty: true,
+        usageOnReady: true, usagePostedAt: true,
+        order: { select: { status: true } },
+        product: { select: { category: { select: { stationId: true } } } },
+      },
     });
     if (!item) throw new NotFoundException('Order item not found.');
+    // A tablet paired to the bar does not mark the kitchen's tickets.
+    if (actor?.isDevice && actor.stationId && item.product?.category?.stationId && item.product.category.stationId !== actor.stationId) {
+      throw new ForbiddenException('This screen is paired to another station.');
+    }
     if (!(LIVE_ORDER as readonly string[]).includes(item.order.status)) {
       throw new BadRequestException('This order was voided. There is nothing to make.');
     }
@@ -140,9 +173,19 @@ export class KdsService {
     const flipped = item.prepStatus === 'PENDING'
       ? await tx.orderItem.updateMany({
           where: { id: orderItemId, prepStatus: 'PENDING' },
-          data:  { prepStatus: 'READY', readyAt: now },
+          // Who bumped it: lead time counts only orders a kitchen or bar actually marked ready.
+          data:  { prepStatus: 'READY', readyAt: now, readyById: actor?.userId ?? null },
         })
       : { count: 0 };
+    /*
+      Owner's rule: this is the moment a waiting line's ingredients are used
+      and its cost is booked. Once only -- guarded inside -- so the other
+      tablet, a serve after the bump, or the nightly job does nothing more.
+    */
+    if (item.usageOnReady && !item.usagePostedAt) {
+      await confirmLineUsage(tx, tenantId, orderItemId, { actorId: actor?.userId ?? null, trigger: 'READY', now });
+    }
+
     // Idempotent: already bumped (here, or by the other tablet a moment ago) is a no-op.
     const updated = flipped.count === 1
       ? { id: item.id, prepStatus: 'READY' as const, readyAt: now }
@@ -172,20 +215,33 @@ export class KdsService {
    * Served without being bumped first is still made: it goes through the bump,
    * so the order is promoted and it is recorded as ready, not skipped past.
    */
-  async markServed(tenantId: string, orderItemId: string) {
+  async markServed(tenantId: string, orderItemId: string, actor?: KdsActor) {
+    assertMayMarkReady(actor);
     return this.prisma.$transaction(async (tx) => {
+      const ref = await tx.orderItem.findFirst({ where: { id: orderItemId, order: { tenantId } }, select: { orderId: true } });
+      if (!ref) throw new NotFoundException('Order item not found.');
+      // Served is a tap on the order too: the same lock as a bump, a refund and a void.
+      await lockOrder(tx, ref.orderId);
       const item = await tx.orderItem.findFirst({
         where: { id: orderItemId, order: { tenantId } },
-        select: { id: true, prepStatus: true },
+        select: { id: true, prepStatus: true, usageOnReady: true, usagePostedAt: true, order: { select: { status: true } } },
       });
       if (!item) throw new NotFoundException('Order item not found.');
-      if (item.prepStatus === 'PENDING') await this.bumpInTx(tx, tenantId, orderItemId);
+      if (!(LIVE_ORDER as readonly string[]).includes(item.order.status)) {
+        throw new BadRequestException('This order was voided. There is nothing to serve.');
+      }
+      if (item.prepStatus === 'PENDING') {
+        await this.bumpInTx(tx, tenantId, orderItemId, actor);
+      } else if (item.usageOnReady && !item.usagePostedAt) {
+        // READY but never confirmed (bumped before this rule, then served): served is made.
+        await confirmLineUsage(tx, tenantId, orderItemId, { actorId: actor?.userId ?? null, trigger: 'READY' });
+      }
       await tx.orderItem.update({
         where: { id: orderItemId },
         data:  { prepStatus: 'SERVED', servedAt: new Date() },
       });
       return tx.orderItem.findFirst({ where: { id: orderItemId }, select: { id: true, prepStatus: true, servedAt: true } });
-    });
+    }, TAP_TX);
   }
 
   /**
@@ -224,9 +280,16 @@ export class KdsService {
       }
       const wasReady = item.prepStatus === 'READY';
 
+      /*
+        A mistaken bump took the ingredients and booked the cost: un-bumping
+        gives back exactly what it took, with its own entry -- same Manila day,
+        open period, no refund since. Refused in words otherwise.
+      */
+      await returnLineUsage(tx, tenantId, orderItemId);
+
       const updated = await tx.orderItem.update({
         where: { id: orderItemId },
-        data:  { prepStatus: 'PENDING', readyAt: null },
+        data:  { prepStatus: 'PENDING', readyAt: null, readyById: null },
         select: { id: true, prepStatus: true },
       });
 
@@ -244,6 +307,6 @@ export class KdsService {
       }
 
       return updated;
-    });
+    }, TAP_TX);
   }
 }

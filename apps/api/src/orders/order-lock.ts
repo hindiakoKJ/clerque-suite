@@ -12,3 +12,18 @@ import { Prisma } from '@prisma/client';
 export async function lockOrder(tx: Prisma.TransactionClient, orderId: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM "orders" WHERE id = ${orderId} FOR UPDATE`;
 }
+
+/**
+ * Wait for any till sale of the shop that is still being written.
+ *
+ * A ready tap (or its un-bump) writes ingredient stock rows and lot layers --
+ * the same rows a sale writes, but in its own recipe order, stock row before
+ * lot. Two transactions taking the same rows in opposite orders deadlock, and
+ * Postgres aborts one: the cashier's sale or the barista's tap. Every sale
+ * first takes its shop's POS order counter row (numbering.next), so taking that
+ * row here too makes taps and sales queue instead of cross. A shop with no
+ * counter row has never sold, so it has nothing waiting to confirm.
+ */
+export async function queueBehindSales(tx: Prisma.TransactionClient, tenantId: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM "document_number_sequences" WHERE "tenantId" = ${tenantId} AND type = 'POS_ORDER' AND "branchId" IS NULL FOR UPDATE`;
+}

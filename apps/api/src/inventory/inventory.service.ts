@@ -10,6 +10,7 @@ import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
 import { resolveBuyUnit } from './unit-conversion';
+import { heldUsage, heldAt, availableQty } from '../orders/held-usage';
 import { PH_TIMEZONE } from '@repo/shared-types';
 
 import { judgeMargin } from '@repo/shared-types';
@@ -404,7 +405,7 @@ export class InventoryService {
    * on is "8 short".
    */
   async getLowStock(tenantId: string, branchId: string) {
-    const [products, ingredients] = await Promise.all([
+    const [products, ingredients, held] = await Promise.all([
       this.prisma.inventoryItem.findMany({
         where:  { tenantId, branchId },
         select: {
@@ -447,6 +448,13 @@ export class InventoryService {
           subRecipeItems: { select: { id: true }, take: 1 },
         },
       }),
+      /*
+        What tickets still waiting at a kitchen or bar screen will take when
+        they are marked ready. That milk is still on the shelf, but it is
+        already promised: counting it as available told the shop it was fine
+        until the tickets cleared and the shelf was suddenly short.
+      */
+      heldUsage(this.prisma, tenantId, [branchId]),
     ]);
 
     const low = [
@@ -460,12 +468,19 @@ export class InventoryService {
           sku:           i.product.sku,
           unit:          'pc',
           quantity:      Number(i.quantity),
+          // Shelf goods come off at the sale; only ingredients wait for a ticket.
+          heldQty:       0,
           lowStockAlert: Number(i.lowStockAlert),
           shortBy:       Number(i.lowStockAlert) - Number(i.quantity),
           isLowStock:    true,
         })),
       ...ingredients
-        .map((r) => ({ ...r, onHand: Number(r.inventory[0]?.quantity ?? 0) }))
+        .map((r) => {
+          const heldQty = heldAt(held, branchId, r.id);
+          // What is left once the waiting tickets have what they need: the
+          // figure a buying decision has to be made on.
+          return { ...r, heldQty, onHand: availableQty(Number(r.inventory[0]?.quantity ?? 0), heldQty) };
+        })
         .filter((r) => r.lowStockAlert != null
                     && r.onHand <= Number(r.lowStockAlert))
         .map((r) => ({
@@ -477,7 +492,14 @@ export class InventoryService {
           name:          r.name,
           sku:           null,
           unit:          r.unit,
+          /*
+            Available, not the shelf figure, so the row still reads
+            `shortBy = lowStockAlert - quantity` and `quantity <= 0` still
+            means "none to use" -- the slip, the Buy Now sheet and Check stock
+            all lean on that. heldQty says how much of the shelf is promised.
+          */
           quantity:      r.onHand,
+          heldQty:       r.heldQty,
           lowStockAlert: Number(r.lowStockAlert),
           shortBy:       Number(r.lowStockAlert) - r.onHand,
           isLowStock:    true,
@@ -542,6 +564,12 @@ export class InventoryService {
     const body = (r: (typeof low)[number]) => [
       { text: r.name, bold: true },
       { text: `   have ${fmtQty(r.quantity)} ${r.unit}`.padEnd(W - 0) },
+      /*
+        "have" is what is left after the tickets waiting at the kitchen or bar.
+        Whoever holds the slip can see more on the shelf than that, so say
+        where the rest is going rather than let the slip look wrong.
+      */
+      ...(r.heldQty > 0 ? [{ text: `   ${fmtQty(r.heldQty)} ${r.unit} held for orders` }] : []),
       { text: `   SHORT ${fmtQty(r.shortBy)} ${r.unit}` },
     ];
 
@@ -1237,23 +1265,36 @@ export class InventoryService {
   // ─── Raw Materials (F&B ingredient library) ───────────────────────────────
 
   async listRawMaterials(tenantId: string, includeInactive = false, branchId?: string) {
-    const items = await this.prisma.rawMaterial.findMany({
-      where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
-      orderBy: { name: 'asc' },
-      ...(branchId
-        ? { include: { inventory: { where: { branchId }, select: { quantity: true } } } }
-        : {}),
-    });
+    const [items, held] = await Promise.all([
+      this.prisma.rawMaterial.findMany({
+        where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
+        orderBy: { name: 'asc' },
+        ...(branchId
+          ? { include: { inventory: { where: { branchId }, select: { quantity: true } } } }
+          : {}),
+      }),
+      // Only a branch has a shelf to hold against; the library view has no stock figures.
+      branchId ? heldUsage(this.prisma, tenantId, [branchId]) : null,
+    ]);
     return items.map((m) => {
       const invRow   = 'inventory' in m && Array.isArray(m.inventory) ? m.inventory[0] : undefined;
+      /*
+        stockQty stays the book figure: Stock on hand is checked against a
+        count and a write-off, and both work on what is physically there.
+      */
       const stockQty = invRow != null ? Number(invRow.quantity) : null;
       const alert    = m.lowStockAlert != null ? Number(m.lowStockAlert) : null;
+      const heldQty  = branchId && held ? heldAt(held, branchId, m.id) : 0;
+      const available = stockQty != null ? availableQty(stockQty, heldQty) : null;
       return {
         ...m,
         costPrice:     m.costPrice     != null ? Number(m.costPrice)     : null,
         lowStockAlert: alert,
         stockQty,
-        isLowStock: stockQty != null && alert != null && stockQty <= alert,
+        ...(branchId ? { heldQty, availableQty: available } : {}),
+        // Low is a decision about what can still be made, so it is judged on
+        // what the waiting tickets leave, not on the shelf.
+        isLowStock: available != null && alert != null && available <= alert,
       };
     });
   }
@@ -1666,12 +1707,36 @@ export class InventoryService {
 
       const unitCost  = Number(material.costPrice ?? 0);
       const totalValue = dto.quantity * unitCost;
-      const qtyAfter  = onHand - dto.quantity;
 
-      await tx.rawMaterialInventory.update({
+      /*
+        Relative, not "set it to what I read minus this". The read above takes
+        no lock, and a ticket marked ready at the kitchen screen now takes its
+        ingredients from this same row at any moment -- an absolute write from
+        that read would put back what the tap just took.
+      */
+      const written = await tx.rawMaterialInventory.update({
         where: { branchId_rawMaterialId: { branchId: dto.branchId, rawMaterialId } },
-        data:  { quantity: new Prisma.Decimal(qtyAfter) },
+        data:  { quantity: { decrement: new Prisma.Decimal(dto.quantity) } },
       });
+      // A decrement cannot clamp itself; a tap landing in between can leave the row just below zero.
+      await tx.rawMaterialInventory.updateMany({
+        where: { branchId: dto.branchId, rawMaterialId, quantity: { lt: 0 } },
+        data:  { quantity: new Prisma.Decimal(0) },
+      });
+      const qtyAfter = Math.max(0, Number(written.quantity));
+
+      /*
+        Allowed, but said. The cap above stays on the shelf figure because a
+        write-off records milk that is already gone -- refusing it would not
+        bring the milk back. What it can do is leave the tickets waiting at
+        the kitchen or bar without enough to be made, and the person writing
+        it off is the one who can go and check.
+      */
+      const held = heldAt(await heldUsage(tx, tenantId, [dto.branchId], { rawMaterialIds: [rawMaterialId] }), dto.branchId, rawMaterialId);
+      const heldWarning = held > 0 && qtyAfter < held
+        ? `${held} ${material.unit} of "${material.name}" is for orders still waiting at the kitchen or bar, `
+          + `and this leaves ${qtyAfter} ${material.unit}. Check those orders can still be made.`
+        : null;
 
       /*
         A zero-value lot row is the write-off's receipt: it is what makes the
@@ -1733,6 +1798,8 @@ export class InventoryService {
         unitCost,
         totalValue,
         warning:        totalValue > 0 ? null : noCostWarning(material.name),
+        heldQty:        held,
+        heldWarning,
       };
     });
   }

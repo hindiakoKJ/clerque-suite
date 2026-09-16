@@ -36,6 +36,9 @@ interface SalesRange {
     totalRevenue: number; totalCogs: number; grossProfit: number;
     grossMargin: number; totalOrders: number; voidCount: number;
     avgOrderValue: number;
+    // Kitchen/bar lines not marked ready yet: sold, but their cost is not booked,
+    // so grossProfit leaves it out. Optional because an older API does not send it.
+    costPending?: { lineCount: number; revenue: number };
   };
   byDay: ByDay[];
   byPaymentMethod: ByPaymentMethod[];
@@ -168,6 +171,13 @@ export default function SalesReportPage() {
               <Kpi icon={TrendingUp} label="Avg Order Value" value={formatPeso(data.totals.avgOrderValue)} />
               <Kpi icon={Ban} label="Voids" value={String(data.totals.voidCount)} sub="excluded from revenue" tone="warn" />
             </section>
+            {/* Said out loud so the margin is not read as final while tickets are still on the screen. */}
+            {(data.totals.costPending?.lineCount ?? 0) > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                Cost still to come for {data.totals.costPending!.lineCount} kitchen/bar item{data.totals.costPending!.lineCount === 1 ? '' : 's'} not yet
+                marked ready ({formatPeso(data.totals.costPending!.revenue)} of sales). Gross profit and margin do not include it yet.
+              </p>
+            )}
 
             {/* By-day table */}
             <section className="rounded-xl border border-border bg-card overflow-hidden">

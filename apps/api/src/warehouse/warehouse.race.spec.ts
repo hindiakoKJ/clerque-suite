@@ -106,6 +106,12 @@ function makePrismaMock() {
           accountingEvent: {
             create: jest.fn(async ({ data }: any) => data),
           },
+          // No ticket waits at a kitchen or bar screen, so nothing is held
+          // back from the send; what waiting tickets hold is pinned in
+          // warehouse.held-stock.spec.
+          orderItem: {
+            findMany: jest.fn(async () => []),
+          },
         });
       }),
     },

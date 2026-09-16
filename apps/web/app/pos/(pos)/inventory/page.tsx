@@ -43,6 +43,12 @@ interface RawMaterial {
   costPrice:     number | null;
   lowStockAlert: number | null;
   stockQty:      number | null;
+  /*
+    Promised to tickets still waiting at a kitchen or bar screen. They take it
+    when marked ready, so it is on the shelf but not free to use; "Low" is
+    judged on what is left after them.
+  */
+  heldQty?:      number;
   isLowStock:    boolean;
   isActive:      boolean;
   /** Batches with expiry dates, used oldest-expiry-first. */
@@ -302,7 +308,7 @@ export default function InventoryPage() {
         // the milk off twice, and a write-off is not visible while it happens.
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
       );
-      const d = res.data as { duplicate?: boolean; quantityAfter?: number; warning?: string | null };
+      const d = res.data as { duplicate?: boolean; quantityAfter?: number; warning?: string | null; heldWarning?: string | null };
       if (d.duplicate) {
         toast.info('That write-off was already recorded.');
       } else {
@@ -311,6 +317,8 @@ export default function InventoryPage() {
         );
         // The shelf moved but the books did not: no cost on file to value it.
         if (d.warning) toast.warning(d.warning, { duration: 10000 });
+        // Recorded, but orders still at the kitchen or bar may now be short of it.
+        if (d.heldWarning) toast.warning(d.heldWarning, { duration: 10000 });
       }
       setMatModal(null);
       qc.invalidateQueries({ queryKey: ['raw-materials', branchId] });
@@ -554,6 +562,12 @@ export default function InventoryPage() {
                         ? `${m.stockQty.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${m.unit}`
                         : <span className="text-muted-foreground font-normal">—</span>
                       }
+                      {/* Why a full-looking shelf can read Low: some of it is already promised. */}
+                      {(m.heldQty ?? 0) > 0 && (
+                        <span className="block text-[11px] font-normal text-muted-foreground">
+                          {(m.heldQty ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} {m.unit} for waiting orders
+                        </span>
+                      )}
                     </td>
 
                     {/* Low-stock alert threshold (inline edit) */}
@@ -866,7 +880,10 @@ export default function InventoryPage() {
                 />
                 {editingMat.stockQty != null && (
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    {editingMat.stockQty.toLocaleString()} {editingMat.unit} on hand.
+                    {editingMat.stockQty.toLocaleString()} {editingMat.unit} on hand
+                    {(editingMat.heldQty ?? 0) > 0
+                      ? `, ${(editingMat.heldQty ?? 0).toLocaleString()} ${editingMat.unit} of it for waiting orders.`
+                      : '.'}
                   </p>
                 )}
               </div>

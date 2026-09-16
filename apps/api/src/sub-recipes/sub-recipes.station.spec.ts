@@ -56,6 +56,8 @@ describe('SubRecipesService.makeBatch — attributing the prep to a station', ()
         // plan this shop does not have cannot refuse every batch.
         findMany:  jest.fn().mockResolvedValue([{ kind: 'KITCHEN' }, { kind: 'BAR' }]),
       },
+      // No ticket is waiting at a kitchen or bar screen, so nothing is held.
+      orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'tom', quantity: 50000 }]),
       },

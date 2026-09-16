@@ -48,7 +48,7 @@ describe('OrdersService — void and refund', () => {
       product: { findUnique: jest.fn().mockResolvedValue({ costPrice: 40 }) },
       accountingEvent: {
         create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve(data); }),
-        findFirst: jest.fn().mockResolvedValue(opts.cogsLines ? { payload: { lines: opts.cogsLines } } : null),
+        findMany: jest.fn().mockResolvedValue(opts.cogsLines ? [{ payload: { lines: opts.cogsLines } }] : []),
       },
     };
     const prisma: any = {
@@ -81,6 +81,26 @@ describe('OrdersService — void and refund', () => {
     expect(Number(tx.inventoryItem.update.mock.calls[0][0].data.quantity)).toBe(12);
     const voidEvent = events.find((e) => e.type === 'VOID');
     expect(voidEvent.payload).toMatchObject({ restockedCogsTotal: 80, refundedAmount: 120 });
+  });
+
+  it('a line still waiting at a screen puts nothing back and reverses no cost, even if a shelf row exists by now', async () => {
+    const waitingShelfLine = {
+      id: 'it1', orderId: 'o1', productId: 'p-croissant', quantity: 2, refundedQty: 0, lineTotal: 240, costPrice: 45,
+      usageOnReady: true, usagePostedAt: null, ingredientsDeductedAt: null, modifiers: [],
+      order: { status: 'PAID', branchId: 'b1', orderNumber: 'ORD-1' },
+      product: { id: 'p-croissant', costPrice: 45, name: 'Croissant', inventoryMode: 'UNIT_BASED' },
+    };
+    const voided = build({ order: { status: 'PAID', paidAt: new Date() }, items: [waitingShelfLine], inventory: { id: 'inv1', quantity: 0 } });
+    await voided.svc.void(TENANT, 'o1', 'owner', 'BUSINESS_OWNER', 'Rang the wrong order');
+    expect(voided.tx.inventoryItem.update).not.toHaveBeenCalled();
+    expect(voided.events.find((e) => e.type === 'VOID').payload).toMatchObject({ restockedCogsTotal: 0 });
+    expect(voided.events.find((e) => e.type === 'COGS_ADJUSTMENT')).toBeUndefined();
+
+    const refunded = build({ order: { status: 'PAID' }, items: [waitingShelfLine], inventory: { id: 'inv1', quantity: 0 } });
+    await refunded.svc.refundItem({ tenantId: TENANT, orderId: 'o1', orderItemId: 'it1', quantity: 1, reason: 'Not wanted', refundMethod: 'CASH', restock: true, refundedById: 'owner', callerRole: 'BUSINESS_OWNER' });
+    expect(refunded.tx.inventoryItem.update).not.toHaveBeenCalled();
+    expect(refunded.events.find((e) => e.type === 'VOID').payload).toMatchObject({ restocked: false, restockedCogsTotal: 0 });
+    expect(refunded.events.find((e) => e.type === 'COGS_ADJUSTMENT')).toBeUndefined();
   });
 
   it('"same day" is the shop\'s day in Manila', async () => {

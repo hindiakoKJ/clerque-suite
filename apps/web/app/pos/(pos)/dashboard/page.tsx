@@ -67,6 +67,9 @@ interface DailyReport {
   grossProfit: number;
   grossMargin: number;
   itemsMissingCost: { lineCount: number; revenueLeak: number };
+  // Kitchen/bar lines not marked ready yet: sold, but their cost is not booked,
+  // so grossProfit leaves it out. Optional because an older API does not send it.
+  costPending?: { lineCount: number; revenue: number };
 }
 
 interface MissingCostProduct {
@@ -310,6 +313,13 @@ function SalesDashboard() {
                 </div>
               ))}
             </div>
+            {/* Said out loud so a busy day's margin is not read as final while tickets are still on the screen. */}
+            {(data.costPending?.lineCount ?? 0) > 0 && (
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Cost still to come for {data.costPending!.lineCount} kitchen/bar item{data.costPending!.lineCount === 1 ? '' : 's'} not yet
+                marked ready ({formatPeso(data.costPending!.revenue)} of sales). Gross profit and margin do not include it yet.
+              </p>
+            )}
           </div>
           )}
 

@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { confirmLineUsage, returnLineUsage, manilaDay } from './usage-confirm';
+import { confirmLineUsage, returnLineUsage, manilaDay, usageOnReadyEnabled } from './usage-confirm';
 
 /**
  * The ready tap: a waiting line's ingredients and cost, taken once, dated to
@@ -32,6 +32,7 @@ describe('confirmLineUsage / returnLineUsage', () => {
     const events: any[] = [];
 
     const tx: any = {
+      $queryRaw: jest.fn(async () => []),
       orderItem: {
         findFirst: jest.fn(async () => ({ ...item, modifiers: item.modifiers })),
         updateMany: jest.fn(async ({ where, data }: any) => {
@@ -72,6 +73,7 @@ describe('confirmLineUsage / returnLineUsage', () => {
         updateMany: jest.fn(async ({ where, data }: any) => {
           if (data.quantity?.decrement !== undefined) stock.set(where.rawMaterialId, (stock.get(where.rawMaterialId) ?? 0) - Number(data.quantity.decrement));
           else if (data.quantity?.increment !== undefined) stock.set(where.rawMaterialId, (stock.get(where.rawMaterialId) ?? 0) + Number(data.quantity.increment));
+          else if (where.quantity?.lt !== undefined && (stock.get(where.rawMaterialId) ?? 0) < Number(where.quantity.lt)) stock.set(where.rawMaterialId, Number(data.quantity));
           return { count: 1 };
         }),
       },
@@ -190,6 +192,47 @@ describe('confirmLineUsage / returnLineUsage', () => {
     expect(events[0].payload.lines[0].unitCost).toBe(63);
   });
 
+  it('waits behind a sale being written before it touches stock, so a tap and a sale cannot deadlock', async () => {
+    const { tx } = build({ quantity: 1 });
+    await confirmLineUsage(tx, TENANT, 'li1', { actorId: null, trigger: 'READY', now: TAP });
+    const sql = tx.$queryRaw.mock.calls[0][0].join('?');
+    expect(sql).toContain('document_number_sequences');
+    expect(sql).toContain('FOR UPDATE');
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.rawMaterialInventory.updateMany.mock.invocationCallOrder[0]);
+  });
+
+  it('records only what really came off when another write landed first, so an un-bump cannot make stock up', async () => {
+    const { tx, stock, events } = build({ quantity: 1 });
+    // A write-off of 95 g commits between the confirm's read (100 g) and its take (18 g).
+    const take = tx.rawMaterialInventory.updateMany.getMockImplementation();
+    tx.rawMaterialInventory.updateMany.mockImplementationOnce(async (args: any) => {
+      stock.set('rm-espresso', stock.get('rm-espresso')! - 95);
+      return take(args);
+    });
+    await confirmLineUsage(tx, TENANT, 'li1', { actorId: null, trigger: 'READY', now: TAP });
+    expect(stock.get('rm-espresso')).toBe(0);
+    expect(events[0].payload.ingredients).toEqual(expect.arrayContaining([{ rawMaterialId: 'rm-espresso', qty: 5 }]));
+
+    await returnLineUsage(tx, TENANT, 'li1', TAP);
+    expect(stock.get('rm-espresso')).toBe(5);
+  });
+
+  it('the kill switch takes the usual ways of writing "no"', () => {
+    const before = process.env.USAGE_ON_READY;
+    try {
+      for (const v of ['off', 'OFF', 'false', '0', 'no', ' disabled ']) {
+        process.env.USAGE_ON_READY = v;
+        expect(usageOnReadyEnabled()).toBe(false);
+      }
+      for (const v of ['', 'on', 'true']) {
+        process.env.USAGE_ON_READY = v;
+        expect(usageOnReadyEnabled()).toBe(true);
+      }
+    } finally {
+      if (before === undefined) delete process.env.USAGE_ON_READY; else process.env.USAGE_ON_READY = before;
+    }
+  });
+
   describe('un-bump', () => {
     it('gives back exactly what the tap took, with its own entry dated to the sale', async () => {
       const { tx, item, stock, lots, events } = build({
@@ -224,6 +267,17 @@ describe('confirmLineUsage / returnLineUsage', () => {
       refunded.item.refundedQty = 1;
       await expect(returnLineUsage(refunded.tx, TENANT, 'li1', TAP)).rejects.toThrow(BadRequestException);
       expect(refunded.stock.get('rm-espresso')).toBe(64);
+    });
+
+    it('refuses when the tap was made while paused and Recipe Catch-Up has since taken the ingredients', async () => {
+      const { tx, item, stock } = build({ paused: true, quantity: 1 });
+      await confirmLineUsage(tx, TENANT, 'li1', { actorId: null, trigger: 'READY', now: TAP });
+      // Catch-Up replays the line after the pause is lifted.
+      stock.set('rm-espresso', 82);
+      item.ingredientsDeductedAt = TAP;
+      await expect(returnLineUsage(tx, TENANT, 'li1', TAP)).rejects.toThrow(/Recipe Catch-Up/);
+      expect(item.usagePostedAt).toBe(TAP);
+      expect(stock.get('rm-espresso')).toBe(82);
     });
 
     it('a line that was never confirmed has nothing to give back', async () => {

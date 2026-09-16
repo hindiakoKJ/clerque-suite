@@ -18,6 +18,13 @@ describe('waste', () => {
     expect(bookedUnitCost([confirmEvent, saleEvent], item())).toEqual({ unitCost: 62.345, costMethod: 'RECIPE_WAC' });
     const legacy = { payload: { lines: [{ productId: 'p-latte', quantity: 1, unitCost: 50, totalCost: 50, costMethod: 'RECIPE_WAC' }] } };
     expect(bookedUnitCost([legacy], item())).toEqual({ unitCost: 50, costMethod: 'RECIPE_WAC' });
+    // Written before keys were kept, with a Regular and a Large of one product: the first line would be a guess, the line's own cost is not.
+    const twoSizes = { payload: { lines: [
+      { productId: 'p-latte', quantity: 1, unitCost: 30, totalCost: 30, costMethod: 'RECIPE_WAC' },
+      { productId: 'p-latte', quantity: 1, unitCost: 45, totalCost: 45, costMethod: 'RECIPE_WAC' },
+    ] } };
+    expect(bookedUnitCost([twoSizes], item({ costPrice: 45 }))).toEqual({ unitCost: 45, costMethod: 'RECIPE_WAC' });
+    expect(bookedUnitCost([twoSizes], item({ costPrice: null }))).toEqual({ unitCost: 30, costMethod: 'RECIPE_WAC' });
     expect(bookedUnitCost([], item())).toEqual({ unitCost: 60, costMethod: 'SNAPSHOT' });
     // Waited and never confirmed: nothing was booked.
     expect(bookedUnitCost([saleEvent], item({ usageOnReady: true, usagePostedAt: null }))).toBeNull();

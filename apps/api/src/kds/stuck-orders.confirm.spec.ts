@@ -11,14 +11,19 @@ jest.mock('../orders/usage-confirm', () => ({ confirmLineUsage: jest.fn(async ()
 describe('StuckOrdersScheduler — the overnight confirm', () => {
   const NOW = new Date('2026-09-16T02:30:00+08:00');
 
-  function build(lines: Array<{ id: string; orderId: string; tenantId: string }>) {
+  function build(lines: Array<{ id: string; orderId: string; tenantId: string; left?: number }>) {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([]),
       orderItem: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
+    // Like the database: sorted by id, after the given id, a page at a time.
     const prisma: any = {
       orderItem: {
-        findMany: jest.fn(async ({ skip }: any) => (skip ? [] : lines.map((l) => ({ id: l.id, orderId: l.orderId, order: { tenantId: l.tenantId } })))),
+        findMany: jest.fn(async ({ where, take }: any) => lines
+          .filter((l) => !where.id?.gt || l.id > where.id.gt)
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .slice(0, take)
+          .map((l) => ({ id: l.id, orderId: l.orderId, quantity: 1, refundedQty: 1 - (l.left ?? 1), order: { tenantId: l.tenantId } }))),
       },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
@@ -26,7 +31,7 @@ describe('StuckOrdersScheduler — the overnight confirm', () => {
     return { job: new StuckOrdersScheduler(prisma, notifications as any), prisma, tx, notifications };
   }
 
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => { jest.clearAllMocks(); (confirmLineUsage as jest.Mock).mockResolvedValue(true); });
 
   it('confirms each waiting line from before today, marks it ready, and tells each shop once', async () => {
     const { job, prisma, tx, notifications } = build([
@@ -59,6 +64,26 @@ describe('StuckOrdersScheduler — the overnight confirm', () => {
     await expect(job.confirmUntapped(NOW)).resolves.toBe(0);
     expect(confirmLineUsage).toHaveBeenCalledTimes(2);
     expect(notifications.create).not.toHaveBeenCalled();
+  });
+
+  it('pages past 200 lines without stepping over any', async () => {
+    const lines = Array.from({ length: 450 }, (_, i) => ({ id: `l${String(i).padStart(3, '0')}`, orderId: `o${i}`, tenantId: 'carolina' }));
+    const { job, prisma } = build(lines);
+    await expect(job.confirmUntapped(NOW)).resolves.toBe(450);
+    const confirmed = (confirmLineUsage as jest.Mock).mock.calls.map((c) => c[2]);
+    expect(new Set(confirmed).size).toBe(450);
+    expect(prisma.orderItem.findMany).toHaveBeenCalledTimes(3);
+    expect(prisma.orderItem.findMany.mock.calls[1][0].where.id).toEqual({ gt: 'l199' });
+  });
+
+  it('a ticket refunded in full while it waited is stamped done but not told to the owner as made', async () => {
+    const { job, notifications } = build([
+      { id: 'a1', orderId: 'o1', tenantId: 'carolina' },
+      { id: 'a2', orderId: 'o1', tenantId: 'carolina', left: 0 },
+    ]);
+    await expect(job.confirmUntapped(NOW)).resolves.toBe(1);
+    expect(confirmLineUsage).toHaveBeenCalledTimes(2);
+    expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ title: '1 kitchen/bar item counted as made overnight' }));
   });
 
   it('the 02:30 run confirms first, then releases', async () => {

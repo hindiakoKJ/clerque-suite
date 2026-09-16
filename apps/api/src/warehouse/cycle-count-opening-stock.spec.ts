@@ -18,11 +18,14 @@ import { WarehouseService } from './warehouse.service';
 describe('WarehouseService — posting a count creates stock that does not exist yet', () => {
   const TENANT = 't1';
   const BRANCH = 'b1';
+  const OPENED = new Date('2026-09-16T02:00:00Z');
 
   function build(opts: {
     existing?: Set<string>; lines?: any[]; live?: Record<string, number>; periods?: any;
     /* A ready tap that takes this much between the post's read and its write. */
     tapBetween?: Record<string, number>;
+    /* Waiting lines the released-holds lookup finds, already in its select shape. */
+    tickets?: any[];
   } = {}) {
     const existing = opts.existing ?? new Set<string>();
     /* What is on the shelf RIGHT NOW, for rows that already exist. */
@@ -33,7 +36,7 @@ describe('WarehouseService — posting a count creates stock that does not exist
     const tx: any = {
       cycleCount: {
         findFirst: jest.fn().mockResolvedValue({
-          id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN',
+          id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN', createdAt: OPENED,
           lines: opts.lines ?? [
             { id: 'l1', rawMaterialId: 'beans', countedQty: '4200', expectedQty: '0' },
             { id: 'l2', rawMaterialId: 'milk',  countedQty: '9000', expectedQty: '0' },
@@ -75,9 +78,26 @@ describe('WarehouseService — posting a count creates stock that does not exist
           existing.add(rm);
           return Promise.resolve({});
         }),
+        // The clamp after the write, applied the way the database would.
+        updateMany: jest.fn(({ where, data }: any) => {
+          const rm = where.rawMaterialId;
+          const below = existing.has(rm) && (liveQty.get(rm) ?? 0) < Number(where.quantity.lt);
+          if (below) liveQty.set(rm, Number(data.quantity));
+          return Promise.resolve({ count: below ? 1 : 0 });
+        }),
         // deliberately absent: if the service still called update(), this would
         // throw exactly as Prisma does when the row is missing
       },
+      /*
+        What waiting tickets let go of since the count opened. Rows come back as
+        given; which of them count is releasedHolds' own rule, pinned in its spec.
+      */
+      orderItem: { findMany: jest.fn(async () => opts.tickets ?? []) },
+      bomItem: {
+        findMany: jest.fn(async () => [{ productId: 'latte', rawMaterialId: 'milk', quantity: 200, rawMaterial: null }]),
+      },
+      variantBomItem: { findMany: jest.fn(async () => []) },
+      modifierOption: { findMany: jest.fn(async () => []) },
       cycleCountLine: { update: jest.fn().mockResolvedValue({}) },
       /*
         The books' side of a count. Only created when the line's material has a
@@ -97,7 +117,7 @@ describe('WarehouseService — posting a count creates stock that does not exist
     */
     const periods: any = { assertDateIsOpen: jest.fn().mockResolvedValue(undefined) };
     const svc = new WarehouseService(prisma, opts.periods ?? periods) as any;
-    return { svc, tx, upserts, events, periods };
+    return { svc, tx, upserts, events, periods, liveQty };
   }
 
   it('posts an opening count on a tenant with no stock rows at all', async () => {
@@ -271,6 +291,146 @@ describe('WarehouseService — posting a count creates stock that does not exist
       await svc.postCycleCount(TENANT, 'cc1', 'u1');
       expect(Number(upserts[0].write.decrement)).toBe(50);
     });
+
+    it('clamps at empty when the tap and the shortfall together would take the row below zero', async () => {
+      // Live 100 is read and the count found 100 missing, so the change is
+      // -100. A latte bumped in between takes 60 first, and the decrement
+      // lands at -60. The clamp right after the write settles it at zero.
+      const { svc, tx, upserts, liveQty } = build({
+        existing: new Set(['milk']),
+        live: { milk: 100 },
+        tapBetween: { milk: 60 },
+        lines: [{ id: 'l1', rawMaterialId: 'milk', countedQty: '4900', expectedQty: '5000' }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts[0].qty).toBe(-60);
+      const clamp = tx.rawMaterialInventory.updateMany.mock.calls[0][0];
+      expect(clamp.where).toEqual({ branchId: BRANCH, rawMaterialId: 'milk', quantity: { lt: 0 } });
+      expect(Number(clamp.data.quantity)).toBe(0);
+      expect(liveQty.get('milk')).toBe(0);
+    });
+
+    it('leaves a row the write kept at or above zero exactly where it landed', async () => {
+      const { svc, liveQty } = build({
+        existing: new Set(['milk']),
+        live: { milk: 5000 },
+        tapBetween: { milk: 100 },
+        lines: [{ id: 'l1', rawMaterialId: 'milk', countedQty: '4800', expectedQty: '5000' }],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(liveQty.get('milk')).toBe(4700);
+    });
+  });
+
+  /*
+    A count opened while tickets wait expects the shelf short by what they
+    hold. A ticket voided or refunded before the post is never made, so its
+    share never comes off the book -- measured against the snapshot as it
+    stands, that share read as stock found. Posting gives it back to what the
+    count expected. Which tickets count is releasedHolds' rule, pinned in
+    released-holds.spec.ts; here, what the post does with the answer.
+  */
+  describe('a waiting ticket voided or refunded after the count opened', () => {
+    const BEFORE = new Date('2026-09-16T01:00:00Z');
+    const AFTER  = new Date('2026-09-16T03:00:00Z');
+    const MILK = { id: 'milk', name: 'Fresh milk', unit: 'ml', costPrice: '0.08', category: 'INGREDIENT' };
+    const ticket = (over: any = {}) => ({
+      productId: 'latte', variantId: null, quantity: 2, usagePostedAt: null, modifiers: [],
+      order: { status: 'PAID', voidedAt: null }, refunds: [], ...over,
+    });
+    // Two lattes waiting at the opening held 400 ml of the 1,000 on the book.
+    const milkLine = (counted: string, expected = '600') => ({
+      id: 'l1', rawMaterialId: 'milk', countedQty: counted, expectedQty: expected, rawMaterial: MILK,
+    });
+
+    it('gives a voided ticket\'s share back, so milk never used is not booked as found', async () => {
+      // Nothing was poured: the counter saw all 1,000. Before, this posted +400.
+      const { svc, tx, upserts, events } = build({
+        existing: new Set(['milk']), live: { milk: 1000 },
+        lines: [milkLine('1000')],
+        tickets: [ticket({ order: { status: 'VOIDED', voidedAt: AFTER } })],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts).toHaveLength(0);
+      expect(events).toHaveLength(0);
+      const written = tx.cycleCountLine.update.mock.calls[0][0].data;
+      expect(Number(written.expectedQty)).toBe(1000);
+      expect(Number(written.varianceQty)).toBe(0);
+    });
+
+    it('still books a real shortfall, and the books get the corrected variance', async () => {
+      const { svc, tx, upserts, events } = build({
+        existing: new Set(['milk']), live: { milk: 1000 },
+        lines: [milkLine('950')],
+        tickets: [ticket({ order: { status: 'VOIDED', voidedAt: AFTER } })],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts[0].qty).toBe(950);
+      expect(events).toHaveLength(1);
+      expect(events[0].payload.quantity).toBe(-50);
+      expect(events[0].payload.totalValue).toBeCloseTo(-4, 6);
+      const written = tx.cycleCountLine.update.mock.calls[0][0].data;
+      expect(Number(written.expectedQty)).toBe(1000);
+      expect(Number(written.varianceQty)).toBe(-50);
+    });
+
+    it('gives back only the units refunded since, not the latte still being made', async () => {
+      // One refunded after the opening (200 ml back); the other's milk is in
+      // the jug, so the shelf shows 800. Handing back 400, or nothing, would
+      // each move stock.
+      const { svc, upserts, events } = build({
+        existing: new Set(['milk']), live: { milk: 1000 },
+        lines: [milkLine('800')],
+        tickets: [ticket({ refunds: [{ quantity: 1, createdAt: AFTER }] })],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts).toHaveLength(0);
+      expect(events).toHaveLength(0);
+    });
+
+    it('gives nothing back for a refund made before the count opened', async () => {
+      // The opening already held only the one latte left: expected 800.
+      const { svc, upserts } = build({
+        existing: new Set(['milk']), live: { milk: 1000 },
+        lines: [milkLine('850', '800')],
+        tickets: [ticket({ refunds: [{ quantity: 1, createdAt: BEFORE }] })],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts[0].qty).toBe(1050);
+    });
+
+    it('gives nothing back for a ticket marked ready since -- its tap took the share off the book', async () => {
+      const { svc, upserts } = build({
+        existing: new Set(['milk']), live: { milk: 600 },
+        lines: [milkLine('600')],
+        tickets: [ticket({ usagePostedAt: AFTER, order: { status: 'COMPLETED', voidedAt: null } })],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(upserts).toHaveLength(0);
+    });
+
+    it('leaves a snapshot stopped at zero as it is, and does not look', async () => {
+      // How much of the hold a zero snapshot took off is unknown; all of it
+      // back could invent a loss.
+      const { svc, tx, upserts } = build({
+        existing: new Set(['milk']), live: { milk: 300 },
+        lines: [milkLine('300', '0')],
+        tickets: [ticket({ order: { status: 'VOIDED', voidedAt: AFTER } })],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      expect(tx.orderItem.findMany).not.toHaveBeenCalled();
+      expect(upserts[0].qty).toBe(600);
+    });
+
+    it('asks about this branch, from the moment the count was opened', async () => {
+      const { svc, tx } = build({
+        existing: new Set(['milk']), live: { milk: 1000 },
+        lines: [milkLine('1000')],
+      });
+      await svc.postCycleCount(TENANT, 'cc1', 'u1');
+      const where = tx.orderItem.findMany.mock.calls[0][0].where;
+      expect(where.order).toMatchObject({ tenantId: TENANT, branchId: BRANCH, paidAt: { lt: OPENED } });
+    });
   });
 });
 
@@ -292,7 +452,7 @@ describe('WarehouseService.postCycleCount — the period lock', () => {
     const tx: any = {
       cycleCount: {
         findFirst: jest.fn().mockResolvedValue({
-          id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN',
+          id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN', createdAt: new Date('2026-09-16T02:00:00Z'),
           lines: [{ id: 'l1', rawMaterialId: 'beans', countedQty: '4200', expectedQty: '0' }],
         }),
         update: jest.fn().mockResolvedValue({ id: 'cc1', lines: [] }),
@@ -300,6 +460,7 @@ describe('WarehouseService.postCycleCount — the period lock', () => {
       rawMaterialInventory: {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn((a: any) => { upserts.push(a); return Promise.resolve({}); }),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       cycleCountLine:  { update: jest.fn().mockResolvedValue({}) },
       accountingEvent: { create: jest.fn().mockResolvedValue({}) },

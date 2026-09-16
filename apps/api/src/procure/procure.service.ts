@@ -2299,7 +2299,9 @@ export class ProcureService {
         ready tap. Posting applies counted-minus-expected to the live figure
         and the tap then takes the ticket's share -- so expecting the whole
         book would take those ingredients off twice. The same expectation a
-        cycle count started from the counts screen takes.
+        cycle count started from the counts screen takes, and posting corrects
+        it the same way: a ticket voided or refunded before the post gives its
+        share back (releasedHolds, measured from when this list's count opened).
       */
       const held = await heldUsage(this.prisma, tenantId, [req.branchId], { rawMaterialIds: [line.rawMaterialId] });
       expected = afterHeld(live ? Number(live.quantity) : 0, heldAt(held, req.branchId, line.rawMaterialId));

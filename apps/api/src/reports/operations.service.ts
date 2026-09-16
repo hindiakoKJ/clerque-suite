@@ -223,8 +223,20 @@ export class OperationsService {
  * for orders stuck at "Preparing", carries the refund's or the job's time and
  * read as a wait of hours. Both dragged the shop's average away from how long
  * customers really wait.
+ *
+ * Nor is an order timed when its ready time is the nightly job's stamp on a
+ * line nobody tapped. A bar line bumped at 10:05 beside a kitchen line never
+ * tapped left the order at "Preparing"; at 02:30 the job stamped the kitchen
+ * line and released the order at that stamp, a wait of over sixteen hours.
+ * Matched on the order's own ready time rather than on any such line: a line
+ * refunded away while it waited is stamped by the job too, a night after a
+ * bump already completed its order at the real time.
  */
-function timedByAStation(o: { items: Array<{ readyById: string | null; readyAt?: Date | null; usageOnReady?: boolean }> }): boolean {
+function timedByAStation(o: { readyAt?: Date | null; items: Array<{ readyById: string | null; readyAt?: Date | null; usageOnReady?: boolean }> }): boolean {
+  const readyAt = o.readyAt?.getTime();
+  const readyAtTheNightlyStamp = readyAt != null && o.items.some((it) =>
+    it.usageOnReady && it.readyById == null && it.readyAt?.getTime() === readyAt);
+  if (readyAtTheNightlyStamp) return false;
   return o.items.some((it) =>
     it.readyById != null
     // Bumped before the bump recorded anyone: the line has its own readyAt. The

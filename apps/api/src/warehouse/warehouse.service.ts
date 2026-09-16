@@ -4,6 +4,7 @@ import { Prisma, StockTransferStatus, CycleCountStatus } from '@prisma/client';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { noCostWarning } from '../inventory/inventory.service';
 import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
+import { releasedHolds } from './released-holds';
 
 // ── Stock Transfer DTOs ────────────────────────────────────────────────────────
 
@@ -398,7 +399,9 @@ export class WarehouseService {
         the jug, not in the carton the counter is looking at. Expecting the
         book figure would book it as missing now, and the tap would take it
         again later. Posting applies the variance relatively, so the tap that
-        lands after the count still takes exactly its share.
+        lands after the count still takes exactly its share. A ticket voided or
+        refunded instead is never made, and posting gives its share back to
+        what the count expected (releasedHolds).
       */
       const held = await heldUsage(tx, tenantId, [branchId]);
 
@@ -505,13 +508,46 @@ export class WarehouseService {
       // Variances the books could not value. Said back, not swallowed.
       const noCost: string[] = [];
 
+      /*
+        Give back what a waiting ticket stopped holding without being made.
+
+        The expected figures were taken less what waiting kitchen/bar tickets
+        held when the count was opened. One voided or refunded since was never
+        made, so its share never comes off the book -- measured against the
+        snapshot as it stands, that share reads as stock found. It goes back
+        onto what the count expected before the variance is worked out.
+
+        Only where the snapshot was above zero: there the whole hold was taken
+        off, so the whole release goes back. A snapshot stopped at zero took
+        off an unknown part of it, and giving it all back could invent a loss.
+
+        A buy list's count takes each line's snapshot when that line is first
+        counted, which can be later than the count was opened; those lines are
+        measured from the opening too, as nothing records the later moment.
+      */
+      const snapshotted = [...new Set(
+        c.lines.filter((l) => new Prisma.Decimal(l.expectedQty).greaterThan(0)).map((l) => l.rawMaterialId),
+      )];
+      const released = await releasedHolds(tx, tenantId, c.branchId, snapshotted, c.createdAt);
+
       for (const line of c.lines) {
         const counted  = new Prisma.Decimal(line.countedQty);
-        const expected = new Prisma.Decimal(line.expectedQty);
+        const snapshot = new Prisma.Decimal(line.expectedQty);
+        const giveBack = snapshot.greaterThan(0) ? (released.get(line.rawMaterialId) ?? 0) : 0;
+        const expected = giveBack > 0 ? snapshot.plus(giveBack) : snapshot;
         const variance = counted.minus(expected);
 
         // Skip zero-variance (within 1g / 1ml precision).
-        if (variance.abs().lessThan(new Prisma.Decimal('0.001'))) continue;
+        if (variance.abs().lessThan(new Prisma.Decimal('0.001'))) {
+          // Nothing moves, but the line still says what it was measured against.
+          if (giveBack > 0) {
+            await tx.cycleCountLine.update({
+              where: { id: line.id },
+              data:  { expectedQty: expected, varianceQty: variance },
+            });
+          }
+          continue;
+        }
 
         // Refuse to post a count that would drive inventory negative.
         if (counted.lessThan(0)) {
@@ -580,9 +616,15 @@ export class WarehouseService {
             quantity:      counted,
           },
         });
+        // A change cannot clamp itself: a tap that took its share between the read and the write can leave the row just below zero.
+        await tx.rawMaterialInventory.updateMany({
+          where: { branchId: c.branchId, rawMaterialId: line.rawMaterialId, quantity: { lt: 0 } },
+          data:  { quantity: new Prisma.Decimal(0) },
+        });
         await tx.cycleCountLine.update({
           where: { id: line.id },
-          data:  { varianceQty: variance },
+          // The expected figure too when a released hold was given back, so counted less expected is still the variance.
+          data:  giveBack > 0 ? { expectedQty: expected, varianceQty: variance } : { varianceQty: variance },
         });
 
         /*

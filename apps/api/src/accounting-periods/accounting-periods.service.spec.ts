@@ -358,10 +358,28 @@ describe('AccountingPeriodsService', () => {
       prisma.accountingPeriod.findFirst.mockResolvedValue(PERIOD);
       prisma.accountingEvent.count.mockResolvedValueOnce(0).mockResolvedValueOnce(2);
       const svc = new AccountingPeriodsService(prisma as never, { log: jest.fn() } as never);
-      await expect(svc.closePeriod('t1', 'p1', 'u1')).rejects.toThrow(/2 cost-of-goods entries/);
+      await expect(svc.closePeriod('t1', 'p1', 'u1')).rejects.toThrow(/2 cost-of-goods or waste entries/);
       const where = prisma.accountingEvent.count.mock.calls[1][0].where;
       expect(where.createdAt).toBeUndefined();
-      expect(where.order.paidAt.lte.toISOString()).toBe('2026-08-31T15:59:59.999Z');
+      const cogs = where.OR.find((b: { type: string }) => b.type === 'COGS');
+      expect(cogs.createdAt).toBeUndefined();
+      expect(cogs.order.paidAt.lte.toISOString()).toBe('2026-08-31T15:59:59.999Z');
+    });
+
+    it('refuses while a waste entry from a refund on the last evening of the period is still posting', async () => {
+      // Dated to the refund, and the queue check above stops at 8 AM of the 31st.
+      const prisma = makePrismaMock();
+      prisma.accountingPeriod.findFirst.mockResolvedValue(PERIOD);
+      prisma.accountingEvent.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+      const svc = new AccountingPeriodsService(prisma as never, { log: jest.fn() } as never);
+      await expect(svc.closePeriod('t1', 'p1', 'u1')).rejects.toThrow(/1 cost-of-goods or waste entry .*has not reached the books/s);
+      expect(prisma.accountingPeriod.update).not.toHaveBeenCalled();
+      const where = prisma.accountingEvent.count.mock.calls[1][0].where;
+      expect(where.OR).toContainEqual({
+        type: 'COGS_ADJUSTMENT',
+        payload: { path: ['kind'], equals: 'WASTE' },
+        createdAt: { lte: new Date('2026-08-31T15:59:59.999Z') },
+      });
     });
 
     it('closes normally once the queue is drained', async () => {

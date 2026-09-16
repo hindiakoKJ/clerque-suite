@@ -47,35 +47,42 @@ export class StuckOrdersScheduler {
   async confirmUntapped(now = new Date()): Promise<number> {
     const dayStart = manilaDayStart(now);
     const perTenant = new Map<string, number>();
-    let cursor: string | undefined;
+    let after: string | undefined;
 
     for (;;) {
+      /*
+        Paged by "id after the last one seen", not a Prisma cursor: a confirmed
+        line stops matching the filter, and a cursor on a row that no longer
+        matches, with skip 1, silently stepped over the next waiting line.
+      */
       const page = await this.prisma.orderItem.findMany({
         where: {
           ...WAITING_LINE,
+          ...(after ? { id: { gt: after } } : {}),
           order: { status: { in: [...HOLDING_STATUSES] }, deletedAt: null, paidAt: { lt: dayStart } },
         },
-        select:  { id: true, orderId: true, order: { select: { tenantId: true } } },
+        select:  { id: true, orderId: true, quantity: true, refundedQty: true, order: { select: { tenantId: true } } },
         orderBy: { id: 'asc' },
         take:    PAGE,
-        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
       });
       if (page.length === 0) break;
-      cursor = page[page.length - 1].id;
+      after = page[page.length - 1].id;
 
-      const byOrder = new Map<string, { tenantId: string; ids: string[] }>();
+      const byOrder = new Map<string, { tenantId: string; ids: string[]; madeIds: Set<string> }>();
       for (const l of page) {
-        const o = byOrder.get(l.orderId) ?? { tenantId: l.order.tenantId, ids: [] };
+        const o = byOrder.get(l.orderId) ?? { tenantId: l.order.tenantId, ids: [], madeIds: new Set<string>() };
         o.ids.push(l.id);
+        // Refunded in full while it waited: stamped done below, but not "counted as made" to the owner.
+        if (Number(l.quantity) - Number(l.refundedQty) > 0) o.madeIds.add(l.id);
         byOrder.set(l.orderId, o);
       }
-      for (const [orderId, { tenantId, ids }] of byOrder) {
+      for (const [orderId, { tenantId, ids, madeIds }] of byOrder) {
         try {
           const n = await this.prisma.$transaction(async (tx) => {
             await lockOrder(tx, orderId);
             let done = 0;
             for (const id of ids) {
-              if (await confirmLineUsage(tx, tenantId, id, { actorId: null, trigger: 'NIGHTLY', now })) done++;
+              if (await confirmLineUsage(tx, tenantId, id, { actorId: null, trigger: 'NIGHTLY', now }) && madeIds.has(id)) done++;
             }
             // Counted as made: off the screen, and the order can be released below.
             await tx.orderItem.updateMany({
@@ -116,18 +123,18 @@ export class StuckOrdersScheduler {
     const dayStart = manilaDayStart(now);
     let released = 0;
     let stillWaiting = 0;
-    let cursor: string | undefined;
+    let after: string | undefined;
 
     for (;;) {
+      // By id after the last one seen: a released order leaves the filter, and a cursor on it skipped the next.
       const page = await this.prisma.order.findMany({
-        where:   { status: 'PAID', paidAt: { lt: dayStart } },
+        where:   { status: 'PAID', paidAt: { lt: dayStart }, ...(after ? { id: { gt: after } } : {}) },
         select:  { id: true },
         orderBy: { id: 'asc' },
         take:    PAGE,
-        ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
       });
       if (page.length === 0) break;
-      cursor = page[page.length - 1].id;
+      after = page[page.length - 1].id;
 
       for (const { id } of page) {
         try {

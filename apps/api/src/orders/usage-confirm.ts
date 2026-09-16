@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { drainLots, recipeKey } from './recipe-usage';
 import { loadLineRecipes } from './line-recipes';
 import { HOLDING_STATUSES, WAITING_LINE } from './held-usage';
+import { queueBehindSales } from './order-lock';
 
 /**
  * The moment a waiting line's ingredients are used.
@@ -27,9 +28,14 @@ import { HOLDING_STATUSES, WAITING_LINE } from './held-usage';
 
 export type ConfirmTrigger = 'READY' | 'NIGHTLY';
 
-/** USAGE_ON_READY=off stops NEW lines from waiting; lines already waiting still confirm. */
+/**
+ * USAGE_ON_READY=off stops NEW lines from waiting; lines already waiting still
+ * confirm. The switch is thrown in a hurry during an incident, so the usual ways
+ * of writing "no" all count.
+ */
+const SWITCHED_OFF = ['off', 'false', '0', 'no', 'disabled'];
 export function usageOnReadyEnabled(): boolean {
-  return (process.env.USAGE_ON_READY ?? '').trim().toLowerCase() !== 'off';
+  return !SWITCHED_OFF.includes((process.env.USAGE_ON_READY ?? '').trim().toLowerCase());
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -113,8 +119,8 @@ export async function confirmLineUsage(
 
   const ingredients: ConfirmPayload['ingredients'] = [];
   const lots: ConfirmPayload['lots'] = [];
-  const touched: string[] = [];
   let recipeUnitCost = 0;
+  if (!paused) await queueBehindSales(tx, tenantId);
 
   for (const u of usage) {
     const consume = round4(u.perUnit * units);
@@ -130,8 +136,26 @@ export async function confirmLineUsage(
           where: { branchId, rawMaterialId: u.rawMaterialId },
           data:  { quantity: { decrement: new Prisma.Decimal(take) } },
         });
-        ingredients.push({ rawMaterialId: u.rawMaterialId, qty: take });
-        touched.push(u.rawMaterialId);
+        /*
+          A relative take cannot clamp itself: a write that landed between the
+          read above and this one (a write-off, an offline sale allowed below
+          zero) can leave the row under zero. Floor it, and record only what
+          really came off -- an un-bump gives back exactly the recorded amount,
+          and giving back more would put stock on the book that is not there.
+        */
+        const after = await tx.rawMaterialInventory.findUnique({
+          where:  { branchId_rawMaterialId: { branchId, rawMaterialId: u.rawMaterialId } },
+          select: { quantity: true },
+        });
+        const under = after ? Math.min(Number(after.quantity), 0) : 0;
+        if (under < 0) {
+          await tx.rawMaterialInventory.updateMany({
+            where: { branchId, rawMaterialId: u.rawMaterialId, quantity: { lt: 0 } },
+            data:  { quantity: new Prisma.Decimal(0) },
+          });
+        }
+        const taken = round4(Math.max(0, take + under));
+        if (taken > 0) ingredients.push({ rawMaterialId: u.rawMaterialId, qty: taken });
       }
     }
     const lotsTracked = u.rawMaterial?.lotsTracked === true;
@@ -145,13 +169,6 @@ export async function confirmLineUsage(
     } else {
       recipeUnitCost += u.perUnit * wac;
     }
-  }
-  if (touched.length > 0) {
-    // Relative takes cannot clamp themselves; a concurrent sale can leave a row just below zero.
-    await tx.rawMaterialInventory.updateMany({
-      where: { branchId, rawMaterialId: { in: touched }, quantity: { lt: 0 } },
-      data:  { quantity: new Prisma.Decimal(0) },
-    });
   }
 
   // The sale's waterfall, less the shelf-lot step (the shelf item was taken at the sale).
@@ -232,7 +249,7 @@ export async function returnLineUsage(
   const item = await tx.orderItem.findFirst({
     where:  { id: orderItemId, order: { tenantId } },
     select: {
-      id: true, orderId: true, quantity: true, refundedQty: true, usageOnReady: true, usagePostedAt: true,
+      id: true, orderId: true, quantity: true, refundedQty: true, usageOnReady: true, usagePostedAt: true, ingredientsDeductedAt: true,
       order: { select: { branchId: true, paidAt: true, createdAt: true } },
     },
   });
@@ -265,7 +282,17 @@ export async function returnLineUsage(
     if (round4(Number(record.units)) !== unitsNow) {
       throw new BadRequestException('Part of this item was refunded after it was made, so it cannot be un-bumped.');
     }
+    /*
+      Counted as made while deduction was paused, then Recipe Catch-Up took its
+      ingredients. The confirm took nothing, so it has nothing to give back --
+      yet the un-bumped line would wait again and hold that milk a second time,
+      and a void would then return nothing for what Catch-Up took.
+    */
+    if (!record.stockTaken && item.ingredientsDeductedAt != null) {
+      throw new BadRequestException('Its ingredients were already taken by Recipe Catch-Up, so it cannot be un-bumped. Void or refund it instead.');
+    }
     if (record.stockTaken) {
+      await queueBehindSales(tx, tenantId);
       for (const ing of record.ingredients ?? []) {
         await tx.rawMaterialInventory.updateMany({
           where: { branchId: item.order.branchId, rawMaterialId: ing.rawMaterialId },

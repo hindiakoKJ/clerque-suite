@@ -82,6 +82,54 @@ describe('Lead time counts only orders a station marked ready', () => {
     expect(report.avgSec).toBe(240);
   });
 
+  describe('an order with a line the nightly job stamped', () => {
+    // Two stations on one order. A line that waited and was never tapped is
+    // stamped READY at 02:30 the next morning, with nobody recorded.
+    const NIGHT = new Date('2026-09-13T02:30:00+08:00');
+    const line = (l: { id: string; station: string; readyAt: Date | null; bumpedBy?: string }) => ({
+      productId: `p-${l.id}`, productName: l.id, quantity: 1,
+      readyById: l.bumpedBy ?? null,
+      readyAt: l.readyAt,
+      usageOnReady: true,
+      product: { category: { stationId: l.station, name: l.station } },
+    });
+
+    it('is not timed when the job released it at that stamp, though a person bumped its other line', async () => {
+      const report = await build([
+        BUMPED,
+        {
+          id: 'latte-and-sandwich', status: 'COMPLETED', paidAt: at('10:00'), readyAt: NIGHT,   // released at the stamp
+          items: [
+            line({ id: 'latte', station: 'st-bar', readyAt: at('10:05'), bumpedBy: 'barista-1' }),
+            line({ id: 'sandwich', station: 'st-kitchen', readyAt: NIGHT }),
+          ],
+        },
+      ]).getDailyLeadTime(TENANT, BRANCH, DAY);
+
+      expect(report.completedCount).toBe(1);
+      expect(report.avgSec).toBe(300);
+      expect(report.overTenMinCount).toBe(0);
+      expect(report.byStation).toEqual([expect.objectContaining({ stationId: 'st-bar', orderCount: 1, avgSec: 300 })]);
+      expect(report.byProduct.map((p) => p.productId)).toEqual(['p-bumped']);
+      expect(report.byHour[10].orderCount).toBe(1);
+    });
+
+    it('is still timed when a bump completed it and the stamp came a night later, on a line refunded away while it waited', async () => {
+      const report = await build([
+        {
+          id: 'latte-and-refunded-sandwich', status: 'COMPLETED', paidAt: at('10:00'), readyAt: at('10:05'),   // completed by the bump
+          items: [
+            line({ id: 'latte', station: 'st-bar', readyAt: at('10:05'), bumpedBy: 'barista-1' }),
+            line({ id: 'sandwich', station: 'st-kitchen', readyAt: NIGHT }),
+          ],
+        },
+      ]).getDailyLeadTime(TENANT, BRANCH, DAY);
+
+      expect(report.completedCount).toBe(1);
+      expect(report.avgSec).toBe(300);
+    });
+  });
+
   it('times every order a station bumped, as before', async () => {
     const report = await build([
       BUMPED,

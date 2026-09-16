@@ -51,7 +51,9 @@ export function recipeCostedProductIds(events: CogsEvent[]): Set<string> {
  * What 5010 was debited per unit of this line, and how: the line's own
  * confirm entry if it waited (newest, after any un-bump and re-bump), else the
  * sale's entry by the line's recipe key, else by product for an entry written
- * before keys were kept, else the cost on the line.
+ * before keys were kept -- only when that product has one such line; with a
+ * Regular and a Large of it the first line would be the wrong one, and the cost
+ * written on the line itself is closer -- else the cost on the line.
  */
 export function bookedUnitCost(events: CogsEvent[], item: WasteItem): { unitCost: number; costMethod: string } | null {
   const perUnit = (l: CogsLine) => {
@@ -64,8 +66,10 @@ export function bookedUnitCost(events: CogsEvent[], item: WasteItem): { unitCost
   if (item.usageOnReady) return null;   // waited and never confirmed: nothing booked
   const key = recipeKey(item.productId, item.variantId, (item.modifiers ?? []).map((m) => m.modifierOptionId));
   const sale = events.flatMap(linesOf).filter((l) => !l.orderItemId);
-  const byKey = sale.find((l) => l.lineKey === key) ?? sale.find((l) => !l.lineKey && l.productId === item.productId);
+  const legacy = sale.filter((l) => !l.lineKey && l.productId === item.productId);
+  const byKey = sale.find((l) => l.lineKey === key) ?? (legacy.length === 1 || item.costPrice == null ? legacy[0] : undefined);
   if (byKey) return { unitCost: perUnit(byKey), costMethod: String(byKey.costMethod ?? '') };
+  if (legacy.length > 1) return { unitCost: Number(item.costPrice), costMethod: String(legacy[0].costMethod ?? 'SNAPSHOT') };
   return item.costPrice != null ? { unitCost: Number(item.costPrice), costMethod: 'SNAPSHOT' } : null;
 }
 

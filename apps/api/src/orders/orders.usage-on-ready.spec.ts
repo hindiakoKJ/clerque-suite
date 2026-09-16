@@ -19,6 +19,7 @@ describe('OrdersService.create — lines that wait for the ready tap', () => {
 
   function build(opts: {
     routed?: boolean; paused?: boolean; milk?: number; heldLines?: any[]; allowOos?: boolean;
+    latteMode?: 'RECIPE_BASED' | 'UNIT_BASED'; latteShelfRow?: boolean;
   } = {}) {
     const flushed: Record<string, number> = {};
     const tx: any = {
@@ -51,7 +52,10 @@ describe('OrdersService.create — lines that wait for the ready tap', () => {
       rawMaterialLot: { findMany: jest.fn().mockResolvedValue([]), updateMany: jest.fn() },
       accountingEvent: { create: jest.fn() },
       inventoryItem: {
-        findFirst: jest.fn(({ where }: any) => Promise.resolve(where.productId === WATER ? { id: 'inv-w', quantity: 50, avgCost: 12 } : null)),
+        findFirst: jest.fn(({ where }: any) => Promise.resolve(
+          where.productId === WATER ? { id: 'inv-w', quantity: 50, avgCost: 12 }
+            : opts.latteShelfRow ? { id: 'inv-l', quantity: 0, avgCost: null } : null,
+        )),
         update: jest.fn(), updateMany: jest.fn(),
       },
       inventoryLog: { create: jest.fn() },
@@ -64,7 +68,7 @@ describe('OrdersService.create — lines that wait for the ready tap', () => {
       },
       product: {
         findMany: jest.fn().mockResolvedValue([
-          { id: LATTE, inventoryMode: 'RECIPE_BASED', category: opts.routed === false ? null : SCREEN },
+          { id: LATTE, inventoryMode: opts.latteMode ?? 'RECIPE_BASED', category: opts.routed === false ? null : SCREEN },
           { id: WATER, inventoryMode: 'UNIT_BASED', category: null },
         ]),
       },
@@ -146,6 +150,25 @@ describe('OrdersService.create — lines that wait for the ready tap', () => {
     const paused = build({ paused: true });
     await paused.svc.create(TENANT, 'cashier', payload() as never);
     expect(marked(paused.tx)).toBeUndefined();
+  });
+
+  it('only ingredients wait: a product that also keeps a shelf row is used at the sale, unless it is costed from its recipe', async () => {
+    // Unit-based with a shelf row (even at zero): a void would put a unit back, so the sale must book it.
+    const shelf = build({ latteMode: 'UNIT_BASED', latteShelfRow: true });
+    await shelf.svc.create(TENANT, 'cashier', payload() as never);
+    expect(marked(shelf.tx)).toBeUndefined();
+    expect(shelf.flushed['rm-milk']).toBe(200);
+    expect(cogs(shelf.tx).lines.map((l: any) => l.productId).sort()).toEqual([LATTE, WATER]);
+
+    // Recipe-costed with a stray shelf row: never put back on a shelf, so it still waits.
+    const recipe = build({ latteMode: 'RECIPE_BASED', latteShelfRow: true });
+    await recipe.svc.create(TENANT, 'cashier', payload() as never);
+    expect(marked(recipe.tx)).toEqual({ where: { id: { in: ['li-latte'] } }, data: { usageOnReady: true } });
+
+    // Unit-based with no shelf row: nothing could be put back, so it waits.
+    const noShelf = build({ latteMode: 'UNIT_BASED' });
+    await noShelf.svc.create(TENANT, 'cashier', payload() as never);
+    expect(marked(noShelf.tx)).toEqual({ where: { id: { in: ['li-latte'] } }, data: { usageOnReady: true } });
   });
 
   it('what other waiting tickets hold is not there to sell: refused, saying how much is held', async () => {

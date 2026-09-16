@@ -750,6 +750,8 @@ export class OrdersService {
       const lotUnitCostByProduct = new Map<string, number>();
       const lotCostAccByProduct  = new Map<string, { cost: number; qty: number }>();
       const firstLotIdByProduct  = new Map<string, string>();
+      // Products with a shelf row at this branch, even at zero: a void or refund puts their units back (see waits below).
+      const shelfRowProducts     = new Set<string>();
       for (const item of payload.items) {
         const soldQty = Number(item.quantity);
 
@@ -757,6 +759,7 @@ export class OrdersService {
           where: { tenantId, branchId: payload.branchId, productId: item.productId },
           select: { id: true, quantity: true, avgCost: true },
         });
+        if (invItem) shelfRowProducts.add(item.productId);
 
         // No inventory record, or already at zero — skip deduction and log
         if (!invItem || Number(invItem.quantity) <= 0) continue;
@@ -1167,7 +1170,17 @@ export class OrdersService {
 
         if (consumptionLines.length === 0) continue; // not a recipe product, no add-ons
 
-        const waits = markWaiting && waitsAtAScreen(routingByProduct.get(item.productId));
+        /*
+          Only ingredients wait. A product that also keeps a shelf row here (a
+          pastry sold with a filling add-on, a bottled drink with a syrup) is
+          treated as a shelf item: a void or a restocking refund puts its unit
+          back and reverses the cost the sale booked for it -- so the sale must
+          book it, and the line is used here as before. A product marked as
+          costed from its recipe is never put back on a shelf, so it still waits.
+        */
+        const waits = markWaiting
+          && waitsAtAScreen(routingByProduct.get(item.productId))
+          && (productModes.get(item.productId) === 'RECIPE_BASED' || !shelfRowProducts.has(item.productId));
         if (waits) waitingKeys.add(recipeKey(item.productId, item.variantId, optionIdsOf(item)));
 
         // Per-unit cost accumulator for this product (₱ per single unit).
@@ -1741,6 +1754,8 @@ export class OrdersService {
         // InventoryItem somehow exists for a recipe product, don't restock.)
         // Same for a line the sale costed from its recipe: its ingredients are gone too.
         if (item.product?.inventoryMode === 'RECIPE_BASED' || costedFromRecipe.has(item.productId)) continue;
+        // Still waiting at a screen: it took nothing from a shelf and booked no cost, so nothing goes back.
+        if (stillWaiting(item)) continue;
 
         /*
           Only what is still on the sale. Units already refunded were either
@@ -2052,7 +2067,8 @@ export class OrdersService {
         recipes, product still marked unit-based): that cost came out of raw
         materials, not 1050, so debiting 1050 back made up stock value.
       */
-      const inv = effectiveRestock && item.order.branchId
+      // A line still waiting at a screen took nothing from a shelf and booked no cost: nothing to put back.
+      const inv = effectiveRestock && item.order.branchId && !stillWaiting(item)
         ? await tx.inventoryItem.findFirst({
             where: { tenantId, branchId: item.order.branchId, productId: item.productId },
             select: { id: true, quantity: true },

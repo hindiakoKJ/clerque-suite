@@ -1,0 +1,389 @@
+'use client';
+
+/**
+ * "Today's inventory" -- the daily sheet the kitchen and bar used to fill in by
+ * hand: Beginning, In, Waste, Used, Ending, per item, for the branch's business
+ * day. Clerque fills it in; the staff check it, print it and sign it.
+ *
+ *   StationInventorySheet  the full-screen sheet on a kitchen or bar screen,
+ *                          dark like the station, with a day picker and Print.
+ *   SheetTables            the tables alone, dark or light -- the owner's copy
+ *                          under Inventory > Reports reuses them.
+ *   SheetPrintCopy         the white A4 copy that prints in place of the page.
+ *
+ * The server builds every number and every word (the cells, the notes), so the
+ * screen, the print and the owner's copy always read the same. Quantities only:
+ * no costs reach a kitchen or bar screen.
+ *
+ * Printing is the browser's own, laid out for A4 (a 58 mm receipt printer cannot
+ * hold the table). The copy is rendered straight into <body> and, while it is
+ * there, a print rule hides everything else -- so it prints alone whichever page
+ * it sits in, without that page's layout needing to know.
+ */
+import { useEffect, useState, type JSX } from 'react';
+import { createPortal, flushSync } from 'react-dom';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { ChevronLeft, ChevronRight, Loader2, Printer, X } from 'lucide-react';
+import { api } from '@/lib/api';
+
+export type SheetSectionKey = 'PREMADE' | 'INGREDIENTS' | 'SUPPLIES' | 'UNROUTED';
+type Column = 'beginning' | 'in' | 'waste' | 'used' | 'ending' | 'adjust';
+
+export interface DailySheetRow {
+  rawMaterialId: string;
+  name: string;
+  unit: string;
+  packSize: number | null;
+  alsoOn: string[];
+  beginning: number;
+  in: number;
+  waste: number;
+  used: number;
+  ending: number;
+  adjust: number;
+  cells: Record<Column, string>;
+}
+
+export interface DailySheet {
+  shop: { name: string };
+  station: { id: string; name: string; kind: string } | null;
+  branch: { id: string; name: string };
+  title: string;
+  day: string;
+  dayLabel: string;
+  today: string;
+  previousDay: string | null;
+  previousDayLabel: string | null;
+  nextDay: string | null;
+  nextDayLabel: string | null;
+  status: 'LIVE' | 'CLOSED';
+  window: { from: string; to: string; fromLabel: string; toLabel: string };
+  notes: string[];
+  stillWaiting: number;
+  showAdjust: boolean;
+  sections: Array<{ key: SheetSectionKey; title: string; rows: DailySheetRow[] }>;
+}
+
+const COLUMNS: Array<[Column, string]> = [
+  ['beginning', 'Beginning'], ['in', 'In'], ['waste', 'Waste'], ['used', 'Used'], ['ending', 'Ending'], ['adjust', 'Adjust'],
+];
+const columnsOf = (sheet: DailySheet) => COLUMNS.filter(([key]) => key !== 'adjust' || sheet.showAdjust);
+
+/** The server's own words for a refusal ("This screen is paired to another station."), when it sent any. */
+export function sheetErrorMessage(error: unknown): string | null {
+  const m = (error as { response?: { data?: { message?: string | string[] } } } | null)?.response?.data?.message;
+  return Array.isArray(m) ? m.join(' ') : (m ?? null);
+}
+
+/** The note the server always puts first says LIVE or CLOSED; the print header already says that. The Adjust note goes under the table. */
+const isAdjustNote = (note: string) => note.startsWith('Adjust is');
+
+// ─── The tables ──────────────────────────────────────────────────────────────
+
+const TONE = {
+  dark: {
+    heading: 'text-amber-300',
+    wrap:    'border-stone-800',
+    head:    'bg-stone-900 text-stone-400',
+    nameHead: 'bg-stone-900',
+    row:     'border-stone-800',
+    name:    'bg-stone-950 text-white',
+    also:    'text-stone-500',
+    num:     'text-stone-200',
+    ending:  'text-white',
+    adjust:  'text-amber-300',
+    empty:   'text-stone-400 border-stone-800',
+  },
+  light: {
+    heading: 'text-foreground',
+    wrap:    'border-border',
+    head:    'bg-muted text-muted-foreground',
+    nameHead: 'bg-muted',
+    row:     'border-border',
+    name:    'bg-background text-foreground',
+    also:    'text-muted-foreground',
+    num:     'text-foreground',
+    ending:  'text-foreground',
+    adjust:  'text-amber-600 dark:text-amber-400',
+    empty:   'text-muted-foreground border-border',
+  },
+} as const;
+
+/** One table per section. Each scrolls sideways on its own, so the page never does on a phone. */
+export function SheetTables({ sheet, tone }: { sheet: DailySheet; tone: 'dark' | 'light' }): JSX.Element {
+  const t = TONE[tone];
+  const columns = columnsOf(sheet);
+  if (sheet.sections.length === 0) {
+    return (
+      <p className={`rounded-xl border border-dashed px-4 py-10 text-center text-sm ${t.empty}`}>
+        No items on this sheet yet. An item shows here once a product sent to this station uses it in a recipe, a size or an add-on.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {sheet.sections.map((section) => (
+        <section key={section.key}>
+          <h3 className={`mb-2 text-sm font-bold uppercase tracking-wider ${t.heading}`}>{section.title}</h3>
+          <div className={`overflow-x-auto rounded-xl border ${t.wrap}`}>
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className={`text-xs uppercase tracking-wide ${t.head}`}>
+                <tr>
+                  {/* The name stays put while the numbers scroll sideways. */}
+                  <th scope="col" className={`sticky left-0 px-3 py-2.5 text-left font-semibold ${t.nameHead}`}>Item</th>
+                  {columns.map(([key, label]) => (
+                    <th key={key} scope="col" className="px-3 py-2.5 text-right font-semibold">{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {section.rows.map((row) => (
+                  <tr key={row.rawMaterialId} className={`border-t ${t.row}`}>
+                    <th scope="row" className={`sticky left-0 px-3 py-2.5 text-left font-medium ${t.name}`}>
+                      <span className="block">{row.name}</span>
+                      {row.alsoOn.length > 0 && (
+                        <span className={`block text-xs font-normal ${t.also}`}>Also on {row.alsoOn.join(', ')}</span>
+                      )}
+                    </th>
+                    {columns.map(([key]) => (
+                      <td
+                        key={key}
+                        className={`whitespace-nowrap px-3 py-2.5 text-right tabular-nums ${
+                          key === 'ending' ? `font-semibold ${t.ending}` : key === 'adjust' && row.adjust !== 0 ? `font-semibold ${t.adjust}` : t.num
+                        }`}
+                      >
+                        {row.cells[key]}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+// ─── The printed copy ────────────────────────────────────────────────────────
+
+const PRINT_CSS = `
+@page { size: A4 portrait; margin: 10mm; }
+@media print {
+  body > *:not([data-sheet-print]) { display: none !important; }
+  html, body { background: #fff !important; }
+}
+[data-sheet-print] { color: #000; background: #fff; font-size: 9pt; line-height: 1.3; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
+[data-sheet-print] table { width: 100%; border-collapse: collapse; margin-top: 6pt; }
+[data-sheet-print] thead { display: table-header-group; }
+[data-sheet-print] tr { break-inside: avoid; page-break-inside: avoid; }
+[data-sheet-print] th, [data-sheet-print] td { border: 0.5pt solid #888; padding: 2.5pt 4pt; vertical-align: top; }
+[data-sheet-print] thead th { font-weight: 700; text-align: right; }
+[data-sheet-print] thead th:first-child, [data-sheet-print] tbody th { text-align: left; font-weight: 400; }
+[data-sheet-print] td { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-sheet-print] tr.sheet-section td { text-align: left; font-weight: 700; background: #eee; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+`;
+
+const manilaTime = (at: Date) =>
+  at.toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+/**
+ * The white A4 sheet with lines to sign. Mounted only while a sheet is loaded;
+ * `printedAt` is set the moment Print is pressed.
+ */
+export function SheetPrintCopy({ sheet, printedAt }: { sheet: DailySheet; printedAt: Date }): JSX.Element | null {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+
+  const columns = columnsOf(sheet);
+  const extraNotes = sheet.notes.slice(1).filter((n) => !isAdjustNote(n));
+  const adjustNote = sheet.notes.find(isAdjustNote);
+
+  return createPortal(
+    <div data-sheet-print="" className="hidden print:block">
+      <style>{PRINT_CSS}</style>
+      <div style={{ fontSize: '14pt', fontWeight: 700 }}>{sheet.title}</div>
+      <div>{sheet.shop.name} · {sheet.branch.name}</div>
+      <div style={{ fontWeight: 700 }}>{sheet.dayLabel}</div>
+      <div>
+        {sheet.status === 'CLOSED'
+          ? `From ${sheet.window.fromLabel} to ${sheet.window.toLabel}`
+          : `Running totals as of ${sheet.window.toLabel} (not closed yet)`}
+      </div>
+      {extraNotes.map((note) => <div key={note}>{note}</div>)}
+
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Item</th>
+            {columns.map(([key, label]) => <th key={key} scope="col">{label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {sheet.sections.flatMap((section) => [
+            <tr key={`section-${section.key}`} className="sheet-section">
+              <td colSpan={columns.length + 1}>{section.title}</td>
+            </tr>,
+            ...section.rows.map((row) => (
+              <tr key={row.rawMaterialId}>
+                <th scope="row">
+                  {row.name}
+                  {row.alsoOn.length > 0 && <span style={{ color: '#555' }}> (also on {row.alsoOn.join(', ')})</span>}
+                </th>
+                {columns.map(([key]) => <td key={key}>{row.cells[key]}</td>)}
+              </tr>
+            )),
+          ])}
+        </tbody>
+      </table>
+
+      <div style={{ marginTop: '16pt', display: 'flex', gap: '18pt', flexWrap: 'wrap' }}>
+        <span>Prepared by: ____________________</span>
+        <span>Signature: ____________________</span>
+        <span>Checked by: ____________________</span>
+      </div>
+      <div style={{ marginTop: '8pt', color: '#333' }}>Printed {manilaTime(printedAt)} from Clerque.</div>
+      {adjustNote && <div style={{ color: '#333' }}>{adjustNote}</div>}
+    </div>,
+    document.body,
+  );
+}
+
+/** Print the loaded sheet, stamping the copy with the moment Print was pressed. */
+export function usePrintSheet(): { printedAt: Date; print: () => void } {
+  const [printedAt, setPrintedAt] = useState(() => new Date());
+  useEffect(() => {
+    // The browser's own Print (Ctrl+P) stamps the time too.
+    const stamp = () => setPrintedAt(new Date());
+    window.addEventListener('beforeprint', stamp);
+    return () => window.removeEventListener('beforeprint', stamp);
+  }, []);
+  return {
+    printedAt,
+    print: () => {
+      // Rendered before the print dialog reads the page, so the copy carries this moment.
+      flushSync(() => setPrintedAt(new Date()));
+      window.print();
+    },
+  };
+}
+
+// ─── On the station screen ───────────────────────────────────────────────────
+
+export function StationInventorySheet({ stationId, open, onClose }: { stationId: string; open: boolean; onClose: () => void }): JSX.Element | null {
+  // Null is the server's default: the sheet running now, or tonight's for a while after closing.
+  const [day, setDay] = useState<string | null>(null);
+  const { printedAt, print } = usePrintSheet();
+
+  const { data: sheet, isPending, isError, error, isFetching } = useQuery<DailySheet>({
+    queryKey: ['station-sheet', stationId, day ?? 'default'],
+    queryFn:  () => api.get(`/kds/stations/${stationId}/daily-inventory${day ? `?day=${day}` : ''}`).then((r) => r.data),
+    enabled:  open && !!stationId,
+    // A running sheet keeps up with the kitchen; a closed one never changes.
+    refetchInterval: (q) => (q.state.data?.status === 'LIVE' ? 60_000 : false),
+    // Keep the day on screen while the next one loads, rather than flashing empty.
+    placeholderData: keepPreviousData,
+  });
+
+  // Escape closes, as any full-screen panel does.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  // Opened again later, it starts on the current sheet.
+  useEffect(() => { if (!open) setDay(null); }, [open]);
+
+  if (!open) return null;
+
+  const barButton = 'flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-semibold transition-colors disabled:opacity-40';
+  const message = isError ? sheetErrorMessage(error) : null;
+
+  return (
+    <>
+      <div role="dialog" aria-modal="true" aria-label="Today's inventory" className="fixed inset-0 z-50 overflow-y-auto bg-stone-950 text-white print:hidden">
+        <div className="sticky top-0 z-20 border-b border-stone-800 bg-stone-900 px-3 py-2 sm:px-6">
+          <div className="mx-auto flex max-w-6xl items-center gap-2">
+            <button
+              type="button"
+              onClick={() => sheet?.previousDay && setDay(sheet.previousDay)}
+              disabled={!sheet?.previousDay}
+              aria-label={sheet?.previousDayLabel ? `Previous day, ${sheet.previousDayLabel}` : 'Previous day'}
+              className={`${barButton} bg-stone-800 text-stone-100 hover:bg-stone-700`}
+            >
+              <ChevronLeft className="h-5 w-5" />
+              <span className="hidden md:inline">{sheet?.previousDayLabel}</span>
+            </button>
+
+            <div className="min-w-0 flex-1 text-center">
+              <p className="truncate text-base font-bold sm:text-lg">{sheet?.title ?? "Today's inventory"}</p>
+              <p className="flex items-center justify-center gap-1.5 truncate text-xs text-stone-400">
+                {isFetching && <Loader2 className="h-3 w-3 shrink-0 animate-spin" />}
+                <span className="truncate">
+                  {sheet ? `${sheet.dayLabel} · ${sheet.status === 'LIVE' ? 'Running' : 'Closed'}` : 'Loading…'}
+                </span>
+              </p>
+            </div>
+
+            {sheet?.nextDay && (
+              <button
+                type="button"
+                onClick={() => setDay(sheet.nextDay)}
+                aria-label={`Next day, ${sheet.nextDayLabel}`}
+                className={`${barButton} bg-stone-800 text-stone-100 hover:bg-stone-700`}
+              >
+                <span className="hidden md:inline">{sheet.nextDayLabel}</span>
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            )}
+            <button type="button" onClick={print} disabled={!sheet} className={`${barButton} bg-amber-500 text-stone-950 hover:bg-amber-400`}>
+              <Printer className="h-4 w-4" />
+              <span className="hidden sm:inline">Print</span>
+            </button>
+            <button type="button" onClick={onClose} aria-label="Close" className={`${barButton} bg-stone-800 text-stone-100 hover:bg-stone-700`}>
+              <X className="h-5 w-5" />
+              <span className="hidden sm:inline">Close</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="mx-auto max-w-6xl space-y-4 px-4 py-4 sm:px-6">
+          {isPending ? (
+            <p className="flex items-center justify-center gap-2 py-24 text-stone-400">
+              <Loader2 className="h-5 w-5 animate-spin" /> Loading the sheet…
+            </p>
+          ) : !sheet ? (
+            <div className="mx-auto max-w-md py-24 text-center">
+              <p className="text-lg font-semibold">Could not load the sheet.</p>
+              <p className="mt-1 text-sm text-stone-400">{message ?? 'Check the connection and try again.'}</p>
+              {day && (
+                <button type="button" onClick={() => setDay(null)} className="mt-4 min-h-11 rounded-xl bg-stone-800 px-4 text-sm font-semibold hover:bg-stone-700">
+                  Back to the current sheet
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {isError && (
+                <p className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-200">
+                  {message ?? 'Could not refresh the sheet.'} Showing what was loaded last.
+                </p>
+              )}
+              {sheet.notes.length > 0 && (
+                <ul className="space-y-1 text-sm text-amber-200">
+                  {sheet.notes.map((note) => <li key={note}>{note}</li>)}
+                </ul>
+              )}
+              <SheetTables sheet={sheet} tone="dark" />
+            </>
+          )}
+        </div>
+      </div>
+      {sheet && <SheetPrintCopy sheet={sheet} printedAt={printedAt} />}
+    </>
+  );
+}

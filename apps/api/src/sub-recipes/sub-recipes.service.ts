@@ -4,6 +4,10 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { availableQty, heldUsage } from '../orders/held-usage';
 import { canPrepAtStation, rotationFromBoard, useByOf, prepStatusOf, PREP_STATUS_ORDER, type PrepLot } from '@repo/shared-types';
+import { chainsFromBoard, type ChainSeverity } from './prep-chain';
+
+/** Chains that need doing now first, then next, then fine. */
+const SEVERITY_ORDER: Record<ChainSeverity, number> = { NOW: 0, NEXT: 1, OK: 2 };
 
 /**
  * Sub-recipes — prepared ingredients that are made in the shop rather than
@@ -176,26 +180,95 @@ export class SubRecipesService {
       because Category routes to Station -- the same routing that already sends
       a ticket to the kitchen printer or the bar. So the kitchen sees kitchen
       preps and the bar sees its own, without anyone tagging anything.
+
+      A dish reaches a prep three ways, and all three count: its own recipe, a
+      size's recipe (only the Large takes the extra syrup), and an add-on
+      ("extra sauce"). Reading only the product recipe left a prep that only a
+      size or an add-on used with no level, no station and no servings -- so
+      the station screen never showed it as the tub plates are served from.
     */
-    const usedBy = await this.prisma.bomItem.findMany({
-      where:  { rawMaterialId: { in: rows.map((r) => r.id) }, product: { tenantId, isActive: true } },
-      select: {
-        rawMaterialId: true,
-        quantity:      true,
-        product: {
-          select: {
-            id: true, name: true,
-            category: { select: { id: true, name: true,
-              station: { select: { id: true, name: true, kind: true } } } },
+    const prepIds = rows.map((r) => r.id);
+    const [usedByDish, usedBySize, usedByAddOn] = await Promise.all([
+      this.prisma.bomItem.findMany({
+        where:  { rawMaterialId: { in: prepIds }, product: { tenantId, isActive: true } },
+        select: {
+          rawMaterialId: true,
+          quantity:      true,
+          product: {
+            select: {
+              id: true, name: true,
+              category: { select: { id: true, name: true,
+                station: { select: { id: true, name: true, kind: true } } } },
+            },
           },
         },
-      },
-    });
-    const feeds = new Map<string, typeof usedBy>();
-    for (const b of usedBy) {
-      const list = feeds.get(b.rawMaterialId) ?? [];
-      list.push(b);
-      feeds.set(b.rawMaterialId, list);
+      }),
+      this.prisma.variantBomItem.findMany({
+        where:  { rawMaterialId: { in: prepIds }, variant: { isActive: true, product: { tenantId, isActive: true } } },
+        select: {
+          rawMaterialId: true,
+          quantity:      true,
+          variant: { select: {
+            id: true, name: true,
+            product: { select: { id: true, name: true,
+              category: { select: { station: { select: { id: true, name: true, kind: true } } } } } },
+          } },
+        },
+      }),
+      this.prisma.modifierOptionIngredient.findMany({
+        where:  { rawMaterialId: { in: prepIds }, quantity: { gt: 0 }, option: { isActive: true, group: { tenantId, isActive: true } } },
+        select: {
+          rawMaterialId: true,
+          quantity:      true,
+          option: { select: {
+            id: true, name: true,
+            group: { select: {
+              // A group bound to a category applies to every dish in it...
+              category: { select: { station: { select: { id: true, name: true, kind: true } } } },
+              // ...and one attached dish by dish reaches those dishes' stations.
+              products: { select: { product: { select: { isActive: true,
+                category: { select: { station: { select: { id: true, name: true, kind: true } } } } } } } },
+            } },
+          } },
+        },
+      }),
+    ]);
+    type FeedStation = NonNullable<NonNullable<(typeof usedByDish)[number]['product']['category']>['station']>;
+    /**
+     * One way a dish uses a prep: which dish, how much per serving, and the stations it is made at.
+     * `addOn` marks the add-on feeds, which only pick a station when no dish or size does (see `station` below).
+     */
+    interface Feed { rawMaterialId: string; quantity: number; dishId: string; dishName: string; stations: FeedStation[]; addOn: boolean }
+    const present = <T>(x: T | null | undefined): x is T => x != null;
+    const allFeeds: Feed[] = [
+      ...usedByDish.map((b) => ({
+        rawMaterialId: b.rawMaterialId, quantity: Number(b.quantity),
+        dishId: b.product.id, dishName: b.product.name,
+        stations: [b.product.category?.station].filter(present),
+        addOn: false,
+      })),
+      ...usedBySize.map((b) => ({
+        rawMaterialId: b.rawMaterialId, quantity: Number(b.quantity),
+        // The size's own id, so two sizes of one dish stay two lines.
+        dishId: b.variant.id, dishName: `${b.variant.product.name} (${b.variant.name})`,
+        stations: [b.variant.product.category?.station].filter(present),
+        addOn: false,
+      })),
+      ...usedByAddOn.map((m) => ({
+        rawMaterialId: m.rawMaterialId, quantity: Number(m.quantity),
+        dishId: m.option.id, dishName: `${m.option.name} (add-on)`,
+        stations: [
+          m.option.group.category?.station,
+          ...m.option.group.products.filter((p) => p.product.isActive).map((p) => p.product.category?.station),
+        ].filter(present),
+        addOn: true,
+      })),
+    ];
+    const feeds = new Map<string, Feed[]>();
+    for (const f of allFeeds) {
+      const list = feeds.get(f.rawMaterialId) ?? [];
+      list.push(f);
+      feeds.set(f.rawMaterialId, list);
     }
 
     /*
@@ -295,6 +368,32 @@ export class SubRecipesService {
       }
     }
 
+    /*
+      How many steps each prep sits from a dish: 1 for what plates are served
+      from, 2 for what refills that, 3 for what that is made from.
+
+      `level` above stops at 2, so a base two steps down read the same as the
+      frozen tub one step down, and the station screen could not order a chain
+      of three. Walked breadth-first from the preps a dish uses, so a prep that
+      sits at two depths gets the smaller one. Null when no dish reaches it.
+    */
+    const depthOf = new Map<string, number>();
+    let frontier = rows.filter((r) => (feeds.get(r.id) ?? []).length > 0).map((r) => r.id);
+    for (const id of frontier) depthOf.set(id, 1);
+    for (let depth = 2; frontier.length > 0; depth += 1) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        for (const line of prepById.get(id)?.subRecipeItems ?? []) {
+          const child = line.rawMaterial.id;
+          if (prepById.has(child) && !depthOf.has(child)) {
+            depthOf.set(child, depth);
+            next.push(child);
+          }
+        }
+      }
+      frontier = next;
+    }
+
     const mapped = rows.map((r) => {
       // What the shelf supports RIGHT NOW, with no prep in between. This is
       // what the cook can start on this minute.
@@ -387,6 +486,8 @@ export class SubRecipesService {
         level: (feeds.get(r.id) ?? []).length > 0
           ? 1 as const
           : feedsAnotherPrep.has(r.id) ? 2 as const : null,
+        /** Steps from a dish: 1 served from, 2 refills it, 3 makes that. Null when no dish reaches it. */
+        depth:         depthOf.get(r.id) ?? null,
         parLevel:      r.lowStockAlert != null ? Number(r.lowStockAlert) : null,
         belowPar:      r.lowStockAlert != null && onHand <= Number(r.lowStockAlert),
         /**
@@ -405,12 +506,13 @@ export class SubRecipesService {
           the same honesty as the batch counts above.
         */
         serves: (feeds.get(r.id) ?? [])
-          .filter((b) => Number(b.quantity) > 0)
-          .map((b) => ({
-            productId:    b.product.id,
-            productName:  b.product.name,
-            perServing:   Number(b.quantity),
-            servingsLeft: Math.floor(onHand / Number(b.quantity)),
+          .filter((f) => f.quantity > 0)
+          .map((f) => ({
+            // A dish, a size or an add-on option: whichever uses it.
+            productId:    f.dishId,
+            productName:  f.dishName,
+            perServing:   f.quantity,
+            servingsLeft: Math.floor(onHand / f.quantity),
           }))
           .sort((a, b) => a.servingsLeft - b.servingsLeft),
         /*
@@ -419,14 +521,22 @@ export class SubRecipesService {
           and bar tickets, so a prep used only by pasta belongs to the kitchen
           and one used only by drinks belongs to the bar. Null when the
           products have no station set, or when a prep genuinely feeds both.
+
+          Dishes and sizes decide first; add-ons only when those name no
+          station. A small shop keeps one catch-all "Add-ons" group and attaches
+          it to dishes AND drinks, so an add-on's stations are every counter
+          the option is offered at, not where the prep is made. Merged with the
+          dish feeds, the kitchen's sauce came back as "both", lost its station,
+          and showed up on the bar screen with a Made button and bar alerts.
+          An add-on still routes a prep that no dish or size uses.
         */
-        station: (() => {
-          const st = [...new Map(
-            (feeds.get(r.id) ?? [])
-              .map((b) => b.product.category?.station)
-              .filter((x): x is NonNullable<typeof x> => !!x)
-              .map((x) => [x.id, x]),
+        station: ((): FeedStation | null => {
+          const stationsOf = (fs: Feed[]) => [...new Map(
+            fs.flatMap((f) => f.stations).map((x) => [x.id, x]),
           ).values()];
+          const mine = feeds.get(r.id) ?? [];
+          const fromDishes = stationsOf(mine.filter((f) => !f.addOn));
+          const st = fromDishes.length > 0 ? fromDishes : stationsOf(mine.filter((f) => f.addOn));
           return st.length === 1 ? st[0] : null;
         })(),
         /** Batches the shelf supports with no prep in between. */
@@ -485,8 +595,15 @@ export class SubRecipesService {
       Inherited one hop up, and only when the parents agree. A tub feeding two
       preps that belong to different stations genuinely has no single owner, and
       guessing one would be worse than leaving it visible to both.
+
+      Nearest the dish first, so a Level 3 base inherits from a Level 2 tub
+      that has already inherited from Level 1. Walked in name order, a base
+      named before its tub read the tub before the tub had a station, and the
+      same recipes gave a different answer depending on what things were called.
     */
-    for (const row of mapped) {
+    const nearestDishFirst = [...mapped].sort((a, b) =>
+      (a.depth ?? Number.MAX_SAFE_INTEGER) - (b.depth ?? Number.MAX_SAFE_INTEGER));
+    for (const row of nearestDishFirst) {
       if (row.station) continue;
       const parents = mapped.filter((m) =>
         m.components.some((c) => c.rawMaterialId === row.id));
@@ -559,6 +676,27 @@ export class SubRecipesService {
     const shown = board.filter((r) => !r.station || r.station.id === station.id);
     const lotsOf = await this.batchesOnHand(tenantId, branch.id, shown);
 
+    /*
+      Each sauce read from Level 1 down, with the one thing to do about it.
+
+      Built from the WHOLE board, so a stage is found even where it is not shown
+      here, and kept for the Level 1 items this screen shows. Worst first: act
+      now, then next, then fine; items routed to no station after this
+      station's own. Read for THIS station, so a stage another station makes
+      (the bar's syrup inside the kitchen's glaze) gets no button here that the
+      Made route would refuse on every tap.
+    */
+    const shownIds = new Set(shown.map((r) => r.id));
+    const chains = chainsFromBoard(board, station)
+      .filter((c) => shownIds.has(c.id))
+      .map((c) => ({ ...c, assigned: !!c.station }))
+      .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
+        || Number(!a.assigned) - Number(!b.assigned)
+        || a.name.localeCompare(b.name));
+    // A stage shared by two chains belongs to the first shown, so it is drawn once.
+    const inChain = new Map<string, string>();
+    for (const c of chains) for (const s of c.stages) if (!inChain.has(s.id)) inChain.set(s.id, c.id);
+
     const rows = shown.map((r) => {
       const rot = rotation.get(r.id) ?? null;
       const useBy = useByOf(r.onHand, lotsOf.get(r.id) ?? [], now);
@@ -582,6 +720,10 @@ export class SubRecipesService {
         serves:        r.serves[0] ?? null,
         /** Routed to this station; false for an item routed to none. */
         assigned:      !!r.station,
+        /** Steps from a dish (1, 2, 3); null when no dish reaches it. */
+        depth:         r.depth ?? null,
+        /** The chain this item is a stage of, when one is shown; the screen draws it inside that card. */
+        inChain:       inChain.get(r.id) ?? null,
       };
     }).sort((a, b) => Number(!a.assigned) - Number(!b.assigned)
       || PREP_STATUS_ORDER[a.status] - PREP_STATUS_ORDER[b.status]
@@ -594,6 +736,7 @@ export class SubRecipesService {
       branchName: branch.name,
       at:         now.toISOString(),
       rows,
+      chains,
     };
   }
 
@@ -631,64 +774,6 @@ export class SubRecipesService {
       if (got.length) out.set(item.id, got);
     }
     return out;
-  }
-
-  /**
-   * Which station preps ONE item — the same derivation the board uses.
-   *
-   * Written as its own method rather than inlined so the station a barista is
-   * SHOWN and the station the server ENFORCES come from one place. Two copies
-   * of this walk would drift, and the drift would show up as a cook being
-   * refused a batch the board had just offered them.
-   *
-   * Null when the products it feeds have no station routed, or when it feeds
-   * both sides. Null is permissive everywhere it is read.
-   */
-  private async stationOfPrep(
-    tenantId: string,
-    rawMaterialId: string,
-    followParents = true,
-  ): Promise<{ id: string; name: string; kind: string } | null> {
-    const usedBy = await this.prisma.bomItem.findMany({
-      where:  { rawMaterialId, product: { tenantId, isActive: true } },
-      select: { product: { select: { category: { select: {
-        station: { select: { id: true, name: true, kind: true } },
-      } } } } },
-    });
-    const stations = [...new Map(
-      usedBy
-        .map((b) => b.product.category?.station)
-        .filter((x): x is NonNullable<typeof x> => !!x)
-        .map((x) => [x.id, x]),
-    ).values()];
-    if (stations.length === 1) {
-      return { id: stations[0].id, name: stations[0].name, kind: String(stations[0].kind) };
-    }
-    if (stations.length > 1 || !followParents) return null;
-
-    /*
-      Nothing routed it directly, so ask whatever it feeds.
-
-      A Level 2 tub feeds no product -- only the Level 1 tub in front of it --
-      so it can never derive a station of its own, and without this the backup
-      batch would be recordable by anyone. It belongs to whoever thaws it.
-
-      One hop, and only when the parents agree: a tub feeding two preps at
-      different stations genuinely has no single owner, and the permissive
-      answer is the right one there.
-    */
-    const parents = await this.prisma.subRecipeItem.findMany({
-      where:  { rawMaterialId, parent: { tenantId, isActive: true } },
-      select: { parentRawMaterialId: true },
-    });
-    const found: Array<{ id: string; name: string; kind: string }> = [];
-    for (const parent of parents) {
-      // followParents=false: one hop only, so a cycle cannot spin here.
-      const st = await this.stationOfPrep(tenantId, parent.parentRawMaterialId, false);
-      if (st) found.push(st);
-    }
-    const uniq = [...new Map(found.map((x) => [x.id, x])).values()];
-    return uniq.length === 1 ? uniq[0] : null;
   }
 
   /** An ingredient is a sub-recipe when it has components AND a yield. */
@@ -864,6 +949,35 @@ export class SubRecipesService {
     if (!branch) throw new BadRequestException('Branch not found in your organization.');
 
     /*
+      The same reference only ever makes the batch once.
+
+      Checked before any write, and returns the original outcome rather than
+      throwing, so a client retrying after a timeout gets the answer it would
+      have got the first time.
+
+      Checked BEFORE the stock check, too. The first tap already used the
+      ingredients, so a retry after it succeeded would otherwise be told "Not
+      enough tomatoes" -- and a cook reading that believes the batch was not
+      recorded and makes it again.
+    */
+    const ref = dto.referenceNumber?.trim();
+    if (ref) {
+      const already = await this.prisma.rawMaterialLot.findFirst({
+        where:  { tenantId, rawMaterialId, referenceNumber: ref },
+        select: { id: true, qtyReceived: true },
+      });
+      if (already) {
+        return {
+          rawMaterialId,
+          branchId:  dto.branchId,
+          produced:  Number(already.qtyReceived),
+          duplicate: true,
+          message:   'This batch was already recorded. Nothing was made again.',
+        };
+      }
+    }
+
+    /*
       Who did this — resolved to a NAME here, while the row is in front of us.
 
       The payload is read back by Stock Movements long after the fact, and a
@@ -888,14 +1002,16 @@ export class SubRecipesService {
       Enforced HERE and not only on the board, because the board is a picture:
       a stale tab, a bookmarked id, or the tablet app posting straight to the
       API would all sail past a filtered list. The rule and the filter share
-      one derivation (stationOfPrep) and one predicate (canPrepAtStation), so
-      the two cannot disagree.
+      one derivation (the board itself, list()) and one predicate
+      (canPrepAtStation), so the two cannot disagree -- a separate walk here
+      missed stations reached through a size or an add-on, and a Level 3 base
+      two steps from any dish.
 
       A prep with no station routed is allowed to everyone. That is a setup
       gap, not a boundary -- refusing it would block a whole shop's prep on a
       menu-routing task nobody has been asked to do.
     */
-    const prepStation = await this.stationOfPrep(tenantId, rawMaterialId);
+    const prepStation = (await this.list(tenantId, dto.branchId, null)).find((r) => r.id === rawMaterialId)?.station ?? null;
     // The same backstop the board uses: read the shop's real stations so a
     // persona written for a floor plan this shop does not have cannot refuse
     // every batch. Board and server must agree, so both consult it.
@@ -981,30 +1097,6 @@ export class SubRecipesService {
     if (this.periods) await this.periods.assertDateIsOpen(tenantId, madeAt);
 
     /*
-      The same reference only ever makes the batch once.
-
-      Checked before any write, and returns the original outcome rather than
-      throwing, so a client retrying after a timeout gets the answer it would
-      have got the first time.
-    */
-    const ref = dto.referenceNumber?.trim();
-    if (ref) {
-      const already = await this.prisma.rawMaterialLot.findFirst({
-        where:  { tenantId, rawMaterialId, referenceNumber: ref },
-        select: { id: true, qtyReceived: true },
-      });
-      if (already) {
-        return {
-          rawMaterialId,
-          branchId:  dto.branchId,
-          produced:  Number(already.qtyReceived),
-          duplicate: true,
-          message:   'This batch was already recorded. Nothing was made again.',
-        };
-      }
-    }
-
-    /*
       What the recipe SAYS this makes, and what the cook says it made.
 
       Expected is the setup figure; actual is a measurement. Where a
@@ -1038,6 +1130,30 @@ export class SubRecipesService {
     const unitCost = produced > 0 ? inputValue / produced : 0;
 
     return this.prisma.$transaction(async (tx) => {
+      /*
+        Two taps at once -- a tablet double-tap -- both pass the check above
+        before either has written its lot, and there is no unique index on a
+        lot's reference to stop the second. So the key is locked for this
+        transaction and checked again under the lock: the second tap waits for
+        the first to commit, then finds its lot and records nothing.
+      */
+      if (ref) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`batch-ref:${tenantId}:${ref}`}))`;
+        const again = await tx.rawMaterialLot.findFirst({
+          where:  { tenantId, rawMaterialId, referenceNumber: ref },
+          select: { qtyReceived: true },
+        });
+        if (again) {
+          return {
+            rawMaterialId,
+            branchId:  dto.branchId,
+            produced:  Number(again.qtyReceived),
+            duplicate: true,
+            message:   'This batch was already recorded. Nothing was made again.',
+          };
+        }
+      }
+
       for (const line of rm.subRecipeItems) {
         const used = Number(line.quantity) * batches;
         // Relative, so a sale ringing at the same moment is not erased by a

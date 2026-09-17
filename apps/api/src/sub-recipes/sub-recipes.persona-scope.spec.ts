@@ -138,6 +138,9 @@ describe('Prep station scope — barista and line cook', () => {
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'raw', quantity: 99999 }]),
       },
+      // No size or add-on uses a prep here: only the dish recipes below.
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       bomItem: {
         findMany: jest.fn().mockResolvedValue([
           { rawMaterialId: SAUCE.id, quantity: 50, product: { id: 'p1', name: 'Spaghetti',
@@ -245,6 +248,9 @@ describe('Prep levels — derived, not configured', () => {
           { rawMaterialId: READY.id, quantity: 2000 },
         ]),
       },
+      // No size or add-on uses a prep here: only the dish recipes below.
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       bomItem: {
         findMany: jest.fn().mockResolvedValue([
           { rawMaterialId: READY.id, quantity: 200, product: { id: 'p1', name: 'Spaghetti',

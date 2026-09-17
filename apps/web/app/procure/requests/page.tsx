@@ -13,6 +13,7 @@ import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
 import { lowStockToast, type PullLowStockResult } from './low-stock-toast';
+import { chipsInOrder, isStillOpen, recordsOn, showsRecordBoxes, startsTicked } from './buy-list-view';
 import {
   servesSentences, servesSummary, type LineServes,
   SOURCE_KINDS, SOURCE_KIND_LABEL, cleanSourceName, sourceKey, sourceText, usuallyFromText, type SourceKind, type UsuallyFrom,
@@ -137,7 +138,8 @@ const BIG_UNIT: Record<string, string> = { g: 'kg', ml: 'L' };
 
 const POCKETS: Array<{ v: Pocket; label: string; sub: string }> = [
   { v: 'OWNER_FUNDED', label: 'Owner paid',        sub: 'Out of their own pocket' },
-  { v: 'CASH',         label: 'From the till',     sub: 'Cash taken from the drawer' },
+  // Credits Cash on Hand but never touches a shift: paid from the POS drawer, it would leave the drawer short at close.
+  { v: 'CASH',         label: 'Shop cash (not the POS drawer)', sub: 'Cash kept apart from the till, like the safe' },
   { v: 'BANK',         label: 'Shop bank / GCash', sub: 'The business account' },
 ];
 const pocketLabel = (p: string | null | undefined) => POCKETS.find((x) => x.v === p)?.label ?? p ?? '';
@@ -249,11 +251,12 @@ export default function ProcurePage() {
   const [remaining, setRemaining] = useState<Record<string, string>>({});
   const [remainMode, setRemainMode] = useState<Record<string, AskMode>>({});
   /*
-    Who actually paid. The three answers post to DIFFERENT accounts: the till
+    Who actually paid. The three answers post to DIFFERENT accounts: shop cash
     credits 1010 Cash on Hand, the owner's own money credits 3010 Owner's
     Capital, the shop's bank or GCash credits 1020 Cash in Bank. Asked, not
-    assumed -- a delivery booked against the wrong pocket is a till that
-    reads short tonight or a bank balance nobody can reconcile.
+    assumed -- a delivery booked against the wrong pocket is a cash count or
+    a bank balance nobody can reconcile. Shop cash writes nothing to the
+    shift, so it is not the POS drawer.
   */
   const [paidBy, setPaidBy] = useState<Pocket>('OWNER_FUNDED');
   const [receivedAt, setReceivedAt] = useState(manilaToday());
@@ -334,7 +337,7 @@ export default function ProcurePage() {
     else toast.error(`${wanted} is not in this branch's list.`);
   }, [all]);
 
-  const live = all.filter((r) => r.status !== 'RECEIVED' && r.status !== 'CANCELLED');
+  const live = all.filter((r) => isStillOpen(r.status));
   const byNeed =
     live.find((r) => r.status === 'BOUGHT' && !onTheWay(r)) ??
     live.find((r) => r.status === 'SENT') ??
@@ -625,7 +628,7 @@ export default function ProcurePage() {
     return { packs: '', size: '', cost: '', brand: '', source: 'none' as const };
   };
   const valuesFor = (l: Line) => bought[l.id] ?? defaultsFor(l);
-  const isTicked  = (l: Line) => ticked[l.id] ?? (l.packsBought != null);
+  const isTicked  = (l: Line) => ticked[l.id] ?? startsTicked(l, !!req && !!onTheWay(req));
 
   /*
     One key per attempt, minted here rather than per call inside the client.
@@ -686,7 +689,13 @@ export default function ProcurePage() {
     mutationFn: () => {
       if (!req) throw new Error('No request.');
       const rows = req.lines
-        .filter((l) => !l.receivedAt && isTicked(l))
+        /*
+          A recorded line goes with every Save, ticked or not: once a list is
+          bought the tick means "here now, post it", and on an order that is
+          on the way nothing starts ticked. Filtering by the tick alone lost a
+          price corrected on a parcel line, or refused the Save outright.
+        */
+        .filter((l) => !l.receivedAt && (isTicked(l) || l.packsBought != null))
         // Staff get one go at a line; a filled line is the deciders' to change.
         .filter((l) => canDecide || l.packsBought == null)
         .map((l) => {
@@ -711,6 +720,8 @@ export default function ProcurePage() {
     },
     onSuccess: (d) => {
       refresh(); setBuyKey(mintKey()); setBought({});
+      // Just marked on the way: the ticks that said "ordered" must not now say "in the box".
+      if (ordered) setTicked({});
       setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
       clearWhere();
       if (d?.paidAhead) {
@@ -935,7 +946,8 @@ export default function ProcurePage() {
   // Whoever is holding the bag may record what came, unless the shop hides
   // prices from them -- in which case the server has already blanked them.
   const canRecord = canDecide || (!!user && !req.costsHidden);
-  const recording = canRecord && (req.status === 'SENT' || req.status === 'BOUGHT');
+  // On an open list too: saving what was bought sends it, so nobody waits for the owner's Send.
+  const recording = canRecord && recordsOn(req.status);
   const stepIndex = Math.max(0, STEPS.findIndex((s) => s.key === req.status));
   const alreadyIn = new Set(req.lines.map((l) => l.rawMaterialId));
   // Everything not already on the request, alphabetical, filtered only if the
@@ -955,6 +967,8 @@ export default function ProcurePage() {
   const unposted   = req.lines.filter((l) => !l.receivedAt);
   const postable   = unposted.filter((l) => l.packsBought != null);
   const tickedNow  = postable.filter((l) => isTicked(l));
+  // Anything ticked as bought on this list: on an open list, what brings out the boxes and the Save.
+  const tickedAny  = unposted.some((l) => isTicked(l));
   const inputCls   = 'mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]';
 
   return (
@@ -967,7 +981,7 @@ export default function ProcurePage() {
             <div className="text-xs text-muted-foreground">
               {req.branch?.name ?? 'This branch'} · {req.lines.length} item{req.lines.length === 1 ? '' : 's'}
             </div>
-            {(receiptDocs.length > 0 || (canRecord && req.status !== 'OPEN' && req.status !== 'CANCELLED')) && (
+            {(receiptDocs.length > 0 || (canRecord && req.status !== 'CANCELLED')) && (
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {receiptDocs.map((d) => (
                   <button key={d.id} type="button" onClick={() => openDoc(d.id, d.filename)}
@@ -975,7 +989,8 @@ export default function ProcurePage() {
                     {d.mimeType === 'application/pdf' ? <FileText className="h-3 w-3" /> : <Paperclip className="h-3 w-3" />} {d.label ?? 'Receipt'}
                   </button>
                 ))}
-                {canRecord && req.status !== 'OPEN' && req.status !== 'CANCELLED' && (
+                {/* An open list too: the receipt for a walk-in buy is filed where it is recorded. */}
+                {canRecord && req.status !== 'CANCELLED' && (
                   <>
                     <select
                       value={photoLabel}
@@ -1055,11 +1070,12 @@ export default function ProcurePage() {
         Everything else that is still open, plus the last few finished ones.
         Without this the only reachable request is whichever one the rule above
         picked, and a second branch's list -- or yesterday's delivery that was
-        never posted -- would have no way back.
+        never posted -- would have no way back. Still-open lists come first so
+        an order still on the way is not pushed off by newer lists.
       */}
       {all.length > 1 && (
         <div className="flex flex-wrap gap-1.5">
-          {all.slice(0, 8).map((r) => {
+          {chipsInOrder(all).map((r) => {
             const active = r.id === req.id;
             return (
               <button
@@ -1474,11 +1490,12 @@ export default function ProcurePage() {
                   </div>
 
                   {/*
-                    What was bought, once the request is out. Shown to whoever
-                    may record: the boxes come filled from last time, so on a
-                    repeat buy the only typing is a price that moved.
+                    What was bought. Shown to whoever may record: the boxes
+                    come filled from last time, so on a repeat buy the only
+                    typing is a price that moved. On an open list, only once
+                    the line is ticked as bought.
                   */}
-                  {recording && !l.receivedAt && (
+                  {recording && !l.receivedAt && showsRecordBoxes(req.status, tick) && (
                     <div className={`mt-2 ${tick ? '' : 'opacity-60'}`} data-entry-group>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                         <label className="text-[11px] text-muted-foreground">
@@ -1623,7 +1640,7 @@ export default function ProcurePage() {
         )}
 
         {/* the recorder's footer: where it came from, and when */}
-        {recording && postable.length + unposted.length > 0 && (
+        {recording && postable.length + unposted.length > 0 && showsRecordBoxes(req.status, tickedAny) && (
           <div className="border-t border-border bg-muted/20 px-4 py-3">
             {/*
               Where the shopping was done, for "where do we usually buy this".
@@ -1682,6 +1699,7 @@ export default function ProcurePage() {
               <span>
                 <strong className="font-medium text-foreground">Ordered — on the way.</strong>{' '}
                 Not here yet. Stock waits for the parcel.
+                <span className="mt-0.5 block">Type each price after vouchers. Leave shipping out if it was free.</span>
               </span>
             </label>
             {/*
@@ -1733,6 +1751,7 @@ export default function ProcurePage() {
         {canRecord && !canDecide && req.status === 'OPEN' && (
           <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
             Keep adding what you need. The owner or manager sends this list when the shift cuts off.
+            {' '}Already bought something on it? Tick it and save what you bought.
           </p>
         )}
         {req.status === 'OPEN' && canDecide && (
@@ -1745,7 +1764,8 @@ export default function ProcurePage() {
             Send to the owners
           </button>
         )}
-        {recording && (req.status === 'SENT' || !canDecide) && (
+        {/* On an open list, once something is ticked as bought: the save sends the list as well. */}
+        {recording && (req.status === 'OPEN' ? tickedAny : (req.status === 'SENT' || !canDecide)) && (
           <button
             onClick={() => saveBought.mutate()}
             disabled={saveBought.isPending}
@@ -1770,8 +1790,7 @@ export default function ProcurePage() {
               <>
                 <p className="text-xs font-medium">Who paid for this?</p>
                 <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                  This decides where the money comes from in the books, so the till and the bank
-                  still balance tonight.
+                  This decides where the money comes from in the books.
                 </p>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {POCKETS.map((o) => (
@@ -1885,11 +1904,13 @@ export default function ProcurePage() {
           {' '}<a href="/procure/cycle-counts" className="text-[var(--accent)] hover:underline">Post it</a> when you have looked, and stock follows.
         </p>
       )}
-      {req.status === 'SENT' && (
+      {(req.status === 'SENT' || (req.status === 'OPEN' && recording && tickedAny)) && (
         <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Tick only what was actually bought. Anything left goes back on the next list
-          when this one is added to stock.
+          {/* An open list's unticked lines move to a fresh open list as soon as it is saved (ProcureService.recordBought). */}
+          {req.status === 'OPEN'
+            ? 'Tick only what was actually bought. Anything left stays on the list, still to buy.'
+            : 'Tick only what was actually bought. Anything left goes back on the next list when this one is added to stock.'}
         </p>
       )}
     </div>

@@ -289,8 +289,7 @@ export default function BranchesPage() {
                   </button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  30 minutes after this time, Clerque sends the owner today&apos;s ingredient usage. Record closing
-                  write-offs and preps before then.
+                  Clerque closes the day when the last shift is closed. If nobody closes it, Clerque does it 2 hours after this time.
                 </p>
               </div>
             </div>

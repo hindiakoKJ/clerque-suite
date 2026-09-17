@@ -54,6 +54,9 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         calls for a prep -- so it can say how many SERVINGS are left rather
         than how many batches. Empty here: these cases are about the chain.
       */
+      // No size or add-on uses a prep here: only the dish recipes below.
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
       // No ticket is waiting at a kitchen or bar screen, so nothing is held.
       orderItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -188,6 +191,9 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         calls for a prep -- so it can say how many SERVINGS are left rather
         than how many batches. Empty here: these cases are about the chain.
       */
+      // No size or add-on uses a prep here: only the dish recipes below.
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
       // No ticket is waiting at a kitchen or bar screen, so nothing is held.
       orderItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -232,6 +238,9 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         calls for a prep -- so it can say how many SERVINGS are left rather
         than how many batches. Empty here: these cases are about the chain.
       */
+      // No size or add-on uses a prep here: only the dish recipes below.
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
       // No ticket is waiting at a kitchen or bar screen, so nothing is held.
       orderItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -251,6 +260,9 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         calls for a prep -- so it can say how many SERVINGS are left rather
         than how many batches. Empty here: these cases are about the chain.
       */
+      // No size or add-on uses a prep here: only the dish recipes below.
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
       // No ticket is waiting at a kitchen or bar screen, so nothing is held.
       orderItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -275,6 +287,9 @@ describe('SubRecipesService.list — seeing down the whole chain', () => {
         calls for a prep -- so it can say how many SERVINGS are left rather
         than how many batches. Empty here: these cases are about the chain.
       */
+      // No size or add-on uses a prep here: only the dish recipes below.
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
       // No ticket is waiting at a kitchen or bar screen, so nothing is held.
       orderItem: { findMany: jest.fn().mockResolvedValue([]) },

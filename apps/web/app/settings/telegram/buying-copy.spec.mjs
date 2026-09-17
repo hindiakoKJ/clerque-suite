@@ -14,5 +14,5 @@ test('the Buying switch mentions the daily ingredients sheet', () => {
   const buying = page.slice(page.indexOf('>Buying</span>'));
   assert.ok(buying.length < page.length, 'Buying switch not found');
   const description = buying.slice(0, buying.indexOf('</label>'));
-  assert.match(description, /ingredients used for the day, sent after its closing time/);
+  assert.match(description, /ingredients used for the day, sent when the day is closed/);
 });

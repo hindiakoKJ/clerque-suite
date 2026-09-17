@@ -85,7 +85,11 @@ describe('SubRecipesService — making a batch', () => {
         // qtyRemaining kept counting stock already stirred into syrup.
         findMany: jest.fn().mockResolvedValue(opts.componentLots ?? []),
         update:   jest.fn().mockResolvedValue({}),
+        // The re-check under the reference lock: nothing recorded in between.
+        findFirst: jest.fn().mockResolvedValue(null),
       },
+      // The reference lock two simultaneous taps queue on.
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
 
     const prisma: any = {
@@ -99,7 +103,9 @@ describe('SubRecipesService — making a batch', () => {
             rawMaterial: { id: l.id, name: l.name, unit: l.unit, costPrice: l.cost },
           })),
         }),
-        findMany: jest.fn().mockResolvedValue(lines.map((l) => ({ id: l.id, name: l.name }))),
+        // setRecipe's "do these exist" read; the board read makeBatch takes its
+        // station from (list(), which asks for preps) finds none.
+        findMany: jest.fn(({ where }: any) => Promise.resolve(where.subRecipeItems ? [] : lines.map((l) => ({ id: l.id, name: l.name })))),
       },
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       // No ticket is waiting at a kitchen or bar screen, so nothing is held.
@@ -110,9 +116,11 @@ describe('SubRecipesService — making a batch', () => {
         ),
       },
       subRecipeItem: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn(), createMany: jest.fn() },
-      // Which products use this prep, and therefore which station it belongs
-      // to. Empty = no station derived, which is permissive everywhere.
+      // Which dishes, sizes and add-ons use this prep, and therefore which
+      // station it belongs to. Empty = no station derived, which is permissive everywhere.
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       // The shop's own stations, read so a persona scope written for a floor
       // plan this shop does not have cannot refuse every batch.
       station: { findMany: jest.fn().mockResolvedValue([]) },

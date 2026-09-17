@@ -990,6 +990,8 @@ model Branch {
   repairTickets             RepairTicket[]
   fuelPumps                 FuelPump[]
   tankDips                  TankDip[]
+  /// Stock saved at each closing: the daily inventory sheet's Beginning.
+  stockDayBalances          StockDayBalance[]
 
   @@map("branches")
 }
@@ -1397,6 +1399,8 @@ model RawMaterial {
   cycleCountLines         CycleCountLine[]
   issuanceLines           MaterialIssuanceLine[]
   modifierIngredientLinks ModifierOptionIngredient[]
+  /// This item's stock saved at each branch closing (the daily sheet).
+  dayBalances             StockDayBalance[]
 
   @@index([tenantId, isActive])
   @@map("raw_materials")
@@ -1529,6 +1533,35 @@ model RawMaterialInventory {
 
   @@unique([branchId, rawMaterialId])
   @@map("raw_material_inventory")
+}
+
+/// One branch's stock of one item as saved at a closing, so tomorrow's daily
+/// sheet has a trustworthy Beginning. Written by the end-of-day job, once per
+/// branch per business day; every row of one save shares takenAt.
+///
+/// No Tenant relation, as with RawMaterialInventory. Cascade on purpose: a
+/// backup restore or demo reset deletes RawMaterial rows, which Restrict would
+/// block; with Cascade the history resets and the next sheet says "No saved
+/// balance yet".
+model StockDayBalance {
+  id            String   @id @default(cuid())
+  tenantId      String
+  branchId      String
+  rawMaterialId String
+  /// The Manila business day this closing ends, "YYYY-MM-DD".
+  day           String
+  /// The BOOK quantity at takenAt (held stock included).
+  endingQty     Decimal  @db.Decimal(12, 4)
+  /// When the stock was read. A late save records its real time.
+  takenAt       DateTime
+  createdAt     DateTime @default(now())
+
+  branch      Branch      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, rawMaterialId, day])
+  @@index([tenantId, branchId, day])
+  @@map("stock_day_balances")
 }
 
 model InventoryLog {

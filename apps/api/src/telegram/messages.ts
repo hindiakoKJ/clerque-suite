@@ -187,6 +187,30 @@ export function buyListSentMessage(
   return fitItems(build, blocks, MESSAGE_LIMIT);
 }
 
+/**
+ * A list already sent, added to from a kitchen or bar screen. Only the lines
+ * that changed: a raised line's amount carries "(was ...)", so the owner can
+ * tell a new item from a bigger one without opening the list.
+ */
+export function buyListUpdatedMessage(
+  req: { shopName: string; branchName: string | null; requestNumber: string },
+  lines: Array<{ name: string; amount: string }>,
+  addedBy: string | null,
+  at: Date,
+): string {
+  // The amount is longer than on a sent list ("3 packs (3,000 g) (was 2 packs (2,000 g))"), so it is cut later.
+  const blocks = lines.map((l) => `• ${escapeHtml(clip(l.name, 80))}: ${escapeHtml(clip(l.amount, 120))}`);
+  const build = (shown: string[], more: number) => [
+    `🛒 <b>Buy list ${escapeHtml(req.requestNumber)} updated</b>`,
+    place(req.shopName, req.branchName),
+    escapeHtml(`${addedBy ? `Added by ${addedBy} · ` : ''}${manilaTime(at)}`),
+    '',
+    ...shown,
+    ...(more > 0 ? [`…and ${more} more`] : []),
+  ].join('\n');
+  return fitItems(build, blocks, MESSAGE_LIMIT);
+}
+
 export function boughtMessage(req: RequestForAlert, recordedBy: string | null, at: Date, added: { items: number; value: number } | null = null): string {
   const lines = boughtLines(req);
   const blocks = lines.map((l) => [

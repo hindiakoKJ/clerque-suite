@@ -3,7 +3,9 @@
 /**
  * CashOutModal — record a Cash Paid-Out or Cash Drop during an open shift.
  *
- * - PAID_OUT  = real expense paid from the till (parking tip, ice, COD).
+ * - PAID_OUT  = real expense paid from the till (parking tip, dish soap).
+ *               Never adds stock: ingredients like ice or water go into
+ *               stock in Procure, or the drinks that use them stop selling.
  *               Above ₱500 requires manager PIN co-auth.
  * - CASH_DROP = mid-shift safekeeping move to the safe.
  *               Always requires manager confirmation.
@@ -238,7 +240,7 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
         </div>
         <p className="text-[11px] text-muted-foreground -mt-1">
           {type === 'PAID_OUT'
-            ? 'Real expense paid from the till — ice run, COD payment, parking tip.'
+            ? 'Real expense paid from the till, like a parking tip. Not for ingredients like ice or water; add those to stock in Procure.'
             : 'Move cash from till to the safe — not an expense, just safekeeping.'}
         </p>
 
@@ -336,7 +338,7 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
             rows={2}
             maxLength={500}
             placeholder={type === 'PAID_OUT'
-              ? 'e.g. Bought ice for the bar from store next door'
+              ? 'e.g. Bought dish soap from the store next door'
               : 'e.g. Drawer hit ₱20k — moved ₱10k to safe'}
             className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
           />

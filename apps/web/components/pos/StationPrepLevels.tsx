@@ -3,14 +3,21 @@
  * Prep levels on the station screen: every pre-made item this station looks
  * after, worst first, readable from across the kitchen or the bar.
  *
- * Past its use-by, out, needs moving or cooking now, due soon, low, fine, and
- * no par set -- the same rule the half-hourly alerts use (@repo/shared-types
- * prep-station and prep-rotation). Items routed to no station are shown apart
- * underneath, since they belong to whoever the shop decides.
+ * Each dish's sauce comes first as a chain card (PrepChainCard): Level 1 the
+ * tub plates are served from, Level 2 behind it, Level 3 behind that, with the
+ * one thing to do and a button to record it. The server reads the stages and
+ * words the instruction (sub-recipes/prep-chain.ts), the same words the bell
+ * alerts use. Anything not part of a chain is still a tile: past its use-by,
+ * out, needs moving or cooking now, due soon, low, fine, and no par set
+ * (@repo/shared-types prep-station and prep-rotation). Items routed to no
+ * station are shown apart underneath, since they belong to whoever the shop
+ * decides.
  *
- * Read-only on purpose: a tablet on the wall is often paired rather than
- * logged in, and recording a batch belongs to the person who made it, on the
- * prep board.
+ * The chain card's button records one batch from the tablet itself. It used
+ * to be read-only, so a cook who had just refilled the line had to find a
+ * phone and the prep board to say so -- and mostly did not, so the next alert
+ * asked for work already done. The server still checks the station and who
+ * paired the tablet.
  *
  * `compact` is the quarter-width column beside the orders: what needs doing
  * as small cards, what is fine as one line each.
@@ -23,6 +30,7 @@ import {
   type PrepStatus, type RotationRow, type UseBy,
 } from '@repo/shared-types';
 import { api } from '@/lib/api';
+import { PrepChainCard, type PrepChain, type StageNote } from './PrepChainCard';
 
 interface PrepRow {
   id: string;
@@ -42,12 +50,18 @@ interface PrepRow {
   batchesWithPrep?: number;
   serves: { productName: string; servingsLeft: number } | null;
   assigned: boolean;
+  /** Steps from a dish: 1 served from, 2 refills it, 3 makes that. Null when no dish reaches it. */
+  depth: number | null;
+  /** The chain card this item is drawn inside, when it is a stage of one. */
+  inChain: string | null;
 }
 interface StationPrep {
   station: { id: string; name: string; kind: string };
   branchName: string;
   at: string;
   rows: PrepRow[];
+  /** Worst first: act now, then next, then fine; unrouted after this station's own. */
+  chains: PrepChain[];
 }
 
 const TONE: Record<PrepStatus, string> = {
@@ -68,7 +82,6 @@ const CHIP: Record<PrepStatus, string> = {
   OK:      'bg-emerald-600 text-white',
   NO_PAR:  'bg-stone-700 text-stone-200',
 };
-const LEVEL: Record<string, string> = { '1': 'Ready to use', '2': 'Parked' };
 /** The coloured edge of a compact card. */
 const EDGE: Record<PrepStatus, string> = {
   EXPIRED: 'border-red-500',
@@ -80,7 +93,6 @@ const EDGE: Record<PrepStatus, string> = {
   NO_PAR:  'border-stone-700',
 };
 const FINE = new Set<PrepStatus>(['OK', 'NO_PAR']);
-const RED = new Set<PrepStatus>(['EXPIRED', 'OUT', 'DO_NOW']);
 
 const amount = (n: number, unit: string) => `${Math.max(0, n).toLocaleString('en-PH', { maximumFractionDigits: 1 })} ${unit}`;
 
@@ -111,22 +123,26 @@ export function StationPrepLevels({
   });
 
   /*
-    The bell rings when a tile turns red, or a red tile gets worse (do now, then
-    out, then past its use-by). Not when it gets better: throwing out the old
-    tub turns "past use-by" into "do now", and ringing for work just finished
-    teaches the kitchen to ignore the bell. The first load only seeds.
-    This runs whichever view is showing -- the screen stays mounted, hidden,
-    behind the orders.
+    The bell rings when a sauce turns to "do it now" (its Level 1 needs action),
+    or when a batch passes its use-by. Not when things get better, and not when
+    the same instruction just gets more urgent: a chain already at "now" stays
+    one key however low it goes, so a busy lunch does not ring every minute and
+    teach the kitchen to ignore the bell. The first load only seeds. This runs
+    whichever view is showing -- the screen stays mounted, hidden, behind the
+    orders.
   */
-  const seenRed = useRef<Map<string, number> | null>(null);
+  const seenKeys = useRef<Set<string> | null>(null);
   const ring = useRef(onNewRed);
   ring.current = onNewRed;
   useEffect(() => {
     if (!data) return;
-    const red = new Map(data.rows.filter((r) => RED.has(r.status)).map((r) => [r.id, PREP_STATUS_ORDER[r.status]]));
-    const prev = seenRed.current;
-    if (prev && [...red].some(([id, rank]) => !prev.has(id) || rank < prev.get(id)!)) ring.current?.();
-    seenRed.current = red;
+    const keys = new Set([
+      ...(data.chains ?? []).filter((c) => c.severity === 'NOW').map((c) => `chain:${c.id}`),
+      ...data.rows.filter((r) => r.status === 'EXPIRED').map((r) => `row:${r.id}`),
+    ]);
+    const prev = seenKeys.current;
+    if (prev && [...keys].some((k) => !prev.has(k))) ring.current?.();
+    seenKeys.current = keys;
   }, [data]);
 
   if (!visible) return null;
@@ -150,8 +166,21 @@ export function StationPrepLevels({
   }
 
   const now = new Date(data.at);
-  const mine = data.rows.filter((r) => r.assigned);
-  const loose = data.rows.filter((r) => !r.assigned);
+  // Older API answers carry no chains; every item is then a tile, as before.
+  const chains = data.chains ?? [];
+  // An item drawn inside a chain card is not drawn again as its own tile.
+  const free = data.rows.filter((r) => r.inChain == null);
+  const mine = free.filter((r) => r.assigned);
+  const loose = free.filter((r) => !r.assigned);
+  // A stage's use-by warnings go inside its chain card, so a tub past its date still says so there.
+  const notes: Record<string, StageNote[]> = {};
+  for (const r of data.rows) {
+    if (r.inChain == null) continue;
+    const lines = useBySentences(r.useBy, r.unit, now);
+    if (lines.length) notes[r.id] = lines.map((text) => ({ text, past: !!r.useBy.expired && text.includes('past') }));
+  }
+  const acting = chains.filter((c) => c.severity !== 'OK');
+  const settled = chains.filter((c) => c.severity === 'OK');
   const updated = isFetching
     ? 'Refreshing…'
     : `${isError ? 'Could not refresh — showing' : 'Updated'} ${new Date(dataUpdatedAt).toLocaleTimeString('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' })}`;
@@ -169,16 +198,21 @@ export function StationPrepLevels({
 
   if (compact) {
     /*
-      A card for anything with something to do -- by its status, or because it
-      still has an instruction (an empty item with no par still says "make a
-      batch"; a ready sauce whose backup is low says to cook the next one).
-      One line each for the rest. Unrouted items join both lists, marked.
+      Chains with something to do first, as cards with their button. Then a
+      card for any other item with something to do -- by its status, or because
+      it still has an instruction (an empty item with no par still says "make a
+      batch"). Then the chains that are fine, and one line each for the rest.
+      The fine chains wait below the other items' warnings so a tub past its
+      use-by is not pushed out of a narrow column by sauces that need nothing.
+      Unrouted items join the lists, marked.
     */
     const needs = (r: PrepRow) => !FINE.has(r.status) || todo(r) != null;
-    const attention = [...mine, ...loose].filter(needs)
+    const attention = free.filter(needs)
       .sort((a, b) => PREP_STATUS_ORDER[a.status] - PREP_STATUS_ORDER[b.status] || Number(!a.assigned) - Number(!b.assigned));
-    const fine = [...mine, ...loose].filter((r) => !needs(r));
-    const allChecked = fine.every((r) => r.status === 'OK');
+    const fine = free.filter((r) => !needs(r));
+    const fineChecked = fine.every((r) => r.status === 'OK');
+    // A chain is checked when its Level 1 has a par or a servings count to judge by.
+    const allChecked = fineChecked && settled.every((c) => c.stages[0]?.dot !== 'GREY');
     return (
       <div className="space-y-3">
         <div>
@@ -188,7 +222,7 @@ export function StationPrepLevels({
             {data.branchName} · {updated}
           </p>
         </div>
-        {attention.length === 0 ? (
+        {acting.length === 0 && attention.length === 0 && (
           allChecked ? (
             <p className="rounded-xl border border-emerald-700/50 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300">
               Every prep level is fine.
@@ -198,7 +232,9 @@ export function StationPrepLevels({
               Nothing needs doing. Items with no par set are not checked.
             </p>
           )
-        ) : attention.map((r) => {
+        )}
+        {acting.map((c) => <PrepChainCard key={c.id} chain={c} stationId={stationId} compact notes={notes} />)}
+        {attention.map((r) => {
           const what = todo(r);
           const dates = useBySentences(r.useBy, r.unit, now);
           return (
@@ -225,9 +261,10 @@ export function StationPrepLevels({
             </div>
           );
         })}
+        {settled.map((c) => <PrepChainCard key={c.id} chain={c} stationId={stationId} compact notes={notes} />)}
         {fine.length > 0 && (
           <div>
-            <p className="mb-1 text-[11px] uppercase tracking-wider text-stone-500">{allChecked ? 'Fine' : 'Fine, or no par set'}</p>
+            <p className="mb-1 text-[11px] uppercase tracking-wider text-stone-500">{fineChecked ? 'Fine' : 'Fine, or no par set'}</p>
             <ul className="divide-y divide-stone-800">
               {fine.map((r) => (
                 <li key={r.id} className={`flex items-start justify-between gap-2 py-1.5 text-sm ${r.assigned ? '' : 'opacity-70'}`}>
@@ -261,7 +298,8 @@ export function StationPrepLevels({
           <div className="min-w-0">
             <p className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-stone-400">
               {r.level === 2 && <Snowflake className="h-3 w-3" />}
-              {r.level ? LEVEL[String(r.level)] : 'Made in advance'}
+              {/* Steps from a dish, the same numbering the chain cards use. */}
+              {r.depth != null ? `Level ${r.depth}` : 'Made in advance'}
             </p>
             <p className="mt-0.5 text-xl font-bold leading-tight">{r.name}</p>
           </div>
@@ -296,6 +334,11 @@ export function StationPrepLevels({
         {data.branchName} · {isFetching ? updated : `${updated} · every minute`}
         {' · '}use-by amounts are estimates: the oldest batch is taken to be used first
       </p>
+      {chains.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          {chains.map((c) => <PrepChainCard key={c.id} chain={c} stationId={stationId} notes={notes} />)}
+        </div>
+      )}
       {mine.length > 0 && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">{mine.map(tile)}</div>
       )}

@@ -38,6 +38,8 @@ test('the page checks the box on save and Clear empties the box itself', () => {
   assert.doesNotMatch(page, /\{form\.closesAt && \(/);
 });
 
-test('the hint says the report goes 30 minutes after closing', () => {
-  assert.match(page, /30 minutes after this time, Clerque sends the owner today&apos;s ingredient usage\. Record closing\s+write-offs and preps before then\./);
+test('the hint says the day closes with the last shift, or 2 hours after closing', () => {
+  assert.match(page, /Clerque closes the day when the last shift is closed\.\s+If nobody closes it, Clerque does it 2 hours after this time\./);
+  // The old promise of a report half an hour after closing is gone.
+  assert.doesNotMatch(page, /30 minutes after this time/);
 });

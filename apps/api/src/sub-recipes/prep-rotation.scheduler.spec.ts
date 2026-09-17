@@ -8,6 +8,9 @@ import { NotificationsService } from '../notifications/notifications.service';
  * table, and the fakes honour the branch and the ingredients each query asks
  * for, so "once per sauce per day, and again after a move -- at that branch"
  * is proved by the dedupe the app actually uses.
+ *
+ * One alert per sauce CHAIN (Level 1 and the stages behind it, prep-chain.ts),
+ * in the same words as the station screen's card.
  */
 describe('PrepRotationScheduler — sauce alerts during service', () => {
   const TENANT = 't1';
@@ -45,7 +48,8 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
     { id: 'cashier', role: 'CASHIER',          branchId: MAIN, personaKey: null },
   ];
 
-  type Lot = { branchId: string; rawMaterialId: string; createdAt: Date };
+  /** A stock lot. qtyReceived below zero is a write-off marker; a batch or a delivery is positive (the default). */
+  type Lot = { branchId: string; rawMaterialId: string; createdAt: Date; qtyReceived?: number };
   /** A batch with a use-by date, for the use-by alerts. */
   type Batch = { id: string; branchId: string; rawMaterialId: string; qtyRemaining: number; receivedAt: Date; expirationDate: Date | null };
   function build(opts: { boards: Record<string, any[]>; watched?: number; lots?: Lot[]; branches?: Array<{ id: string; name: string }>; batches?: Batch[] }) {
@@ -66,9 +70,10 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
         findMany: jest.fn(({ where }: any) => Promise.resolve([...new Set((opts.batches ?? [])
           .filter((b) => b.branchId === where.branchId && where.rawMaterialId.in.includes(b.rawMaterialId) && b.qtyRemaining > 0 && b.expirationDate)
           .map((b) => b.rawMaterialId))].map((rawMaterialId) => ({ rawMaterialId })))),
-        // Newest lot per ingredient, for the branch and ingredients asked about -- like the database.
+        // Newest lot per ingredient, for the branch, ingredients and lot sign asked about -- like the database.
         groupBy: jest.fn(({ where }: any) => {
-          const hits = lots.filter((l) => l.branchId === where.branchId && where.rawMaterialId.in.includes(l.rawMaterialId));
+          const hits = lots.filter((l) => l.branchId === where.branchId && where.rawMaterialId.in.includes(l.rawMaterialId)
+            && (where.qtyReceived?.gt == null || (l.qtyReceived ?? 1) > where.qtyReceived.gt));
           const newest = new Map<string, Date>();
           for (const l of hits) if (!newest.has(l.rawMaterialId) || newest.get(l.rawMaterialId)! < l.createdAt) newest.set(l.rawMaterialId, l.createdAt);
           return Promise.resolve([...newest].map(([rawMaterialId, createdAt]) => ({ rawMaterialId, _max: { createdAt } })));
@@ -88,9 +93,10 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
         (opts.batches ?? []).filter((b) => b.branchId === branchId && b.rawMaterialId === i.id && b.qtyRemaining > 0)
           .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime())])))),
     };
-    const svc = new PrepRotationScheduler(prisma, subRecipes, new NotificationsService(prisma));
+    const notifications = new NotificationsService(prisma);
+    const svc = new PrepRotationScheduler(prisma, subRecipes, notifications);
     return {
-      svc, table, prisma, subRecipes,
+      svc, table, prisma, subRecipes, notifications,
       run: (at: Date) => { clock = at; return svc.alertTenant(TENANT, at); },
       setBoard: (branchId: string, b: any[]) => { boards[branchId] = b; },
       addLot: (l: Lot) => { lots.push(l); },
@@ -103,8 +109,8 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
     expect(table.map((n) => n.userId).sort()).toEqual(['cook', 'mgr', 'owner']);   // not the barista, not a plain cashier
     expect(table[0]).toMatchObject({
       kind: 'WARNING', link: `/procure/batches?branch=${MAIN}`,
-      title: 'Teriyaki Sauce (ready): move one across',
-      body: 'Move one batch across from Teriyaki Sauce (frozen).',
+      title: 'Teriyaki Sauce (ready): refill from Level 2',
+      body: 'Refill Level 1 from Level 2 (Teriyaki Sauce (frozen)).',
     });
   });
 
@@ -147,19 +153,73 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
     await run(T0);
     addLot({ branchId: NAGA, rawMaterialId: 'rm-ready', createdAt: hours(1) });
     await run(hours(2));
-    expect(table.map((n) => n.title)).toEqual(Array(3).fill('Teriyaki Sauce (ready) (Main): move one across'));
+    expect(table.map((n) => n.title)).toEqual(Array(3).fill('Teriyaki Sauce (ready): refill from Level 2 (Main)'));
   });
 
-  it('says when the line runs out, even though it already said to move one across today', async () => {
+  it('says it again when what to do changes, not when the same instruction just gets more urgent', async () => {
     const { run, setBoard, table } = build({ boards: { [MAIN]: [frozen(4000), ready(380), breve()] } });
     await run(T0);
+    // The line runs dry: still "refill from Level 2", so no second alert.
     setBoard(MAIN, [frozen(4000), ready(0), breve()]);
     await run(hours(0.5));
+    // The freezer is empty too: now Level 2 has to be made first, which is new news.
+    setBoard(MAIN, [frozen(0), ready(0), breve()]);
+    await run(hours(1));
     const owner = table.filter((n) => n.userId === 'owner');
-    expect(owner.map((n) => [n.kind, n.title])).toEqual([
-      ['WARNING', 'Teriyaki Sauce (ready): move one across'],
-      ['ERROR', 'Teriyaki Sauce (ready) is out: move one across'],
+    expect(owner.map((n) => [n.kind, n.title, n.body])).toEqual([
+      ['WARNING', 'Teriyaki Sauce (ready): refill from Level 2', 'Refill Level 1 from Level 2 (Teriyaki Sauce (frozen)).'],
+      ['WARNING', 'Teriyaki Sauce (ready): make Level 2 now', 'Make a batch of Level 2 (Teriyaki Sauce (frozen)).'],
     ]);
+  });
+
+  it('one alert per chain per person, however many of its stages need doing', async () => {
+    // The ready tub is under par AND the frozen one is under its own par: one chain, one instruction.
+    const { run, table, notifications } = build({ boards: { [MAIN]: [frozen(1000, 2000), ready(380), breve()] } });
+    const create = jest.spyOn(notifications, 'create');
+    expect(await run(T0)).toBe(3);
+    expect(table.map((n) => n.userId).sort()).toEqual(['cook', 'mgr', 'owner']);
+    expect(new Set(table.map((n) => n.title))).toEqual(new Set(['Teriyaki Sauce (ready): make Level 2 now']));
+    expect(create.mock.calls.every(([a]) => a.dedupeKey === 'prep-chain-rm-ready')).toBe(true);
+  });
+
+  it('a kitchen sauce whose next step is a stage the bar makes is told to the bar, not the kitchen that cannot record it', async () => {
+    // The kitchen's teriyaki is cooked from the bar's syrup, which is short of one refill; the bar pours that syrup into drinks.
+    const syrup = {
+      ...breve(1500), id: 'rm-syrup', name: 'Simple syrup',
+      components: [{ rawMaterialId: 'rm-sugar', name: 'Sugar', unit: 'g', quantity: 500, onHand: 9000, isPrep: false }],
+    };
+    const glaze = { ...ready(380), kind: 'MAKE', components: [{ rawMaterialId: 'rm-syrup', name: 'Simple syrup', unit: 'ml', quantity: 2000, onHand: 1500, isPrep: true }] };
+    const { run, table } = build({ boards: { [MAIN]: [glaze, syrup] } });
+    await run(T0);
+    expect(table.map((n) => n.userId).sort()).toEqual(['barista', 'mgr', 'owner']);   // not the cook
+    expect(table[0]).toMatchObject({ title: 'Teriyaki Sauce (ready): make Level 2 now', body: 'Make a batch of Level 2 (Simple syrup).' });
+  });
+
+  it('sends no per-item rotation alert any more: a backup under par is said as its chain\'s next step', async () => {
+    const { run, table } = build({ boards: { [MAIN]: [frozen(1000, 2000), ready(3000), breve()] } });
+    expect(await run(T0)).toBe(3);
+    expect(table.some((n) => /cook the next batch today|move one across/.test(n.title))).toBe(false);
+    expect(table[0]).toMatchObject({ kind: 'INFO', title: 'Teriyaki Sauce (ready): make Level 2 now', body: 'Make a batch of Level 2 (Teriyaki Sauce (frozen)).' });
+  });
+
+  it('no par anywhere in the chain means no alert, even at two servings left', async () => {
+    const twoLeft = { ...ready(300, null), serves: [{ productId: 'p1', productName: 'Teriyaki Wings', servingsLeft: 2 }] };
+    const { run, table } = build({ boards: { [MAIN]: [frozen(4000), twoLeft] } });
+    expect(await run(T0)).toBe(0);
+    expect(table).toHaveLength(0);
+  });
+
+  it('a write-off does not make the same alert new; a batch on any stage of the chain does', async () => {
+    const { run, addLot, table } = build({ boards: { [MAIN]: [frozen(4000), ready(380), breve()] } });
+    await run(T0);
+    // A spoiled tub thrown out: a negative marker lot on the ready sauce.
+    addLot({ branchId: MAIN, rawMaterialId: 'rm-ready', createdAt: hours(1), qtyReceived: -500 });
+    await run(hours(2));
+    expect(table).toHaveLength(3);
+    // A batch of the frozen stage behind it: the chain has moved, so the same words are news again.
+    addLot({ branchId: MAIN, rawMaterialId: 'rm-frozen', createdAt: hours(3), qtyReceived: 2000 });
+    await run(hours(4));
+    expect(table).toHaveLength(6);
   });
 
   it('starts fresh the next day', async () => {
@@ -188,8 +248,8 @@ describe('PrepRotationScheduler — sauce alerts during service', () => {
     const { run, table } = build({ branches, boards: { [MAIN]: [frozen(4000), ready(3000), breve()], [NAGA]: [frozen(4000), ready(380), breve()] } });
     await run(T0);
     expect(table.map((n) => [n.userId, n.title, n.link]).sort()).toEqual([
-      ['mgr-b2', 'Teriyaki Sauce (ready) (Naga): move one across', `/procure/batches?branch=${NAGA}`],
-      ['owner', 'Teriyaki Sauce (ready) (Naga): move one across', `/procure/batches?branch=${NAGA}`],
+      ['mgr-b2', 'Teriyaki Sauce (ready): refill from Level 2 (Naga)', `/procure/batches?branch=${NAGA}`],
+      ['owner', 'Teriyaki Sauce (ready): refill from Level 2 (Naga)', `/procure/batches?branch=${NAGA}`],
     ]);
   });
 

@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException, Logger, Optional } from '@nestjs/common';
 import { ReportsService } from '../reports/reports.service';
+import { EndOfDayScheduler } from '../ingredient-reports/end-of-day.scheduler';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { Prisma } from '@prisma/client';
@@ -111,6 +112,11 @@ export class ShiftsService {
     private prisma:  PrismaService,
     private audit:   AuditService,
     private reports: ReportsService,
+    /*
+      Closes the day's inventory sheet when the last shift closes. Optional so
+      a test or a bootstrap without ingredient reports still closes shifts.
+    */
+    @Optional() private dayClose?: EndOfDayScheduler,
   ) {}
 
   // ─── Branch ownership guard ───────────────────────────────────────────────
@@ -347,9 +353,35 @@ export class ShiftsService {
           `shift ${shiftId}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      this.closeDayInBackground(tenantId, shift.branchId, shiftId, closed?.closedAt ?? new Date());
     }
 
     return closed;
+  }
+
+  /**
+   * The last shift closing is also when the day's inventory sheet closes: the
+   * closing stock is saved, the usage message goes and the closing buy list is
+   * checked (EndOfDayScheduler.closeDayAtLastShift). It decides for itself
+   * whether this close is the end of the day or a mid-day handover.
+   *
+   * Started after the close has committed and not waited on: reading the
+   * stock, building the message and sending Telegram can take seconds, and the
+   * cashier's drawer must close at once whatever happens there. It never
+   * throws; the catch only keeps a future change from becoming an unhandled
+   * rejection. If this process stops before it finishes, the end-of-day job
+   * still closes the day 2 hours after the closing time.
+   */
+  private closeDayInBackground(tenantId: string, branchId: string, shiftId: string, closedAt: Date): void {
+    const dayClose = this.dayClose;
+    if (!dayClose) return;
+    // Through a resolved promise, so even a synchronous throw lands in the catch below, never in close().
+    Promise.resolve().then(() => dayClose.closeDayAtLastShift(tenantId, branchId, closedAt)).catch((err) => {
+      this.logger.error(
+        `[shifts] Closing the day's inventory sheet failed for branch ${branchId} after closing ` +
+        `shift ${shiftId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   /** Today's date in PH local time (UTC+8) as YYYY-MM-DD. */

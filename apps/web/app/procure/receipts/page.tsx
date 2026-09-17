@@ -11,6 +11,7 @@ import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
 import { SOURCE_KINDS, SOURCE_KIND_LABEL, type SourceKind } from '@repo/shared-types';
+import { receiptDateFor, listToAsk, askText, keepWorkOnList, readTag, type WaitingList } from './receipt-list';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -143,6 +144,7 @@ const factorBetween = (from: string | null, to: string | null): number | null =>
 };
 const mintKey = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now()));
 const todayPH = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const WAITS_FOR_PARCEL = '"Paid when ordered" is ticked: tap Save to the request and post it when the parcel comes, or untick it if the goods are here.';
 
 /**
  * A phone photo is 3-5 MB and the reader does not need it: 1600 px on the
@@ -313,14 +315,41 @@ export default function ReceiptsPage() {
   const [placeByHand, setPlaceByHand] = useState(false);
   const chooseKind = (k: DocumentKind) => {
     setDocumentKind(k);
-    if (k === 'order_screen') setPaidAhead(true);
+    // Paid when ordered follows the kind -- except on a list already on the way, where this photo is the parcel arriving.
+    setPaidAhead(k === 'order_screen' && !(request && readTag(request.notes, 'ONTHEWAY')));
     if (!placeByHand) setPlaceKind(k === 'order_screen' ? 'ONLINE' : k === 'delivery_receipt' ? 'SUPPLIER' : '');
   };
+  /** The URL has been read, so "no ?request" really means none was given. */
+  const [urlRead, setUrlRead] = useState(false);
+  /** Lists the person said this receipt is not for. */
+  const [notThisList, setNotThisList] = useState<string[]>([]);
+  /** A date the reader found on the paper or the person typed: a list picked later does not replace it. */
+  const dateChosen = useRef(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const id = new URLSearchParams(window.location.search).get('request');
     if (id) setRequestId(id);
+    setUrlRead(true);
   }, []);
+  /*
+    Opened with no list (the "Upload a receipt" tile) while the branch has
+    shopping saved as bought, or a list sent out for buying. Posting on its
+    own made a second list: the sent one stayed behind, still counted as
+    coming, and a bought one posted later put the same goods on the shelf
+    twice. So the screen asks whether this is that shopping; yes lands the
+    receipt on it, exactly as opening it from the list would.
+  */
+  const { data: waiting = [] } = useQuery<WaitingList[]>({
+    queryKey: ['procure-requests', branchId, 'waiting-for-a-receipt'],
+    queryFn:  () => Promise.all((['BOUGHT', 'SENT'] as const).map((status) =>
+      api.get('/procure/requests', { params: { branchId, status } }).then((r) => r.data as WaitingList[]),
+    )).then((both) => both.flat()),
+    enabled:  !!user && urlRead && !requestId && !!branchId,
+    staleTime: 30_000,
+  });
+  // Never about the list this receipt itself just made: fixing a failed line and posting again replays onto it by key.
+  const ask = urlRead && !requestId ? listToAsk(waiting.filter((r) => readTag(r.notes, 'RCPT') !== idemKey), notThisList) : null;
+  const askCopy = ask ? askText(ask) : null;
   const { data: request } = useQuery<RequestForReceipt>({
     queryKey: ['receipt-request', requestId],
     queryFn:  () => api.get(`/procure/requests/${requestId}`).then((r) => r.data),
@@ -340,7 +369,8 @@ export default function ReceiptsPage() {
     if (!request || seeded.current === request.id) return;
     seeded.current = request.id;
     if (request.branchId) setBranchId(request.branchId);
-    if (request.boughtAt) setDate(String(request.boughtAt).slice(0, 10));
+    // The day it was bought, in Manila (not the UTC day, which is a day early); an order still on the way arrives today.
+    if (!dateChosen.current) setDate(receiptDateFor(request, todayPH()));
     /*
       The lines the kitchen asked for, unposted ones only, with what is known
       about them: what was recorded, else what one held and cost last time.
@@ -350,7 +380,7 @@ export default function ReceiptsPage() {
       them all put last month's price and a guessed pack count on the shelf
       for things that never came.
     */
-    setRows(request.lines.filter((l) => !l.receivedAt).map((l) => {
+    const listRows = request.lines.filter((l) => !l.receivedAt).map((l): Row => {
       const lp = l.lastPack;
       const recorded = l.packsBought != null;
       return {
@@ -364,7 +394,10 @@ export default function ReceiptsPage() {
         brand: l.brandNote ?? lp?.brandNote ?? '',
         fromLine: true,
       };
-    }));
+    });
+    // A list picked after a photo was read or lines typed keeps that work.
+    const recordedOn = new Set(request.lines.filter((l) => l.packsBought != null).map((l) => l.rawMaterialId));
+    setRows((prev) => keepWorkOnList(listRows, prev, (id) => recordedOn.has(id)));
   }, [request]);
 
   /** Read a photo somebody already filed with the request, without re-uploading it. */
@@ -463,7 +496,7 @@ export default function ReceiptsPage() {
       setReading(r);
       if (r.reads) qc.setQueryData(['receipt-reads'], r.reads);
       if (r.vendor) setVendor(r.vendor);
-      if (r.dateIso) setDate(r.dateIso);
+      if (r.dateIso) { setDate(r.dateIso); dateChosen.current = true; }
       if (r.referenceNumber) setRef(r.referenceNumber);
       const readRows: Row[] = r.lines.map((l) => {
         const isExpense = l.kind === 'expense';
@@ -551,6 +584,8 @@ export default function ReceiptsPage() {
   }
 
   // ── posting ─────────────────────────────────────────────────────────────
+  /** "Paid when ordered" ticked on a list: this is saved now and posted when the parcel comes. */
+  const waitsForParcel = !!requestId && paidAhead;
   const post = useMutation({
     mutationFn: (postNow: boolean) => {
       const lines = rows.filter((r) => r.kind === 'stock').map((r) => ({
@@ -573,6 +608,8 @@ export default function ReceiptsPage() {
         unless somebody retyped it later. A fee goes with money leaving:
         either the order was paid for today, or the goods post now.
       */
+      // Paid when ordered is the parcel not here yet. Posting it would put it on the shelf today and close the list.
+      if (postNow && waitsForParcel) throw new Error(WAITS_FOR_PARCEL);
       if (!postNow && !paidAhead && expenses.length > 0) {
         throw new Error('A fee posts with money leaving. Use "Post to stock", or tick "Paid when ordered" — or take the fee row off and add it when the goods are posted.');
       }
@@ -597,7 +634,7 @@ export default function ReceiptsPage() {
       qc.invalidateQueries({ queryKey: ['procure-requests'] });
       qc.invalidateQueries({ queryKey: ['request-docs', requestId] });
       if (r.duplicate) toast.message('This receipt was already posted. Nothing was added twice.');
-      else if (r.paidAhead) toast.success(`Saved onto ${r.request?.requestNumber}. ${formatPeso(r.paidAhead.total)} paid ahead from ${r.paidAhead.pocket === 'BANK' ? 'the shop bank / GCash' : r.paidAhead.pocket === 'CASH' ? 'the till' : 'the owner'} — the shelf waits for the parcel.`, { duration: 8000 });
+      else if (r.paidAhead) toast.success(`Saved onto ${r.request?.requestNumber}. ${formatPeso(r.paidAhead.total)} paid ahead from ${r.paidAhead.pocket === 'BANK' ? 'the shop bank / GCash' : r.paidAhead.pocket === 'CASH' ? 'shop cash' : 'the owner'} — the shelf waits for the parcel.`, { duration: 8000 });
       else if (r.recorded && r.posted?.length === 0 && !r.failed?.length) toast.success(`Saved onto ${r.request?.requestNumber}. Nothing posted yet.`);
       else if (r.failed?.length) toast.warning(`${r.posted.length} posted, ${r.failed.length} could not be — see below.`);
       else toast.success('In stock. The receipt is filed with the request.');
@@ -632,8 +669,9 @@ export default function ReceiptsPage() {
       }
     });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) out.push('The receipt date needs to be a real date.');
+    if (ask) out.push(`First answer the question at the top: is this the shopping for ${ask.requestNumber}?`);
     return out;
-  }, [rows, date, byId]);
+  }, [rows, date, byId, ask]);
 
   const stockTotal   = rows.filter((r) => r.kind === 'stock').reduce((s, r) => s + pos(r.packs) * pos(r.cost), 0);
   const expenseTotal = rows.filter((r) => r.kind === 'expense').reduce((s, r) => s + pos(r.amount), 0);
@@ -647,8 +685,11 @@ export default function ReceiptsPage() {
 
   function reset(ask = true) {
     if (ask && hasWork && !result && !window.confirm(`Throw away the ${rows.length} line${rows.length === 1 ? '' : 's'} on screen?`)) return;
-    setPhoto(null); setIdemKey(mintKey()); setRows([]); setVendor(''); setDate(todayPH()); setRef('');
+    setPhoto(null); setIdemKey(mintKey()); setRows([]); setVendor(''); setDate(todayPH()); dateChosen.current = false; setRef('');
     setReading(null); setResult(null);
+    // The next receipt is its own shopping: a list picked by answering the question does not carry over.
+    if (!new URLSearchParams(window.location.search).get('request')) { setRequestId(null); seeded.current = null; }
+    setNotThisList([]);
     // The next receipt starts from its own kind of photo, not the last one's choice.
     setPlaceByHand(false);
     setPlaceKind(documentKind === 'order_screen' ? 'ONLINE' : documentKind === 'delivery_receipt' ? 'SUPPLIER' : '');
@@ -748,6 +789,27 @@ export default function ReceiptsPage() {
     <div className="space-y-4 pb-28">
       <input ref={takeRef}   type="file" accept="image/*" capture="environment" className="hidden" onChange={onPhoto} />
       <input ref={chooseRef} type="file" accept="image/*" className="hidden" onChange={onPhoto} />
+
+      {/* 0. a list already waiting for this shopping? */}
+      {ask && askCopy && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-xs">
+          <ClipboardList className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">{askCopy.question}</p>
+            <p className="mt-0.5 leading-relaxed text-muted-foreground">{askCopy.detail}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" onClick={() => setRequestId(ask.id)}
+                className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-white">
+                Yes, it is for {ask.requestNumber}
+              </button>
+              <button type="button" onClick={() => setNotThisList((ids) => [...ids, ask.id])}
+                className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs hover:bg-muted">
+                No, a different trip
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 0. the request this belongs to */}
       {requestId && (
@@ -855,7 +917,7 @@ export default function ReceiptsPage() {
         </label>
         <label className="text-[11px] text-muted-foreground">
           Receipt date
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+          <input type="date" value={date} onChange={(e) => { setDate(e.target.value); dateChosen.current = true; }}
             className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" />
         </label>
         <label className="text-[11px] text-muted-foreground">
@@ -877,7 +939,7 @@ export default function ReceiptsPage() {
           <div className="mt-0.5 grid grid-cols-3 gap-2">
             {([
               { v: 'OWNER_FUNDED', label: 'Owner paid',        sub: 'Out of their own pocket' },
-              { v: 'CASH',         label: 'From the till',     sub: 'Cash taken from the drawer' },
+              { v: 'CASH',         label: 'Shop cash (not the POS drawer)', sub: 'Cash kept apart from the till, like the safe' },
               { v: 'BANK',         label: 'Shop bank / GCash', sub: 'The business account' },
             ] as const).map((o) => (
               <button key={o.v} type="button" onClick={() => setPaidBy(o.v)}
@@ -1094,6 +1156,9 @@ export default function ReceiptsPage() {
             </span>
           </label>
         )}
+        {waitsForParcel && (
+          <p className="rounded-xl border border-border bg-card px-4 py-2 text-xs text-muted-foreground">{WAITS_FOR_PARCEL}</p>
+        )}
         <div className="flex gap-2">
           {requestId && (
             <button
@@ -1107,7 +1172,8 @@ export default function ReceiptsPage() {
           )}
           <button
             onClick={() => post.mutate(true)}
-            disabled={post.isPending || problems.length > 0}
+            disabled={post.isPending || problems.length > 0 || waitsForParcel}
+            title={waitsForParcel ? WAITS_FOR_PARCEL : undefined}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg disabled:opacity-50"
           >
             {post.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}

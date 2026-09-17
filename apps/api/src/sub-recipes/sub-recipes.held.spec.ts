@@ -93,6 +93,8 @@ describe('SubRecipesService.list — plates waiting at a screen hold their sauce
       bomItem: bomItems(USED_BY),
       variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
       modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
+      // No add-on uses a prep here (the board's feeds read).
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       orderItem: waitingTickets(tickets),
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue([
@@ -219,6 +221,8 @@ describe('SubRecipesService — batches, with tickets holding a component', () =
             { id: 's2', quantity: 500,  rawMaterial: { id: 'rm-water', name: 'Water',       unit: 'ml', costPrice: 0.002 } },
           ],
         }),
+        // The board makeBatch reads the prep's station from: no prep is routed here.
+        findMany: jest.fn().mockResolvedValue([]),
       },
       rawMaterialInventory: {
         findMany: jest.fn().mockResolvedValue(Object.entries(book).map(([rawMaterialId, quantity]) => ({ rawMaterialId, quantity }))),
@@ -227,9 +231,10 @@ describe('SubRecipesService — batches, with tickets holding a component', () =
       bomItem: bomItems([]),
       variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
       modifierOption: { findMany: jest.fn().mockResolvedValue([]) },
+      // No add-on uses a prep here (the board's feeds read).
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       station: { findMany: jest.fn().mockResolvedValue([]) },
-      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     return { svc: new SubRecipesService(prisma) as any, prisma, decrements, cost: () => newCost };

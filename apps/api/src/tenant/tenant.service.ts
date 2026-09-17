@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { BusinessType, AccountingMethod } from '@prisma/client';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
+import { BRANCH_CLOSES_AT_PATTERN } from './dto/branch.dto';
 import * as bcrypt from 'bcryptjs';
 import { taxStatusFlags, AI_ADDONS, DEFAULT_APP_ACCESS, normalizePlanCode, planCapsFor, planLimitsFor, planFeaturesFor } from '@repo/shared-types';
 import type { TaxStatus, AiAddonType, StaffRole } from '@repo/shared-types';
@@ -48,6 +49,19 @@ export interface UpdateTaxSettingsDto {
   minNumber?:        string;
 }
 
+/**
+ * The HTTP DTO already checks closesAt; this repeats it for any other caller of
+ * the service, because the closing-time job reads the stored text as "HH:mm"
+ * and a malformed value would quietly mean no report gets sent that night.
+ * undefined and null pass: they mean "leave it" and "not set".
+ */
+function assertClosesAt(closesAt: string | null | undefined) {
+  if (closesAt == null) return;
+  if (typeof closesAt !== 'string' || !BRANCH_CLOSES_AT_PATTERN.test(closesAt)) {
+    throw new BadRequestException('Closing time must be a 24-hour time like "21:00" (00:00 to 23:59).');
+  }
+}
+
 @Injectable()
 export class TenantService {
   constructor(
@@ -63,7 +77,7 @@ export class TenantService {
     // active. Active flag exposed in the payload.
     return this.prisma.branch.findMany({
       where: { tenantId },
-      select: { id: true, name: true, address: true, isActive: true },
+      select: { id: true, name: true, address: true, isActive: true, closesAt: true },
       orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
     });
   }
@@ -72,7 +86,11 @@ export class TenantService {
    * Create a new branch — plan-aware. Rejects when the tenant has already
    * provisioned PLAN_LIMITS[planCode].maxBranches active branches.
    */
-  async createBranch(tenantId: string, dto: { name: string; address: string | null }) {
+  async createBranch(
+    tenantId: string,
+    dto: { name: string; address: string | null; closesAt?: string | null },
+  ) {
+    assertClosesAt(dto.closesAt);
     const { normalizePlanCode, planLimitsFor } = await import('@repo/shared-types');
 
     const tenant = await this.prisma.tenant.findUnique({
@@ -104,28 +122,30 @@ export class TenantService {
         tenantId,
         name:    dto.name,
         address: dto.address,
+        closesAt: dto.closesAt ?? null,
         isActive: true,
       },
-      select: { id: true, name: true, address: true, isActive: true },
+      select: { id: true, name: true, address: true, isActive: true, closesAt: true },
     });
     return branch;
   }
 
   /**
-   * Update a branch — rename, change address, or flip active flag. Atomic
-   * tenant-scoped update; deactivating a branch does NOT cascade-delete
-   * historical orders (audit trail preserved).
+   * Update a branch — rename, change address, set or clear the closing time,
+   * or flip active flag. Atomic tenant-scoped update; deactivating a branch
+   * does NOT cascade-delete historical orders (audit trail preserved).
    *
    * Re-activating a branch when the plan ceiling is already at cap throws.
    */
   async updateBranch(
     tenantId: string,
     id: string,
-    dto: { name?: string; address?: string | null; isActive?: boolean },
+    dto: { name?: string; address?: string | null; isActive?: boolean; closesAt?: string | null },
   ) {
     if (dto.name !== undefined && dto.name.trim().length < 2) {
       throw new BadRequestException('Branch name must be at least 2 characters.');
     }
+    assertClosesAt(dto.closesAt);
 
     // If reactivating, check the plan cap.
     if (dto.isActive === true) {
@@ -156,6 +176,8 @@ export class TenantService {
     if (dto.name     !== undefined) data.name     = dto.name.trim();
     if (dto.address  !== undefined) data.address  = dto.address;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
+    // undefined = leave the closing time alone; null = the owner cleared it.
+    if (dto.closesAt !== undefined) data.closesAt = dto.closesAt;
 
     const result = await this.prisma.branch.updateMany({
       where: { id, tenantId },
@@ -164,7 +186,7 @@ export class TenantService {
     if (result.count === 0) throw new NotFoundException('Branch not found.');
     return this.prisma.branch.findUnique({
       where:  { id },
-      select: { id: true, name: true, address: true, isActive: true },
+      select: { id: true, name: true, address: true, isActive: true, closesAt: true },
     });
   }
 

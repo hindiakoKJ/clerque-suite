@@ -1,6 +1,7 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Package, ShoppingBag, FlaskConical, AlertTriangle, Download, ChevronRight,
@@ -9,6 +10,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
 import { useInventoryBase } from '@/lib/inventory-base';
+import { reportView, type Tab } from './report-link';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -22,8 +24,14 @@ interface IngredientReportRow {
   openingValue:     number;
   purchasesQty:     number;
   purchasesValue:   number;
+  /** Everything that left the shelf: the four below added up. */
   consumptionQty:   number;
   consumptionValue: number;
+  soldQty:          number;
+  /** Made, then voided or refunded: the ingredients never come back. */
+  wastedQty:        number;
+  intoPrepsQty:     number;
+  writtenOffQty:    number;
   closingQty:       number;
   closingValue:     number;
   daysOfStock:      number | null;
@@ -39,9 +47,16 @@ interface IngredientReport {
   totals: {
     openingValue:     number;
     purchasesValue:   number;
+    /**
+     * Sold, wasted and written off, in pesos. Unlike each row's value, it leaves
+     * out what went into preps: the prep still holds that value, and it is
+     * counted when the prep is used.
+     */
     consumptionValue: number;
     closingValue:     number;
   };
+  /** Units sold in range still waiting at a kitchen or bar screen: nothing used for them yet. */
+  stillBeingMade?:  number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -52,12 +67,17 @@ const peso = (n: number) =>
 const qty = (n: number, unit: string) =>
   `${n.toLocaleString('en-PH', { maximumFractionDigits: 2 })} ${unit}`;
 
+// The shop's calendar day. toISOString() is the UTC day, which before 8 AM in
+// Manila is still yesterday -- and the report reads these dates as Manila days.
+const manilaDay = (d: Date) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+
 function defaultRange(): { from: string; to: string } {
   const to = new Date();
   const from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
   return {
-    from: from.toISOString().slice(0, 10),
-    to:   to.toISOString().slice(0, 10),
+    from: manilaDay(from),
+    to:   manilaDay(to),
   };
 }
 
@@ -82,20 +102,37 @@ function downloadCsv(filename: string, headers: string[], rows: (string | number
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-type Tab = 'on-hand' | 'purchases' | 'consumption';
-
+// useSearchParams has to sit inside a Suspense boundary, or Next's build cannot prerender the page.
 export default function IngredientReportsPage() {
+  return (
+    <Suspense>
+      <LinkedReports />
+    </Suspense>
+  );
+}
+
+function LinkedReports() {
+  const params = useSearchParams();
+  // Tapping another bell while this page is open changes only the query string, and Next keeps the
+  // page mounted, so the dates and tab would stay on the first link. A new key starts from the new one.
+  return <IngredientReports key={params.toString()} params={params} />;
+}
+
+function IngredientReports({ params }: { params: { get(name: string): string | null } }) {
   const base = useInventoryBase();   // stays inside POS or Procure, whichever opened it
   const user = useAuthStore((s) => s.user);
-  const [tab, setTab] = useState<Tab>('on-hand');
-  const init = defaultRange();
+  // The end-of-day bell asks for one branch's day on the Consumption tab, so its numbers match the page.
+  const linked = reportView(params, user);
+  const [tab, setTab] = useState<Tab>(linked.tab);
+  const init = linked.dates ?? defaultRange();
   const [from, setFrom] = useState(init.from);
   const [to,   setTo]   = useState(init.to);
+  const branchId = linked.branchId;
 
   const { data, isLoading, error } = useQuery<IngredientReport>({
-    queryKey: ['ingredient-report', from, to, user?.branchId ?? null],
+    queryKey: ['ingredient-report', from, to, branchId],
     queryFn:  () => api
-      .get('/reports/ingredients', { params: { from, to, branchId: user?.branchId ?? undefined } })
+      .get('/reports/ingredients', { params: { from, to, branchId: branchId ?? undefined } })
       .then((r) => r.data),
     enabled:  !!user,
     staleTime: 30_000,
@@ -114,7 +151,10 @@ export default function IngredientReportsPage() {
 
   const consumptionRows = useMemo(() => {
     if (!data) return [];
-    return data.rows.filter((r) => r.consumptionQty > 0).sort((a, b) => b.consumptionValue - a.consumptionValue);
+    // Then by quantity, so ingredients with no cost on file still sort sensibly.
+    return data.rows
+      .filter((r) => r.consumptionQty > 0)
+      .sort((a, b) => b.consumptionValue - a.consumptionValue || b.consumptionQty - a.consumptionQty);
   }, [data]);
 
   function exportCsv() {
@@ -135,8 +175,10 @@ export default function IngredientReportsPage() {
     } else {
       downloadCsv(
         `ingredient-consumption-${dateStr}.csv`,
-        ['Ingredient', 'Unit', 'Qty Consumed', 'Total Cost', 'Days in Range', 'Avg Daily'],
-        consumptionRows.map((r) => [r.name, r.unit, r.consumptionQty, r.consumptionValue, data.days, r.consumptionQty / data.days]),
+        ['Ingredient', 'Unit', 'Sold', 'Wasted', 'Into Preps', 'Written Off', 'Total', 'Value'],
+        consumptionRows.map((r) => [
+          r.name, r.unit, r.soldQty, r.wastedQty, r.intoPrepsQty, r.writtenOffQty, r.consumptionQty, r.consumptionValue,
+        ]),
       );
     }
   }
@@ -208,7 +250,12 @@ export default function IngredientReportsPage() {
         ) : tab === 'purchases' ? (
           <PurchasesTable rows={purchaseRows} totalValue={data.totals.purchasesValue} days={data.days} />
         ) : (
-          <ConsumptionTable rows={consumptionRows} totalValue={data.totals.consumptionValue} days={data.days} />
+          <ConsumptionTable
+            rows={consumptionRows}
+            totalValue={data.totals.consumptionValue}
+            days={data.days}
+            stillBeingMade={data.stillBeingMade ?? 0}
+          />
         )}
       </div>
     </div>
@@ -360,47 +407,71 @@ function PurchasesTable({ rows, totalValue, days }: { rows: IngredientReportRow[
   );
 }
 
-function ConsumptionTable({ rows, totalValue, days }: { rows: IngredientReportRow[]; totalValue: number; days: number }) {
+// A split cell: blank-ish when nothing left that way, so the column that matters stands out.
+function SplitCell({ n }: { n: number }) {
+  return (
+    <td className="px-3 py-3 text-right tabular-nums text-muted-foreground">
+      {n > 0 ? n.toLocaleString('en-PH', { maximumFractionDigits: 2 }) : '—'}
+    </td>
+  );
+}
+
+function ConsumptionTable({
+  rows, totalValue, days, stillBeingMade,
+}: { rows: IngredientReportRow[]; totalValue: number; days: number; stillBeingMade: number }) {
+  // Waiting tickets have used nothing yet; said, so a count taken while they wait is not a surprise.
+  const waitingNote = stillBeingMade > 0 ? (
+    <div className="px-4 sm:px-6 py-2 border-b border-border text-xs text-muted-foreground">
+      {stillBeingMade.toLocaleString('en-PH', { maximumFractionDigits: 2 })} item{stillBeingMade === 1 ? '' : 's'} still
+      being made at the kitchen or bar — not counted until marked ready.
+    </div>
+  ) : null;
   if (rows.length === 0) {
     return (
-      <div className="text-center text-muted-foreground text-sm py-12">
-        No consumption recorded in this date range. Consumption is derived from completed orders that include recipe-based products.
-      </div>
+      <>
+        {waitingNote}
+        <div className="text-center text-muted-foreground text-sm py-12 px-4">
+          Nothing left the shelf in this date range. Usage comes from sales (through each item&apos;s recipe, sizes and
+          add-ons), prep batches and write-offs.
+        </div>
+      </>
     );
   }
   return (
     <>
       <ReconcileCallout
-        label={`Total ingredient cost consumed over ${days} day${days === 1 ? '' : 's'} — included in your COGS (account 5010) for the period`}
+        label={`Value of ingredients that left the shelf over ${days} day${days === 1 ? '' : 's'}, at today's cost — sold, wasted (made, then voided or refunded), or written off. What went into preps is not in this total: the prep still holds that value, and it counts when the prep is used`}
         value={totalValue}
       />
-      <table className="w-full text-sm min-w-[640px]">
-        <thead className="bg-muted/50 text-xs text-muted-foreground uppercase tracking-wide border-b border-border sticky top-0">
+      {waitingNote}
+      <table className="w-full text-sm min-w-[720px]">
+        <thead className="bg-muted/50 text-xs text-muted-foreground uppercase tracking-wide border-b border-border sticky top-0 z-10">
           <tr>
-            <th className="px-6 py-3 text-left font-semibold">Ingredient</th>
-            <th className="px-4 py-3 text-right font-semibold">Qty Consumed</th>
-            <th className="px-4 py-3 text-right font-semibold">Cost Consumed</th>
-            <th className="px-4 py-3 text-right font-semibold">Avg Daily</th>
-            <th className="px-4 py-3 text-right font-semibold">% of Total</th>
+            {/* The name stays put while the numbers scroll sideways on a phone. */}
+            <th className="px-4 sm:px-6 py-3 text-left font-semibold sticky left-0 bg-muted">Ingredient</th>
+            <th className="px-3 py-3 text-right font-semibold">Sold</th>
+            <th className="px-3 py-3 text-right font-semibold">Wasted</th>
+            <th className="px-3 py-3 text-right font-semibold">Into preps</th>
+            <th className="px-3 py-3 text-right font-semibold">Written off</th>
+            <th className="px-4 py-3 text-right font-semibold">Total</th>
+            <th className="px-4 py-3 text-right font-semibold">Value</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
           {rows.map((r) => (
             <tr key={r.id} className="hover:bg-muted/40 transition-colors">
-              <td className="px-6 py-3">
+              <td className="px-4 sm:px-6 py-3 sticky left-0 bg-background">
                 <IngredientNameCell id={r.id} name={r.name} isLowStock={r.isLowStock} />
               </td>
-              <td className="px-4 py-3 text-right tabular-nums font-semibold text-foreground">
+              <SplitCell n={r.soldQty} />
+              <SplitCell n={r.wastedQty} />
+              <SplitCell n={r.intoPrepsQty} />
+              <SplitCell n={r.writtenOffQty} />
+              <td className="px-4 py-3 text-right tabular-nums font-semibold text-foreground whitespace-nowrap">
                 {qty(r.consumptionQty, r.unit)}
               </td>
-              <td className="px-4 py-3 text-right tabular-nums font-medium text-foreground">
-                {peso(r.consumptionValue)}
-              </td>
-              <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                {qty(r.consumptionQty / days, r.unit)}
-              </td>
-              <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                {totalValue > 0 ? `${((r.consumptionValue / totalValue) * 100).toFixed(1)}%` : '—'}
+              <td className="px-4 py-3 text-right tabular-nums font-medium text-foreground whitespace-nowrap">
+                {r.costPrice > 0 ? peso(r.consumptionValue) : <span className="text-amber-600">— set cost</span>}
               </td>
             </tr>
           ))}

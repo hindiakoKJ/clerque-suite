@@ -29,6 +29,8 @@ describe('UsersService — caller-authority wall', () => {
       },
       // Changing a role reseeds the user's per-app access rows.
       userAppAccess: { upsert: jest.fn().mockResolvedValue({}) },
+      // Leaving the owner or manager role, or being switched off, unlinks Telegram alerts.
+      telegramLink: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       // A permissions change force-revokes the user's live sessions.
       userSession: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -67,6 +69,23 @@ describe('UsersService — caller-authority wall', () => {
       await expect(
         svc.update(TENANT, 'owner-1', { name: 'Renamed' } as any, 'MDM', MDM_ID),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('unlinks Telegram alerts when someone leaves the owner or manager role, or is switched off', async () => {
+      prisma.user.findFirst.mockResolvedValue({ id: 'mgr-1', role: 'BRANCH_MANAGER', customPermissions: [] });
+      await svc.update(TENANT, 'mgr-1', { role: 'CASHIER' } as any, 'BUSINESS_OWNER', 'owner-1');
+      expect(prisma.telegramLink.updateMany).toHaveBeenCalledWith({ where: { userId: 'mgr-1', tenantId: TENANT }, data: { chatId: null, telegramUsername: null } });
+
+      prisma.telegramLink.updateMany.mockClear();
+      await svc.update(TENANT, 'mgr-1', { isActive: false } as any, 'BUSINESS_OWNER', 'owner-1');
+      expect(prisma.telegramLink.updateMany).toHaveBeenCalledTimes(1);
+
+      // Made a manager, or renamed: the link stays.
+      prisma.telegramLink.updateMany.mockClear();
+      prisma.user.findFirst.mockResolvedValue({ id: 'staff-1', role: 'CASHIER', customPermissions: [] });
+      await svc.update(TENANT, 'staff-1', { role: 'BRANCH_MANAGER' } as any, 'BUSINESS_OWNER', 'owner-1');
+      await svc.update(TENANT, 'staff-1', { name: 'Ana' } as any, 'BUSINESS_OWNER', 'owner-1');
+      expect(prisma.telegramLink.updateMany).not.toHaveBeenCalled();
     });
 
     it('blocks self-approval: an owner cannot change their own role or permissions', async () => {

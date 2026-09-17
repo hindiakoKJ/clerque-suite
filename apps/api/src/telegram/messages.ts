@@ -235,3 +235,109 @@ export function postedMessage(req: RequestForAlert, postedBy: string | null, at:
   ].join('\n');
   return fitItems(build, blocks, MESSAGE_LIMIT);
 }
+
+// ── end of day ─────────────────────────────────────────────────────────────
+
+/** How many ingredients the phone shows; the rest are counted in "+N more" and listed on the report page. */
+export const USAGE_ROWS_SHOWN = 25;
+
+export interface UsageForAlert {
+  shopName: string;
+  branchName: string | null;
+  /** The business day, YYYY-MM-DD, Manila. */
+  day: string;
+  /** Most valuable first, as the report sorts them. */
+  rows: Array<{ name: string; unit: string; costPrice: number; total: number; wasted: number; writtenOff: number }>;
+  /** Pesos, at today's costs -- the same figure the report page shows. */
+  totalValue: number;
+  /** Units sold that day still waiting at a kitchen or bar screen: nothing is counted for them yet. */
+  stillBeingMade: number;
+  /** Sales rung up offline that reached Clerque after the sheet for their hours went out: on no sheet. */
+  lateSales: number;
+}
+
+/**
+ * What the sheet says about sales on no sheet. The bell says it in the same
+ * words, so the phone and the bell never tell two stories.
+ */
+export function lateSalesNote(n: number): string {
+  return n === 1
+    ? "1 sale rung up offline reached Clerque after its day's sheet went out. No sheet counts it; the report page does."
+    : `${n} sales rung up offline reached Clerque after their day's sheet went out. No sheet counts them; the report page does.`;
+}
+
+/** "Wed, Sep 16" for a YYYY-MM-DD Manila day. Noon, so no timezone can tip it into the day before. */
+export function manilaDayLabel(day: string): string {
+  return new Intl.DateTimeFormat('en-PH', { timeZone: PH_TIMEZONE, weekday: 'short', month: 'short', day: 'numeric' })
+    .format(new Date(`${day}T12:00:00+08:00`));
+}
+
+/**
+ * A quantity the way staff write it on the daily sheet: 8,100 ml is "8.1 L",
+ * 1,250 g is "1.25 kg". Only grams and millilitres are scaled up; every other
+ * unit is shown as it is kept.
+ */
+export function usageQty(n: number, unit: string): string {
+  const u = unit.trim();
+  const scaled = u.toLowerCase() === 'g' ? 'kg' : u.toLowerCase() === 'ml' ? 'L' : null;
+  // Compared as it will be shown, so 999.996 g reads "1 kg", not "1,000 g".
+  if (scaled && Math.abs(Math.round(n * 100) / 100) >= 1000) return `${amount(n / 1000)} ${scaled}`;
+  return u ? `${amount(n)} ${u}` : amount(n);
+}
+
+function amount(n: number): string {
+  // Two decimals is plenty for "8.12 L"; a pinch under one unit keeps more, so it never reads as 0.
+  return n.toLocaleString('en-PH', { maximumFractionDigits: Math.abs(n) >= 1 ? 2 : 4 });
+}
+
+/** The day's ingredient usage, sent a little after the branch's closing time. */
+export function dailyUsageMessage(u: UsageForAlert): string {
+  const top = u.rows.slice(0, USAGE_ROWS_SHOWN);
+  const blocks = top.map((r) => {
+    const lines = [row(r.name, usageQty(r.total, r.unit))];
+    /*
+      The total already includes these, on their own lines under it like a
+      receipt's modifiers. Saying so is what lets the owner ask "why did we
+      throw out milk?" -- and a line each means neither amount is ever cut off.
+    */
+    if (r.wasted > 0) lines.push(row('  of it wasted', usageQty(r.wasted, r.unit)));
+    if (r.writtenOff > 0) lines.push(row('  of it written off', usageQty(r.writtenOff, r.unit)));
+    return lines.join('\n');
+  });
+  const costed = u.rows.filter((r) => r.costPrice > 0).length;
+
+  const build = (shown: string[], more: number) => {
+    const head = [
+      '📋 <b>Ingredients used today</b>',
+      // Names cut to length, so no shop name can push the list out of the message.
+      place(clip(u.shopName, 120), u.branchName ? clip(u.branchName, 80) : null),
+      escapeHtml(manilaDayLabel(u.day)),
+    ];
+    const tail: string[] = [];
+    if (u.rows.length === 0) {
+      // Only sent like this when something was sold, or for the late sales alone: say why the sheet is blank.
+      tail.push(u.stillBeingMade > 0
+        ? 'No ingredients were counted yet.'
+        : u.lateSales > 0 ? 'No ingredients were counted.' : 'No ingredients were counted. The items sold may have no recipe yet.');
+    } else {
+      const body = [...shown];
+      const hidden = more + (u.rows.length - top.length);
+      if (hidden > 0) body.push(`+${hidden} more`);
+      // No value line when nothing has a cost: "₱0.00" would read as "nothing was used".
+      if (costed > 0) {
+        body.push(RULE, row('VALUE AT COST', `₱${money(u.totalValue)}`));
+        const uncosted = u.rows.length - costed;
+        if (uncosted > 0) body.push(clip(`  ${uncosted} ${uncosted === 1 ? 'has' : 'have'} no cost, not counted`, WIDTH));
+      }
+      tail.push(`<pre>${escapeHtml(body.join('\n'))}</pre>`);
+    }
+    if (u.stillBeingMade > 0) {
+      const n = u.stillBeingMade;
+      tail.push(escapeHtml(`${qty(n)} item${n === 1 ? '' : 's'} still at the kitchen or bar screen ${n === 1 ? 'is' : 'are'} not counted yet.`));
+    }
+    if (u.lateSales > 0) tail.push(escapeHtml(lateSalesNote(u.lateSales)));
+    tail.push(escapeHtml('Full list: Inventory > Ingredients > Reports'));
+    return [...head, ...tail].join('\n');
+  };
+  return fitItems(build, blocks, MESSAGE_LIMIT);
+}

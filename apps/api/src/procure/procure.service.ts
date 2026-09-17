@@ -40,6 +40,158 @@ function afterHeld(book: number, held: number): number {
   return book > 0 ? availableQty(book, held) : book;
 }
 
+/** How long an unclosed list is still believed. See onTheWay. */
+const SENT_BELIEVED_DAYS   = 3;
+const BOUGHT_BELIEVED_DAYS = 7;
+
+/** One ingredient's worth of what is coming, and the list bringing most of it. */
+export interface Coming {
+  /** In the ingredient's own unit, summed over every list. */
+  quantity: number;
+  /** The list with the biggest share, so the screen can say "on REQ-...". */
+  requestNumber: string;
+  sentAt: Date | null;
+}
+
+/**
+ * What this branch has already asked for or bought and not yet had in:
+ * rawMaterialId -> quantity, in the ingredient's own unit, and the list that
+ * brings most of it.
+ *
+ * Check stock looked at the shelf alone. A list sent at noon is not on the
+ * shelf until the shopping comes back, so pressing Check stock again that
+ * afternoon found the same sugar short and put it on the next list -- and the
+ * shop bought it twice. What is coming is part of what the shop will have.
+ *
+ * Sent: what was asked for. Bought: the packs actually bought, when the
+ * shopper recorded them -- three 1 kg bags against a 2,500 g line is 3,000 g
+ * coming -- and what was asked for on a line nobody has recorded yet, which
+ * is still wanted and goes back on the open list if the request closes
+ * without it. A line already posted is on the shelf and counted there, so a
+ * half-posted request does not count its posted lines twice. An open list is
+ * not coming (nobody has it yet); a cancelled or closed one never will be.
+ *
+ * Except on an order waiting for its parcel (tagged ONTHEWAY): a line left
+ * blank there was not ordered, so it is still needed, not coming. That order
+ * does not close -- and put its blanks back on the list -- until the parcel
+ * is posted, days later, after the shop has run out. A grocery trip still
+ * being filled in (milk this morning, beans this afternoon) is posted the
+ * same day and carries its blanks forward then, so its blanks still count.
+ *
+ * An unclosed list is not believed forever. Nothing closes one on its own:
+ * stock posted from Receipts without the list, or received under Inventory,
+ * leaves it SENT, and a line that failed to post leaves it BOUGHT. Counted
+ * with no end, it kept the item off every later list until somebody found
+ * and cancelled it. So a line stops counting when
+ *   - stock of that ingredient has come in at the branch since the list was
+ *     bought (or sent, if not bought yet): whatever came in is taken to be
+ *     what the list was for. The balance of a short delivery is the
+ *     exception: it is made straight after its parent's packs are posted, so
+ *     those packs are left out by their line numbers rather than trusted to
+ *     a clock.
+ *   - a sent list is older than 3 days: nobody bought it, and nothing
+ *     replaced it.
+ *   - a bought list is older than 7 days, unless it is an order still
+ *     waiting for its parcel.
+ * Asking again for something that was in fact coming is a line somebody can
+ * see and remove; a shortage hidden by a forgotten list is seen by nobody.
+ */
+export async function onTheWay(
+  db: Pick<Prisma.TransactionClient, 'purchaseRequestLine' | 'rawMaterialLot'>,
+  tenantId: string,
+  branchId: string,
+  /** A request to leave out, when the caller is deciding about that one itself. */
+  excludeRequestId?: string,
+): Promise<Map<string, Coming>> {
+  const now = Date.now();
+  const sentFrom   = new Date(now - SENT_BELIEVED_DAYS * 86_400_000);
+  const boughtFrom = new Date(now - BOUGHT_BELIEVED_DAYS * 86_400_000);
+  const lines = await db.purchaseRequestLine.findMany({
+    where: {
+      receivedAt: null,
+      purchaseRequest: {
+        tenantId,
+        branchId,
+        // Old lists pile up exactly when nobody closes them, so they are left
+        // in the table rather than read and thrown away. The tag is read
+        // exactly below; this only narrows the read.
+        OR: [
+          { status: 'SENT',   sentAt:   { gte: sentFrom } },
+          { status: 'BOUGHT', boughtAt: { gte: boughtFrom } },
+          { status: 'BOUGHT', notes:    { contains: '[ONTHEWAY:' } },
+        ],
+        ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
+      },
+    },
+    select: {
+      rawMaterialId: true, qtyRequested: true, packsBought: true, packSize: true,
+      purchaseRequest: { select: { status: true, requestNumber: true, notes: true, sentAt: true, boughtAt: true } },
+    },
+  });
+
+  const believed: Array<{
+    rawMaterialId: string; qty: number; since: Date; balanceOf: string | null;
+    requestNumber: string; sentAt: Date | null;
+  }> = [];
+  for (const l of lines) {
+    const pr       = l.purchaseRequest;
+    const bought   = pr.status === 'BOUGHT';
+    const waiting  = bought && readTag(pr.notes, 'ONTHEWAY') != null;
+    const recorded = bought && l.packsBought != null && l.packSize != null;
+    const dated    = bought ? pr.boughtAt : pr.sentAt;
+    if (!waiting && !(dated && dated >= (bought ? boughtFrom : sentFrom))) continue;
+    if (waiting && !recorded) continue;
+    const since = pr.boughtAt ?? pr.sentAt;
+    // Every path that sends or buys a list dates it. One without a date
+    // cannot be checked against what came in since, so it is not believed.
+    if (!since) continue;
+    const qty = recorded ? Number(l.packsBought) * Number(l.packSize) : Number(l.qtyRequested);
+    if (!(qty > 0)) continue;
+    believed.push({
+      rawMaterialId: l.rawMaterialId, qty, since, balanceOf: readTag(pr.notes, 'BALANCEOF'),
+      requestNumber: pr.requestNumber, sentAt: pr.sentAt,
+    });
+  }
+  const coming = new Map<string, Coming>();
+  if (believed.length === 0) return coming;
+
+  /*
+    Stock that came in since: one read for every ingredient involved.
+    createdAt, not receivedAt -- receivedAt is the business date somebody
+    typed, and can be set back to before the list went out. A write-off is a
+    lot too, with a negative quantity; that is stock leaving, not arriving.
+  */
+  const earliest = new Date(Math.min(...believed.map((b) => b.since.getTime())));
+  const lots = await db.rawMaterialLot.findMany({
+    where: {
+      tenantId,
+      branchId,
+      rawMaterialId: { in: [...new Set(believed.map((b) => b.rawMaterialId))] },
+      qtyReceived:   { gt: 0 },
+      createdAt:     { gt: earliest },
+    },
+    select: { rawMaterialId: true, createdAt: true, referenceNumber: true },
+  });
+
+  const biggest = new Map<string, number>();
+  for (const b of believed) {
+    const cameIn = lots.some((lot) => lot.rawMaterialId === b.rawMaterialId && lot.createdAt > b.since
+      // The parent's own packs, posted a moment before this balance was made.
+      && !(b.balanceOf && (lot.referenceNumber ?? '').startsWith(`${b.balanceOf}-`)));
+    if (cameIn) continue;
+    const had = coming.get(b.rawMaterialId);
+    const leads = !had || b.qty > (biggest.get(b.rawMaterialId) ?? 0);
+    if (leads) biggest.set(b.rawMaterialId, b.qty);
+    coming.set(b.rawMaterialId, {
+      // Rounded to the column's four places, so sums of decimals compare cleanly.
+      quantity:      Math.round(((had?.quantity ?? 0) + b.qty) * 10_000) / 10_000,
+      requestNumber: leads ? b.requestNumber : had.requestNumber,
+      sentAt:        leads ? b.sentAt : had.sentAt,
+    });
+  }
+  return coming;
+}
+
 /** What each pocket is called in a sentence a shop owner reads. */
 const POCKET_WORDS: Record<ProcurePocket, string> = {
   CASH:         'the till',
@@ -366,6 +518,18 @@ export class ProcureService {
     );
     const toMake = (low as Array<Record<string, unknown>>).filter((r) => r['kind'] === 'PREP');
 
+    /*
+      What this branch already has coming: lists sent to the owners and
+      shopping bought but not yet posted. Without it, Check stock pressed
+      again before the delivery arrived asked for the same things a second
+      time. Read once, and only when something is low.
+    */
+    const coming = ingredients.length > 0 ? await onTheWay(this.prisma, tenantId, branchId) : new Map<string, Coming>();
+    const alreadyComing: Array<{
+      id: string; name: string; unit: string; quantity: number; shortBy: number; coming: number;
+      requestNumber: string; sentAt: Date | null;
+    }> = [];
+
     let added = 0;
     for (const row of ingredients) {
       const rawMaterialId = String(row['rawMaterialId'] ?? row['id'] ?? '');
@@ -410,7 +574,41 @@ export class ProcureService {
         rule as the doubling: get above the line and leave some cover.
       */
       const level = Number(row['lowStockAlert'] ?? 0);
-      const qtyRequested = shortBy > 0 ? shortBy * 2 : (level > 0 ? level : 1);
+      const wanted = shortBy > 0 ? shortBy * 2 : (level > 0 ? level : 1);
+      /*
+        What is on the way counts as stock the shop will have.
+
+        Covered means what is coming is at least what the rule above wants:
+        nothing is added, and it is reported so the screen can say why. Short
+        of that, the list asks for what the rule wants less what is already
+        coming. One target for both, so the shelf ends up where the rule meant
+        it to either way. The cut-off used to be "just above the reorder
+        level": one gram more coming then meant thousands fewer asked for, and
+        a delivery that left the shelf a gram over the line, back on the list
+        after the first sale.
+
+        Exactly on the line the rule wants the reorder level itself, so that
+        much coming covers it. The request is rounded to the column's four
+        places, so a shortfall and a delivery equal on paper compare equal.
+      */
+      const onWay = coming.get(rawMaterialId);
+      const onWayQty = onWay?.quantity ?? 0;
+      const qtyRequested = onWayQty > 0 ? Math.round((wanted - onWayQty) * 10_000) / 10_000 : wanted;
+      if (onWay && onWayQty > 0 && !(qtyRequested > 0)) {
+        alreadyComing.push({
+          id:       rawMaterialId,
+          name:     String(row['name'] ?? ''),
+          unit:     String(row['unit'] ?? ''),
+          quantity: Number(row['quantity'] ?? 0),
+          shortBy,
+          coming:   onWayQty,
+          // The list bringing most of it, so the screen can say "on REQ-..."
+          // and somebody can cancel it if it was forgotten.
+          requestNumber: onWay.requestNumber,
+          sentAt:        onWay.sentAt,
+        });
+        continue;
+      }
       await this.addLine(tenantId, req.id, { rawMaterialId, qtyRequested, shortBy });
       added++;
     }
@@ -452,6 +650,13 @@ export class ProcureService {
         quantity: Number(r['quantity'] ?? 0),
         shortBy:  Number(r['shortBy'] ?? 0),
       })),
+      /*
+        Low on the shelf but already coming -- on a list the owners have, or
+        bought and not yet posted -- so nothing was added for them. Reported
+        so "nothing added" can be told apart from "nothing is low", with the
+        list that brings most of each so the screen can name it.
+      */
+      onTheWay: alreadyComing,
     };
   }
 

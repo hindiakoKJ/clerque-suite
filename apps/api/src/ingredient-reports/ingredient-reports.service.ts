@@ -1,22 +1,27 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { availableQty, heldAcross, heldUsage } from '../orders/held-usage';
 import { stillWaiting } from '../orders/waste';
+import { DAY_MS, isManilaDay, manilaDayStart, usedByDay, UsageDay, UsageRow } from './daily-usage';
 
 /**
  * Ingredient (raw-material) reporting.
  *
- * Three report shapes:
+ * Four report shapes:
  *   1. Per-ingredient movements    — receipts + consumption timeline
  *   2. Per-ingredient FIFO lots    — what's on the shelf, in age order
  *   3. Aggregated tenant report    — opening / purchases / consumption / closing
  *                                    across all ingredients for a date range
+ *   4. Daily usage (daily-usage.ts) — what left the shelf each Manila day,
+ *                                    as sold / wasted / into preps / written off.
+ *                                    The aggregated report's consumption and the
+ *                                    end-of-day message both read it.
  *
- * Consumption isn't logged in its own table — it's derived on the fly by
- * joining completed Orders × OrderItem × Product → BomItem (× variantBom for
- * variant orders). This keeps the schema lean and means consumption history
- * is always perfectly consistent with sales history (no drift between two
- * separately-maintained tables). A line still waiting at a kitchen or bar
+ * Consumption isn't logged in its own table — it's derived on the fly from
+ * order lines × their recipe (size recipe and add-ons included), prep batches
+ * and write-offs; see daily-usage.ts. This keeps the schema lean and means
+ * consumption history is always perfectly consistent with sales history (no
+ * drift between two separately-maintained tables). A line still waiting at a kitchen or bar
  * screen is left out: its ingredients leave stock when it is marked ready.
  */
 export interface IngredientMovementRow {
@@ -231,14 +236,17 @@ export class IngredientReportsService {
   // For each ingredient, returns:
   //   openingQty / openingValue   — derived: closingQty - purchases + consumption
   //   purchasesQty / purchasesValue
-  //   consumptionQty / consumptionValue
+  //   consumptionQty / consumptionValue — everything that left the shelf
+  //   soldQty / wastedQty / intoPrepsQty / writtenOffQty — why it left (they add up to consumptionQty)
+  //   (totals.consumptionValue leaves intoPreps out -- see step 6)
   //   closingQty   / closingValue  — current RawMaterialInventory snapshot
   //   heldQty      — what tickets still waiting at a kitchen or bar screen hold
   //   availableQty — closingQty less heldQty, never below zero
   //   daysOfStock  — availableQty ÷ avgDailyConsumption (null if no consumption)
   //   isLowStock   — availableQty at or under the ingredient's alert level
   //
-  // Date range defaults to the last 30 days.
+  // Date range defaults to the last 30 days. A bare date (YYYY-MM-DD, what the
+  // report page's date pickers send) is a whole Manila day, `to` included.
 
   async getAggregatedReport(
     tenantId: string,
@@ -246,8 +254,19 @@ export class IngredientReportsService {
   ) {
     const now = new Date();
     const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const fromDate = opts.from ? new Date(opts.from) : defaultFrom;
-    const toDate   = opts.to   ? new Date(opts.to)   : now;
+    /*
+      `new Date('2026-09-16')` is UTC midnight -- 8 AM in Manila. So "Sep 1 to
+      Sep 16" ran from 8 AM on the 1st to 8 AM on the 16th: the first morning
+      of sales went uncounted and the last day stopped at breakfast, which is
+      never going to match a sheet counted by hand. One window for every figure
+      on the report, so opening = closing - purchases + consumption still holds.
+    */
+    const fromDate = opts.from
+      ? (isManilaDay(opts.from) ? manilaDayStart(opts.from) : new Date(opts.from))
+      : defaultFrom;
+    const toDate = opts.to
+      ? (isManilaDay(opts.to) ? new Date(manilaDayStart(opts.to).getTime() + DAY_MS - 1) : new Date(opts.to))
+      : now;
     const days = Math.max(1, Math.ceil((toDate.getTime() - fromDate.getTime()) / (1000 * 60 * 60 * 24)));
 
     // 1. List all active ingredients for the tenant.
@@ -299,92 +318,21 @@ export class IngredientReportsService {
     */
     const held = await heldUsage(this.prisma, tenantId, opts.branchId ? [opts.branchId] : null);
 
-    // 4. Consumption in range (derived from paid orders × BOM). Most lines
-    // take their ingredients at the sale, so a PAID order counts even if
-    // production hasn't completed. A line waiting at a kitchen or bar screen
-    // takes them only when marked ready; until then nothing has left stock,
-    // and counting it would also throw opening (closing - purchases +
-    // consumption) off by what it holds.
-    const orders = await this.prisma.order.findMany({
-      where: {
-        tenantId,
-        status:    { in: ['PAID', 'COMPLETED'] },
-        deletedAt: null,
-        paidAt:    { gte: fromDate, lte: toDate },
-        ...(opts.branchId ? { branchId: opts.branchId } : {}),
-      },
-      select: {
-        items: {
-          select: { productId: true, quantity: true, usageOnReady: true, usagePostedAt: true },
-        },
-      },
-    });
-
-    const productIds = [...new Set(orders.flatMap((o) => o.items.map((i) => i.productId)))];
-    const allBom = productIds.length
-      ? await this.prisma.bomItem.findMany({
-          where:  { productId: { in: productIds } },
-          select: { productId: true, rawMaterialId: true, quantity: true },
-        })
-      : [];
-    // Index BOM by productId for quick lookup
-    const bomByProduct = new Map<string, Array<{ rawMaterialId: string; quantity: number }>>();
-    for (const b of allBom) {
-      const arr = bomByProduct.get(b.productId) ?? [];
-      arr.push({ rawMaterialId: b.rawMaterialId, quantity: Number(b.quantity) });
-      bomByProduct.set(b.productId, arr);
-    }
-
-    const consumptionQtyByRm = new Map<string, number>();
-    for (const order of orders) {
-      for (const item of order.items) {
-        if (stillWaiting(item)) continue;
-        const recipe = bomByProduct.get(item.productId);
-        if (!recipe) continue;
-        for (const r of recipe) {
-          const qty = Number(item.quantity) * r.quantity;
-          consumptionQtyByRm.set(
-            r.rawMaterialId,
-            (consumptionQtyByRm.get(r.rawMaterialId) ?? 0) + qty,
-          );
-        }
-      }
-    }
-
     /*
-      4b. Consumption by PREP.
+      4. Consumption: everything that left the shelf in range, and why.
 
-      Step 4 derives usage from paid orders x PRODUCT recipe. That misses the
-      whole other way this shop consumes ingredients: a batch of syrup takes
-      1,200 g of sugar in one go, and the sugar is not in any product recipe --
-      the SYRUP is. So an ingredient used only for prep read as zero
-      consumption, which made its days-of-cover null, which reads as "infinite"
-      on the one ingredient that leaves the shelf in the biggest lumps.
-
-      Measured on the demo data: 15,200 g of sugar on hand, consumed 0, cover
-      NONE -- while every batch of syrup takes 1,200 g of it.
-
-      The batch events carry what each preparation actually took, so this is a
-      real measurement rather than another estimate.
+      This used to walk only the PRODUCT's own recipe, so a Large read as a
+      Regular, an add-on's syrup was never counted, oat milk did not take the
+      dairy off, and a voided or refunded drink whose milk was already poured
+      counted one way here and another on the stock book. The same numbers
+      the staff count by hand now come from one place: sold and wasted order
+      lines through the shared recipe walk, prep batches, and write-offs. A
+      line still waiting at a kitchen or bar screen has used nothing and is
+      left out, which also keeps opening (closing - purchases + consumption)
+      true. `to` is inclusive here, the daily usage exclusive.
     */
-    const prepEvents = await this.prisma.accountingEvent.findMany({
-      where: {
-        tenantId,
-        type:      'INVENTORY_ADJUSTMENT',
-        createdAt: { gte: fromDate, lte: toDate },
-      },
-      select: { payload: true },
-    });
-    for (const ev of prepEvents) {
-      const pl = ev.payload as Record<string, unknown> | null;
-      if (!pl || pl['kind'] !== 'SUB_RECIPE_BATCH') continue;
-      if (opts.branchId && pl['branchId'] && pl['branchId'] !== opts.branchId) continue;
-      for (const c of (Array.isArray(pl['consumed']) ? pl['consumed'] : []) as Array<Record<string, unknown>>) {
-        const id = String(c['rawMaterialId'] ?? '');
-        if (!id) continue;
-        consumptionQtyByRm.set(id, (consumptionQtyByRm.get(id) ?? 0) + Number(c['quantity'] ?? 0));
-      }
-    }
+    const usage = await usedByDay(this.prisma, tenantId, opts.branchId ?? null, fromDate, new Date(toDate.getTime() + 1));
+    const usedByRm = new Map(usage.rows.map((r) => [r.rawMaterialId, r]));
 
     // 5. Build the per-ingredient rows.
     const rows = ingredients.map((rm) => {
@@ -392,7 +340,8 @@ export class IngredientReportsService {
       const closingQty     = onHandByRm.get(rm.id) ?? 0;
       const purchasesQty   = purchasesQtyByRm.get(rm.id) ?? 0;
       const purchasesValue = purchasesValByRm.get(rm.id) ?? 0;
-      const consumptionQty = consumptionQtyByRm.get(rm.id) ?? 0;
+      const used           = usedByRm.get(rm.id);
+      const consumptionQty = used?.total ?? 0;
       const consumptionValue = consumptionQty * cost;
       // Opening = closing - net change; net change = purchases - consumption.
       const openingQty   = closingQty - purchasesQty + consumptionQty;
@@ -416,6 +365,10 @@ export class IngredientReportsService {
         purchasesValue,
         consumptionQty,
         consumptionValue,
+        soldQty:           used?.sold ?? 0,
+        wastedQty:         used?.wasted ?? 0,
+        intoPrepsQty:      used?.intoPreps ?? 0,
+        writtenOffQty:     used?.writtenOff ?? 0,
         closingQty,
         closingValue,
         heldQty,
@@ -426,15 +379,29 @@ export class IngredientReportsService {
       };
     });
 
-    // 6. Totals.
+    /*
+      6. Totals. The split is priced like consumptionValue. Each row keeps its
+      preps (the sugar did leave the sugar shelf), but the consumption total
+      does not: that sugar became syrup still on the shelf, and the syrup is
+      counted again when it is sold, wasted or written off. So sold + wasted +
+      written off add up to the total, and intoPrepsValue stands on its own.
+    */
     const totals = rows.reduce(
       (acc, r) => ({
         openingValue:     acc.openingValue     + r.openingValue,
         purchasesValue:   acc.purchasesValue   + r.purchasesValue,
-        consumptionValue: acc.consumptionValue + r.consumptionValue,
+        consumptionValue: acc.consumptionValue + (r.soldQty + r.wastedQty + r.writtenOffQty) * r.costPrice,
+        soldValue:        acc.soldValue        + r.soldQty       * r.costPrice,
+        wastedValue:      acc.wastedValue      + r.wastedQty     * r.costPrice,
+        intoPrepsValue:   acc.intoPrepsValue   + r.intoPrepsQty  * r.costPrice,
+        writtenOffValue:  acc.writtenOffValue  + r.writtenOffQty * r.costPrice,
         closingValue:     acc.closingValue     + r.closingValue,
       }),
-      { openingValue: 0, purchasesValue: 0, consumptionValue: 0, closingValue: 0 },
+      {
+        openingValue: 0, purchasesValue: 0, consumptionValue: 0,
+        soldValue: 0, wastedValue: 0, intoPrepsValue: 0, writtenOffValue: 0,
+        closingValue: 0,
+      },
     );
 
     return {
@@ -444,6 +411,49 @@ export class IngredientReportsService {
       branchId: opts.branchId ?? null,
       rows,
       totals,
+      // Units sold in range still waiting at a kitchen or bar screen: not in consumption yet.
+      stillBeingMade: usage.stillBeingMade,
     };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // One day's usage -- what the end-of-day message sends
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** One Manila day: rows most valuable first, peso totals, and what is still being made. */
+  async usageForDay(tenantId: string, branchId: string | null, day: string): Promise<UsageDay> {
+    if (!isManilaDay(day)) {
+      throw new BadRequestException('The day has to be a real date written as YYYY-MM-DD.');
+    }
+    const from = manilaDayStart(day);
+    const usage = await usedByDay(this.prisma, tenantId, branchId, from, new Date(from.getTime() + DAY_MS));
+    return usage.days.find((d) => d.day === day) ?? {
+      day,
+      rows: [],
+      totals: { soldValue: 0, wastedValue: 0, intoPrepsValue: 0, writtenOffValue: 0, value: 0 },
+      stillBeingMade: 0,
+    };
+  }
+
+  /**
+   * Everything used at a branch in [from, to), as one sheet under `label`.
+   *
+   * For the end-of-day message of a shop that closes after midnight: its
+   * trade runs from one closing to the next, not midnight to midnight, so the
+   * 00:30 latte belongs on the sheet sent at 01:00. The rows, totals and what
+   * is still being made are for the whole window, never cut at midnight;
+   * `label` only names the sheet (the business day most of it falls in).
+   */
+  async usageForWindow(tenantId: string, branchId: string, label: string, from: Date, to: Date): Promise<UsageDay> {
+    if (!isManilaDay(label)) {
+      throw new BadRequestException('The day has to be a real date written as YYYY-MM-DD.');
+    }
+    const usage = await usedByDay(this.prisma, tenantId, branchId, from, to);
+    return { day: label, rows: usage.rows, totals: usage.totals, stillBeingMade: usage.stillBeingMade };
+  }
+
+  /** The ingredients used on one Manila day at a branch (every branch when null), most valuable first. */
+  async usedOn(tenantId: string, branchId: string | null, day: string): Promise<UsageRow[]> {
+    return (await this.usageForDay(tenantId, branchId, day)).rows;
   }
 }

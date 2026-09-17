@@ -63,11 +63,15 @@ describe('RecipeCatchupService', () => {
         findUnique: jest.fn().mockResolvedValue({ recipeDeductionPausedAt: opts.pausedAt ?? null }),
       },
       // The service always filters lines on ingredientsDeductedAt: null. The
-      // NOT clause is honoured here so a waiting line in a fixture is really
-      // left out, the way the database leaves it out.
+      // NOT clause and the order status list are honoured here so a waiting
+      // line, or an order in a status the replay skips, is really left out,
+      // the way the database leaves it out. A fixture's order is COMPLETED
+      // unless it says otherwise.
       orderItem: {
         findMany: jest.fn(({ where }: any) => Promise.resolve(
-          items.filter((i: any) => !(where?.NOT && Object.entries(where.NOT).every(([k, v]) => (i[k] ?? null) === v))),
+          items
+            .filter((i: any) => !(where?.NOT && Object.entries(where.NOT).every(([k, v]) => (i[k] ?? null) === v)))
+            .filter((i: any) => !where?.order?.status?.in || where.order.status.in.includes(i.orderStatus ?? 'COMPLETED')),
         )),
         count: jest.fn().mockResolvedValue(opts.alreadyDeducted ?? 0),
         updateMany: jest.fn(({ where }: any) => {
@@ -211,8 +215,49 @@ describe('RecipeCatchupService', () => {
     expect(lineFor(p, BEANS).quantityUsed).toBe(54);   // 18 x 1.5 x 2
   });
 
-  it('nets refunded quantity out — a refunded drink consumed nothing', async () => {
+  // ─────────────── refunds and voids rung while deduction was paused ───────────────
+  //
+  // Not paused, a line used at the sale takes all of it at the sale, and a
+  // refund or a void never gives an ingredient back: the drink was made, so its
+  // milk is waste. The daily usage sheet counts it that way. Paused, this replay
+  // is the stock write, so it has to take the same -- or the sheet shows milk
+  // wasted that never leaves the stock book.
+
+  it('replays a refunded drink in full: it was already made, so all 5 are taken', async () => {
     const { svc } = build({ items: [line('i-1', LATTE, 5, [], 2)] });
+    const p = await svc.preview(TENANT, RANGE);
+
+    expect(lineFor(p, MILK).quantityUsed).toBe(750);   // 5 x 150, the 2 refunded included
+  });
+
+  it('replays a voided order: its drinks were made before the void', async () => {
+    const voided = { ...line('i-void', LATTE, 2, [], 0, 'o-void'), orderStatus: 'VOIDED' };
+    const { svc, db } = build({ items: [voided, line('i-1', LATTE, 1)] });
+
+    const p = await svc.preview(TENANT, RANGE);
+    expect(lineFor(p, MILK).quantityUsed).toBe(450);   // (2 voided + 1 kept) x 150
+    expect(p.orderCount).toBe(2);
+    expect(db.orderItem.findMany.mock.calls[0][0].where.order.status.in).toContain('VOIDED');
+
+    const out = await svc.apply(TENANT, USER, { ...RANGE, expectedLineCount: 2 });
+    expect(decremented[MILK]).toBe(450);
+    expect(stampedItemIds.sort()).toEqual(['i-1', 'i-void']);
+    expect(out.stampedLineCount).toBe(2);
+  });
+
+  it('still skips a voided line that was waiting at the bar: it was never made', async () => {
+    const waitingVoid = { ...line('i-wait', LATTE, 2), orderStatus: 'VOIDED', usageOnReady: true, usagePostedAt: null };
+    const { svc } = build({ items: [waitingVoid] });
+    const p = await svc.preview(TENANT, RANGE);
+
+    expect(p.lineCount).toBe(0);
+    expect(p.lines).toEqual([]);
+  });
+
+  it('nets out units refunded while a line waited, for a line marked ready while paused', async () => {
+    // The ready tap made only what was left: 5 ordered, 2 refunded before it was made.
+    const confirmed = { ...line('i-conf', LATTE, 5, [], 2), usageOnReady: true, usagePostedAt: new Date('2026-09-05T03:00:00.000Z') };
+    const { svc } = build({ items: [confirmed] });
     const p = await svc.preview(TENANT, RANGE);
 
     expect(lineFor(p, MILK).quantityUsed).toBe(450);   // (5 - 2) x 150

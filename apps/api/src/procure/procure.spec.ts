@@ -1,4 +1,4 @@
-import { ProcureService } from './procure.service';
+import { ProcureService, onTheWay } from './procure.service';
 import { Prisma } from '@prisma/client';
 import { servesSentences } from '@repo/shared-types';
 import { productCeiling } from '../products/recipe-ceiling';
@@ -61,6 +61,16 @@ describe('ProcureService', () => {
     addOns?: Array<{ rawMaterialId: string; option: { name: string } }>;
     /** The servings query fails -- the list must still load. */
     productsFail?: boolean;
+    /**
+     * Other requests at the shop -- sent, bought, closed, at this branch unless
+     * one names another, and sent (and bought) an hour ago unless it says when.
+     */
+    elsewhere?: Array<{
+      id: string; status: string; branchId?: string; lines: any[];
+      requestNumber?: string; notes?: string | null; sentAt?: Date | null; boughtAt?: Date | null;
+    }>;
+    /** Stock lots received, at this branch unless one names another. */
+    lots?: Array<{ rawMaterialId: string; qtyReceived: number; createdAt: Date; referenceNumber?: string | null; branchId?: string }>;
   } = {}) {
     const created: any[] = [];
     const createdRequests: any[] = [];
@@ -111,6 +121,7 @@ describe('ProcureService', () => {
           const { lines: nested, ...rest } = data;
           const made = {
             id: data.status === 'BOUGHT' ? 'follow1' : 'open1',
+            status: 'OPEN',   // the column's default, when the create does not say
             ...rest,
             lines: (nested?.create ?? []).map((l: any, i: number) => ({ id: `f${i + 1}`, receivedAt: null, ...l })),
           };
@@ -128,6 +139,10 @@ describe('ProcureService', () => {
         create:     jest.fn(({ data }: any) => {
           created.push(data);
           if (openList && data.purchaseRequestId === openList.id) openList.lines.push({ id: `o${openList.lines.length + 1}`, ...data });
+          // Like the database: a line added to the request under test is on it when the request is read again.
+          else if (request && data.purchaseRequestId === request.id) {
+            request.lines.push({ id: `n${request.lines.length + 1}`, receivedAt: null, packsBought: null, packSize: null, ...data });
+          }
           return Promise.resolve(data);
         }),
         update:     jest.fn(({ where, data }: any) => {
@@ -140,7 +155,38 @@ describe('ProcureService', () => {
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
         // What each ingredient held and cost the last time it was received. The
         // where-it-is-usually-bought query (it asks by request status) finds none.
-        findMany:   jest.fn(({ where }: any = {}) => Promise.resolve(where?.purchaseRequest?.status ? [] : (opts.lastPacks ?? []))),
+        findMany:   jest.fn(({ where }: any = {}) => {
+          /*
+            What is on the way: lines not yet posted, on requests filtered the
+            way the table would filter them -- the request under test and any
+            others beside it.
+          */
+          if (where?.receivedAt === null) {
+            const pr = where.purchaseRequest;
+            const anHourAgo = new Date(Date.now() - 3_600_000);
+            const dated = (r: any) => ({
+              tenantId: TENANT, branchId: BRANCH, notes: null,
+              requestNumber: `REQ-${r.id}`, sentAt: anHourAgo, boughtAt: r.status === 'BOUGHT' ? anHourAgo : null, ...r,
+            });
+            // Each OR branch: a status, and a date on or after, or a note containing.
+            const branch = (r: any, c: any) => (c.status == null || r.status === c.status)
+              && (!c.sentAt   || (r.sentAt != null && r.sentAt >= c.sentAt.gte))
+              && (!c.boughtAt || (r.boughtAt != null && r.boughtAt >= c.boughtAt.gte))
+              && (!c.notes    || (r.notes ?? '').includes(c.notes.contains));
+            const all = [...(request ? [dated(request)] : []), ...(opts.elsewhere ?? []).map(dated)];
+            return Promise.resolve(all
+              .filter((r: any) => r.tenantId === pr.tenantId && r.branchId === pr.branchId && pr.OR.some((c: any) => branch(r, c))
+                && (!pr.id || r.id !== pr.id.not))
+              .flatMap((r: any) => r.lines
+                .filter((l: any) => l.receivedAt == null)
+                .map((l: any) => ({
+                  rawMaterialId: l.rawMaterialId, qtyRequested: l.qtyRequested,
+                  packsBought: l.packsBought ?? null, packSize: l.packSize ?? null,
+                  purchaseRequest: { status: r.status, requestNumber: r.requestNumber, notes: r.notes, sentAt: r.sentAt, boughtAt: r.boughtAt },
+                }))));
+          }
+          return Promise.resolve(where?.purchaseRequest?.status ? [] : (opts.lastPacks ?? []));
+        }),
       },
       document: {
         count:     jest.fn(({ where }: any) => Promise.resolve(filedWhere(where).length)),
@@ -223,6 +269,15 @@ describe('ProcureService', () => {
       },
       modifierOptionIngredient: {
         findMany: jest.fn(({ where }: any) => Promise.resolve((opts.addOns ?? []).filter((a) => where.rawMaterialId.in.includes(a.rawMaterialId)))),
+      },
+      // Stock that came in, filtered the way the lots table would filter it.
+      rawMaterialLot: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve((opts.lots ?? [])
+          .map((l) => ({ branchId: BRANCH, referenceNumber: null, ...l }))
+          .filter((l) => where.tenantId === TENANT && l.branchId === where.branchId
+            && where.rawMaterialId.in.includes(l.rawMaterialId)
+            && l.qtyReceived > where.qtyReceived.gt && l.createdAt > where.createdAt.gt)
+          .map(({ rawMaterialId, createdAt, referenceNumber }) => ({ rawMaterialId, createdAt, referenceNumber })))),
       },
       rawMaterial: {
         findFirst: jest.fn(({ where }: any) => Promise.resolve({ id: where.id, name: 'White Sugar' })),
@@ -484,6 +539,325 @@ describe('ProcureService', () => {
       const { svc, created } = build({ lowStock: [], unmonitored: 11 });
       await svc.pullLowStock(TENANT, BRANCH, USER);
       expect(created).toHaveLength(0);
+    });
+  });
+
+  /*
+    What is already coming.
+
+    Check stock deduped only against the open list. A list sent to the owners,
+    or shopping bought and not yet posted, is not on the shelf -- so pressing
+    Check stock again before the delivery arrived found the same sugar short
+    and asked for it twice.
+  */
+  describe('what is already on the way', () => {
+    // 2,000 g available against a 6,000 g level: 4,000 short, and the rule buys 8,000.
+    const SUGAR = { rawMaterialId: 'rm-sugar', name: 'White Sugar', unit: 'g', quantity: 2000, shortBy: 4000, lowStockAlert: 6000, kind: 'INGREDIENT' };
+    const onOpen = (created: any[]) => created.filter((c) => c.purchaseRequestId === 'open1');
+
+    it('sent, then checked again: adds nothing, and says it is already coming', async () => {
+      const { svc, created } = build({ lowStock: [SUGAR] });
+      const first = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(first.added).toBe(1);
+      expect(first.onTheWay).toEqual([]);
+
+      await svc.sendRequest(TENANT, 'req1', USER);
+
+      // The shelf has not changed -- the shopping has not come back yet.
+      const again = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(again.requestId).toBe('open1');
+      expect(again.added).toBe(0);
+      expect(onOpen(created)).toHaveLength(0);
+      // Named, so the screen can say which list it is on.
+      expect(again.onTheWay).toEqual([
+        { id: 'rm-sugar', name: 'White Sugar', unit: 'g', quantity: 2000, shortBy: 4000, coming: 8000,
+          requestNumber: 'REQ-20260830-001', sentAt: expect.any(Date) },
+      ]);
+    });
+
+    it('bought and not yet posted counts the packs bought, not what was asked', async () => {
+      // 2,500 g short, so the rule wants 5,000 g. The list asked for 2,500 g, and five 1 kg
+      // bags were bought: 5,000 g coming covers it; the 2,500 g asked for would not.
+      const { svc, created } = build({
+        lowStock: [{ ...SUGAR, quantity: 1000, shortBy: 2500, lowStockAlert: 3500 }],
+        elsewhere: [{ id: 'reqB', status: 'BOUGHT', lines: [
+          { rawMaterialId: 'rm-sugar', qtyRequested: 2500, packsBought: 5, packSize: 1000, receivedAt: null },
+        ] }],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(0);
+      expect(created.filter((c) => c.rawMaterialId)).toHaveLength(0);
+      expect(res.onTheWay.map((x: any) => [x.id, x.coming])).toEqual([['rm-sugar', 5000]]);
+    });
+
+    it('a bought list\'s line nobody has recorded yet still counts what was asked', async () => {
+      const { svc } = build({
+        lowStock: [SUGAR],
+        elsewhere: [{ id: 'reqB', status: 'BOUGHT', lines: [
+          { rawMaterialId: 'rm-sugar', qtyRequested: 8000, packsBought: null, packSize: null, receivedAt: null },
+        ] }],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(0);
+      expect(res.onTheWay[0].coming).toBe(8000);
+    });
+
+    it('lines already posted, and closed or cancelled lists, are not coming', async () => {
+      // Posted stock is already in the shelf figure; counting it again would hide a real shortage.
+      const { svc, created } = build({
+        lowStock: [SUGAR],
+        elsewhere: [
+          { id: 'reqB', status: 'BOUGHT', lines: [
+            { rawMaterialId: 'rm-sugar', qtyRequested: 8000, packsBought: 8, packSize: 1000, receivedAt: new Date('2026-09-15T02:00:00Z') },
+          ] },
+          { id: 'reqR', status: 'RECEIVED', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 8000, receivedAt: null }] },
+          { id: 'reqC', status: 'CANCELLED', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 8000, receivedAt: null }] },
+        ],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(1);
+      expect(res.onTheWay).toEqual([]);
+      expect(Number(created.find((c) => c.rawMaterialId === 'rm-sugar').qtyRequested)).toBe(8000);
+    });
+
+    it('another branch\'s list is not coming here', async () => {
+      const { svc, created } = build({
+        lowStock: [SUGAR],
+        elsewhere: [{ id: 'reqB2', status: 'SENT', branchId: 'b2', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 8000, receivedAt: null }] }],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(1);
+      expect(res.onTheWay).toEqual([]);
+      expect(Number(created.find((c) => c.rawMaterialId === 'rm-sugar').qtyRequested)).toBe(8000);
+    });
+
+    it('part of it coming: asks only for the rest', async () => {
+      // 3,000 g sent leaves the sugar at 5,000 g -- still under 6,000. The rule wanted 8,000; 3,000 is coming.
+      const { svc, created } = build({
+        lowStock: [SUGAR],
+        elsewhere: [{ id: 'reqS', status: 'SENT', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 3000, receivedAt: null }] }],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(1);
+      expect(res.onTheWay).toEqual([]);
+      const line = created.find((c) => c.rawMaterialId === 'rm-sugar');
+      expect(Number(line.qtyRequested)).toBe(5000);
+      expect(Number(line.shortBy)).toBe(4000);   // why it is on the list is unchanged
+    });
+
+    it('coming exactly up to the level is still low, so the rest is still asked for', async () => {
+      // Low is `<=`: 2,000 + 4,000 lands ON the 6,000 g line.
+      const { svc, created } = build({
+        lowStock: [SUGAR],
+        elsewhere: [{ id: 'reqS', status: 'SENT', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 4000, receivedAt: null }] }],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(1);
+      expect(Number(created.find((c) => c.rawMaterialId === 'rm-sugar').qtyRequested)).toBe(4000);
+    });
+
+    it('only what is coming for that item: other low items are bought as before', async () => {
+      const { svc, created } = build({
+        lowStock: [SUGAR, { rawMaterialId: 'rm-milk', name: 'Fresh Milk', unit: 'ml', quantity: 0, shortBy: 6000, lowStockAlert: 6000, kind: 'INGREDIENT' }],
+        elsewhere: [{ id: 'reqS', status: 'SENT', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 8000, receivedAt: null }] }],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(1);
+      expect(created.filter((c) => c.rawMaterialId).map((c) => [c.rawMaterialId, Number(c.qtyRequested)])).toEqual([['rm-milk', 12000]]);
+      expect(res.onTheWay.map((x: any) => x.id)).toEqual(['rm-sugar']);
+    });
+
+    it('adds up every list coming to the branch, and can leave one out', async () => {
+      const { prisma } = build({
+        open: { status: 'SENT', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 1000, receivedAt: null }] },
+        elsewhere: [
+          { id: 'reqB', status: 'BOUGHT', lines: [
+            { rawMaterialId: 'rm-sugar', qtyRequested: 2500, packsBought: 3, packSize: 1000, receivedAt: null },
+            { rawMaterialId: 'rm-milk', qtyRequested: 0.3, receivedAt: null },
+          ] },
+          { id: 'reqS', status: 'SENT', lines: [{ rawMaterialId: 'rm-milk', qtyRequested: 0.1, receivedAt: null }] },
+        ],
+      });
+      const qty = (m: Map<string, { quantity: number }>) => Object.fromEntries([...m].map(([id, c]) => [id, c.quantity]));
+      const all = await onTheWay(prisma, TENANT, BRANCH);
+      expect(qty(all)).toEqual({ 'rm-sugar': 4000, 'rm-milk': 0.4 });
+      // Named by the list bringing the most: 3,000 g of the sugar, 0.3 of the milk.
+      expect(all.get('rm-sugar')!.requestNumber).toBe('REQ-reqB');
+      expect(all.get('rm-milk')!.requestNumber).toBe('REQ-reqB');
+      const without = await onTheWay(prisma, TENANT, BRANCH, 'req1');
+      expect(qty(without)).toEqual({ 'rm-sugar': 3000, 'rm-milk': 0.4 });
+    });
+
+    it('names the list that brings most of it, with when it was sent', async () => {
+      const monday  = new Date(Date.now() - 30 * 3_600_000);
+      const tuesday = new Date(Date.now() - 6 * 3_600_000);
+      const { svc } = build({
+        lowStock: [SUGAR],
+        elsewhere: [
+          { id: 'reqS', requestNumber: 'REQ-20260915-001', status: 'SENT', sentAt: monday, lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 3000, receivedAt: null }] },
+          { id: 'reqT', requestNumber: 'REQ-20260916-001', status: 'SENT', sentAt: tuesday, lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 6000, receivedAt: null }] },
+        ],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(0);
+      expect(res.onTheWay).toEqual([expect.objectContaining({ coming: 9000, requestNumber: 'REQ-20260916-001', sentAt: tuesday })]);
+    });
+
+    /*
+      A list nobody closes.
+
+      Nothing closes a sent list on its own. Stock posted from Receipts without
+      the list, or received under Inventory, leaves it SENT; a line that fails
+      to post leaves a bought one BOUGHT. Believed with no end date, it kept
+      the sugar off every later list until somebody found and cancelled it.
+    */
+    describe('a list nobody closed', () => {
+      const sentAt = new Date(Date.now() - 24 * 3_600_000);
+      const SENT_SUGAR = { id: 'reqA', status: 'SENT', sentAt, lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 8000, receivedAt: null }] };
+
+      it('stops counting once sugar has come in since it was sent', async () => {
+        const { svc, created, prisma } = build({
+          lowStock: [SUGAR],
+          elsewhere: [SENT_SUGAR],
+          // Bought on a receipt and posted, without the list.
+          lots: [{ rawMaterialId: 'rm-sugar', qtyReceived: 8000, createdAt: new Date(sentAt.getTime() + 3_600_000), referenceNumber: 'REQ-20260916-002-01' }],
+        });
+        const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+        expect(res.added).toBe(1);
+        expect(res.onTheWay).toEqual([]);
+        expect(Number(created.find((c) => c.rawMaterialId === 'rm-sugar').qtyRequested)).toBe(8000);
+        // Read once, and only from the time of the list.
+        expect(prisma.rawMaterialLot.findMany).toHaveBeenCalledTimes(1);
+        expect(prisma.rawMaterialLot.findMany.mock.calls[0][0].where.createdAt.gt).toEqual(sentAt);
+      });
+
+      it('still counts when what came in was before the list, a write-off, or at another branch', async () => {
+        const { svc } = build({
+          lowStock: [SUGAR],
+          elsewhere: [SENT_SUGAR],
+          lots: [
+            { rawMaterialId: 'rm-sugar', qtyReceived: 8000, createdAt: new Date(sentAt.getTime() - 3_600_000) },
+            { rawMaterialId: 'rm-sugar', qtyReceived: -500, createdAt: new Date(sentAt.getTime() + 3_600_000) },
+            { rawMaterialId: 'rm-sugar', qtyReceived: 8000, createdAt: new Date(sentAt.getTime() + 3_600_000), branchId: 'b2' },
+            { rawMaterialId: 'rm-milk',  qtyReceived: 8000, createdAt: new Date(sentAt.getTime() + 3_600_000) },
+          ],
+        });
+        const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+        expect(res.added).toBe(0);
+        expect(res.onTheWay[0].coming).toBe(8000);
+      });
+
+      it('a bought list is measured from when it was bought, not sent', async () => {
+        // An emergency bag between sending and buying: the list bought afterwards is still coming.
+        const boughtAt = new Date(sentAt.getTime() + 6 * 3_600_000);
+        const { svc } = build({
+          lowStock: [SUGAR],
+          elsewhere: [{ id: 'reqB', status: 'BOUGHT', sentAt, boughtAt, lines: [
+            { rawMaterialId: 'rm-sugar', qtyRequested: 8000, packsBought: 8, packSize: 1000, receivedAt: null },
+          ] }],
+          lots: [{ rawMaterialId: 'rm-sugar', qtyReceived: 1000, createdAt: new Date(sentAt.getTime() + 3_600_000) }],
+        });
+        const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+        expect(res.added).toBe(0);
+        expect(res.onTheWay[0].coming).toBe(8000);
+      });
+
+      it('the balance of a short delivery is not undone by its parent\'s own packs', async () => {
+        // The parent's arrived packs are posted a moment before the balance is made; a
+        // clock a little ahead puts them after it. Anything else that came in still counts.
+        const boughtAt = new Date(Date.now() - 2 * 3_600_000);
+        const later = new Date(boughtAt.getTime() + 1000);
+        const balance = { id: 'reqBal', status: 'BOUGHT', sentAt: boughtAt, boughtAt,
+          notes: '[BALANCEOF:REQ-20260910-100] [ONTHEWAY:2026-09-17] Balance of REQ-20260910-100: still coming',
+          lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 8000, packsBought: 8, packSize: 1000, receivedAt: null }] };
+
+        const own = build({
+          lowStock: [SUGAR], elsewhere: [balance],
+          lots: [{ rawMaterialId: 'rm-sugar', qtyReceived: 2000, createdAt: later, referenceNumber: 'REQ-20260910-100-01' }],
+        });
+        const kept = await own.svc.pullLowStock(TENANT, BRANCH, USER);
+        expect(kept.added).toBe(0);
+        expect(kept.onTheWay[0].coming).toBe(8000);
+
+        const other = build({
+          lowStock: [SUGAR], elsewhere: [balance],
+          lots: [{ rawMaterialId: 'rm-sugar', qtyReceived: 2000, createdAt: later, referenceNumber: 'REQ-20260910-1000-01' }],
+        });
+        const dropped = await other.svc.pullLowStock(TENANT, BRANCH, USER);
+        expect(dropped.added).toBe(1);
+        expect(dropped.onTheWay).toEqual([]);
+      });
+
+      it('a sent list older than three days is not believed', async () => {
+        const old = build({ lowStock: [SUGAR], elsewhere: [{ ...SENT_SUGAR, sentAt: new Date(Date.now() - 73 * 3_600_000) }] });
+        const res = await old.svc.pullLowStock(TENANT, BRANCH, USER);
+        expect(res.added).toBe(1);
+        expect(res.onTheWay).toEqual([]);
+        expect(Number(old.created.find((c) => c.rawMaterialId === 'rm-sugar').qtyRequested)).toBe(8000);
+
+        const recent = build({ lowStock: [SUGAR], elsewhere: [{ ...SENT_SUGAR, sentAt: new Date(Date.now() - 71 * 3_600_000) }] });
+        expect((await recent.svc.pullLowStock(TENANT, BRANCH, USER)).added).toBe(0);
+      });
+
+      it('a bought list older than a week is not believed, unless it is an order still waiting for its parcel', async () => {
+        const eightDays = new Date(Date.now() - 8 * 86_400_000);
+        const line = { rawMaterialId: 'rm-sugar', qtyRequested: 8000, packsBought: 8, packSize: 1000, receivedAt: null };
+
+        const trip = build({ lowStock: [SUGAR], elsewhere: [{ id: 'reqB', status: 'BOUGHT', sentAt: eightDays, boughtAt: eightDays, lines: [line] }] });
+        expect((await trip.svc.pullLowStock(TENANT, BRANCH, USER)).added).toBe(1);
+
+        const parcel = build({ lowStock: [SUGAR], elsewhere: [{ id: 'reqB', status: 'BOUGHT', sentAt: eightDays, boughtAt: eightDays, notes: '[ONTHEWAY:2026-09-09]', lines: [line] }] });
+        const res = await parcel.svc.pullLowStock(TENANT, BRANCH, USER);
+        expect(res.added).toBe(0);
+        expect(res.onTheWay[0].coming).toBe(8000);
+
+        // Only a tag Procure wrote, in front: a person's words further along are not one.
+        const typed = build({ lowStock: [SUGAR], elsewhere: [{ id: 'reqB', status: 'BOUGHT', sentAt: eightDays, boughtAt: eightDays, notes: 'Shopee [ONTHEWAY:2026-09-09]', lines: [line] }] });
+        expect((await typed.svc.pullLowStock(TENANT, BRANCH, USER)).added).toBe(1);
+      });
+    });
+
+    it('a line left blank on an order waiting for its parcel was not ordered, so it is still needed', async () => {
+      // Only the cups were ordered on Shopee. The sugar line was left blank; the order
+      // does not close, and put the sugar back on the list, until the parcel is posted.
+      const { svc, created } = build({
+        lowStock: [SUGAR],
+        elsewhere: [{ id: 'reqB', status: 'BOUGHT', notes: '[ONTHEWAY:2026-09-04]', lines: [
+          { rawMaterialId: 'rm-cups',  qtyRequested: 100,  packsBought: 1, packSize: 100, receivedAt: null },
+          { rawMaterialId: 'rm-sugar', qtyRequested: 8000, packsBought: null, packSize: null, receivedAt: null },
+        ] }],
+      });
+      const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+      expect(res.added).toBe(1);
+      expect(res.onTheWay).toEqual([]);
+      expect(Number(created.find((c) => c.rawMaterialId === 'rm-sugar').qtyRequested)).toBe(8000);
+    });
+
+    it('covered only when what is coming reaches what the rule wants, so the amount asked never jumps', async () => {
+      // 4,000 g short: the rule wants 8,000 g. One gram past the reorder level used to
+      // count as covered, and the delivery left the shelf a gram over the line.
+      const ask = async (coming: number) => {
+        const { svc, created } = build({
+          lowStock: [SUGAR],
+          elsewhere: [{ id: 'reqS', status: 'SENT', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: coming, receivedAt: null }] }],
+        });
+        const res = await svc.pullLowStock(TENANT, BRANCH, USER);
+        const line = created.find((c) => c.rawMaterialId === 'rm-sugar');
+        return { asked: line ? Number(line.qtyRequested) : 0, covered: res.onTheWay.length === 1 };
+      };
+      expect(await ask(4001)).toEqual({ asked: 3999, covered: false });
+      expect(await ask(7999)).toEqual({ asked: 1, covered: false });
+      expect(await ask(8000)).toEqual({ asked: 0, covered: true });
+    });
+
+    it('exactly on the line, as much as the reorder level coming covers it', async () => {
+      const onTheLine = { ...SUGAR, quantity: 6000, shortBy: 0 };
+      const covered = build({ lowStock: [onTheLine], elsewhere: [{ id: 'reqS', status: 'SENT', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 6000, receivedAt: null }] }] });
+      expect((await covered.svc.pullLowStock(TENANT, BRANCH, USER)).added).toBe(0);
+
+      const partly = build({ lowStock: [onTheLine], elsewhere: [{ id: 'reqS', status: 'SENT', lines: [{ rawMaterialId: 'rm-sugar', qtyRequested: 1000, receivedAt: null }] }] });
+      expect((await partly.svc.pullLowStock(TENANT, BRANCH, USER)).added).toBe(1);
+      expect(Number(partly.created.find((c) => c.rawMaterialId === 'rm-sugar').qtyRequested)).toBe(5000);
     });
   });
 

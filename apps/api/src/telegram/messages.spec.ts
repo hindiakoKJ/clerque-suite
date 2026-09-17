@@ -1,5 +1,6 @@
 import {
-  CAPTION_LIMIT, MESSAGE_LIMIT, SaleForAlert, boughtMessage, buyListSentMessage, escapeHtml, photoCaption, postedMessage, saleMessage,
+  CAPTION_LIMIT, MESSAGE_LIMIT, SaleForAlert, USAGE_ROWS_SHOWN, UsageForAlert, boughtMessage, buyListSentMessage, dailyUsageMessage, escapeHtml,
+  lateSalesNote, manilaDayLabel, photoCaption, postedMessage, saleMessage, usageQty,
 } from './messages';
 
 /** What the owner reads on their phone. */
@@ -108,6 +109,128 @@ describe('Telegram alert messages', () => {
     expect(text).toContain('<b>In stock: PR-2026-0012</b>  ₱380.00');
     expect(text).toContain('• Whole milk: 4 packs × 1000 ml');
     expect(text).not.toContain('Espresso');
+  });
+
+  // ── end of day ──────────────────────────────────────────────────────────
+
+  const usage = (over: Partial<UsageForAlert> = {}): UsageForAlert => ({
+    shopName: 'Cafe Carolina', branchName: 'Main', day: '2026-09-16',
+    rows: [
+      { name: 'Fresh Milk', unit: 'ml', costPrice: 0.095, total: 8100, wasted: 1200, writtenOff: 0 },
+      { name: 'Espresso Beans', unit: 'g', costPrice: 0.85, total: 1250, wasted: 0, writtenOff: 300 },
+      { name: 'Paper Cups 12oz', unit: 'pcs', costPrice: 4, total: 64, wasted: 0, writtenOff: 0 },
+    ],
+    totalValue: 2081.75,
+    stillBeingMade: 0,
+    lateSales: 0,
+    ...over,
+  });
+
+  it("the day's usage reads like the handwritten sheet: branch, date, each ingredient in kg and L", () => {
+    const text = dailyUsageMessage(usage());
+    const [title, place, date] = text.split('\n');
+    expect(title).toBe('📋 <b>Ingredients used today</b>');
+    expect(place).toBe('Cafe Carolina · Main');
+    expect(date).toBe('Wed, Sep 16');
+    const lines = receipt(text).split('\n');
+    expect(lines.every((l) => [...l].length <= 32)).toBe(true);
+    expect(lines[0]).toMatch(/^Fresh Milk +8\.1 L$/);
+    expect(lines[1]).toMatch(/^ {2}of it wasted +1\.2 L$/);
+    expect(lines[2]).toMatch(/^Espresso Beans +1\.25 kg$/);
+    expect(lines[3]).toMatch(/^ {2}of it written off +300 g$/);
+    expect(lines[4]).toMatch(/^Paper Cups 12oz +64 pcs$/);
+    expect(lines.find((l) => l.startsWith('VALUE AT COST'))).toMatch(/₱2,081\.75$/);
+    // The escaped ">" is what Telegram shows as ">".
+    expect(text.endsWith('Full list: Inventory &gt; Ingredients &gt; Reports')).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(MESSAGE_LIMIT);
+  });
+
+  it('humanises only grams and millilitres, and only from 1,000 up', () => {
+    expect(usageQty(8100, 'ml')).toBe('8.1 L');
+    expect(usageQty(1000, 'g')).toBe('1 kg');
+    expect(usageQty(999, 'ml')).toBe('999 ml');
+    // Rounded as it would show: never "1,000 g".
+    expect(usageQty(999.996, 'g')).toBe('1 kg');
+    expect(usageQty(1500, 'G')).toBe('1.5 kg');
+    expect(usageQty(12345.678, 'ml')).toBe('12.35 L');
+    expect(usageQty(2500, 'pcs')).toBe('2,500 pcs');
+    expect(usageQty(0.0125, 'L')).toBe('0.0125 L');
+    expect(usageQty(3, '')).toBe('3');
+  });
+
+  it('says nothing about value when no ingredient has a cost, and says which are left out when some have none', () => {
+    const none = dailyUsageMessage(usage({ rows: usage().rows.map((r) => ({ ...r, costPrice: 0 })), totalValue: 0 }));
+    expect(none).not.toContain('VALUE');
+    expect(none).not.toContain('₱');
+    const some = receipt(dailyUsageMessage(usage({ rows: usage().rows.map((r, i) => ({ ...r, costPrice: i === 2 ? 0 : r.costPrice })) })));
+    expect(some).toContain('  1 has no cost, not counted');
+  });
+
+  it('no split line for an ingredient nothing was wasted or written off of', () => {
+    const lines = receipt(dailyUsageMessage(usage({ rows: [{ name: 'Sugar', unit: 'g', costPrice: 0.07, total: 650, wasted: 0, writtenOff: 0 }] }))).split('\n');
+    expect(lines[0]).toMatch(/^Sugar +650 g$/);
+    expect(lines[1]).toBe('-'.repeat(32));
+  });
+
+  it('shows the top 25 by value and counts the rest as "+N more"', () => {
+    const rows = Array.from({ length: 60 }, (_, i) => ({ name: `Ingredient ${i}`, unit: 'g', costPrice: 1, total: 1000 - i, wasted: 0, writtenOff: 0 }));
+    const lines = receipt(dailyUsageMessage(usage({ rows }))).split('\n');
+    expect(USAGE_ROWS_SHOWN).toBe(25);
+    expect(lines.filter((l) => l.startsWith('Ingredient '))).toHaveLength(25);
+    expect(lines[24]).toMatch(/^Ingredient 24 /);
+    expect(lines).toContain('+35 more');
+  });
+
+  it('a list that would pass the 4096-character limit drops rows from the end and counts them in "+N more"', () => {
+    // Every character escapes to five: 25 rows of these do not fit.
+    const rows = Array.from({ length: 40 }, (_, i) => ({ name: `${'&'.repeat(40)}${i}`, unit: 'ml', costPrice: 1, total: 2000, wasted: 500, writtenOff: 250 }));
+    const text = dailyUsageMessage(usage({ rows, totalValue: 80000 }));
+    expect(text.length).toBeLessThanOrEqual(MESSAGE_LIMIT);
+    expect(text).toContain('</pre>');
+    expect(text.endsWith('Reports')).toBe(true);
+    const shown = receipt(text).split('\n').filter((l) => l.startsWith('&')).length;
+    expect(shown).toBeLessThan(25);
+    expect(receipt(text)).toContain(`+${40 - shown} more`);
+  });
+
+  it('escapes ingredient, shop and branch names', () => {
+    const text = dailyUsageMessage(usage({
+      shopName: 'Kape <i>&</i> Co', branchName: 'SM <Naga>',
+      rows: [{ name: 'Tea <b>&</b>', unit: 'g', costPrice: 1, total: 5, wasted: 0, writtenOff: 0 }],
+    }));
+    expect(text).toContain('Kape &lt;i&gt;&amp;&lt;/i&gt; Co · SM &lt;Naga&gt;');
+    expect(text).toContain('Tea &lt;b&gt;&amp;&lt;/b&gt;');
+    expect(text.match(/<b>/g)).toHaveLength(1);
+    expect(text.match(/<i>/g)).toBeNull();
+  });
+
+  it('a day with sales but nothing counted says why, and items still at a screen are called out', () => {
+    expect(dailyUsageMessage(usage({ rows: [], totalValue: 0 }))).toContain('The items sold may have no recipe yet.');
+    const waiting = dailyUsageMessage(usage({ rows: [], totalValue: 0, stillBeingMade: 3 }));
+    expect(waiting).toContain('No ingredients were counted yet.');
+    expect(waiting).toContain('3 items still at the kitchen or bar screen are not counted yet.');
+    expect(waiting).not.toContain('<pre>');
+    expect(dailyUsageMessage(usage({ stillBeingMade: 1 }))).toContain('1 item still at the kitchen or bar screen is not counted yet.');
+  });
+
+  it('says how many sales rung up offline reached Clerque after their sheet, before the pointer to the full list', () => {
+    const lines = dailyUsageMessage(usage({ lateSales: 3 })).split('\n');
+    expect(lines[lines.length - 2]).toBe("3 sales rung up offline reached Clerque after their day's sheet went out. No sheet counts them; the report page does.");
+    expect(dailyUsageMessage(usage({ lateSales: 1 }))).toContain("1 sale rung up offline reached Clerque after its day's sheet went out. No sheet counts it; the report page does.");
+    expect(dailyUsageMessage(usage())).not.toContain('reached Clerque');
+    expect(lateSalesNote(2)).toBe("2 sales rung up offline reached Clerque after their day's sheet went out. No sheet counts them; the report page does.");
+  });
+
+  it('a sheet sent only for late sales does not blame missing recipes', () => {
+    const text = dailyUsageMessage(usage({ rows: [], totalValue: 0, lateSales: 2 }));
+    expect(text).toContain('No ingredients were counted.');
+    expect(text).not.toContain('recipe');
+    expect(text).toContain('2 sales rung up offline');
+  });
+
+  it("labels the business day in Manila, whatever the server's timezone", () => {
+    expect(manilaDayLabel('2026-09-16')).toBe('Wed, Sep 16');
+    expect(manilaDayLabel('2027-01-01')).toBe('Fri, Jan 1');
   });
 
   it('escapeHtml leaves nothing Telegram would read as markup', () => {

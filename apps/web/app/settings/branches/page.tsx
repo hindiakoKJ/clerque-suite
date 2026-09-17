@@ -4,7 +4,7 @@
  *
  * Tenants on multi-branch plans use this to manage their physical locations.
  * Lists existing branches, lets the owner add a new one (subject to plan
- * cap), rename, change address, or deactivate.
+ * cap), rename, change address, set its closing time, or deactivate.
  *
  * Plan cap is enforced server-side (POST /tenant/branches throws
  * BRANCH_CAP_REACHED). The UI also shows usage so the owner sees how many
@@ -12,7 +12,7 @@
  *
  * BUSINESS_OWNER + SUPER_ADMIN only — staff cannot manage branches.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -21,13 +21,30 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { planLabel, type PlanCode } from '@repo/shared-types';
+import { closesAtToSave } from './closes-at';
 
 interface Branch {
   id:       string;
   name:     string;
   address:  string | null;
   isActive: boolean;
+  /** "HH:mm", 24-hour, Manila time. null = not set. */
+  closesAt: string | null;
 }
+
+/**
+ * "21:00" -> "9:00 PM". closesAt is already Manila wall-clock time, so the
+ * digits are formatted as they are -- going through Date would shift it by
+ * the viewer's own timezone.
+ */
+function formatClosesAt(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return hhmm;
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+const EMPTY_FORM = { name: '', address: '', closesAt: '' };
 
 const INPUT_CLS =
   'w-full border border-border bg-background rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent transition-shadow';
@@ -42,7 +59,9 @@ export default function BranchesPage() {
   const maxBranches = (user as any)?.planLimits?.maxBranches ?? 1;
 
   const [modal, setModal] = useState<'create' | { id: string } | null>(null);
-  const [form,  setForm]  = useState({ name: '', address: '' });
+  const [form,  setForm]  = useState(EMPTY_FORM);
+  // Read on save: a half-typed time box looks empty to React, only the box itself knows.
+  const closesAtRef = useRef<HTMLInputElement>(null);
 
   const { data: branches = [], isLoading } = useQuery<Branch[]>({
     queryKey: ['tenant-branches-manage'],
@@ -55,14 +74,14 @@ export default function BranchesPage() {
   const atCap        = activeCount >= maxBranches;
 
   const createBranch = useMutation({
-    mutationFn: (body: { name: string; address: string }) =>
+    mutationFn: (body: { name: string; address: string; closesAt: string | null }) =>
       api.post('/tenant/branches', body).then((r) => r.data),
     onSuccess: () => {
       toast.success('Branch added');
       qc.invalidateQueries({ queryKey: ['tenant-branches-manage'] });
       qc.invalidateQueries({ queryKey: ['tenant-branches'] });
       setModal(null);
-      setForm({ name: '', address: '' });
+      setForm(EMPTY_FORM);
     },
     onError: (err: any) => {
       const code = err?.response?.data?.code;
@@ -102,11 +121,11 @@ export default function BranchesPage() {
   }
 
   function openCreate() {
-    setForm({ name: '', address: '' });
+    setForm(EMPTY_FORM);
     setModal('create');
   }
   function openEdit(b: Branch) {
-    setForm({ name: b.name, address: b.address ?? '' });
+    setForm({ name: b.name, address: b.address ?? '', closesAt: b.closesAt ?? '' });
     setModal({ id: b.id });
   }
 
@@ -181,6 +200,7 @@ export default function BranchesPage() {
                   )}
                 </div>
                 {b.address && <p className="text-xs text-muted-foreground truncate mt-0.5">{b.address}</p>}
+                {b.closesAt && <p className="text-xs text-muted-foreground mt-0.5">Closes {formatClosesAt(b.closesAt)}</p>}
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <button
@@ -238,6 +258,41 @@ export default function BranchesPage() {
                   placeholder="Optional"
                 />
               </div>
+              <div>
+                <label htmlFor="branch-closes-at" className="block text-xs font-medium text-muted-foreground mb-1">
+                  Closes at
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={closesAtRef}
+                    id="branch-closes-at"
+                    type="time"
+                    value={form.closesAt}
+                    onChange={(e) => setForm((f) => ({ ...f, closesAt: e.target.value }))}
+                    className={INPUT_CLS}
+                  />
+                  {/*
+                    Not every browser's time box has its own clear button. Always
+                    shown: a half-typed box is "" to React too, and this is the way
+                    out of the "finish the closing time" message. The box is emptied
+                    directly, since setting "" over "" changes nothing React would redraw.
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (closesAtRef.current) closesAtRef.current.value = '';
+                      setForm((f) => ({ ...f, closesAt: '' }));
+                    }}
+                    className="text-xs px-2 py-1.5 rounded-lg border border-border hover:bg-muted shrink-0"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  30 minutes after this time, Clerque sends the owner today&apos;s ingredient usage. Record closing
+                  write-offs and preps before then.
+                </p>
+              </div>
             </div>
             <div className="px-6 py-4 border-t border-border flex items-center justify-end gap-2">
               <button
@@ -252,12 +307,20 @@ export default function BranchesPage() {
                     toast.error('Branch name must be at least 2 characters');
                     return;
                   }
+                  // A half-typed time box reports "" just like a blank one, so
+                  // saving it would quietly remove the closing time.
+                  const time = closesAtToSave(closesAtRef.current, form.closesAt);
+                  if (!time.ok) {
+                    toast.error(time.message);
+                    return;
+                  }
+                  const closesAt = time.closesAt;
                   if (modal === 'create') {
-                    createBranch.mutate({ name: form.name.trim(), address: form.address.trim() });
+                    createBranch.mutate({ name: form.name.trim(), address: form.address.trim(), closesAt });
                   } else {
                     updateBranch.mutate({
                       id: modal.id,
-                      body: { name: form.name.trim(), address: form.address.trim() || null },
+                      body: { name: form.name.trim(), address: form.address.trim() || null, closesAt },
                     });
                   }
                 }}

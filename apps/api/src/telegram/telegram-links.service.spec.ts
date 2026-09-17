@@ -148,6 +148,17 @@ describe('TelegramLinksService', () => {
       await expect(build().svc.createLink(session('cook', 'GENERAL_EMPLOYEE'), NOW)).rejects.toThrow(ForbiddenException);
       await expect(build({ enabled: false }).svc.createLink(session('anne', 'BUSINESS_OWNER'), NOW)).rejects.toThrow(ServiceUnavailableException);
     });
+
+    it('only owners and managers can change what they get or send a test; only a manager keeps the link capability', async () => {
+      const { svc } = build();
+      for (const role of ['GENERAL_EMPLOYEE', 'CASHIER', 'SALES_LEAD', 'MDM', 'WAREHOUSE_STAFF']) {
+        await expect(svc.updateMine(session('cook', role), { alertSales: false })).rejects.toThrow(ForbiddenException);
+        await expect(svc.sendTest(session('cook', role))).rejects.toThrow(ForbiddenException);
+        expect(await svc.status(session('cook', role))).toMatchObject({ canLink: false });
+      }
+      // Unlinking is never blocked, so nobody is stuck with alerts.
+      await expect(svc.unlinkMine(session('cook', 'CASHIER'))).resolves.toEqual({ unlinked: false });
+    });
   });
 
   describe('using the link in Telegram', () => {

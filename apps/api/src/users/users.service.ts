@@ -14,6 +14,7 @@ import { CreateUserDto, StaffRole } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { assertPinPolicy } from '../auth/pin-policy';
 import { assertPasswordPolicy } from '../auth/password-policy';
+import { LINKABLE_ROLES } from '../telegram/link-roles';
 
 export { CreateUserDto, UpdateUserDto, StaffRole };
 
@@ -391,6 +392,16 @@ export class UsersService {
       },
     });
     if (result.count === 0) throw new NotFoundException('User not found');
+
+    /*
+      Telegram alerts are for owners and branch managers only. Someone moved to
+      another role, or switched off, loses the link at once: the alert reader
+      already skips them, but a link left behind would quietly start sending
+      again the day the role or the account came back.
+    */
+    if (dto.isActive === false || (dto.role !== undefined && !LINKABLE_ROLES.includes(dto.role))) {
+      await this.prisma.telegramLink.updateMany({ where: { userId: id, tenantId }, data: { chatId: null, telegramUsername: null } });
+    }
 
     // Audit-log the permissions change so SOD log + governance reports have
     // a record. We log even when only role / persona changed — those affect

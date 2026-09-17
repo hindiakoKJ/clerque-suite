@@ -21,7 +21,10 @@ describe('IngredientReportsService — days of cover counts prep', () => {
 
   function build(opts: { batches?: number; ordersOfLatte?: number } = {}) {
     const batches = opts.batches ?? 0;
+    // An hour ago: inside the default last-30-days window, and not after "now".
+    const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     const prepEvents = Array.from({ length: batches }, () => ({
+      createdAt: anHourAgo,
       payload: {
         kind: 'SUB_RECIPE_BATCH',
         branchId: 'b1',
@@ -45,8 +48,13 @@ describe('IngredientReportsService — days of cover counts prep', () => {
       rawMaterialLot: { findMany: jest.fn().mockResolvedValue([]) },
       order: {
         findMany: jest.fn().mockResolvedValue(
-          Array.from({ length: opts.ordersOfLatte ?? 0 }, () => ({
-            items: [{ productId: 'p-latte', quantity: 1 }],
+          Array.from({ length: opts.ordersOfLatte ?? 0 }, (_, n) => ({
+            id: `o-${n}`, status: 'COMPLETED', paidAt: anHourAgo, createdAt: anHourAgo,
+            // A saved line used at the sale: no size, no add-ons, nothing refunded.
+            items: [{
+              id: `oi-${n}`, productId: 'p-latte', variantId: null, modifiers: [],
+              quantity: 1, refundedQty: 0, usageOnReady: false, usagePostedAt: null,
+            }],
           })),
         ),
       },

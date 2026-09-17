@@ -1,4 +1,5 @@
 import { TelegramAlertsService } from './telegram-alerts.service';
+import type { UsageDay } from '../ingredient-reports/daily-usage';
 
 /** Each alert: loads what it says only for a shop someone listens to, sends to exactly the recipients, never throws. */
 describe('TelegramAlertsService', () => {
@@ -24,6 +25,7 @@ describe('TelegramAlertsService', () => {
         }),
       },
       purchaseRequest: { findFirst: jest.fn(async ({ where }: any) => (where.tenantId === 't1' ? REQUEST : null)) },
+      branch: { findFirst: jest.fn(async ({ where }: any) => (where.tenantId === 't1' && where.id === 'b1' ? { name: 'Main', tenant: { name: 'Cafe Carolina' } } : null)) },
       user: { findFirst: jest.fn(async ({ where }: any) => (where.tenantId === 't1' ? { name: 'Anne' } : null)) },
     };
     const client: any = { enabled: opts.enabled ?? true, sendMessage: jest.fn(), sendPhoto: jest.fn() };
@@ -81,5 +83,77 @@ describe('TelegramAlertsService', () => {
     expect(texts[1]).toContain('Bought: PR-0012');
     expect(texts[2]).toContain('In stock: PR-0012');
     expect(client.sendPhoto).toHaveBeenCalledWith('101', Buffer.from('jpg'), 'image/jpeg', expect.stringContaining('Receipt photo: PR-0012'), expect.any(String));
+  });
+
+  describe('dailyUsage -- the end-of-day ingredient sheet', () => {
+    // What the end-of-day job read for the bell. Its value is not the rows' sum on purpose: the message must show this figure, not work out its own.
+    const DAY: UsageDay = {
+      day: '2026-09-16',
+      rows: [{
+        rawMaterialId: 'rm-milk', name: 'Fresh Milk', unit: 'ml', costPrice: 0.1,
+        sold: 7000, wasted: 1100, intoPreps: 0, writtenOff: 0, total: 8100, value: 810,
+      }],
+      totals: { soldValue: 700, wastedValue: 110, intoPrepsValue: 0, writtenOffValue: 0, value: 777.77 },
+      stillBeingMade: 0,
+    };
+
+    it('goes to the recipients for that branch on the buying switch, showing exactly the reading it is handed', async () => {
+      const { svc, client, links, prisma } = build();
+      await svc.dailyUsage('t1', 'b1', DAY, 0);
+      expect(links.anyoneListening).toHaveBeenCalledWith('t1', 'buying');
+      expect(links.recipients).toHaveBeenCalledWith('t1', 'b1', 'buying');
+      expect(prisma.branch.findFirst.mock.calls[0][0].where).toEqual({ id: 'b1', tenantId: 't1' });
+      expect(client.sendMessage.mock.calls.map((c: any[]) => c[0])).toEqual(['101', '102']);
+      const text = client.sendMessage.mock.calls[0][1];
+      expect(text).toContain('<b>Ingredients used today</b>');
+      expect(text).toContain('Cafe Carolina · Main');
+      expect(text).toContain('Wed, Sep 16');
+      expect(text).toMatch(/Fresh Milk +8\.1 L/);
+      expect(text).toMatch(/of it wasted +1\.1 L/);
+      expect(text).toMatch(/VALUE AT COST +₱777\.77/);
+      expect(text).not.toContain('reached Clerque');
+    });
+
+    it('reads no usage of its own: only the branch name is looked up', async () => {
+      const { svc, client, prisma } = build();
+      await svc.dailyUsage('t1', 'b1', DAY, 0);
+      expect(client.sendMessage).toHaveBeenCalledTimes(2);
+      expect(prisma.order.findFirst).not.toHaveBeenCalled();
+      expect(prisma.branch.findFirst).toHaveBeenCalledTimes(1);
+    });
+
+    it('says how many sales reached Clerque too late for any sheet', async () => {
+      const { svc, client } = build({ chats: ['101'] });
+      await svc.dailyUsage('t1', 'b1', DAY, 2);
+      expect(client.sendMessage.mock.calls[0][1]).toContain("2 sales rung up offline reached Clerque after their day's sheet went out.");
+    });
+
+    it('a shop nobody listens to is not read at all', async () => {
+      const { svc, client, prisma } = build({ listening: false });
+      await svc.dailyUsage('t1', 'b1', DAY, 0);
+      expect(prisma.branch.findFirst).not.toHaveBeenCalled();
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('no recipient for the branch: the branch is not read', async () => {
+      const { svc, client, prisma } = build({ chats: [] });
+      await svc.dailyUsage('t1', 'b1', DAY, 0);
+      expect(prisma.branch.findFirst).not.toHaveBeenCalled();
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('a branch of another shop sends nothing', async () => {
+      const { svc, client } = build();
+      await svc.dailyUsage('t2', 'b1', DAY, 0);
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('never rejects: a bad day or a failed read only costs the message', async () => {
+      const { svc, client, prisma } = build();
+      await expect(svc.dailyUsage('t1', 'b1', { ...DAY, day: '2026-02-30' }, 0)).resolves.toBeUndefined();
+      prisma.branch.findFirst.mockRejectedValueOnce(new Error('database down'));
+      await expect(svc.dailyUsage('t1', 'b1', DAY, 0)).resolves.toBeUndefined();
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
   });
 });

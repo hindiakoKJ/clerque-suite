@@ -9,6 +9,7 @@ import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { TenantService } from './tenant.service';
 import { UpdateTenantProfileDto } from './dto/update-tenant-profile.dto';
 import { UpdateTaxSettingsDto } from './dto/update-tax-settings.dto';
+import { CreateBranchDto, UpdateBranchDto } from './dto/branch.dto';
 
 @ApiTags('Tenant')
 @ApiBearerAuth('access-token')
@@ -119,7 +120,8 @@ export class TenantController {
   }
 
   /**
-   * POST /tenant/branches — create a new branch.
+   * POST /tenant/branches — create a new branch. closesAt ("HH:mm", Manila
+   * time) is optional; the owner can set it later from Settings → Branches.
    *
    * Plan-aware: rejects when the tenant has already provisioned `maxBranches`
    * for their plan code (PLAN_LIMITS). Owners can buy a higher plan from
@@ -133,19 +135,21 @@ export class TenantController {
   @HttpCode(HttpStatus.CREATED)
   createBranch(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { name?: string; address?: string },
+    @Body() body: CreateBranchDto,
   ) {
     if (!body.name || body.name.trim().length < 2) {
       throw new BadRequestException('Branch name must be at least 2 characters.');
     }
     return this.tenantService.createBranch(user.tenantId!, {
-      name:    body.name.trim(),
-      address: body.address?.trim() || null,
+      name:     body.name.trim(),
+      address:  body.address?.trim() || null,
+      closesAt: body.closesAt ?? null,
     });
   }
 
   /**
-   * PATCH /tenant/branches/:id — rename / change address / toggle active.
+   * PATCH /tenant/branches/:id — rename / change address / toggle active /
+   * set or clear the closing time (closesAt "HH:mm", or null to clear).
    * BUSINESS_OWNER + SUPER_ADMIN.
    */
   @Roles('BUSINESS_OWNER', 'SUPER_ADMIN')
@@ -154,7 +158,7 @@ export class TenantController {
   updateBranch(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { name?: string; address?: string | null; isActive?: boolean },
+    @Body() body: UpdateBranchDto,
   ) {
     return this.tenantService.updateBranch(user.tenantId!, id, body);
   }

@@ -8,6 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { TelegramClient } from './telegram.client';
 import { LINK_TTL_SECONDS, signLinkCode, verifyLinkCode } from './link-token';
 import { escapeHtml } from './messages';
+import { LINKABLE_ROLES } from './link-roles';
 
 /**
  * Who a shop's alerts go to, and how a chat gets onto that list.
@@ -20,7 +21,7 @@ import { escapeHtml } from './messages';
  * demoted owner or a deactivated account stops getting alerts at once.
  */
 
-export const LINKABLE_ROLES: readonly string[] = ['BUSINESS_OWNER', 'BRANCH_MANAGER'];
+export { LINKABLE_ROLES };
 
 const ROLE_WORDS: Record<string, string> = { BUSINESS_OWNER: 'Owner', BRANCH_MANAGER: 'Branch manager' };
 
@@ -103,6 +104,7 @@ export class TelegramLinksService implements OnModuleInit {
 
   async updateMine(user: JwtPayload, dto: { alertSales?: boolean; alertBuying?: boolean }) {
     if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
+    this.assertLinkableRole(user);
     const data: { alertSales?: boolean; alertBuying?: boolean } = {};
     if (typeof dto.alertSales === 'boolean') data.alertSales = dto.alertSales;
     if (typeof dto.alertBuying === 'boolean') data.alertBuying = dto.alertBuying;
@@ -128,6 +130,7 @@ export class TelegramLinksService implements OnModuleInit {
 
   async sendTest(user: JwtPayload) {
     if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
+    this.assertLinkableRole(user);
     const link = await this.prisma.telegramLink.findFirst({
       where:  { userId: user.sub, tenantId: user.tenantId, chatId: { not: null } },
       select: { chatId: true, tenant: { select: { name: true } } },
@@ -140,6 +143,11 @@ export class TelegramLinksService implements OnModuleInit {
   private assertCanLink(user: JwtPayload) {
     if (!this.client.enabled) throw new ServiceUnavailableException('Telegram alerts are not switched on for Clerque yet.');
     if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
+    this.assertLinkableRole(user);
+  }
+
+  /** Owners and branch managers only -- for making a link and for everything done with one. Unlinking stays open to anyone, so nobody is ever stuck with alerts. */
+  private assertLinkableRole(user: JwtPayload) {
     if (!LINKABLE_ROLES.includes(user.role)) {
       throw new ForbiddenException('Only the owner or a branch manager can get Telegram alerts.');
     }

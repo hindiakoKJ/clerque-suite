@@ -6,7 +6,9 @@
 
 1. **The kitchen account is the kitchen/bar station screen.** It shows its orders and the running balance of the pre-made ingredients, plus ONE button to request what is running low. Clerque consolidates everything (low now, what the preps need, tomorrow's expected use, minus what is already on a list or on the way, no duplicates, never lowering a typed amount) into one list and sends the owner ONE message. A later tap sends only what is new.
 2. **Levels:** Level 1 = what you serve from; Level 2 refills it; Level 3 makes Level 2.
-3. **Closing-time fail-safe:** the owner sets each branch's closing time. If nothing was sent by closing, Clerque sends tomorrow's list by itself. Needs a closing-time field per branch (schema change) -- asked KJ for approval; not yet given.
+3. **Closing-time fail-safe:** the owner sets each branch's closing time. If nothing was sent by closing, Clerque sends tomorrow's list by itself. Needs a closing-time field per branch (schema change) -- **KJ approved 2026-09-16** ("yes, do the closing time setting"); branch `branch-closing-time`.
+4. **Daily "ingredients used" report** (KJ, 2026-09-16: staff write it by hand every day). The report exists (Inventory > Ingredients > Reports > Consumption) but walks only the product recipe (misses sizes and add-ons). Make it exact and send it to the owner at closing time.
+5. **Non-ingredient items** (KJ: "should there be a + button?"): yes -- a + on the kitchen request to add anything by hand. Supplies already have a home: RawMaterial.category KITCHEN_SUPPLY / BAR_SUPPLY / OFFICE_SUPPLY. Cups, lids and straws used in recipes are counted automatically; tissue, soap and the like are not tied to sales, so they come from the + (pick a saved supply, or type a new one) or from a low level if set.
 
 ## Build order
 
@@ -266,3 +268,48 @@ One principle has to relax. The code refuses thresholds nobody chose (procure.se
 1. **Can kitchen and bar staff (and the cashier at close) send tomorrow's list to the owners themselves with one tap?** Recommended: yes. Sending only tells the owners; buying, posting to stock and money stay with the owner or manager.
 2. **Level numbering: is Level 1 what you serve from, Level 2 the backup that refills it, and Level 3 what Level 2 is made from?** Recommended: yes. It matches how the app already numbers them, and the reverse numbering in the Carolina code comment goes away.
 3. **At 21:00, if nobody has sent it, should Clerque only remind the owner or send the list by itself?** Recommended: remind for the first 2 weeks while Anne checks the amounts, then switch on auto-send.
+---
+
+## Daily inventory sheet on the kitchen and bar screens (KJ, 2026-09-16)
+
+> "no costing for them. what they are doing is doing the report manually ... there is the beginning and end
+> report ... trying to remember yesterday's sales, they are writing the usage per ingredient level according to
+> the orders. that is very clerical ... do that button report for them. also, lets have that same kind of report
+> where we can report the beginning balance and ending balance aside from the ingredients used."
+> "also, consider how this would affect the pre made ingredients"
+
+**Their paper today** (scans 08242026 kitchen.pdf / Bar.pdf, rendered in Downloads/carolina_pages): one sheet per
+station, KITCHEN INVENTORY and BAR INVENTORY, grouped in sections (kitchen: herbs & spices, raw materials, fresh
+goods, frozen dairy/meat/seafood/chips, COOKED/PORTIONED MATERIALS = pasta and meat servings, sauces, toppings,
+rice, sandwich spread, packaging; bar: disposables, liquids, raw materials incl. syrups and White Sugar Syrup, tea
+bags & sachets). Columns: **Remaining | Trans In | Waste | Used | Ending** (packaging: Sold). Amounts written as
+packs plus loose ("12 PKS / 815 g", "6 CANS / 263.3 g", "58 SERVING"). NAME and Signature at the bottom.
+
+**KJ approved (2026-09-16)** a new table for a daily saved balance ("Yes, add it"): Clerque has no raw-material
+movement ledger (InventoryLog is products only), so a trustworthy Beginning needs yesterday's Ending saved.
+
+**Design**
+- Table `stock_day_balances`: tenantId, branchId, rawMaterialId, day (Manila business day), endingQty, takenAt;
+  unique (branchId, rawMaterialId, day). Saved at the branch's closing time (same job as the usage message;
+  business day before 04:00 = previous day); a branch with no closing time is saved at 23:55 Manila.
+  Idempotent upsert; a late save records its real takenAt.
+- A day's sheet covers the window from the previous save to this save (today: previous save to now).
+  Beginning = previous save; Ending = this save (today: live stock); In = received/posted purchases, transfers in,
+  prep batches made; Waste = write-offs + made items voided/refunded; Used = sold through recipes + used into preps;
+  **Adjust** = Ending - (Beginning + In - Waste - Used), shown only when not zero (counts, corrections, transfers
+  out, anything untracked) -- the sheet always adds up and nothing is hidden. First day without a save: Beginning
+  worked back from Ending, marked "no saved balance yet".
+- **Pre-made ingredients**: a prep is its own row. In = batches made (a move from Level 2 to Level 1 is Used on
+  Level 2 and In on Level 1); Used = orders that use it + preps made from it; Waste = expired or written off.
+  A raw ingredient's Used includes what went into preps, so cream is counted once, when the sauce is made -- not
+  again when the pasta sells (sales walk the recipe line "30 g sauce", never the sauce's components).
+  Preps counted in servings show servings.
+- **Station rows**: ingredients reachable from recipes of products routed to this station (through preps), preps
+  whose station is this one, and supplies of the station's kind (KITCHEN_SUPPLY / BAR_SUPPLY). Stock is per branch,
+  so an ingredient both stations use shows on both with the branch's balance and a "shared with Bar" note.
+  Sections: Pre-made, Ingredients, Supplies.
+- **No costs anywhere on the station sheet.** Amounts in packs + loose from pack memory, else humanised units.
+- **Button**: station screen header "Today's inventory" -> full-screen sheet, Yesterday/Today arrows, Print (A4,
+  like their paper, with Name and Signature lines). API `GET /kds/stations/:id/daily-inventory?day=`, same guard as
+  the prep route (KDS devices only, own station, branch of the pairer).
+- Owner: the same sheet for all ingredients under Inventory > Reports, with value; the closing message links it.

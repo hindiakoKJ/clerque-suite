@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { isManilaDay, UsageDay } from '../ingredient-reports/daily-usage';
 import { TelegramClient } from './telegram.client';
 import { AlertTopic, TelegramLinksService } from './telegram-links.service';
 import {
-  RequestForAlert, SaleForAlert, boughtMessage, buyListSentMessage, photoCaption, postedMessage, saleMessage,
+  RequestForAlert, SaleForAlert, boughtMessage, buyListSentMessage, dailyUsageMessage, photoCaption, postedMessage, saleMessage,
 } from './messages';
 
 /**
@@ -121,6 +122,40 @@ export class TelegramAlertsService {
       const chats = await this.links.recipients(tenantId, req.branchId, 'buying');
       if (chats.length === 0) return;
       const text = postedMessage(req.alert, await this.nameOf(tenantId, postedById), new Date());
+      for (const chat of chats) this.client.sendMessage(chat, text);
+    });
+  }
+
+  /**
+   * The ingredient usage sheet for one branch, sent by the end-of-day job a
+   * little after closing. `usage` is the very reading the job built the bell
+   * notification from -- not read again here, so the phone and the bell show
+   * the same numbers even when a sale lands in between. `usage.day` names the
+   * sheet (YYYY-MM-DD, Manila); `lateSales` counts sales on no sheet.
+   *
+   * On the buying switch: what was used today is what gets bought tomorrow,
+   * and a new switch would need a new column and a new setting on the
+   * Telegram page.
+   */
+  dailyUsage(tenantId: string, branchId: string, usage: UsageDay, lateSales: number): Promise<void> {
+    return this.fire('end-of-day usage', tenantId, 'buying', async () => {
+      if (!isManilaDay(usage.day)) throw new Error(`"${usage.day}" is not a real day written YYYY-MM-DD`);
+      const chats = await this.links.recipients(tenantId, branchId, 'buying');
+      if (chats.length === 0) return;
+      const branch = await this.prisma.branch.findFirst({
+        where:  { id: branchId, tenantId },
+        select: { name: true, tenant: { select: { name: true } } },
+      });
+      if (!branch) return;
+      const text = dailyUsageMessage({
+        shopName:       branch.tenant.name,
+        branchName:     branch.name,
+        day:            usage.day,
+        rows:           usage.rows,
+        totalValue:     usage.totals.value,
+        stillBeingMade: usage.stillBeingMade,
+        lateSales,
+      });
       for (const chat of chats) this.client.sendMessage(chat, text);
     });
   }

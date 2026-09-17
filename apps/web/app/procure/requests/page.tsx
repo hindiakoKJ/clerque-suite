@@ -12,6 +12,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
+import { lowStockToast, type PullLowStockResult } from './low-stock-toast';
 import {
   servesSentences, servesSummary, type LineServes,
   SOURCE_KINDS, SOURCE_KIND_LABEL, cleanSourceName, sourceKey, sourceText, usuallyFromText, type SourceKind, type UsuallyFrom,
@@ -504,23 +505,13 @@ export default function ProcurePage() {
 
   const pull = useMutation({
     mutationFn: () => api.post('/procure/requests/pull-low-stock', { branchId }).then((r) => r.data),
-    onSuccess: (d: { added: number; unmonitored?: number; toMake?: Array<{ name: string }> }) => {
+    onSuccess: (d: PullLowStockResult) => {
       refresh();
-      // An ingredient with no reorder level can never appear on this list, so
-      // "nothing is below its reorder level" was being said in two very
-      // different situations: everything is stocked, and nobody is watching.
-      // Say which one it is.
-      const blind = d.unmonitored ?? 0;
-      const blindNote = blind > 0
-        ? ` ${blind} ingredient${blind === 1 ? ' has' : 's have'} no reorder level, so ${blind === 1 ? 'it' : 'they'} can never show up here.`
-        : '';
-      if (d.added) {
-        toast.success(`Added ${d.added} item${d.added === 1 ? '' : 's'} that are below their reorder level.${blindNote}`);
-      } else if (blind > 0) {
-        toast.warning(`Nothing is below its reorder level.${blindNote}`);
-      } else {
-        toast.success('Nothing is below its reorder level right now.');
-      }
+      // Which of "added", "already coming", "nobody is watching" and "all
+      // stocked" it was -- see lowStockToast.
+      const said = lowStockToast(d);
+      if (said.kind === 'success') toast.success(said.message);
+      else toast.warning(said.message);
 
       /*
         Things that are short but cannot be BOUGHT.

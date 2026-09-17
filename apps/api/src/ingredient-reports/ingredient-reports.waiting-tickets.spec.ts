@@ -32,8 +32,8 @@ describe('Ingredient report and tickets still waiting at a screen', () => {
       status: o.status ?? 'COMPLETED',
       paidAt: new Date('2026-09-10T02:00:00Z'),
       completedAt: new Date('2026-09-10T02:05:00Z'),
-      items: o.lines.map((l) => ({
-        productId: LATTE, variantId: null, modifiers: [], product: { name: 'Latte' },
+      items: o.lines.map((l, n) => ({
+        id: `${o.id}-${n}`, productId: LATTE, variantId: null, modifiers: [], product: { name: 'Latte' },
         quantity: l.qty, refundedQty: 0,
         usageOnReady: l.waiting === true || l.confirmedAt != null,
         usagePostedAt: l.confirmedAt ?? null,

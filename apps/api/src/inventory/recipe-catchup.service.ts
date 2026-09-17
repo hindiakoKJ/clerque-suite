@@ -61,8 +61,16 @@ import { WAITING_LINE } from '../orders/held-usage';
  * "what did it cost".
  */
 
-/** Orders that represent real consumption. VOIDED never left the kitchen. */
-const CONSUMING_STATUSES: Prisma.EnumOrderStatusFilter['in'] = ['PAID', 'COMPLETED', 'RETURNED'];
+/**
+ * Orders whose made lines used ingredients -- the same list the daily usage
+ * sheet counts (ingredient-reports/daily-usage.ts USED_STATUSES). VOIDED is in
+ * on purpose: a void puts a shelf item back but never an ingredient, so a
+ * drink made and then voided still took its milk. Not paused, the sale took it
+ * and the void never gave it back; paused, this replay is what takes it. A
+ * voided line still waiting at a screen was never made, and the waiting-line
+ * clause below keeps it out.
+ */
+const CONSUMING_STATUSES: Prisma.EnumOrderStatusFilter['in'] = ['PAID', 'COMPLETED', 'RETURNED', 'VOIDED'];
 
 /** entityType marker on the audit trail. */
 const AUDIT_ENTITY = 'RECIPE_CATCHUP';
@@ -434,6 +442,7 @@ export class RecipeCatchupService {
         variantId: true,
         quantity: true,
         refundedQty: true,
+        usageOnReady: true,
         modifiers: { select: { modifierOptionId: true } },
       },
     });
@@ -446,9 +455,18 @@ export class RecipeCatchupService {
     const servings: Array<{ itemId: string; orderId: string; productId: string; variantId: string | null; qty: number; optionIds: string[] }> = [];
 
     for (const item of items) {
-      // Refunded quantity nets out: a drink rung up and then refunded never
-      // consumed anything.
-      const netQty = Number(item.quantity) - Number(item.refundedQty ?? 0);
+      /*
+        Replay what the stock write would have taken had deduction not been
+        paused, so paused-then-caught-up ends where not-paused would have.
+        A line used at the sale took all of it at the sale, and a later
+        refund or void never gave an ingredient back: the drink was made, so
+        its milk is waste, and the daily usage sheet already counts it so. A
+        line confirmed at the ready tap took only what was left of it then --
+        units refunded while it waited were never made.
+      */
+      const netQty = item.usageOnReady
+        ? Number(item.quantity) - Number(item.refundedQty ?? 0)
+        : Number(item.quantity);
       if (netQty <= 0) continue;
 
       const seen = unitsByProduct.get(item.productId);

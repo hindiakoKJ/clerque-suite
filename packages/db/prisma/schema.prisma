@@ -941,6 +941,12 @@ model Branch {
   name      String
   address   String?
   isActive  Boolean  @default(true)
+  /// When this branch usually closes: "HH:mm", 24-hour, Manila wall-clock time
+  /// (e.g. "21:00"). null = the owner has not set it. At this time Clerque sends
+  /// the owner the day's ingredient usage report (and, later, tomorrow's buy
+  /// list). Kept as plain text, not a timestamp, because it is the same clock
+  /// time every day -- there is no date to store and no timezone to shift.
+  closesAt  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

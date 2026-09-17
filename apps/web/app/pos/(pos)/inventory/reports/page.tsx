@@ -2,15 +2,18 @@
 import { Suspense, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
-  ArrowLeft, Package, ShoppingBag, FlaskConical, AlertTriangle, Download, ChevronRight,
+  ArrowLeft, Package, ShoppingBag, FlaskConical, AlertTriangle, Download, ChevronRight, ChevronLeft, ClipboardList, Printer, Loader2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
 import { useInventoryBase } from '@/lib/inventory-base';
 import { reportView, type Tab } from './report-link';
+import {
+  SheetPrintCopy, SheetTables, sheetErrorMessage, usePrintSheet, type DailySheet,
+} from '@/components/pos/StationInventorySheet';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -123,7 +126,9 @@ function IngredientReports({ params }: { params: { get(name: string): string | n
   const user = useAuthStore((s) => s.user);
   // The end-of-day bell asks for one branch's day on the Consumption tab, so its numbers match the page.
   const linked = reportView(params, user);
-  const [tab, setTab] = useState<Tab>(linked.tab);
+  // The daily sheet is its own tab: the kitchen's Beginning-to-Ending sheet, for the people its route lets in.
+  const [tab, setTab] = useState<Tab | 'daily-sheet'>(linked.tab);
+  const canSeeDailySheet = !!user && (user.isSuperAdmin || DAILY_SHEET_ROLES.includes(user.role));
   const init = linked.dates ?? defaultRange();
   const [from, setFrom] = useState(init.from);
   const [to,   setTo]   = useState(init.to);
@@ -134,7 +139,7 @@ function IngredientReports({ params }: { params: { get(name: string): string | n
     queryFn:  () => api
       .get('/reports/ingredients', { params: { from, to, branchId: branchId ?? undefined } })
       .then((r) => r.data),
-    enabled:  !!user,
+    enabled:  !!user && tab !== 'daily-sheet',
     staleTime: 30_000,
   });
 
@@ -158,7 +163,7 @@ function IngredientReports({ params }: { params: { get(name: string): string | n
   }, [data]);
 
   function exportCsv() {
-    if (!data) return;
+    if (!data || tab === 'daily-sheet') return;
     const dateStr = `${from}_to_${to}`;
     if (tab === 'on-hand') {
       downloadCsv(
@@ -203,7 +208,8 @@ function IngredientReports({ params }: { params: { get(name: string): string | n
           </div>
         </div>
 
-        {/* Date range + export */}
+        {/* Date range + export. The daily sheet picks its own day. */}
+        {tab !== 'daily-sheet' && (
         <div className="flex items-center gap-2 flex-wrap">
           <input
             type="date"
@@ -228,20 +234,27 @@ function IngredientReports({ params }: { params: { get(name: string): string | n
             Export
           </button>
         </div>
+        )}
       </div>
 
       {/* Tabs */}
       <div className="px-4 sm:px-6 py-2 border-b border-border bg-muted/20 shrink-0">
-        <div className="flex items-center gap-1">
+        {/* Wraps onto a second line on a phone rather than pushing the page sideways. */}
+        <div className="flex flex-wrap items-center gap-1">
           <TabButton active={tab === 'on-hand'}     onClick={() => setTab('on-hand')}     icon={Package}      label="Stock on Hand" />
           <TabButton active={tab === 'purchases'}   onClick={() => setTab('purchases')}   icon={ShoppingBag}  label="Purchases" />
           <TabButton active={tab === 'consumption'} onClick={() => setTab('consumption')} icon={FlaskConical} label="Consumption" />
+          {canSeeDailySheet && (
+            <TabButton active={tab === 'daily-sheet'} onClick={() => setTab('daily-sheet')} icon={ClipboardList} label="Daily sheet" />
+          )}
         </div>
       </div>
 
       {/* Body */}
       <div className="flex-1 overflow-auto">
-        {isLoading ? (
+        {tab === 'daily-sheet' ? (
+          <DailySheetTab initialBranchId={branchId} />
+        ) : isLoading ? (
           <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">Loading report…</div>
         ) : error ? (
           <div className="flex items-center justify-center h-40 text-red-500 text-sm">Could not load the report.</div>
@@ -258,6 +271,120 @@ function IngredientReports({ params }: { params: { get(name: string): string | n
           />
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Daily sheet ─────────────────────────────────────────────────────────────
+
+/** Who the daily-sheet route lets in (a manager tied to one branch sees only that branch). */
+const DAILY_SHEET_ROLES: string[] = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'SUPER_ADMIN'];
+
+type OwnerSheet = DailySheet & {
+  choices: { branches: Array<{ id: string; name: string }>; stations: Array<{ id: string; name: string; kind: string }> };
+};
+
+/**
+ * The owner's copy of the kitchen's daily sheet: the same sheet the station
+ * screen shows and prints, for any branch, one station's rows or every item.
+ * Quantities only, like the kitchen's copy -- the other tabs carry the costs.
+ */
+function DailySheetTab({ initialBranchId }: { initialBranchId: string | null }) {
+  const [branchId, setBranchId] = useState<string | null>(initialBranchId);
+  const [stationId, setStationId] = useState<string | null>(null);
+  // Null is the server's default: the sheet running now, or the one just closed for a while after closing.
+  const [day, setDay] = useState<string | null>(null);
+  const { printedAt, print } = usePrintSheet();
+
+  const { data: sheet, isPending, isError, error, isFetching } = useQuery<OwnerSheet>({
+    queryKey: ['daily-sheet', branchId, stationId, day ?? 'default'],
+    queryFn:  () => api
+      .get('/reports/ingredients/daily-sheet', {
+        params: { branchId: branchId ?? undefined, stationId: stationId ?? undefined, day: day ?? undefined },
+      })
+      .then((r) => r.data),
+    // A running sheet keeps up; a closed one never changes.
+    refetchInterval: (q) => (q.state.data?.status === 'LIVE' ? 60_000 : false),
+    // Keep the sheet on screen while another branch, station or day loads.
+    placeholderData: keepPreviousData,
+  });
+
+  const field = 'text-xs border border-border bg-background rounded-md px-2 py-1.5 text-foreground';
+  const dayButton = 'flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-md border border-border text-foreground hover:bg-muted disabled:opacity-40 transition-colors';
+  const message = isError ? sheetErrorMessage(error) : null;
+
+  return (
+    <div className="px-4 sm:px-6 py-4 space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          aria-label="Branch"
+          value={sheet?.branch.id ?? branchId ?? ''}
+          onChange={(e) => { setBranchId(e.target.value); setStationId(null); setDay(null); }}
+          className={field}
+        >
+          {(sheet?.choices.branches ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        <select aria-label="Station" value={stationId ?? ''} onChange={(e) => setStationId(e.target.value || null)} className={field}>
+          <option value="">All items</option>
+          {(sheet?.choices.stations ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <button type="button" onClick={() => sheet?.previousDay && setDay(sheet.previousDay)} disabled={!sheet?.previousDay} className={dayButton}>
+          <ChevronLeft className="h-3.5 w-3.5" />
+          {sheet?.previousDayLabel ?? 'Earlier'}
+        </button>
+        <input
+          type="date"
+          aria-label="Day"
+          value={day ?? sheet?.day ?? ''}
+          max={sheet?.today}
+          onChange={(e) => setDay(e.target.value || null)}
+          className={field}
+        />
+        {sheet?.nextDay && (
+          <button type="button" onClick={() => setDay(sheet.nextDay)} className={dayButton}>
+            {sheet.nextDayLabel}
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={print}
+          disabled={!sheet}
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md font-semibold bg-foreground text-background hover:opacity-90 disabled:opacity-50 transition-opacity"
+        >
+          <Printer className="h-3.5 w-3.5" />
+          Print
+        </button>
+        {isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+      </div>
+
+      {isPending ? (
+        <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">Loading the sheet…</div>
+      ) : !sheet ? (
+        <div className="flex flex-col items-center justify-center gap-3 h-40 text-sm text-center">
+          <p className="text-red-500">{message ?? 'Could not load the sheet.'}</p>
+          {day && <button type="button" onClick={() => setDay(null)} className={dayButton}>Back to the current sheet</button>}
+        </div>
+      ) : (
+        <>
+          <div>
+            <h2 className="text-base font-semibold text-foreground">{sheet.title}</h2>
+            <p className="text-xs text-muted-foreground">
+              {sheet.branch.name} · {sheet.dayLabel} · {sheet.status === 'LIVE'
+                ? `running totals as of ${sheet.window.toLabel}`
+                : `${sheet.window.fromLabel} to ${sheet.window.toLabel}`}
+            </p>
+          </div>
+          {isError && <p className="text-xs text-red-500">{message ?? 'Could not refresh the sheet.'} Showing what was loaded last.</p>}
+          {sheet.notes.length > 0 && (
+            <ul className="space-y-1 text-xs text-amber-700 dark:text-amber-300">
+              {sheet.notes.map((note) => <li key={note}>{note}</li>)}
+            </ul>
+          )}
+          <SheetTables sheet={sheet} tone="light" />
+          <SheetPrintCopy sheet={sheet} printedAt={printedAt} />
+        </>
+      )}
     </div>
   );
 }

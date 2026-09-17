@@ -33,7 +33,11 @@ describe('SubRecipesService.makeBatch — the record of the preparation', () => 
         create:   jest.fn().mockResolvedValue({}),
         findMany: jest.fn().mockResolvedValue([]),
         update:   jest.fn().mockResolvedValue({}),
+        // The re-check under the reference lock: nothing recorded in between.
+        findFirst: jest.fn().mockResolvedValue(null),
       },
+      // The reference lock two simultaneous taps queue on.
+      $executeRaw: jest.fn().mockResolvedValue(1),
       accountingEvent: {
         create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve({}); }),
       },
@@ -61,18 +65,19 @@ describe('SubRecipesService.makeBatch — the record of the preparation', () => 
         ]),
       },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
-      // Which products use this prep, and therefore which station it belongs
-      // to. Empty = no station derived, which is permissive everywhere.
+      // Which dishes, sizes and add-ons use this prep, and therefore which
+      // station it belongs to (makeBatch reads it off the board, list()).
+      // Empty = no station derived, which is permissive everywhere.
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
-      // And which preps use it, for the one-hop inheritance a parked tub needs.
-      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       // The shop's own stations, read so a persona scope written for a floor
       // plan this shop does not have cannot refuse every batch.
       station: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const svc = new SubRecipesService(prisma) as any;
-    return { svc, events };
+    return { svc, events, prisma, tx };
   }
 
   const make = (svc: any, over: Record<string, unknown> = {}) =>
@@ -145,5 +150,44 @@ describe('SubRecipesService.makeBatch — the record of the preparation', () => 
     const res = await make(svc, { referenceNumber: 'BATCH-seen' });
     expect(res.duplicate).toBe(true);
     expect(events).toHaveLength(0);
+  });
+
+  /*
+    A kitchen tablet sends one key per tap. The first tap used the sugar, so a
+    retry after it succeeded would find the shelf short -- and "Not enough
+    White Sugar" reads as "it was not recorded", so the cook makes it again.
+  */
+  it('a retry after success is told it was already recorded, even though the stock is now short', async () => {
+    const { svc, events, prisma } = build();
+    prisma.rawMaterialInventory.findMany = jest.fn().mockResolvedValue([
+      { rawMaterialId: 'sugar', quantity: 0 },
+      { rawMaterialId: 'water', quantity: 0 },
+    ]);
+    prisma.rawMaterialLot.findFirst = jest.fn().mockResolvedValue({ id: 'lot-1', qtyReceived: 2000 });
+    const res = await make(svc, { referenceNumber: 'STN-retry-1' });
+    expect(res).toMatchObject({ duplicate: true, produced: 2000 });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(events).toHaveLength(0);
+  });
+
+  it('two taps at once: the second waits on the key lock, finds the first batch, and records nothing', async () => {
+    // Both passed the check before the transaction; only the re-check under the lock sees the first commit.
+    const { svc, events, tx } = build();
+    tx.rawMaterialLot.findFirst = jest.fn().mockResolvedValue({ qtyReceived: 2000 });
+    const res = await make(svc, { referenceNumber: 'STN-double-tap' });
+    expect(res).toMatchObject({ duplicate: true, produced: 2000 });
+    const [sql, key] = tx.$executeRaw.mock.calls[0];
+    expect(sql.join('?')).toContain('pg_advisory_xact_lock(hashtext(');
+    expect(key).toBe('batch-ref:t1:STN-double-tap');
+    expect(tx.rawMaterialLot.findFirst.mock.calls[0][0].where).toEqual({ tenantId: 't1', rawMaterialId: 'syrup', referenceNumber: 'STN-double-tap' });
+    expect(tx.rawMaterialInventory.update).not.toHaveBeenCalled();
+    expect(tx.rawMaterialLot.create).not.toHaveBeenCalled();
+    expect(events).toHaveLength(0);
+  });
+
+  it('takes no lock when no reference was given', async () => {
+    const { svc, tx } = build();
+    await make(svc);
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
   });
 });

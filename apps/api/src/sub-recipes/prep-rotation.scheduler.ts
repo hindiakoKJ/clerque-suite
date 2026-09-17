@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import {
-  PH_TIMEZONE, canPrepAtStation, prepStationKindsFor, rotationFromBoard, rotationNeedsAction, rotationAlertTitle, rotationInstruction,
-  useByOf, useByAlertTitle, useByWhen, type PrepLot,
+  PH_TIMEZONE, canPrepAtStation, prepStationKindsFor, useByOf, useByAlertTitle, useByWhen, type PrepLot,
 } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SubRecipesService } from './sub-recipes.service';
+import { chainsFromBoard, makerOf } from './prep-chain';
 
 /**
  * The sauce rotation, said during service, to the people who act on it.
@@ -20,14 +20,15 @@ import { SubRecipesService } from './sub-recipes.service';
  * One alert per PERSON, not one for the shop: a tenant-wide alert has a single
  * "read" flag, so the cook tapping "mark all read" would clear the owner's.
  *
- * Once per sauce, per what-to-do, per day -- and again after the sauce was
- * moved or cooked. Every move and every batch writes a stock lot on the
- * ready-to-use item, so "since the newest lot" makes the second rotation of the
- * day new news rather than a repeat. The words carry no live quantity, so a
- * sale does not make an old alert look new.
+ * One alert per sauce chain (Level 1 and the stages behind it, prep-chain.ts),
+ * once per what-to-do per day -- and again after a batch on any stage of it.
+ * Every move and every batch writes a stock lot on what it made, so "since the
+ * newest lot" makes the second rotation of the day new news rather than a
+ * repeat. The words carry no live quantity, so a sale does not make an old
+ * alert look new.
  *
- * Silent for any sauce with no par level: a warning nobody configured is one
- * everyone learns to ignore.
+ * Silent for any chain with no par level on any stage: a warning nobody
+ * configured is one everyone learns to ignore.
  *
  * Also a batch past its use-by, or due within 12 hours, of any pre-made item
  * -- once per batch per day. A batch only has a use-by when whoever made it
@@ -91,34 +92,60 @@ export class PrepRotationScheduler {
     for (const branch of branches) {
       const board = await this.subRecipes.list(tenantId, branch.id, null);
       if (dated > 0) created += await this.alertUseBy(tenantId, branch, branches.length > 1, board, people, now, dayStart);
-      const due = rotationFromBoard(board).filter(rotationNeedsAction);
-      if (due.length === 0) continue;
+      /*
+        One alert per sauce CHAIN, saying the one thing to do -- the same words
+        the station screen's card says (prep-chain.ts). Before, the ready tub
+        and its backup each had their own alert, so a cook was told "move one
+        across" and "cook the next batch" about one sauce in two messages and
+        had to work out the order. Only chains with a par somewhere: a warning
+        nobody configured is one everyone learns to ignore.
+      */
+      const chains = chainsFromBoard(board).filter((c) => c.alertTitle && c.alertable);
+      if (chains.length === 0) continue;
 
-      // The newest stock lot of each sauce here: a move or a batch since then makes it news again.
+      /*
+        The newest batch of each stage here: a batch made on ANY stage since
+        makes the chain news again. Positive lots only -- a write-off is written
+        as a negative marker lot, and throwing out a spoiled tub is not a batch,
+        so it must not make the same instruction look new.
+      */
+      const stageIds = [...new Set(chains.flatMap((c) => c.stages.map((s) => s.id)))];
       const lots = await this.prisma.rawMaterialLot.groupBy({
         by:    ['rawMaterialId'],
-        where: { tenantId, branchId: branch.id, rawMaterialId: { in: due.map((r) => r.prepId) } },
+        where: { tenantId, branchId: branch.id, rawMaterialId: { in: stageIds }, qtyReceived: { gt: 0 } },
         _max:  { createdAt: true },
       });
+      const newestLot = new Map(lots.map((l) => [l.rawMaterialId, l._max.createdAt]));
       // The shop's stations as the board reads them (every prep), so a barista's scope is judged the same way.
       const shopKinds: string[] = [...new Set(board.map((r) => r.station?.kind).filter(Boolean).map(String))];
       const where = branches.length > 1 ? ` (${branch.name})` : '';
 
-      for (const r of due) {
-        const lastLot = lots.find((l) => l.rawMaterialId === r.prepId)?._max.createdAt ?? null;
-        const since = lastLot && lastLot > dayStart ? lastLot : dayStart;
-        const recipients = recipientsFor(people, branch.id, r.station?.kind ?? null, shopKinds);
+      for (const c of chains) {
+        let since = dayStart;
+        for (const s of c.stages) {
+          const at = newestLot.get(s.id);
+          if (at && at > since) since = at;
+        }
+        /*
+          Told to whoever makes the stage the alert is about. A kitchen glaze
+          short of the bar's simple syrup says "make Level 2 now", and the
+          kitchen cannot record the bar's syrup: told to the kitchen, nobody
+          who can act hears it. When that stage has no station of its own, the
+          chain's station as before.
+        */
+        const maker = makerOf(c, board);
+        const recipients = recipientsFor(people, branch.id, (maker ?? c.station)?.kind ?? null, shopKinds);
 
         for (const p of recipients) {
           const res = await this.notifications.create({
             tenantId,
             userId:      p.id,
-            kind:        r.state === 'REFILL_BACKUP' ? 'INFO' : r.out ? 'ERROR' : 'WARNING',
-            title:       rotationAlertTitle(r, where),
-            body:        rotationInstruction(r) ?? undefined,
+            kind:        c.severity === 'NOW' ? 'WARNING' : 'INFO',
+            title:       c.alertTitle + where,
+            body:        c.alertBody ?? undefined,
             // The board opened on this branch: an owner has none of their own to fall back on.
             link:        `/procure/batches?branch=${branch.id}`,
-            dedupeKey:   `prep-rotation-${r.prepId}`,
+            dedupeKey:   `prep-chain-${c.id}`,
             dedupeSince: since,
           });
           // A repeat hands back only the earlier row's id; a new alert is the whole row.

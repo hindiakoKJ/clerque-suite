@@ -85,6 +85,27 @@ describe('TelegramAlertsService', () => {
     expect(client.sendPhoto).toHaveBeenCalledWith('101', Buffer.from('jpg'), 'image/jpeg', expect.stringContaining('Receipt photo: PR-0012'), expect.any(String));
   });
 
+  it('a list sent from a kitchen screen names the screen, not the person who paired it', async () => {
+    const { svc, client, prisma } = build({ chats: ['101'] });
+    await svc.buyListSent('t1', 'r1', [{ name: 'Milk', amount: '2 packs' }], 'u1', 'Kitchen screen');
+    expect(client.sendMessage.mock.calls[0][1]).toContain('Sent by Kitchen screen · ');
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    // With no label, the person is looked up as before.
+    await svc.buyListSent('t1', 'r1', [{ name: 'Milk', amount: '2 packs' }], 'u1');
+    expect(client.sendMessage.mock.calls[1][1]).toContain('Sent by Anne · ');
+  });
+
+  it('an updated list goes on the buying switch to the request\'s branch, naming who added to it', async () => {
+    const { svc, client, links } = build({ chats: ['101'] });
+    await svc.buyListUpdated('t1', 'r1', [{ name: 'Milk', amount: '3 packs (was 2 packs)' }], 'Bar screen');
+    expect(links.anyoneListening).toHaveBeenCalledWith('t1', 'buying');
+    expect(links.recipients).toHaveBeenCalledWith('t1', 'b2', 'buying');
+    const text = client.sendMessage.mock.calls[0][1];
+    expect(text).toContain('<b>Buy list PR-0012 updated</b>');
+    expect(text).toContain('Added by Bar screen · ');
+    expect(text).toContain('• Milk: 3 packs (was 2 packs)');
+  });
+
   describe('dailyUsage -- the end-of-day ingredient sheet', () => {
     // What the end-of-day job read for the bell. Its value is not the rows' sum on purpose: the message must show this figure, not work out its own.
     const DAY: UsageDay = {

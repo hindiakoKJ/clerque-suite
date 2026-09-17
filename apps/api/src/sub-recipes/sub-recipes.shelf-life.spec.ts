@@ -38,7 +38,11 @@ describe('SubRecipesService.makeBatch — how long the batch is good for', () =>
         create:   jest.fn(({ data }: any) => { lots.push(data); return Promise.resolve({}); }),
         findMany: jest.fn().mockResolvedValue([]),
         update:   jest.fn().mockResolvedValue({}),
+        // The re-check under the reference lock: nothing recorded in between.
+        findFirst: jest.fn().mockResolvedValue(null),
       },
+      // The reference lock two simultaneous taps queue on.
+      $executeRaw: jest.fn().mockResolvedValue(1),
       accountingEvent: {
         create: jest.fn(({ data }: any) => { events.push(data); return Promise.resolve({}); }),
       },
@@ -61,11 +65,12 @@ describe('SubRecipesService.makeBatch — how long the batch is good for', () =>
         findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'sugar', quantity: 20000 }]),
       },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
-      // Which products use this prep, and therefore which station it belongs
-      // to. Empty = no station derived, which is permissive everywhere.
+      // Which dishes, sizes and add-ons use this prep, and therefore which
+      // station it belongs to (makeBatch reads it off the board, list()).
+      // Empty = no station derived, which is permissive everywhere.
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
-      // And which preps use it, for the one-hop inheritance a parked tub needs.
-      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       // The shop's own stations, read so a persona scope written for a floor
       // plan this shop does not have cannot refuse every batch.
       station: { findMany: jest.fn().mockResolvedValue([]) },

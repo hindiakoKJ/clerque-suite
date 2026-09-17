@@ -355,6 +355,9 @@ export class ProcureReceiptsService {
       }
     }
 
+    // 0. Shopping already saved as bought on a list goes in from that list, not a second time from here.
+    await this.refuseWhatIsOnABoughtList(tenantId, branchId, dto.lines ?? []);
+
     const receiptDate = this.resolveDate(dto.receiptDate);
     const label = [dto.vendor?.trim(), dto.referenceNumber?.trim()].filter(Boolean).join(' · ');
 
@@ -713,6 +716,61 @@ export class ProcureReceiptsService {
   // ── helpers ───────────────────────────────────────────────────────────────
 
   private keyTag(key: string) { return `[RCPT:${key}]`; }
+
+  /**
+   * A receipt posted on its own, for an ingredient a shopper already saved
+   * as bought on a list at this branch, and not yet in stock.
+   *
+   * Posting it here makes a second list and puts the goods on the shelf; the
+   * bought list still waits, and whoever posts it later puts the same goods
+   * on the shelf again, with the money twice. Receiving refuses a repeat only
+   * by line reference, and the two lists have different ones, so nothing
+   * further down would stop it. The receipt is refused with the list named,
+   * before anything is written or created.
+   *
+   * An order still on the way (tagged ONTHEWAY) is left out: a grocery run
+   * for sugar while a Shopee parcel of sugar is coming is two purchases. So
+   * is a line nobody recorded, which says nothing was bought for it yet.
+   */
+  private async refuseWhatIsOnABoughtList(tenantId: string, branchId: string, lines: ReceiptStockLineDto[]) {
+    const ids = [...new Set(lines.map((l) => l.rawMaterialId).filter((id): id is string => !!id))];
+    if (ids.length === 0) return;
+    const waiting = await this.prisma.purchaseRequestLine.findMany({
+      where: {
+        rawMaterialId:   { in: ids },
+        receivedAt:      null,
+        packsBought:     { not: null },
+        purchaseRequest: { tenantId, branchId, status: 'BOUGHT' },
+      },
+      select: {
+        rawMaterial:     { select: { name: true } },
+        purchaseRequest: { select: { requestNumber: true, notes: true } },
+      },
+      orderBy: { lineNumber: 'asc' },
+    });
+    // The tag is read exactly (the front run of notes), the way onTheWay reads it.
+    const clash = waiting.filter((l) => readTag(l.purchaseRequest.notes, 'ONTHEWAY') == null);
+    if (clash.length === 0) return;
+
+    const lists = new Map<string, string[]>();
+    for (const l of clash) {
+      const name = l.rawMaterial?.name ?? 'An item';
+      const on = lists.get(name) ?? [];
+      if (!on.includes(l.purchaseRequest.requestNumber)) on.push(l.purchaseRequest.requestNumber);
+      lists.set(name, on);
+    }
+    const numbers = [...new Set(clash.map((l) => l.purchaseRequest.requestNumber))];
+    const and = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+    const one = lists.size === 1;
+    const names = numbers.length === 1
+      ? and([...lists.keys()])
+      : and([...lists.entries()].map(([name, on]) => `${name} (${on.join(', ')})`));
+    throw new BadRequestException(
+      `${names} ${one ? 'is' : 'are'} already saved as bought${numbers.length === 1 ? ` on ${numbers[0]}` : ''} `
+      + `and not in stock yet. Add ${one ? 'it' : 'them'} to stock from ${numbers.length === 1 ? 'that list' : 'those lists'} `
+      + `in Purchase request, so ${one ? 'it is' : 'they are'} not added twice.`,
+    );
+  }
 
   /** Everything resolveMaterial would refuse, asked up front, creating nothing. */
   private async validateLines(tenantId: string, lines: ReceiptStockLineDto[]) {

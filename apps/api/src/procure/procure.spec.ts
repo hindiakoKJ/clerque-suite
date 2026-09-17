@@ -1,4 +1,4 @@
-import { ProcureService, onTheWay } from './procure.service';
+import { ProcureService, amountWords, namesInWords, onTheWay } from './procure.service';
 import { Prisma } from '@prisma/client';
 import { servesSentences } from '@repo/shared-types';
 import { productCeiling } from '../products/recipe-ceiling';
@@ -320,7 +320,7 @@ describe('ProcureService', () => {
     const mail: any = { sendBuyListSent: jest.fn((a: any) => { if (opts.mailFails) return Promise.reject(new Error('Resend is down')); mailed.push(a); return Promise.resolve(); }) };
     const svc = new ProcureService(prisma, inventory, simple, documents, warehouse, notifications, mail) as any;
     return {
-      svc, prisma, inventory, created, createdRequests, updatedLines, received, entries, docs, createdCounts, countLines, notified, mailed,
+      notifications, svc, prisma, inventory, created, createdRequests, updatedLines, received, entries, docs, createdCounts, countLines, notified, mailed,
       req: () => request, open: () => openList, count: () => openCount,
     };
   }
@@ -883,6 +883,27 @@ describe('ProcureService', () => {
     await expect(svc.sendRequest(TENANT, 'req1', USER)).rejects.toThrow(/already sent/i);
   });
 
+  describe('the day a sent list is for', () => {
+    // Only the clock is faked: the service's promises and timers run as they do in the shop.
+    const at = (iso: string) => jest.useFakeTimers({
+      now: new Date(iso),
+      doNotFake: ['hrtime', 'nextTick', 'performance', 'queueMicrotask', 'setImmediate', 'clearImmediate', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'],
+    });
+    afterEach(() => jest.useRealTimers());
+
+    it('is stamped on the list, by the rule a kitchen tap uses, so the closing job counts it as sent', async () => {
+      at('2026-09-17T15:00:00+08:00');   // from 10:00 Manila: tomorrow's shopping
+      const afternoon = build({ lines: [], open: { notes: '[RCPT:abc] Aling Nena' } });
+      const res = await afternoon.svc.sendRequest(TENANT, 'req1', USER);
+      expect(res.notes).toBe('[RCPT:abc] [PLAN:2026-09-18] Aling Nena');   // what was there stays
+      expect(res.sentAt).toEqual(new Date('2026-09-17T15:00:00+08:00'));
+
+      at('2026-09-17T09:30:00+08:00');   // before 10:00: this morning's shopping
+      const morning = build({ lines: [] });
+      expect((await morning.svc.sendRequest(TENANT, 'req1', USER)).notes).toBe('[PLAN:2026-09-17]');
+    });
+  });
+
   // ── shopping ──────────────────────────────────────────────────────────────
 
   it('records containers and price, not a converted quantity', async () => {
@@ -916,11 +937,115 @@ describe('ProcureService', () => {
     expect(updatedLines[2]).toMatchObject({ sourceKind: null, sourceName: null });
   });
 
-  it('refuses to record shopping against a request that was never sent', async () => {
-    const { svc } = build({ status: 'OPEN', lines: [{ id: 'l1' }] });
-    await expect(svc.recordBought(TENANT, 'req1', [
-      { lineId: 'l1', packsBought: 1, packSize: 100, packCost: 10 },
-    ])).rejects.toThrow(/has to be sent/i);
+  it('staff record a walk-in buy on the open list: it is sent and bought in the same save, and the Bought alert goes', async () => {
+    /*
+      KJ, 2026-09-17: a barista who bought the ice does not wait for the
+      owner's Send. The list reads as sent a moment before, by whoever
+      recorded it -- and carries no [PLAN] tag, because it did not ask for
+      the next shopping.
+    */
+    const { svc, req, updatedLines } = build({
+      status: 'OPEN', lines: [
+        { id: 'l1', rawMaterialId: 'rm-ice', packsBought: null, rawMaterial: { name: 'Ice' } },
+        { id: 'l2', rawMaterialId: 'rm-sugar', packsBought: null, rawMaterial: { name: 'White Sugar' } },
+      ],
+    });
+    const alerts = { bought: jest.fn() };
+    svc.telegramAlerts = alerts;
+    const before = Date.now();
+    const res = await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 5000, packCost: 60 }], { userId: 'barista', role: 'CASHIER' });
+
+    expect(res.status).toBe('BOUGHT');
+    expect(req()).toMatchObject({ status: 'BOUGHT', sentById: 'barista' });
+    expect(req().sentAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(req().boughtAt).toEqual(req().sentAt);
+    expect(req().notes).toBeUndefined();   // nothing written to the notes: no [PLAN]
+    expect(updatedLines.map((u) => u.id)).toEqual(['l1']);
+    expect(alerts.bought).toHaveBeenCalledWith(TENANT, 'req1', 'barista', null);
+  });
+
+  describe('the lines a walk-in buy did not record', () => {
+    /*
+      The barista bought the ice, not the sugar beside it on the open list.
+      Left blank on the now-BOUGHT list, onTheWay counted the sugar as coming
+      for a week, so that night's closing list left it out; it only went back
+      on a list when the owner posted the ice.
+    */
+    const ICE   = { id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-ice', qtyRequested: 10000, shortBy: null, packsBought: null, receivedAt: null, rawMaterial: { name: 'Ice' } };
+    const SUGAR = { id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-sugar', qtyRequested: 2000, shortBy: 500, packsBought: null, receivedAt: null, rawMaterial: { name: 'White Sugar' } };
+    const BARISTA = { userId: 'barista', role: 'CASHIER' };
+    const ICE_BOUGHT = [{ lineId: 'l1', packsBought: 2, packSize: 5000, packCost: 60 }];
+
+    it('go straight back on a fresh open list and come off the bought one, so they stay to buy', async () => {
+      const { svc, prisma, created } = build({ status: 'OPEN', lines: [ICE, SUGAR] });
+      const res = await svc.recordBought(TENANT, 'req1', ICE_BOUGHT, BARISTA);
+
+      const carried = created.find((c) => c.purchaseRequestId === 'open1');
+      expect(carried).toMatchObject({ rawMaterialId: 'rm-sugar' });
+      expect(Number(carried.qtyRequested)).toBe(2000);
+      expect(Number(carried.shortBy)).toBe(500);
+      expect(created.some((c) => c.purchaseRequestId === 'open1' && c.rawMaterialId === 'rm-ice')).toBe(false);
+      expect(prisma.purchaseRequestLine.deleteMany).toHaveBeenCalledWith({
+        where: { purchaseRequestId: 'req1', id: { in: ['l2'] }, packsBought: null, receivedAt: null },
+      });
+      expect(res.status).toBe('BOUGHT');
+      expect(res.lines.map((l: any) => l.id)).toEqual(['l1']);
+    });
+
+    it('a list that was already sent keeps its blanks: they go back when it is posted, as before', async () => {
+      const { svc, prisma, created } = build({ status: 'SENT', open: { sentAt: new Date(), sentById: 'anne' }, lines: [ICE, SUGAR] });
+      const res = await svc.recordBought(TENANT, 'req1', ICE_BOUGHT, BARISTA);
+      expect(created.some((c) => c.purchaseRequestId === 'open1')).toBe(false);
+      expect(prisma.purchaseRequestLine.deleteMany).not.toHaveBeenCalled();
+      expect(res.lines.map((l: any) => l.id)).toEqual(['l1', 'l2']);
+    });
+
+    it('nothing left over, nothing moved', async () => {
+      const { svc, prisma, created } = build({ status: 'OPEN', lines: [ICE] });
+      await svc.recordBought(TENANT, 'req1', ICE_BOUGHT, BARISTA);
+      expect(created.some((c) => c.purchaseRequestId === 'open1')).toBe(false);
+      expect(prisma.purchaseRequestLine.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('when moving them fails, the purchase is still saved, the blanks stay where they were, and it is logged', async () => {
+      const { svc, prisma, req } = build({ status: 'OPEN', lines: [ICE, SUGAR] });
+      prisma.purchaseRequestLine.create.mockRejectedValueOnce(new Error('connection reset'));
+      const logged = jest.spyOn((svc as any).logger, 'error').mockImplementation(() => undefined);
+      const res = await svc.recordBought(TENANT, 'req1', ICE_BOUGHT, BARISTA);
+      expect(req().status).toBe('BOUGHT');
+      expect(prisma.purchaseRequestLine.deleteMany).not.toHaveBeenCalled();
+      expect(res.lines.map((l: any) => l.id)).toEqual(['l1', 'l2']);
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('REQ-20260830-001'), expect.anything());
+    });
+  });
+
+  it('staff still cannot say an open list was paid, and a shop that hides costs from staff still refuses them', async () => {
+    const line = { id: 'l1', rawMaterialId: 'rm-ice', packsBought: null, rawMaterial: { name: 'Ice' } };
+    const row  = [{ lineId: 'l1', packsBought: 2, packSize: 5000, packCost: 60 }];
+    const staff = { userId: 'barista', role: 'CASHIER' };
+    await expect(build({ status: 'OPEN', lines: [line] }).svc.recordBought(TENANT, 'req1', row, staff, { onTheWay: true, paidFrom: 'CASH' }))
+      .rejects.toThrow(/Only the owner or manager can say the order was paid/);
+    const hidden = build({ status: 'OPEN', lines: [line], showCostsToStaff: false });
+    await expect(hidden.svc.recordBought(TENANT, 'req1', row, staff)).rejects.toThrow(/owner or manager records/i);
+    expect(hidden.req().status).toBe('OPEN');
+  });
+
+  it('a list already sent keeps the moment and the person it was sent by when it is bought', async () => {
+    const sentAt = new Date('2026-09-17T02:00:00Z');
+    const { svc, prisma } = build({ status: 'SENT', open: { sentAt, sentById: 'anne' }, lines: [{ id: 'l1', rawMaterialId: 'rm-haz', packsBought: null, rawMaterial: { name: 'Hazelnut Syrup' } }] });
+    await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 1, packSize: 750, packCost: 540 }], { userId: 'barista', role: 'CASHIER' });
+    const data = prisma.purchaseRequest.update.mock.calls[0][0].data;
+    expect(data).not.toHaveProperty('sentAt');
+    expect(data).not.toHaveProperty('sentById');
+  });
+
+  it('refuses to record shopping on a request that is closed or cancelled', async () => {
+    for (const status of ['RECEIVED', 'CANCELLED']) {
+      const { svc } = build({ status, lines: [{ id: 'l1' }] });
+      await expect(svc.recordBought(TENANT, 'req1', [
+        { lineId: 'l1', packsBought: 1, packSize: 100, packCost: 10 },
+      ])).rejects.toThrow(`Nothing more can be recorded as bought on this request (it is ${status.toLowerCase()}).`);
+    }
   });
 
   // ── posting to stock ──────────────────────────────────────────────────────
@@ -1022,6 +1147,68 @@ describe('ProcureService', () => {
     const res = await svc.receiveRequest(TENANT, 'req1', USER);
     expect(res.carried[0].alreadyThere).toBe(true);
     expect(created.some((c) => c.rawMaterialId === 'rm-x')).toBe(false);
+  });
+
+  describe('carrying blanks back from an order that waited for its parcel', () => {
+    // Ordered Sep 4 (Manila midnight, as a typed "Bought on" date is stored), posted days later.
+    const ORDERED = { notes: '[ONTHEWAY:2026-09-04] Shopee order 2609041234', boughtAt: new Date('2026-09-03T16:00:00Z'), sentAt: new Date('2026-09-03T01:00:00Z') };
+    const OAT = { ...UNBOUGHT, id: 'l3', lineNumber: 'REQ-20260830-001-03', rawMaterialId: 'rm-oat', rawMaterial: { name: 'Oat Milk', unit: 'ml' } };
+    const onOpenList = (created: any[]) => created.filter((c) => c.purchaseRequestId === 'open1').map((c) => c.rawMaterialId);
+
+    it('leaves off a line whose ingredient came in at the branch after the order, and still carries the rest', async () => {
+      const { svc, created } = build({
+        status: 'BOUGHT', open: ORDERED, lines: [...BOUGHT, UNBOUGHT, OAT],
+        lots: [
+          { rawMaterialId: 'rm-x', qtyReceived: 500, createdAt: new Date('2026-09-05T03:00:00Z') },    // the lemons, bought at the grocery since
+          { rawMaterialId: 'rm-oat', qtyReceived: -200, createdAt: new Date('2026-09-05T03:00:00Z') }, // a write-off is stock leaving, not coming in
+        ],
+      });
+      const res = await svc.receiveRequest(TENANT, 'req1', USER);
+      expect(res.request.status).toBe('RECEIVED');
+      expect(res.carried.map((c: any) => c.name)).toEqual(['Oat Milk']);
+      expect(onOpenList(created)).toEqual(['rm-oat']);
+    });
+
+    it('stock that came in before the order was bought, or at another branch, does not stand in for it', async () => {
+      const { svc, created } = build({
+        status: 'BOUGHT', open: ORDERED, lines: [...BOUGHT, UNBOUGHT],
+        lots: [
+          { rawMaterialId: 'rm-x', qtyReceived: 500, createdAt: new Date('2026-09-03T10:00:00Z') },
+          { rawMaterialId: 'rm-x', qtyReceived: 500, createdAt: new Date('2026-09-05T03:00:00Z'), branchId: 'b2' },
+        ],
+      });
+      const res = await svc.receiveRequest(TENANT, 'req1', USER);
+      expect(res.carried.map((c: any) => c.name)).toEqual(['Dried Lemon']);
+      expect(onOpenList(created)).toEqual(['rm-x']);
+    });
+
+    it('a grocery trip, not on the way, carries its blanks back as before', async () => {
+      const { svc, created, prisma } = build({
+        status: 'BOUGHT', open: { notes: null, boughtAt: ORDERED.boughtAt }, lines: [...BOUGHT, UNBOUGHT],
+        lots: [{ rawMaterialId: 'rm-x', qtyReceived: 500, createdAt: new Date('2026-09-05T03:00:00Z') }],
+      });
+      const res = await svc.receiveRequest(TENANT, 'req1', USER);
+      expect(res.carried.map((c: any) => c.name)).toEqual(['Dried Lemon']);
+      expect(onOpenList(created)).toEqual(['rm-x']);
+      expect(prisma.rawMaterialLot.findMany).not.toHaveBeenCalled();
+    });
+
+    it('a balance of a short delivery does not take its parent\'s own packs, posted a moment before it, as the item coming in', async () => {
+      const balance = {
+        notes: '[BALANCEOF:REQ-20260829-004] [ONTHEWAY:2026-09-04] Balance of REQ-20260829-004: still coming',
+        boughtAt: new Date('2026-09-04T02:00:00.000Z'), sentAt: new Date('2026-09-04T02:00:00.000Z'),
+      };
+      const stillComing = { ...BOUGHT[0], id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-x', qtyRequested: 750, shortBy: null, rawMaterial: { name: 'Dried Lemon', unit: 'g' } };
+      const { svc, created } = build({
+        status: 'BOUGHT', open: balance, lines: [...BOUGHT, stillComing],
+        // The parent's lemons, stamped a millisecond after the balance by a clock that runs a little ahead.
+        lots: [{ rawMaterialId: 'rm-x', qtyReceived: 1500, createdAt: new Date('2026-09-04T02:00:00.001Z'), referenceNumber: 'REQ-20260829-004-02' }],
+      });
+      const res = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l1' }], closeRest: true });
+      expect(res.request.status).toBe('RECEIVED');
+      expect(res.carried.map((c: any) => c.name)).toEqual(['Dried Lemon']);
+      expect(onOpenList(created)).toEqual(['rm-x']);
+    });
   });
 
   it('one failing line does not cost the rest of the delivery', async () => {
@@ -1301,7 +1488,7 @@ describe('ProcureService', () => {
       const { svc } = build({ lines: [{ id: 'l1', rawMaterialId: 'rm-haz', qtyRequested: 1500, rawMaterial: { name: 'Hazelnut Syrup', unit: 'ml' } }], people: [{ id: 'o1', email: null, name: 'Anne', role: 'BUSINESS_OWNER' }] });
       const alerts = alertsOn(svc);
       await svc.sendRequest(TENANT, 'req1', USER);
-      expect(alerts.buyListSent).toHaveBeenCalledWith(TENANT, 'req1', [expect.objectContaining({ name: 'Hazelnut Syrup' })], USER);
+      expect(alerts.buyListSent).toHaveBeenCalledWith(TENANT, 'req1', [expect.objectContaining({ name: 'Hazelnut Syrup' })], USER, null);
     });
 
     it('the first recording of what was bought alerts; a correction to a bought request does not', async () => {
@@ -2133,5 +2320,79 @@ describe('ProcureService', () => {
   it('will not file a photo on a cancelled request', async () => {
     const { svc } = build({ status: 'CANCELLED', lines: [] });
     await expect(svc.attachPhoto(TENANT, 'req1', 'cook', { imageBase64: Buffer.from('x').toString('base64') })).rejects.toThrow(/cancelled/i);
+  });
+  // ── a list a kitchen or bar screen added to ───────────────────────────────
+
+  describe('telling the owners a sent list changed', () => {
+    const lines = [
+      { id: 'l1', rawMaterialId: 'rm-milk', qtyRequested: 3000, rawMaterial: { name: 'Fresh milk', unit: 'ml' } },
+      { id: 'l2', rawMaterialId: 'rm-sug',  qtyRequested: 500,  rawMaterial: { name: 'White Sugar', unit: 'g' } },
+      { id: 'l3', rawMaterialId: 'rm-tis',  qtyRequested: 4,    rawMaterial: { name: 'Tissue roll', unit: 'roll' } },
+    ];
+    const req = { id: 'req1', requestNumber: 'REQ-20260917-002', branchId: BRANCH, branch: { name: 'Main' }, lines };
+    const packs = [{ rawMaterialId: 'rm-milk', packSize: 1000, packCost: 95, brandNote: null, receivedAt: new Date() }];
+
+    it('names only what changed, says what a raised line was, and mails nobody', async () => {
+      const { svc, notified, mailed } = build({ people: PEOPLE, lastPacks: packs });
+      const alerts = { buyListUpdated: jest.fn(), buyListSent: jest.fn() };
+      svc.telegramAlerts = alerts;
+      const told = await svc.tellTheOwners(TENANT, req, null, 'pairer', {
+        mode: 'updated',
+        changed: [{ rawMaterialId: 'rm-milk', was: 2000 }, { rawMaterialId: 'rm-tis', was: null }],
+        byLabel: 'Kitchen screen',
+        newItems: { ids: ['rm-tis'], screen: 'Kitchen screen' },
+      });
+      expect(told.sort()).toEqual(['Anne', 'Mia']);
+      expect(notified.map((n) => n.userId).sort()).toEqual(['mgr', 'owner']);
+      expect(notified[0]).toMatchObject({
+        title: 'Buy list REQ-20260917-002 updated — Main',
+        body:  'Fresh milk 3 packs (3,000 ml) (was 2 packs (2,000 ml)) · Tissue roll (new item from the Kitchen screen) 4 roll',
+        link:  '/procure/requests?view=REQ-20260917-002',
+        dedupeKey: `req-updated-REQ-20260917-002-${notified[0].userId}`,
+      });
+      expect(mailed).toEqual([]);
+      expect(alerts.buyListSent).not.toHaveBeenCalled();
+      expect(alerts.buyListUpdated).toHaveBeenCalledWith(TENANT, 'req1', [
+        { name: 'Fresh milk', amount: '3 packs (3,000 ml) (was 2 packs (2,000 ml))', serves: null },
+        { name: 'Tissue roll (new item from the Kitchen screen)', amount: '4 roll', serves: null },
+      ], 'Kitchen screen');
+    });
+
+    it('an update that changed nothing tells nobody', async () => {
+      const { svc, notified } = build({ people: PEOPLE });
+      expect(await svc.tellTheOwners(TENANT, req, null, 'pairer', { mode: 'updated', changed: [] })).toEqual([]);
+      expect(notified).toEqual([]);
+    });
+
+    it('sent mode returns who was told, and a screen is named on Telegram instead of the person who paired it', async () => {
+      const { svc } = build({ people: PEOPLE.slice(0, 1) });
+      const alerts = { buyListSent: jest.fn() };
+      svc.telegramAlerts = alerts;
+      expect(await svc.tellTheOwners(TENANT, req, null, 'pairer', { byLabel: 'Kitchen screen' })).toEqual(['Anne']);
+      expect(alerts.buyListSent).toHaveBeenCalledWith(TENANT, 'req1', expect.any(Array), 'pairer', 'Kitchen screen');
+    });
+
+    it('nobody to tell, or a failure telling them, returns no names', async () => {
+      expect(await build({ people: [] }).svc.tellTheOwners(TENANT, req)).toEqual([]);
+      const broken = build({ people: PEOPLE });
+      broken.notifications.create.mockRejectedValue(new Error('database down'));
+      jest.spyOn(broken.svc.logger, 'warn').mockImplementation(() => undefined);
+      expect(await broken.svc.tellTheOwners(TENANT, req)).toEqual([]);
+    });
+  });
+
+  it('amountWords says an amount the way the list always has', () => {
+    expect(amountWords(1500, 'ml', 750)).toBe('2 packs (1,500 ml)');
+    expect(amountWords(750, 'ml', 750)).toBe('1 pack (750 ml)');
+    expect(amountWords(500, 'g', null)).toBe('500 g');
+    expect(amountWords(1000, 'g', 300)).toBe('1,000 g');          // not a whole number of packs
+    expect(amountWords(1500, 'ml', 1000)).toBe('1.5 packs (1,500 ml)');
+  });
+
+  it('namesInWords lists people the way a sentence does', () => {
+    expect(namesInWords(['Anne'])).toBe('Anne');
+    expect(namesInWords(['Anne', 'Mia'])).toBe('Anne and Mia');
+    expect(namesInWords(['Anne', 'Mia', 'Jo'])).toBe('Anne, Mia and Jo');
+    expect(namesInWords([])).toBe('');
   });
 });

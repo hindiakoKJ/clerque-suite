@@ -69,7 +69,7 @@ m.note('What the receipt says: your receipt prints as "ACKNOWLEDGEMENT RECEIPT /
 m.h2('Cash leaving the drawer during the day');
 m.steps([
   'Click "Cash Out" in the top bar.',
-  'Choose "Paid Out" (a real expense paid from the till - ice, a COD delivery) or "Cash Drop" (moving cash to the safe for safekeeping).',
+  { text: 'Choose "Paid Out" (a real expense paid from the till, like a parking tip) or "Cash Drop" (moving cash to the safe for safekeeping).', note: 'Paid Out is not for ingredients like ice or water - add those to stock in Procure. A Paid Out never adds stock, so drinks that use them stop selling when the stock runs out.' },
   'Type "Amount (₱)", pick a "Category" (for paid-outs), and write a "Reason" - at least a short sentence. Click "Pay out" or "Drop to safe".',
 ]);
 m.careful('A cash drop, or a paid-out above ₱500, asks you to pick the "Approving manager". The manager confirms verbally for now. Both reduce the "Expected in drawer" amount when you close - so the count still balances.');
@@ -118,7 +118,7 @@ m.p('Clerque can track two kinds of stock. "Unit" items (bottled water, a pastry
 m.h2('Ingredients (beans, milk, syrups, cups)');
 m.steps([
   'Left menu → "Ingredients". Click to add each raw material with its unit (g, ml, pc) and its cost per unit.',
-  'When a delivery arrives: find the ingredient, click "Receive stock". Type "Quantity", "Cost / unit (₱)", the "Receipt date", and "Paid by": "Cash" (from the drawer), "Credit / Net-30" (supplier bill to pay later), or "Owner funds" (you paid from your own pocket).',
+  'When a delivery arrives: find the ingredient, click "Receive stock". Type "Quantity", "Cost / unit (₱)", the "Receipt date", and "Paid by": "Cash" (shop cash kept apart from the POS drawer - it does not change the drawer count), "Credit / Net-30" (supplier bill to pay later), or "Owner funds" (you paid from your own pocket).',
   'Click "Receive". Clerque updates the stock, updates the average cost, and writes the books entry for you - the screen even tells you: "A journal entry will be posted automatically".',
 ]);
 m.h2('Recipes (what goes into each drink)');

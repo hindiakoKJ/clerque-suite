@@ -29,6 +29,8 @@ describe('ProcureReceiptsService', () => {
     kitchen?: any;
     receiveImpl?: (rmId: string, dto: any) => any;
     twin?: { id: string; name: string; isActive: boolean } | null;
+    /** Lines already on other lists at the shop: { rawMaterialId, receivedAt, packsBought, purchaseRequest: { tenantId, branchId, status, requestNumber, notes } }. */
+    otherLists?: any[];
   } = {}) {
     const requests: any[] = [];
     if (opts.kitchen) requests.push(opts.kitchen);
@@ -70,6 +72,15 @@ describe('ProcureReceiptsService', () => {
         }),
       },
       purchaseRequestLine: {
+        // Applies the query's own filter, so what it asks for is what is checked.
+        findMany: jest.fn().mockImplementation(({ where }: any) => Promise.resolve((opts.otherLists ?? []).filter((l: any) =>
+          where.rawMaterialId.in.includes(l.rawMaterialId)
+          && (where.receivedAt === null ? l.receivedAt == null : true)
+          && (where.packsBought?.not === null ? l.packsBought != null : true)
+          && l.purchaseRequest.tenantId === where.purchaseRequest.tenantId
+          && l.purchaseRequest.branchId === where.purchaseRequest.branchId
+          && l.purchaseRequest.status === where.purchaseRequest.status,
+        ).map((l: any) => ({ rawMaterial: MATERIALS.find((m) => m.id === l.rawMaterialId), purchaseRequest: l.purchaseRequest })))),
         create: jest.fn().mockImplementation(({ data }: any) => {
           const req = requests[requests.length - 1] ?? opts.existingByKey;
           const l = { id: `line-new-${Math.random().toString(36).slice(2, 6)}`, ...data, receivedAt: null,
@@ -762,5 +773,99 @@ describe('ProcureReceiptsService', () => {
     const { svc } = build();
     await expect(svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, receiptDate: '2026-13-45' }))
       .rejects.toThrow(/real date/);
+  });
+
+  // ── a receipt on its own, for shopping already saved as bought ─────────────
+
+  describe('shopping already saved as bought on a list', () => {
+    const onList = (over: any = {}, request: any = {}) => ({
+      rawMaterialId: 'sugar', receivedAt: null, packsBought: 2,
+      ...over,
+      purchaseRequest: { tenantId: TENANT, branchId: BRANCH, status: 'BOUGHT', requestNumber: 'REQ-20260916-001', notes: 'Puregold', ...request },
+    });
+
+    it('refuses to post it a second time on its own, names the list, and writes nothing', async () => {
+      const { svc, prisma, inventory, received, entries, docs } = build({ otherLists: [onList()] });
+      const dto = { ...CONFIRM, idempotencyKey: 'k-new', imageBase64: 'AAAA', lines: [...CONFIRM.lines, { create: { name: 'Oat milk', unit: 'ml' }, packsBought: 1, packSize: 1000, packCost: 150 }] };
+      await expect(svc.confirm(TENANT, USER, BRANCH, dto)).rejects.toThrow(
+        'Sugar is already saved as bought on REQ-20260916-001 and not in stock yet. '
+        + 'Add it to stock from that list in Purchase request, so it is not added twice.',
+      );
+      expect(prisma.purchaseRequest.create).not.toHaveBeenCalled();
+      expect(inventory.createRawMaterial).not.toHaveBeenCalled();
+      expect(received).toEqual([]);
+      expect(entries).toEqual([]);
+      expect(docs).toEqual([]);
+      // Asked about this branch's bought lists only, for the ingredients on the receipt.
+      expect(prisma.purchaseRequestLine.findMany.mock.calls[0][0].where).toEqual({
+        rawMaterialId: { in: ['sugar', 'wings'] }, receivedAt: null, packsBought: { not: null },
+        purchaseRequest: { tenantId: TENANT, branchId: BRANCH, status: 'BOUGHT' },
+      });
+    });
+
+    it('names every list when the shopping sits on more than one', async () => {
+      const { svc } = build({ otherLists: [
+        onList(),
+        onList({ rawMaterialId: 'wings' }, { requestNumber: 'REQ-20260915-002' }),
+      ] });
+      await expect(svc.confirm(TENANT, USER, BRANCH, CONFIRM)).rejects.toThrow(
+        'Sugar (REQ-20260916-001) and Chicken wings (REQ-20260915-002) are already saved as bought and not in stock yet. '
+        + 'Add them to stock from those lists in Purchase request, so they are not added twice.',
+      );
+    });
+
+    it('still posts beside an order on the way, a line nobody recorded, one already in stock, or another branch\'s list', async () => {
+      const { svc, received } = build({ otherLists: [
+        onList({}, { notes: '[ONTHEWAY:2026-09-12] [PREPAID:OWNER_FUNDED] Shopee' }),
+        onList({ packsBought: null }),
+        onList({ receivedAt: new Date('2026-09-16T02:00:00Z') }),
+        onList({}, { branchId: 'b2' }),
+        onList({}, { status: 'SENT' }),
+      ] });
+      const r = await svc.confirm(TENANT, USER, BRANCH, CONFIRM);
+      expect(received.map((x) => x.rmId)).toEqual(['sugar', 'wings']);
+      expect(r.request.status).toBe('RECEIVED');
+    });
+
+    it('a note that only mentions ONTHEWAY further along is not an order on the way', async () => {
+      const { svc } = build({ otherLists: [onList({}, { notes: 'Puregold, said [ONTHEWAY:2026-09-12]' })] });
+      await expect(svc.confirm(TENANT, USER, BRANCH, CONFIRM)).rejects.toThrow(/already saved as bought on REQ-20260916-001/);
+    });
+
+    it('a retry of the same receipt finishes its own list instead of being refused by it', async () => {
+      const stuck = {
+        id: 'reqX', tenantId: TENANT, branchId: BRANCH, requestNumber: 'REQ-20260902-001', status: 'BOUGHT',
+        lines: [{ id: 'lineA', lineNumber: 'REQ-20260902-001-01', rawMaterialId: 'sugar', packsBought: 1, packSize: 1000, packCost: 85, brandNote: null, receivedAt: null,
+                  rawMaterial: MATERIALS[1] }],
+      };
+      const { svc, prisma, received } = build({
+        existingByKey: stuck,
+        otherLists: [onList({ packsBought: 1 }, { requestNumber: 'REQ-20260902-001' })],
+      });
+      prisma.purchaseRequest.findFirst.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.notes?.startsWith || where.id ? stuck : null));
+      prisma.purchaseRequest.update.mockImplementation(({ data }: any) => Promise.resolve({ ...stuck, ...data }));
+      prisma.purchaseRequestLine.update.mockResolvedValue({});
+      const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, idempotencyKey: 'abc-123' });
+      expect(r.duplicate).toBe(true);
+      expect(received.map((x) => x.rmId).sort()).toEqual(['sugar', 'wings']);
+      expect(prisma.purchaseRequestLine.findMany).not.toHaveBeenCalled();
+    });
+
+    it('a receipt opened from that list lands on it, and is not refused', async () => {
+      const list = { ...kitchen(), status: 'BOUGHT', boughtAt: new Date('2026-09-15T16:00:00Z') };
+      list.lines[0].packsBought = 2;
+      const { svc, prisma, received } = build({ kitchen: list, otherLists: [onList({}, { requestNumber: list.requestNumber })] });
+      const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k' });
+      expect(prisma.purchaseRequestLine.findMany).not.toHaveBeenCalled();
+      expect(received.map((x) => x.dto.referenceNumber)).toEqual(['REQ-20260901-004-01', 'REQ-20260901-004-02']);
+      expect(r.request.status).toBe('RECEIVED');
+    });
+
+    it('a receipt of new ingredients and fees only asks nothing', async () => {
+      const { svc, prisma } = build({ otherLists: [onList()] });
+      await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, lines: [{ create: { name: 'Oat milk', unit: 'ml' }, packsBought: 1, packSize: 1000, packCost: 150 }] });
+      expect(prisma.purchaseRequestLine.findMany).not.toHaveBeenCalled();
+    });
   });
 });

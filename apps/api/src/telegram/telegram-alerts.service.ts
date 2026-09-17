@@ -4,7 +4,7 @@ import { isManilaDay, UsageDay } from '../ingredient-reports/daily-usage';
 import { TelegramClient } from './telegram.client';
 import { AlertTopic, TelegramLinksService } from './telegram-links.service';
 import {
-  RequestForAlert, SaleForAlert, boughtMessage, buyListSentMessage, dailyUsageMessage, photoCaption, postedMessage, saleMessage,
+  RequestForAlert, SaleForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, photoCaption, postedMessage, saleMessage,
 } from './messages';
 
 /**
@@ -79,14 +79,32 @@ export class TelegramAlertsService {
     });
   }
 
-  /** `lines` are the ones the buy-list email already worked out, in packs where Clerque knows the pack. */
-  buyListSent(tenantId: string, requestId: string, lines: Array<{ name: string; amount: string }>, sentById: string | null): Promise<void> {
+  /**
+   * `lines` are the ones the buy-list email already worked out, in packs where Clerque knows the pack.
+   * `byLabel` names the sender when it is not a person to look up: "Kitchen screen", "Clerque at closing time".
+   */
+  buyListSent(
+    tenantId: string, requestId: string, lines: Array<{ name: string; amount: string }>, sentById: string | null,
+    byLabel: string | null = null,
+  ): Promise<void> {
     return this.fire('buy list sent', tenantId, 'buying', async () => {
       const req = await this.request(tenantId, requestId);
       if (!req) return;
       const chats = await this.links.recipients(tenantId, req.branchId, 'buying');
       if (chats.length === 0) return;
-      const text = buyListSentMessage(req.alert, lines, await this.nameOf(tenantId, sentById), new Date());
+      const text = buyListSentMessage(req.alert, lines, byLabel ?? await this.nameOf(tenantId, sentById), new Date());
+      for (const chat of chats) this.client.sendMessage(chat, text);
+    });
+  }
+
+  /** A sent list a kitchen or bar screen added to: only the changed lines, in the bell's words. */
+  buyListUpdated(tenantId: string, requestId: string, lines: Array<{ name: string; amount: string }>, byLabel: string | null): Promise<void> {
+    return this.fire('buy list updated', tenantId, 'buying', async () => {
+      const req = await this.request(tenantId, requestId);
+      if (!req) return;
+      const chats = await this.links.recipients(tenantId, req.branchId, 'buying');
+      if (chats.length === 0) return;
+      const text = buyListUpdatedMessage(req.alert, lines, byLabel, new Date());
       for (const chat of chats) this.client.sendMessage(chat, text);
     });
   }

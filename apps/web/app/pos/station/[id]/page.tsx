@@ -1,15 +1,17 @@
 'use client';
-import { use, useEffect, useRef, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff, Maximize, Printer } from 'lucide-react';
+import { Check, Clock, ChefHat, Coffee, Snowflake, Cake, Store, AlertTriangle, Bell, BellOff, Maximize, Printer, ClipboardList } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useKitchenChime } from '@/hooks/pos/useKitchenChime';
 import { useKioskMode } from '@/hooks/pos/useKioskMode';
 import { buildStationTicket, sendViaRawBt, isLikelyAndroid } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { StationPrepLevels } from '@/components/pos/StationPrepLevels';
+import { StationInventorySheet } from '@/components/pos/StationInventorySheet';
+import { StationRequestButton } from '@/components/pos/StationRequestButton';
 import { StationScreenLayout, STATION_VIEWS, stationRootHeight, type StationView } from '@/components/pos/StationScreenLayout';
 import { useAuthStore } from '@/store/auth';
 import {
@@ -144,6 +146,10 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
     setView(v);
     try { localStorage.setItem(viewKey, v); } catch { /* not remembered, still switched */ }
   };
+
+  // Today's inventory sheet, full screen over the orders. The orders keep polling underneath, so the bell still rings.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const closeSheet = useCallback(() => setSheetOpen(false), []);
 
   // Kiosk: fullscreen (a kitchen tablet has no business showing a URL bar),
   // wake lock so it never sleeps mid-service, pinned against pinch/pull.
@@ -306,8 +312,10 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    // Side by side on a tablet: a fixed height, so the orders and the prep column each scroll on their own.
-    <div className={`${stationRootHeight(view)} flex flex-col bg-stone-950 text-white`}>
+    <>
+    {/* Side by side on a tablet: a fixed height, so the orders and the prep column each scroll on their own.
+        Never printed: Print on the inventory sheet prints the sheet alone. */}
+    <div className={`${stationRootHeight(view)} flex flex-col bg-stone-950 text-white print:hidden`}>
       {/* Header */}
       <header className="px-4 sm:px-8 py-5 flex flex-wrap items-center justify-between gap-3 border-b-2 border-amber-500/50 bg-stone-900">
         <div className="flex flex-wrap items-center gap-3">
@@ -327,7 +335,21 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        {/* Wraps on a phone, so the extra buttons never push the page sideways. */}
+        <div className="flex flex-wrap items-center gap-4">
+          {/* The daily sheet the kitchen used to fill in by hand. The server names the station, so a
+              paired tablet (which has no floor layout of its own) still gets a titled sheet. */}
+          <button
+            onClick={() => setSheetOpen(true)}
+            title="Today's inventory: beginning, in, waste, used and ending for each item"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-stone-800 text-stone-100 hover:bg-stone-700 text-sm font-semibold"
+          >
+            <ClipboardList className="h-4 w-4" />
+            <span className="hidden sm:inline">Today&apos;s inventory</span>
+          </button>
+          {/* Puts what is running low on the branch's buy list and sends it to the owner.
+              Self-contained (its own panel); off until the screen is known to be paired to this station. */}
+          <StationRequestButton stationId={stationId} enabled={pairState === 'ok'} />
           {/* Kitchen bell. Browsers refuse to start audio without a gesture, so
               when it is still locked we say so plainly rather than letting the
               chef believe the bell is on when it is silent. */}
@@ -478,5 +500,7 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
         )}
       />
     </div>
+    <StationInventorySheet stationId={stationId} open={sheetOpen} onClose={closeSheet} />
+    </>
   );
 }

@@ -193,7 +193,7 @@ export default function TelegramAlertsPage() {
                 <span>
                   <span className="font-medium text-foreground">Buying</span>
                   <span className="block text-xs text-muted-foreground">
-                    When a buy list is sent, when it is bought (with prices), receipt photos as they are filed, when it goes into stock, and each branch&apos;s ingredients used for the day, sent after its closing time.
+                    When a buy list is sent, when it is bought (with prices), receipt photos as they are filed, when it goes into stock, and each branch&apos;s ingredients used for the day, sent when the day is closed.
                   </span>
                 </span>
               </label>

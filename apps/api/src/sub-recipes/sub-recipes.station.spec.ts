@@ -62,11 +62,12 @@ describe('SubRecipesService.makeBatch — attributing the prep to a station', ()
         findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'tom', quantity: 50000 }]),
       },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
-      // Which products use this prep, and therefore which station it belongs
-      // to. Empty = no station derived, which is permissive everywhere.
+      // Which dishes, sizes and add-ons use this prep, and therefore which
+      // station it belongs to (makeBatch reads it off the board, list()).
+      // Empty = no station derived, which is permissive everywhere.
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
-      // And which preps use it, for the one-hop inheritance a parked tub needs.
-      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     return { svc: new SubRecipesService(prisma) as any, events, prisma };

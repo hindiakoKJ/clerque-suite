@@ -1,5 +1,5 @@
 import {
-  CAPTION_LIMIT, MESSAGE_LIMIT, SaleForAlert, USAGE_ROWS_SHOWN, UsageForAlert, boughtMessage, buyListSentMessage, dailyUsageMessage, escapeHtml,
+  CAPTION_LIMIT, MESSAGE_LIMIT, SaleForAlert, USAGE_ROWS_SHOWN, UsageForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, escapeHtml,
   lateSalesNote, manilaDayLabel, photoCaption, postedMessage, saleMessage, usageQty,
 } from './messages';
 
@@ -81,6 +81,35 @@ describe('Telegram alert messages', () => {
     expect(text).toContain('Sent by Anne · Sep 15, 3:10 PM');
     expect(text).toContain('• Whole milk: 4 packs (4,000 ml)');
     expect(buyListSentMessage(req, [], null, at)).toContain('All clear');
+  });
+
+  it('an updated buy list names only the changed lines, with what a raised one was', () => {
+    const text = buyListUpdatedMessage(req, [
+      { name: 'Whole milk', amount: '3 packs (3,000 ml) (was 2 packs (2,000 ml))' },
+      { name: 'Tissue roll (new item from the Kitchen screen)', amount: '4 roll' },
+    ], 'Kitchen screen', at);
+    const lines = text.split('\n');
+    expect(lines[0]).toBe('🛒 <b>Buy list PR-2026-0012 updated</b>');
+    expect(lines[1]).toBe('Cafe Carolina · Main');
+    expect(lines[2]).toBe('Added by Kitchen screen · Sep 15, 3:10 PM');
+    expect(text).toContain('• Whole milk: 3 packs (3,000 ml) (was 2 packs (2,000 ml))');
+    expect(text).toContain('• Tissue roll (new item from the Kitchen screen): 4 roll');
+  });
+
+  it('an updated buy list escapes what the shop typed', () => {
+    const text = buyListUpdatedMessage({ ...req, shopName: 'Tom & Jerry <Cafe>' }, [{ name: 'Syrup <b>&</b>', amount: '2 > 1' }], 'A<b>', at);
+    expect(text).toContain('Tom &amp; Jerry &lt;Cafe&gt;');
+    expect(text).toContain('• Syrup &lt;b&gt;&amp;&lt;/b&gt;: 2 &gt; 1');
+    expect(text).toContain('Added by A&lt;b&gt;');
+    expect(text).not.toContain('<b>&</b>');
+  });
+
+  it('an updated buy list with hundreds of lines fits Telegram and says how many are left out', () => {
+    const many = Array.from({ length: 400 }, (_, i) => ({ name: `Ingredient number ${i} with a long name`, amount: '12 packs (12,000 ml) (was 10 packs (10,000 ml))' }));
+    const text = buyListUpdatedMessage(req, many, null, at);
+    expect(text.length).toBeLessThanOrEqual(MESSAGE_LIMIT);
+    expect(text).toMatch(/…and \d+ more$/);
+    expect(text.split('\n')[2]).toBe('Sep 15, 3:10 PM');
   });
 
   it('bought shows each line and the total paid', () => {

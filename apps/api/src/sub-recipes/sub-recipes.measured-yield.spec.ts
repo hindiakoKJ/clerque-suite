@@ -53,8 +53,10 @@ describe('SubRecipesService.makeBatch — what actually came out', () => {
       orderItem: { findMany: jest.fn().mockResolvedValue([]) },
       rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([{ rawMaterialId: 'soy', quantity: 999999 }]) },
       rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
+      // The board makeBatch reads the prep's station from: no dish, size or add-on uses it.
       bomItem: { findMany: jest.fn().mockResolvedValue([]) },
-      subRecipeItem: { findMany: jest.fn().mockResolvedValue([]) },
+      variantBomItem: { findMany: jest.fn().mockResolvedValue([]) },
+      modifierOptionIngredient: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     return { svc: new SubRecipesService(prisma) as any, events, lots };

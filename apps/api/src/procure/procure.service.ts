@@ -23,6 +23,7 @@ import { CostSanityService } from '../common/sanity/cost-sanity.service';
 import { SanityContext } from '../common/sanity/sanity.types';
 import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 import { heldUsage, heldAt, availableQty, type HeldMap } from '../orders/held-usage';
+import { plannedDayFor } from './station-request-plan';
 
 /** Where a price somebody confirmed on the buy list is written down, per line. */
 const CONFIRMED_LINE = 'PurchaseRequestLine';
@@ -35,8 +36,11 @@ const CONFIRMED_LINE = 'PurchaseRequestLine';
  * from an empty book, so a hold cannot lower it further -- and a count must
  * still see the shortfall, or posting it could never bring the book back up.
  * With nothing waiting every figure is the book, as before.
+ *
+ * Exported so the kitchen screen's "Request what's running low" plans from
+ * the same figure the list and Check stock use.
  */
-function afterHeld(book: number, held: number): number {
+export function afterHeld(book: number, held: number): number {
   return book > 0 ? availableQty(book, held) : book;
 }
 
@@ -190,6 +194,28 @@ export async function onTheWay(
     });
   }
   return coming;
+}
+
+/**
+ * An amount on the buy list the way the shop writes it by hand: in packs when
+ * the quantity is a whole (or half) number of the last pack bought, with the
+ * unit amount beside it; otherwise the unit amount alone.
+ *
+ * One builder for the owner email, the bell, Telegram and the kitchen
+ * screen's answer, so they never word the same line two ways.
+ */
+export function amountWords(qty: number, unit: string, packSize: number | null): string {
+  const n = packSize ? Math.round((qty / packSize) * 100) / 100 : null;
+  const whole = n != null && Math.abs(n * packSize! - qty) < 1e-6 && n > 0;
+  return whole
+    ? `${n} pack${n === 1 ? '' : 's'} (${qty.toLocaleString()} ${unit})`
+    : `${qty.toLocaleString()} ${unit}`;
+}
+
+/** Names as a sentence says them: "Anne", "Anne and Mia", "Anne, Mia and Jo". */
+export function namesInWords(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /** What each pocket is called in a sentence a shop owner reads. */
@@ -675,9 +701,20 @@ export class ProcureService {
     if (req.status !== 'OPEN') {
       throw new BadRequestException(`This request was already sent (${req.status.toLowerCase()}).`);
     }
+    const now = new Date();
     const updated = await this.prisma.purchaseRequest.update({
       where:   { id: requestId },
-      data:    { status: 'SENT', sentAt: new Date(), sentById: userId },
+      data:    {
+        status: 'SENT', sentAt: now, sentById: userId,
+        /*
+          The day this list is for, by the same rule a kitchen or bar tap uses
+          (today before 10:00 Manila, tomorrow from then). The closing job
+          counts only a list carrying this tag as the one already sent, so a
+          receipt or a short delivery's balance -- also stamped sent -- is not
+          mistaken for it; without the tag, a list sent here would not count.
+        */
+        notes: withTag(req.notes, 'PLAN', plannedDayFor(now).plannedDay),
+      },
       include: this.lineInclude(),
     });
     // The copy for the group chat, filed now: on-hand is live and cannot be
@@ -693,14 +730,29 @@ export class ProcureService {
    * notification and, where mail is configured, the list itself -- in packs
    * where Clerque knows the pack, which is how the shop has always written
    * it by hand. Best effort: a mail outage never blocks the send.
+   *
+   * Mode 'updated' is a list already sent that a kitchen or bar screen added
+   * to: the bell and Telegram name only what changed, and no email goes (the
+   * email and its PDF are the copy as first sent). Returns the names of the
+   * people told, or [] when nobody was or telling them failed.
    */
-  private async tellTheOwners(
+  async tellTheOwners(
     tenantId: string,
     req: { id: string; requestNumber: string; branchId: string; branch?: { name: string } | null;
-           lines: Array<{ rawMaterialId: string; qtyRequested: Prisma.Decimal; rawMaterial: { name: string; unit: string } }> },
+           lines: Array<{ rawMaterialId: string; qtyRequested: Prisma.Decimal | number; rawMaterial: { name: string; unit: string } }> },
     pdf: Buffer | null = null,
     sentById: string | null = null,
-  ) {
+    opts: {
+      mode?: 'sent' | 'updated';
+      /** Updated mode: the lines this change touched, and what each asked for before (null: new on the list). */
+      changed?: Array<{ rawMaterialId: string; was: number | null }>;
+      /** Who to name instead of looking up sentById: "Kitchen screen", "Clerque at closing time". */
+      byLabel?: string | null;
+      /** Items a station screen created just now, so the owner knows to set them up. */
+      newItems?: { ids: string[]; screen: string } | null;
+    } = {},
+  ): Promise<string[]> {
+    const mode = opts.mode ?? 'sent';
     try {
       const people = await this.prisma.user.findMany({
         where: {
@@ -712,31 +764,59 @@ export class ProcureService {
         },
         select: { id: true, email: true, name: true },
       });
-      if (people.length === 0) return;
+      if (people.length === 0) return [];
 
-      const packs = await this.lastPacks(tenantId, req.lines.map((l) => l.rawMaterialId));
-      // What each item still serves, in the same words as the list and the PDF.
-      const servesOf = await this.servesByItem(tenantId, [req.branchId], req.lines.map((l) => l.rawMaterialId));
-      const lines = req.lines.map((l) => {
+      const changed = mode === 'updated' ? (opts.changed ?? []) : null;
+      const wasOf = new Map((changed ?? []).map((c) => [c.rawMaterialId, c.was]));
+      // Updated: only what this change touched. Sent: the whole list, as always.
+      const told = changed ? req.lines.filter((l) => wasOf.has(l.rawMaterialId)) : req.lines;
+      if (changed && told.length === 0) return [];
+
+      const packs = await this.lastPacks(tenantId, told.map((l) => l.rawMaterialId));
+      // What each item still serves, in the same words as the list and the PDF. Only the email carries it.
+      const servesOf = mode === 'sent'
+        ? await this.servesByItem(tenantId, [req.branchId], told.map((l) => l.rawMaterialId))
+        : null;
+      const newIds = new Set(opts.newItems?.ids ?? []);
+      const lines = told.map((l) => {
         const qty  = Number(l.qtyRequested);
-        const pack = packs.get(l.rawMaterialId);
-        const n    = pack ? Math.round((qty / pack.packSize) * 100) / 100 : null;
-        const whole = n != null && Math.abs(n * pack!.packSize - qty) < 1e-6 && n > 0;
+        const packSize = packs.get(l.rawMaterialId)?.packSize ?? null;
+        const was  = wasOf.get(l.rawMaterialId);
+        const amount = amountWords(qty, l.rawMaterial.unit, packSize);
         return {
-          name:   l.rawMaterial.name,
-          amount: whole
-            ? `${n} pack${n === 1 ? '' : 's'} (${qty.toLocaleString()} ${l.rawMaterial.unit})`
-            : `${qty.toLocaleString()} ${l.rawMaterial.unit}`,
+          // A new item from a station screen has no cost or reorder level yet: say where it came from.
+          name:   newIds.has(l.rawMaterialId) && opts.newItems
+            ? `${l.rawMaterial.name} (new item from the ${opts.newItems.screen})`
+            : l.rawMaterial.name,
+          amount: was != null ? `${amount} (was ${amountWords(was, l.rawMaterial.unit, packSize)})` : amount,
           serves: servesOf ? servesSummary(servesOf(req.branchId, l.rawMaterialId, null)) : null,
         };
       });
-      // Telegram too, in the same words as the email. Not awaited.
-      void this.telegramAlerts?.buyListSent(tenantId, req.id, lines, sentById);
       const branch = req.branch?.name ?? null;
       const link   = `/procure/requests?view=${req.requestNumber}`;
+      const listed = lines.slice(0, 6).map((l) => `${l.name} ${l.amount}`).join(' · ') + (lines.length > 6 ? ` · and ${lines.length - 6} more` : '');
+
+      if (mode === 'updated') {
+        // Telegram too, in the same words as the bell. Not awaited.
+        void this.telegramAlerts?.buyListUpdated(tenantId, req.id, lines, opts.byLabel ?? null);
+        for (const p of people) {
+          if (!this.notifications) break;
+          await this.notifications.create({
+            tenantId, userId: p.id, kind: 'INFO',
+            title: `Buy list ${req.requestNumber} updated${branch ? ` — ${branch}` : ''}`,
+            // The body changes with every raise, so each update is its own bell; an exact repeat within the hour is not.
+            body: listed, link,
+            dedupeKey: `req-updated-${req.requestNumber}-${p.id}`,
+          });
+        }
+        return people.map((p) => p.name);
+      }
+
+      // Telegram too, in the same words as the email. Not awaited.
+      void this.telegramAlerts?.buyListSent(tenantId, req.id, lines, sentById, opts.byLabel ?? null);
       const body   = lines.length === 0
         ? 'Nothing hit its reorder level — an all-clear.'
-        : lines.slice(0, 6).map((l) => `${l.name} ${l.amount}`).join(' · ') + (lines.length > 6 ? ` · and ${lines.length - 6} more` : '');
+        : listed;
 
       for (const p of people) {
         if (this.notifications) {
@@ -751,9 +831,11 @@ export class ProcureService {
           await this.mail.sendBuyListSent({ to: p.email, name: p.name, requestNumber: req.requestNumber, branchName: branch, lines, link, pdf });
         }
       }
+      return people.map((p) => p.name);
     } catch (err) {
       // The list IS sent; telling people about it is the part that may fail.
       this.logger.warn(`[procure] could not notify the owners of ${req.requestNumber}: ${err instanceof Error ? err.message : err}`);
+      return [];
     }
   }
 
@@ -768,6 +850,12 @@ export class ProcureService {
    * condition: the shop shows purchase costs to its staff. Recording a price
    * you are not allowed to see makes no sense, and that one switch already
    * says which kind of shop this is. Recording never posts anything.
+   *
+   * An OPEN list may be recorded on too (KJ, 2026-09-17). A barista's walk-in
+   * buy, or ice that is only on today's open list, used to wait for the owner
+   * to press Send first. Recording on it marks the list sent and bought in the
+   * same save, as if it had been sent a moment before. Posting to stock,
+   * paying and cancelling stay with the owner or manager.
    */
   async recordBought(
     tenantId: string,
@@ -784,11 +872,13 @@ export class ProcureService {
     } = {},
   ) {
     const req = await this.getRaw(tenantId, requestId);
-    if (req.status !== 'SENT' && req.status !== 'BOUGHT') {
+    if (req.status !== 'OPEN' && req.status !== 'SENT' && req.status !== 'BOUGHT') {
       throw new BadRequestException(
-        `A request has to be sent before it can be bought against (this one is ${req.status.toLowerCase()}).`,
+        `Nothing more can be recorded as bought on this request (it is ${req.status.toLowerCase()}).`,
       );
     }
+    // Never sent: this save sends it too. Read before anything is written.
+    const unsent = req.status === 'OPEN';
     const prepaid = readTag(req.notes, 'PREPAID') as ProcurePocket | null;
     if (extra.paidFrom && prepaid && extra.paidFrom !== prepaid) {
       throw new BadRequestException(
@@ -945,18 +1035,65 @@ export class ProcureService {
     if (extra.note) notes = appendNote(notes, extra.note);
     const boughtDay = extra.boughtAt ? this.dayOf(extra.boughtAt) : null;
     if (extra.onTheWay || extra.paidFrom) notes = withTag(notes, 'ONTHEWAY', boughtDay ?? this.today());
-    const updated = await this.prisma.purchaseRequest.update({
+    const now = new Date();
+    let updated = await this.prisma.purchaseRequest.update({
       where:   { id: requestId },
       data:    {
         status:   'BOUGHT',
+        /*
+          An open list is sent by this same save, by whoever recorded it, so
+          it reads like any list that was sent and then bought. It carries no
+          [PLAN] tag: it did not ask for the next shopping, so the closing job
+          still sends tomorrow's list (StationRequestService.buyListSentSince).
+        */
+        ...(unsent ? { sentAt: now, sentById: actor?.userId ?? null } : {}),
         // The first recording sets the day; a correction later does not move it.
-        boughtAt: boughtDay ? this.manilaMidnight(boughtDay) : (req.boughtAt ?? new Date()),
+        boughtAt: boughtDay ? this.manilaMidnight(boughtDay) : (req.boughtAt ?? now),
         ...(notes !== req.notes ? { notes } : {}),
       },
       include: this.lineInclude(),
     });
-    if (!extra.quiet && (req.status === 'SENT' || filledBlank.length > 0)) {
-      void this.telegramAlerts?.bought(tenantId, requestId, actor?.userId ?? null, req.status === 'SENT' ? null : {
+    /*
+      A walk-in buy on the open list takes only what was bought off it. The
+      barista bought the ice; the sugar on the same list was never sent to
+      anyone. Left blank on a BOUGHT list, onTheWay counted the sugar as
+      coming for a week, so that night's closing list, the kitchen's tap and
+      Check stock all left it out -- and it only went back on a list when the
+      owner posted the ice, often the next morning, a day of shopping late.
+      So the lines this save did not record move to the branch's open list now
+      (a fresh one: this list is no longer open), and come off this one.
+      Carried first and removed second: if the removal fails, the sugar is on
+      two lists where somebody can see it, never on none.
+    */
+    if (unsent) {
+      const saved = new Set(lines.map((l) => l.lineId));
+      const left  = req.lines.filter((l) => !saved.has(l.id) && l.packsBought == null && !l.receivedAt);
+      if (left.length > 0) {
+        try {
+          const carried = await this.carryForward(tenantId, updated, left, actor?.userId ?? req.createdById);
+          const movedNumbers = new Set(carried.map((c) => c.line));
+          const moved = left.filter((l) => movedNumbers.has(l.lineNumber)).map((l) => l.id);
+          if (moved.length > 0) {
+            await this.prisma.purchaseRequestLine.deleteMany({
+              // Still blank: a line somebody recorded in the meantime is bought, and stays.
+              where: { purchaseRequestId: requestId, id: { in: moved }, packsBought: null, receivedAt: null },
+            });
+            updated = { ...updated, lines: updated.lines.filter((l) => !moved.includes(l.id)) };
+          }
+        } catch (err) {
+          // The purchase itself is saved. The lines left behind stay on this
+          // list, as before this change, and posting it still carries them.
+          this.logger.error(
+            `Could not move the unbought lines of ${req.requestNumber} back to the open list: ${(err as Error)?.message ?? err}`,
+            (err as Error)?.stack,
+          );
+        }
+      }
+    }
+    // The first recording, on a list sent or still open, is news; so is a later trip that fills blank lines.
+    const firstRecording = req.status !== 'BOUGHT';
+    if (!extra.quiet && (firstRecording || filledBlank.length > 0)) {
+      void this.telegramAlerts?.bought(tenantId, requestId, actor?.userId ?? null, firstRecording ? null : {
         items: filledBlank.length,
         value: filledBlank.reduce((t, l) => t + l.packsBought * l.packCost, 0),
       });
@@ -1387,10 +1524,13 @@ export class ProcureService {
    * Lines nobody bought, back onto the branch's open list with their own
    * control numbers. They still have to be bought; dropping them was the
    * thing the screen promised not to do.
+   *
+   * Except, on an order that waited for its parcel, a line whose ingredient
+   * has come in at the branch since the order was bought (see below).
    */
   private async carryForward(
     tenantId: string,
-    req: { branchId: string; requestNumber: string },
+    req: { branchId: string; requestNumber: string; notes?: string | null; boughtAt?: Date | null; sentAt?: Date | null },
     lines: Array<{ lineNumber: string; rawMaterialId: string; qtyRequested: Prisma.Decimal; shortBy: Prisma.Decimal | null; rawMaterial: { name: string; subRecipeItems?: Array<{ id: string }> } }>,
     userId: string,
   ) {
@@ -1398,6 +1538,38 @@ export class ProcureService {
     // A prep left on an old list is made in the kitchen, not bought: it is not carried onto the next one.
     lines = lines.filter((l) => (l.rawMaterial.subRecipeItems ?? []).length === 0);
     if (lines.length === 0) return carried;
+
+    /*
+      An order waiting for its parcel (tagged ONTHEWAY) is posted days after
+      it was placed, and its blank lines were not ordered -- onTheWay already
+      counts them as still needed, so in those days they went on other lists
+      and were bought at the grocery, off a receipt or under Inventory. Put
+      back on the open list now, they sent somebody to buy them a second
+      time. So such a line is left off when stock of that ingredient came in
+      at the branch after the order was bought: the same test onTheWay uses to
+      stop believing a list, including leaving out a balance's parent's own
+      packs, which are posted a moment before the balance is made. A grocery
+      trip is posted the same day, so its blanks still go back as before.
+    */
+    const since = req.boughtAt ?? req.sentAt ?? null;
+    if (readTag(req.notes, 'ONTHEWAY') != null && since) {
+      const balanceOf = readTag(req.notes, 'BALANCEOF');
+      const lots = await this.prisma.rawMaterialLot.findMany({
+        where: {
+          tenantId,
+          branchId:      req.branchId,
+          rawMaterialId: { in: [...new Set(lines.map((l) => l.rawMaterialId))] },
+          qtyReceived:   { gt: 0 },
+          createdAt:     { gt: since },
+        },
+        select: { rawMaterialId: true, createdAt: true, referenceNumber: true },
+      });
+      const cameIn = new Set(lots
+        .filter((lot) => lot.createdAt > since && !(balanceOf && (lot.referenceNumber ?? '').startsWith(`${balanceOf}-`)))
+        .map((lot) => lot.rawMaterialId));
+      lines = lines.filter((l) => !cameIn.has(l.rawMaterialId));
+      if (lines.length === 0) return carried;
+    }
     const open = await this.openRequestRaw(tenantId, req.branchId, userId);
     const onOpen = new Set(open.lines.map((l) => l.rawMaterialId));
     const numbered: Array<{ lineNumber: string }> = open.lines.map((l) => ({ lineNumber: l.lineNumber }));
@@ -1904,7 +2076,7 @@ export class ProcureService {
    * the number came from so a one-off 5 kg sack is visible before it
    * becomes next time's default.
    */
-  private async lastPacks(tenantId: string, ids?: string[]): Promise<Map<string, LastPack>> {
+  async lastPacks(tenantId: string, ids?: string[]): Promise<Map<string, LastPack>> {
     if (ids && ids.length === 0) return new Map();
     const rows = await this.prisma.purchaseRequestLine.findMany({
       where: {
@@ -2545,7 +2717,7 @@ export class ProcureService {
     return new Date(`${day}T00:00:00+08:00`);
   }
 
-  private lineInclude() {
+  lineInclude() {
     return {
       lines: {
         include: {

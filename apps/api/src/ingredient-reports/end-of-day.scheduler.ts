@@ -3,21 +3,27 @@ import { Cron } from '@nestjs/schedule';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
+import { StationRequestService } from '../procure/station-request.service';
 import { lateSalesNote, money, usageQty } from '../telegram/messages';
 import { BRANCH_CLOSES_AT_PATTERN } from '../tenant/dto/branch.dto';
 import { IngredientReportsService } from './ingredient-reports.service';
 import { DAY_MS, manilaDayOf, manilaDayStart, UsageDay } from './daily-usage';
+import { closingSaves, dayBefore, saveClosingBalances } from './stock-day-balances';
 
 /**
- * The daily "ingredients used" sheet, sent a little after each branch's
- * closing time.
+ * The daily "ingredients used" sheet, sent when a branch's day is closed.
+ *
+ * The day closes when the last shift of the day is closed (ShiftsService calls
+ * closeDayAtLastShift). If nobody closes it, this job closes it 2 hours after
+ * the branch's closing time -- or at 03:30 Manila for a branch with no closing
+ * time. Whichever comes first wins; the other finds the day already closed.
  *
  * Cafe staff write this sheet by hand at the end of the day. Every five
  * minutes this looks for branches whose sheet is due and sends the owner and
  * that branch's managers what was used: a bell notification in Clerque and,
  * for those who linked it, a Telegram message.
  *
- * A sheet covers the 24 hours up to the moment it is due, not a calendar day.
+ * A sheet covers the hours since the day before closed, not a calendar day.
  * A cafe closing at 01:00 sells its last lattes after midnight, and a sheet
  * cut at midnight would put them on the next night's sheet. Back-to-back
  * windows also mean nothing recorded between two sheets -- a write-off after
@@ -37,23 +43,48 @@ import { DAY_MS, manilaDayOf, manilaDayStart, UsageDay } from './daily-usage';
  * Nothing goes to demo shops (anyone can log in to those) or suspended ones,
  * the same rule the Telegram links apply. Days with nothing used and nothing
  * sold are skipped: a blank sheet every night for a closed shop is noise.
+ *
+ * At the same moment, before any message is built, each branch's stock is
+ * saved as that day's closing balance (stock-day-balances.ts): the Beginning of
+ * the next day's inventory sheet on the kitchen and bar screens. That save is
+ * data, not a message, so it runs for demo shops and for branches with no
+ * closing time too.
+ *
+ * When the day closes, a branch whose kitchen and bar sent no buy list for the
+ * next shopping gets one sent anyway (StationRequestService). Like the
+ * message, that skips demo shops and branches with no closing time.
  */
 
 /**
- * Staff keep recording after the doors close: the leftover milk written off,
- * the last tickets marked ready, tomorrow's syrup. Sending a little later lets
- * that closing-up work reach the sheet. Well inside CATCH_UP_MS.
+ * When nobody closes the last shift, how long after the closing time Clerque
+ * closes the day itself. Long enough for staff still closing up -- the leftover
+ * milk written off, the last tickets marked ready, tomorrow's syrup -- to finish
+ * and close their shift, which closes the day at that moment instead.
  */
-export const SEND_AFTER_CLOSE_MS = 30 * 60 * 1000;
+export const FALLBACK_AFTER_CLOSE_MS = 2 * 60 * 60 * 1000;
 
 /**
- * How long after closing a report not sent yet still goes out. The job runs
- * every five minutes, so a sheet due at 23:57 is only seen at 00:00 -- on the
- * next calendar day -- and a deploy or restart can straddle the send.
- * Kept short so that setting a closing time in the morning does not send
- * last night's report out of the blue.
+ * How long after the fallback moment a day not closed yet is still closed and
+ * sent. The job runs every five minutes, so a day due at 23:57 is only seen at
+ * 00:00 -- on the next calendar day -- and a deploy or restart can straddle it.
+ * Kept short so that setting a closing time in the morning does not send last
+ * night's report out of the blue.
  */
 export const CATCH_UP_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * A last shift closed this long or less before the closing time ends the day.
+ * Earlier than that it is a handover: the morning cashier closing before the
+ * afternoon one opens, with the day's trade still to come.
+ */
+export const LAST_SHIFT_BEFORE_CLOSE_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * With no closing time, a last shift closed from 17:00 up to 04:00 Manila ends
+ * the day; any other hour is taken as a handover.
+ */
+export const EVENING_FROM_HOUR = 17;
+export const NIGHT_UNTIL_HOUR = 4;
 
 /** How many ingredients the bell names; the rest are on the report page. */
 const BELL_ITEMS = 5;
@@ -68,8 +99,8 @@ export function windowStart(sendAt: Date): Date {
 
 /**
  * The date a sheet sent at `sendAt` is named for: the Manila day most of its
- * 24 hours fall in. A 01:00 or 04:30 closing names the evening before, whose
- * trade it mostly is; a 21:00 closing names today.
+ * 24 hours fall in. A day closed at 03:00 or 06:30 names the evening before,
+ * whose trade it mostly is; one closed at 23:00 names today.
  */
 export function sheetDay(sendAt: Date): string {
   return manilaDayOf(new Date(sendAt.getTime() - DAY_MS / 2));
@@ -85,22 +116,137 @@ export interface DueSheet {
 }
 
 /**
- * The sheet due at `now` for a branch closing at `closesAt`, or null when no
- * sheet has come due since a closing within the catch-up window.
+ * The latest moment a sheet came due at or before `now`, for a branch closing
+ * at `closesAt` (HH:mm, already checked).
  */
-export function reportDue(closesAt: string, now: Date): DueSheet | null {
-  if (!BRANCH_CLOSES_AT_PATTERN.test(closesAt)) return null;
+export function lastDueAt(closesAt: string, now: Date, afterCloseMs = FALLBACK_AFTER_CLOSE_MS): Date {
   /*
-    The latest moment a sheet came due. Manila keeps no daylight saving, so
-    each is 24 hours after the one before. It can take two steps back: a
-    23:50 closing falls due at 00:20, so at 00:10 today's and yesterday's are
-    both still ahead -- and sending at 00:10 would read a window that ends in
-    the future, leaving 00:10 to 00:20 on no sheet.
+    Manila keeps no daylight saving, so each is 24 hours after the one before.
+    It can take two steps back: a 23:50 closing falls due at 01:50, so at 00:10
+    today's and yesterday's are both still ahead -- and sending at 00:10 would
+    read a window that ends in the future, leaving 00:10 to 01:50 on no sheet.
   */
-  let to = new Date(new Date(`${manilaDayOf(now)}T${closesAt}:00+08:00`).getTime() + SEND_AFTER_CLOSE_MS);
+  let to = new Date(new Date(`${manilaDayOf(now)}T${closesAt}:00+08:00`).getTime() + afterCloseMs);
   while (to.getTime() > now.getTime()) to = new Date(to.getTime() - DAY_MS);
-  if (now.getTime() - (to.getTime() - SEND_AFTER_CLOSE_MS) > CATCH_UP_MS) return null;
+  return to;
+}
+
+/**
+ * The day the job closes at `now` for a branch closing at `closesAt` (when
+ * nobody closed the last shift), or null when no fallback moment has come
+ * within the catch-up window.
+ * `afterCloseMs` is how long after closing it falls due: 2 hours for a
+ * closing time, none for a branch with no closing time (03:30 Manila).
+ */
+export function reportDue(closesAt: string, now: Date, afterCloseMs = FALLBACK_AFTER_CLOSE_MS): DueSheet | null {
+  if (!BRANCH_CLOSES_AT_PATTERN.test(closesAt)) return null;
+  const to = lastDueAt(closesAt, now, afterCloseMs);
+  // From the fallback moment itself: it is already 2 hours after closing, so counting from the closing would leave one hour.
+  if (now.getTime() - to.getTime() > CATCH_UP_MS) return null;
   return { day: sheetDay(to), from: windowStart(to), to };
+}
+
+/**
+ * When the job closes the day of a branch with no closing time: late enough
+ * that any evening's trade is over. It names the day before (sheetDay), whose
+ * trade it is.
+ */
+export const DEFAULT_SAVE_AT = '03:30';
+
+/** When a branch's day closes if no shift closes it: 2 hours after its closing time, or 03:30 with no (readable) closing time. */
+export function closingClock(closesAt: string | null | undefined): { at: string; afterCloseMs: number } {
+  return closesAt && BRANCH_CLOSES_AT_PATTERN.test(closesAt)
+    ? { at: closesAt, afterCloseMs: FALLBACK_AFTER_CLOSE_MS }
+    : { at: DEFAULT_SAVE_AT, afterCloseMs: 0 };
+}
+
+/** The Manila hour (0-23) at `at`. Manila keeps no daylight saving, so it is UTC+8 all year. */
+function manilaHour(at: Date): number {
+  return new Date(at.getTime() + 8 * 60 * 60 * 1000).getUTCHours();
+}
+
+/**
+ * The day a last shift closed at `closedAt` ends, or null when that close is
+ * not the end of the day.
+ *
+ * It ends the day whose fallback moment is next (or just passed, within the
+ * catch-up), and is named the way the job would name that day -- so whichever
+ * of the two closes it, the day has one name, and a close at 00:30 names the
+ * evening before.
+ *
+ * Too early is a handover, not the end of the day: before 2 hours ahead of the
+ * closing time, or with no closing time, from 04:00 to 16:59 Manila.
+ * `to` is the close; `from` is 24 hours before, used only when the day before
+ * has no saved balance.
+ */
+export function lastShiftCloseDue(closesAt: string | null | undefined, closedAt: Date): DueSheet | null {
+  const clock = closingClock(closesAt);
+  const last = lastDueAt(clock.at, closedAt, clock.afterCloseMs);
+  const fallback = closedAt.getTime() - last.getTime() <= CATCH_UP_MS ? last : new Date(last.getTime() + DAY_MS);
+  if (closesAt && BRANCH_CLOSES_AT_PATTERN.test(closesAt)) {
+    const closing = fallback.getTime() - clock.afterCloseMs;
+    if (closedAt.getTime() < closing - LAST_SHIFT_BEFORE_CLOSE_MS) return null;
+  } else {
+    const hour = manilaHour(closedAt);
+    if (hour >= NIGHT_UNTIL_HOUR && hour < EVENING_FROM_HOUR) return null;
+  }
+  return { day: sheetDay(fallback), from: windowStart(closedAt), to: closedAt };
+}
+
+/**
+ * The closing balance the job saves at `now`, or null. The same moment and the
+ * same day name as the usage message, so the saved balance, the message and
+ * the daily sheet all agree on which business day an hour belongs to.
+ */
+export function saveDue(closesAt: string | null | undefined, now: Date): DueSheet | null {
+  const clock = closingClock(closesAt);
+  return reportDue(clock.at, now, clock.afterCloseMs);
+}
+
+/**
+ * Which daily sheets exist at `now` for a branch, by the fallback clock: the
+ * one running, and the one whose fallback moment came last. A day closed
+ * earlier by its last shift is found by its save (stock-day-balances.ts).
+ */
+export interface SheetDays {
+  /** The sheet running now; if no shift closes it, its closing balance is saved at `runningDueAt`. */
+  running: string;
+  runningDueAt: Date;
+  /** The sheet whose fallback moment came last, at `lastDueAt`. */
+  last: string;
+  lastDueAt: Date;
+  /** Still within the catch-up window: its save may not have been written yet. */
+  lastInCatchUp: boolean;
+  /** When any business day's fallback moment falls; the day before's is 24 hours earlier. */
+  dueAt: (day: string) => Date;
+}
+
+/**
+ * When business day `day` closes if no shift closes it. A fallback after
+ * midnight falls on the calendar day after the day it names, so the day is
+ * found the same way the message names it (sheetDay), not assumed.
+ */
+export function closingDueAt(closesAt: string | null | undefined, day: string): Date {
+  const clock = closingClock(closesAt);
+  let at = new Date(new Date(`${day}T${clock.at}:00+08:00`).getTime() + clock.afterCloseMs);
+  while (sheetDay(at) < day) at = new Date(at.getTime() + DAY_MS);
+  while (sheetDay(at) > day) at = new Date(at.getTime() - DAY_MS);
+  return at;
+}
+
+export function sheetDays(closesAt: string | null | undefined, now: Date): SheetDays {
+  const clock = closingClock(closesAt);
+  const last = lastDueAt(clock.at, now, clock.afterCloseMs);
+  const running = new Date(last.getTime() + DAY_MS);
+  return {
+    running:       sheetDay(running),
+    runningDueAt:  running,
+    last:          sheetDay(last),
+    lastDueAt:     last,
+    // Counted from the fallback moment, the same as reportDue.
+    lastInCatchUp: now.getTime() - last.getTime() <= CATCH_UP_MS,
+    dueAt:         (day) => closingDueAt(closesAt, day),
+  };
 }
 
 /** Where the bell opens. It also marks the day as sent, so it names the branch and the day. */
@@ -139,6 +285,14 @@ export function usageBellBody(usage: UsageDay, lateSales = 0): string {
 
 type ClosingBranch = { id: string; tenantId: string; name: string; closesAt: string | null };
 
+/**
+ * What closing the last shift did to the day:
+ *   CLOSED          it was the end of the day, and the day was closed (or already was: each step keeps its own once-only guard)
+ *   NOT_END_OF_DAY  too early -- a handover, so nothing was done
+ *   SKIPPED         an inactive branch, a suspended shop, or the branch could not be read
+ */
+export type LastShiftDayClose = 'CLOSED' | 'NOT_END_OF_DAY' | 'SKIPPED';
+
 @Injectable()
 export class EndOfDayScheduler {
   private readonly logger = new Logger(EndOfDayScheduler.name);
@@ -150,11 +304,19 @@ export class EndOfDayScheduler {
     private readonly reports: IngredientReportsService,
     // Optional like every other Telegram caller: the bell still goes when Telegram is not wired in.
     @Optional() private readonly telegram?: TelegramAlertsService,
+    // The closing-time buy list. Optional so the usage message still goes where Procure is not wired in.
+    @Optional() private readonly closingList?: StationRequestService,
   ) {}
 
-  /** Every five minutes, Manila time. Returns how many branches were sent their day. Never throws. */
+  /**
+   * Every five minutes, Manila time. Returns how many branches were sent their day. Never throws.
+   * `clock` stamps a closing save with the moment the stock is read, never the run's start.
+   */
   @Cron('*/5 * * * *', { timeZone: PH_TIMEZONE })
-  async run(now: Date = new Date()): Promise<number> {
+  async run(now: Date = new Date(), clock: () => Date = () => new Date()): Promise<number> {
+    // First, so the saved balance is as close to closing as possible and the message below can cover the same hours.
+    await this.saveDueBalances(now, clock);
+
     let branches: ClosingBranch[];
     try {
       branches = await this.prisma.branch.findMany({
@@ -179,12 +341,140 @@ export class EndOfDayScheduler {
         // One branch's failure must not cost every other branch its report.
         this.logger.error(`End-of-day usage failed for branch ${branch.id} (shop ${branch.tenantId}): ${err instanceof Error ? err.message : err}`);
       }
+      await this.sendClosingList(branch, now);
     }
     if (sent > 0) this.logger.log(`Sent the end-of-day ingredient usage for ${sent} branch(es).`);
     return sent;
   }
 
-  /** True when this call sent the branch its day. */
+  /**
+   * The last shift of the day was closed at a branch: close the day now, the
+   * same three steps the job takes at the fallback moment -- save the closing
+   * balance, send the day's usage message, and send the buy list if the
+   * kitchen and bar sent none -- named for the same business day, with the
+   * message ending at the saved balance's read time.
+   *
+   * Called by ShiftsService after the shift close has committed, and not
+   * waited on. A close too early to be the end of the day (a handover) does
+   * nothing. A day already closed -- by the job, or by an earlier last shift
+   * that night -- is not saved or sent again: the save, the message and the
+   * list each keep their own once-only guard.
+   *
+   * Never throws: a cashier's drawer must close whatever happens here.
+   */
+  async closeDayAtLastShift(
+    tenantId: string,
+    branchId: string,
+    closedAt: Date,
+    clock: () => Date = () => new Date(),
+  ): Promise<LastShiftDayClose> {
+    let branch: ClosingBranch & { isActive: boolean; tenant: { isDemoTenant: boolean; status: string } } | null;
+    try {
+      branch = await this.prisma.branch.findFirst({
+        where:  { id: branchId, tenantId },
+        select: { id: true, tenantId: true, name: true, closesAt: true, isActive: true, tenant: { select: { isDemoTenant: true, status: true } } },
+      });
+    } catch (err) {
+      this.logger.error(`Could not read branch ${branchId} (shop ${tenantId}) to close its day after the last shift: ${err instanceof Error ? err.message : err}`);
+      return 'SKIPPED';
+    }
+    // The job's own rule for saves: every active branch of a shop that is not suspended.
+    if (!branch || !branch.isActive || branch.tenant.status === 'SUSPENDED') return 'SKIPPED';
+
+    const due = lastShiftCloseDue(branch.closesAt, closedAt);
+    if (!due) return 'NOT_END_OF_DAY';
+    const place: ClosingBranch = { id: branch.id, tenantId: branch.tenantId, name: branch.name, closesAt: branch.closesAt };
+
+    try {
+      // Null when the day was already saved: the job's fallback or an earlier last shift got there first.
+      const saved = await saveClosingBalances(this.prisma, place, due.day, clock);
+      if (saved != null) this.logger.log(`Saved the closing stock for branch ${branchId} (shop ${tenantId}), day ${due.day}, at its last shift close.`);
+    } catch (err) {
+      // The message and the list still go: they do not need the save, and the job retries the save within its catch-up.
+      this.logger.error(`Saving the closing stock failed for branch ${branchId} (shop ${tenantId}), day ${due.day}, at its last shift close: ${err instanceof Error ? err.message : err}`);
+    }
+
+    // Like the job: no message and no list for demo shops, or for branches with no (readable) closing time.
+    if (branch.tenant.isDemoTenant || !branch.closesAt || !BRANCH_CLOSES_AT_PATTERN.test(branch.closesAt)) return 'CLOSED';
+    try {
+      if (await this.sendDay(place, due)) this.logger.log(`Sent the end-of-day ingredient usage for branch ${branchId} (shop ${tenantId}), day ${due.day}, at its last shift close.`);
+    } catch (err) {
+      // Nothing was claimed, so the job sends it at the fallback moment.
+      this.logger.error(`End-of-day usage failed for branch ${branchId} (shop ${tenantId}), day ${due.day}, at its last shift close: ${err instanceof Error ? err.message : err}`);
+    }
+    // The close itself is the closing: a list tapped before it already asked for the next shopping.
+    await this.askClosingList(place, { ...due, closedAt: due.to }, closedAt);
+    return 'CLOSED';
+  }
+
+  /**
+   * Saves the closing balance of every branch whose fallback moment has just
+   * come. Returns how many branches this call saved. Never throws.
+   *
+   * Every active branch of a shop that is not suspended -- demo shops too, and
+   * branches with no closing time (at 03:30): this is the stock record the
+   * daily sheet reads, not a message to anyone. A day already closed by its
+   * last shift is found saved and left alone.
+   */
+  async saveDueBalances(now: Date, clock: () => Date = () => new Date()): Promise<number> {
+    let branches: Array<{ id: string; tenantId: string; closesAt: string | null }>;
+    try {
+      branches = await this.prisma.branch.findMany({
+        where:   { isActive: true, tenant: { status: { not: 'SUSPENDED' } } },
+        select:  { id: true, tenantId: true, closesAt: true },
+        orderBy: { id: 'asc' },
+      });
+    } catch (err) {
+      this.logger.error(`Could not read the branches to save closing stock for: ${err instanceof Error ? err.message : err}`);
+      return 0;
+    }
+
+    let saved = 0;
+    for (const branch of branches) {
+      const due = saveDue(branch.closesAt, now);
+      if (!due) continue;
+      try {
+        if ((await saveClosingBalances(this.prisma, branch, due.day, clock)) != null) saved++;
+      } catch (err) {
+        // One branch's failure must not cost every other branch its saved balance, or its message.
+        this.logger.error(`Saving the closing stock failed for branch ${branch.id} (shop ${branch.tenantId}), day ${due.day}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    if (saved > 0) this.logger.log(`Saved the closing stock for ${saved} branch(es).`);
+    return saved;
+  }
+
+  /**
+   * The buy list for the next shopping, for a branch whose kitchen and bar
+   * never tapped "Request what's running low": sent when the day closes, at
+   * the fallback moment here (closing + 2 hours), named for the same business
+   * day, whether or not the message itself had anything to say. Procure
+   * decides whether a list already went out -- at an earlier last shift close,
+   * or on a run before this one -- so the runs after it send nothing more.
+   * Never throws.
+   */
+  private async sendClosingList(branch: ClosingBranch, now: Date): Promise<void> {
+    if (!branch.closesAt) return;
+    const due = reportDue(branch.closesAt, now);
+    if (!due) return;
+    // The closing itself, not the fallback moment: a list tapped between the two already asked for the next shopping.
+    const closedAt = new Date(due.to.getTime() - FALLBACK_AFTER_CLOSE_MS);
+    await this.askClosingList(branch, { ...due, closedAt }, now);
+  }
+
+  /** Asks Procure for the closing buy list of one branch's day. Never throws. */
+  private async askClosingList(branch: ClosingBranch, due: DueSheet & { closedAt: Date }, now: Date): Promise<void> {
+    if (!this.closingList) return;
+    try {
+      const result = await this.closingList.sendAtClosingIfNothingSent(branch, due, now);
+      if (result === 'SENT') this.logger.log(`Sent the closing buy list for branch ${branch.id} (shop ${branch.tenantId}), day ${due.day}.`);
+    } catch (err) {
+      // It is not meant to throw; this only keeps a future change from costing the other branches their list.
+      this.logger.error(`Closing buy list failed for branch ${branch.id} (shop ${branch.tenantId}), day ${due.day}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** True when this call sent the branch its day (the job's fallback moment). */
   async sendIfDue(branch: ClosingBranch, now: Date): Promise<boolean> {
     if (!branch.closesAt || !BRANCH_CLOSES_AT_PATTERN.test(branch.closesAt)) {
       if (!this.warnedBadTime.has(branch.id)) {
@@ -195,10 +485,17 @@ export class EndOfDayScheduler {
     }
     const due = reportDue(branch.closesAt, now);
     if (!due) return false;
+    return this.sendDay(branch, due);
+  }
 
+  /**
+   * Sends one branch its day, once: from the job at the fallback moment, or
+   * at the last shift close. True when this call sent it.
+   */
+  private async sendDay(branch: ClosingBranch, due: DueSheet): Promise<boolean> {
     const { tenantId } = branch;
     const link = usageReportLink(branch.id, due.day);
-    // The sheet is due at least 12 hours into its day, so this catches every send of it.
+    // The day closes at least 8 hours into the day it is named for (sheetDay), so this catches every send of it.
     const sentAlready = { tenantId, link, createdAt: { gte: manilaDayStart(due.day) } };
 
     // A cheap look first: after the day went out, each run until the window closes costs this one query.
@@ -219,11 +516,12 @@ export class EndOfDayScheduler {
     });
     if (people.length === 0) return false;
 
-    const usage = await this.reports.usageForWindow(tenantId, branch.id, due.day, due.from, due.to);
-    const lateSales = await this.lateSales(tenantId, branch.id, due);
+    const hours = await this.usageHours(branch.id, due);
+    const usage = await this.reports.usageForWindow(tenantId, branch.id, due.day, hours.from, hours.to);
+    const lateSales = await this.lateSales(tenantId, branch.id, hours);
     if (
       usage.rows.length === 0 && usage.stillBeingMade === 0 && lateSales === 0
-      && !(await this.soldIn(tenantId, branch.id, due.from, due.to))
+      && !(await this.soldIn(tenantId, branch.id, hours.from, hours.to))
     ) {
       return false;
     }
@@ -255,6 +553,31 @@ export class EndOfDayScheduler {
     */
     await this.telegram?.dailyUsage(tenantId, branch.id, usage, lateSales);
     return true;
+  }
+
+  /**
+   * The hours the message covers: from the closing balance saved for the day
+   * before to the one saved for this day, so the message and the daily
+   * inventory sheet on the kitchen and bar screens cover exactly the same
+   * hours. A save is stamped when the stock was read, a moment after the day
+   * closed; a message ending at the close would leave that moment on none.
+   *
+   * The save ends the message even when it is earlier than `due.to`: a day
+   * closed by its last shift at 20:40 and sent by the job at 23:00 (its first
+   * send failed) still ends at 20:40, where the next day's sheet begins.
+   *
+   * The 24 hours up to the close when a save is missing -- a branch with no
+   * stock rows has none, and a save can fail. Only the day before's save
+   * counts as the start: one from further back would put a day that already
+   * went out on this message again.
+   */
+  private async usageHours(branchId: string, due: DueSheet): Promise<DueSheet> {
+    const before = dayBefore(due.day);
+    const saved = await closingSaves(this.prisma, branchId, [before, due.day]);
+    const to = saved.get(due.day) ?? due.to;
+    const start = saved.get(before);
+    const from = start && start.getTime() < to.getTime() ? start : due.from;
+    return { day: due.day, from, to };
   }
 
   /** Whether the branch took a sale in the window: sales with nothing counted still get a (short) report. */

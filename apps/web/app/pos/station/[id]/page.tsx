@@ -19,6 +19,7 @@ import {
   verifyDeviceToken,
   clearDeviceToken,
 } from '@/lib/pos/device-token';
+import { queueProblem, stationTitle } from './station-screen';
 
 interface QueueItem {
   id:           string;
@@ -34,6 +35,9 @@ interface QueueItem {
   readyAt:      string | null;
   waitSeconds:  number;
 }
+
+/** One empty list, so "no orders" is the same value on every render. */
+const NO_ITEMS: QueueItem[] = [];
 
 const STATION_ICON: Record<string, React.ElementType> = {
   COUNTER:     Store,
@@ -179,7 +183,7 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
     sendViaRawBt(escpos);
   }
 
-  const { data: items = [], isFetching } = useQuery<QueueItem[]>({
+  const { data: queued, isFetching, isError: queueFailed, error: queueError } = useQuery<QueueItem[]>({
     queryKey: ['kds-queue', stationId],
     queryFn:  () => api.get(`/kds/stations/${stationId}/queue`).then((r) => r.data),
     // Hold off until we've confirmed the device is authorised for this station;
@@ -187,6 +191,28 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
     // the global axios refresh interceptor for no reason.
     enabled:  !!stationId && pairState === 'ok',
     refetchInterval: 3_000,
+    refetchIntervalInBackground: true,
+  });
+  /*
+    A queue that failed to load is said, never shown as "All caught up": a
+    signed-out or unpaired screen looked finished while tickets waited. Signed
+    out also hides the last list it had, which can no longer change.
+  */
+  const problem = queueFailed ? queueProblem(queueError) : null;
+  const signedOut = problem?.kind === 'unpaired';
+  const items = signedOut ? NO_ITEMS : (queued ?? NO_ITEMS);
+
+  /*
+    The station's name for the title and the printed ticket. The floor layout
+    needs a login, so a paired tablet takes it from the prep levels, which
+    answer with their station. The same query (same key) the prep column
+    polls, so it is one request.
+  */
+  const { data: prepInfo } = useQuery<{ station?: { id: string; name: string; kind: string } }>({
+    queryKey: ['kds-prep', stationId],
+    queryFn:  () => api.get(`/kds/stations/${stationId}/prep`).then((r) => r.data),
+    enabled:  !!stationId && pairState === 'ok',
+    refetchInterval: 60_000,
     refetchIntervalInBackground: true,
   });
 
@@ -272,8 +298,8 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
       return aTs - bTs;
     });
 
-  const Icon = station ? STATION_ICON[station.kind] ?? ChefHat : ChefHat;
-  const stationName = station?.name ?? 'Station';
+  const Icon = STATION_ICON[station?.kind ?? prepInfo?.station?.kind ?? ''] ?? ChefHat;
+  const stationName = stationTitle(station, prepInfo?.station);
 
   // ── Mismatch guard — paired to a different station than the URL ──────────
   if (pairState === 'mismatch') {
@@ -418,8 +444,39 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
         // Always mounted, so prep levels keep watching (and ring) while only the orders are showing.
         prep={<StationPrepLevels stationId={stationId} enabled={!!stationId && pairState === 'ok'} visible={view !== 'orders'}
           compact={view === 'split'} onNewRed={() => { if (chime.enabled) chime.ring(); }} />}
-        orders={orderNumbers.length === 0 ? (
+        orders={signedOut ? (
+          <div className="flex flex-col items-center justify-center px-6 py-24 text-center">
+            <AlertTriangle className="h-14 w-14 text-amber-400 mb-4" />
+            <p className="text-2xl font-semibold text-white">This screen is signed out or unpaired</p>
+            <p className="text-base text-stone-300 mt-2 max-w-md">
+              Orders cannot show here. Pair it again from Settings &gt; Displays.
+            </p>
+            {problem?.detail && <p className="text-sm text-stone-500 mt-2 max-w-md">{problem.detail}</p>}
+            <button
+              onClick={() => {
+                clearDeviceToken();
+                router.replace('/pair');
+              }}
+              className="mt-6 min-h-11 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-semibold transition-colors"
+            >
+              Pair this screen again
+            </button>
+          </div>
+        ) : problem && !queued ? (
+          <div className="flex flex-col items-center justify-center px-6 py-24 text-center">
+            <AlertTriangle className="h-14 w-14 text-amber-400 mb-4" />
+            <p className="text-2xl font-semibold text-white">Could not load the orders</p>
+            <p className="text-base text-stone-300 mt-2 max-w-md">
+              {problem.detail ?? 'Check the Wi-Fi. This screen tries again every few seconds.'}
+            </p>
+          </div>
+        ) : orderNumbers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-32 text-stone-500">
+            {problem && (
+              <p className="mb-6 rounded-lg bg-amber-500/15 px-3 py-2 text-sm text-amber-200">
+                Could not refresh the orders. Check the Wi-Fi.
+              </p>
+            )}
             <Check className="h-16 w-16 opacity-30 mb-4" />
             <p className="text-2xl font-semibold">All caught up</p>
             <p className="text-sm mt-1">Waiting for new orders…</p>

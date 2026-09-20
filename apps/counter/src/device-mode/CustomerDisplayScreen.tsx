@@ -17,9 +17,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 
 import { pairedClient, verifyDeviceToken } from '@/device-mode/pairedClient';
-import { ApiHttpError } from '@/api/client';
+import { ApiHttpError, resolveAssetUrl } from '@/api/client';
+import { usePairedTenantBranding } from '@/api/queries';
 import { clearDeviceMode, type PairedDevice } from '@/device-mode/storage';
 import { colors, radii, spacing, text, tnum } from '@/theme';
 
@@ -82,6 +84,7 @@ export default function CustomerDisplayScreen({ pairing, onUnpaired }: Props): R
   const [paymentPhase, setPaymentPhase] = useState<'thanks' | 'preparing'>('thanks');
   const lastPaymentSeq = useRef<number | null>(null);
   const lastSeq = useRef(0);
+  const branding = usePairedTenantBranding(pairing);
 
   // Verify token on mount; bounce to picker if revoked.
   useEffect(() => {
@@ -157,12 +160,16 @@ export default function CustomerDisplayScreen({ pairing, onUnpaired }: Props): R
   }, [state.type, state.seq]);
 
   const businessName = state.businessName ?? pairing.tenantName ?? 'Welcome';
+  // Business logo from GET /tenant/branding (device token). '' until it
+  // loads, when there is no logo, or offline with nothing cached; the
+  // screens then show a plain store icon.
+  const logoUri = resolveAssetUrl(branding.data?.logoUrl);
 
   // WELCOME
   if (state.type === 'WELCOME' || (state.lines.length === 0 && state.type !== 'PAYMENT_PENDING')) {
     return (
       <View style={[styles.full, styles.welcomeBg]}>
-        <MaterialCommunityIcons name="coffee" size={96} color={'#FBE9C7'} />
+        <DisplayLogo uri={logoUri} maxWidth={216} maxHeight={136} pad={spacing.s3} iconSize={96} />
         <Text style={styles.welcomeTitle}>{businessName}</Text>
         <Text style={styles.welcomeSubtitle}>Welcome — please order at the counter</Text>
       </View>
@@ -258,7 +265,7 @@ export default function CustomerDisplayScreen({ pairing, onUnpaired }: Props): R
     <View style={styles.cartRoot}>
       <View style={styles.cartHeader}>
         <View style={styles.cartHeaderLeft}>
-          <MaterialCommunityIcons name="coffee" size={28} color={'#FBE9C7'} />
+          <DisplayLogo uri={logoUri} maxWidth={112} maxHeight={32} pad={spacing.s1} iconSize={28} />
           <Text style={styles.cartHeaderTitle}>{businessName}</Text>
         </View>
         <View style={styles.cartHeaderRight}>
@@ -304,7 +311,83 @@ export default function CustomerDisplayScreen({ pairing, onUnpaired }: Props): R
   );
 }
 
+/**
+ * Business logo on a light chip, or a plain store icon when there is none
+ * (or it fails to load). The brown background would swallow a dark logo,
+ * hence the chip.
+ *
+ * The image box follows the logo's own shape inside maxWidth x maxHeight,
+ * so a wide logo isn't squeezed into a square and a square logo doesn't sit
+ * in a wide white bar. Until the size is known it renders as a square.
+ *
+ * Shapes are remembered per link for the life of the app: this component
+ * remounts every time the screen flips between welcome and cart, and
+ * without the memo each flip would start square and then jump.
+ */
+const knownLogoRatios = new Map<string, number>();
+
+function DisplayLogo({
+  uri,
+  maxWidth,
+  maxHeight,
+  pad,
+  iconSize,
+}: {
+  uri: string;
+  maxWidth: number;
+  maxHeight: number;
+  pad: number;
+  iconSize: number;
+}): React.ReactElement {
+  // Both keyed by link, so a new logo starts clean instead of inheriting
+  // the old one's shape or failure.
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const [shape, setShape] = useState<{ uri: string; ratio: number } | null>(null);
+
+  if (!uri || failedUri === uri) {
+    return <MaterialCommunityIcons name="store" size={iconSize} color={'#FBE9C7'} />;
+  }
+
+  const ratio = shape?.uri === uri ? shape.ratio : knownLogoRatios.get(uri) ?? 1;
+  let height = maxHeight;
+  let width = height * ratio;
+  if (width > maxWidth) {
+    width = maxWidth;
+    height = width / ratio;
+  }
+
+  return (
+    <View
+      style={[styles.logoChip, { padding: pad }]}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <Image
+        source={{ uri }}
+        style={{ width: Math.round(width), height: Math.round(height) }}
+        contentFit="contain"
+        cachePolicy="memory-disk"
+        transition={0}
+        onLoad={(e) => {
+          const { width: w, height: h } = e.source;
+          if (!(w > 0 && h > 0)) return;
+          const r = w / h;
+          knownLogoRatios.set(uri, r);
+          // Keep the same object when nothing changed, so a repeat onLoad
+          // after the resize can't loop re-renders.
+          setShape((prev) => (prev && prev.uri === uri && Math.abs(prev.ratio - r) < 0.001 ? prev : { uri, ratio: r }));
+        }}
+        onError={() => setFailedUri(uri)}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  logoChip: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: radii.md,
+  },
   full: {
     flex: 1,
     alignItems: 'center',

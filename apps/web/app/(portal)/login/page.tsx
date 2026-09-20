@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { jwtDecode } from 'jwt-decode';
 import type { AppProduct } from '@/components/portal/AppLoginPage';
@@ -8,6 +8,7 @@ import type { JwtPayload, AuthTokens } from '@repo/shared-types';
 import { AppLoginPage } from '@/components/portal/AppLoginPage';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
+import { rememberBusinessAfterLogin } from '@/lib/branding';
 
 /* The valid ?app= values that map to a product config */
 const VALID_PRODUCTS: AppProduct[] = ['pos', 'ledger', 'procure', 'payroll', 'console'];
@@ -41,6 +42,16 @@ function LoginInner() {
   // exchanges for the real access/refresh pair.
   const [twoFactorChallenge, setTwoFactorChallenge] = useState<string | null>(null);
   const [twoFactorCode, setTwoFactorCode] = useState('');
+  // Company code typed on the form, kept for the 2FA step so the login page
+  // can remember this business's logo for next time.
+  const companyCodeRef = useRef('');
+
+  /** Remember this business (code, name, logo) for this device's login page.
+   *  Not awaited: sign-in never waits on it. Never for Console / super admins. */
+  function rememberBusiness(user: JwtPayload) {
+    if (isConsoleHost || user.isSuperAdmin === true || user.role === 'SUPER_ADMIN') return;
+    void rememberBusinessAfterLogin(companyCodeRef.current, user.tenantId);
+  }
 
   async function completeLogin(data: AuthTokens) {
     setTokens(data.accessToken, data.refreshToken);
@@ -50,6 +61,7 @@ function LoginInner() {
     document.cookie =
       `app-session=${data.accessToken}; path=/; SameSite=Lax` +
       (isProd ? '; Secure' : '');
+    rememberBusiness(user);
     const next = searchParams.get('next');
     if (isConsoleHost) {
       const isSuper = user.isSuperAdmin === true || user.role === 'SUPER_ADMIN';
@@ -87,6 +99,7 @@ function LoginInner() {
   async function handleSubmit(values: { tenantId: string; email: string; password: string; rememberMe: boolean; mode: 'password' | 'pin' }) {
     setLoading(true);
     setError(undefined);
+    companyCodeRef.current = values.tenantId;
     try {
       // PIN login dispatches to /auth/pin-login (returns the same AuthTokens shape).
       // Password login keeps the original /auth/login path.
@@ -124,6 +137,7 @@ function LoginInner() {
       document.cookie =
         `app-session=${data.accessToken}; path=/; SameSite=Lax` +
         (isProd ? '; Secure' : '');
+      rememberBusiness(user);
 
       // If app was pre-selected, go directly; otherwise show app selector.
       // On the console subdomain, super-admins land on /admin/dashboard and

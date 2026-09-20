@@ -42,7 +42,8 @@ export interface TenantConfig {
   nextOrNumber: number;
   receiptHeaderNote?: string;
   receiptFooterNote?: string;
-  receiptLogoUrl?: string;
+  // The logo is not part of TenantConfig: it no longer comes from the login
+  // token. Read it with useTenantBranding() (GET /tenant/branding).
   /** FDA License to Operate — printed on every receipt header for DME tenants. */
   fdaLicenseNumber?: string;
   /** Plan-feature flags pre-resolved by the Cloud /me endpoint. */

@@ -16,6 +16,8 @@ import type { PaymentMethod, TaxStatus, ReceiptAuthority } from '@repo/shared-ty
 import { getProviderPhase, receiptAuthority } from '@repo/shared-types';
 import { isDemoMode } from '@/lib/demo/config';
 import { useSound } from '@/hooks/pos/useSound';
+import { useBranding } from '@/hooks/useBranding';
+import { waitForImages } from '@/lib/branding';
 
 /**
  * Roles allowed to void directly from the terminal (no supervisor co-auth).
@@ -245,7 +247,9 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   // Sprint 19 — owner-customizable receipt template
   const receiptHeaderNote     = user?.receiptHeaderNote;
   const receiptFooterNote     = user?.receiptFooterNote;
-  const receiptLogoUrl        = user?.receiptLogoUrl;
+  // The logo comes from GET /tenant/branding, never from the login token (an
+  // inline image there could overflow the session cookie). '' = no logo.
+  const { logoSrc: receiptLogoSrc } = useBranding({ enabled: !!user?.tenantId });
 
   // ── In-receipt void (role-gated) ───────────────────────────────────────────
   // Visible only when:
@@ -361,10 +365,13 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
     }
   }
 
-  function handleBrowserPrint() {
+  async function handleBrowserPrint() {
     if (!printRef.current) return;
     const win = window.open('', '_blank', 'width=400,height=760');
     if (!win) return;
+    // The popup has none of the page's Tailwind, so the logo needs its own
+    // size cap here or it prints at full pixel size (a 512px logo overflows
+    // 80mm paper).
     win.document.write(`
       <html><head><title>Receipt</title>
       <style>
@@ -376,9 +383,15 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
         .big { font-size: 16px; }
         .offline-badge { background:#f59e0b; color:#fff; text-align:center; padding:4px; margin-bottom:8px; font-weight:bold; }
         .bir-footer { font-size: 9px; color: #666; }
+        img.receipt-logo { display: block; margin: 0 auto 4px; max-height: 48px; max-width: 60%; object-fit: contain; }
       </style></head><body>${printRef.current.innerHTML}</body></html>
     `);
     win.document.close();
+    // Wait for the logo to load in the popup (up to 3s) before printing, or
+    // the slip prints with a blank where the logo should be.
+    await waitForImages(win.document);
+    if (win.closed) return;
+    win.focus();
     win.print();
     win.close();
   }
@@ -437,7 +450,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                   <Zap className="h-4 w-4" />
                 </button>
               )}
-              <button onClick={handleBrowserPrint} title="Browser print" className="text-muted-foreground hover:text-foreground transition-colors p-2">
+              <button onClick={() => void handleBrowserPrint()} title="Browser print" className="text-muted-foreground hover:text-foreground transition-colors p-2">
                 <Printer className="h-4 w-4" />
               </button>
             </div>
@@ -464,12 +477,13 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
 
             {/* ── Header: business info + BIR classification ── */}
             <div className="text-center space-y-0.5 mb-3">
-              {receiptLogoUrl && (
+              {receiptLogoSrc && (
                 /* eslint-disable-next-line @next/next/no-img-element */
                 <img
-                  src={receiptLogoUrl}
+                  key={receiptLogoSrc}
+                  src={receiptLogoSrc}
                   alt="logo"
-                  className="mx-auto mb-1 max-h-12 object-contain"
+                  className="receipt-logo mx-auto mb-1 max-h-12 max-w-[200px] object-contain"
                   onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                 />
               )}
@@ -687,7 +701,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                   </button>
                 ) : (
                   <button
-                    onClick={handleBrowserPrint}
+                    onClick={() => void handleBrowserPrint()}
                     className="font-display flex items-center gap-3 rounded-xl border border-border bg-secondary text-secondary-foreground px-4 text-sm font-semibold hover:bg-secondary/80 transition-colors"
                     style={{ minHeight: 48 }}
                   >

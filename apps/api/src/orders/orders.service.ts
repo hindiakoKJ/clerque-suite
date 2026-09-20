@@ -23,6 +23,7 @@ import { Prisma, InventoryLogType } from '@prisma/client';
 import { OfflineOrder, planFeaturesFor, hasPermission, PH_TIMEZONE } from '@repo/shared-types';
 import { OrderQuoteService } from './order-quote.service';
 import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
+import { supervisorPinAttempts } from '../auth/pin-attempts';
 
 /** Peso tolerance when comparing a caller's totals against our own. One
  *  centavo absorbs float noise without letting a real discrepancy through. */
@@ -2280,6 +2281,9 @@ export class OrdersService {
     if (!/^\d{4,6}$/.test(cleaned)) {
       throw new ForbiddenException('Supervisor PIN must be 4-6 digits.');
     }
+    // 5 wrong PINs in 15 minutes, counted for the whole business, then wait.
+    // Checked before the PIN so a locked till cannot still tell right from wrong.
+    const attempt = supervisorPinAttempts.startTry(tenantId);
     const SUPERVISOR_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'];
     const candidates = await this.prisma.user.findMany({
       where: {
@@ -2300,12 +2304,16 @@ export class OrdersService {
         matches.push({ id: u.id, name: u.name, role: u.role });
       }
     }
+    // A wrong PIN is already counted by startTry.
     if (matches.length === 0) throw new ForbiddenException('Supervisor PIN not recognised.');
     if (matches.length > 1) {
+      // Not a wrong guess: the PIN is right, just shared.
+      attempt.notAGuess();
       throw new ForbiddenException(
         'That PIN matches more than one supervisor. Have them change it, or sign in directly.',
       );
     }
+    attempt.succeeded();
     return matches[0];
   }
 

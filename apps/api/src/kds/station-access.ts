@@ -51,7 +51,24 @@ export async function stationContext(
       ? 'The person who paired this screen no longer has an active account. Pair it again.'
       : 'Your account is not active.');
   }
-  const wanted = (user.isDevice ? person.branchId : (user.branchId ?? person.branchId)) ?? station.branchId ?? null;
+  /*
+    Which branch this screen's stock belongs to.
+
+    A tablet on the wall is in ONE kitchen, and that kitchen is the station's
+    branch. Reading it from whoever paired the tablet took the milk off the
+    branch that person happens to be assigned to: in a two-branch shop, the
+    owner (assigned to Branch A) pairs the tablet in Branch B, and the waste a
+    cook records there came off Branch A's books while Branch B's stayed high.
+    Station.branchId is nullable, so the pairer's branch still answers for a
+    station that belongs to no branch in particular, and a one-branch shop --
+    where neither is set -- still falls through to its only active branch.
+
+    A logged-in person keeps their own branch: they carry it from screen to
+    screen, and their session says where they are.
+  */
+  const wanted = (user.isDevice
+    ? (station.branchId ?? person.branchId)
+    : (user.branchId ?? person.branchId)) ?? station.branchId ?? null;
   const branch = wanted
     ? await prisma.branch.findFirst({ where: { id: wanted, tenantId }, select: { id: true, name: true } })
     : await prisma.branch.findFirst({ where: { tenantId, isActive: true }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } });

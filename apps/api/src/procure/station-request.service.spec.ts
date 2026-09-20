@@ -13,6 +13,7 @@ describe('StationRequestService', () => {
   const B = 'b1';
   const NOW = new Date('2026-09-17T15:00:00+08:00');   // planning Friday Sep 18
   const HOUR = 3_600_000;
+  const LATER_CLOSING = new Date('2026-09-17T21:30:00+08:00');
 
   const KITCHEN: RequestContext = {
     tenantId: T, branchId: B, branchName: 'Main', stationKind: 'KITCHEN', stationName: 'Kitchen',
@@ -41,6 +42,8 @@ describe('StationRequestService', () => {
     flipCount?: number;
     clashOnce?: boolean;
     historyFails?: boolean;
+    /** No open day to learn from: the shop's first day on Clerque. */
+    noHistory?: boolean;
   } = {}) {
     const requests: Req[] = (opts.requests ?? []).map((r) => ({ ...r, lines: r.lines.map((l) => ({ ...l })) }));
     const materials: Material[] = MATERIALS.map((m) => ({ createdAt: new Date('2026-01-01'), ...m }));
@@ -151,7 +154,7 @@ describe('StationRequestService', () => {
 
     const svc = new StationRequestService(prisma, procure as ProcureService);
     const perFriday = opts.milkPerFriday ?? 2400;
-    const history = [
+    const history = opts.noHistory ? [] : [
       { day: '2026-09-11', used: new Map([['milk', perFriday]]) },
       { day: '2026-09-04', used: new Map([['milk', perFriday]]) },
     ];
@@ -266,9 +269,41 @@ describe('StationRequestService', () => {
   it('nothing low and no list: nothing is created and nobody is told', async () => {
     const { svc, writes, procure } = build({ stock: { milk: 50_000, sugar: 50_000, syrup: 5000, tissue: 20 } });
     const res = await svc.apply(KITCHEN, [], NOW);
-    expect(res).toMatchObject({ outcome: 'NOTHING_NEW', request: null, message: 'Nothing is running low. Nothing was sent.' });
+    expect(res).toMatchObject({ outcome: 'NOTHING_NEW', request: null, message: 'Nothing is running low. Nothing was sent.', learning: false });
     expect(writes).toEqual([]);
     expect(procure.tellTheOwners).not.toHaveBeenCalled();
+  });
+
+  // ── the first days: too little sales history ─────────────────────────────
+
+  it('first day, nothing low: never says nothing is running low, and tells the screen Clerque is still learning', async () => {
+    const { svc, writes, procure } = build({ noHistory: true, stock: { milk: 50_000, sugar: 50_000, syrup: 5000, tissue: 20 } });
+    const res = await svc.apply(KITCHEN, [], NOW);
+    expect(res).toMatchObject({ outcome: 'NOTHING_NEW', request: null, message: 'Nothing was sent.', learning: true });
+    expect(res.message).not.toMatch(/running low/);
+    expect(writes).toEqual([]);
+    expect(procure.tellTheOwners).not.toHaveBeenCalled();
+    // The "+" preview says the same, so the screen can too before anything is added.
+    expect((await svc.preview(KITCHEN, NOW)).learning).toBe(true);
+  });
+
+  it('first day, a hand-added item is sent and the screen still hears Clerque is learning', async () => {
+    const { svc, requests } = build({ noHistory: true, stock: { milk: 50_000, sugar: 50_000, syrup: 5000, tissue: 20 } });
+    const res = await svc.apply(KITCHEN, [{ rawMaterialId: 'milk', qty: 2000 }], NOW);
+    expect(res).toMatchObject({ outcome: 'SENT', learning: true, message: 'Sent to Anne and Mia. 1 item on the list.' });
+    expect(requests[0].lines[0]).toMatchObject({ rawMaterialId: 'milk', qtyRequested: 2000 });
+  });
+
+  it('first day at closing: an empty list is not called an all-clear', async () => {
+    const { svc, procure } = build({ noHistory: true, stock: { milk: 50_000, sugar: 50_000, syrup: 5000, tissue: 20 } });
+    const closing: RequestContext = { ...KITCHEN, stationKind: null, stationName: null, actorId: null, createdById: 'owner1', byLabel: 'Clerque at closing time', source: 'CLOSING' };
+    const res = await svc.apply(closing, [], LATER_CLOSING);
+    expect(res).toMatchObject({ outcome: 'SENT', learning: true, message: 'Sent to Anne and Mia with nothing on the list yet.' });
+    expect(res.message).not.toMatch(/all-clear/);
+    expect(procure.tellTheOwners).toHaveBeenCalledTimes(1);
+    // With a month behind it, the same empty list is the all-clear.
+    const known = build({ stock: { milk: 50_000, sugar: 50_000, syrup: 5000, tissue: 20 } });
+    expect(await known.svc.apply(closing, [], LATER_CLOSING)).toMatchObject({ learning: false, message: 'Sent the all-clear to Anne and Mia. Nothing is running low.' });
   });
 
   it('two screens queue on one lock per branch', async () => {

@@ -58,7 +58,9 @@ function sessionFromJwt(accessToken: string): { user: AuthSession['user']; tenan
     nextOrNumber:     1,         // server-derived; refreshed by orders module
     receiptHeaderNote: typeof p.receiptHeaderNote === 'string' ? p.receiptHeaderNote : undefined,
     receiptFooterNote: typeof p.receiptFooterNote === 'string' ? p.receiptFooterNote : undefined,
-    receiptLogoUrl:    typeof p.receiptLogoUrl    === 'string' ? p.receiptLogoUrl    : undefined,
+    // No logo here on purpose: the token no longer carries it (an inline
+    // image made the token too big). Screens read it from GET
+    // /tenant/branding via useTenantBranding() in @/api/queries.
     fdaLicenseNumber:  typeof p.fdaLicenseNumber  === 'string' ? p.fdaLicenseNumber  : undefined,
     planFeatures: features,
   };

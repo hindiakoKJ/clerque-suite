@@ -25,18 +25,27 @@ describe('ShiftsService.close — writing the day\'s Z-Read', () => {
 
   const CLOSED_AT = new Date('2026-09-16T13:10:00Z'); // 21:10 Manila
 
-  function build(opts: { stillOpen?: number; zReadThrows?: boolean; dayClose?: any } = {}) {
+  function build(opts: {
+    stillOpen?: number; zReadThrows?: boolean; dayClose?: any;
+    closedAt?: Date; closesAt?: string | null; branchThrows?: boolean;
+  } = {}) {
     const generateZRead = jest.fn(() =>
       opts.zReadThrows ? Promise.reject(new Error('boom')) : Promise.resolve({ id: 'z1' }));
 
     const tx: any = {
       shift: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findFirst:  jest.fn().mockResolvedValue({ id: SHIFT, closedAt: CLOSED_AT }),
+        findFirst:  jest.fn().mockResolvedValue({ id: SHIFT, closedAt: opts.closedAt ?? CLOSED_AT }),
       },
       accountingEvent: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma: any = {
+      // The branch's closing time decides whether this close ends the day.
+      branch: {
+        findFirst: opts.branchThrows
+          ? jest.fn().mockRejectedValue(new Error('database down'))
+          : jest.fn().mockResolvedValue({ closesAt: opts.closesAt ?? null }),
+      },
       shift: {
         findFirst: jest.fn().mockResolvedValue({
           id: SHIFT, tenantId: TENANT, branchId: BRANCH, cashierId: CASHIER,
@@ -73,7 +82,55 @@ describe('ShiftsService.close — writing the day\'s Z-Read', () => {
     const [tenantId, branchId, date] = generateZRead.mock.calls[0] as any[];
     expect(tenantId).toBe(TENANT);
     expect(branchId).toBe(BRANCH);
-    expect(date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(date).toBe('2026-09-16');                 // closed 21:10 Manila on the 16th
+  });
+
+  /*
+    No till open is not yet the end of the day. On a single till the morning
+    cashier closes before the afternoon one opens, and that used to write the
+    day's Z-Read at noon, for good. It is written at the moment the day's
+    inventory sheet closes (lastShiftCloseDue), for the day that close ends.
+  */
+  describe('only at the end of the day', () => {
+    it('does NOT write one at a mid-day handover on a single till (no closing time set)', async () => {
+      const { svc, generateZRead } = build({ stillOpen: 0, closedAt: new Date('2026-09-17T06:09:10Z') }); // 14:09 Manila
+      await svc.close(TENANT, SHIFT, CASHIER, 1500);
+      expect(generateZRead).not.toHaveBeenCalled();
+    });
+
+    it('does NOT write one at a handover well before the closing time', async () => {
+      const { svc, generateZRead } = build({ stillOpen: 0, closesAt: '22:00', closedAt: new Date('2026-09-17T06:00:00Z') }); // 14:00
+      await svc.close(TENANT, SHIFT, CASHIER, 1500);
+      expect(generateZRead).not.toHaveBeenCalled();
+    });
+
+    it('writes it at the last close near the closing time, for that day', async () => {
+      const { svc, generateZRead } = build({ stillOpen: 0, closesAt: '22:00', closedAt: new Date('2026-09-17T13:45:00Z') }); // 21:45
+      await svc.close(TENANT, SHIFT, CASHIER, 1500);
+      expect(generateZRead).toHaveBeenCalledWith(TENANT, BRANCH, '2026-09-17', CASHIER);
+    });
+
+    it('a close after midnight is the evening before\'s Z-Read, not the new day\'s', async () => {
+      const { svc, generateZRead } = build({ stillOpen: 0, closedAt: new Date('2026-09-17T16:30:00Z') }); // 00:30 on the 18th
+      await svc.close(TENANT, SHIFT, CASHIER, 1500);
+      expect(generateZRead).toHaveBeenCalledWith(TENANT, BRANCH, '2026-09-17', CASHIER);
+    });
+
+    it("reads the closing time of this branch, in the caller's shop", async () => {
+      const { svc, prisma } = build({ stillOpen: 0 });
+      await svc.close(TENANT, SHIFT, CASHIER, 1500);
+      expect(prisma.branch.findFirst).toHaveBeenCalledWith({
+        where: { id: BRANCH, tenantId: TENANT }, select: { closesAt: true },
+      });
+    });
+
+    it('still closes the shift, and logs, when the branch cannot be read', async () => {
+      const { svc, generateZRead } = build({ stillOpen: 0, branchThrows: true });
+      const logged = jest.spyOn(svc.logger, 'error').mockImplementation(() => undefined);
+      await expect(svc.close(TENANT, SHIFT, CASHIER, 1500)).resolves.toMatchObject({ id: SHIFT });
+      expect(generateZRead).not.toHaveBeenCalled();
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining(`Z-Read generation failed for branch ${BRANCH}`));
+    });
   });
 
   it('does NOT write one while another till is still open', async () => {
@@ -115,7 +172,7 @@ describe('ShiftsService.close — writing the day\'s Z-Read', () => {
       const tx: any = {
         shift: {
           updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-          findFirst:  jest.fn().mockResolvedValue({ id: SHIFT }),
+          findFirst:  jest.fn().mockResolvedValue({ id: SHIFT, closedAt: CLOSED_AT }),
         },
         accountingEvent: { create: jest.fn().mockResolvedValue({}) },
       };

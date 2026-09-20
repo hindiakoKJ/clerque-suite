@@ -18,6 +18,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
 
 import { useAuth } from '@/auth/AuthProvider';
+import { useTenantBranding } from '@/api/queries';
+import TenantMark from '@/components/TenantMark';
 import { useSync } from '@/offline/SyncProvider';
 import DisplaysScreen from '@/shell/DisplaysScreen';
 import PrinterSettingsScreen from '@/shell/PrinterSettingsScreen';
@@ -137,6 +139,7 @@ export default function AppDrawer(): React.ReactElement {
 function DrawerBody(props: DrawerContentComponentProps): React.ReactElement {
   const { tenant, session, cashier, signOut, lockToPin } = useAuth();
   const { queuedCount } = useSync();
+  const branding = useTenantBranding();
   const activeRoute = props.state.routes[props.state.index]?.name;
 
   return (
@@ -146,8 +149,13 @@ function DrawerBody(props: DrawerContentComponentProps): React.ReactElement {
       style={styles.scroll}
     >
       <View style={styles.head}>
-        <Text style={styles.tenantName}>{tenant?.name ?? 'Clerque'}</Text>
-        <Text style={styles.tenantId}>{tenant ? `ID ${tenant.id.slice(0, 8)}` : '—'}</Text>
+        {tenant ? (
+          <TenantMark size={48} branding={branding.data} fallbackName={tenant.name} />
+        ) : null}
+        <View style={styles.headText}>
+          <Text style={styles.tenantName}>{tenant?.name ?? 'Clerque'}</Text>
+          <Text style={styles.tenantId}>{tenant ? `ID ${tenant.id.slice(0, 8)}` : '—'}</Text>
+        </View>
       </View>
 
       <View style={styles.nav}>
@@ -222,7 +230,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.ruleStrong,
     backgroundColor: colors.cream,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s3,
   },
+  headText: { flex: 1, minWidth: 0 },
   tenantName: { ...text.displaySm, color: colors.ink },
   tenantId: { ...text.caption, color: colors.muted, marginTop: spacing.s1 },
   nav: { padding: spacing.s3, flex: 1 },

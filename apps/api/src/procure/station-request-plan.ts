@@ -30,6 +30,12 @@ export const SENT_LIST_HOURS = 18;
 export const RAISE_MIN_FRACTION = 0.10;
 /** Before this hour (Manila) the shopping is still for today; from it, for tomorrow. */
 export const PLAN_TODAY_BEFORE_HOUR = 10;
+/**
+ * Fewer open days than this behind a "lately" forecast, and Clerque is still
+ * learning the shop's usage. The first days after go-live: the forecast sees
+ * little or nothing, so an empty list is not an all-clear.
+ */
+export const LEARNING_DAYS = 3;
 
 /** One day the shop was open, and what each item used that day. */
 export interface HistoryDay {
@@ -109,6 +115,12 @@ export interface PlanResult {
   check: Array<{ rawMaterialId: string; name: string; reason: string }>;
   /** Preps whose recipes loop back into each other; left out of the plan. */
   cycle: string[];
+  /**
+   * Too little sales history to forecast from (no open day, or fewer than
+   * LEARNING_DAYS of them lately): only reorder levels and "+" can put
+   * something on the list, so nothing on it does not mean nothing is low.
+   */
+  learning: boolean;
 }
 
 const round4 = (n: number) => Math.round(n * 10_000) / 10_000;
@@ -242,6 +254,7 @@ export function planRequest(input: PlanInput): PlanResult {
   // Two same weekdays make a pattern; one is an accident. Short of that, the last week will do.
   const basis: 'WEEKDAY' | 'RECENT' | 'NONE' = sameDays.length >= 2 ? 'WEEKDAY' : recentDays.length >= 1 ? 'RECENT' : 'NONE';
   const basisDays = basis === 'WEEKDAY' ? sameDays : basis === 'RECENT' ? recentDays : [];
+  const learning = basis === 'NONE' || (basis === 'RECENT' && recentDays.length < LEARNING_DAYS);
   const expected = (id: string): number => basisDays.length === 0
     ? 0
     : round4(basisDays.reduce((t, d) => t + (usedOn.get(d)?.get(id) ?? 0), 0) / basisDays.length);
@@ -364,5 +377,5 @@ export function planRequest(input: PlanInput): PlanResult {
   onTheWay.sort((a, b) => a.name.localeCompare(b.name));
   check.sort((a, b) => a.name.localeCompare(b.name));
 
-  return { plannedDay, lines, onTheWay, toMake, check, cycle };
+  return { plannedDay, lines, onTheWay, toMake, check, cycle, learning };
 }

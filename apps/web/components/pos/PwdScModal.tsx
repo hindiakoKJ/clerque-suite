@@ -120,17 +120,12 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
       // the unclaimed VAT slice.
       addAdditionalPwdSc(type, idRef.trim(), idOwnerName.trim(), selectedSubtotal, claimed);
     } else {
-      // First PWD/SC: if ALL selectable items were chosen, pass undefined so
-      // the store uses the legacy "covers entire cart" path (preserves the
-      // single-PWD behaviour clients already trust).
-      const allSelected = selected.size === lineKeys.length;
-      applyPwdSc(
-        type,
-        idRef.trim(),
-        idOwnerName.trim(),
-        allSelected ? undefined : selectedSubtotal,
-        allSelected ? undefined : claimed,
-      );
+      // First PWD/SC: always the ticked lines and their one-unit subtotal, the
+      // same figure the preview shows. Ticking every line used to hand the
+      // store "the whole cart", which discounted every unit (2 lattes: 60 off
+      // instead of 30) and recorded no lines, so a second senior could claim
+      // the same items again.
+      applyPwdSc(type, idRef.trim(), idOwnerName.trim(), selectedSubtotal, claimed);
     }
     onClose();
   }

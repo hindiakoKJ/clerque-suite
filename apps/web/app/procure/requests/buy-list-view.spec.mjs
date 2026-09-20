@@ -5,7 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { chipsInOrder, recordsOn, showsRecordBoxes, startsTicked } from './buy-list-view.ts';
+import {
+  chipsInOrder, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
+} from './buy-list-view.ts';
 
 const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
 
@@ -43,7 +45,7 @@ test('a recorded line starts ticked on a normal bought list, unticked on an orde
 test('the page uses both, and Save still sends a recorded line that is not ticked', () => {
   assert.match(page, /chipsInOrder\(all\)\.map\(/);
   assert.doesNotMatch(page, /all\.slice\(0, 8\)/);
-  assert.match(page, /const isTicked\s+= \(l: Line\) => ticked\[l\.id\] \?\? startsTicked\(l, !!req && !!onTheWay\(req\)\);/);
+  assert.match(page, /const isTicked\s+= \(l: Line\) => ticked\[l\.id\]\s+\?\? \(startsTicked\(l, !!req && !!onTheWay\(req\)\) \|\| /);
   assert.match(page, /\.filter\(\(l\) => !l\.receivedAt && \(isTicked\(l\) \|\| l\.packsBought != null\)\)/);
   assert.match(page, /if \(ordered\) setTicked\(\{\}\);/);
 });
@@ -66,7 +68,8 @@ test('the page records on an open list: the boxes, the footer and Save once tick
   assert.match(page, /\{recording && \(req\.status === 'OPEN' \? tickedAny : \(req\.status === 'SENT' \|\| !canDecide\)\) && \(/);
   // Add photo: every status but cancelled, the open list included.
   assert.doesNotMatch(page, /canRecord && req\.status !== 'OPEN'/);
-  assert.equal((page.match(/canRecord && req\.status !== 'CANCELLED'/g) ?? []).length, 2);
+  // Twice for Add photo, once for "Record something you bought".
+  assert.equal((page.match(/canRecord && req\.status !== 'CANCELLED'/g) ?? []).length, 3);
   // Posting, paying ahead and cancelling stay with the deciders.
   assert.match(page, /\{req\.status === 'BOUGHT' && canDecide && \(/);
   assert.match(page, /\{ordered && canDecide && !prepaid && \(/);
@@ -84,4 +87,62 @@ test('Cash Out help says Paid Out is not for ice or water', () => {
   const modal = readFileSync(new URL('../../../components/pos/CashOutModal.tsx', import.meta.url), 'utf8');
   assert.match(modal, /Not for ingredients like ice or water; add those to stock in Procure\./);
   assert.doesNotMatch(modal, /ice run|COD payment|Bought ice/);
+});
+
+// ── staff walk-in buys ──────────────────────────────────────────────────────
+
+const req = (status, notes = null) => ({ status, notes });
+const onTheWayTag = (r) => (r.notes ?? '').includes('[ONTHEWAY:');
+
+test('staff open on the list being built when there is one; the owner keeps the old order', () => {
+  // The kitchen's tap sent one list; somebody opened a fresh one since.
+  const sent = req('SENT');
+  const open = req('OPEN');
+  const waiting = req('BOUGHT');
+  const live = [open, sent, waiting];
+  assert.equal(listToOpen(live, true, onTheWayTag), open, 'staff: the list they can add to');
+  assert.equal(listToOpen(live, false, onTheWayTag), waiting, 'owner: the delivery waiting to be posted');
+  assert.equal(listToOpen([open, sent], false, onTheWayTag), sent);
+});
+
+test('with no list being built, staff get the same list as before', () => {
+  const sent = req('SENT');
+  const parcel = req('BOUGHT', '[ONTHEWAY:2026-09-17]');
+  assert.equal(listToOpen([parcel, sent], true, onTheWayTag), sent);
+  assert.equal(listToOpen([parcel], true, onTheWayTag), parcel);
+  assert.equal(listToOpen([], true, onTheWayTag), null);
+  // An order still on the way never sits in front of today's list.
+  const open = req('OPEN');
+  assert.equal(listToOpen([parcel, open], false, onTheWayTag), open);
+});
+
+test('a line added as a walk-in buy starts ticked until something is recorded on it', () => {
+  const items = new Set(['ice']);
+  assert.equal(startsTickedAsWalkIn({ rawMaterialId: 'ice', packsBought: null, receivedAt: null }, items), true);
+  assert.equal(startsTickedAsWalkIn({ rawMaterialId: 'milk', packsBought: null, receivedAt: null }, items), false);
+  assert.equal(startsTickedAsWalkIn({ rawMaterialId: 'ice', packsBought: 2, receivedAt: null }, items), false);
+  assert.equal(startsTickedAsWalkIn({ rawMaterialId: 'ice', packsBought: null, receivedAt: '2026-09-17' }, items), false);
+});
+
+test('the page: staff open on the list being built, and "Record something you bought" is one tap from any list', () => {
+  assert.match(page, /const byNeed = listToOpen\(live, !canDecide, \(r\) => !!onTheWay\(r\)\);/);
+  // Only for whoever may record, and never on a cancelled list: the cost-visibility rule is unchanged.
+  assert.match(page, /\{canRecord && req\.status !== 'CANCELLED' && !\(walkInPicking && picking\) && \(/);
+  assert.match(page, /Record something you bought<\/span>/);
+  // From a sent or bought list it opens the list being built for the same branch, then the picker.
+  assert.match(page, /onClick=\{\(\) => \(req\.status === 'OPEN' \? beginWalkIn\(req\) : startWalkIn\.mutate\(\)\)\}/);
+  assert.match(page, /api\.post\('\/procure\/requests\/open', \{ branchId: req\?\.branch\?\.id \?\? branchId \}\)/);
+  assert.match(page, /setWalkInPicking\(true\);\s+setPicking\(true\);/);
+  // The walk-in flag is the screen's; it is never posted with the line.
+  assert.match(page, /mutationFn: \(\{ walkIn: _walkIn, \.\.\.v \}/);
+  assert.match(page, /walkIn: walkInPicking \}\);/);
+  // A walk-in line starts ticked only on the list it was added to.
+  assert.match(page, /walkIn === req\.id && startsTickedAsWalkIn\(l, walkInItems\)/);
+});
+
+test('staff hints no longer say the owner sends the list at cut-off, and say who records when costs are hidden', () => {
+  assert.doesNotMatch(page, /sends this list when the shift cuts off/);
+  assert.match(page, /It is sent to the owner from the kitchen or bar screen, or at closing time\./);
+  assert.match(page, /Bought something yourself\? Tell the owner or manager: on this account only they record purchases\./);
+  assert.match(page, /Bought something\? Tick it if it is on the list, or tap Record something you bought above, then save\./);
 });

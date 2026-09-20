@@ -265,6 +265,7 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
         navItems={navItems}
         logoIcon={BookOpen}
         appName="Ledger"
+        showTenantMark
         helpHref="/ledger/help"
         onSignOut={handleLogout}
         headerRight={

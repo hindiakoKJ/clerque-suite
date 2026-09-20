@@ -290,8 +290,9 @@ const SECTIONS: HelpSection[] = [
         q: 'What\'s the difference between Paid-Out and Cash Drop?',
         a: (
           <ul className="list-disc pl-5 space-y-1">
-            <li><strong>Paid-Out</strong> — real expense paid from the cash drawer. E.g. tipping a delivery rider, buying ice mid-shift, paying a small supplier in cash. Posts an expense JE.</li>
-            <li><strong>Cash Drop</strong> — safekeeping. Cashier hands cash to manager who locks it in the safe. No expense — moves cash from &ldquo;Cash on Hand&rdquo; to &ldquo;Cash on Safe&rdquo;.</li>
+            <li><strong>Paid-Out</strong> — a small expense paid from the cash drawer. E.g. tipping a delivery rider, parking. Books it as an expense.</li>
+            <li><strong>Ice, water and any other ingredient are never paid from the till.</strong> The owner pays for them, and they are recorded in Procure as &ldquo;Owner paid&rdquo;. Paying for ice from the drawer books the cost twice and still leaves the ice out of stock, so the iced drinks stop selling.</li>
+            <li><strong>Cash Drop</strong> — safekeeping. Cashier hands cash to manager who locks it in the safe. No expense — the cash moves from the drawer to the safe, and it is still the shop&rsquo;s cash.</li>
             <li>Both reduce the expected closing cash, so your variance reconciles cleanly.</li>
           </ul>
         ),

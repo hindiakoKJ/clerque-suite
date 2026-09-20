@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
 import { stillWaiting } from '../orders/waste';
+import { netShareOfLines } from '../reports/reports.service';
 
 export interface VarianceRow {
   rawMaterialId: string;
@@ -256,10 +257,10 @@ export class InventoryReportsService {
   }
 
   /**
-   * Per-product margin: revenue (sum of lineTotal) vs COGS (sum of qty × costPrice)
-   * over the window. Pulls COGS from OrderItem.costPrice (frozen at sale time,
-   * or at the ready tap for a line that waited at a screen); falls back to 0
-   * when absent.
+   * Per-product margin: revenue (each line's share of what its order kept, net
+   * of order discounts and VAT) vs COGS (sum of qty × costPrice) over the
+   * window. Pulls COGS from OrderItem.costPrice (frozen at sale time, or at the
+   * ready tap for a line that waited at a screen); falls back to 0 when absent.
    */
   async margin(tenantId: string, from?: string, to?: string): Promise<MarginRow[]> {
     const { fromD, toD } = this.parseRange(from, to);
@@ -268,6 +269,7 @@ export class InventoryReportsService {
         order: { tenantId, deletedAt: null, ...SOLD, createdAt: { gte: fromD, lte: toD } },
       },
       select: {
+        orderId:       true,
         productId:     true,
         productName:   true,
         quantity:      true,
@@ -276,15 +278,26 @@ export class InventoryReportsService {
         refundedQty:   true,
         usageOnReady:  true,
         usagePostedAt: true,
+        order:         { select: { totalAmount: true, vatAmount: true } },
       },
     });
+
+    /*
+      lineTotal is the line as rung, before an order discount: a senior's 20%
+      is only in the order's totalAmount. Every line of a sold order is in
+      `items` (the filter is on the order), so each order's lines are added up
+      here and every line scaled to its share of what the order kept.
+    */
+    const lineSums = new Map<string, number>();
+    for (const it of items) lineSums.set(it.orderId, (lineSums.get(it.orderId) ?? 0) + Number(it.lineTotal));
 
     const agg = new Map<string, MarginRow>();
     const costedRevenue = new Map<string, number>();
     for (const it of items) {
       const qtyNet = Number(it.quantity) - Number(it.refundedQty);
       if (qtyNet <= 0) continue;
-      const revenue = Number(it.lineTotal) * (qtyNet / Number(it.quantity || 1));
+      const netShare = netShareOfLines(it.order.totalAmount, it.order.vatAmount, lineSums.get(it.orderId) ?? 0);
+      const revenue = Number(it.lineTotal) * netShare * (qtyNet / Number(it.quantity || 1));
       const existing = agg.get(it.productId) ?? {
         productId:   it.productId,
         productName: it.productName,

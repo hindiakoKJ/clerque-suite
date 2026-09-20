@@ -18,13 +18,18 @@ interface MobileNavSheetProps {
   /** Optional Help & Guide route (per-app). Renders link in the footer when set. */
   helpHref?: string;
   onSignOut?: () => void;
+  /** The business's logo and name for a header row. Null hides the row (Console). */
+  tenant?: { logoSrc: string; name: string | null } | null;
 }
 
 export function MobileNavSheet({
   open, onClose, children, logoIcon: LogoIcon, appName, brandName = 'Clerque',
-  roleLabel, helpHref, onSignOut,
+  roleLabel, helpHref, onSignOut, tenant = null,
 }: MobileNavSheetProps) {
   const user = useAuthStore((s) => s.user);
+  const [logoFailed, setLogoFailed] = React.useState(false);
+  React.useEffect(() => { setLogoFailed(false); }, [tenant?.logoSrc]);
+  const showTenantLogo = !!tenant?.logoSrc && !logoFailed;
 
   const itemCls =
     'flex items-center gap-3 px-3 py-2 rounded-md text-sm text-muted-foreground ' +
@@ -41,6 +46,28 @@ export function MobileNavSheet({
           {/* Header */}
           <div className="px-4 py-2 border-b border-border shrink-0 flex items-start justify-between gap-2">
             <div className="flex flex-col gap-1.5 min-w-0">
+              {/* Business row: the full logo fits here (up to 160x40), which
+                  suits wide wordmarks that shrink too far in the square spots. */}
+              {tenant && (showTenantLogo || tenant.name) && (
+                <div className="flex flex-col items-start gap-1 pb-1.5 mb-0.5 border-b border-border/60 min-w-0">
+                  {showTenantLogo && (
+                    /* On white, like every other logo spot: a transparent logo
+                       with dark lettering vanishes on the dark theme. */
+                    <div className="inline-flex items-center rounded-md border border-border bg-white px-1.5 py-1">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={tenant.logoSrc}
+                        alt={tenant.name ?? 'Business logo'}
+                        className="max-h-8 max-w-[148px] object-contain"
+                        onError={() => setLogoFailed(true)}
+                      />
+                    </div>
+                  )}
+                  {tenant.name && (
+                    <p className="text-sm font-semibold text-foreground leading-snug line-clamp-2 break-words">{tenant.name}</p>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2.5">
                 <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
                   <LogoIcon className="h-4 w-4 text-white" />

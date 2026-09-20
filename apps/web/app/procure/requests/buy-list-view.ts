@@ -21,6 +21,31 @@ export function chipsInOrder<T extends { status: string }>(all: T[], max = 8): T
 }
 
 /**
+ * Which still-open list the screen opens on, from `live` (newest first).
+ *
+ * The owner or manager: a delivery waiting to be posted, then shopping waiting
+ * to be recorded, then the list being built, then an order still on the way.
+ *
+ * Staff: the list being built, when there is one. Their part is adding what is
+ * short and saving a walk-in buy, and both happen on that list. Most days a
+ * sent list exists (the kitchen's tap or the closing job sent it), so opening
+ * on it hid Add behind a small "Building" chip.
+ */
+export function listToOpen<T extends { status: string }>(
+  live: T[],
+  staff: boolean,
+  isOnTheWay: (r: T) => boolean,
+): T | null {
+  const open = live.find((r) => r.status === 'OPEN');
+  if (staff && open) return open;
+  return live.find((r) => r.status === 'BOUGHT' && !isOnTheWay(r))
+    ?? live.find((r) => r.status === 'SENT')
+    ?? open
+    ?? live.find((r) => r.status === 'BOUGHT')
+    ?? null;
+}
+
+/**
  * The tick a line starts with before anyone touches it. A recorded line starts
  * ticked, so "Add it all to stock" posts the shopping in one tap -- except on
  * an order that is on the way, where the person ticks what is in the box.
@@ -29,6 +54,16 @@ export function chipsInOrder<T extends { status: string }>(all: T[], max = 8): T
  */
 export const startsTicked = (line: { packsBought: unknown }, onTheWay: boolean): boolean =>
   line.packsBought != null && !onTheWay;
+
+/**
+ * A line just added through "Record something you bought" starts ticked, so
+ * its packs and price boxes are already open: it was bought, that is why it
+ * was added. Only until something is recorded on it.
+ */
+export const startsTickedAsWalkIn = (
+  line: { rawMaterialId: string; packsBought: unknown; receivedAt: unknown },
+  walkInItems: ReadonlySet<string>,
+): boolean => walkInItems.has(line.rawMaterialId) && line.packsBought == null && line.receivedAt == null;
 
 /**
  * Whether somebody allowed to record what was bought can do it on a list at

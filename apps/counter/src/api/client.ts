@@ -59,7 +59,10 @@ export function setAuthCallbacks(cbs: {
   onAuthExpired = cbs.onAuthExpired ?? null;
 }
 
-function getBaseUrl(): string {
+/** Base URL for every Cloud API call, prefix included (e.g.
+ *  https://api.clerque.cc/api/v1). Shared with the paired-device client and
+ *  the logo URL builder so all three agree on where the API lives. */
+export function getApiBaseUrl(): string {
   const extra = (Constants.expoConfig?.extra ?? {}) as { apiBaseUrl?: string };
   const url = extra.apiBaseUrl;
   if (!url) throw new ApiHttpError(0, 'CONFIG', 'apiBaseUrl missing from expo config');
@@ -69,6 +72,32 @@ function getBaseUrl(): string {
   // should NOT include /api/v1 themselves.
   const trimmed = url.replace(/\/+$/, '');
   return trimmed.endsWith('/api/v1') ? trimmed : `${trimmed}/api/v1`;
+}
+
+/**
+ * Turn a stored upload link into a URL an <Image> can load. Mirrors
+ * resolveAssetUrl in apps/web/lib/api.ts:
+ *   • absolute http(s) links (S3 / R2) pass through unchanged;
+ *   • server-relative paths (/api/v1/products/photos/<id> on database
+ *     storage, /uploads/... on local disk) are joined to the API host
+ *     WITHOUT the /api/v1 prefix, because the path already carries
+ *     whatever prefix it needs.
+ * Anything else (data:, file:, //host) returns '' so callers show their
+ * fallback instead of handing the image loader something unexpected.
+ */
+export function resolveAssetUrl(pathOrUrl: string | null | undefined): string {
+  const value = (pathOrUrl ?? '').trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//')) return '';
+  let base: string;
+  try {
+    base = getApiBaseUrl();
+  } catch {
+    return '';
+  }
+  const origin = base.replace(/\/api\/v\d+$/, '');
+  return origin + (value.startsWith('/') ? value : `/${value}`);
 }
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -130,7 +159,7 @@ async function request<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${getBaseUrl()}${path}`, {
+    response = await fetch(`${getApiBaseUrl()}${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),

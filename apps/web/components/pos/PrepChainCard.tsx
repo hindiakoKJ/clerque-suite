@@ -9,16 +9,21 @@
  * work out the order themselves ("the ready tub is low, the frozen one is empty
  * too, so first I cook the base").
  *
- * The button records ONE batch of the stage that needs doing, at the recipe's
- * own yield -- nothing to type on a wall tablet with wet hands. Each tap sends a
- * key, and the server records a key once, so a double-tap or a retry after the
- * signal dropped cannot make the sauce twice. No costs anywhere.
+ * The big button records ONE batch of the stage that needs doing, at the
+ * recipe's own yield -- nothing to type on a wall tablet with wet hands. A
+ * stage that CAN be made but is not the thing to do next gets a smaller button
+ * of its own, so wings marinated overnight or a sauce cooked before the rush
+ * are recorded when they are made: until the tap the raw stock stays too high
+ * on the books and the day's sheet is wrong. Each tap sends a key, and the
+ * server records a key once, so a double-tap or a retry after the signal
+ * dropped cannot make the sauce twice. No costs anywhere.
  */
 import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { keepTapKey, newTapKey, tapFailure, tapFailureText } from './station-taps';
 
 export type ChainSeverity = 'NOW' | 'NEXT' | 'OK';
 export type ChainDot = 'RED' | 'AMBER' | 'GREEN' | 'GREY';
@@ -37,6 +42,18 @@ export interface ChainStage {
   canMakeNow: boolean;
   dot: ChainDot;
   line: string;
+  /**
+   * A batch of this stage can be recorded from this screen although the big
+   * button is not for it -- a batch made ahead. Null when it cannot be made
+   * now, another station makes it, or the big button already records it.
+   */
+  made: StageMade | null;
+}
+
+/** A stage's own small button: the words, and the one batch it records. */
+export interface StageMade {
+  label: string;
+  uses: string;
 }
 
 export interface PrepChain {
@@ -81,13 +98,85 @@ const DOT_LABEL: Record<ChainDot, string> = {
 
 const amount = (n: number, unit: string) => `${Math.max(0, n).toLocaleString('en-PH', { maximumFractionDigits: 1 })} ${unit}`;
 
-/*
-  A fresh tap key. crypto.randomUUID only exists on HTTPS or localhost, and a
-  kitchen tablet on the shop's own network may be neither, so the fallback is
-  time plus randomness -- unique enough for one screen's taps.
-*/
-const newKey = (): string =>
-  globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+/**
+ * One batch recorded, from the big button or from a stage's own small one.
+ *
+ * Its own key, so the big button and a stage button are never the same tap,
+ * and its own pending, so only the button that was tapped waits. The prep
+ * tiles that are not inside a chain use it too (StationPrepLevels).
+ */
+export function MadeButton({
+  stationId, rawMaterialId, label, uses, tone, enabled = true, disabledLabel, compact = false,
+}: {
+  stationId: string;
+  rawMaterialId: string;
+  label: string;
+  /** "Uses 2 kg Chicken · 200 g Marinade" -- shown under the button, so nothing is recorded blind. */
+  uses: string | null;
+  /** The one thing to do now, or a batch made ahead. */
+  tone: 'primary' | 'secondary';
+  enabled?: boolean;
+  /** What the big button says instead when it cannot be tapped ("Buy Tomatoes first"). */
+  disabledLabel?: string;
+  compact?: boolean;
+}) {
+  const qc = useQueryClient();
+  const key = useRef(newTapKey());
+  const [pending, setPending] = useState(false);
+
+  async function record() {
+    if (!enabled || pending) return;
+    setPending(true);
+    try {
+      const res = await api.post<{ message: string }>(
+        `/kds/stations/${stationId}/prep/${rawMaterialId}/made`,
+        { key: key.current },
+      );
+      // Recorded: the next tap is a new batch.
+      key.current = newTapKey();
+      toast.success(res.data.message);
+      /*
+        Stay disabled until the levels have been read again. Otherwise a second
+        tap landing just after the answer -- with the new key -- would record a
+        second batch while the card still showed the old numbers.
+      */
+      await qc.invalidateQueries({ queryKey: ['kds-prep', stationId] });
+    } catch (e) {
+      // A refusal recorded nothing, so the next tap is a new try; anything else keeps the key.
+      if (!keepTapKey(tapFailure(e).status)) key.current = newTapKey();
+      toast.error(tapFailureText(e));
+      qc.invalidateQueries({ queryKey: ['kds-prep', stationId] });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const look = tone === 'primary'
+    ? `min-h-14 w-full px-3 text-lg font-bold ${enabled
+        ? 'bg-amber-500 text-stone-950 hover:bg-amber-400 active:bg-amber-600 disabled:opacity-70'
+        : 'cursor-not-allowed bg-stone-700 text-stone-400'}`
+    : 'min-h-11 w-full px-3 text-sm font-semibold border border-amber-500/60 text-amber-200 '
+      + 'hover:bg-amber-500/15 active:bg-amber-500/25 disabled:opacity-60';
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={record}
+        disabled={!enabled || pending}
+        className={`flex items-center justify-center gap-2 rounded-xl leading-tight transition-colors ${look}`}
+      >
+        {pending && <Loader2 className={tone === 'primary' ? 'h-5 w-5 animate-spin' : 'h-4 w-4 animate-spin'} />}
+        {enabled ? label : (disabledLabel ?? label)}
+      </button>
+      {enabled && uses && (
+        <p className={`mt-1 text-center leading-snug text-stone-400 ${tone === 'primary' ? 'text-xs' : 'text-[11px]'}`}>
+          {compact && tone === 'secondary' ? uses.replace(/^Uses /, '') : uses}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function PrepChainCard({
   chain, stationId, compact = false, notes,
@@ -98,48 +187,6 @@ export function PrepChainCard({
   /** Use-by warnings per stage id, so a tub past its date still says so inside its chain. */
   notes?: Record<string, StageNote[]>;
 }) {
-  const qc = useQueryClient();
-  const key = useRef(newKey());
-  const [pending, setPending] = useState(false);
-
-  async function record() {
-    const action = chain.action;
-    if (!action || !action.enabled || pending) return;
-    setPending(true);
-    try {
-      const res = await api.post<{ message: string }>(
-        `/kds/stations/${stationId}/prep/${action.rawMaterialId}/made`,
-        { key: key.current },
-      );
-      // Recorded: the next tap is a new batch.
-      key.current = newKey();
-      toast.success(res.data.message);
-      /*
-        Stay disabled until the levels have been read again. Otherwise a second
-        tap landing just after the answer -- with the new key -- would record a
-        second batch while the card still showed the old numbers.
-      */
-      await qc.invalidateQueries({ queryKey: ['kds-prep', stationId] });
-    } catch (e) {
-      const r = (e as { response?: { status?: number; data?: { message?: string | string[] } } })?.response;
-      const m = r?.data?.message;
-      const said = Array.isArray(m) ? m.join(' ') : m;
-      /*
-        No answer at all (the signal dropped) or a server error: the batch may
-        or may not have been recorded, so the key is KEPT -- tapping again then
-        either records it or is told it already was. A refusal (4xx) recorded
-        nothing, so the next tap is a new try.
-      */
-      if (r?.status && r.status >= 400 && r.status < 500) key.current = newKey();
-      toast.error(said ?? (r
-        ? 'Could not record it. Tap again: it will not be counted twice.'
-        : 'No connection. Tap again when it is back: it will not be counted twice.'));
-      qc.invalidateQueries({ queryKey: ['kds-prep', stationId] });
-    } finally {
-      setPending(false);
-    }
-  }
-
   const action = chain.action;
   return (
     <div className={`rounded-2xl border-l-4 bg-stone-900 ${EDGE[chain.severity]} ${compact ? 'px-3 py-2.5' : 'p-4'}`}>
@@ -177,26 +224,36 @@ export function PrepChainCard({
             {(notes?.[s.id] ?? []).map((n) => (
               <p key={n.text} className={`pl-[18px] text-xs leading-snug ${n.past ? 'text-red-300' : 'text-orange-200'}`}>{n.text}</p>
             ))}
+            {/* Made ahead of the rush: recorded now, not once the tub runs low. */}
+            {s.made && (
+              <div className="mt-1.5 pl-[18px]">
+                <MadeButton
+                  stationId={stationId}
+                  rawMaterialId={s.id}
+                  label={s.made.label}
+                  uses={s.made.uses}
+                  tone="secondary"
+                  compact={compact}
+                />
+              </div>
+            )}
           </li>
         ))}
       </ul>
 
       {action && (
         <div className={compact ? 'mt-2' : 'mt-3'}>
-          <button
-            type="button"
-            onClick={record}
-            disabled={!action.enabled || pending}
-            className={`flex min-h-14 w-full items-center justify-center gap-2 rounded-xl px-3 text-lg font-bold leading-tight transition-colors ${
-              action.enabled
-                ? 'bg-amber-500 text-stone-950 hover:bg-amber-400 active:bg-amber-600 disabled:opacity-70'
-                : 'cursor-not-allowed bg-stone-700 text-stone-400'
-            }`}
-          >
-            {pending && <Loader2 className="h-5 w-5 animate-spin" />}
-            {action.enabled ? action.label : (action.disabledReason ?? action.label)}
-          </button>
-          {action.enabled && <p className="mt-1 text-center text-xs leading-snug text-stone-400">{action.uses}</p>}
+          <MadeButton
+            /* A fresh tap key when the thing to do moves to another stage: one key is one batch of one item. */
+            key={action.rawMaterialId}
+            stationId={stationId}
+            rawMaterialId={action.rawMaterialId}
+            label={action.label}
+            uses={action.uses}
+            tone="primary"
+            enabled={action.enabled}
+            disabledLabel={action.disabledReason}
+          />
         </div>
       )}
     </div>

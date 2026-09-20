@@ -11,6 +11,7 @@
  */
 
 import { receiptAuthority } from '@repo/shared-types';
+import { thermalBytes, toThermalText } from './thermal-text';
 
 // ── Web Serial type shim ──────────────────────────────────────────────────────────
 declare global {
@@ -56,24 +57,28 @@ const C = {
   feed3:        cmd(LF, LF, LF),
 };
 
-const enc = new TextEncoder();
-const txt = (s: string) => enc.encode(s);
+// Printers get plain ASCII: "Café" -> "Cafe", "₱" -> "P" (see thermal-text.ts).
+const txt = (s: string) => thermalBytes(s);
 
-function padRight(s: string, n: number) { return s.substring(0, n).padEnd(n); }
+// Columns are measured on the text as printed, so a swap like "½" -> "1/2"
+// can't push the price column past the paper edge.
+function padRight(s: string, n: number) { return toThermalText(s).substring(0, n).padEnd(n); }
 
 function twoCol(left: string, right: string): Uint8Array {
-  const r = right.length;
-  const l = COLS - r - 1;
-  return txt(`${padRight(left, l)} ${right}`);
+  const r = toThermalText(right);
+  const l = COLS - r.length - 1;
+  return txt(`${padRight(left, l)} ${r}`);
 }
 
 function dash(): Uint8Array { return txt('-'.repeat(COLS)); }
 
-/** Word-wrap a sentence into lines no wider than `n` columns. */
+/** Word-wrap a sentence into lines no wider than `n` printed columns. */
 function wrapWords(s: string, n: number): string[] {
   const out: string[] = [];
   let cur = '';
-  for (const w of s.split(' ')) {
+  // Wrap the text as printed: a swap like "½" -> "1/2" is wider than the
+  // character it replaces and would otherwise spill past the paper edge.
+  for (const w of toThermalText(s).split(' ')) {
     if (cur && cur.length + 1 + w.length > n) { out.push(cur); cur = w; }
     else cur = cur ? `${cur} ${w}` : w;
   }

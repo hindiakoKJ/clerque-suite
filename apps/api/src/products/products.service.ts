@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { productCeiling, LimitedBy } from './recipe-ceiling';
+import { missingCostWhere, UNPRICED_INGREDIENT, unpricedIngredientNames } from './missing-cost';
 import { heldUsage, heldAt, availableQty, HeldMap } from '../orders/held-usage';
 import { Prisma, DrugClass } from '@prisma/client';
 import { hasPermission, planFeaturesFor } from '@repo/shared-types';
@@ -647,8 +648,11 @@ export class ProductsService {
 
   // Used by POS terminal — optimized for speed; includes modifier groups
   /**
-   * Products with no costPrice set. These break COGS reporting silently —
-   * sales register revenue but no cost, overstating gross profit.
+   * Products that sell at a wrong cost. These break COGS reporting silently —
+   * sales register revenue but no (or too little) cost, overstating gross
+   * profit. Either the product has no costPrice, or its cost comes from its
+   * recipe and a recipe ingredient has no price or a price of ₱0 (named in
+   * unpricedIngredients). See missing-cost.ts.
    * Returns active products only (deactivated ones can't be sold anyway).
    */
   async findMissingCost(tenantId: string) {
@@ -657,20 +661,42 @@ export class ProductsService {
     // not a leak. Skip the warning entirely for these tenants.
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
-      select: { businessType: true },
+      select: { businessType: true, inventoryMode: true },
     });
     if (tenant?.businessType === 'SERVICE') {
       return { count: 0, products: [] };
     }
+    const houseUsesRecipes = tenant?.inventoryMode === 'RECIPE_BASED';
 
-    const products = await this.prisma.product.findMany({
-      where:   { tenantId, isActive: true, costPrice: null },
+    const rows = await this.prisma.product.findMany({
+      where:   missingCostWhere(tenantId, houseUsesRecipes),
       select:  {
         id: true, name: true, sku: true, price: true,
         category: { select: { name: true } },
+        inventoryMode: true,
+        bomItems: {
+          where:  { rawMaterial: UNPRICED_INGREDIENT },
+          select: { rawMaterial: { select: { name: true } } },
+        },
+        variants: {
+          where:  { isActive: true },
+          select: {
+            variantBomItems: {
+              where:  { rawMaterial: UNPRICED_INGREDIENT },
+              select: { rawMaterial: { select: { name: true } } },
+            },
+          },
+        },
       },
       orderBy: [{ category: { name: 'asc' } }, { name: 'asc' }],
     });
+    const products = rows.map(({ inventoryMode: _m, bomItems: _b, variants: _v, ...p }) => ({
+      ...p,
+      unpricedIngredients: unpricedIngredientNames(
+        { inventoryMode: _m, bomItems: _b, variants: _v },
+        houseUsesRecipes,
+      ),
+    }));
     return {
       count:    products.length,
       products,

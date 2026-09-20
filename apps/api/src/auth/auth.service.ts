@@ -14,6 +14,7 @@ import { MailService } from '../mail/mail.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { SubscriptionPaymentsService } from '../subscription-payments/subscription-payments.service';
 import { assertPinPolicy } from './pin-policy';
+import { tillPinAttempts } from './pin-attempts';
 import { assertPasswordPolicy } from './password-policy';
 import { resolveAiQuota } from '../ai/ai-availability';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, PLAN_FEATURES, PLAN_LIMITS, DEFAULT_PLAN_CODE, normalizePlanCode, planFeaturesFor, planLimitsFor } from '@repo/shared-types';
@@ -595,26 +596,47 @@ export class AuthService {
    *   - Requires a LIVE authenticated session on the till (JWT guard at the
    *     controller): this switches between staff on an open till, it is not a
    *     login path from nothing.
-   *   - Same tenant only, active POS-capable roles only, kiosk-only accounts
-   *     refused (they are never issued JWTs anywhere).
+   *   - Same tenant only, kiosk-only accounts refused (they are never issued
+   *     JWTs anywhere).
+   *   - Till roles only: CASHIER and SALES_LEAD. The owner and managers sign
+   *     in with their email and password. Landing an owner session on a
+   *     shared till (owner types her PIN, walks away) would leave staff PINs,
+   *     prices and the books open to whoever is next at the counter. An
+   *     owner's PIN typed here gets the same "no cashier has that PIN" as a
+   *     wrong one, so the till never reveals whose PIN it is.
+   *   - Except the person already signed in on this till (`currentUserId`),
+   *     whatever their role. The same screen is also the manual lock -- the
+   *     "back in a minute" lock the cashier taps herself -- and in a
+   *     one-person cafe the person who taps it is the owner. Refusing her own
+   *     PIN would send the owner through a full email-and-password sign-in on
+   *     a tablet, mid-service, to get back into the screen she locked ninety
+   *     seconds ago. Letting her back in lands nobody new on the till: it is
+   *     the session that is already there, so the reason for the role list
+   *     does not apply to it.
+   *   - 5 wrong PINs in 15 minutes for the business, then a wait
+   *     (tillPinAttempts). A right PIN clears the count.
    *   - The PIN must be unique among the tenant's staff — ambiguity is
    *     refused outright rather than guessed at, same as supervisor PINs.
    *   - 2FA-enrolled accounts are refused: a 4-8 digit PIN must never stand
    *     in for a second factor. They sign in fully instead.
    */
-  async switchCashierByPin(tenantId: string, pin: string) {
+  async switchCashierByPin(tenantId: string, pin: string, currentUserId?: string) {
     const trimmed = (pin ?? '').trim();
     if (!/^\d{4,8}$/.test(trimmed)) {
       throw new UnauthorizedException('Enter the 4-8 digit PIN.');
     }
 
+    const attempt = tillPinAttempts.startTry(tenantId);
     const matches = await this.prisma.user.findMany({
       where: {
         tenantId,
         isActive: true,
         kioskOnly: false,
         kioskPin: trimmed,   // plaintext, same storage validateUserByPin reads
-        role: { in: ['CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER'] },
+        // Till roles only -- or the session already on this till, unlocking itself. See above.
+        OR: currentUserId
+          ? [{ role: { in: ['CASHIER', 'SALES_LEAD'] } }, { id: currentUserId }]
+          : [{ role: { in: ['CASHIER', 'SALES_LEAD'] } }],
       },
       select: {
         id: true, tenantId: true, branchId: true, role: true, name: true, enable2fa: true,
@@ -622,13 +644,19 @@ export class AuthService {
     });
 
     if (matches.length === 0) {
-      throw new UnauthorizedException('No staff member has that PIN.');
+      // Counted as a wrong try by startTry.
+      throw new UnauthorizedException(
+        'No cashier has that PIN. Owners and managers sign in with email and password.',
+      );
     }
+    // Past here the PIN was right, so it is not a guess.
     if (matches.length > 1) {
+      attempt.notAGuess();
       throw new ForbiddenException(
         'Two staff members share this PIN — PINs must be unique. Ask the owner to change one in Staff settings.',
       );
     }
+    attempt.succeeded();
 
     const user = matches[0];
     if (user.enable2fa) {
@@ -672,7 +700,7 @@ export class AuthService {
       try {
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, receiptLogoUrl: true, allowSelfClockIn: true, returnsOwnerOnly: true, ledgerMode: true, country: true, currency: true, timezone: true },
+          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, allowSelfClockIn: true, returnsOwnerOnly: true, ledgerMode: true, country: true, currency: true, timezone: true },
         });
       } catch (err: any) {
         // PrismaClientValidationError or P2022 (column doesn't exist) means
@@ -719,7 +747,10 @@ export class AuthService {
       // Sprint 19 — receipt template fields baked into JWT for fast render
       receiptHeaderNote: tenant?.receiptHeaderNote ?? null,
       receiptFooterNote: tenant?.receiptFooterNote ?? null,
-      receiptLogoUrl:    tenant?.receiptLogoUrl ?? null,
+      // The logo is deliberately NOT here. It was once an inline image of up
+      // to 256 KB, and this token is also the browser cookie: past about 4 KB
+      // the cookie is dropped and the whole business loops back to login.
+      // Screens read it from GET /tenant/branding instead.
       // Sprint 19 — self-clock policy. Default false (kiosk-only) so the
       // frontend hides the Clock sidebar link unless explicitly enabled.
       allowSelfClockIn:  tenant?.allowSelfClockIn ?? false,
@@ -1233,6 +1264,16 @@ export class AuthService {
     const cleanedPin = newPin.trim();
     if (!/^\d{4,6}$/.test(cleanedPin)) {
       throw new BadRequestException('PIN must be 4 to 6 digits.');
+    }
+    // Same guessability rules as the till PIN (1234, repeats, runs, years).
+    // Checked when a PIN is set, so PINs already saved keep working.
+    try {
+      assertPinPolicy(cleanedPin);
+    } catch {
+      throw new BadRequestException(
+        'That PIN is too easy to guess. Avoid 1234, 0000, repeated digits, counting up or down, ' +
+          'and years like 1990. This PIN approves voids and refunds.',
+      );
     }
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

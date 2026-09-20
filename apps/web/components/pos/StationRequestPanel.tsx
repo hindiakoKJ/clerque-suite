@@ -9,6 +9,11 @@
  * the shop pays. Big touch targets: this runs on a tablet in a kitchen.
  *
  * No polling. The list changes when somebody taps, and the tap answers.
+ *
+ * The first days after go-live Clerque has little or no sales history, so the
+ * tap sees almost nothing: the server says so (`learning`) and the panel tells
+ * the cook to add what they know is low, instead of an empty list reading as
+ * all clear.
  */
 import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
@@ -18,6 +23,7 @@ import {
   AlertTriangle, ArrowUp, Check, ChefHat, Loader2, Minus, PackagePlus, Plus, Search, ShoppingCart, Truck, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { MAX_QTY, amountWords, parseAmount, stepDown, stepOf, stepUp } from './station-request-amount';
 
 // ── what the server sends (station-request.service.ts) ──────────────────────
 
@@ -35,7 +41,12 @@ export interface RequestView {
   onTheWay: Array<{ name: string; amount: string }>;
   toMake: Array<{ name: string; batches: number }>;
   check: Array<{ name: string; reason: string }>;
+  /** Too little sales history to forecast from: nothing on the list does not mean nothing is low. */
+  learning?: boolean;
 }
+
+/** What the panel says while Clerque is still learning the shop's usage. */
+export const LEARNING_NOTE = 'Clerque is still learning your usage. Add what you know is low with +.';
 
 export interface RequestResult extends RequestView {
   outcome: RequestOutcome;
@@ -60,7 +71,6 @@ type SupplyCategory = (typeof SUPPLY_CATEGORIES)[number][0];
 const UNITS = ['pc', 'pack', 'box', 'roll', 'g', 'kg', 'ml', 'L'] as const;
 type Unit = (typeof UNITS)[number];
 const MAX_EXTRAS = 20;
-const MAX_QTY = 1_000_000;
 
 /** The request-low endpoint for one station. */
 export const requestLowPath = (stationId: string) => `/kds/stations/${stationId}/request-low`;
@@ -82,33 +92,12 @@ type Draft =
   | { key: string; kind: 'pick'; rawMaterialId: string; name: string; unit: string; packSize: number | null; qty: number }
   | { key: string; kind: 'new'; name: string; category: SupplyCategory; unit: Unit; qty: number };
 
-/**
- * One tap of the stepper: a whole pack when Clerque knows the pack (the server
- * rounds to packs anyway), 100 g or ml, otherwise one of the unit.
- */
-function stepOf(unit: string, packSize: number | null): number {
-  if (packSize != null && packSize > 0) return packSize;
-  const u = unit.trim().toLowerCase();
-  return u === 'g' || u === 'ml' ? 100 : 1;
-}
-
-function draftAmount(d: Draft): string {
-  const qty = `${d.qty.toLocaleString('en-PH', { maximumFractionDigits: 2 })} ${d.unit}`;
-  if (d.kind === 'pick' && d.packSize != null && d.packSize > 0) {
-    const packs = Math.round((d.qty / d.packSize) * 100) / 100;
-    return `${packs} pack${packs === 1 ? '' : 's'} (${qty})`;
-  }
-  return qty;
-}
-
 /** Where a new supply most likely belongs: the kitchen side or the bar side of the shop. */
 function defaultCategory(stationKind: string | null | undefined): SupplyCategory {
   return stationKind === 'KITCHEN' || stationKind === 'PASTRY_PASS' ? 'KITCHEN_SUPPLY' : 'BAR_SUPPLY';
 }
 
 const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
-/** Four decimals, as the server accepts: a 750.5 ml pack stepped three times must not send 2251.4999999. */
-const qty4 = (n: number) => Math.round(n * 10_000) / 10_000;
 
 // ── the panel ───────────────────────────────────────────────────────────────
 
@@ -178,6 +167,12 @@ export function StationRequestPanel({
         ) : (
           <>
             <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-5">
+              {result.learning && (
+                <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-3 text-base text-amber-100">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" />
+                  <span>{LEARNING_NOTE}</span>
+                </p>
+              )}
               {result.added.length > 0 && (
                 <Section title="New on the list" icon={<Plus className="h-4 w-4 text-emerald-400" />}>
                   {result.added.map((l) => (
@@ -214,7 +209,7 @@ export function StationRequestPanel({
                   {result.unchanged} {result.unchanged === 1 ? 'item is' : 'items are'} already on the list.
                 </p>
               )}
-              {nothingToShow && (
+              {nothingToShow && !result.learning && (
                 <p className="text-sm text-stone-400">
                   If something is running low that Clerque cannot see, add it with the button below.
                 </p>
@@ -284,6 +279,8 @@ function AddSomething({
   });
   const [typed, setTyped] = useState('');
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  /** An amount being typed, by draft, until the box is left: "" or "2." must not snap back mid-typing. */
+  const [typing, setTyping] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
 
   const query = norm(typed);
@@ -296,6 +293,8 @@ function AddSomething({
   const exact = !!query && (data?.pickable ?? []).some((p) => norm(p.name) === query);
   const draftedNew = drafts.some((d) => d.kind === 'new' && norm(d.name) === query);
   const full = drafts.length >= MAX_EXTRAS;
+  // A typed amount the server would refuse holds the send until it is fixed.
+  const badAmount = Object.values(typing).some((t) => parseAmount(t) == null);
 
   function pick(p: Pickable) {
     if (full || picked.has(p.rawMaterialId)) return;
@@ -313,9 +312,17 @@ function AddSomething({
 
   const update = (key: string, patch: Partial<Draft>) =>
     setDrafts((ds) => ds.map((d) => (d.key === key ? ({ ...d, ...patch } as Draft) : d)));
+  const doneTyping = (key: string) => setTyping((t) => {
+    if (!(key in t)) return t;
+    const rest = { ...t };
+    delete rest[key];
+    return rest;
+  });
+  /** A tap or a new unit sets the amount outright: whatever was half-typed is dropped. */
+  const setQty = (key: string, patch: Partial<Draft>) => { doneTyping(key); update(key, patch); };
 
   async function send() {
-    if (drafts.length === 0 || sending) return;
+    if (drafts.length === 0 || sending || badAmount) return;
     setSending(true);
     try {
       const extras = drafts.map((d) => (d.kind === 'pick'
@@ -348,7 +355,7 @@ function AddSomething({
                     </div>
                     <button
                       type="button"
-                      onClick={() => setDrafts((ds) => ds.filter((x) => x.key !== d.key))}
+                      onClick={() => { doneTyping(d.key); setDrafts((ds) => ds.filter((x) => x.key !== d.key)); }}
                       aria-label={`Remove ${d.name}`}
                       className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-stone-400 hover:bg-stone-800 hover:text-white"
                     >
@@ -377,7 +384,7 @@ function AddSomething({
                           onChange={(e) => {
                             const unit = e.target.value as Unit;
                             // A new unit starts again from one step of it: 1 pc is not 1 g.
-                            update(d.key, { unit, qty: stepOf(unit, null) });
+                            setQty(d.key, { unit, qty: stepOf(unit, null) });
                           }}
                           className="min-h-12 rounded-xl border border-stone-700 bg-stone-800 px-3 text-base text-white"
                         >
@@ -390,24 +397,48 @@ function AddSomething({
                   <div className="mt-2 flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => update(d.key, { qty: qty4(Math.max(step, d.qty - step)) })}
+                      onClick={() => setQty(d.key, { qty: stepDown(d.qty, step) })}
                       disabled={d.qty <= step}
                       aria-label="Less"
-                      className="flex h-12 w-12 items-center justify-center rounded-xl bg-stone-800 text-white hover:bg-stone-700 disabled:opacity-40"
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-stone-800 text-white hover:bg-stone-700 disabled:opacity-40"
                     >
                       <Minus className="h-5 w-5" />
                     </button>
-                    <span className="min-w-0 flex-1 text-center text-base font-semibold tabular-nums">{draftAmount(d)}</span>
+                    {/* Typed too: 2 kg of beans is one number, not twenty taps of 100 g. */}
+                    <label className={`flex min-h-12 min-w-0 flex-1 items-center rounded-xl border bg-stone-800 focus-within:border-amber-500 ${
+                      d.key in typing && parseAmount(typing[d.key]) == null ? 'border-red-500' : 'border-stone-700'
+                    }`}>
+                      <span className="sr-only">How much {d.name}, in {d.unit}</span>
+                      <input
+                        inputMode="decimal"
+                        value={typing[d.key] ?? String(d.qty)}
+                        onChange={(e) => {
+                          const text = e.target.value;
+                          setTyping((t) => ({ ...t, [d.key]: text }));
+                          const n = parseAmount(text);
+                          if (n != null) update(d.key, { qty: n });
+                        }}
+                        onFocus={(e) => e.target.select()}
+                        onBlur={() => { if (parseAmount(typing[d.key] ?? '') != null) doneTyping(d.key); }}
+                        className="w-full min-w-0 bg-transparent px-3 text-center text-base font-semibold tabular-nums text-white focus:outline-none"
+                      />
+                      <span className="shrink-0 pr-3 text-sm text-stone-400">{d.unit}</span>
+                    </label>
                     <button
                       type="button"
-                      onClick={() => update(d.key, { qty: qty4(Math.min(MAX_QTY, d.qty + step)) })}
-                      disabled={d.qty + step > MAX_QTY}
+                      onClick={() => setQty(d.key, { qty: stepUp(d.qty, step) })}
+                      disabled={d.qty >= MAX_QTY}
                       aria-label="More"
-                      className="flex h-12 w-12 items-center justify-center rounded-xl bg-stone-800 text-white hover:bg-stone-700 disabled:opacity-40"
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-stone-800 text-white hover:bg-stone-700 disabled:opacity-40"
                     >
                       <Plus className="h-5 w-5" />
                     </button>
                   </div>
+                  {d.key in typing && parseAmount(typing[d.key]) == null ? (
+                    <p className="mt-1 text-center text-xs text-red-300">Type an amount above 0.</p>
+                  ) : d.kind === 'pick' && d.packSize != null && d.packSize > 0 ? (
+                    <p className="mt-1 text-center text-xs text-stone-400">{amountWords(d.qty, d.unit, d.packSize)}</p>
+                  ) : null}
                 </li>
               );
             })}
@@ -497,7 +528,7 @@ function AddSomething({
         <button
           type="button"
           onClick={() => void send()}
-          disabled={drafts.length === 0 || sending}
+          disabled={drafts.length === 0 || sending || badAmount}
           className="min-h-12 flex-1 flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 text-base font-semibold text-stone-950 hover:bg-amber-400 disabled:opacity-50"
         >
           {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <ShoppingCart className="h-5 w-5" />}

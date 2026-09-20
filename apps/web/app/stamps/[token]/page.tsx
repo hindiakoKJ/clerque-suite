@@ -14,10 +14,11 @@
  *                                 staff modal — opens in a new window;
  *                                 staff prints from browser print dialog)
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Stamp as StampIcon, CheckCircle2 } from 'lucide-react';
+import { brandLogoSrc, waitForImages } from '@/lib/branding';
 
 interface PublicCard {
   templateName:        string;
@@ -54,12 +55,21 @@ export default function PublicStampCardPage() {
     retry:    false,
   });
 
+  // The stored logo link can be relative (database storage), so build it
+  // against the API origin. An old inline data: logo counts as no logo.
+  const [logoFailed, setLogoFailed] = useState(false);
+  const logoSrc = logoFailed ? '' : brandLogoSrc(data?.tenantLogoUrl);
+
   // Auto-fire the browser print dialog when ?print=1.
   useEffect(() => {
     if (printMode && data && typeof window !== 'undefined') {
-      // Slight delay so the QR/layout finishes rendering.
-      const t = setTimeout(() => window.print(), 400);
-      return () => clearTimeout(t);
+      // Slight delay so the layout settles, then wait (up to 3s) for the logo
+      // and QR images so the card doesn't print with blanks.
+      let cancelled = false;
+      const t = setTimeout(() => {
+        void waitForImages(document).then(() => { if (!cancelled) window.print(); });
+      }, 400);
+      return () => { cancelled = true; clearTimeout(t); };
     }
   }, [printMode, data]);
 
@@ -97,9 +107,14 @@ export default function PublicStampCardPage() {
         `}</style>
         <div className="w-[72mm] py-3 font-mono text-[12px] leading-snug">
           <div className="text-center space-y-0.5">
-            {data.tenantLogoUrl && (
+            {logoSrc && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={data.tenantLogoUrl} alt="logo" className="h-10 mx-auto mb-1" />
+              <img
+                src={logoSrc}
+                alt="logo"
+                className="h-10 max-w-[200px] object-contain mx-auto mb-1"
+                onError={() => setLogoFailed(true)}
+              />
             )}
             <div className="font-bold text-[14px]">{data.tenantBusinessName ?? 'Stamp Card'}</div>
             <div className="text-[10px]">— Loyalty Card —</div>
@@ -167,9 +182,14 @@ export default function PublicStampCardPage() {
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-white dark:from-slate-900 dark:to-slate-950 px-4 py-8">
       <div className="max-w-sm mx-auto space-y-4">
         <div className="text-center space-y-1">
-          {data.tenantLogoUrl ? (
+          {logoSrc ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={data.tenantLogoUrl} alt="" className="h-12 mx-auto mb-2" />
+            <img
+              src={logoSrc}
+              alt=""
+              className="h-12 max-w-[200px] object-contain mx-auto mb-2"
+              onError={() => setLogoFailed(true)}
+            />
           ) : (
             <StampIcon className="h-10 w-10 mx-auto text-amber-600 dark:text-amber-400" />
           )}

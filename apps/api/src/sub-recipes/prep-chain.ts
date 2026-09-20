@@ -76,6 +76,19 @@ export interface ChainStage {
   dot: ChainDot;
   /** "Level 1 · Tomato Sauce (ready) · 300 g · about 2 Spaghetti" */
   line: string;
+  /**
+   * A batch of this stage can be recorded from this screen although the
+   * chain's main button is not for it: a batch made ahead, before anything
+   * runs low. Null when it cannot be made now, another station makes it, or
+   * the main button already records it.
+   */
+  made: StageMade | null;
+}
+
+/** A stage's own small button: the words and the one batch the main button would use for that stage. */
+export interface StageMade {
+  label: string;
+  uses: string;
 }
 
 export interface ChainAction {
@@ -205,13 +218,44 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
       dot,
       line: `Level ${level} · ${f.row.name} · ${amount(f.row.onHand, f.row.unit)}`
         + (i === 0 && servingsLeft != null ? ` · about ${servingsLeft.toLocaleString('en-PH')} ${servesName}` : ''),
+      made: null,
     };
   });
 
-  const base = { id: l1.id, name: l1.name, station: l1.station ?? null, stages };
+  const names = walk.map((w) => w.row.name);
+  const [L1, L2, L3] = names;
+  // MOVE wording only when the stage it moves from is actually in the chain.
+  const movesFromBelow = (i: number) => facts[i].row.kind === 'MOVE' && i + 1 < n;
+  const makesFromBelow = (i: number) => i + 1 < n;
+  const label = (i: number): string => {
+    if (i === 0) return movesFromBelow(0) ? 'Refilled Level 1' : 'Made a batch';
+    if (i === 1) return movesFromBelow(1) ? 'Moved to Level 2' : 'Made Level 2';
+    return 'Made Level 3';
+  };
+  const uses = (i: number): string =>
+    `Uses ${facts[i].used.map((c) => `${amount(c.quantity, c.unit)} ${c.name}`).join(' · ')}`;
+
+  /*
+    A batch made ahead -- wings marinated overnight, a sauce cooked before the
+    rush -- has to be recordable when it is made, not only once the tub runs
+    low: until the tap the raw stock stays too high on the books and the day's
+    sheet is wrong. So each stage that can be made right now and that this
+    screen may record (the Made route's rule: this station's, or routed to
+    none) gets a small button of its own, unless the main button is for it.
+    Read for the bell alerts (no station), who makes it is not judged; the
+    alerts draw no buttons.
+  */
+  const withMade = (action: ChainAction | null): ChainStage[] => stages.map((s, i) => {
+    const maker = facts[i].row.station ?? null;
+    const mayRecordHere = !at || !maker || maker.id === at.id;
+    const isMain = !!action?.enabled && action.rawMaterialId === facts[i].row.id;
+    return { ...s, made: facts[i].canMakeNow && mayRecordHere && !isMain ? { label: label(i), uses: uses(i) } : null };
+  });
+
+  const base = { id: l1.id, name: l1.name, station: l1.station ?? null };
   const k = needs.indexOf(true);
   if (k < 0) {
-    return { ...base, headline: null, severity: 'OK', action: null, blockedBy: null, alertTitle: null, alertBody: null, alertable: false };
+    return { ...base, stages: withMade(null), headline: null, severity: 'OK', action: null, blockedBy: null, alertTitle: null, alertBody: null, alertable: false };
   }
   const severity: ChainSeverity = needs[0] ? 'NOW' : 'NEXT';
 
@@ -229,12 +273,6 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
     blockedPrep = { at: i, name: f.shortPrep?.name ?? 'another item' };
   }
 
-  const names = walk.map((w) => w.row.name);
-  const [L1, L2, L3] = names;
-  // MOVE wording only when the stage it moves from is actually in the chain.
-  const movesFromBelow = (i: number) => facts[i].row.kind === 'MOVE' && i + 1 < n;
-  const makesFromBelow = (i: number) => i + 1 < n;
-
   const prefix = servingsLeft != null
     ? `Level 1: ${servingsLeft.toLocaleString('en-PH')} serving${servingsLeft === 1 ? '' : 's'} left`
     : `Level 1: ${amount(l1.onHand, l1.unit)} left`;
@@ -251,14 +289,6 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
     }
     return `Level 3 (${L3}) is low — make a batch now.`;
   };
-  const label = (i: number): string => {
-    if (i === 0) return movesFromBelow(0) ? 'Refilled Level 1' : 'Made a batch';
-    if (i === 1) return movesFromBelow(1) ? 'Moved to Level 2' : 'Made Level 2';
-    return 'Made Level 3';
-  };
-  const uses = (i: number): string =>
-    `Uses ${facts[i].used.map((c) => `${amount(c.quantity, c.unit)} ${c.name}`).join(' · ')}`;
-
   let headline: string;
   let alertTitle: string;
   let alertBody: string;
@@ -318,6 +348,7 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
 
   return {
     ...base,
+    stages: withMade(action),
     headline,
     severity,
     action,

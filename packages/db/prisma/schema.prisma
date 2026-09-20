@@ -526,8 +526,13 @@ model Tenant {
   /// Footer note printed at the bottom (Wi-Fi password, social media,
   /// "thank you" message). 3 lines max recommended.
   receiptFooterNote String?
-  /// Optional logo URL printed at the top of the receipt. Should be a
-  /// 1-bit PNG ideally; thermal printers don't render full color anyway.
+  /// The business logo, one image for every screen (receipt on screen and in
+  /// browser print, customer display, app shell). A short link only: an
+  /// upload from POST /tenant/logo (public/branding/<tenantId>/<id>) or an
+  /// https:// link, never an inline data: image. Not in the login token; read
+  /// it from GET /tenant/branding. Thermal slips do not print it yet. On the
+  /// DB storage driver the file is a ProductPhoto row whose originalName
+  /// starts with "branding:tenant-logo"; any unused-photo clean-up must skip it.
   receiptLogoUrl    String?
 
   /// Sprint 19 — Self-service clock-in policy. When false (default), staff

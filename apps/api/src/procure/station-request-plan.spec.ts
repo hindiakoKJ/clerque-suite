@@ -50,6 +50,19 @@ describe('station request plan', () => {
     expect(r.lines).toEqual([]);
   });
 
+  it('says it is still learning with no sales history or under three recent days, not once the forecast has something', () => {
+    const items = [item({ id: 'milk', unit: 'ml', available: 500 })];
+    // Go-live: nothing sold yet. An empty list is not an all-clear.
+    expect(plan({ items }).learning).toBe(true);
+    // Day 2 and day 3: one and two open days lately.
+    expect(plan({ items, history: [day('2026-09-16', { milk: 800 })] }).learning).toBe(true);
+    expect(plan({ items, history: [day('2026-09-15', { milk: 800 }), day('2026-09-16', { milk: 900 })] }).learning).toBe(true);
+    // Day 4: three open days.
+    expect(plan({ items, history: [day('2026-09-14', { milk: 700 }), day('2026-09-15', { milk: 800 }), day('2026-09-16', { milk: 900 })] }).learning).toBe(false);
+    // Two same weekdays make a pattern, however quiet the last week was.
+    expect(plan({ items, history: [day('2026-09-11', { milk: 2000 }), day('2026-09-04', { milk: 2800 })] }).learning).toBe(false);
+  });
+
   it('a weekday the shop was shut is not a day of zero sales', () => {
     // Sep 11 sold nothing: dropped, so only one Friday is left and the last week decides.
     const history = historyFromUsage([

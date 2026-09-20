@@ -18,6 +18,21 @@ export interface CostPending {
   revenue: number;
 }
 
+/**
+ * What one peso of an order's lineTotal earned, net of the order's discounts
+ * and VAT: (totalAmount - vatAmount) / lineSum, lineSum being the sum of the
+ * order's lineTotals.
+ *
+ * lineTotal is each line as rung, before an order-level discount (Senior/PWD
+ * 20%, a cashier's discount), which is only in totalAmount. Multiplying a line
+ * by this gives its share of what the shop kept. 1 for an order with no order
+ * discount and no VAT; 0 for an order whose lines add up to nothing.
+ */
+export function netShareOfLines(totalAmount: unknown, vatAmount: unknown, lineSum: number): number {
+  if (!(lineSum > 0)) return 0;
+  return (Number(totalAmount) - Number(vatAmount ?? 0)) / lineSum;
+}
+
 export interface PaymentBreakdown {
   method: string;
   totalAmount: number;
@@ -299,16 +314,20 @@ export class ReportsService {
     let leakRevenue = 0;
     const costPending: CostPending = { lineCount: 0, revenue: 0 };
     for (const order of completed) {
-      const orderVat = Number(order.vatAmount ?? 0);
-      const orderTotal = Number(order.totalAmount);
-      // Pro-rate the order's net (ex-VAT) total across line items by lineTotal share
-      const orderLineSum = order.items.reduce((s, i) => s + Number(i.lineTotal), 0) || 1;
+      /*
+        What the order really earned, net of VAT, shared across its lines by
+        lineTotal. A line's lineTotal is its price as rung, BEFORE an order
+        discount: the Senior/PWD 20% and a cashier's discount live only in the
+        order's totalAmount. Taking only the VAT off lineTotal counted every
+        senior's 20% as profit, so gross profit read higher than the revenue
+        beside it. Same net as the books (the journal credits total less VAT).
+      */
+      const orderNet = netShareOfLines(
+        order.totalAmount, order.vatAmount, order.items.reduce((s, i) => s + Number(i.lineTotal), 0),
+      );
       for (const item of order.items) {
         const lineRevGross = Number(item.lineTotal);
-        // Net-of-VAT share for this line (only meaningful if order had VAT)
-        const lineNet = orderTotal > 0
-          ? lineRevGross - (orderVat * (lineRevGross / orderLineSum))
-          : lineRevGross;
+        const lineNet = lineRevGross * orderNet;
         netRevenue += lineNet;
         if (stillWaiting(item)) {
           // Cost is booked at the ready tap; the snapshot on the line is not it.
@@ -412,9 +431,11 @@ export class ReportsService {
 
   // ─── Z-Read: daily tamper-proof totals (BIR CAS accreditation) ──────────────
   //
-  // One Z-Read record per branch per calendar date (PH UTC+8).
-  // INSERT-only — the unique constraint on (branchId, date) enforces idempotency.
-  // Calling this a second time for the same day returns the existing record.
+  // One Z-Read record per branch per calendar date (PH UTC+8); the unique
+  // constraint on (branchId, date) keeps it to one row.
+  // Calling this again for the same day counts the day again and updates that
+  // row: a later end-of-day close, or the owner regenerating after late sales
+  // reached Clerque, must not be stuck with the totals of the first call.
 
   async generateZRead(
     tenantId:     string,
@@ -422,9 +443,16 @@ export class ReportsService {
     dateStr:      string,   // YYYY-MM-DD in PH time
     generatedById?: string,
   ) {
-    // Build the date in UTC+8 (PH local midnight)
+    // The sales window: the day in PH time (UTC+8).
     const startOfDay = new Date(`${dateStr}T00:00:00+08:00`);
     const endOfDay   = new Date(`${dateStr}T23:59:59.999+08:00`);
+    /*
+      The row's date. ZReadLog.date is a date-only column, which keeps the UTC
+      date of what it is given: PH midnight is 16:00 UTC the day before, so
+      saving startOfDay dated every Z-Read one day early. UTC midnight of the
+      same YYYY-MM-DD keeps the day as named.
+    */
+    const day = new Date(`${dateStr}T00:00:00Z`);
 
     /*
       Prove the branch is ours BEFORE anything else touches it.
@@ -449,11 +477,10 @@ export class ReportsService {
     });
     if (!branch) throw new NotFoundException('Branch not found');
 
-    // Idempotency: return existing record if already generated
+    // One row per branch per day: found here, updated below if it exists.
     const existing = await this.prisma.zReadLog.findUnique({
-      where: { branchId_date: { branchId, date: startOfDay } },
+      where: { branchId_date: { branchId, date: day } },
     });
-    if (existing) return existing;
 
     const orders = await this.prisma.order.findMany({
       where: {
@@ -482,19 +509,31 @@ export class ReportsService {
       }
     }
 
+    const totals = {
+      totalOrders:   completed.length,
+      voidCount:     voided.length,
+      grossSales:    new Prisma.Decimal(grossSales),
+      netSales:      new Prisma.Decimal(netSales),
+      vatAmount:     new Prisma.Decimal(vatAmount),
+      discountAmount: new Prisma.Decimal(discountAmt),
+      cashAmount:    new Prisma.Decimal(cashAmount),
+      nonCashAmount: new Prisma.Decimal(nonCashAmount),
+    };
+
+    if (existing) {
+      // Undefined generatedById leaves who generated it as it was.
+      return this.prisma.zReadLog.update({
+        where: { id: existing.id },
+        data:  { ...totals, generatedById },
+      });
+    }
+
     return this.prisma.zReadLog.create({
       data: {
         tenantId,
         branchId,
-        date:          startOfDay,
-        totalOrders:   completed.length,
-        voidCount:     voided.length,
-        grossSales:    new Prisma.Decimal(grossSales),
-        netSales:      new Prisma.Decimal(netSales),
-        vatAmount:     new Prisma.Decimal(vatAmount),
-        discountAmount: new Prisma.Decimal(discountAmt),
-        cashAmount:    new Prisma.Decimal(cashAmount),
-        nonCashAmount: new Prisma.Decimal(nonCashAmount),
+        date: day,
+        ...totals,
         generatedById,
       },
     });

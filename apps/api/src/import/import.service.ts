@@ -2,6 +2,8 @@ import { Injectable, BadRequestException, Optional } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { idsInARecipe } from '../inventory/recipe-use';
+import { blendCost, stockValuedEvent } from '../inventory/zero-cost-blend';
 import {
   UNIT_FACTORS as SHARED_UNIT_FACTORS,
   normUnit as sharedNormUnit,
@@ -222,6 +224,25 @@ export class ImportService {
   private isHintRow(r?: string[]): boolean {
     if (!r) return false;
     return r.filter((c) => /^\s*(Required|Optional)\.?\s/i.test(String(c ?? ''))).length >= 2;
+  }
+
+  /**
+   * "Is this ingredient in a recipe?", answered for a whole upload from one
+   * query, and only if some row asks.
+   *
+   * A ₱0 written over an item a recipe uses books every plate that uses it at
+   * ₱0 -- the sale's cost is `costPrice ?? 0` -- so those rows are refused by
+   * name. Supplies are not refused: bleach at ₱0 never reaches a plate.
+   *
+   * Asked lazily because a clean upload never writes a ₱0, and eagerly-once
+   * because a sheet full of them would otherwise be one query per row.
+   */
+  private recipeMembers(tenantId: string): (id: string) => Promise<boolean> {
+    let ids: Promise<Set<string>> | null = null;
+    return async (id: string) => {
+      ids ??= idsInARecipe(this.prisma, tenantId);
+      return (await ids).has(id);
+    };
   }
 
   /**
@@ -2110,6 +2131,9 @@ export class ImportService {
       if (looksLikeHints) dataRows = dataRows.slice(1);
     }
 
+    // Asked once for the whole upload, and only if a row actually writes a ₱0.
+    const usedInARecipe = this.recipeMembers(tenantId);
+
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
       if (this.isSampleRow(dataRows[i])) { result.skipped++; continue; }
@@ -2266,6 +2290,54 @@ export class ImportService {
               });
               continue;
             }
+          }
+
+          /*
+            A unit is not a label here: every recipe line, stock count and lot
+            of this item is a number in that unit. Re-uploading "Honey | kg"
+            over Honey kept in g turned a 12 g recipe line into 12 kg and the
+            grams on the shelf into kilos, with no message. Once the item has
+            stock or is in a recipe, the import refuses to change its unit.
+            Capital letters only ("ML" for "ml") is not a change of unit.
+          */
+          const heldIn = String(existing.unit ?? '').trim();
+          if (heldIn && heldIn.toLowerCase() !== storedUnit.toLowerCase()) {
+            const [bom, variant, addOn, inPrep, isPrep, stock] = await Promise.all([
+              this.prisma.bomItem.count({ where: { rawMaterialId: existing.id } }),
+              this.prisma.variantBomItem.count({ where: { rawMaterialId: existing.id } }),
+              this.prisma.modifierOptionIngredient.count({ where: { rawMaterialId: existing.id } }),
+              this.prisma.subRecipeItem.count({ where: { rawMaterialId: existing.id } }),
+              this.prisma.subRecipeItem.count({ where: { parentRawMaterialId: existing.id } }),
+              this.prisma.rawMaterialInventory.count({ where: { rawMaterialId: existing.id, quantity: { not: 0 } } }),
+            ]);
+            const inRecipes = bom + variant + addOn + inPrep + isPrep;
+            if (inRecipes + stock > 0) {
+              const has = stock > 0 && inRecipes > 0 ? 'stock on the shelf and recipes using it'
+                : stock > 0 ? 'stock on the shelf'
+                : 'recipes using it';
+              result.errors.push({
+                row: rowNum,
+                message: `"${existing.name}" is counted in ${heldIn} and already has ${has}, `
+                  + `so this upload cannot change it to ${storedUnit}. `
+                  + `To give a price per ${unit.trim()}, put ${heldIn} in the Recipe Unit column `
+                  + `and the importer works out the price per ${heldIn}. `
+                  + 'To fix a cost only, use Procure > Stock on hand.',
+              });
+              continue;
+            }
+          }
+
+          /*
+            A cost of 0 typed over an item a recipe uses books every plate that
+            uses it at ₱0. A blank cell already means "keep the cost on file".
+          */
+          if (!ingCostBlank && !(storedCost > 0) && await usedInARecipe(existing.id)) {
+            result.errors.push({
+              row: rowNum,
+              message: `"${existing.name ?? name.trim()}" is used in recipes, so its cost cannot be 0. `
+                + 'Put what it costs, or leave the cost cell blank to keep the cost it has.',
+            });
+            continue;
           }
 
           // Same rule as products: a blank cell is "not supplied", not zero.
@@ -3127,6 +3199,10 @@ export class ImportService {
       if (!touched.has(key)) touched.set(key, { name, firstRow: rowNum, ok: 0, failed: 0 });
       return touched.get(key)!;
     };
+    // Rows that passed, held until every row of their dish has been checked.
+    const pending: Array<{
+      tracked: { failed: number; ok: number }; productId: string; rawMaterialId: string; quantity: number; rowNum: number;
+    }> = [];
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
@@ -3230,27 +3306,8 @@ export class ImportService {
           continue;
         }
 
-        // Upsert the BOM row by (productId, rawMaterialId)
-        const existing = await this.prisma.bomItem.findFirst({
-          where: { productId: product.id, rawMaterialId: rm.id },
-          select: { id: true },
-        });
-        if (existing) {
-          await this.prisma.bomItem.update({
-            where: { id: existing.id },
-            data:  { quantity: new Prisma.Decimal(finalQty) },
-          });
-          result.updated++;
-        } else {
-          await this.prisma.bomItem.create({
-            data: {
-              productId:     product.id,
-              rawMaterialId: rm.id,
-              quantity:      new Prisma.Decimal(finalQty),
-            },
-          });
-          result.imported++;
-        }
+        // Written below, once every row of this dish is known to pass.
+        pending.push({ tracked, productId: product.id, rawMaterialId: rm.id, quantity: finalQty, rowNum });
         tracked.ok++;
       } catch (err: any) {
         result.errors.push({ row: rowNum, message: err.message ?? 'Unknown error' });
@@ -3258,16 +3315,58 @@ export class ImportService {
       }
     }
 
+    /*
+      A dish's recipe lines are written only when ALL of its rows pass.
+
+      Writing each good row as it came meant a dish with one bad row still got
+      its other lines -- and the till costs a sale from those lines whenever
+      the shop is on Recipe cost, whatever the product's own switch says. So a
+      recipe the import called "not activated" was live, charging a plate for
+      half its ingredients. Now a dish with a failed row keeps exactly the
+      recipe it had before this upload.
+    */
+    for (const p of pending) {
+      if (p.tracked.failed > 0) continue;
+      try {
+        // Upsert the BOM row by (productId, rawMaterialId)
+        const existing = await this.prisma.bomItem.findFirst({
+          where: { productId: p.productId, rawMaterialId: p.rawMaterialId },
+          select: { id: true },
+        });
+        if (existing) {
+          await this.prisma.bomItem.update({
+            where: { id: existing.id },
+            data:  { quantity: new Prisma.Decimal(p.quantity) },
+          });
+          result.updated++;
+        } else {
+          await this.prisma.bomItem.create({
+            data: {
+              productId:     p.productId,
+              rawMaterialId: p.rawMaterialId,
+              quantity:      new Prisma.Decimal(p.quantity),
+            },
+          });
+          result.imported++;
+        }
+      } catch (err: any) {
+        result.errors.push({ row: p.rowNum, message: err.message ?? 'Unknown error' });
+        p.tracked.ok--;
+        p.tracked.failed++;
+      }
+    }
+
     // Flip to RECIPE_BASED ONLY the products whose rows all imported cleanly.
-    // A product with any failed row keeps its current mode and gets a note so
-    // the owner knows its recipe is incomplete and not yet the COGS source.
+    // A product with any failed row keeps its current mode and recipe, and
+    // gets a note so the owner knows nothing was changed for it.
     const productsToFlip: string[] = [];
     for (const t of touched.values()) {
       if (!t.id || t.ok === 0) continue;
       if (t.failed > 0) {
         result.errors.push({
           row: t.firstRow,
-          message: `Product "${t.name}": partially imported — not activated (${t.failed} of ${t.ok + t.failed} recipe rows failed). Fix those rows and re-import to switch it to recipe-based COGS.`,
+          message: `Product "${t.name}": not imported (${t.failed} of ${t.ok + t.failed} recipe rows failed), `
+            + 'so its recipe was left as it was. Fix those rows and upload again.',
         });
         continue;
       }
@@ -4009,6 +4108,8 @@ export class ImportService {
       select: { taxStatus: true },
     });
     const tenantIsVat = tenantTax?.taxStatus === 'VAT';
+    // Asked once for the whole upload, and only if a row actually loads at ₱0.
+    const usedInARecipe = this.recipeMembers(tenantId);
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = dataStart + i + 2;
@@ -4104,6 +4205,20 @@ export class ImportService {
         if (dup) { result.skipped++; continue; }
       }
 
+      /*
+        Stock loaded at ₱0 for an item a recipe uses books every plate that
+        uses it at ₱0, and nothing on screen says so. Refuse the row by name.
+        A supply at ₱0 is still allowed: it never reaches a plate's cost.
+      */
+      if (!(netCost > 0) && await usedInARecipe(rm.id)) {
+        result.errors.push({
+          row: rowNum,
+          message: `"${rm.name}" is used in recipes, so its stock needs a cost. `
+            + 'Put what it cost per unit, or leave this row out.',
+        });
+        continue;
+      }
+
       try {
         await this.prisma.$transaction(async (tx) => {
           // Update RawMaterial WAC
@@ -4114,15 +4229,23 @@ export class ImportService {
           const oldOnHand = oldQty ? Number(oldQty.quantity) : 0;
           const newOnHand = oldOnHand + qty;
 
-          // WAC update on RawMaterial
+          // WAC update on RawMaterial. A ₱0 on either side is never averaged
+          // in; stock valued for the first time is booked as opening stock
+          // (see inventory/zero-cost-blend.ts).
           const oldWac = rm.costPrice ? Number(rm.costPrice) : 0;
-          const newWac = newOnHand > 0
-            ? ((oldOnHand * oldWac) + (qty * netCost)) / newOnHand
-            : netCost;
-          await tx.rawMaterial.update({
-            where: { id: rm.id },
-            data:  { costPrice: new Prisma.Decimal(newWac) },
+          const blend = blendCost({ qtyBefore: oldOnHand, oldCost: oldWac, qtyIn: qty, inCost: netCost });
+          if (blend.cost != null) {
+            await tx.rawMaterial.update({
+              where: { id: rm.id },
+              data:  { costPrice: new Prisma.Decimal(blend.cost) },
+            });
+          }
+          const valuedEvent = blend.valued && stockValuedEvent({
+            tenantId, material: rm, branchId,
+            quantity: blend.valued.quantity, unitCost: blend.valued.unitCost,
+            at: date, reference: refNumber?.trim() || null,
           });
+          if (valuedEvent) await tx.accountingEvent.create({ data: valuedEvent });
 
           /*
             RawMaterialInventory update — RELATIVE.

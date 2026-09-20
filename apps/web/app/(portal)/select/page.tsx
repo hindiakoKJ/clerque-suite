@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ShoppingCart, BookOpen, Users, Lock, ArrowRight, ShieldCheck, ShoppingBasket } from 'lucide-react';
 import { toast } from 'sonner';
@@ -8,6 +9,7 @@ import { useAuthStore } from '@/store/auth';
 import { accessibleApps, type AppCardWithRoute } from '@/lib/apps';
 import { api } from '@/lib/api';
 import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
+import { useBranding } from '@/hooks/useBranding';
 
 /* ─── App card registry ──────────────────────────────────────────────────── */
 
@@ -63,6 +65,14 @@ export default function SelectPage() {
 
   const onlyApp = accessible.length === 1 ? accessible[0] : null;
 
+  // The business's logo above the welcome. Not for super admins: their
+  // session's tenant is the platform's, not a customer's.
+  const brand = useBranding({ enabled: !!user?.tenantId && !isSuper });
+  const [brandLogoFailed, setBrandLogoFailed] = useState(false);
+  useEffect(() => { setBrandLogoFailed(false); }, [brand.logoSrc]);
+  const showBrand = !!user?.tenantId && !isSuper;
+  const showBrandLogo = showBrand && !!brand.logoSrc && !brandLogoFailed;
+
   // Redirect to login if unauthenticated, or straight to the only app the
   // user has access to. Both effects run unconditionally each render.
   useEffect(() => {
@@ -108,6 +118,49 @@ export default function SelectPage() {
       <div className="w-full max-w-2xl space-y-8">
         {/* Header */}
         <div className="text-center space-y-2">
+          {/* Business mark: logo up to 200x64, else initials. The 64px row is
+              held while branding loads so the heading doesn't jump. */}
+          {showBrand && (brand.isLoading || showBrandLogo || brand.initials) && (
+            <div className="flex flex-col items-center gap-1">
+              {brand.isLoading ? (
+                <div className="h-16" aria-hidden />
+              ) : showBrandLogo ? (
+                /* On white, like every other logo spot: a transparent logo
+                   with dark lettering vanishes on the dark theme. */
+                <div className="h-16 max-w-[200px] inline-flex items-center justify-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white px-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={brand.logoSrc}
+                    alt={brand.displayName ?? 'Business logo'}
+                    className="max-h-12 max-w-[174px] object-contain"
+                    onError={() => setBrandLogoFailed(true)}
+                  />
+                </div>
+              ) : (
+                <div
+                  role="img"
+                  aria-label={brand.displayName ?? brand.initials}
+                  className="h-16 w-16 rounded-full flex items-center justify-center text-xl font-bold"
+                  style={{ background: 'color-mix(in oklab, hsl(217 91% 55%) 12%, transparent)', color: 'hsl(217 91% 50%)' }}
+                >
+                  {brand.initials}
+                </div>
+              )}
+              {!brand.isLoading && (brand.displayName || (isOwner && !brand.logoSrc && !brand.isError)) && (
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  {brand.displayName}
+                  {isOwner && !brand.logoSrc && !brand.isError && (
+                    <>
+                      {brand.displayName && <span aria-hidden> · </span>}
+                      <Link href="/settings" className="font-medium text-blue-600 dark:text-blue-400 hover:underline">
+                        Add your logo
+                      </Link>
+                    </>
+                  )}
+                </p>
+              )}
+            </div>
+          )}
           <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Welcome, {user.name}</h1>
           <p className="text-slate-500 dark:text-slate-400">Choose a Clerque app to open.</p>
         </div>

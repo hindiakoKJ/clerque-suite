@@ -20,6 +20,7 @@
  */
 
 import { toast } from 'sonner';
+import { thermalBytes } from './thermal-text';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -81,8 +82,8 @@ const C = {
   doubleOff:   new Uint8Array([0x1d, 0x21, 0x00]),
 };
 
-const enc = new TextEncoder();
-function txt(s: string): Uint8Array { return enc.encode(s); }
+// Printers get plain ASCII: "Café" -> "Cafe", "×" -> "x" (see thermal-text.ts).
+function txt(s: string): Uint8Array { return thermalBytes(s); }
 function concat(chunks: Uint8Array[]): Uint8Array {
   const total = chunks.reduce((sum, c) => sum + c.length, 0);
   const out = new Uint8Array(total);
@@ -118,7 +119,7 @@ export function buildStationTicket(data: StationTicketData, paperWidthMm = 80): 
   // Items
   for (const item of data.items) {
     parts.push(C.boldOn);
-    parts.push(txt(`${item.quantity}× ${item.productName}`), C.lf);
+    parts.push(txt(`${item.quantity}x ${item.productName}`), C.lf);
     parts.push(C.boldOff);
     if (item.modifiers && item.modifiers.length > 0) {
       for (const m of item.modifiers) {
@@ -156,21 +157,14 @@ export async function dispatchPrintJob(
         // RawBT Android app captures the URL via Android intent filter and
         // forwards bytes to the paired Bluetooth printer.
         // Reference: https://rawbt.ru/ (free, freemium pro features).
-        const b64 = uint8ToBase64(escpos);
-        const url = `rawbt:base64,${b64}`;
-        // window.location.href triggers the intent on Android browsers.
-        // On desktop (no RawBT installed), the URL fails silently — we toast a hint.
+        // On desktop (no RawBT installed) the URL would fail silently, so say why.
         if (typeof window === 'undefined') return { ok: false, reason: 'No window' };
         if (!isLikelyAndroid()) {
           return { ok: false, reason: 'RawBT requires Android with the RawBT app installed.' };
         }
-        // Use a hidden iframe so the navigation doesn't replace the current page
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = url;
-        document.body.appendChild(iframe);
-        // Clean up after a tick — RawBT consumes the URL on app launch
-        setTimeout(() => document.body.removeChild(iframe), 1000);
+        // Same hand-off as the station tablets and the test slip: a link click,
+        // not a hidden iframe, which newer Android Chrome silently blocks.
+        sendViaRawBt(escpos);
         return { ok: true };
       }
 
@@ -296,8 +290,8 @@ export function uint8ToBase64(bytes: Uint8Array): string {
 /**
  * Hand an ESC/POS payload to the RawBT app via its intent URL. RawBT owns the
  * Bluetooth pairing (classic SPP printers are unreachable from Web Bluetooth)
- * and forwards the bytes to the paired printer. The hidden iframe keeps the
- * intent navigation from replacing the page.
+ * and forwards the bytes to the paired printer. A hidden link is clicked, so
+ * the intent opens RawBT without replacing the page.
  */
 export function sendViaRawBt(escpos: Uint8Array): void {
   if (typeof window === 'undefined') return;

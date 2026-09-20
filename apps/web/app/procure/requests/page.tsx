@@ -13,7 +13,10 @@ import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
 import { lowStockToast, type PullLowStockResult } from './low-stock-toast';
-import { chipsInOrder, isStillOpen, recordsOn, showsRecordBoxes, startsTicked } from './buy-list-view';
+import {
+  chipsInOrder, isStillOpen, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
+} from './buy-list-view';
+import { pickerOrder, showNotInRecipe } from './ingredient-picker';
 import {
   servesSentences, servesSummary, type LineServes,
   SOURCE_KINDS, SOURCE_KIND_LABEL, cleanSourceName, sourceKey, sourceText, usuallyFromText, type SourceKind, type UsuallyFrom,
@@ -104,7 +107,7 @@ interface Request {
    */
   costsHidden?: boolean;
 }
-interface Ingredient { id: string; name: string; unit: string }
+interface Ingredient { id: string; name: string; unit: string; inRecipe?: boolean; category?: string }
 interface Charge { description: string; amount: string; category: ChargeKind }
 
 const num = (v: unknown): number => (v == null ? 0 : Number(v));
@@ -234,6 +237,15 @@ export default function ProcurePage() {
   const [picking, setPicking]   = useState(false);
   const [search, setSearch]     = useState('');
   /*
+    "Record something you bought". While the picker is open for it, what is
+    added was bought; each such line starts ticked with its packs and price
+    boxes open -- that is why it was added. `walkIn` is the list those lines
+    are on, so another list's lines never start ticked.
+  */
+  const [walkInPicking, setWalkInPicking] = useState(false);
+  const [walkIn, setWalkIn] = useState<string | null>(null);
+  const [walkInItems, setWalkInItems] = useState<Set<string>>(() => new Set());
+  /*
     Picking an ingredient and saying how much are two different questions, and
     the second one used to be answered by the code: every tap posted
     qtyRequested: 1, which nothing on screen showed. The owner got a buy list
@@ -338,12 +350,8 @@ export default function ProcurePage() {
   }, [all]);
 
   const live = all.filter((r) => isStillOpen(r.status));
-  const byNeed =
-    live.find((r) => r.status === 'BOUGHT' && !onTheWay(r)) ??
-    live.find((r) => r.status === 'SENT') ??
-    live.find((r) => r.status === 'OPEN') ??
-    live.find((r) => r.status === 'BOUGHT') ??
-    null;
+  // Staff open on the list being built: adding and a walk-in buy both happen there.
+  const byNeed = listToOpen(live, !canDecide, (r) => !!onTheWay(r));
 
   // Nothing outstanding at all -- open one so the branch always has somewhere
   // to put the next shortage. Runs only when the list came back empty-handed.
@@ -545,7 +553,8 @@ export default function ProcurePage() {
   // than adding a second line, so this one mutation serves both "add" and
   // "change how much".
   const addLine = useMutation({
-    mutationFn: (v: { rawMaterialId: string; qtyRequested: number }) =>
+    /** `walkIn`: added through "Record something you bought". Screen-only, never sent. */
+    mutationFn: ({ walkIn: _walkIn, ...v }: { rawMaterialId: string; qtyRequested: number; walkIn?: boolean }) =>
       api.post(`/procure/requests/${req!.id}/lines`, v),
     onSuccess: (_d, v) => {
       refresh();
@@ -554,7 +563,16 @@ export default function ProcurePage() {
       // a shortage round taking four taps and taking twelve. The item drops
       // out of the grid as soon as it lands, so the list is its own receipt.
       const name = ingredients.find((i) => i.id === v.rawMaterialId)?.name;
-      if (name) toast.success(`${name} added.`);
+      if (v.walkIn && req) {
+        // A walk-in buy: close the picker so the line's packs and price boxes are in view.
+        const onto = req.id;
+        setWalkInItems((prev) => new Set(walkIn === onto ? prev : []).add(v.rawMaterialId));
+        setWalkIn(onto);
+        setPicking(false); setWalkInPicking(false);
+        toast.success(`${name ?? 'It'} is on the list. Fill in the packs and price, then save what was bought.`, { duration: 7000 });
+      } else if (name) {
+        toast.success(`${name} added.`);
+      }
       setSearch(''); setPending(null); setQty('');
       setEditing(null); setEditQty('');
     },
@@ -628,7 +646,8 @@ export default function ProcurePage() {
     return { packs: '', size: '', cost: '', brand: '', source: 'none' as const };
   };
   const valuesFor = (l: Line) => bought[l.id] ?? defaultsFor(l);
-  const isTicked  = (l: Line) => ticked[l.id] ?? startsTicked(l, !!req && !!onTheWay(req));
+  const isTicked  = (l: Line) => ticked[l.id]
+    ?? (startsTicked(l, !!req && !!onTheWay(req)) || (!!req && walkIn === req.id && startsTickedAsWalkIn(l, walkInItems)));
 
   /*
     One key per attempt, minted here rather than per call inside the client.
@@ -722,6 +741,7 @@ export default function ProcurePage() {
       refresh(); setBuyKey(mintKey()); setBought({});
       // Just marked on the way: the ticks that said "ordered" must not now say "in the box".
       if (ordered) setTicked({});
+      setWalkIn(null); setWalkInItems(new Set()); setWalkInPicking(false);
       setBoughtNote(''); setBoughtDate(''); setOrdered(false); setPaidFrom(''); setOrderCharges([]);
       clearWhere();
       if (d?.paidAhead) {
@@ -867,6 +887,31 @@ export default function ProcurePage() {
     onError: (e) => fail(e, 'Could not cancel this request.'),
   });
 
+  /*
+    "Record something you bought", from a list that is not being built: a
+    barista's ice or cups bought at the store. Add only works on the list
+    being built, so this finds that list for the same branch (the server makes
+    one when there is none), opens it and opens the picker. Recording it still
+    needs the shop to show purchase costs to staff; the button only shows then.
+  */
+  const beginWalkIn = (onto: Request) => {
+    setViewing(onto.id);
+    setEditing(null); setPending(null); setQty(''); setSearch('');
+    setWalkInPicking(true);
+    setPicking(true);
+  };
+  const startWalkIn = useMutation({
+    mutationFn: () => api.post('/procure/requests/open', { branchId: req?.branch?.id ?? branchId }).then((r) => r.data as Request),
+    onSuccess: (open) => {
+      // On screen now, not after the refetch: the page shows a list only once it is in `all`.
+      qc.setQueryData<Request[]>(['procure-requests', branchId], (old = []) =>
+        old.some((r) => r.id === open.id) ? old : [open, ...old]);
+      beginWalkIn(open);
+      refresh();
+    },
+    onError: (e) => fail(e, 'Could not open the list to record it on.'),
+  });
+
   /** "2 packs · 1,500 ml" when the pack is known and it divides; else the plain amount. */
   const packsLabel = (l: Line) => {
     const qty = num(l.qtyRequested);
@@ -950,12 +995,10 @@ export default function ProcurePage() {
   const recording = canRecord && recordsOn(req.status);
   const stepIndex = Math.max(0, STEPS.findIndex((s) => s.key === req.status));
   const alreadyIn = new Set(req.lines.map((l) => l.rawMaterialId));
-  // Everything not already on the request, alphabetical, filtered only if the
-  // person chose to narrow it. No arbitrary cap -- a hidden ingredient is one
-  // somebody has to hunt for.
-  const matches = ingredients
-    .filter((i) => !alreadyIn.has(i.id) && i.name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  // Everything not already on the request, what the recipes use first, then
+  // alphabetical, filtered only if the person chose to narrow it. No arbitrary
+  // cap -- a hidden ingredient is one somebody has to hunt for.
+  const matches = pickerOrder(ingredients, alreadyIn, search);
 
   const estimate = req.lines.reduce(
     (s, l) => s + num(l.packsBought) * num(l.packCost), 0);
@@ -1096,6 +1139,31 @@ export default function ProcurePage() {
         </div>
       )}
 
+      {/*
+        A walk-in buy, easy to find. It used to take the "Building" chip above,
+        then Add, then a tick nobody was told about.
+      */}
+      {canRecord && req.status !== 'CANCELLED' && !(walkInPicking && picking) && (
+        <button
+          type="button"
+          onClick={() => (req.status === 'OPEN' ? beginWalkIn(req) : startWalkIn.mutate())}
+          disabled={startWalkIn.isPending}
+          className="flex min-h-[3rem] w-full items-center gap-3 rounded-xl border border-dashed border-[var(--accent)]/60 bg-card px-4 py-2.5 text-left transition-colors hover:bg-[var(--accent)]/5 disabled:opacity-50"
+        >
+          {startWalkIn.isPending
+            ? <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[var(--accent)]" />
+            : <ShoppingCart className="h-5 w-5 shrink-0 text-[var(--accent)]" />}
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold">Record something you bought</span>
+            <span className="block text-xs text-muted-foreground">
+              {recordsOn(req.status) && req.status !== 'OPEN' && req.lines.some((l) => !l.receivedAt)
+                ? 'Already on this list? Tick it below instead.'
+                : 'Bought it at the store? Add it here, then fill in the packs and price.'}
+            </span>
+          </span>
+        </button>
+      )}
+
       {/* the list */}
       <div className="rounded-xl border border-border bg-card">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -1111,7 +1179,7 @@ export default function ProcurePage() {
                 Check stock
               </button>
               <button
-                onClick={() => setPicking((v) => !v)}
+                onClick={() => { setWalkInPicking(false); setPicking((v) => !v); }}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
               >
                 <Plus className="h-3.5 w-3.5" /> Add
@@ -1160,6 +1228,21 @@ export default function ProcurePage() {
 
         {picking && req.status === 'OPEN' && (
           <div className="border-b border-border bg-muted/30 p-3">
+            {walkInPicking && (
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  <strong className="font-medium text-foreground">Record something you bought.</strong>{' '}
+                  Pick it and say how much you bought. Then fill in the packs and price, and save.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { setPicking(false); setPending(null); setQty(''); setWalkInPicking(false); }}
+                  className="shrink-0 rounded-lg border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                >
+                  Close
+                </button>
+              </div>
+            )}
             {pending ? (
               /*
                 Step two. Asked here rather than left to a default, because a
@@ -1171,11 +1254,11 @@ export default function ProcurePage() {
                   e.preventDefault();
                   const n = parseFloat(qty);
                   if (!(n > 0)) { toast.error('Enter how much is needed.'); return; }
-                  addLine.mutate({ rawMaterialId: pending.id, qtyRequested: toBase(n, askMode, memoryOf(pending.id)?.packSize) });
+                  addLine.mutate({ rawMaterialId: pending.id, qtyRequested: toBase(n, askMode, memoryOf(pending.id)?.packSize), walkIn: walkInPicking });
                 }}
               >
                 <div className="text-sm font-medium">{pending.name}</div>
-                <p className="mt-0.5 text-xs text-muted-foreground">How much do you need?</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{walkInPicking ? 'How much did you buy?' : 'How much do you need?'}</p>
                 {(() => {
                   const mem = memoryOf(pending.id);
                   const big = BIG_UNIT[pending.unit];
@@ -1267,6 +1350,9 @@ export default function ProcurePage() {
                         >
                           <span className="line-clamp-2 text-xs font-medium leading-tight">{i.name}</span>
                           <span className="mt-0.5 text-[10px] text-muted-foreground">{i.unit}</span>
+                          {showNotInRecipe(i) && (
+                            <span className="text-[10px] text-amber-700 dark:text-amber-400">not in any recipe</span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1742,16 +1828,18 @@ export default function ProcurePage() {
         {!canRecord && req.status !== 'RECEIVED' && req.status !== 'CANCELLED' && (
           <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
             {req.status === 'OPEN'
-              ? 'Keep adding what you need. The owner or manager sends this list when the shift cuts off.'
+              ? 'Keep adding what you need. It is sent to the owner from the kitchen or bar screen, or at closing time.'
               : req.status === 'SENT'
                 ? 'Sent — waiting for whoever shops to record what they bought.'
                 : 'Bought — waiting for the owner or manager to add it to stock.'}
+            {/* The shop hides purchase costs from staff, so recording a buy is the owner's or manager's (ProcureService.recordBought). */}
+            {' '}Bought something yourself? Tell the owner or manager: on this account only they record purchases.
           </p>
         )}
         {canRecord && !canDecide && req.status === 'OPEN' && (
           <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
-            Keep adding what you need. The owner or manager sends this list when the shift cuts off.
-            {' '}Already bought something on it? Tick it and save what you bought.
+            Keep adding what you need. It is sent to the owner from the kitchen or bar screen, or at closing time.
+            {' '}Bought something? Tick it if it is on the list, or tap Record something you bought above, then save.
           </p>
         )}
         {req.status === 'OPEN' && canDecide && (

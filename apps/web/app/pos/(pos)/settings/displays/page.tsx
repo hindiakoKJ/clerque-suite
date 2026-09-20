@@ -11,6 +11,7 @@
  * pending devices with last-seen status and a Revoke action.
  */
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import {
   Monitor,
@@ -37,6 +38,7 @@ import {
 import { toast } from 'sonner';
 import { isFnbType } from '@repo/shared-types';
 import type { PairedDeviceRole } from '@/lib/pos/device-token';
+import { pairedWithoutStation, stationForPairing, stationsForRole } from './station-choice';
 
 interface PairingRow {
   id:         string;
@@ -185,23 +187,18 @@ export default function DisplaysSettingsPage() {
       <section className={gridClass}>
         {primaryRoles.map((role) => {
           const Icon = ROLE_ICON[role];
-          // For KDS_BAR / KDS_KITCHEN we let the cashier pick a specific
-          // station if any are configured — otherwise a generic role-only
-          // code (the device just listens to all stations of that kind).
-          const stationOptions = (() => {
-            if (role === 'KDS_KITCHEN') return kdsStations.filter((s) => s.name.toLowerCase().includes('kitchen') || (layout?.stations.find((x) => x.id === s.id)?.kind === 'KITCHEN'));
-            if (role === 'KDS_BAR')     return kdsStations.filter((s) => {
-              const kind = layout?.stations.find((x) => x.id === s.id)?.kind;
-              return kind === 'BAR' || kind === 'HOT_BAR' || kind === 'COLD_BAR';
-            });
-            return [];
-          })();
+          // KDS_BAR / KDS_KITCHEN codes are always for one station. A code
+          // with no station paired a tablet that showed "All caught up"
+          // forever, so the API refuses one and this card never offers it.
+          const stationOptions = stationsForRole(role, kdsStations);
 
           return (
             <RoleCard
               key={role}
               icon={Icon}
               title={ROLE_LABEL[role]}
+              needsStation={role !== 'CUSTOMER_DISPLAY'}
+              stationWord={role === 'KDS_BAR' ? 'bar' : 'kitchen'}
               stations={stationOptions.map((s) => ({ id: s.id, name: s.name }))}
               busy={createMut.isPending}
               onGenerate={(stationId) => generateForRole(role, stationId)}
@@ -250,17 +247,25 @@ export default function DisplaysSettingsPage() {
 function RoleCard({
   icon: Icon,
   title,
+  needsStation,
+  stationWord,
   stations,
   busy,
   onGenerate,
 }: {
   icon: React.ElementType;
   title: string;
+  /** Kitchen and bar screens are always for one station. */
+  needsStation: boolean;
+  /** "kitchen" or "bar", for the no-station hint. */
+  stationWord: string;
   stations: Array<{ id: string; name: string }>;
   busy: boolean;
   onGenerate: (stationId?: string) => void;
 }) {
   const [selected, setSelected] = useState<string>('');
+  const stationId = needsStation ? stationForPairing(stations, selected) : null;
+  const blocked = needsStation && !stationId;
 
   return (
     <div className="rounded-2xl border border-border bg-card p-5 flex flex-col gap-4">
@@ -271,15 +276,27 @@ function RoleCard({
         <h3 className="font-semibold text-foreground text-base leading-snug">{title}</h3>
       </div>
 
-      {stations.length > 0 && (
+      {needsStation && stations.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No station has its screen turned on yet. Turn on the {stationWord} screen in{' '}
+          <Link href="/settings/floor-layout" className="font-medium text-[var(--accent)] hover:underline">
+            Settings &gt; Floor Layout
+          </Link>
+          , then come back here.
+        </p>
+      )}
+
+      {needsStation && stations.length > 0 && (
         <div>
-          <label className="text-xs text-muted-foreground block mb-1.5">Station (optional)</label>
+          <label className="text-xs text-muted-foreground block mb-1.5">Station</label>
           <select
-            value={selected}
+            value={stationId ?? ''}
             onChange={(e) => setSelected(e.target.value)}
             className="w-full border border-border bg-background rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent"
           >
-            <option value="">Any matching station</option>
+            {stations.length > 1 && (
+              <option value="" disabled>Pick a station</option>
+            )}
             {stations.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
@@ -288,8 +305,8 @@ function RoleCard({
       )}
 
       <button
-        onClick={() => onGenerate(selected || undefined)}
-        disabled={busy}
+        onClick={() => onGenerate(stationId ?? undefined)}
+        disabled={busy || blocked}
         className="mt-auto py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
         style={{ background: 'var(--accent)' }}
       >
@@ -461,7 +478,14 @@ function DeviceTable({
               <tr key={r.id} className="border-b border-border last:border-b-0">
                 <td className="px-5 py-3 text-foreground">{ROLE_LABEL[r.role] ?? r.role}</td>
                 <td className="px-5 py-3 text-muted-foreground">
-                  {r.label || (r.stationId ? stationNameById[r.stationId] ?? r.stationId : '—')}
+                  {pairedWithoutStation(r) ? (
+                    // Paired before kitchen/bar screens needed a station: it shows no orders.
+                    <span className="text-amber-600 dark:text-amber-400">
+                      No station, so it shows no orders. Revoke it and pair it again.
+                    </span>
+                  ) : (
+                    r.label || (r.stationId ? stationNameById[r.stationId] ?? r.stationId : '—')
+                  )}
                 </td>
                 <td className="px-5 py-3 text-muted-foreground tabular-nums">
                   {r.lastSeenAt ? formatRelative(r.lastSeenAt) : (r.redeemedAt ? 'just paired' : 'pending')}

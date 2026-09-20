@@ -183,7 +183,8 @@ export interface JwtPayload {
    *  fall back to baked-in defaults when null. */
   receiptHeaderNote?: string | null;
   receiptFooterNote?: string | null;
-  receiptLogoUrl?:    string | null;
+  // No logo here on purpose: the token is also the session cookie, and a
+  // logo can outgrow a cookie. Read it from GET /tenant/branding.
   /** Sprint 19 — When false (default), staff cannot clock in/out from
    *  their own Sync account; only the shared kiosk tablet works. The
    *  frontend uses this to hide the Clock sidebar link. */

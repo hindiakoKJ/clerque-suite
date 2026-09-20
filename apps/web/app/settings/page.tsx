@@ -17,6 +17,8 @@ import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
+import { BusinessLogoCard } from '@/components/settings/BusinessLogoCard';
+import { useBranding } from '@/hooks/useBranding';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -50,7 +52,8 @@ interface TenantProfile {
   // Sprint 19 — receipt template (owner-editable from Settings).
   receiptHeaderNote?:   string | null;
   receiptFooterNote?:   string | null;
-  receiptLogoUrl?:      string | null;
+  // The logo is not read from here: it comes from GET /tenant/branding
+  // (useBranding) and is changed only through BusinessLogoCard.
   // Sprint 19 — returns/refunds owner-only policy.
   returnsOwnerOnly?:    boolean | null;
   // Master switch for ingredient deduction. Non-null = paused since then.
@@ -189,12 +192,14 @@ export default function SettingsPage() {
   });
   const [profileDirty, setProfileDirty] = useState(false);
 
-  // Sprint 19 — receipt template form (owner-only edit).
+  // Sprint 19 — receipt template form (owner-only edit). No logo field: the
+  // logo is uploaded in the Business Logo card, and sending a logo value here
+  // would overwrite (or clear) the uploaded one.
   const [receiptForm, setReceiptForm] = useState({
     receiptHeaderNote: '',
     receiptFooterNote: '',
-    receiptLogoUrl:    '',
   });
+  const { logoSrc: receiptPreviewLogo } = useBranding({ enabled: isOwner });
   const [receiptDirty, setReceiptDirty] = useState(false);
 
   // ── BIR / Tax settings state ──────────────────────────────────────────────
@@ -243,7 +248,6 @@ export default function SettingsPage() {
     setReceiptForm({
       receiptHeaderNote: profile.receiptHeaderNote ?? '',
       receiptFooterNote: profile.receiptFooterNote ?? '',
-      receiptLogoUrl:    profile.receiptLogoUrl ?? '',
     });
   }, [profile]);
 
@@ -280,7 +284,6 @@ export default function SettingsPage() {
     mutationFn: (body: typeof receiptForm) => api.patch('/tenant/profile', {
       receiptHeaderNote: body.receiptHeaderNote.trim() || null,
       receiptFooterNote: body.receiptFooterNote.trim() || null,
-      receiptLogoUrl:    body.receiptLogoUrl.trim()    || null,
     }).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tenant-profile'] });
@@ -635,6 +638,9 @@ export default function SettingsPage() {
               )}
             </div>
 
+            {/* ── Business logo (owner-only upload) ─────────────────────────── */}
+            {isOwner && <BusinessLogoCard />}
+
             {/* ── Inventory Costing (Sprint 4A + Sprint 6) ────────────────────── */}
             {isOwner && profile && (
               <CostingCard profile={profile} qc={qc} />
@@ -648,21 +654,11 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Customise what appears on every printed receipt. Header note shows
                     below your business name; footer note replaces "Thank you for your
-                    purchase!" Logo prints at the top (1-bit PNG works best for thermal
-                    printers).
+                    purchase!" Your logo (set in Business Logo above) shows at the top of
+                    on-screen and browser-printed receipts. Thermal printers print text only
+                    for now.
                   </p>
                 </div>
-
-                <label className="block">
-                  <span className="text-xs text-muted-foreground">Logo URL</span>
-                  <input
-                    type="url"
-                    value={receiptForm.receiptLogoUrl}
-                    onChange={(e) => { setReceiptForm((f) => ({ ...f, receiptLogoUrl: e.target.value })); setReceiptDirty(true); }}
-                    placeholder="https://… (paste image URL)"
-                    className="mt-1 w-full h-9 px-2 rounded-md border border-border bg-background text-sm"
-                  />
-                </label>
 
                 <label className="block">
                   <span className="text-xs text-muted-foreground">Header note (below business name)</span>
@@ -692,12 +688,13 @@ export default function SettingsPage() {
 
                 {/* Live preview */}
                 <div className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-[11px] font-mono text-center space-y-0.5 max-w-xs mx-auto">
-                  {receiptForm.receiptLogoUrl && (
+                  {receiptPreviewLogo && (
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
-                      src={receiptForm.receiptLogoUrl}
+                      key={receiptPreviewLogo}
+                      src={receiptPreviewLogo}
                       alt="logo preview"
-                      className="mx-auto max-h-10 object-contain mb-1"
+                      className="mx-auto max-h-10 max-w-[160px] object-contain mb-1"
                       onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                     />
                   )}

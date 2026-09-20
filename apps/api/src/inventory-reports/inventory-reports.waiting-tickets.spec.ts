@@ -33,13 +33,18 @@ describe('Inventory reports and tickets still waiting at a screen', () => {
   } = {}) {
     const rows = (opts.lines ?? []).map((l) => ({
       id: l.id,
+      // One order per line, paid in full (no order discount, no VAT).
+      orderId: `order-${l.id}`,
       productId: LATTE, productName: 'Latte', variantId: null, modifiers: [],
       quantity: l.qty, refundedQty: l.refunded ?? 0,
       lineTotal: l.lineTotal ?? 150 * l.qty,
       costPrice: l.costPrice === undefined ? 40 : l.costPrice,
       usageOnReady: l.waiting === true || l.confirmedAt != null,
       usagePostedAt: l.confirmedAt ?? null,
-      order: { branchId: l.branch ?? BRANCH, status: l.status ?? 'COMPLETED', createdAt: new Date('2026-09-04T02:00:00Z') },
+      order: {
+        branchId: l.branch ?? BRANCH, status: l.status ?? 'COMPLETED', createdAt: new Date('2026-09-04T02:00:00Z'),
+        totalAmount: l.lineTotal ?? 150 * l.qty, vatAmount: 0,
+      },
     }));
     const branchMatches = (want: any, got: string) =>
       want == null || (typeof want === 'string' ? want === got : (want.in ?? []).includes(got));

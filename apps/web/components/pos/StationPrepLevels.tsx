@@ -30,7 +30,8 @@ import {
   type PrepStatus, type RotationRow, type UseBy,
 } from '@repo/shared-types';
 import { api } from '@/lib/api';
-import { PrepChainCard, type PrepChain, type StageNote } from './PrepChainCard';
+import { MadeButton, PrepChainCard, type PrepChain, type StageNote } from './PrepChainCard';
+import { tileMadeLabel } from './station-taps';
 
 interface PrepRow {
   id: string;
@@ -109,6 +110,32 @@ function todo(r: PrepRow): string | null {
   }
   return null;
 }
+
+/*
+  A pre-made item that is not inside a chain card gets its own "Made" button,
+  so a batch made ahead -- wings marinated overnight, a sauce cooked before the
+  rush -- is recorded when it is made and not once the tub runs low. Until the
+  tap the raw stock stays too high on the books and the day's sheet is wrong.
+  The button only shows when there is enough on hand for one batch (the server
+  would refuse it otherwise), and big only when the item needs doing now.
+
+  Every row here is this station's or routed to none, which is exactly what the
+  Made route lets this screen record.
+*/
+const madeButton = (r: PrepRow, stationId: string, compact = false) => {
+  const label = tileMadeLabel(r);
+  if (!label) return null;
+  return (
+    <MadeButton
+      stationId={stationId}
+      rawMaterialId={r.id}
+      label={label}
+      uses={null}
+      tone={todo(r) != null ? 'primary' : 'secondary'}
+      compact={compact}
+    />
+  );
+};
 
 export function StationPrepLevels({
   stationId, enabled, onNewRed, visible = true, compact = false,
@@ -236,6 +263,7 @@ export function StationPrepLevels({
         {acting.map((c) => <PrepChainCard key={c.id} chain={c} stationId={stationId} compact notes={notes} />)}
         {attention.map((r) => {
           const what = todo(r);
+          const made = madeButton(r, stationId, true);
           const dates = useBySentences(r.useBy, r.unit, now);
           return (
             <div key={r.id} className={`rounded-xl border-l-4 bg-stone-900 px-3 py-2 ${EDGE[r.status]}`}>
@@ -258,6 +286,7 @@ export function StationPrepLevels({
                 <p key={d} className={`mt-0.5 text-xs leading-snug ${r.useBy.expired && d.includes('past') ? 'text-red-300' : 'text-orange-200'}`}>{d}</p>
               ))}
               {!r.assigned && <p className="mt-0.5 text-[10px] uppercase tracking-wider text-stone-500">Not routed to a station</p>}
+              {made && <div className="mt-2">{made}</div>}
             </div>
           );
         })}
@@ -266,20 +295,27 @@ export function StationPrepLevels({
           <div>
             <p className="mb-1 text-[11px] uppercase tracking-wider text-stone-500">{fineChecked ? 'Fine' : 'Fine, or no par set'}</p>
             <ul className="divide-y divide-stone-800">
-              {fine.map((r) => (
-                <li key={r.id} className={`flex items-start justify-between gap-2 py-1.5 text-sm ${r.assigned ? '' : 'opacity-70'}`}>
-                  {/* Wrapped, not cut: "Tomato Sauce (ready)" and "(frozen)" must stay tellable apart on a touch screen. */}
-                  <span className="min-w-0 leading-snug text-stone-300">
-                    {r.level === 2 && <Snowflake className="mr-1 inline h-3 w-3 align-[-1px] text-sky-300" aria-label="Parked" />}
-                    {r.name}
-                    {!r.assigned && <span className="ml-1 text-[10px] uppercase text-stone-500">not routed</span>}
-                  </span>
-                  <span className="shrink-0 text-right tabular-nums leading-snug text-stone-400">
-                    {amount(r.onHand, r.unit)}
-                    {r.status === 'NO_PAR' && <span className="block text-[10px] text-stone-600">no par</span>}
-                  </span>
-                </li>
-              ))}
+              {fine.map((r) => {
+                // Nothing needs doing, but a batch made early still has to be recorded.
+                const made = madeButton(r, stationId, true);
+                return (
+                  <li key={r.id} className={`py-1.5 text-sm ${r.assigned ? '' : 'opacity-70'}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      {/* Wrapped, not cut: "Tomato Sauce (ready)" and "(frozen)" must stay tellable apart on a touch screen. */}
+                      <span className="min-w-0 leading-snug text-stone-300">
+                        {r.level === 2 && <Snowflake className="mr-1 inline h-3 w-3 align-[-1px] text-sky-300" aria-label="Parked" />}
+                        {r.name}
+                        {!r.assigned && <span className="ml-1 text-[10px] uppercase text-stone-500">not routed</span>}
+                      </span>
+                      <span className="shrink-0 text-right tabular-nums leading-snug text-stone-400">
+                        {amount(r.onHand, r.unit)}
+                        {r.status === 'NO_PAR' && <span className="block text-[10px] text-stone-600">no par</span>}
+                      </span>
+                    </div>
+                    {made && <div className="ml-auto mt-1.5 w-40">{made}</div>}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
@@ -290,6 +326,7 @@ export function StationPrepLevels({
 
   const tile = (r: PrepRow) => {
     const what = todo(r);
+    const made = madeButton(r, stationId);
     const dates = useBySentences(r.useBy, r.unit, now);
     const fill = r.parLevel ? Math.min(1, Math.max(0, r.onHand / (r.parLevel * 2))) : null;
     return (
@@ -324,6 +361,7 @@ export function StationPrepLevels({
             About {r.serves.servingsLeft.toLocaleString('en-PH')} {r.serves.productName} left on this
           </p>
         )}
+        {made && <div className="mt-3">{made}</div>}
       </div>
     );
   };

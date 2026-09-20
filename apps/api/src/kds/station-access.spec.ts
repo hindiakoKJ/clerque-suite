@@ -32,12 +32,28 @@ describe('stationContext', () => {
   const login = (over: Partial<StationCaller> = {}) =>
     ({ sub: 'mgr', tenantId: 't1', branchId: 'b-main', role: 'GENERAL_EMPLOYEE', ...over }) as StationCaller;
 
-  it('lets a kitchen display use its own station, for the branch of whoever paired it', async () => {
+  it('lets a kitchen display use its own station, falling back to the branch of whoever paired it', async () => {
     const ctx = await stationContext(build(), device(), 's-kitchen', { write: true });
     expect(ctx).toEqual({
       tenantId: 't1', station: { id: 's-kitchen', name: 'Kitchen', kind: 'KITCHEN' }, branch: { id: 'b-main', name: 'Main' },
       actorId: 'mgr', actorLabel: 'Kitchen screen', isDevice: true,
     });
+  });
+
+  /*
+    The tablet is on one kitchen's wall. Taking its branch from the person who
+    paired it sent that kitchen's waste to whichever branch that person is
+    assigned to -- the owner pairs the Branch B tablet, the milk comes off
+    Branch A. The station's own branch answers first for a screen.
+  */
+  it("gives a kitchen display the station's own branch, not the pairer's", async () => {
+    const ctx = await stationContext(build({ stationBranch: 'b-first', personBranch: 'b-main' }), device(), 's-kitchen', { write: true });
+    expect(ctx.branch).toEqual({ id: 'b-first', name: 'First' });
+  });
+
+  it('still gives a logged-in person their own branch, whatever branch the station is in', async () => {
+    const ctx = await stationContext(build({ stationBranch: 'b-first', personBranch: 'b-main' }), login({ branchId: 'b-main' }), 's-kitchen', { write: true });
+    expect(ctx.branch).toEqual({ id: 'b-main', name: 'Main' });
   });
 
   it('refuses a display paired to another station', async () => {

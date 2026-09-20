@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, ConflictException, BadRequestException, Logger, Optional } from '@nestjs/common';
 import { ReportsService } from '../reports/reports.service';
-import { EndOfDayScheduler } from '../ingredient-reports/end-of-day.scheduler';
+import { EndOfDayScheduler, lastShiftCloseDue } from '../ingredient-reports/end-of-day.scheduler';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { Prisma } from '@prisma/client';
@@ -311,10 +311,10 @@ export class ShiftsService {
     });
 
     /*
-      The last shift at a branch closing IS the end of the business day, so
-      that is when the Z-Read gets written.
+      The last shift at a branch closing at the end of the business day is
+      when the Z-Read gets written (a mid-day handover is not; see below).
 
-      POST /reports/z-read has always existed, is correct, and is idempotent
+      POST /reports/z-read has always existed, is correct, and keeps one row
       per branch per day — and nothing in the product ever called it. The
       Z-Read History report in Ledger reads a table nothing writes. For a
       VAT-registered shop that is the daily record the BIR expects a CAS to
@@ -322,8 +322,8 @@ export class ShiftsService {
 
       Not a clock-based cron: a shop's day ends when the shop says it does,
       and a Z-Read fired at 23:55 while the till is still open would lock the
-      day's totals early — the record is idempotent, so the premature one
-      would win and the late sales would never appear on it.
+      day's totals early, and the late sales would be missing until someone
+      generated it again.
 
       Not a call from the browser either: the endpoint is restricted to
       managers and owners, and the person who closes the last shift is usually
@@ -332,20 +332,36 @@ export class ShiftsService {
       Deliberately outside the transaction and deliberately swallowing its own
       errors: a cashier at 10pm must be able to close her drawer whether or not
       the day's Z-Read could be built. A missing Z-Read is recoverable — the
-      owner regenerates it from Reports, and it is idempotent so nothing
-      duplicates. A drawer she cannot close is not.
+      owner regenerates it from Reports, and it updates the day's one row so
+      nothing duplicates. A drawer she cannot close is not.
     */
     const stillOpen = await this.prisma.shift.count({
       where: { tenantId, branchId: shift.branchId, closedAt: null },
     });
     if (stillOpen === 0) {
+      /*
+        No till open is not yet the end of the day. On a single till the
+        morning cashier closes before the afternoon one opens, and that used to
+        write the Z-Read at noon. It is written at the same moment the day's
+        inventory sheet closes (lastShiftCloseDue: near the branch's closing
+        time, or in the evening with none set), and dated the business day that
+        close ends, so a close at 00:30 is the evening before's Z-Read. A later
+        end-of-day close of that day updates it.
+      */
       try {
-        await this.reports.generateZRead(
-          tenantId,
-          shift.branchId,
-          ShiftsService.todayPH(),
-          cashierId,
-        );
+        const branch = await this.prisma.branch.findFirst({
+          where:  { id: shift.branchId, tenantId },
+          select: { closesAt: true },
+        });
+        const due = lastShiftCloseDue(branch?.closesAt, closed?.closedAt ?? new Date());
+        if (due) {
+          await this.reports.generateZRead(
+            tenantId,
+            shift.branchId,
+            due.day,
+            cashierId,
+          );
+        }
       } catch (err) {
         // Logged, never thrown. See above.
         this.logger.error(
@@ -382,12 +398,6 @@ export class ShiftsService {
         `shift ${shiftId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
-  }
-
-  /** Today's date in PH local time (UTC+8) as YYYY-MM-DD. */
-  private static todayPH(): string {
-    const ph = new Date(Date.now() + 8 * 60 * 60 * 1000);
-    return ph.toISOString().slice(0, 10);
   }
 
   // ─── Cash Out / Cash Drop ───────────────────────────────────────────────

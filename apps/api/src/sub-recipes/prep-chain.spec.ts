@@ -252,5 +252,57 @@ describe('prep level chains', () => {
       const here = chainsFromBoard([ready(300), frozen(1000), base(5000)], KITCHEN)[0];
       expect(here).toEqual(c);
     });
+
+    it('a batch made ahead: the kitchen gets a small button for its own stage only, the bar for the bar\'s', () => {
+      const board = [glaze({ onHand: 3000, station: null }), syrup(900)];
+      const onKitchen = glazeOf(chainsFromBoard(board, KITCHEN));
+      expect(onKitchen.severity).toBe('OK');
+      expect(onKitchen.stages.map((s) => [s.id, s.made])).toEqual([
+        ['glaze', { label: 'Made a batch', uses: 'Uses 500 g Simple syrup · 100 g Butter' }],
+        // The bar's syrup: the Made route refuses it from the kitchen, so no button here.
+        ['syrup', null],
+      ]);
+      const onBar = glazeOf(chainsFromBoard(board, BAR));
+      expect(onBar.stages.map((s) => [s.id, s.made?.label ?? null])).toEqual([['glaze', 'Made a batch'], ['syrup', 'Made Level 2']]);
+    });
+  });
+
+  /*
+    A batch made ahead -- wings marinated overnight, a sauce cooked before the
+    rush -- has to be recordable when it is made. The main button only appears
+    when a stage needs doing, so each stage that can be made gets its own small
+    one.
+  */
+  describe('a batch made ahead', () => {
+    it('with nothing to do, every stage that can be made still offers one batch, in the main button\'s words', () => {
+      const c = chainsFromBoard([ready(3000), frozen(4000), base(5000)], KITCHEN)[0];
+      expect(c).toMatchObject({ severity: 'OK', action: null, headline: null });
+      expect(c.stages.map((s) => s.made)).toEqual([
+        { label: 'Refilled Level 1', uses: 'Uses 2,000 g Sauce frozen' },
+        { label: 'Made Level 2', uses: 'Uses 2,000 g Tomato base' },
+        { label: 'Made Level 3', uses: 'Uses 1,000 g Tomato · 500 g Sugar' },
+      ]);
+    });
+
+    it('when a stage needs doing, the main button is for it and the other stages keep their small ones', () => {
+      const c = chainsFromBoard([ready(300), frozen(2000), base(5000)], KITCHEN)[0];
+      expect(c.action).toMatchObject({ rawMaterialId: 'ready', enabled: true });
+      expect(c.stages.map((s) => s.made?.label ?? null)).toEqual([null, 'Made Level 2', 'Made Level 3']);
+    });
+
+    it('a stage short of what it is made from offers nothing: the server would refuse the batch', () => {
+      const c = chainsFromBoard([ready(3000), frozen(1000), base(0, 100)], KITCHEN)[0];
+      expect(c.severity).toBe('OK');
+      expect(c.stages.map((s) => s.made)).toEqual([null, null, null]);
+    });
+
+    it('when the main button is off (buy something first), a deeper stage that can be made still offers its batch', () => {
+      // Level 1 needs refilling and Level 2 is empty for want of spice; the base can still be cooked ahead.
+      const spicy = frozen(0, { components: [prep('base', 'Tomato base', 2000), raw('spice', 'Spice', 10, 0)] });
+      const c = chainsFromBoard([ready(300), spicy, base(5000)], KITCHEN)[0];
+      expect(c.headline).toBe('Out of Spice. Buy it now.');
+      expect(c.action).toMatchObject({ rawMaterialId: 'ready', enabled: false, disabledReason: 'Buy Spice first' });
+      expect(c.stages.map((s) => s.made?.label ?? null)).toEqual([null, null, 'Made Level 3']);
+    });
   });
 });

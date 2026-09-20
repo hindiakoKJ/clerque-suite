@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Coffee, Sparkles, Receipt, ShoppingCart, ChefHat } from 'lucide-react';
+import { Store, Sparkles, Receipt, ShoppingCart, ChefHat } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import {
@@ -14,6 +14,7 @@ import {
   clearDeviceToken,
 } from '@/lib/pos/device-token';
 import { useKioskMode } from '@/hooks/pos/useKioskMode';
+import { useBranding } from '@/hooks/useBranding';
 import { Maximize } from 'lucide-react';
 
 const EMPTY: CustomerDisplayState = {
@@ -143,7 +144,15 @@ export default function CustomerDisplayPage() {
     return () => clearInterval(id);
   }, [pairedCashierId]);
 
-  const businessName = state.businessName ?? tenantBusinessName ?? 'Welcome';
+  // Logo + name from GET /tenant/branding, fetched once and cached (never in
+  // the 300ms cart updates). A paired screen authenticates with its device
+  // token. Wait until this screen knows who it belongs to before asking.
+  const brand = useBranding({ enabled: tokenChecked && !!cashierId });
+  const [logoFailed, setLogoFailed] = useState(false);
+  useEffect(() => { setLogoFailed(false); }, [brand.logoSrc]);
+  const logoSrc = logoFailed ? '' : brand.logoSrc;
+
+  const businessName = state.businessName ?? tenantBusinessName ?? brand.displayName ?? 'Welcome';
 
   // One small unobtrusive pill, only while browser chrome is visible.
   // Browsers grant fullscreen exclusively from a tap, so it cannot be
@@ -168,7 +177,21 @@ export default function CustomerDisplayPage() {
         style={{ background: 'linear-gradient(135deg, #6b3f1d 0%, #8b5e3c 100%)' }}
       >
         {fullscreenPrompt}
-        <Coffee className="h-24 w-24 text-amber-100 mb-6 opacity-90" />
+        {/* The business's logo on a white card (dark logos stay readable on
+            the brown), up to 240x160; a plain shop icon when there is none. */}
+        {logoSrc ? (
+          <div className="mb-6 rounded-2xl bg-white p-3 shadow-xl flex items-center justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={logoSrc}
+              alt={brand.displayName ?? 'Logo'}
+              className="max-h-[136px] max-w-[216px] object-contain"
+              onError={() => setLogoFailed(true)}
+            />
+          </div>
+        ) : (
+          <Store className="h-24 w-24 text-amber-100 mb-6 opacity-90" />
+        )}
         <h1 className="text-5xl sm:text-6xl font-bold text-white mb-3 tracking-tight">
           {businessName}
         </h1>
@@ -299,7 +322,19 @@ export default function CustomerDisplayPage() {
         style={{ background: '#6b3f1d', borderColor: '#8b5e3c' }}
       >
         <div className="flex items-center gap-3">
-          <Coffee className="h-8 w-8 text-amber-200" />
+          {logoSrc ? (
+            <div className="h-10 shrink-0 rounded-lg bg-white px-1.5 flex items-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={logoSrc}
+                alt=""
+                className="max-h-8 max-w-[148px] object-contain"
+                onError={() => setLogoFailed(true)}
+              />
+            </div>
+          ) : (
+            <Store className="h-8 w-8 text-amber-200 shrink-0" />
+          )}
           <h1 className="text-3xl font-bold tracking-tight">{businessName}</h1>
         </div>
         <div className="flex items-center gap-2 text-amber-200">

@@ -1,4 +1,11 @@
-import { Controller, Get, Patch, Post, Body, Param, Req, UseGuards, HttpCode, HttpStatus, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Controller, Get, Patch, Post, Delete, Body, Param, Req, UseGuards, UseInterceptors, UploadedFile,
+  HttpCode, HttpStatus, BadRequestException, ForbiddenException, PayloadTooLargeException,
+  Injectable, NestInterceptor, ExecutionContext, CallHandler,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { Observable, catchError, throwError } from 'rxjs';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -10,13 +17,33 @@ import { TenantService } from './tenant.service';
 import { UpdateTenantProfileDto } from './dto/update-tenant-profile.dto';
 import { UpdateTaxSettingsDto } from './dto/update-tax-settings.dto';
 import { CreateBranchDto, UpdateBranchDto } from './dto/branch.dto';
+import { UpdateReceiptConfigDto } from './dto/update-receipt-config.dto';
+import { MAX_LOGO_BYTES, TenantLogoService } from './tenant-logo.service';
+
+/**
+ * Multer refuses a file over the limit before the handler runs, with a bare
+ * "File too large". Say it in words the owner can act on.
+ */
+@Injectable()
+export class LogoTooLargeMessage implements NestInterceptor {
+  intercept(_ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
+    return next.handle().pipe(catchError((err) => throwError(() =>
+      err instanceof PayloadTooLargeException
+        ? new PayloadTooLargeException({ code: 'LOGO_TOO_LARGE', message: 'The logo must be 1 MB or smaller.' })
+        : err,
+    )));
+  }
+}
 
 @ApiTags('Tenant')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('tenant')
 export class TenantController {
-  constructor(private tenantService: TenantService) {}
+  constructor(
+    private tenantService: TenantService,
+    private logoService:   TenantLogoService,
+  ) {}
 
   /** Returns all active branches for the authenticated user's tenant.
    *  Used by product inventory prompt, shift open, and any branch-picker UI. */
@@ -116,7 +143,52 @@ export class TenantController {
   @Patch('profile')
   @HttpCode(HttpStatus.OK)
   updateProfile(@CurrentUser() user: JwtPayload, @Body() body: UpdateTenantProfileDto) {
-    return this.tenantService.updateProfile(user.tenantId!, body);
+    return this.tenantService.updateProfile(user.tenantId!, body, user.sub);
+  }
+
+  /**
+   * POST /tenant/logo — upload the business logo (multipart field "file").
+   *
+   * PNG, JPEG or WEBP, 1 MB at most, checked by the file's bytes; never SVG.
+   * Stored under public/branding/<tenantId>/ with a new random id, served by
+   * the same no-login route as product photos, and only that short link is
+   * saved in Tenant.receiptLogoUrl. The previous logo file is deleted.
+   *
+   * The business owner only. RolesGuard lets a super admin through every
+   * @Roles list, so the role is checked again here: a Console account must
+   * not brand whatever tenant it happens to sit in.
+   */
+  @Roles('BUSINESS_OWNER')
+  @Post('logo')
+  @HttpCode(HttpStatus.OK)
+  // busboy refuses a file that REACHES its limit, so the limit is one byte
+  // over: a file of exactly 1 MB is accepted, anything bigger is refused
+  // with LogoTooLargeMessage's wording before more of it is buffered.
+  @UseInterceptors(
+    LogoTooLargeMessage,
+    FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_LOGO_BYTES + 1, files: 1 } }),
+  )
+  uploadLogo(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<{ logoUrl: string }> {
+    this.assertOwner(user);
+    return this.logoService.upload(user.tenantId, user.sub, file);
+  }
+
+  /** DELETE /tenant/logo — remove the business logo and its stored file. Owner only. */
+  @Roles('BUSINESS_OWNER')
+  @Delete('logo')
+  @HttpCode(HttpStatus.OK)
+  removeLogo(@CurrentUser() user: JwtPayload): Promise<{ logoUrl: null }> {
+    this.assertOwner(user);
+    return this.logoService.remove(user.tenantId, user.sub);
+  }
+
+  private assertOwner(user: JwtPayload) {
+    if (user.role !== 'BUSINESS_OWNER') {
+      throw new ForbiddenException('Only the business owner can change the logo.');
+    }
   }
 
   /**
@@ -267,7 +339,8 @@ export class TenantController {
    * Plan-gated via PLAN_FEATURES.receiptCustomization:
    *   'none'         → write rejected with PLAN_FEATURE_DISABLED
    *   'headerFooter' → header + footer text only
-   *   'full'         → header + footer + logo (base64 data URL in logoUrl)
+   *   'full'         → header + footer + logo (a short link only; upload the
+   *                     picture with POST /tenant/logo)
    *
    * Owner-only. The frontend renders a tier-aware editor (upsell card for
    * 'none', text-only for 'headerFooter', text+upload for 'full').
@@ -277,7 +350,7 @@ export class TenantController {
   @HttpCode(HttpStatus.OK)
   updateReceiptConfig(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { headerNote?: string | null; footerNote?: string | null; logoUrl?: string | null },
+    @Body() body: UpdateReceiptConfigDto,
   ) {
     return this.tenantService.updateReceiptConfig(user.tenantId!, body ?? {}, user.sub);
   }

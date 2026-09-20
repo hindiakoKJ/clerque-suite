@@ -14,6 +14,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { LoyaltyService } from '../loyalty/loyalty.service';
 import { VoidApprovalsService } from '../void-approvals/void-approvals.service';
 import { OrderQuoteService } from './order-quote.service';
+import { supervisorPinAttempts } from '../auth/pin-attempts';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -98,6 +99,8 @@ describe('OrdersService — void()', () => {
   let taxCalc: ReturnType<typeof makeTaxCalcMock>;
 
   beforeEach(async () => {
+    // The wrong-PIN count lives for the life of the API process; start each test from zero.
+    supervisorPinAttempts.clear();
     prisma  = makePrismaMock();
     audit   = makeAuditMock();
     periods = makePeriodsMock();
@@ -228,6 +231,59 @@ describe('OrdersService — void()', () => {
       await expect(
         svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '1357'),
       ).resolves.toBeDefined();
+    });
+
+    describe('wrong-PIN limit (5 in 15 minutes, for the whole business)', () => {
+      const wrongVoid = () =>
+        svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '9999');
+
+      it('after 5 wrong PINs even the right one waits, with a plain 429', async () => {
+        prisma.user.findMany.mockResolvedValue([await pinUser({ pin: '4321' })]);
+        prisma.order.findFirst.mockResolvedValue(completedOrderToday());
+        for (let i = 0; i < 5; i++) {
+          await expect(wrongVoid()).rejects.toThrow('Supervisor PIN not recognised.');
+        }
+        const err = await svc
+          .void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '4321')
+          .catch((e) => e);
+        expect(err.getStatus()).toBe(429);
+        expect(err.getResponse().message).toMatch(/^Too many wrong supervisor PINs\. Try again in 15 minutes/);
+        // Refused before any PIN is compared.
+        expect(prisma.user.findMany).toHaveBeenCalledTimes(5);
+      });
+
+      it('refunds share the same count as voids', async () => {
+        prisma.user.findMany.mockResolvedValue([await pinUser({ pin: '4321' })]);
+        for (let i = 0; i < 5; i++) {
+          await expect(wrongVoid()).rejects.toThrow(ForbiddenException);
+        }
+        const err = await svc
+          .refundItem({
+            tenantId: 'tenant-1', orderId: 'order-1', orderItemId: 'item-1', quantity: 1,
+            reason: 'Wrong drink', refundMethod: 'CASH', restock: false,
+            refundedById: 'cashier-1', callerRole: 'CASHIER', supervisorPin: '4321',
+          } as any)
+          .catch((e) => e);
+        expect(err.getStatus()).toBe(429);
+      });
+
+      it('a right PIN starts the count again', async () => {
+        prisma.user.findMany.mockResolvedValue([await pinUser({ pin: '4321' })]);
+        prisma.order.findFirst.mockResolvedValue(completedOrderToday());
+        for (let i = 0; i < 4; i++) await expect(wrongVoid()).rejects.toThrow(ForbiddenException);
+        await expect(
+          svc.void('tenant-1', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '4321'),
+        ).resolves.toBeDefined();
+        for (let i = 0; i < 4; i++) await expect(wrongVoid()).rejects.toThrow('Supervisor PIN not recognised.');
+      });
+
+      it('another business is not locked out', async () => {
+        prisma.user.findMany.mockResolvedValue([await pinUser({ pin: '4321' })]);
+        for (let i = 0; i < 5; i++) await expect(wrongVoid()).rejects.toThrow(ForbiddenException);
+        await expect(
+          svc.void('tenant-2', 'order-1', 'cashier-1', 'CASHIER', 'Customer request', '9999'),
+        ).rejects.toThrow('Supervisor PIN not recognised.');
+      });
     });
   });
 

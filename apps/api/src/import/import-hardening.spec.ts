@@ -248,24 +248,27 @@ describe('ImportService — importRecipes', () => {
     }));
   });
 
-  it('flips ONLY products whose rows all imported; a product with an errored row is NOT flipped and gets a note', async () => {
+  it('flips ONLY products whose rows all imported; a product with an errored row is NOT flipped, gets NO lines, and gets a note', async () => {
     const svc = new ImportService(prisma, OPEN_PERIODS);
     const res = await svc.importRecipes(csvFile([
       'Product Name*,Ingredient Name*,Quantity*',
-      'Latte,whole milk,200',      // ok
+      'Latte,whole milk,200',      // passes, but Latte has a failed row -> not written
       'Latte,Unobtainium,5',       // ingredient missing -> Latte incomplete
-      'Espresso Solo,Beans,18',    // ok -> flipped
+      'Espresso Solo,Beans,18',    // ok -> written and flipped
     ].join('\n')), 't1');
 
-    expect(res.imported).toBe(2);
+    expect(res.imported).toBe(1);
+    expect(prisma.bomItem.create).toHaveBeenCalledTimes(1);
+    expect(prisma.bomItem.create.mock.calls[0][0].data.productId).toBe('p-esp');
     expect(prisma.product.updateMany).toHaveBeenCalledTimes(1);
     const call = prisma.product.updateMany.mock.calls[0][0];
     expect(call.where.id.in).toEqual(['p-esp']);           // Latte (p-latte) NOT flipped
     expect(call.data).toEqual({ inventoryMode: 'RECIPE_BASED' });
 
-    const note = res.errors.find((e) => e.message.includes('partially imported — not activated'));
+    const note = res.errors.find((e) => e.message.includes('not imported'));
     expect(note).toBeDefined();
     expect(note!.message).toContain('Product "Latte"');
+    expect(note!.message).toContain('left as it was');
     expect(res.errors.some((e) => e.message.includes('Ingredient "Unobtainium" not found'))).toBe(true);
   });
 
@@ -315,9 +318,10 @@ describe('ImportService — importRecipes', () => {
       'Latte,Whole Milk,200',
       'latte,Beans,abc',
     ].join('\n')), 't1');
-    expect(res.imported).toBe(1);
+    expect(res.imported).toBe(0);
+    expect(prisma.bomItem.create).not.toHaveBeenCalled();
     expect(prisma.product.updateMany).not.toHaveBeenCalled();
-    expect(res.errors.filter((e) => e.message.includes('partially imported — not activated'))).toHaveLength(1);
+    expect(res.errors.filter((e) => e.message.includes('not imported'))).toHaveLength(1);
   });
 });
 

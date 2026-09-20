@@ -32,9 +32,13 @@ describe('ImportService — ingredient export round-trips', () => {
     const prisma: any = {
       rawMaterial: {
         findMany: jest.fn().mockResolvedValue(live),
-        // exact-case lookup, exactly as the service does it
+        // exact-case lookup, exactly as the service does it. The whole row
+        // comes back, as Prisma returns it: the importer reads the unit it is
+        // counted in off this row before it decides to write anything.
         findFirst: jest.fn(({ where }: any) =>
-          Promise.resolve(byName.has(where.name) ? { id: 'id-' + where.name } : null)),
+          Promise.resolve(byName.has(where.name)
+            ? { id: 'id-' + where.name, ...byName.get(where.name) }
+            : null)),
         create: jest.fn(({ data }: any) => { created.push(data); return Promise.resolve({ id: 'new' }); }),
         update: jest.fn(({ where, data }: any) => {
           updated.push({ id: where.id, data });

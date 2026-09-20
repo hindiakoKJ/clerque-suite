@@ -16,6 +16,11 @@ import { assertPinPolicy } from '../auth/pin-policy';
 import { assertPasswordPolicy } from '../auth/password-policy';
 import { LINKABLE_ROLES } from '../telegram/link-roles';
 
+/** Roles tied to one branch -- the same list as BRANCH_SCOPED_ROLES in common/branch-scope.ts. */
+const ONE_BRANCH_ROLES = new Set([
+  'CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE',
+]);
+
 export { CreateUserDto, UpdateUserDto, StaffRole };
 
 @Injectable()
@@ -222,7 +227,7 @@ export class UsersService {
         email: dto.email,
         passwordHash,
         role: dto.role,
-        branchId: dto.branchId ?? null,
+        branchId: dto.branchId || (await this.onlyBranchFor(tenantId, dto.role)),
         kioskOnly: dto.kioskOnly ?? false,
         // Sprint 19 — kioskPin is stored as plaintext (4–8 digits, low-stakes
         // clock-in credential). Hashing was tried but broke kiosk lookups
@@ -251,6 +256,29 @@ export class UsersService {
     });
 
     return created;
+  }
+
+  /**
+   * The branch a new account gets when none was picked.
+   *
+   * A cashier with no branch cannot open a shift, and the till stops at "This
+   * account has no branch". Settings > Users has no Branch field, so every
+   * account made there hit it. When the shop has exactly one active branch
+   * there is only one right answer, so it is used.
+   *
+   * Only for the roles tied to one branch (the same list as
+   * common/branch-scope.ts). The owner, accountants and auditors keep no
+   * branch, because for them no branch means every branch. With two or more
+   * branches nothing is guessed.
+   */
+  private async onlyBranchFor(tenantId: string, role: string): Promise<string | null> {
+    if (!ONE_BRANCH_ROLES.has(role)) return null;
+    const branches = await this.prisma.branch.findMany({
+      where:  { tenantId, isActive: true },
+      select: { id: true },
+      take:   2,
+    });
+    return branches.length === 1 ? branches[0].id : null;
   }
 
   // ─── Update user ──────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { missingCostWhere } from '../products/missing-cost';
 
 export interface ProcessMetrics {
   generatedAt: string;
@@ -142,7 +143,12 @@ export class LedgerMetricsService {
       this.prisma.auditLog.count({
         where: { tenantId, action: 'SOD_OVERRIDE_GRANTED' as any, createdAt: { gte: month30 } },
       }).catch(() => 0),
-      this.prisma.product.count({ where: { tenantId, isActive: true, costPrice: null } }),
+      // Same rule as the POS dashboard list (products/missing-cost.ts): no
+      // cost price, or costed by a recipe that uses an ingredient at ₱0 or blank.
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { inventoryMode: true } })
+        .then((t) => this.prisma.product.count({
+          where: missingCostWhere(tenantId, t?.inventoryMode === 'RECIPE_BASED'),
+        })),
       this.prisma.auditLog.count({ where: { tenantId, createdAt: { gte: dayAgo } } }).catch(() => 0),
       // Offline-synced orders detected via clientUuid (set client-side
       // before sync; null on direct online orders).

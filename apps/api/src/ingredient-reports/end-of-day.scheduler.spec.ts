@@ -103,6 +103,10 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
     stock?: Stock[];
     /** false: the closing-time buy list is not wired in. */
     closingList?: boolean;
+    /** Z-Reads already written, e.g. by a last shift close earlier that evening. */
+    zReads?: Array<{ tenantId: string; branchId: string; day: string }>;
+    /** true: generating a Z-Read fails. */
+    zReadFails?: boolean;
   } = {}) {
     const branches = opts.branches ?? [MAIN];
     const people = opts.people ?? PEOPLE;
@@ -112,6 +116,10 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
     const table: any[] = [];
     /** Saved closing balances, shared by every run and every scheduler instance, like the notifications. */
     const balances: any[] = [];
+    /** The Z-Read rows: one per branch per day, the same table both ends of the day write. */
+    const zReadRows: Array<{ tenantId: string; branchId: string; day: string; date: number }> = [...(opts.zReads ?? []).map((z) => ({
+      ...z, date: new Date(`${z.day}T00:00:00Z`).getTime(),
+    }))];
     let clock = new Date(0);
     const locks = new Map<string, Promise<void>>();
 
@@ -170,6 +178,11 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
       },
       notification,
       stockDayBalance,
+      // Date-only column: the row is keyed on UTC midnight of the day as named.
+      zReadLog: {
+        findFirst: jest.fn(async ({ where }: any) => zReadRows.find((r) =>
+          r.branchId === where.branchId && r.date === where.date.getTime()) ?? null),
+      },
       $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) => {
         const held: { release?: () => void } = {};
         const tx = {
@@ -200,10 +213,27 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
       }),
     };
     const telegram: any = { dailyUsage: jest.fn(async () => undefined) };
+    /*
+      ReportsService.generateZRead has its own spec (reports.z-read.spec.ts);
+      here only that the day's close asks for it, for which day, and once.
+      Like the real one it is update-on-repeat, so a second call on a day that
+      already has a row replaces it rather than making a second.
+    */
+    const zReads: any = {
+      generateZRead: jest.fn(async (tenantId: string, branchId: string, day: string) => {
+        if (opts.zReadFails) throw new Error('z-read boom');
+        const date = new Date(`${day}T00:00:00Z`).getTime();
+        const found = zReadRows.find((r) => r.branchId === branchId && r.date === date);
+        if (found) return found;
+        const row = { tenantId, branchId, day, date };
+        zReadRows.push(row);
+        return row;
+      }),
+    };
     // Procure's own spec covers whether a list already went out; here it only matters when and for what it is asked.
     const closingList: any = { sendAtClosingIfNothingSent: jest.fn(async () => 'SENT') };
     const make = () => new EndOfDayScheduler(
-      prisma, reports, opts.telegram === false ? undefined : telegram, opts.closingList === false ? undefined : closingList,
+      prisma, reports, zReads, opts.telegram === false ? undefined : telegram, opts.closingList === false ? undefined : closingList,
     );
     const scheduler = make();
     /** Runs the job at a Manila wall-clock time. A closing save reads the stock at that same instant. */
@@ -223,7 +253,7 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
       const calls = telegram.dailyUsage.mock.calls;
       return (calls[calls.length - 1]?.[2] as UsageDay | undefined)?.rows.map((r) => r.name);
     };
-    return { scheduler, make, runAt, closeShiftAt, prisma, reports, telegram, closingList, table, recorded, sales, lastSentNames, balances, stock };
+    return { scheduler, make, runAt, closeShiftAt, prisma, reports, telegram, closingList, table, recorded, sales, lastSentNames, balances, stock, zReads, zReadRows };
   }
   /** The order counts that ask whether anything sold in the window (the late-sales count has no OR). */
   const soldQueries = (prisma: any) => prisma.order.count.mock.calls.map((c: any[]) => c[0].where).filter((w: any) => w.OR);
@@ -1055,6 +1085,69 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
       expect(usageBellBody(usageDay('2026-09-16', []), 1)).toBe(
         "No ingredients were counted. 1 sale rung up offline reached Clerque after its day's sheet went out. No sheet counts it; the report page does.",
       );
+    });
+  });
+
+
+  /*
+    The Z-Read is the day's sealed sales total, the daily record a BIR CAS is
+    expected to keep. Closing the last shift writes it, but only when that
+    close counts as the end of the day -- so a cafe that shut two hours early,
+    or one that never filled in a closing time, wrote none, and no screen posts
+    /reports/z-read. The fallback clock writes it too, so whichever end of the
+    day comes first, the day has its record.
+  */
+  describe("the day's Z-Read", () => {
+    it('writes it at the fallback moment, for the same day the sheet is named', async () => {
+      const h = build({ branches: [MAIN] });
+      await h.runAt('2026-09-16T22:55:00');
+      expect(h.zReads.generateZRead).not.toHaveBeenCalled();
+
+      await h.runAt('2026-09-16T23:00:02');
+      expect(h.zReads.generateZRead).toHaveBeenCalledWith('t1', 'b-main', '2026-09-16');
+    });
+
+    it('writes one for a branch with no closing time, which no shift close outside the evening ever writes', async () => {
+      const h = build({ branches: [NAGA] });
+      // Shut at half four: too early to be the end of the day, so the close writes nothing.
+      expect(await h.closeShiftAt('2026-09-16T16:30:00', NAGA)).toBe('NOT_END_OF_DAY');
+      expect(h.zReads.generateZRead).not.toHaveBeenCalled();
+
+      await h.runAt('2026-09-17T03:30:02');
+      expect(h.zReads.generateZRead).toHaveBeenCalledWith('t1', 'b-naga', '2026-09-16');
+    });
+
+    it('writes one for a shop that shut two hours before its closing time', async () => {
+      const h = build({ branches: [MAIN] });
+      expect(await h.closeShiftAt('2026-09-16T17:30:00', MAIN)).toBe('NOT_END_OF_DAY');
+      await h.runAt('2026-09-16T23:00:02');
+      expect(h.zReads.generateZRead).toHaveBeenCalledWith('t1', 'b-main', '2026-09-16');
+    });
+
+    it('writes it once, however many runs fall in the catch-up window', async () => {
+      const h = build({ branches: [MAIN] });
+      await h.runAt('2026-09-16T23:00:02');
+      await h.runAt('2026-09-16T23:05:02');
+      await h.runAt('2026-09-17T01:30:00');
+      expect(h.zReads.generateZRead).toHaveBeenCalledTimes(1);
+      expect(h.zReadRows).toHaveLength(1);
+    });
+
+    it('leaves the one the last shift close wrote alone', async () => {
+      const h = build({ branches: [MAIN], zReads: [{ tenantId: 't1', branchId: 'b-main', day: '2026-09-16' }] });
+      await h.runAt('2026-09-16T23:00:02');
+      expect(h.zReads.generateZRead).not.toHaveBeenCalled();
+      expect(h.zReadRows).toHaveLength(1);
+    });
+
+    it('a Z-Read that cannot be built costs no branch its closing stock', async () => {
+      const h = build({
+        branches: [MAIN, NAGA], zReadFails: true,
+        stock: [{ tenantId: 't1', branchId: 'b-main', rawMaterialId: 'rm-milk', quantity: 4200 }],
+      });
+      await expect(h.runAt('2026-09-16T23:00:02')).resolves.toBeGreaterThanOrEqual(0);
+      expect(h.zReads.generateZRead).toHaveBeenCalledTimes(1);
+      expect(h.balances.map((b) => b.branchId)).toEqual(['b-main']);
     });
   });
 

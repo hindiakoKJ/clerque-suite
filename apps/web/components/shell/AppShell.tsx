@@ -11,6 +11,8 @@ import { MobileNavSheet } from './MobileNavSheet';
 import { toggleTheme } from '@/components/portal/AppLoginPage';
 import { useAuthStore } from '@/store/auth';
 import { AppSwitcher } from './AppSwitcher';
+import { TenantMark } from './TenantMark';
+import { useBranding } from '@/hooks/useBranding';
 
 export interface NavItem {
   href: string;
@@ -70,6 +72,12 @@ interface AppShellProps {
   settingsHref?: string | null;
   /** When provided, a Sign Out button is rendered in the sidebar footer and mobile nav. */
   onSignOut?: () => void;
+  /**
+   * Show the business's logo (or initials) in place of the app square, with
+   * the app icon as a small corner badge. Opt-in per app: tenant apps pass
+   * true; Console never does, so a super admin never sees a tenant's brand.
+   */
+  showTenantMark?: boolean;
 }
 
 export function AppShell({
@@ -84,12 +92,48 @@ export function AppShell({
   helpHref,
   settingsHref,
   onSignOut,
+  showTenantMark = false,
 }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isDark, setIsDark] = useState(false);
   const pathname = usePathname();
   const user     = useAuthStore((s) => s.user);
+  const brand    = useBranding({ enabled: showTenantMark && !!user?.tenantId });
+  // No initials means branding never loaded and the session has no name:
+  // keep the plain app square rather than an empty tile.
+  const tenantMark = showTenantMark && !!brand.initials ? brand : null;
+  // While the first fetch is in flight, hold the spot with a blank tile so the
+  // corner doesn't flash the app square and then swap to the logo.
+  const brandPending = showTenantMark && brand.isLoading;
+
+  // A plain render helper (not a component) so TenantMark keeps its state
+  // across AppShell re-renders.
+  function renderBrandSquare({ size, badgeSize, iconClass, radius, ringClass }: {
+    size: number; badgeSize: number; iconClass: string; radius: string; ringClass?: string;
+  }) {
+    if (brandPending) {
+      return <div className={cn('shrink-0 bg-muted', radius)} style={{ width: size, height: size }} aria-hidden />;
+    }
+    if (tenantMark) {
+      return (
+        <TenantMark
+          size={size}
+          logoSrc={tenantMark.logoSrc}
+          initials={tenantMark.initials}
+          name={tenantMark.displayName}
+          badgeIcon={LogoIcon}
+          badgeSize={badgeSize}
+          badgeRingClassName={ringClass}
+        />
+      );
+    }
+    return (
+      <div className={cn('flex items-center justify-center shrink-0', radius)} style={{ width: size, height: size, background: 'var(--accent)' }}>
+        <LogoIcon className={cn(iconClass, 'text-white')} />
+      </div>
+    );
+  }
 
   useEffect(() => {
     // Backstop: re-apply theme from localStorage in case React hydration briefly
@@ -197,6 +241,36 @@ export function AppShell({
           collapsed ? 'w-16' : 'w-56',
         )}
       >
+        {showTenantMark ? (
+          /* Business mark (36px, 32 collapsed) on the left spanning both rows;
+             the app name and role pill stack beside it. Same 64px height as
+             the main header so the bottom borders line up. */
+          <div className={cn(
+            'border-b border-border shrink-0 h-16 flex items-center',
+            collapsed ? 'justify-center px-2' : 'px-3 gap-2.5',
+          )}>
+            {collapsed
+              ? renderBrandSquare({ size: 32, badgeSize: 12, iconClass: 'h-4 w-4', radius: 'rounded-lg' })
+              : renderBrandSquare({ size: 36, badgeSize: 14, iconClass: 'h-5 w-5', radius: 'rounded-lg' })}
+            {!collapsed && (
+              <div className="flex flex-col justify-center gap-1 min-w-0 flex-1">
+                <div className="flex items-baseline gap-1.5 min-w-0 font-display">
+                  <span className="font-bold text-sm tracking-tight text-foreground whitespace-nowrap">{brandName}</span>
+                  <span className="text-muted-foreground text-sm">·</span>
+                  <span className="font-bold text-sm tracking-tight whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
+                </div>
+                {roleLabel && (
+                  <span
+                    className="self-start inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full text-white whitespace-nowrap"
+                    style={{ background: 'var(--accent)' }}
+                  >
+                    {roleLabel}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
         <div className={cn(
           'border-b border-border shrink-0',
           collapsed ? 'h-16 flex items-center justify-center px-2' : 'h-16 px-3 py-2 flex flex-col justify-center gap-1',
@@ -225,6 +299,7 @@ export function AppShell({
             </span>
           )}
         </div>
+        )}
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col">
           <NavList />
@@ -324,9 +399,13 @@ export function AppShell({
               <Menu className="h-5 w-5" />
             </button>
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
-                <LogoIcon className="h-3.5 w-3.5 text-white" />
-              </div>
+              {showTenantMark
+                ? renderBrandSquare({ size: 24, badgeSize: 10, iconClass: 'h-3.5 w-3.5', radius: 'rounded-md', ringClass: 'ring-card' })
+                : (
+                  <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ background: 'var(--accent)' }}>
+                    <LogoIcon className="h-3.5 w-3.5 text-white" />
+                  </div>
+                )}
               <span className="font-semibold text-sm whitespace-nowrap" style={{ color: 'var(--accent)' }}>{appName}</span>
               {roleLabel && (
                 <span
@@ -356,7 +435,19 @@ export function AppShell({
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
 
-      <MobileNavSheet open={mobileOpen} onClose={() => setMobileOpen(false)} logoIcon={LogoIcon} appName={appName} brandName={brandName} roleLabel={roleLabel} helpHref={helpHref} onSignOut={onSignOut}>
+      <MobileNavSheet
+        open={mobileOpen}
+        onClose={() => setMobileOpen(false)}
+        logoIcon={LogoIcon}
+        appName={appName}
+        brandName={brandName}
+        roleLabel={roleLabel}
+        helpHref={helpHref}
+        onSignOut={onSignOut}
+        tenant={showTenantMark && tenantMark && (tenantMark.logoSrc || tenantMark.displayName)
+          ? { logoSrc: tenantMark.logoSrc, name: tenantMark.displayName }
+          : null}
+      >
         <NavList onItemClick={() => setMobileOpen(false)} />
       </MobileNavSheet>
     </div>

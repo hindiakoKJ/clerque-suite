@@ -7,6 +7,7 @@ import { StationRequestService } from '../procure/station-request.service';
 import { lateSalesNote, money, usageQty } from '../telegram/messages';
 import { BRANCH_CLOSES_AT_PATTERN } from '../tenant/dto/branch.dto';
 import { IngredientReportsService } from './ingredient-reports.service';
+import { ReportsService } from '../reports/reports.service';
 import { DAY_MS, manilaDayOf, manilaDayStart, UsageDay } from './daily-usage';
 import { closingSaves, dayBefore, saveClosingBalances } from './stock-day-balances';
 
@@ -302,6 +303,13 @@ export class EndOfDayScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly reports: IngredientReportsService,
+    /*
+      The day's Z-Read. Not optional: a day with no Z-Read is a missing BIR
+      record and nothing else writes it, so a wiring mistake must stop the API
+      at boot rather than go unnoticed until an audit. ReportsModule depends
+      on nothing but Prisma, so there is no cycle.
+    */
+    private readonly zReads: ReportsService,
     // Optional like every other Telegram caller: the bell still goes when Telegram is not wired in.
     @Optional() private readonly telegram?: TelegramAlertsService,
     // The closing-time buy list. Optional so the usage message still goes where Procure is not wired in.
@@ -439,9 +447,54 @@ export class EndOfDayScheduler {
         // One branch's failure must not cost every other branch its saved balance, or its message.
         this.logger.error(`Saving the closing stock failed for branch ${branch.id} (shop ${branch.tenantId}), day ${due.day}: ${err instanceof Error ? err.message : err}`);
       }
+      await this.writeZRead(branch, due.day);
     }
     if (saved > 0) this.logger.log(`Saved the closing stock for ${saved} branch(es).`);
     return saved;
+  }
+
+  /**
+   * The day's Z-Read, written here when the day closes on the fallback clock.
+   *
+   * The Z-Read is the day's sealed sales total -- the daily record a BIR CAS
+   * is expected to keep -- and closing the last shift of the day writes it
+   * (ShiftsService). But a shift close only counts as the end of the day when
+   * it is near the branch's closing time, or in the evening for a branch with
+   * no closing time set; a quiet Tuesday shut two hours early, or a shop that
+   * never filled in its closing time and shuts at half four, closed the
+   * drawer and wrote nothing. No screen posts /reports/z-read, so that day's
+   * record simply did not exist.
+   *
+   * So the other end of the day writes it too: the same fallback moment that
+   * saves the closing stock, for the same branch and the same business day
+   * name. Whichever of the two closes the day writes the one row -- and
+   * because both name the day with sheetDay, they converge on it rather than
+   * making two.
+   *
+   * Only when the day has none: a Z-Read already written by the shift close
+   * keeps its totals and the name of the cashier who closed. Never throws --
+   * a Z-Read that could not be built must not cost the other branches their
+   * closing stock, and the owner can regenerate it from Reports.
+   */
+  private async writeZRead(branch: { id: string; tenantId: string }, day: string): Promise<boolean> {
+    try {
+      /*
+        A cheap look first: this runs every five minutes for the hours of the
+        catch-up window. ZReadLog.date is a date-only column keyed on UTC
+        midnight of the day as named (reports.service.ts, generateZRead).
+      */
+      const already = await this.prisma.zReadLog.findFirst({
+        where:  { branchId: branch.id, date: new Date(`${day}T00:00:00Z`) },
+        select: { id: true },
+      });
+      if (already) return false;
+      await this.zReads.generateZRead(branch.tenantId, branch.id, day);
+      this.logger.log(`Wrote the Z-Read for branch ${branch.id} (shop ${branch.tenantId}), day ${day}, as its day closed.`);
+      return true;
+    } catch (err) {
+      this.logger.error(`Writing the Z-Read failed for branch ${branch.id} (shop ${branch.tenantId}), day ${day}: ${err instanceof Error ? err.message : err}`);
+      return false;
+    }
   }
 
   /**

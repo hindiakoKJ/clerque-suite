@@ -14,8 +14,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthProvider';
 import { useSync } from '@/offline/SyncProvider';
 import { useBranchContext } from '@/api/BranchContext';
+import { useTenantBranding } from '@/api/queries';
 import BrandLockup from '@/components/BrandLockup';
 import SyncPill from '@/components/SyncPill';
+import TenantMark from '@/components/TenantMark';
 import { colors, radii, spacing, text } from '@/theme';
 
 interface Props {
@@ -25,6 +27,7 @@ interface Props {
 export default function TopBar({ onMenuPress }: Props): React.ReactElement {
   const { tenant, session, cashier } = useAuth();
   const { branches, activeBranch, setActiveBranch } = useBranchContext();
+  const branding = useTenantBranding();
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
 
   const showBranchPicker = branches.length > 1;
@@ -42,10 +45,15 @@ export default function TopBar({ onMenuPress }: Props): React.ReactElement {
       <BrandLockup size="md" />
 
       <View style={styles.tenant}>
-        <Text style={styles.tenantName} numberOfLines={1}>{tenant?.name ?? '—'}</Text>
-        <Text style={styles.tenantSub}>
-          {tenant ? 'Clerque' : 'Not signed in'}
-        </Text>
+        {tenant ? (
+          <TenantMark size={36} branding={branding.data} fallbackName={tenant.name} />
+        ) : null}
+        <View style={styles.tenantText}>
+          <Text style={styles.tenantName} numberOfLines={1}>{tenant?.name ?? '—'}</Text>
+          <Text style={styles.tenantSub}>
+            {tenant ? 'Clerque' : 'Not signed in'}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.search}>
@@ -140,7 +148,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  tenant: { justifyContent: 'center', minWidth: 140 },
+  // Business mark (36) sits before the name; the name column keeps its
+  // 140dp minimum, so the mark's width comes out of the flexible search field.
+  tenant: { flexDirection: 'row', alignItems: 'center', gap: spacing.s2 },
+  tenantText: { justifyContent: 'center', minWidth: 140 },
   tenantName: { ...text.bodyLg, color: colors.ink, fontWeight: '700' },
   tenantSub: { ...text.caption, color: colors.muted },
   search: {

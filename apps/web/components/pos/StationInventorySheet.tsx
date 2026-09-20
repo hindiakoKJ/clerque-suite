@@ -15,16 +15,28 @@
  * screen, the print and the owner's copy always read the same. Quantities only:
  * no costs reach a kitchen or bar screen.
  *
+ * On the station's own running sheet each row also has "Thrown out": spoiled
+ * milk, a dropped tray of fries. It goes through the very same write-off as
+ * Procure > Stock, so the Waste column here and the books agree. It used to
+ * need Anne or a manager in Procure, one item at a time, so the kitchen wrote
+ * waste on paper -- and what never reached Procure left the stock too high and
+ * the waste expense missing.
+ *
  * Printing is the browser's own, laid out for A4 (a 58 mm receipt printer cannot
  * hold the table). The copy is rendered straight into <body> and, while it is
  * there, a print rule hides everything else -- so it prints alone whichever page
  * it sits in, without that page's layout needing to know.
  */
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import { createPortal, flushSync } from 'react-dom';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Loader2, Printer, X } from 'lucide-react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { ChevronLeft, ChevronRight, Loader2, Printer, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
+import { keepTapKey, newTapKey, tapFailure, tapFailureText } from './station-taps';
+import {
+  WASTE_REASONS, addPack, inPacks, packButtonLabel, parseWasteAmount, wasteRequest, type WasteReason,
+} from './station-waste';
 
 export type SheetSectionKey = 'PREMADE' | 'INGREDIENTS' | 'SUPPLIES' | 'UNROUTED';
 type Column = 'beginning' | 'in' | 'waste' | 'used' | 'ending' | 'adjust';
@@ -109,8 +121,18 @@ const TONE = {
   },
 } as const;
 
-/** One table per section. Each scrolls sideways on its own, so the page never does on a phone. */
-export function SheetTables({ sheet, tone }: { sheet: DailySheet; tone: 'dark' | 'light' }): JSX.Element {
+/**
+ * One table per section. Each scrolls sideways on its own, so the page never
+ * does on a phone.
+ *
+ * `onThrowOut` is only passed on the station's own running sheet: the owner's
+ * copy under Inventory > Reports draws the same tables with no buttons.
+ */
+export function SheetTables({ sheet, tone, onThrowOut }: {
+  sheet: DailySheet;
+  tone: 'dark' | 'light';
+  onThrowOut?: (row: DailySheetRow) => void;
+}): JSX.Element {
   const t = TONE[tone];
   const columns = columnsOf(sheet);
   if (sheet.sections.length === 0) {
@@ -143,6 +165,16 @@ export function SheetTables({ sheet, tone }: { sheet: DailySheet; tone: 'dark' |
                       <span className="block">{row.name}</span>
                       {row.alsoOn.length > 0 && (
                         <span className={`block text-xs font-normal ${t.also}`}>Also on {row.alsoOn.join(', ')}</span>
+                      )}
+                      {onThrowOut && (
+                        <button
+                          type="button"
+                          onClick={() => onThrowOut(row)}
+                          className="mt-1 flex min-h-9 items-center gap-1 rounded-lg border border-stone-700 px-2 text-xs font-semibold text-stone-300 transition-colors hover:bg-stone-800 active:bg-stone-700"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Thrown out
+                        </button>
                       )}
                     </th>
                     {columns.map(([key]) => (
@@ -270,11 +302,146 @@ export function usePrintSheet(): { printedAt: Date; print: () => void } {
   };
 }
 
+// ─── "Thrown out" ────────────────────────────────────────────────────────────
+
+/**
+ * What was thrown out, in the item's own unit: an amount, a reason, and a note
+ * if there is one to add. The pack button is for the things bought by the pack
+ * -- a whole 1 L of milk soured is one tap, not "1000" typed with wet hands.
+ *
+ * The tap key is the same one every station tap sends, so a double-tap or a
+ * retry after the signal dropped takes the milk off once (station-taps.ts).
+ * Amounts only: a kitchen or bar screen is never shown what it cost.
+ */
+function ThrowOutDialog({ stationId, row, onClose }: { stationId: string; row: DailySheetRow; onClose: () => void }): JSX.Element {
+  const qc = useQueryClient();
+  const key = useRef(newTapKey());
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState<WasteReason | null>(null);
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const body = wasteRequest({ rawMaterialId: row.rawMaterialId, amount, reason, note, key: key.current });
+  const typed = parseWasteAmount(amount);
+  const packs = typed == null ? null : inPacks(typed, row.unit, row.packSize);
+  const packLabel = packButtonLabel(row.packSize, row.unit);
+
+  async function save() {
+    if (!body || saving) return;
+    setSaving(true);
+    try {
+      const res = await api.post<{ message: string; warning: string | null }>(`/kds/stations/${stationId}/waste`, body);
+      // Recorded: the next entry is a new one.
+      key.current = newTapKey();
+      toast.success(res.data.message);
+      // Orders still waiting may now be short of it -- quantities only, and the cook can go and look.
+      if (res.data.warning) toast.warning(res.data.warning, { duration: 10_000 });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['station-sheet', stationId] }),
+        qc.invalidateQueries({ queryKey: ['kds-prep', stationId] }),
+      ]);
+      onClose();
+    } catch (e) {
+      // A refusal ("the books show only 1.2 L") recorded nothing, so the next Save is a new try.
+      if (!keepTapKey(tapFailure(e).status)) key.current = newTapKey();
+      toast.error(tapFailureText(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label={`Thrown out, ${row.name}`}
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4 print:hidden">
+      <div className="max-h-full w-full max-w-md overflow-y-auto rounded-t-2xl bg-stone-900 p-4 text-white sm:rounded-2xl">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-lg font-bold leading-tight">Thrown out</p>
+            <p className="truncate text-sm text-stone-400">{row.name}</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close"
+            className="flex min-h-11 shrink-0 items-center rounded-xl bg-stone-800 px-3 text-sm font-semibold hover:bg-stone-700">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <label htmlFor="waste-amount" className="mt-4 block text-sm font-semibold text-stone-300">
+          How much was thrown out?
+        </label>
+        <div className="mt-1.5 flex items-center gap-2">
+          <input
+            id="waste-amount"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder="0"
+            className="min-h-14 w-full rounded-xl border border-stone-700 bg-stone-950 px-3 text-2xl font-bold tabular-nums text-white outline-none focus:border-amber-500"
+          />
+          <span className="shrink-0 text-lg font-semibold text-stone-400">{row.unit}</span>
+        </div>
+        {packLabel && (
+          <button type="button" onClick={() => setAmount(addPack(amount, row.packSize ?? 0))}
+            className="mt-2 min-h-11 rounded-xl border border-stone-700 px-3 text-sm font-semibold text-stone-200 hover:bg-stone-800">
+            {packLabel}
+          </button>
+        )}
+        {packs && <p className="mt-1 text-xs text-stone-400">That is {packs}.</p>}
+
+        <p className="mt-4 text-sm font-semibold text-stone-300">Why?</p>
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          {WASTE_REASONS.map((r) => (
+            <button
+              key={r.code}
+              type="button"
+              onClick={() => setReason(r.code)}
+              aria-pressed={reason === r.code}
+              className={`min-h-11 rounded-xl px-3 text-sm font-semibold transition-colors ${
+                reason === r.code ? 'bg-amber-500 text-stone-950' : 'border border-stone-700 text-stone-200 hover:bg-stone-800'
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+
+        <label htmlFor="waste-note" className="mt-4 block text-sm font-semibold text-stone-300">
+          Anything to add? <span className="font-normal text-stone-500">(not required)</span>
+        </label>
+        <input
+          id="waste-note"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          maxLength={200}
+          autoComplete="off"
+          placeholder="Left out overnight"
+          className="mt-1.5 min-h-12 w-full rounded-xl border border-stone-700 bg-stone-950 px-3 text-base text-white outline-none focus:border-amber-500"
+        />
+
+        <button
+          type="button"
+          onClick={save}
+          disabled={!body || saving}
+          className="mt-5 flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-3 text-lg font-bold text-stone-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-stone-700 disabled:text-stone-400"
+        >
+          {saving && <Loader2 className="h-5 w-5 animate-spin" />}
+          {body ? 'Record it' : typed == null ? 'Enter how much' : 'Pick why'}
+        </button>
+        <p className="mt-2 text-center text-xs leading-snug text-stone-500">
+          This takes it off the stock and puts it in the Waste column. Tapping twice does not record it twice.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ─── On the station screen ───────────────────────────────────────────────────
 
 export function StationInventorySheet({ stationId, open, onClose }: { stationId: string; open: boolean; onClose: () => void }): JSX.Element | null {
   // Null is the server's default: the sheet running now, or tonight's for a while after closing.
   const [day, setDay] = useState<string | null>(null);
+  // The row whose "Thrown out" was tapped, if any.
+  const [throwOut, setThrowOut] = useState<DailySheetRow | null>(null);
   const { printedAt, print } = usePrintSheet();
 
   const { data: sheet, isPending, isError, error, isFetching } = useQuery<DailySheet>({
@@ -287,21 +454,33 @@ export function StationInventorySheet({ stationId, open, onClose }: { stationId:
     placeholderData: keepPreviousData,
   });
 
-  // Escape closes, as any full-screen panel does.
+  // Escape closes, as any full-screen panel does -- the "Thrown out" box first.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (throwOut) setThrowOut(null);
+      else onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, throwOut]);
 
-  // Opened again later, it starts on the current sheet.
-  useEffect(() => { if (!open) setDay(null); }, [open]);
+  // Opened again later, it starts on the current sheet, with nothing half-typed.
+  useEffect(() => { if (!open) { setDay(null); setThrowOut(null); } }, [open]);
+  // Stepping back to an earlier day closes it: waste is only recorded on the running sheet.
+  useEffect(() => { setThrowOut(null); }, [day]);
 
   if (!open) return null;
 
   const barButton = 'flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-semibold transition-colors disabled:opacity-40';
   const message = isError ? sheetErrorMessage(error) : null;
+  /*
+    Waste is recorded on the day it happens, so only the running sheet offers
+    it -- an earlier day is closed, and its numbers no longer move. A sheet
+    with no station of its own (the owner's copy) never offers it.
+  */
+  const recordable = !!sheet && sheet.status === 'LIVE' && !!sheet.station && sheet.day === sheet.today;
 
   return (
     <>
@@ -378,11 +557,14 @@ export function StationInventorySheet({ stationId, open, onClose }: { stationId:
                   {sheet.notes.map((note) => <li key={note}>{note}</li>)}
                 </ul>
               )}
-              <SheetTables sheet={sheet} tone="dark" />
+              <SheetTables sheet={sheet} tone="dark" onThrowOut={recordable ? setThrowOut : undefined} />
             </>
           )}
         </div>
       </div>
+      {throwOut && recordable && (
+        <ThrowOutDialog stationId={stationId} row={throwOut} onClose={() => setThrowOut(null)} />
+      )}
       {sheet && <SheetPrintCopy sheet={sheet} printedAt={printedAt} />}
     </>
   );

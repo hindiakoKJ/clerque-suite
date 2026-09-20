@@ -154,4 +154,40 @@ describe('KdsService — the station queue', () => {
     expect(rows.map((r) => [r.productName, r.quantity])).toEqual([['latte', 2]]);
     expect(prisma.orderItem.findMany.mock.calls[0][0].where.order).toEqual({ tenantId: 't1', status: { in: ['PAID', 'COMPLETED'] } });
   });
+
+  /*
+    A fake that honours the take and the oldest-first order the service asks
+    for, so a smaller window or a reversed sort fails here.
+  */
+  function busyDay(count: number) {
+    const start = Date.now() - count * 60_000;
+    const lines = Array.from({ length: count }, (_, i) => ({
+      id: `l${i}`, orderId: `o${i}`, productName: `Drink ${i}`, quantity: 1, refundedQty: 0, notes: null, prepStatus: 'PENDING', readyAt: null,
+      order: { orderNumber: `ORD-${i}`, paidAt: new Date(start + i * 60_000), completedAt: null, branchId: 'b1' }, modifiers: [],
+    }));
+    const prisma: any = {
+      station: { findFirst: jest.fn().mockResolvedValue({ id: 's1', name: 'Bar', hasKds: true }) },
+      orderItem: {
+        findMany: jest.fn(async ({ orderBy, take }: any) => {
+          const oldestFirst = orderBy?.[0]?.order?.paidAt === 'asc';
+          const sorted = [...lines].sort((a, b) => (a.order.paidAt.getTime() - b.order.paidAt.getTime()) * (oldestFirst ? 1 : -1));
+          return sorted.slice(0, take ?? sorted.length);
+        }),
+      },
+    };
+    return new KdsService(prisma);
+  }
+
+  it('a busy day with 120 untapped lines still shows the newest order, oldest first', async () => {
+    const rows = await busyDay(120).listStationQueue('t1', 's1');
+    expect(rows).toHaveLength(120);
+    expect(rows[0].orderNumber).toBe('ORD-0');
+    expect(rows[119].orderNumber).toBe('ORD-119');
+  });
+
+  it('the window is 200 lines, oldest first: the oldest wait on screen until they are tapped', async () => {
+    const rows = await busyDay(260).listStationQueue('t1', 's1');
+    expect(rows).toHaveLength(200);
+    expect(rows.map((r) => r.orderNumber)).toEqual(Array.from({ length: 200 }, (_, i) => `ORD-${i}`));
+  });
 });

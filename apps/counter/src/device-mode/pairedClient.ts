@@ -7,20 +7,18 @@
  * Authorization header (the cashier flow owns that), so this module fetches
  * directly while reusing the same base URL discovery logic.
  *
+ * The base URL comes from the shared client so it carries the /api/v1
+ * prefix. This file used to keep its own copy that stopped at the host
+ * (it predates the prefix fix in client.ts), so paired screens called
+ * /display-pairing/whoami and /customer-display/state without /api/v1 and
+ * got 404s, which verifyDeviceToken reads as "revoked".
+ *
  * Token-sanity check: GET /display-pairing/whoami?token=<...> returns 400
  * when the token is revoked / missing — callers wipe SecureStore and bounce
  * back to the picker on that signal.
  */
 
-import Constants from 'expo-constants';
-import { ApiHttpError } from '@/api/client';
-
-function getBaseUrl(): string {
-  const extra = (Constants.expoConfig?.extra ?? {}) as { apiBaseUrl?: string };
-  const url = extra.apiBaseUrl;
-  if (!url) throw new ApiHttpError(0, 'CONFIG', 'apiBaseUrl missing from expo config');
-  return url.replace(/\/+$/, '');
-}
+import { ApiHttpError, getApiBaseUrl } from '@/api/client';
 
 async function request<T>(
   method: 'GET' | 'POST',
@@ -40,7 +38,7 @@ async function request<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${getBaseUrl()}${path}`, {
+    response = await fetch(`${getApiBaseUrl()}${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),

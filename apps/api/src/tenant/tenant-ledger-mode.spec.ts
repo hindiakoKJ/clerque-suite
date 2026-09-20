@@ -13,6 +13,7 @@ import { UpdateTenantProfileDto } from './dto/update-tenant-profile.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
+import { TenantLogoService } from './tenant-logo.service';
 
 const TENANT_ID = 'tenant-1';
 
@@ -35,6 +36,7 @@ async function makeService() {
       { provide: PrismaService,        useValue: prismaMock },
       { provide: TaxCalculatorService, useValue: {} },
       { provide: AuditService,         useValue: { log: jest.fn() } },
+      { provide: TenantLogoService,    useValue: { releaseReplacedLogo: jest.fn() } },
     ],
   }).compile();
   return { svc: moduleRef.get(TenantService), prisma: prismaMock };

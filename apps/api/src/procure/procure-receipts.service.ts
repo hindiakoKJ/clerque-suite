@@ -8,9 +8,10 @@ import { ProcureService, PostedExpense } from './procure.service';
 import { ProcurePocket } from './dto/receive-request.dto';
 import { PH_TIMEZONE, cleanSourceName, isSourceKind, sourceKey, type SourceKind } from '@repo/shared-types';
 import {
-  promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount,
-  MaterialRef, ParsedLine,
+  promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount, scoreMatch, tokens,
+  MaterialRef, ParsedLine, MatchResult, Candidate,
 } from './receipt-parser';
+import { idsInARecipe } from '../inventory/recipe-use';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
 import { readTag, withTag, appendNote } from './procure-notes';
 import { CostSanityService, IngredientCostLine } from '../common/sanity/cost-sanity.service';
@@ -42,9 +43,54 @@ import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 
 export interface SuggestedLine extends ParsedLine {
   index:   number;
-  match:   { rawMaterialId: string; name: string; unit: string; category: string; score: number } | null;
-  alternatives: Array<{ rawMaterialId: string; name: string; unit: string; score: number }>;
+  /** inRecipe false: no live recipe uses this record ("not in any recipe"). */
+  match:   { rawMaterialId: string; name: string; unit: string; category: string; score: number; inRecipe: boolean } | null;
+  alternatives: Array<{ rawMaterialId: string; name: string; unit: string; score: number; inRecipe: boolean }>;
   pack:    ReturnType<typeof derivePack> | null;
+}
+
+/**
+ * Recipe items first.
+ *
+ * The shop's list holds twins that no recipe uses: "Ice Cubes" beside the
+ * "Ice" that 48 drinks use. A receipt line "ICE CUBES 5KG" scores the twin a
+ * perfect match and the recipe's own record a coin flip, so the purchase went
+ * onto the twin. Ice never went up, and the till kept refusing iced drinks.
+ *
+ * So when the best match is in no recipe, and a recipe item's whole name sits
+ * inside its name ("Ice" in "Ice Cubes", "Yogurt" in "Emborg Yogurt"), nothing
+ * is picked for the person: they choose, with the recipe item offered first.
+ * The other choices always list recipe items before the rest. A best match
+ * that a recipe uses, or that has no recipe look-alike, is left as it was.
+ */
+export function recipeFirst(
+  description: string,
+  m: MatchResult,
+  materials: MaterialRef[],
+  inRecipe: Set<string>,
+): MatchResult {
+  const used = (c: Candidate) => inRecipe.has(c.material.id);
+  let best = m.best;
+  let pool = m.alternatives;
+  if (best && !used(best)) {
+    const top = best;
+    const topWords = new Set(tokens(top.material.name));
+    const lookAlikes: Candidate[] = materials
+      .filter((r) => inRecipe.has(r.id) && r.id !== top.material.id)
+      .filter((r) => {
+        const words = tokens(r.name);
+        return words.length > 0 && words.every((w) => topWords.has(w));
+      })
+      .map((r) => ({ material: r, score: scoreMatch(description, r.name) }));
+    if (lookAlikes.length > 0) {
+      const ids = new Set(lookAlikes.map((c) => c.material.id));
+      pool = [...lookAlikes, top, ...m.alternatives.filter((c) => !ids.has(c.material.id))];
+      best = null;
+    }
+  }
+  const byScore = (a: Candidate, b: Candidate) => b.score - a.score;
+  const ordered = [...pool.filter(used).sort(byScore), ...pool.filter((c) => !used(c)).sort(byScore)];
+  return { best, alternatives: ordered };
 }
 
 @Injectable()
@@ -139,6 +185,7 @@ export class ProcureReceiptsService {
     parsed = applied.parsed;
 
     const materials = await this.materials(tenantId);
+    const inRecipe  = await idsInARecipe(this.prisma, tenantId);
     /*
       The request's own ingredients first. A shop with three sugars and a
       reading of "SUGAR 1KG" is a tie among strangers -- unless the kitchen
@@ -152,7 +199,12 @@ export class ProcureReceiptsService {
         ? { best: null, alternatives: [] }
         : (() => {
             const first = onList.length ? matchIngredient(l.description, onList) : null;
-            return first?.best ? first : matchIngredient(l.description, materials);
+            return recipeFirst(
+              l.description,
+              first?.best ? first : matchIngredient(l.description, materials),
+              materials,
+              inRecipe,
+            );
           })();
       const best = m.best;
       return {
@@ -164,9 +216,11 @@ export class ProcureReceiptsService {
           unit:          best.material.unit,
           category:      best.material.category,
           score:         +best.score.toFixed(3),
+          inRecipe:      inRecipe.has(best.material.id),
         } : null,
         alternatives: m.alternatives.map((a) => ({
           rawMaterialId: a.material.id, name: a.material.name, unit: a.material.unit, score: +a.score.toFixed(3),
+          inRecipe: inRecipe.has(a.material.id),
         })),
         pack: best ? derivePack(l, best.material) : null,
       };

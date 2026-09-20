@@ -19,6 +19,7 @@ import { CreateBranchDto, UpdateBranchDto } from './dto/branch.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
+import { TenantLogoService } from './tenant-logo.service';
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 
 const TENANT_ID = 'tenant-1';
@@ -102,7 +103,7 @@ describe('TenantController — branches', () => {
       createBranch: jest.fn().mockResolvedValue({}),
       updateBranch: jest.fn().mockResolvedValue({}),
     };
-    return { ctrl: new TenantController(svc as unknown as TenantService), svc };
+    return { ctrl: new TenantController(svc as unknown as TenantService, {} as TenantLogoService), svc };
   }
 
   it('create passes closesAt through, and null when left out', async () => {
@@ -152,6 +153,7 @@ describe('TenantService — branch closing time', () => {
         { provide: PrismaService,        useValue: prismaMock },
         { provide: TaxCalculatorService, useValue: {} },
         { provide: AuditService,         useValue: { log: jest.fn() } },
+        { provide: TenantLogoService,    useValue: { releaseReplacedLogo: jest.fn() } },
       ],
     }).compile();
     return { svc: moduleRef.get(TenantService), prisma: prismaMock };

@@ -1,8 +1,10 @@
 'use client';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { toast } from 'sonner';
 import { computeVat, computeDiscount, round2 } from '@/lib/pos/utils';
 import { getLinePromoDiscount } from '@/lib/pos/promotions';
+import { discountRemovedMessage, oneUnitSubtotal, unclaimedVatableSubtotal } from '@/lib/pos/cart-discounts';
 import type { CartItemModifier, TaxStatus } from '@repo/shared-types';
 import type { ActivePromotion } from '@/lib/pos/promotions';
 
@@ -79,9 +81,10 @@ export interface CartDiscount {
   idRef?: string;
   idOwnerName?: string;
   /**
-   * Cart line keys claimed by this PWD/SC. Empty array means the discount
-   * covers the entire cart (legacy "all items" path). Used to prevent
-   * double-claiming when additional PWDs/SCs are added later.
+   * Cart line keys claimed by this PWD/SC, one unit each. Used to prevent
+   * double-claiming when additional PWDs/SCs are added later. Every PWD/SC
+   * now records its lines; an empty array is only found on a cart saved
+   * before that (the old "covers the entire cart" path).
    * Only meaningful when type is PWD or SENIOR_CITIZEN.
    */
   selectedLineKeys?: string[];
@@ -164,16 +167,12 @@ interface CartState {
   applyPromoDiscounts: (promotions: ActivePromotion[]) => void;
 
   /**
-   * Apply PWD/SC discount.
-   * @param selectedSubtotal Optional: subtotal of only the selected (discountable) items.
-   *                         If omitted the entire cart subtotal is used.
-   */
-  /**
    * Apply the FIRST PWD/SC discount.
-   * @param selectedLineKeys Cart line keys this PWD claimed. When omitted, the
-   *                          legacy "covers the whole cart" path is used.
-   * @param selectedSubtotal Subtotal of selected items. When omitted, the full
-   *                          cart subtotal is used.
+   * @param selectedLineKeys Cart line keys this PWD claimed. When omitted,
+   *                          every line in the cart is claimed.
+   * @param selectedSubtotal Subtotal of selected items, one unit per line.
+   *                          When omitted, it is worked out from the claimed
+   *                          lines, one unit each -- never every unit.
    */
   applyPwdSc: (
     type: 'PWD' | 'SENIOR_CITIZEN',
@@ -214,6 +213,19 @@ interface CartState {
   grandTotal: () => number;
 }
 
+/**
+ * Any discount on the cart comes off when its lines change (an item added or
+ * removed, a quantity changed): its amount was worked out from the order as it
+ * was. `patch` takes it off; `message` is what the cashier is told, or null
+ * when there was nothing to take off.
+ */
+function discountsOff(state: Pick<CartState, 'orderDiscount' | 'additionalPwdScEntries'>) {
+  const message = discountRemovedMessage(state.orderDiscount, state.additionalPwdScEntries.length);
+  return message
+    ? { message, patch: { orderDiscount: null, additionalPwdScEntries: [] as AdditionalPwdScEntry[] } }
+    : { message: null, patch: {} };
+}
+
 export const useCartStore = create<CartState>()(
   persist(
     (set, get) => ({
@@ -234,30 +246,33 @@ export const useCartStore = create<CartState>()(
     const priceAdjustment = (modifiers ?? []).reduce((sum, m) => sum + m.priceAdjustment, 0);
     const unitPrice = product.price + priceAdjustment;
 
+    const removed = discountsOff(get());
     set((state) => {
       const existing = state.lines.find((l) => l.lineKey === lineKey);
       if (existing) {
         return {
+          ...removed.patch,
           lines: state.lines.map((l) =>
             l.lineKey === lineKey ? { ...l, quantity: l.quantity + 1 } : l,
           ),
         };
       }
       return {
+        ...removed.patch,
         lines: [...state.lines, { product, variantId, modifiers, lineKey, quantity: 1, unitPrice, itemDiscount: 0 }],
       };
     });
+    if (removed.message) toast.warning(removed.message);
   },
 
   removeItem: (lineKey) => {
-    set((state) => {
-      const nextLines = state.lines.filter((l) => l.lineKey !== lineKey);
-      return {
-        lines: nextLines,
-        orderDiscount:          nextLines.length === 0 ? null : state.orderDiscount,
-        additionalPwdScEntries: nextLines.length === 0 ? []   : state.additionalPwdScEntries,
-      };
-    });
+    const state = get();
+    if (!state.lines.some((l) => l.lineKey === lineKey)) return;
+    const nextLines = state.lines.filter((l) => l.lineKey !== lineKey);
+    const removed = discountsOff(state);
+    set({ lines: nextLines, ...removed.patch });
+    // Emptying the cart takes the discount off too, with nothing to say.
+    if (removed.message && nextLines.length > 0) toast.warning(removed.message);
   },
 
   attestPharmacistForRxLines: (pin, pharmacistName, yellowRxSerialsByLineKey) => {
@@ -291,9 +306,15 @@ export const useCartStore = create<CartState>()(
 
   updateQty: (lineKey, qty) => {
     if (qty <= 0) { get().removeItem(lineKey); return; }
-    set((state) => ({
+    const state = get();
+    const line = state.lines.find((l) => l.lineKey === lineKey);
+    if (!line || line.quantity === qty) return;
+    const removed = discountsOff(state);
+    set({
       lines: state.lines.map((l) => l.lineKey === lineKey ? { ...l, quantity: qty } : l),
-    }));
+      ...removed.patch,
+    });
+    if (removed.message) toast.warning(removed.message);
   },
 
   setItemDiscount: (lineKey, discount) => {
@@ -340,10 +361,17 @@ export const useCartStore = create<CartState>()(
   },
 
   applyPwdSc: (type, idRef, idOwnerName, selectedSubtotal, selectedLineKeys) => {
-    const { taxStatus } = get();
+    const { taxStatus, lines } = get();
     const fullSubtotal  = get().subtotal();
-    const basis         = selectedSubtotal ?? fullSubtotal;
-    const unselectedSubtotal = selectedSubtotal != null ? fullSubtotal - selectedSubtotal : 0;
+    /*
+      Always one unit per claimed line, and the lines always recorded. Taking
+      20% of the whole cart when every line was ticked discounted every unit
+      (2 lattes: 60 off instead of 30), and recording no lines let a second
+      senior claim the same items again.
+    */
+    const claimedKeys   = selectedLineKeys ?? lines.map((l) => l.lineKey);
+    const basis         = selectedSubtotal ?? oneUnitSubtotal(lines, claimedKeys);
+    const unselectedSubtotal = fullSubtotal - basis;
 
     // RA 9994 / RA 7277 — dispatch to correct engine via unified helper
     const { vatExclusiveBase, discountOnBase, vatOnDiscounted, totalSavings } =
@@ -367,7 +395,7 @@ export const useCartStore = create<CartState>()(
         percent: 20,
         idRef,
         idOwnerName,
-        selectedLineKeys: selectedLineKeys ?? [],
+        selectedLineKeys: claimedKeys,
       },
       // Reset any additional PWD/SC entries when starting fresh.
       additionalPwdScEntries: [],
@@ -482,13 +510,13 @@ export const useCartStore = create<CartState>()(
         return orderDiscount.vatOnDiscounted + (orderDiscount.vatOnUnselected ?? 0);
       }
 
-      // Unclaimed subtotal = sum of vatable lines NOT in any PWD's claim list.
+      // Unclaimed subtotal = vatable lines NOT in any PWD's claim list, plus the
+      // units past the first on a claimed line (only one unit is discounted;
+      // the rest are sold at full price and carry full VAT).
       // (Non-vatable items collect zero VAT regardless of who claimed them.)
-      const unclaimedVatableSubtotal = lines
-        .filter((l) => l.product.isVatable && !claimed.has(l.lineKey))
-        .reduce((sum, l) => sum + (l.unitPrice - l.itemDiscount) * l.quantity, 0);
-      const vatOnUnclaimed = unclaimedVatableSubtotal > 0
-        ? computeVat(unclaimedVatableSubtotal).vat
+      const unclaimed = unclaimedVatableSubtotal(lines, claimed);
+      const vatOnUnclaimed = unclaimed > 0
+        ? computeVat(unclaimed).vat
         : 0;
 
       const additionalVatOnDiscounted = additionalPwdScEntries.reduce((sum, e) => sum + e.vatOnDiscounted, 0);
@@ -512,7 +540,8 @@ export const useCartStore = create<CartState>()(
   grandTotal: () => {
     const { subtotal, orderDiscount, additionalPwdScEntries } = get();
     const additionalSavings = additionalPwdScEntries.reduce((sum, e) => sum + e.totalSavings, 0);
-    return subtotal() - (orderDiscount?.totalSavings ?? 0) - additionalSavings;
+    // Never below zero, whatever discount is stored.
+    return Math.max(0, subtotal() - (orderDiscount?.totalSavings ?? 0) - additionalSavings);
   },
     }),
     {

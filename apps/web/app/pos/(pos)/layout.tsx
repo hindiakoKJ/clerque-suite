@@ -858,6 +858,7 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
         navItems={navItems}
         logoIcon={ShoppingCart}
         appName="Counter"
+        showTenantMark
         roleLabel={roleLabel}
         headerRight={headerRight}
         sidebarExtra={<ClockWidget />}
@@ -950,9 +951,14 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
             <div className="px-6 pb-6 flex flex-col gap-2">
               {/* Primary: close shift first, then auto-logout */}
               <button
-                onClick={() => {
+                onClick={async () => {
                   setShowSignOutWarning(false);
                   setSignOutAfterClose(true);   // handleCloseShift will doLogout() after
+                  // Pull the live shift totals first, exactly like the header
+                  // Close Shift button. Without this the close screen shows the
+                  // figures from when the shift opened (no sale refreshes them),
+                  // and the cashier sees a wrong expected-cash / variance preview.
+                  await refreshShift();
                   setShowCloseShift(true);
                 }}
                 className="w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity hover:opacity-90"

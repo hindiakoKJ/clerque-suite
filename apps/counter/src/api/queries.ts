@@ -14,12 +14,15 @@
  * Endpoint shapes mirror the Cloud API. We use unknown-ish DTOs at the edge
  * because the API package types aren't yet shared with the Counter app.
  */
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { api, ApiHttpError } from '@/api/client';
+import { normalizeBranding, type TenantBranding } from '@/api/branding';
 import { useAuth } from '@/auth/AuthProvider';
+import { pairedClient } from '@/device-mode/pairedClient';
+import type { PairedDevice } from '@/device-mode/storage';
 
 // ─── Domain shapes ────────────────────────────────────────────────────────
 // Kept loose intentionally — we'll tighten when packages/shared-types is
@@ -311,5 +314,44 @@ export function useBranches() {
       return res ?? [];
     },
     { staleTime: 5 * 60_000, enabled: !!tenant },
+  );
+}
+
+/** Branding rarely changes. Refetch on a slow timer so a new logo reaches a
+ *  till or a customer display that stays open all day, without anyone
+ *  signing out. */
+const BRANDING_STALE_MS = 5 * 60_000;
+const BRANDING_REFRESH_MS = 15 * 60_000;
+
+/**
+ * GET /tenant/branding for the signed-in app (top bar, drawer, More screen).
+ * Cached per tenant so the logo still shows when the till boots offline.
+ * The key is memoised: useCachedQuery re-reads AsyncStorage whenever the key
+ * identity changes, and these screens re-render often.
+ */
+export function useTenantBranding(): UseQueryResult<TenantBranding> {
+  const { tenant, session } = useAuth();
+  const tenantId = tenant?.id ?? 'anon';
+  const key = useMemo(() => ['tenant-branding', tenantId] as const, [tenantId]);
+  return useCachedQuery<TenantBranding>(
+    key,
+    `tenant-branding.${tenantId}`,
+    async () => normalizeBranding(await api.get<unknown>('/tenant/branding')),
+    { staleTime: BRANDING_STALE_MS, refetchInterval: BRANDING_REFRESH_MS, enabled: !!session && !!tenant },
+  );
+}
+
+/**
+ * GET /tenant/branding for a paired screen (customer display). These devices
+ * have no user login, so the call carries the device token instead.
+ */
+export function usePairedTenantBranding(pairing: PairedDevice): UseQueryResult<TenantBranding> {
+  const { tenantId, deviceToken } = pairing;
+  const key = useMemo(() => ['tenant-branding', 'device', tenantId] as const, [tenantId]);
+  return useCachedQuery<TenantBranding>(
+    key,
+    `tenant-branding.device.${tenantId}`,
+    async () => normalizeBranding(await pairedClient.get<unknown>('/tenant/branding', deviceToken)),
+    { staleTime: BRANDING_STALE_MS, refetchInterval: BRANDING_REFRESH_MS, enabled: !!deviceToken },
   );
 }

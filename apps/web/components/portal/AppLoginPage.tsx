@@ -6,6 +6,7 @@ import {
   ShoppingCart, BookOpen, Users, ShieldCheck, ShoppingBasket, Wifi, WifiOff, Check,
   Sun, Moon, Lock, Hash, Delete,
 } from 'lucide-react';
+import { brandLogoSrc, readLastBusiness, type LastBusiness } from '@/lib/branding';
 
 /* ─── Product registry ─────────────────────────────────────────────────── */
 
@@ -156,6 +157,15 @@ export function AppLoginPage({
   const [rememberMe, setRememberMe] = useState(true);
   const [isOnline,   setIsOnline]   = useState(true);
   const [isDark,     setIsDark]     = useState(false);
+  // Last business that signed in on this device (never looked up by code:
+  // that would reveal which businesses exist). Read after mount; storage can
+  // be blocked, in which case there is simply no logo.
+  const [lastBusiness, setLastBusiness] = useState<LastBusiness | null>(null);
+  const [lastLogoFailed, setLastLogoFailed] = useState(false);
+  useEffect(() => {
+    if (product === 'console') return;
+    setLastBusiness(readLastBusiness());
+  }, [product]);
 
   /* Sync dark state — layout.tsx script sets class before paint */
   useEffect(() => {
@@ -181,6 +191,13 @@ export function AppLoginPage({
   const heroBg = isDark
     ? `color-mix(in oklab, ${accent} 8%, #030712)`
     : `color-mix(in oklab, ${accent} 6%, #ffffff)`;
+
+  // Show that logo only while the Tenant ID box is empty or holds the same
+  // code, so someone else signing in on a shared tablet never sees it.
+  const lastLogoSrc = lastBusiness && !lastLogoFailed ? brandLogoSrc(lastBusiness.logoUrl) : '';
+  const typedCode = tenantId.trim().toLowerCase();
+  const showLastLogo = !!lastLogoSrc
+    && (typedCode === '' || typedCode === lastBusiness!.companyCode.trim().toLowerCase());
 
   const siblings = (Object.keys(PRODUCTS) as AppProduct[])
     .filter((id) => id !== product && siblingUrls[id])
@@ -318,9 +335,25 @@ export function AppLoginPage({
                 })}
               </div>
             )}
-            <h2 className="text-3xl font-bold text-foreground">
-              Sign in to Clerque {p.name}
-            </h2>
+            <div className="flex items-center gap-3">
+              {showLastLogo && (
+                <div
+                  className="w-10 h-10 shrink-0 rounded-lg border border-border bg-white overflow-hidden flex items-center justify-center"
+                  title={lastBusiness?.name ?? undefined}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={lastLogoSrc}
+                    alt={lastBusiness?.name ?? 'Business logo'}
+                    className="max-w-full max-h-full object-contain p-0.5"
+                    onError={() => setLastLogoFailed(true)}
+                  />
+                </div>
+              )}
+              <h2 className="text-3xl font-bold text-foreground min-w-0">
+                Sign in to Clerque {p.name}
+              </h2>
+            </div>
             <p className="text-muted-foreground">
               {mode === 'pin'
                 ? 'Fast cashier sign-in with your 4–8 digit PIN.'

@@ -6,6 +6,9 @@ import { BusinessType, AccountingMethod } from '@prisma/client';
 import { TaxCalculatorService } from '../tax/tax.service';
 import { AuditService } from '../audit/audit.service';
 import { BRANCH_CLOSES_AT_PATTERN } from './dto/branch.dto';
+import { LOGO_LINK_MESSAGE } from './dto/update-receipt-config.dto';
+import { describeLogoForAudit, isAllowedLogoLink } from './logo-link';
+import { TenantLogoService } from './tenant-logo.service';
 import * as bcrypt from 'bcryptjs';
 import { taxStatusFlags, AI_ADDONS, DEFAULT_APP_ACCESS, normalizePlanCode, planCapsFor, planLimitsFor, planFeaturesFor } from '@repo/shared-types';
 import type { TaxStatus, AiAddonType, StaffRole } from '@repo/shared-types';
@@ -18,9 +21,9 @@ export interface UpdateTenantProfileDto {
   contactEmail?: string;
   contactPhone?: string;
   /** Sprint 19 — receipt template fields */
-  receiptHeaderNote?: string;
-  receiptFooterNote?: string;
-  receiptLogoUrl?:    string;
+  receiptHeaderNote?: string | null;
+  receiptFooterNote?: string | null;
+  receiptLogoUrl?:    string | null;
   /** Sprint 19 — returns/refunds owner-only policy. */
   returnsOwnerOnly?:  boolean;
   /** Master switch for ingredient deduction at sale time. false = paused. */
@@ -68,6 +71,7 @@ export class TenantService {
     private prisma:   PrismaService,
     private taxCalc:  TaxCalculatorService,
     private audit:    AuditService,
+    private logo:     TenantLogoService,
   ) {}
 
   /** Returns all active branches for branch-picker dropdowns across the app. */
@@ -660,14 +664,25 @@ export class TenantService {
     return tenant;
   }
 
-  async updateProfile(tenantId: string, dto: UpdateTenantProfileDto) {
+  async updateProfile(tenantId: string, dto: UpdateTenantProfileDto, actorId?: string) {
     await this.getProfile(tenantId);
+    // Receipt header, footer and logo link used to be stripped here and thrown
+    // away while Settings still said "Receipt template saved". They now go
+    // through updateReceiptConfig: the same plan-tier gate (so a SOLO_LITE
+    // owner still cannot set a logo this way), and the logo only as a short
+    // link, never an inline image. Run first so a refusal saves nothing.
+    const receiptPatch: { headerNote?: string | null; footerNote?: string | null; logoUrl?: string | null } = {};
+    if (dto.receiptHeaderNote !== undefined) receiptPatch.headerNote = dto.receiptHeaderNote;
+    if (dto.receiptFooterNote !== undefined) receiptPatch.footerNote = dto.receiptFooterNote;
+    if (dto.receiptLogoUrl    !== undefined) receiptPatch.logoUrl    = dto.receiptLogoUrl;
+    const receipt = Object.keys(receiptPatch).length > 0
+      ? await this.updateReceiptConfig(tenantId, receiptPatch, actorId)
+      : null;
+
     // Sprint 25 — strip plan-gated fields from the generic profile-update
-    // path. Receipt customization + void-approval threshold must go through
-    // their dedicated tier-checked endpoints (`updateReceiptConfig`,
-    // tenant settings page guard). Without this strip, a SOLO_LITE owner
-    // could PATCH /tenant/profile with `receiptLogoUrl` and bypass the
-    // `receiptCustomization === 'full'` gate.
+    // path. The void-approval threshold must go through its dedicated
+    // tier-checked path (tenant settings page guard); the receipt fields were
+    // handled just above.
     // `ledgerMode` (Magnet Books FULL|SIMPLE) is an owner preference, NOT
     // plan-gated — it stays in `safeDto` and persists when provided.
     const {
@@ -735,7 +750,14 @@ export class TenantService {
       });
     }
 
-    return saved;
+    return receipt
+      ? {
+          ...saved,
+          receiptHeaderNote: receipt.receiptHeaderNote,
+          receiptFooterNote: receipt.receiptFooterNote,
+          receiptLogoUrl:    receipt.receiptLogoUrl,
+        }
+      : saved;
   }
 
   /**
@@ -945,11 +967,15 @@ export class TenantService {
    * Clearing fields (passing empty string / null) is always allowed regardless
    * of tier so a downgraded tenant can scrub customizations even after losing
    * write access.
+   *
+   * The logo is a short link only (see logo-link.ts): the picture is uploaded
+   * with POST /tenant/logo. When the link changes, the file behind the old one
+   * is deleted if it was this business's own uploaded logo.
    */
   async updateReceiptConfig(
     tenantId: string,
     dto: { headerNote?: string | null; footerNote?: string | null; logoUrl?: string | null },
-    actorId: string,
+    actorId?: string,
   ) {
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
@@ -968,6 +994,11 @@ export class TenantService {
     const headerNote = dto.headerNote === undefined ? undefined : (dto.headerNote?.trim() || null);
     const footerNote = dto.footerNote === undefined ? undefined : (dto.footerNote?.trim() || null);
     const logoUrl    = dto.logoUrl    === undefined ? undefined : (dto.logoUrl?.trim()    || null);
+    // The DTO already refuses these; repeated for any other caller, because a
+    // data: image here once reached the login token and the session cookie.
+    if (logoUrl != null && !isAllowedLogoLink(logoUrl)) {
+      throw new BadRequestException(LOGO_LINK_MESSAGE);
+    }
 
     const wantsAnyWrite =
       (headerNote != null) || (footerNote != null) || (logoUrl != null);
@@ -1009,17 +1040,25 @@ export class TenantService {
       },
     });
 
+    if (data.receiptLogoUrl !== undefined) {
+      await this.logo.releaseReplacedLogo(tenantId, tenant.receiptLogoUrl, updated.receiptLogoUrl);
+    }
+
     await this.audit.log({
       tenantId,
       action:      'SETTING_CHANGED',
       entityType:  'Tenant',
       entityId:    tenantId,
+      // An old inline logo can be hundreds of KB; the audit row gets a
+      // description of it, not a copy.
       before: {
         receiptHeaderNote: tenant.receiptHeaderNote,
         receiptFooterNote: tenant.receiptFooterNote,
-        receiptLogoUrl:    tenant.receiptLogoUrl,
+        receiptLogoUrl:    describeLogoForAudit(tenant.receiptLogoUrl),
       },
-      after:       data,
+      after:       data.receiptLogoUrl === undefined
+        ? data
+        : { ...data, receiptLogoUrl: describeLogoForAudit(data.receiptLogoUrl as string | null) },
       description: 'Receipt template updated',
       performedBy: actorId,
     }).catch(() => undefined);

@@ -32,7 +32,14 @@ function assertMayMarkReady(actor: KdsActor | undefined) {
 const TAP_TX = { maxWait: 10_000, timeout: 30_000 } as const;
 /** Orders a station may still act on. A voided order is not made, and its lines are not bumped. */
 const LIVE_ORDER = ['PAID', 'COMPLETED'] as const;
-const QUEUE_SIZE = 50;
+/*
+  How many lines a station screen gets, oldest first. It was 50: on a busy day
+  with old tickets never tapped Ready, a new order past the 50th line never
+  showed at all -- no ticket, no bell. 200 lines is more than a cafe's rush
+  leaves open, and still a small read every 3 seconds (the nightly job clears
+  earlier days' untapped lines).
+*/
+const QUEUE_SIZE = 200;
 
 /**
  * KDS (Kitchen Display System) service — Sprint 5 MVP.

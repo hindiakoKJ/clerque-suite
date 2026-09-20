@@ -327,7 +327,12 @@ export class AuthController {
     @Body() body: { pin: string },
     @Response({ passthrough: true }) res: ExpressResponse,
   ) {
-    const user = await this.authService.switchCashierByPin(current.tenantId!, body?.pin ?? '');
+    /*
+      The live session's own id goes in: the same screen is the manual lock,
+      so the person who locked it must be able to unlock it with her PIN even
+      when she is the owner. Everyone else is still held to the till roles.
+    */
+    const user = await this.authService.switchCashierByPin(current.tenantId!, body?.pin ?? '', current.sub);
     // Full session issuance — UserSession row + login log, so the switch is
     // as traceable as any sign-in.
     const tokens = await this.authService.login(

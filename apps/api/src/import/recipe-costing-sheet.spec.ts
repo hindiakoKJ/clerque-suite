@@ -88,7 +88,7 @@ describe('what the filled-in workbook does when it is uploaded', () => {
   const HEADERS = generator.IMPORTER_HEADERS as string[];
   const HINTS = generator.IMPORTER_HINTS as string[];
 
-  function run(rows: string[][], existingUnit = 'g') {
+  function run(rows: string[][], existingUnit = 'g', inUse = 0) {
     const updated: any[] = [];
     const prisma: any = {
       rawMaterial: {
@@ -96,10 +96,15 @@ describe('what the filled-in workbook does when it is uploaded', () => {
           Promise.resolve({ id: 'rm-' + where.name, name: where.name, unit: existingUnit, category: 'INGREDIENT' })),
         update: jest.fn().mockImplementation((args: any) => { updated.push(args.data); return Promise.resolve(args.data); }),
         create: jest.fn().mockImplementation((args: any) => { updated.push(args.data); return Promise.resolve(args.data); }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
-      bomItem: { count: jest.fn().mockResolvedValue(0) },
+      // `inUse` stands for recipe lines on the ingredient; the unit guard
+      // counts them alongside stock before it lets a unit change through.
+      bomItem: { count: jest.fn().mockResolvedValue(inUse) },
       variantBomItem: { count: jest.fn().mockResolvedValue(0) },
       subRecipeItem: { count: jest.fn().mockResolvedValue(0) },
+      modifierOptionIngredient: { count: jest.fn().mockResolvedValue(0) },
+      rawMaterialInventory: { count: jest.fn().mockResolvedValue(0) },
     };
     const service = new ImportService(prisma) as any;
     return service.importIngredientsFromRows([HEADERS, HINTS, ...rows], 't1')
@@ -156,5 +161,21 @@ describe('what the filled-in workbook does when it is uploaded', () => {
     const prefilled = await run([['Butter', 'kg', '320', '', '', 'g', '', '']]);
     expect(prefilled.updated[0].unit).toBe('g');
     expect(Number(prefilled.updated[0].costPrice)).toBeCloseTo(0.32, 10);
+  });
+
+  it('refuses the unit change outright once the ingredient is in a recipe', async () => {
+    /*
+      The same row as above, on a shop that is already running. Butter is in a
+      recipe, so a 12 g line would become 12 kg the moment the unit flips, and
+      every plate with butter in it would cost a thousand times what it does.
+      Nothing is written: the row is refused, and the message says to put the
+      unit it is counted in under Recipe Unit instead.
+    */
+    const { res, updated } = await run([['Butter', 'kg', '320', '', '', '', '', '']], 'g', 1);
+    expect(updated).toEqual([]);
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0].message).toContain('counted in g');
+    expect(res.errors[0].message).toContain('recipes using it');
+    expect(res.errors[0].message).toContain('Recipe Unit');
   });
 });

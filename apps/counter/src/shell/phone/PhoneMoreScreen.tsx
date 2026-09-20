@@ -15,6 +15,8 @@ import PhoneHeader from '@/shell/phone/PhoneHeader';
 import { useAuth } from '@/auth/AuthProvider';
 import { useBranchContext } from '@/api/BranchContext';
 import { api, ApiHttpError } from '@/api/client';
+import { useTenantBranding } from '@/api/queries';
+import TenantMark from '@/components/TenantMark';
 import { clearDeviceMode } from '@/device-mode/storage';
 import { colors, radii, spacing, text as textTokens } from '@/theme';
 import type { PhoneMoreStackParamList } from '@/shell/phone/types';
@@ -24,6 +26,7 @@ type Props = NativeStackScreenProps<PhoneMoreStackParamList, 'MoreRoot'>;
 export default function PhoneMoreScreen({ navigation }: Props): React.ReactElement {
   const { tenant, session, cashier, signOut, lockToPin } = useAuth();
   const { activeBranch } = useBranchContext();
+  const branding = useTenantBranding();
 
   const approvals = useQuery<{ count: number }>({
     queryKey: ['void-approvals', 'pending-count'],
@@ -66,10 +69,15 @@ export default function PhoneMoreScreen({ navigation }: Props): React.ReactEleme
       <PhoneHeader title="More" />
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.headerCard}>
-          <Text style={styles.tenant}>{tenant?.name ?? '—'}</Text>
-          <Text style={styles.sub}>
-            {activeBranch?.name ?? 'No branch'} · {cashier?.name ?? session?.user.name ?? ''}
-          </Text>
+          {tenant ? (
+            <TenantMark size={48} branding={branding.data} fallbackName={tenant.name} />
+          ) : null}
+          <View style={styles.headerText}>
+            <Text style={styles.tenant}>{tenant?.name ?? '—'}</Text>
+            <Text style={styles.sub}>
+              {activeBranch?.name ?? 'No branch'} · {cashier?.name ?? session?.user.name ?? ''}
+            </Text>
+          </View>
         </View>
 
         <Section title="Account">
@@ -194,7 +202,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.rule,
     padding: spacing.s4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.s3,
   },
+  headerText: { flex: 1, minWidth: 0 },
   tenant: { ...textTokens.displaySm, color: colors.ink },
   sub: { ...textTokens.caption, color: colors.muted, marginTop: 2 },
   section: { gap: spacing.s2 },

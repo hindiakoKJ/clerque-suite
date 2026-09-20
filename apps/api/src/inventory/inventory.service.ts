@@ -10,6 +10,8 @@ import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ReceiveRawMaterialDto } from './dto/receive-raw-material.dto';
 import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
 import { resolveBuyUnit } from './unit-conversion';
+import { idsInARecipe } from './recipe-use';
+import { blendCost, stockValuedEvent } from './zero-cost-blend';
 import { heldUsage, heldAt, availableQty } from '../orders/held-usage';
 import { PH_TIMEZONE } from '@repo/shared-types';
 
@@ -1265,7 +1267,7 @@ export class InventoryService {
   // ─── Raw Materials (F&B ingredient library) ───────────────────────────────
 
   async listRawMaterials(tenantId: string, includeInactive = false, branchId?: string) {
-    const [items, held] = await Promise.all([
+    const [items, held, inRecipe] = await Promise.all([
       this.prisma.rawMaterial.findMany({
         where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
         orderBy: { name: 'asc' },
@@ -1275,6 +1277,9 @@ export class InventoryService {
       }),
       // Only a branch has a shelf to hold against; the library view has no stock figures.
       branchId ? heldUsage(this.prisma, tenantId, [branchId]) : null,
+      // Which of these a live recipe uses, so a purchase picker can put the
+      // record the recipes read ahead of a twin that nothing uses.
+      idsInARecipe(this.prisma, tenantId),
     ]);
     return items.map((m) => {
       const invRow   = 'inventory' in m && Array.isArray(m.inventory) ? m.inventory[0] : undefined;
@@ -1291,6 +1296,7 @@ export class InventoryService {
         costPrice:     m.costPrice     != null ? Number(m.costPrice)     : null,
         lowStockAlert: alert,
         stockQty,
+        inRecipe:      inRecipe.has(m.id),
         ...(branchId ? { heldQty, availableQty: available } : {}),
         // Low is a decision about what can still be made, so it is judged on
         // what the waiting tickets leave, not on the shelf.
@@ -1991,6 +1997,8 @@ export class InventoryService {
       // WAC cost update: if new cost price provided, update material cost
       let unitCost = material.costPrice ? Number(material.costPrice) : 0;
       let marginAlerts: MarginAlert[] = [];
+      // Stock that had no value was just valued, so the books do carry it.
+      let stockValued = false;
       if (netCostPrice != null) {
         /*
           Blend over every branch, because the cost this writes is every
@@ -2016,19 +2024,33 @@ export class InventoryService {
           (sum, row) => sum + (row.branchId === dto.branchId ? qtyBefore : Number(row.quantity)),
           0,
         );
-        const qtyAfterEverywhere = qtyBeforeEverywhere + dto.quantity;
 
-        const oldCost    = unitCost;
-        const totalOldValue  = qtyBeforeEverywhere * oldCost;
-        const totalNewValue  = dto.quantity * netCostPrice;
-        const newWac = qtyAfterEverywhere > 0
-          ? (totalOldValue + totalNewValue) / qtyAfterEverywhere
-          : netCostPrice;
-
-        await tx.rawMaterial.update({
-          where: { id: rawMaterialId },
-          data: { costPrice: new Prisma.Decimal(newWac) },
+        /*
+          A ₱0 on either side is "no price" and is never averaged in: stock
+          loaded at ₱0 takes the first real price, and a delivery at ₱0 leaves
+          the price on file alone. Whatever that values for the first time is
+          booked as opening stock, so the stock account keeps matching.
+          See zero-cost-blend.ts.
+        */
+        const blend = blendCost({
+          qtyBefore: qtyBeforeEverywhere, oldCost: unitCost,
+          qtyIn: dto.quantity, inCost: netCostPrice,
         });
+        if (blend.cost != null) {
+          await tx.rawMaterial.update({
+            where: { id: rawMaterialId },
+            data: { costPrice: new Prisma.Decimal(blend.cost) },
+          });
+        }
+        const valuedEvent = blend.valued && stockValuedEvent({
+          tenantId, material, branchId: dto.branchId,
+          quantity: blend.valued.quantity, unitCost: blend.valued.unitCost,
+          at: receivedAt, reference: dto.referenceNumber ?? null,
+        });
+        if (valuedEvent) {
+          await tx.accountingEvent.create({ data: valuedEvent });
+          stockValued = true;
+        }
         unitCost = netCostPrice; // this delivery, at what the shelf is worth
 
         // Sprint 8: ripple the new WAC into every product that uses this
@@ -2210,7 +2232,7 @@ export class InventoryService {
         receivedAt: receivedAt.toISOString(),
         paymentMethod,
         totalValue,
-        warning: totalValue > 0 ? null : noCostWarning(material.name),
+        warning: totalValue > 0 || stockValued ? null : noCostWarning(material.name),
         marginAlerts,
       };
     },

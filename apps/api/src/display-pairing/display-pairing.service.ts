@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { pairingCodeAttempts } from '../auth/pin-attempts';
 import type { DisplayDeviceRole } from '@prisma/client';
 
 /**
@@ -28,6 +29,12 @@ export class DisplayPairingService {
    * If a pending (un-redeemed, un-expired) code already exists for the
    * same (createdById, role, stationId), return that one instead of
    * creating a fresh one — the cashier sees the same code on every tap.
+   *
+   * Every kitchen/bar (KDS_*) code must name one of this business's active
+   * stations with its screen turned on. A KDS code without a station used to
+   * be accepted: the tablet then opened /pos/station/generic, the queue call
+   * failed with "Station not found", and the screen showed "All caught up"
+   * forever while real tickets waited (and their ingredients stayed held).
    */
   async createCode(
     tenantId: string,
@@ -35,6 +42,10 @@ export class DisplayPairingService {
     role: DisplayDeviceRole,
     opts: { stationId?: string; label?: string } = {},
   ) {
+    if (role !== 'CUSTOMER_DISPLAY') {
+      await this.assertKdsStation(tenantId, opts.stationId);
+    }
+
     // Reuse existing pending row when present
     const existing = await this.prisma.displayPairing.findFirst({
       where: {
@@ -75,6 +86,27 @@ export class DisplayPairingService {
     throw new BadRequestException('Could not allocate a pairing code, try again.');
   }
 
+  private async assertKdsStation(tenantId: string, stationId: string | undefined) {
+    if (!stationId) {
+      throw new BadRequestException(
+        'Pick the station this screen is for, such as Kitchen or Bar, in Settings > Displays. ' +
+          'A kitchen or bar screen with no station shows no orders.',
+      );
+    }
+    const station = await this.prisma.station.findFirst({
+      where:  { id: stationId, tenantId, isActive: true },
+      select: { id: true, hasKds: true },
+    });
+    if (!station) {
+      throw new BadRequestException('That station was not found. Refresh the page and pick the station again.');
+    }
+    if (!station.hasKds) {
+      throw new BadRequestException(
+        'That station has no screen turned on. Turn on its screen in Settings > Floor Layout, then try again.',
+      );
+    }
+  }
+
   /**
    * Redeem a 4-digit code from a secondary device. Returns the device
    * token + the metadata the secondary device needs to render the right
@@ -90,6 +122,12 @@ export class DisplayPairingService {
       select: { id: true, name: true },
     });
     if (!tenant) throw new NotFoundException('Tenant not found.');
+
+    // The 4-digit code is the only secret here, so guesses are limited:
+    // 10 failed codes in 15 minutes for this business, then a wait. Every
+    // failure below (unknown, used, revoked, expired) counts; a good code
+    // clears the count. Keyed on the real tenant id, never the typed slug.
+    const attempt = pairingCodeAttempts.startTry(tenant.id);
 
     const row = await this.prisma.displayPairing.findUnique({
       where: { tenantId_code: { tenantId: tenant.id, code: code.trim() } },
@@ -108,6 +146,7 @@ export class DisplayPairingService {
         lastSeenAt: new Date(),
       },
     });
+    attempt.succeeded();
     return {
       deviceToken,
       tenantId:   updated.tenantId,
@@ -192,7 +231,8 @@ export class DisplayPairingService {
 }
 
 function randomFourDigitCode(): string {
-  return String(Math.floor(1000 + Math.random() * 9000));
+  // crypto, not Math.random: the code is the secret, so it must not be predictable.
+  return String(crypto.randomInt(1000, 10000));
 }
 
 function randomDeviceToken(): string {

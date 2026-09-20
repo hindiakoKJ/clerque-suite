@@ -61,6 +61,12 @@ export interface StationRequestView {
   onTheWay: Array<{ name: string; amount: string }>;
   toMake: Array<{ name: string; batches: number }>;
   check: Array<{ name: string; reason: string }>;
+  /**
+   * Too little sales history to forecast from (the first days): only reorder
+   * levels and "+" put anything on the list, so the screen says so instead of
+   * letting an empty list read as an all-clear.
+   */
+  learning: boolean;
 }
 
 export interface StationRequestResult extends StationRequestView {
@@ -274,7 +280,8 @@ export class StationRequestService {
     const view = plan
       ? this.view(plan, list, added, raised, done.lineCount - added.length - raised.length)
       : this.emptyView(plannedDay, list);
-    return { outcome, message: this.messageFor(outcome, list, names, done.lineCount, changes.length), sentTo: names, ...view };
+    const learning = plan?.learning ?? false;
+    return { outcome, message: this.messageFor(outcome, list, names, done.lineCount, changes.length, learning), sentTo: names, ...view };
   }
 
   private async applyInTx(
@@ -617,6 +624,7 @@ export class StationRequestService {
     };
     return {
       ...this.emptyView(plan.plannedDay, list),
+      learning: plan.learning,
       added:  added.map((c) => words(c.rawMaterialId)).filter((w): w is NonNullable<typeof w> => w != null),
       raised: raised.flatMap((c) => {
         const w = words(c.rawMaterialId);
@@ -635,17 +643,23 @@ export class StationRequestService {
       plannedFor: plannedDay,
       plannedForLabel: manilaDayLabel(plannedDay),
       request: list ? { id: list.id, requestNumber: list.requestNumber, status: String(list.status) } : null,
-      added: [], raised: [], unchanged: 0, onTheWay: [], toMake: [], check: [],
+      added: [], raised: [], unchanged: 0, onTheWay: [], toMake: [], check: [], learning: false,
     };
   }
 
-  private messageFor(outcome: RequestOutcome, list: ChosenList | null, names: string[], lineCount: number, changed: number): string {
+  /**
+   * What the screen says. While Clerque is still learning the shop's usage an
+   * empty list is never called an all-clear: the forecast cannot see what is
+   * low yet, and the screen's own note says to add it with "+".
+   */
+  private messageFor(outcome: RequestOutcome, list: ChosenList | null, names: string[], lineCount: number, changed: number, learning = false): string {
     const items = (n: number) => `${n} item${n === 1 ? '' : 's'}`;
     const told = names.length > 0 ? namesInWords(names) : null;
     switch (outcome) {
       case 'SENT':
         if (!told) return 'Saved as sent, but no owner or manager account was found to tell.';
-        return lineCount > 0 ? `Sent to ${told}. ${items(lineCount)} on the list.` : `Sent the all-clear to ${told}. Nothing is running low.`;
+        if (lineCount > 0) return `Sent to ${told}. ${items(lineCount)} on the list.`;
+        return learning ? `Sent to ${told} with nothing on the list yet.` : `Sent the all-clear to ${told}. Nothing is running low.`;
       case 'UPDATED':
         return told
           ? `Added ${items(changed)}. ${told} ${names.length === 1 ? 'was' : 'were'} told.`
@@ -653,7 +667,8 @@ export class StationRequestService {
       case 'ALREADY_SENT':
         return 'A list already went out today.';
       default:
-        return list && list.status !== 'OPEN' ? 'Already sent. Nothing new.' : 'Nothing is running low. Nothing was sent.';
+        if (list && list.status !== 'OPEN') return 'Already sent. Nothing new.';
+        return learning ? 'Nothing was sent.' : 'Nothing is running low. Nothing was sent.';
     }
   }
 }

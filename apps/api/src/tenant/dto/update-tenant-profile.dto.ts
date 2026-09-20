@@ -10,8 +10,11 @@ import {
   Min,
   MaxLength,
   Matches,
+  ValidateIf,
 } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { LOGO_LINK_MAX_LENGTH, LOGO_LINK_PATTERN } from '../logo-link';
+import { LOGO_LINK_MESSAGE } from './update-receipt-config.dto';
 
 export const LEDGER_MODES = ['FULL', 'SIMPLE'] as const;
 export type LedgerModeValue = (typeof LEDGER_MODES)[number];
@@ -69,10 +72,14 @@ export class UpdateTenantProfileDto {
   @MaxLength(300)
   receiptFooterNote?: string;
 
-  @IsOptional()
+  /** Saved through the same plan check as PATCH /tenant/receipt-config, and
+   *  only as a short link (never an inline data: image). The picture itself
+   *  is uploaded with POST /tenant/logo. null or "" removes the link. */
+  @ValidateIf((o) => o.receiptLogoUrl != null && String(o.receiptLogoUrl).trim() !== '')
   @IsString()
-  @MaxLength(2048)
-  receiptLogoUrl?: string;
+  @MaxLength(LOGO_LINK_MAX_LENGTH, { message: 'The logo link is too long.' })
+  @Matches(LOGO_LINK_PATTERN, { message: LOGO_LINK_MESSAGE })
+  receiptLogoUrl?: string | null;
 
   /** Sprint 19 — Returns/refunds owner-only policy. Pharmacy default true;
    *  others default false. Owner toggles in Settings → Business profile. */

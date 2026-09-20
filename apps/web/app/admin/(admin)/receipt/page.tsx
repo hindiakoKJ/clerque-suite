@@ -7,16 +7,19 @@
  *
  *   'none'         → upsell card pointing to Settings → Subscription.
  *   'headerFooter' → editable header + footer text fields; logo upload hidden.
- *   'full'         → header + footer + logo upload (base64 data URL stored in
- *                    tenant.receiptLogoUrl). No separate /assets endpoint —
- *                    the asset travels with the tenant row.
+ *   'full'         → header + footer text. The logo is NOT set here any more:
+ *                    it used to be saved as an inline data: image, which rode
+ *                    in the login token and could overflow the session cookie.
+ *                    The business owner uploads it in Settings → Business
+ *                    Profile (POST /tenant/logo), and the API now refuses a
+ *                    data: logo on this route.
  *
  * Writes go to PATCH /tenant/receipt-config which enforces the same tier
  * defense-in-depth on the server.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Lock, Sparkles, Upload, Image as ImageIcon, X } from 'lucide-react';
+import { Lock, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -27,12 +30,10 @@ type Tier = 'none' | 'headerFooter' | 'full';
 interface TenantProfile {
   receiptHeaderNote?: string | null;
   receiptFooterNote?: string | null;
-  receiptLogoUrl?:    string | null;
 }
 
 const HEADER_MAX = 200;
 const FOOTER_MAX = 300;
-const LOGO_MAX_BYTES = 256 * 1024; // 256 KB — base64 column is text; keep it small.
 
 const INPUT_CLS =
   'w-full border border-border bg-background rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent transition-shadow';
@@ -51,59 +52,32 @@ export default function ReceiptCustomizationPage() {
 
   const [header, setHeader] = useState('');
   const [footer, setFooter] = useState('');
-  const [logoUrl, setLogoUrl] = useState<string>('');
   const [saving, setSaving] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (profile) {
       setHeader(profile.receiptHeaderNote ?? '');
       setFooter(profile.receiptFooterNote ?? '');
-      setLogoUrl(profile.receiptLogoUrl ?? '');
     }
   }, [profile]);
-
-  function pickLogo() { fileRef.current?.click(); }
-
-  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      toast.error('Logo must be an image file (PNG, JPG, or SVG).');
-      return;
-    }
-    if (file.size > LOGO_MAX_BYTES) {
-      toast.error(`Logo file is too large (${Math.round(file.size / 1024)} KB). Max 256 KB.`);
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      setLogoUrl(result);
-    };
-    reader.onerror = () => toast.error('Could not read the file. Try a different image.');
-    reader.readAsDataURL(file);
-  }
-
-  function clearLogo() { setLogoUrl(''); }
 
   async function handleSave() {
     setSaving(true);
     try {
-      const body: { headerNote?: string | null; footerNote?: string | null; logoUrl?: string | null } = {
+      // Header and footer only. Leaving logoUrl out keeps the uploaded logo.
+      const body: { headerNote?: string | null; footerNote?: string | null } = {
         headerNote: header.trim() || null,
         footerNote: footer.trim() || null,
       };
-      if (tier === 'full') {
-        body.logoUrl = logoUrl.trim() || null;
-      }
       await api.patch('/tenant/receipt-config', body);
       toast.success('Receipt customization saved.');
       qc.invalidateQueries({ queryKey: ['tenant-profile-receipt'] });
       qc.invalidateQueries({ queryKey: ['tenant-profile'] });
     } catch (err: unknown) {
-      const data = (err as { response?: { data?: { code?: string; message?: string } } })?.response?.data;
-      toast.error(data?.message ?? 'Failed to save receipt customization.');
+      const data = (err as { response?: { data?: { code?: string; message?: string | string[] } } })?.response?.data;
+      // Validation errors come back as a list of messages; show the first one.
+      const message = Array.isArray(data?.message) ? data?.message[0] : data?.message;
+      toast.error(message || 'Failed to save receipt customization.');
     } finally {
       setSaving(false);
     }
@@ -182,54 +156,11 @@ export default function ReceiptCustomizationPage() {
             <p className="text-[10px] text-muted-foreground mt-0.5">{footer.length}/{FOOTER_MAX} · multi-line OK</p>
           </div>
 
-          {/* Logo upload — only on 'full' tier */}
+          {/* Logo — uploaded by the business owner in Settings, not here. */}
           {tier === 'full' && (
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">
-                Receipt logo (PNG, JPG, or SVG — max 256 KB)
-              </label>
-              <div className="flex items-start gap-3">
-                <div className="flex-shrink-0 w-24 h-24 rounded-lg border border-border bg-muted/30 flex items-center justify-center overflow-hidden">
-                  {logoUrl ? (
-                    // Receipt logos are owner-uploaded into their own tenant — safe to render.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={logoUrl} alt="Receipt logo preview" className="max-w-full max-h-full object-contain" />
-                  ) : (
-                    <ImageIcon className="h-8 w-8 text-muted-foreground/40" />
-                  )}
-                </div>
-                <div className="flex flex-col gap-2">
-                  <button
-                    onClick={pickLogo}
-                    type="button"
-                    className="inline-flex items-center gap-2 text-xs border border-border rounded-lg px-3 py-1.5 hover:bg-muted transition-colors"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    {logoUrl ? 'Replace logo' : 'Upload logo'}
-                  </button>
-                  {logoUrl && (
-                    <button
-                      onClick={clearLogo}
-                      type="button"
-                      className="inline-flex items-center gap-2 text-xs text-red-500 hover:text-red-600 transition-colors"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                      Remove logo
-                    </button>
-                  )}
-                </div>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/svg+xml"
-                  className="hidden"
-                  onChange={onFileChange}
-                />
-              </div>
-              <p className="text-[10px] text-muted-foreground mt-1">
-                Uploaded image is stored inline as a data URL; small files print fastest on thermal hardware.
-              </p>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              The receipt logo is uploaded by the business owner in Settings → Business Profile → Business Logo.
+            </p>
           )}
 
           <div className="pt-2 flex gap-3">

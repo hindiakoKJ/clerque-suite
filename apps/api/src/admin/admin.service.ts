@@ -18,6 +18,7 @@ import { COFFEE_SHOP_INGREDIENTS } from './coffee-shop-ingredients';
 import { COFFEE_SHOP_CATEGORIES } from './coffee-shop-categories';
 import { AccountsService } from '../accounting/accounts.service';
 import { MailService } from '../mail/mail.service';
+import { MAX_FAILED_ATTEMPTS, lockoutClearedRow, recentFailedLogins } from '../auth/lockout';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -673,21 +674,16 @@ export class AdminService {
       },
     });
 
-    // Check lockout status: users with 5+ recent failed logins are "locked"
-    const LOCKOUT_WINDOW_MS = 15 * 60 * 1000;
-    const windowStart = new Date(Date.now() - LOCKOUT_WINDOW_MS);
-
+    // Locked = the same count the sign-in itself uses, so an admin unlock shows at once.
     return Promise.all(users.map(async (u) => {
-      const recentFailures = await this.prisma.loginLog.count({
-        where: { userId: u.id, success: false, createdAt: { gte: windowStart } },
-      });
+      const recentFailures = await recentFailedLogins(this.prisma, u.id);
       return {
         id:           u.id,
         name:         u.name,
         email:        u.email,
         role:         u.role,
         isActive:     u.isActive,
-        isLocked:     recentFailures >= 5,
+        isLocked:     recentFailures >= MAX_FAILED_ATTEMPTS,
         lastLoginAt:  u.sessions[0]?.lastUsedAt ?? null,
         activeSessions: u._count.sessions,
         createdAt:    u.createdAt,
@@ -751,7 +747,7 @@ export class AdminService {
     const user = await this.prisma.user.findUnique({
       where:  { id: userId },
       select: {
-        id: true, email: true, name: true, role: true,
+        id: true, email: true, name: true, role: true, tenantId: true,
         tenant: { select: { id: true, slug: true } },
       },
     });
@@ -769,11 +765,16 @@ export class AdminService {
     const generatedPassword = this.generatePassword();
     const passwordHash = await bcrypt.hash(generatedPassword, 12);
 
-    // Reset password + clear all sessions + clear login failure log
+    /*
+      Reset password + clear all sessions + lift any lockout. login_logs is
+      INSERT-only at the database (an audit trigger refuses DELETE), so the
+      failures are not deleted -- that made this reset fail with a 500. A marker
+      row makes the lockout count only failures after it.
+    */
     await this.prisma.$transaction([
       this.prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
       this.prisma.userSession.deleteMany({ where: { userId } }),
-      this.prisma.loginLog.deleteMany({ where: { userId, success: false } }),
+      this.prisma.loginLog.create({ data: lockoutClearedRow(user, 'ADMIN_PASSWORD_RESET') }),
     ]);
 
     await this.logAction({
@@ -808,11 +809,12 @@ export class AdminService {
   async clearLockout(userId: string, actor: ConsoleActor) {
     const user = await this.prisma.user.findUnique({
       where:  { id: userId },
-      select: { id: true, email: true, tenant: { select: { id: true, slug: true } } },
+      select: { id: true, email: true, tenantId: true, tenant: { select: { id: true, slug: true } } },
     });
     if (!user) throw new NotFoundException('User not found.');
 
-    await this.prisma.loginLog.deleteMany({ where: { userId, success: false } });
+    // A marker, not a delete: login_logs refuses DELETE (see lockout.ts).
+    await this.prisma.loginLog.create({ data: lockoutClearedRow(user, 'ADMIN_UNLOCK') });
 
     await this.logAction({
       actor,

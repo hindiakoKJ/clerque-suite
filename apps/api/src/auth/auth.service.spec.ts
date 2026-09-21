@@ -24,6 +24,8 @@ function makePrismaMock() {
     loginLog: {
       count:  jest.fn(),
       create: jest.fn().mockResolvedValue({}),
+      // No admin reset or unlock on record: the lockout counts the whole window.
+      findFirst: jest.fn().mockResolvedValue(null),
     },
     userAppAccess: {
       findMany: jest.fn().mockResolvedValue([]),

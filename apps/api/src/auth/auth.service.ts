@@ -20,14 +20,13 @@ import { resolveAiQuota } from '../ai/ai-availability';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, PLAN_FEATURES, PLAN_LIMITS, DEFAULT_PLAN_CODE, normalizePlanCode, planFeaturesFor, planLimitsFor } from '@repo/shared-types';
 import type { TaxStatus, AiAddonType } from '@repo/shared-types';
 import { PH_TIMEZONE } from '@repo/shared-types';
+import { LOCKOUT_MINUTES, MAX_FAILED_ATTEMPTS, recentFailedLogins } from './lockout';
 
 // 8h access token = one login covers a full work shift; no mid-shift logouts.
 // Refresh-token rotation still happens silently in the background via the
 // axios refresh interceptor, so security posture is unchanged.
 const ACCESS_EXPIRY = '8h';
 const REFRESH_EXPIRY = '30d';
-const MAX_FAILED_ATTEMPTS = 5;
-const LOCKOUT_MINUTES = 15;
 
 @Injectable()
 export class AuthService {
@@ -395,14 +394,8 @@ export class AuthService {
     }
 
     // ── Account lockout check ──────────────────────────────────────────────
-    const windowStart = new Date(Date.now() - LOCKOUT_MINUTES * 60 * 1000);
-    const recentFailures = await this.prisma.loginLog.count({
-      where: {
-        userId: user.id,
-        success: false,
-        createdAt: { gte: windowStart },
-      },
-    });
+    // Failures before an admin reset or unlock no longer count (see lockout.ts).
+    const recentFailures = await recentFailedLogins(this.prisma, user.id);
     if (recentFailures >= MAX_FAILED_ATTEMPTS) {
       throw new ForbiddenException(
         `Account locked after ${MAX_FAILED_ATTEMPTS} failed attempts. Try again in ${LOCKOUT_MINUTES} minutes.`,
@@ -480,10 +473,7 @@ export class AuthService {
       });
     }
 
-    const windowStart = new Date(Date.now() - LOCKOUT_MINUTES * 60 * 1000);
-    const recentFailures = await this.prisma.loginLog.count({
-      where: { userId: user.id, success: false, createdAt: { gte: windowStart } },
-    });
+    const recentFailures = await recentFailedLogins(this.prisma, user.id);
     if (recentFailures >= MAX_FAILED_ATTEMPTS) {
       throw new ForbiddenException(
         `Account locked after ${MAX_FAILED_ATTEMPTS} failed attempts. Try again in ${LOCKOUT_MINUTES} minutes.`,

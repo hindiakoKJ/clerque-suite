@@ -4315,6 +4315,15 @@ export class ImportService {
             most likely and least likely to be noticed.
           */
           const totalValue = +(qty * netCost).toFixed(2);
+          const grossValue = +(qty * grossCost).toFixed(2);
+          /*
+            The input tax is the DIFFERENCE of the two rounded numbers, never a
+            third rounding of its own -- the rule receiveRawMaterial already
+            follows (inventory.service.ts). Rounded separately, a VAT shop's
+            7 at PHP 1.02 split into 6.38 + 0.77 against 7.14, and the entry
+            either posted a centavo out or failed and left the stock off the books.
+          */
+          const inputVat = +(grossValue - totalValue).toFixed(2);
           await tx.accountingEvent.create({
             data: {
               tenantId,
@@ -4339,8 +4348,8 @@ export class ImportService {
                 quantity:       qty,
                 totalValue,
                 costPrice:      netCost,
-                inputVat:       +((qty * grossCost) - (qty * netCost)).toFixed(2),
-                grossValue:     +(qty * grossCost).toFixed(2),
+                inputVat,
+                grossValue,
                 paymentMethod,
                 branchId,
                 receivedAt:     date.toISOString(),

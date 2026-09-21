@@ -1671,6 +1671,65 @@ describe('ProcureService', () => {
     expect(notified).toHaveLength(1);
   });
 
+  describe('the bell when staff record what was bought', () => {
+    // Two lines on a sent list; the cook records the first, the second is still blank.
+    const staffBuys = () => {
+      const b = build({
+        status: 'SENT', people: PEOPLE, open: { branch: { name: 'Main' } },
+        lines: [
+          { id: 'l1', rawMaterialId: 'rm-haz', packsBought: null, rawMaterial: { name: 'Hazelnut Syrup' } },
+          { id: 'l2', rawMaterialId: 'rm-sug', packsBought: null, rawMaterial: { name: 'White Sugar' } },
+        ],
+      });
+      b.prisma.user.findFirst.mockImplementation(({ where }: any) => Promise.resolve({ name: where.id === 'cook' ? 'Jo' : 'Someone' }));
+      return b;
+    };
+    const HAZ = [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 540 }];
+    const COOK = { userId: 'cook', role: 'GENERAL_EMPLOYEE' };
+
+    it('rings once for each owner and this branch\'s manager, pointing at the request', async () => {
+      const { svc, notified } = staffBuys();
+      await svc.recordBought(TENANT, 'req1', HAZ, COOK);
+      expect(notified.map((n) => n.userId).sort()).toEqual(['mgr', 'owner']);   // not the cook, not the other branch
+      for (const n of notified) {
+        expect(n).toEqual({
+          tenantId: TENANT, userId: n.userId, kind: 'INFO',
+          title: 'Bought: REQ-20260830-001 — post it to stock',
+          body: '1 item, recorded by Jo · Main',
+          link: '/procure/requests?view=REQ-20260830-001',
+          dedupeKey: `req-bought-REQ-20260830-001-${n.userId}`,
+        });
+      }
+    });
+
+    it('a second save on the bought request rings nothing new', async () => {
+      const { svc, notified } = staffBuys();
+      await svc.recordBought(TENANT, 'req1', HAZ, COOK);
+      expect(notified).toHaveLength(2);
+      // A later trip filling the blank line, then the manager correcting a price: no new bell.
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l2', packsBought: 1, packSize: 1000, packCost: 91 }], COOK);
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 750, packCost: 520 }], { userId: 'mgr', role: 'BRANCH_MANAGER' });
+      expect(notified).toHaveLength(2);
+    });
+
+    it('no bell when the owner or manager records it themselves', async () => {
+      const owner = staffBuys();
+      await owner.svc.recordBought(TENANT, 'req1', HAZ, { userId: 'owner', role: 'BUSINESS_OWNER' });
+      expect(owner.notified).toEqual([]);
+      const mgr = staffBuys();
+      await mgr.svc.recordBought(TENANT, 'req1', HAZ, { userId: 'mgr', role: 'BRANCH_MANAGER' });
+      expect(mgr.notified).toEqual([]);
+    });
+
+    it('a bell that cannot be written never fails the save', async () => {
+      const { svc, notifications, req } = staffBuys();
+      notifications.create.mockRejectedValue(new Error('database down'));
+      const res = await svc.recordBought(TENANT, 'req1', HAZ, COOK);
+      expect(res.status).toBe('BOUGHT');
+      expect(req().status).toBe('BOUGHT');
+    });
+  });
+
   // ── the buy list as a PDF: for the group chat, and filed in Clerque ───────
 
   const PDF_LINES = [

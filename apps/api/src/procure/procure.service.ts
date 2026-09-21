@@ -1099,6 +1099,16 @@ export class ProcureService {
       });
     }
     /*
+      Staff bought it: the owner and the manager also hear it in the app, on
+      the same first recording that sends the Telegram alert. The Day 1
+      runbook says post as soon as "bought" arrives, and a shop with no
+      Telegram linked never got it. An owner or manager recording it
+      themselves needs no bell -- they know.
+    */
+    if (!extra.quiet && firstRecording && !decider && actor) {
+      await this.bellBought(tenantId, updated, lines.length, actor.userId);
+    }
+    /*
       Already paid ahead? Then a corrected price is a correction to the
       money too, and the pocket is the one the request remembers -- the
       screen stops offering the pocket tiles once an order is prepaid, so
@@ -1109,6 +1119,49 @@ export class ProcureService {
     if (!pocket) return updated;
     const paid = await this.payAhead(tenantId, updated, actor?.userId ?? '', pocket, boughtDay ?? this.today(), extra.charges ?? []);
     return { ...paid.request, paidAhead: paid.summary };
+  }
+
+  /**
+   * The bell for a purchase staff recorded: the same people tellTheOwners
+   * tells (the owners, and this branch's manager), pointing at the request so
+   * the owner can post it to stock. Best effort: the purchase is already
+   * saved, so a bell that fails is logged and never fails the save.
+   */
+  private async bellBought(
+    tenantId: string,
+    req: { requestNumber: string; branchId: string; branch?: { name: string } | null },
+    items: number,
+    recordedById: string,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    try {
+      const [people, recorder] = await Promise.all([
+        this.prisma.user.findMany({
+          where: {
+            tenantId, isActive: true,
+            OR: [
+              { role: 'BUSINESS_OWNER' },
+              { role: 'BRANCH_MANAGER', OR: [{ branchId: req.branchId }, { branchId: null }] },
+            ],
+          },
+          select: { id: true },
+        }),
+        this.prisma.user.findFirst({ where: { id: recordedById, tenantId }, select: { name: true } }),
+      ]);
+      const branch = req.branch?.name ?? null;
+      const body = `${items} item${items === 1 ? '' : 's'}, recorded by ${recorder?.name ?? 'staff'}${branch ? ` · ${branch}` : ''}`;
+      for (const p of people) {
+        if (p.id === recordedById) continue;
+        await this.notifications.create({
+          tenantId, userId: p.id, kind: 'INFO',
+          title: `Bought: ${req.requestNumber} — post it to stock`,
+          body, link: `/procure/requests?view=${req.requestNumber}`,
+          dedupeKey: `req-bought-${req.requestNumber}-${p.id}`,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`[procure] could not tell the owners ${req.requestNumber} was bought: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /**

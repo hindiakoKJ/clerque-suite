@@ -95,6 +95,17 @@ describe('ImportService — stock receipts and recoverable input VAT', () => {
       expect(Number(p.grossValue)).toBeCloseTo(1120, 2);
       expect(Number(p.totalValue) + Number(p.inputVat)).toBeCloseTo(Number(p.grossValue), 2);
     });
+
+    it('splits a half-centavo receipt so net + input tax is the money paid, to the centavo', async () => {
+      // 7 at ₱1.02: ₱7.14 paid, net 6.375. Rounded on its own the tax came to
+      // 0.77 against a net of 6.38 -- Dr 7.15 / Cr 7.14, an entry a centavo out.
+      const { run, events } = build('VAT');
+      await run([['2026-08-30', 'Coffee Beans', '7', '1.02', 'Main Branch', 'CREDIT', '', 'DR-3']]);
+      const p: any = events[0].payload;
+      expect(Number(p.grossValue)).toBe(7.14);
+      expect(Math.round(Number(p.totalValue) * 100) + Math.round(Number(p.inputVat) * 100))
+        .toBe(Math.round(Number(p.grossValue) * 100));
+    });
   });
 
   describe('stock the owner brought in', () => {

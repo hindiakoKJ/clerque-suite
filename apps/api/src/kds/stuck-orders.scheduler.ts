@@ -1,5 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import type { Prisma } from '@prisma/client';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -22,7 +23,14 @@ const PAGE = 200;
  *    The cost is dated to the sale, as a tap would have dated it. The owner is
  *    told how many were counted this way.
  *
- * 2. Releases orders left at "Preparing" (PAID) with nothing left to make.
+ * 2. Clears tickets whose stock was already taken at the sale -- sold before
+ *    the ready-tap rule, replayed from the offline queue, or rung while
+ *    deduction was paused -- that nobody tapped. They are marked ready and
+ *    nothing else: no stock, no cost, those were handled at the till.
+ *    Otherwise they sit on the station screens for good and hold their order
+ *    at "Preparing".
+ *
+ * 3. Releases orders left at "Preparing" (PAID) with nothing left to make.
  *    Before the station-routing fix an order waited on every routed line, even
  *    one sent to a station with no screen or a line refunded away; this clears
  *    those and any a crash leaves behind.
@@ -39,8 +47,9 @@ export class StuckOrdersScheduler {
   @Cron('30 2 * * *', { timeZone: PH_TIMEZONE })
   async nightly(now = new Date()) {
     const confirmed = await this.confirmUntapped(now);
+    const cleared = await this.clearAtSaleTickets(now);
     const released = await this.releaseStuckOrders(now);
-    return { ...released, confirmed };
+    return { ...released, confirmed, cleared };
   }
 
   /** Step 1: waiting lines from before today, confirmed as made. Returns how many lines were confirmed. */
@@ -118,7 +127,60 @@ export class StuckOrdersScheduler {
     return total;
   }
 
-  /** Step 2: orders at "Preparing" from before today with nothing left to make. */
+  /** Step 2: at-sale tickets from before today nobody tapped, marked ready. Returns how many lines were cleared. */
+  async clearAtSaleTickets(now = new Date()): Promise<number> {
+    const where = {
+      usageOnReady: false,
+      prepStatus:   'PENDING',
+      // A line a station screen lists; a till-only line never shows, so it is left as it is.
+      product:      { category: { station: { hasKds: true } } },
+      order:        { status: { in: [...HOLDING_STATUSES] }, deletedAt: null, paidAt: { lt: manilaDayStart(now) } },
+    } satisfies Prisma.OrderItemWhereInput;
+    let cleared = 0;
+    let after: string | undefined;
+
+    for (;;) {
+      // By id after the last one seen: a cleared line leaves the filter, and a cursor on it skipped the next.
+      const page = await this.prisma.orderItem.findMany({
+        where:   { ...where, ...(after ? { id: { gt: after } } : {}) },
+        select:  { id: true, orderId: true },
+        orderBy: { id: 'asc' },
+        take:    PAGE,
+      });
+      if (page.length === 0) break;
+      after = page[page.length - 1].id;
+
+      const byOrder = new Map<string, string[]>();
+      for (const l of page) byOrder.set(l.orderId, [...(byOrder.get(l.orderId) ?? []), l.id]);
+      for (const [orderId, ids] of byOrder) {
+        try {
+          cleared += await this.prisma.$transaction(async (tx) => {
+            await lockOrder(tx, orderId);
+            /*
+              The filter again under the lock, so a line bumped, or an order
+              voided, since the read is left alone. Status only: no stock, no
+              cost, no readyAt -- a ready time on a line that took its stock at
+              the sale is read by the lead-time report as a person's tap, and
+              would time the order at 02:30.
+            */
+            const res = await tx.orderItem.updateMany({
+              where: { ...where, id: { in: ids } },
+              data:  { prepStatus: 'READY' },
+            });
+            return res.count;
+          });
+        } catch (err) {
+          this.logger.error(`Could not clear the kitchen/bar tickets of order ${orderId}: ${(err as Error).message}`);
+        }
+      }
+      if (page.length < PAGE) break;
+    }
+
+    this.logger.log(`Cleared ${cleared} kitchen/bar ticket(s) from before today whose stock was taken at the sale.`);
+    return cleared;
+  }
+
+  /** Step 3: orders at "Preparing" from before today with nothing left to make. */
   async releaseStuckOrders(now = new Date()): Promise<{ released: number; stillWaiting: number }> {
     const dayStart = manilaDayStart(now);
     let released = 0;

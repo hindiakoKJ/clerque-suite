@@ -28,7 +28,8 @@ interface Movement {
   createdById:       string | null;
   createdByName:     string | null;
   paymentMethod:     string | null;
-  totalValue:        number | null;
+  /** Left out for anyone the shop hides purchase costs from; null when nothing was valued. */
+  totalValue?:       number | null;
   accountingEventId: string | null;
 }
 
@@ -78,11 +79,18 @@ export default function StockMovementsPage() {
     staleTime: 15_000,
   });
 
+  /*
+    The server leaves the peso value off every row for someone the shop hides
+    purchase costs from, so the column goes -- on screen and in the export --
+    rather than a dash on every line.
+  */
+  const valuesShown = movements.length === 0 || movements.some((m) => 'totalValue' in m);
+
   // CSV export — done client-side for the current filtered view.
   function exportCsv() {
     const header = [
       'Date', 'Kind', 'Type', 'Item', 'Unit', 'Quantity',
-      'Stock Before', 'Stock After', 'Value', 'Payment', 'Reference', 'Reason', 'Cashier',
+      'Stock Before', 'Stock After', ...(valuesShown ? ['Value'] : []), 'Payment', 'Reference', 'Reason', 'Cashier',
     ];
     const rows = movements.map((m) => [
       new Date(m.occurredAt).toISOString().slice(0, 19).replace('T', ' '),
@@ -93,7 +101,7 @@ export default function StockMovementsPage() {
       m.quantity.toString(),
       m.quantityBefore?.toString() ?? '',
       m.quantityAfter?.toString() ?? '',
-      m.totalValue != null ? m.totalValue.toFixed(2) : '',
+      ...(valuesShown ? [m.totalValue != null ? m.totalValue.toFixed(2) : ''] : []),
       m.paymentMethod ? (PAYMENT_LABEL[m.paymentMethod] ?? m.paymentMethod) : '',
       m.reference ?? '',
       m.reason ?? '',
@@ -206,7 +214,7 @@ export default function StockMovementsPage() {
                 <th className="px-4 py-3 text-left font-semibold">Type</th>
                 <th className="px-4 py-3 text-right font-semibold">Qty</th>
                 <th className="px-4 py-3 text-right font-semibold">Stock After</th>
-                <th className="px-4 py-3 text-right font-semibold">Value</th>
+                {valuesShown && <th className="px-4 py-3 text-right font-semibold">Value</th>}
                 <th className="px-4 py-3 text-left font-semibold">Reference</th>
                 <th className="px-4 py-3 text-left font-semibold">By</th>
               </tr>
@@ -272,10 +280,12 @@ export default function StockMovementsPage() {
                         : '—'}
                     </td>
 
-                    {/* Value */}
-                    <td className="px-4 py-3 text-right text-muted-foreground tabular-nums whitespace-nowrap">
-                      {m.totalValue != null && m.totalValue > 0 ? formatPeso(m.totalValue) : '—'}
-                    </td>
+                    {/* Value -- only for those the shop shows purchase costs to */}
+                    {valuesShown && (
+                      <td className="px-4 py-3 text-right text-muted-foreground tabular-nums whitespace-nowrap">
+                        {m.totalValue != null && m.totalValue > 0 ? formatPeso(m.totalValue) : '—'}
+                      </td>
+                    )}
 
                     {/* Reference (order # or supplier ref) */}
                     <td className="px-4 py-3 text-xs text-muted-foreground">

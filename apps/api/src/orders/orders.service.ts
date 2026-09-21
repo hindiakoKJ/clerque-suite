@@ -595,6 +595,8 @@ export class OrdersService {
             where:  { id: { in: productIds }, tenantId },
             select: {
               id: true,
+              // The catalog cost, for the last step of the cost waterfall below.
+              costPrice: true,
               category: { select: { stationId: true, revenueAccountCode: true, station: { select: { hasKds: true, isActive: true } } } },
             },
           })
@@ -618,6 +620,18 @@ export class OrdersService {
       // into 4010. Null category / null code → the handler's 4010 default.
       const revenueCodeByProduct = new Map(
         productsForRouting.map((p) => [p.id, p.category?.revenueAccountCode ?? null]),
+      );
+      /*
+        Product.costPrice as the server has it. The SNAPSHOT step of the cost
+        waterfall used to take this from the till, which sent back the cost it
+        had loaded with the catalog. A cashier on a shop that hides purchase
+        costs is no longer sent that figure, so the till has nothing to send --
+        and the catalog is the same number without the round trip. The till's
+        figure stays as the fallback for a product with no cost on file, which
+        is what an older till or an offline sale still sends.
+      */
+      const catalogCostByProduct = new Map(
+        productsForRouting.map((p) => [p.id, p.costPrice != null ? Number(p.costPrice) : null]),
       );
       const paidAtTs = new Date(payload.createdAt);
       const initialStatus: 'PAID' | 'COMPLETED' = hasAnyRoutedItem ? 'PAID' : 'COMPLETED';
@@ -1484,17 +1498,20 @@ export class OrdersService {
                 //   4. WAC        — Moving-Average Cost from InventoryItem
                 //                   (UNIT_BASED products with no lots, or
                 //                   tenants on the WAC valuation method).
-                //   5. SNAPSHOT   — till's snapshot of Product.costPrice
-                //                   (legacy fallback).
+                //   5. SNAPSHOT   — Product.costPrice, read from the catalog
+                //                   here; the till's copy of it only when the
+                //                   catalog has none (legacy fallback).
                 const recipeAcc = recipeCostByKey.get(recipeKey(i.productId, i.variantId, optionIdsOf(i)));
                 const recipe   = recipeAcc ? (recipeAcc.qty > 0 ? recipeAcc.cost / recipeAcc.qty : 0) : undefined;
                 const lotCost  = lotUnitCostByProduct.get(i.productId);
                 const wac      = avgCostByProduct.get(i.productId);
+                const snapshot = catalogCostByProduct.get(i.productId)
+                  ?? (i.costPrice != null ? Number(i.costPrice) : null);
                 const unitCost =
                   recipe  != null ? recipe :
                   lotCost != null ? lotCost :
                   wac     != null ? wac :
-                  i.costPrice != null ? Number(i.costPrice) : null;
+                  snapshot;
                 if (unitCost == null) return null;
                 const qty = Number(i.quantity);
                 // Overhead is added per unit produced. For MANUFACTURING, this

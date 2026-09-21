@@ -12,6 +12,7 @@
  *   [PREPAID:<pocket>]  paid before it arrived; the pocket that paid
  *   [ADV:<amount>]      how much of that advance is still waiting in 1063
  *   [FEES:<key>]        the receipt whose delivery fees have already posted
+ *   [LASTPRICE:<ids>]   lines priced from last time, for the owner to check
  *
  * Tags go in front, newest last, then the human text.
  *
@@ -82,4 +83,31 @@ export function appendNote(notes: string | null | undefined, line: string): stri
   const { tags, plain } = split(notes);
   const body = [human(plain), text].filter(Boolean).join(' · ');
   return [tags.join(' '), body].filter(Boolean).join(' ').slice(0, MAX);
+}
+
+/**
+ * [LASTPRICE:<line ids>] -- lines staff recorded on a shop that hides
+ * purchase costs from them. They typed packs and size only; the price is last
+ * time's, filled in for the owner to check against the receipt before
+ * posting (ProcureService.recordBought). A price saved by anyone who sees
+ * costs, or read off the receipt, takes the line off it.
+ * Line ids only -- never a peso -- because the notes reach staff screens.
+ */
+export const LAST_PRICE_TAG = 'LASTPRICE';
+
+export function lastPricedLines(notes: string | null | undefined): Set<string> {
+  return new Set((readTag(notes, LAST_PRICE_TAG) ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+/**
+ * Notes with these lines taken off [LASTPRICE], and the tag dropped when none
+ * are left. The same notes back when none of them was on it, so a caller can
+ * tell "nothing changed" by identity and leave the row alone.
+ */
+export function withoutLastPriced(notes: string | null | undefined, lineIds: Iterable<string>): string | null | undefined {
+  const was = lastPricedLines(notes);
+  const now = new Set(was);
+  for (const id of lineIds) now.delete(id);
+  if (now.size === was.size) return notes;
+  return now.size > 0 ? withTag(notes, LAST_PRICE_TAG, [...now].join(',')) : withoutTag(notes, LAST_PRICE_TAG);
 }

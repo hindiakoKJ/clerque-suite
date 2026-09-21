@@ -55,14 +55,14 @@ describe('The price question is asked before anything is saved', () => {
       const svc = build(sanity);
       await svc.receiveRawMaterialChecked(TENANT, 'rm-milk', dto,
         sanityContext('1', [{ key: 'rm:rm-milk:receive', value: '0.190000' }], 'owner-1'));
-      expect(svc.receiveRawMaterial).toHaveBeenCalledWith(TENANT, 'rm-milk', expect.objectContaining({ acceptCostChange: true }));
+      expect(svc.receiveRawMaterial).toHaveBeenCalledWith(TENANT, 'rm-milk', expect.objectContaining({ acceptCostChange: true }), {});
       expect(sanity.recordConfirmed).toHaveBeenCalled();
     });
 
     it('does not ask a client that cannot show the question', async () => {
       const svc = build(sanityThatWarns((k) => [warning(k)]));
       await svc.receiveRawMaterialChecked(TENANT, 'rm-milk', dto, sanityContext(undefined, undefined));
-      expect(svc.receiveRawMaterial).toHaveBeenCalledWith(TENANT, 'rm-milk', dto);
+      expect(svc.receiveRawMaterial).toHaveBeenCalledWith(TENANT, 'rm-milk', dto, {});   // {}: nobody hidden from costs
     });
 
     it('does not ask about a delivery that was already received under the same reference', async () => {
@@ -74,11 +74,22 @@ describe('The price question is asked before anything is saved', () => {
       expect(svc.receiveRawMaterial).toHaveBeenCalled();
     });
 
+    it('carries who is receiving through to the guard, asked or not', async () => {
+      // costsHidden words the ten-times refusal without the cost on file.
+      const asked = build(sanityThatWarns((k) => [warning(k, 'magnitude')]));
+      await asked.receiveRawMaterialChecked(TENANT, 'rm-milk', dto,
+        sanityContext('1', [{ key: 'rm:rm-milk:receive', value: '0.190000' }], 'clerk-1'), { costsHidden: true });
+      expect(asked.receiveRawMaterial.mock.calls[0][3]).toEqual({ costsHidden: true });
+      const notAsked = build(sanityThatWarns((k) => [warning(k)]));
+      await notAsked.receiveRawMaterialChecked(TENANT, 'rm-milk', dto, sanityContext(undefined, undefined), { costsHidden: true });
+      expect(notAsked.receiveRawMaterial.mock.calls[0][3]).toEqual({ costsHidden: true });
+    });
+
     it('lifts the old guard for any price the person confirmed, not only a ten-times one', async () => {
       const svc = build(sanityThatWarns((k) => [warning(k, 'unusual')]));
       await svc.receiveRawMaterialChecked(TENANT, 'rm-milk', dto,
         sanityContext('1', [{ key: 'rm:rm-milk:receive', value: '0.190000' }], 'owner-1'));
-      expect(svc.receiveRawMaterial).toHaveBeenCalledWith(TENANT, 'rm-milk', expect.objectContaining({ acceptCostChange: true }));
+      expect(svc.receiveRawMaterial).toHaveBeenCalledWith(TENANT, 'rm-milk', expect.objectContaining({ acceptCostChange: true }), {});
     });
   });
 

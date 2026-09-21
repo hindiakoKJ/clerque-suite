@@ -143,9 +143,16 @@ export class BoughtLineInputDto {
   @IsPositive()
   packSize!: number;
 
+  /*
+    Left out by staff on a shop that hides purchase costs from them: they
+    record packs and size, and the server fills the price from last time for
+    the owner to check (ProcureService.recordBought). Anyone who sees costs
+    is still refused without one, by the service, in plain words.
+  */
+  @IsOptional()
   @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
-  packCost!: number;
+  packCost?: number;
 
   @IsOptional()
   @IsString()

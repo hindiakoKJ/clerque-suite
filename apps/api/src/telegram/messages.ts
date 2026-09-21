@@ -152,15 +152,53 @@ export interface RequestForAlert {
   shopName: string;
   branchName: string | null;
   requestNumber: string;
-  lines: Array<{ name: string; unit: string; packsBought: number | null; packSize: number | null; packCost: number | null; received: boolean }>;
+  lines: Array<{
+    name: string; unit: string; packsBought: number | null; packSize: number | null; packCost: number | null; received: boolean;
+    /** Priced from last time by the server (staff recorded packs only): for the owner to check against the receipt. */
+    lastPrice?: boolean;
+  }>;
 }
 
+/*
+  Every line recorded as bought, priced or not. Staff on a shop that hides
+  purchase costs record packs only; the price is last time's, or -- the first
+  time an item is bought -- none yet. Dropping the unpriced ones made a first
+  staff buy read "Bought: ₱0.00" over an empty list, to the one person who
+  has to add the price.
+*/
 function boughtLines(req: RequestForAlert) {
-  return req.lines.filter((l) => l.packsBought != null && l.packCost != null);
+  return req.lines.filter((l) => l.packsBought != null);
 }
 
 function boughtTotal(req: RequestForAlert): number {
   return boughtLines(req).reduce((t, l) => t + (l.packsBought ?? 0) * (l.packCost ?? 0), 0);
+}
+
+/** Bought lines with no price yet, and lines carrying last time's price. */
+function priceGaps(req: RequestForAlert): { toAdd: number; lastTime: number } {
+  const lines = boughtLines(req);
+  return {
+    toAdd:    lines.filter((l) => l.packCost == null).length,
+    lastTime: lines.filter((l) => l.packCost != null && l.lastPrice).length,
+  };
+}
+
+/**
+ * What the owner still has to do about prices, in words; empty when nothing.
+ * `marked`: the lines above carry a * on last time's prices, so the note
+ * explains the mark; a photo caption has no lines, so it counts them.
+ */
+function priceGapWords(req: RequestForAlert, marked: boolean): string[] {
+  const { toAdd, lastTime } = priceGaps(req);
+  const items = (n: number) => `${n} item${n === 1 ? '' : 's'}`;
+  const out: string[] = [];
+  if (toAdd > 0) out.push(`${items(toAdd)} still need${toAdd === 1 ? 's' : ''} the price from the receipt.`);
+  if (lastTime > 0) {
+    out.push(marked
+      ? `* Last time's price. Check ${lastTime === 1 ? 'it' : 'them'} against the receipt.`
+      : `${items(lastTime)} at last time's price. Check against the receipt.`);
+  }
+  return out;
 }
 
 function packWords(l: { unit: string; packsBought: number | null; packSize: number | null }): string {
@@ -215,20 +253,26 @@ export function boughtMessage(req: RequestForAlert, recordedBy: string | null, a
   const lines = boughtLines(req);
   const blocks = lines.map((l) => [
     clip(l.name, WIDTH),
-    row(`  ${packWords(l)}`, money((l.packsBought ?? 0) * (l.packCost ?? 0))),
+    row(
+      `  ${packWords(l)}`,
+      l.packCost == null ? 'price to add' : `${money((l.packsBought ?? 0) * l.packCost)}${l.lastPrice ? '*' : ''}`,
+    ),
   ].join('\n'));
+  // "so far" whenever a line has no price yet: the total is not the bill.
+  const soFar = priceGaps(req).toAdd > 0 ? ' so far' : '';
   const build = (shown: string[], more: number) => {
     const body = [...shown];
     if (more > 0) body.push(`…and ${more} more`);
-    body.push(RULE, row('TOTAL', `₱${money(boughtTotal(req))}`));
+    body.push(RULE, row(`TOTAL${soFar}`, `₱${money(boughtTotal(req))}`));
     return [
       added
         ? `✅ <b>Bought more: ${escapeHtml(req.requestNumber)}</b>  +₱${money(added.value)}`
-        : `✅ <b>Bought: ${escapeHtml(req.requestNumber)}</b>  ₱${money(boughtTotal(req))}`,
+        : `✅ <b>Bought: ${escapeHtml(req.requestNumber)}</b>  ₱${money(boughtTotal(req))}${soFar}`,
       place(req.shopName, req.branchName),
       escapeHtml(`${recordedBy ? `Recorded by ${recordedBy} · ` : ''}${manilaTime(at)}`),
-      ...(added ? [escapeHtml(`Added now: ${added.items} item${added.items === 1 ? '' : 's'}, ₱${money(added.value)}. Request total ₱${money(boughtTotal(req))}.`)] : []),
+      ...(added ? [escapeHtml(`Added now: ${added.items} item${added.items === 1 ? '' : 's'}, ₱${money(added.value)}. Request total ₱${money(boughtTotal(req))}${soFar}.`)] : []),
       `<pre>${escapeHtml(body.join('\n'))}</pre>`,
+      ...priceGapWords(req, true).map(escapeHtml),
     ].join('\n');
   };
   return fitItems(build, blocks, MESSAGE_LIMIT);
@@ -240,7 +284,8 @@ export function photoCaption(req: RequestForAlert, label: string, filedBy: strin
     `📷 <b>${escapeHtml(clip(label, 40))} photo: ${escapeHtml(req.requestNumber)}</b>`,
     place(clip(req.shopName, 120), req.branchName ? clip(req.branchName, 80) : null),
     escapeHtml(`${filedBy ? `Filed by ${clip(filedBy, 80)} · ` : ''}${manilaTime(at)}`),
-    items > 0 ? escapeHtml(`Bought on this request: ₱${money(boughtTotal(req))} (${items} item${items === 1 ? '' : 's'})`) : 'Nothing recorded as bought on this request yet.',
+    items > 0 ? escapeHtml(`Bought on this request: ₱${money(boughtTotal(req))}${priceGaps(req).toAdd > 0 ? ' so far' : ''} (${items} item${items === 1 ? '' : 's'})`) : 'Nothing recorded as bought on this request yet.',
+    ...(items > 0 ? priceGapWords(req, false).map(escapeHtml) : []),
   ].join('\n');
   return text.length <= CAPTION_LIMIT ? text : text.slice(0, text.lastIndexOf('\n', CAPTION_LIMIT));
 }

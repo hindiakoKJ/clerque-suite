@@ -28,7 +28,7 @@ Based on the go-live audit (2026-09-20) and the fixes shipped with it.
 |---|---|---|
 | B1 | Settings > Branches > Main: set the **closing time** (e.g. 21:00). | The branch row shows "Closes 9:00 PM". |
 | B2 | Settings: Recipe cost ON, Ingredient deduction ON, Ledger mode FULL, **Sell when out of stock OFF** for now. | The choices survive a page reload. |
-| B3 | Decide **show purchase costs to staff**. ON lets staff record what they bought (prices visible on Procure screens). Kitchen/bar screens never show costs either way. | — |
+| B3 | **Show purchase costs to staff: OFF** (KJ, 2026-09-21). Staff still record what they bought (packs and pack size, no price box); Clerque fills in last time's price for Anne, marked "check the receipt", and posting refuses a line with no price. | A barista's Procure screen shows no pesos. |
 | B4 | Settings > Floor Layout: keep the Kitchen and Bar **screens**, turn the Bar and Kitchen **printers** OFF unless real station printers are installed. | Two station cards, each with a screen, no printer. |
 | B5 | Settings > Security: Anne sets a 6-digit **supervisor PIN** (not a date, not 123456). Anne sets **no till PIN**. | Saving is accepted (weak PINs are refused). |
 | B6 | Settings > Business logo: upload Carolina's logo (PNG or JPEG, under 1 MB). | The logo shows in the menu and on the receipt preview. |
@@ -100,7 +100,7 @@ Fix these in the Setup Pack (or straight after import):
 - If something is low, tap "Request what's running low". Use "+" for tissue, soap and anything not in a recipe.
 
 **Anne**
-- Post a purchase to stock as soon as a "bought" alert arrives.
+- Post a purchase to stock as soon as a "bought" alert arrives (bell and Telegram). Check each price against the receipt: lines marked "Price from last purchase" were filled in by Clerque.
 - Bills you pay yourself: Procure > Receipts, "Owner paid". Not Record Entry, not Expense Claims.
 - Cash you take home: Ledger > Record Entry, "Owner took out".
 - Use the Ledger P&L for profit.

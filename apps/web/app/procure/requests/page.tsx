@@ -15,6 +15,7 @@ import { CostHint, useCostBands } from '@/components/shared/CostHint';
 import { lowStockToast, type PullLowStockResult } from './low-stock-toast';
 import {
   chipsInOrder, isStillOpen, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
+  fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice,
 } from './buy-list-view';
 import { pickerOrder, showNotInRecipe } from './ingredient-picker';
 import {
@@ -278,10 +279,11 @@ export default function ProcurePage() {
 
   /*
     Sending and posting to stock are owner/manager actions at the API.
-    Recording what was bought is open to whoever is holding the bag -- when
-    the shop shows purchase costs to its staff. The server strips the costs
-    and sets costsHidden when it does not, so that one flag answers both
-    "may I see the price" and "may I type it".
+    Recording what was bought is open to whoever is holding the bag. When the
+    shop hides purchase costs from its staff, the server strips the costs and
+    sets costsHidden, and that one flag answers both "may I see the price"
+    and "may I type it": no, so they record packs and size only and the
+    server prices it from last time for the owner to check (KJ, 2026-09-21).
   */
   const canDecide = !!user && ['BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'].includes(user.role);
   const [bought, setBought]     = useState<Record<string, { packs: string; size: string; cost: string; brand: string; source?: 'line' | 'last' | 'none' }>>({});
@@ -569,7 +571,7 @@ export default function ProcurePage() {
         setWalkInItems((prev) => new Set(walkIn === onto ? prev : []).add(v.rawMaterialId));
         setWalkIn(onto);
         setPicking(false); setWalkInPicking(false);
-        toast.success(`${name ?? 'It'} is on the list. Fill in the packs and price, then save what was bought.`, { duration: 7000 });
+        toast.success(`${name ?? 'It'} is on the list. Fill in the ${fillInWords(!req.costsHidden)}, then save what was bought.`, { duration: 7000 });
       } else if (name) {
         toast.success(`${name} added.`);
       }
@@ -707,6 +709,8 @@ export default function ProcurePage() {
   const saveBought = useMutation({
     mutationFn: () => {
       if (!req) throw new Error('No request.');
+      // Staff on a shop that hides costs send no price; the server fills last time's for the owner.
+      const withPrice = !req.costsHidden;
       const rows = req.lines
         /*
           A recorded line goes with every Save, ticked or not: once a list is
@@ -721,13 +725,14 @@ export default function ProcurePage() {
           const b = valuesFor(l);
           return {
             lineId: l.id, name: l.rawMaterial.name,
-            packsBought: parseFloat(b.packs), packSize: parseFloat(b.size), packCost: parseFloat(b.cost),
+            packsBought: parseFloat(b.packs), packSize: parseFloat(b.size),
+            ...(withPrice ? { packCost: parseFloat(b.cost) } : {}),
             brandNote: b.brand.trim() || undefined,
             ...(whereFor(l) ?? {}),
           };
         });
-      const half = rows.find((r) => !(r.packsBought > 0) || !(r.packSize > 0) || !(r.packCost > 0));
-      if (half) throw new Error(`${half.name}: fill in packs, what one holds, and the price.`);
+      const half = rows.find((r) => stillNeeds(r, withPrice));
+      if (half) throw new Error(`${half.name}: ${stillNeeds(half, withPrice)}`);
       if (rows.length === 0) throw new Error('Tick what you bought first.');
       return api.post(`/procure/requests/${req.id}/bought`, {
         lines: rows.map(({ name: _n, ...r }) => r),
@@ -756,7 +761,9 @@ export default function ProcurePage() {
         }
         if (bad) toast.warning(bad.error as string, { duration: 10000 });
       } else {
-        toast.success(ordered ? 'Recorded — marked as on the way.' : 'Shopping recorded.');
+        const said = ordered ? 'Recorded — marked as on the way.' : 'Shopping recorded.';
+        // No price was typed: say who puts it in, so nobody wonders where it went.
+        toast.success(req?.costsHidden ? `${said} The owner checks the prices against the receipt.` : said);
       }
     },
     onError: (e) => {
@@ -787,6 +794,16 @@ export default function ProcurePage() {
         first, through the same door the Save button uses.
       */
       const fixes = pendingFixes();
+      /*
+        A line staff recorded when there was no last time to price it from
+        has no price. Posting it would put it on the shelf at nothing, so the
+        server refuses it -- asked here first, before anything posts.
+      */
+      const unpriced = firstWithoutPrice(
+        req.lines.filter((l) => !l.receivedAt && l.packsBought != null && isTicked(l)),
+        (l) => fixes.find((f) => f.lineId === l.id)?.packCost,
+      );
+      if (unpriced) throw new Error(`${unpriced.rawMaterial.name}: add the price from the receipt before posting.`);
       if (fixes.length > 0) {
         await api.post(`/procure/requests/${req.id}/bought`, { lines: fixes }, { headers: { 'Idempotency-Key': buyKey } });
         setBuyKey(mintKey());
@@ -988,9 +1005,11 @@ export default function ProcurePage() {
     );
   }
 
-  // Whoever is holding the bag may record what came, unless the shop hides
-  // prices from them -- in which case the server has already blanked them.
-  const canRecord = canDecide || (!!user && !req.costsHidden);
+  // Whoever is holding the bag may record what came. When the shop hides
+  // prices from them the server has already blanked them, and they record
+  // packs and size only: no price box, no totals, no peso (KJ, 2026-09-21).
+  const canRecord = !!user;
+  const noPrice   = !!req.costsHidden;
   // On an open list too: saving what was bought sends it, so nobody waits for the owner's Send.
   const recording = canRecord && recordsOn(req.status);
   const stepIndex = Math.max(0, STEPS.findIndex((s) => s.key === req.status));
@@ -1007,6 +1026,8 @@ export default function ProcurePage() {
   const prepaid    = readTag(req.notes, 'PREPAID') as Pocket | null;
   const advance    = Number(readTag(req.notes, 'ADV') ?? 0) || 0;
   const humanNotes = plainNotes(req.notes);
+  // Lines staff recorded without a price, priced from last time: the owner checks them.
+  const lastPriced = lastPricedLines(req.notes);
   const unposted   = req.lines.filter((l) => !l.receivedAt);
   const postable   = unposted.filter((l) => l.packsBought != null);
   const tickedNow  = postable.filter((l) => isTicked(l));
@@ -1158,7 +1179,7 @@ export default function ProcurePage() {
             <span className="block text-xs text-muted-foreground">
               {recordsOn(req.status) && req.status !== 'OPEN' && req.lines.some((l) => !l.receivedAt)
                 ? 'Already on this list? Tick it below instead.'
-                : 'Bought it at the store? Add it here, then fill in the packs and price.'}
+                : `Bought it at the store? Add it here, then fill in the ${fillInWords(!noPrice)}.`}
             </span>
           </span>
         </button>
@@ -1232,7 +1253,7 @@ export default function ProcurePage() {
               <div className="mb-2 flex items-start justify-between gap-2">
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   <strong className="font-medium text-foreground">Record something you bought.</strong>{' '}
-                  Pick it and say how much you bought. Then fill in the packs and price, and save.
+                  Pick it and say how much you bought. Then fill in the {fillInWords(!noPrice)}, and save.
                 </p>
                 <button
                   type="button"
@@ -1583,7 +1604,7 @@ export default function ProcurePage() {
                   */}
                   {recording && !l.receivedAt && showsRecordBoxes(req.status, tick) && (
                     <div className={`mt-2 ${tick ? '' : 'opacity-60'}`} data-entry-group>
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      <div className={`grid grid-cols-2 gap-2 ${noPrice ? 'sm:grid-cols-3' : 'sm:grid-cols-4'}`}>
                         <label className="text-[11px] text-muted-foreground">
                           Packs
                           <input inputMode="decimal" value={b.packs} disabled={staffLocked} onChange={(e) => set('packs', e.target.value)} className={inputCls}
@@ -1608,12 +1629,15 @@ export default function ProcurePage() {
                             data-entry onKeyDown={enterMovesNext}
                             onBlur={() => setEnteredCost((prev) => ({ ...prev, [l.id]: true }))} />
                         </label>
-                        <label className="text-[11px] text-muted-foreground">
-                          Price per pack
-                          <input inputMode="decimal" value={b.cost} disabled={staffLocked} onChange={(e) => set('cost', e.target.value)} className={inputCls}
-                            data-entry onKeyDown={enterMovesNext}
-                            onBlur={() => setEnteredCost((prev) => ({ ...prev, [l.id]: true }))} />
-                        </label>
+                        {/* Not for staff the shop hides costs from: the owner checks last time's against the receipt. */}
+                        {!noPrice && (
+                          <label className="text-[11px] text-muted-foreground">
+                            Price per pack
+                            <input inputMode="decimal" value={b.cost} disabled={staffLocked} onChange={(e) => set('cost', e.target.value)} className={inputCls}
+                              data-entry onKeyDown={enterMovesNext}
+                              onBlur={() => setEnteredCost((prev) => ({ ...prev, [l.id]: true }))} />
+                          </label>
+                        )}
                         <label className="text-[11px] text-muted-foreground">
                           Brand (optional)
                           <input value={b.brand} disabled={staffLocked} onChange={(e) => set('brand', e.target.value)}
@@ -1625,7 +1649,7 @@ export default function ProcurePage() {
                         band={bands?.get(l.rawMaterialId)}
                         packCost={parseFloat(b.cost)}
                         packSize={parseFloat(b.size)}
-                        show={!!bought[l.id] && !!enteredCost[l.id]}
+                        show={!noPrice && !!bought[l.id] && !!enteredCost[l.id]}
                       />
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
                         {b.source === 'last' && !bought[l.id] && l.lastPack && (
@@ -1637,6 +1661,10 @@ export default function ProcurePage() {
                         )}
                         {b.source === 'none' && !bought[l.id] && <span>first time buying this — fill it in once</span>}
                         {staffLocked && <span>recorded — the owner or manager can change it</span>}
+                        {/* Staff recorded it without a price: last time's, or none yet. Said until the owner saves one. */}
+                        {!noPrice && !bought[l.id] && priceCheck(l, lastPriced) && (
+                          <span className="font-medium text-amber-600 dark:text-amber-400">{priceCheck(l, lastPriced)}</span>
+                        )}
                         {l.packsBought != null && (sourceText(l.sourceKind, l.sourceName) || (canDecide && wherePicked)) && (
                           <span className="inline-flex items-center gap-1">
                             <Store className="h-3 w-3" />
@@ -1652,7 +1680,7 @@ export default function ProcurePage() {
                             )}
                           </span>
                         )}
-                        {lineTotal > 0 && (
+                        {lineTotal > 0 && !noPrice && (
                           <span>
                             {b.packs} × {peso(parseFloat(b.cost) || 0)} = <strong className="font-mono text-foreground">{peso(lineTotal)}</strong>
                             {b.size && <> · {(parseFloat(b.packs) || 0) * (parseFloat(b.size) || 0)} {l.rawMaterial.unit} into stock</>}
@@ -1785,7 +1813,7 @@ export default function ProcurePage() {
               <span>
                 <strong className="font-medium text-foreground">Ordered — on the way.</strong>{' '}
                 Not here yet. Stock waits for the parcel.
-                <span className="mt-0.5 block">Type each price after vouchers. Leave shipping out if it was free.</span>
+                {!noPrice && <span className="mt-0.5 block">Type each price after vouchers. Leave shipping out if it was free.</span>}
               </span>
             </label>
             {/*
@@ -1832,8 +1860,6 @@ export default function ProcurePage() {
               : req.status === 'SENT'
                 ? 'Sent — waiting for whoever shops to record what they bought.'
                 : 'Bought — waiting for the owner or manager to add it to stock.'}
-            {/* The shop hides purchase costs from staff, so recording a buy is the owner's or manager's (ProcureService.recordBought). */}
-            {' '}Bought something yourself? Tell the owner or manager: on this account only they record purchases.
           </p>
         )}
         {canRecord && !canDecide && req.status === 'OPEN' && (

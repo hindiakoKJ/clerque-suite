@@ -22,6 +22,12 @@ import type {
 import type { ReceiptVatBreakdown } from './Receipt';
 import { counterReceiptAuthority } from './receiptAuthority';
 
+/**
+ * Printed on a non-VAT Sales Invoice only — the web ReceiptModal's TaxFooter
+ * wording. Shared with the visual Receipt.tsx.
+ */
+export const NON_VAT_INVOICE_LEGEND = 'THIS DOCUMENT IS NOT VALID FOR CLAIM OF INPUT TAX.';
+
 /** Serializable shape of what `Receipt.tsx` consumes — safe to send over IPC / store in queues. */
 export interface ReceiptForPrinter {
   tenant: TenantConfig;
@@ -143,13 +149,20 @@ export function receiptToEscPos(
 ): Uint8Array {
   const b = new EscPosBuilder();
   const isVat = r.tenant.taxStatus === 'VAT' && r.tenant.isVatRegistered;
-  /** Tenant fact for the header status line only — registration alone does
-   *  NOT make the slip an official document (see receiptAuthority.ts). */
-  const isBirRegistered = r.tenant.taxStatus === 'VAT' || r.tenant.taxStatus === 'NON_VAT';
   /** What this slip IS — same verdict as the visual Receipt.tsx. Fails SAFE
    *  to Acknowledgement Receipt ("AR #") until Counter carries isPtuHolder. */
   const auth            = counterReceiptAuthority(r.tenant);
   const numberPrefix    = auth.numberPrefix;
+  /**
+   * VAT is mentioned ONLY on a VAT Sales Invoice — same rule as Receipt.tsx
+   * and the web ReceiptModal. Every slip used to print "Non-VAT registered" /
+   * "Not BIR-registered", which a non-VAT shop does not want on its customer's
+   * receipt; an Acknowledgement Receipt is gross only plus its disclaimer.
+   */
+  const vatHeader       = auth.kind === 'SALES_INVOICE' && isVat ? 'VAT-registered' : null;
+  const nonVatLegend    = auth.kind === 'SALES_INVOICE' && r.tenant.taxStatus === 'NON_VAT'
+    ? NON_VAT_INVOICE_LEGEND
+    : null;
 
   b.init();
 
@@ -164,7 +177,9 @@ export function receiptToEscPos(
   if (r.tenant.tin) {
     b.line(`TIN ${r.tenant.tin}`);
   }
-  b.line(isBirRegistered ? (isVat ? 'VAT-registered' : 'Non-VAT registered') : 'Not BIR-registered');
+  if (vatHeader) {
+    b.line(vatHeader);
+  }
   if (r.tenant.fdaLicenseNumber) {
     b.line(`FDA LTO ${r.tenant.fdaLicenseNumber}`);
   }
@@ -225,10 +240,10 @@ export function receiptToEscPos(
     b.line(labelAmount('VAT-exempt sales', formatPesoPlain(r.vat.vatExemptCents), width));
     b.line(labelAmount('VAT zero-rated', formatPesoPlain(r.vat.vatZeroRatedCents), width));
     b.line(labelAmount('VAT (12%)', formatPesoPlain(r.vat.vatAmountCents), width));
-  } else if (auth.kind === 'SALES_INVOICE') {
+  } else if (auth.kind === 'SALES_INVOICE' && auth.showVatLine) {
     b.line(labelAmount('VAT-exempt sales', formatPesoPlain(r.totalCents), width));
   }
-  // Acknowledgement Receipt — gross only, no VAT lines.
+  // Acknowledgement Receipt or non-VAT — gross only, no VAT lines.
 
   b.divider('-', width);
 
@@ -269,6 +284,11 @@ export function receiptToEscPos(
   if (auth.disclaimer) {
     b.bold(true);
     for (const l of wrapWords(auth.disclaimer, width)) b.line(l);
+    b.bold(false);
+  }
+  if (nonVatLegend) {
+    b.bold(true);
+    for (const l of wrapWords(nonVatLegend, width)) b.line(l);
     b.bold(false);
   }
   const closing = auth.kind === 'SALES_INVOICE'

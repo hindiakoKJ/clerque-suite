@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   chipsInOrder, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
+  fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice,
 } from './buy-list-view.ts';
 
 const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
@@ -140,9 +141,69 @@ test('the page: staff open on the list being built, and "Record something you bo
   assert.match(page, /walkIn === req\.id && startsTickedAsWalkIn\(l, walkInItems\)/);
 });
 
-test('staff hints no longer say the owner sends the list at cut-off, and say who records when costs are hidden', () => {
+test('staff hints no longer say the owner sends the list at cut-off, nor that only the owner records', () => {
   assert.doesNotMatch(page, /sends this list when the shift cuts off/);
   assert.match(page, /It is sent to the owner from the kitchen or bar screen, or at closing time\./);
-  assert.match(page, /Bought something yourself\? Tell the owner or manager: on this account only they record purchases\./);
+  // KJ, 2026-09-21: staff on a shop that hides costs record too, without a price.
+  assert.doesNotMatch(page, /on this account only they record purchases/);
   assert.match(page, /Bought something\? Tick it if it is on the list, or tap Record something you bought above, then save\./);
+});
+
+// ── a shop that hides purchase costs from staff (KJ, 2026-09-21) ────────────
+
+test('staff who do not see costs are asked for packs only; everyone else for packs and price', () => {
+  assert.equal(fillInWords(true), 'packs and price');
+  assert.equal(fillInWords(false), 'packs');
+  assert.equal(stillNeeds({ packsBought: 2, packSize: 5000 }, false), null);
+  assert.equal(stillNeeds({ packsBought: 2, packSize: 5000 }, true), 'fill in packs, what one holds, and the price.');
+  assert.equal(stillNeeds({ packsBought: 2, packSize: 5000, packCost: 60 }, true), null);
+  assert.equal(stillNeeds({ packsBought: NaN, packSize: 5000 }, false), 'fill in packs and what one holds.');
+  assert.equal(stillNeeds({ packsBought: 2, packSize: NaN }, false), 'fill in packs and what one holds.');
+});
+
+test('the owner is told which prices are from last time and which are missing', () => {
+  const notes = '[ONTHEWAY:2026-09-21] [LASTPRICE:l1,l3] Ice from the corner store';
+  const last = lastPricedLines(notes);
+  assert.deepEqual([...last], ['l1', 'l3']);
+  assert.deepEqual([...lastPricedLines(null)], []);
+  assert.deepEqual([...lastPricedLines('[ONTHEWAY:2026-09-21]')], []);
+
+  const line = (id, over = {}) => ({ id, packsBought: 2, packCost: 60, receivedAt: null, ...over });
+  assert.equal(priceCheck(line('l1'), last), 'Price from last purchase — check the receipt.');
+  assert.equal(priceCheck(line('l2', { packCost: null }), last), 'No price yet — add it from the receipt before posting.');
+  assert.equal(priceCheck(line('l2'), last), null, 'a price somebody who sees costs typed is not questioned');
+  assert.equal(priceCheck(line('l1', { receivedAt: '2026-09-21' }), last), null, 'posted: nothing to check');
+  assert.equal(priceCheck(line('l4', { packsBought: null, packCost: null }), last), null, 'not bought yet');
+});
+
+test('posting stops at the first line with no price, unless one is being typed now', () => {
+  const ice  = { id: 'l1', packCost: '60.0000' };
+  const milk = { id: 'l2', packCost: null };
+  assert.equal(firstWithoutPrice([ice, milk], () => undefined), milk);
+  assert.equal(firstWithoutPrice([ice, milk], (l) => (l.id === 'l2' ? 95 : undefined)), null);
+  assert.equal(firstWithoutPrice([ice], () => undefined), null);
+});
+
+test('the page: staff who do not see costs get no price box, no totals, no peso', () => {
+  assert.match(page, /const canRecord = !!user;/);
+  assert.match(page, /const noPrice\s+= !!req\.costsHidden;/);
+  // The price box, the cost hint and the line total only for whoever sees costs.
+  assert.match(page, /\{!noPrice && \(\s+<label className="text-\[11px\] text-muted-foreground">\s+Price per pack/);
+  assert.match(page, /show=\{!noPrice && !!bought\[l\.id\] && !!enteredCost\[l\.id\]\}/);
+  assert.match(page, /\{lineTotal > 0 && !noPrice && \(/);
+  assert.match(page, /\{!noPrice && <span className="mt-0\.5 block">Type each price after vouchers\./);
+  // "Spent" and the paid-ahead figure were already hidden by the same flag.
+  assert.match(page, /\{estimate > 0 && !req\.costsHidden && \(/);
+  // Save sends no price from them, and asks only for packs and size.
+  assert.match(page, /\.\.\.\(withPrice \? \{ packCost: parseFloat\(b\.cost\) \} : \{\}\),/);
+  assert.match(page, /const half = rows\.find\(\(r\) => stillNeeds\(r, withPrice\)\);/);
+  assert.doesNotMatch(page, /fill in the packs and price/, 'every "packs and price" hint goes through fillInWords');
+});
+
+test('the page: the owner sees the price from last time flagged, and posting refuses a line with none', () => {
+  assert.match(page, /const lastPriced = lastPricedLines\(req\.notes\);/);
+  assert.match(page, /\{!noPrice && !bought\[l\.id\] && priceCheck\(l, lastPriced\) && \(/);
+  assert.match(page, /if \(unpriced\) throw new Error\(`\$\{unpriced\.rawMaterial\.name\}: add the price from the receipt before posting\.`\);/);
+  // Checked before the fixes are sent, so nothing posts half-way.
+  assert.ok(page.indexOf('if (unpriced) throw') < page.indexOf("await api.post(`/procure/requests/${req.id}/bought`, { lines: fixes }"));
 });

@@ -309,6 +309,25 @@ export class CloseAndPlanService {
       throw new BadRequestException('One or more raw materials do not belong to your organization.');
     }
 
+    /*
+      Every line needs what one unit cost, the way recording a purchase does.
+
+      A line at ₱0 is not a free delivery to the books: with a cost already on
+      file the blend keeps that cost and values the stock against Owner's
+      Capital (zero-cost-blend.ts), and no purchase posts -- so the cash that
+      paid for it is never taken out of the drawer or the bank. The Counter's
+      Close & Plan starts every line at the cost on file, which on a shop that
+      hides costs from staff is no cost at all, so an untouched line sent ₱0.
+      Refused before anything is saved, naming the lines, so nothing half-lands.
+    */
+    const unpriced = lines.filter((l) => !(Number(l.unitCost) > 0));
+    if (unpriced.length > 0) {
+      const names = [...new Set(unpriced.map((l) => ownedMaterials.find((m) => m.id === l.rawMaterialId)?.name ?? 'an item'))];
+      throw new BadRequestException(
+        `Type what one unit cost, from the receipt: ${names.join(', ')}. Nothing was saved.`,
+      );
+    }
+
     // Validate branch belongs to tenant.
     const branch = await this.prisma.branch.findFirst({
       where: { id: branchId, tenantId },

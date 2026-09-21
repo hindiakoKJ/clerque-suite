@@ -9,6 +9,7 @@ import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
 import { OperationsService } from './operations.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { purchaseCostsVisibleTo } from '../procure/cost-visibility';
 import { generateRecipeCostingPdf } from './recipe-costing-pdf';
 import { PH_TIMEZONE } from '@repo/shared-types';
 
@@ -137,11 +138,20 @@ export class ReportsController {
    */
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
   @Get('shift/:shiftId')
-  getShift(
+  async getShift(
     @CurrentUser() user: JwtPayload,
     @Param('shiftId') shiftId: string,
   ) {
-    return this.reportsService.getShiftReport(user.tenantId!, shiftId);
+    const report = await this.reportsService.getShiftReport(user.tenantId!, shiftId);
+    /*
+      The end-of-shift summary is the cashier's own: sales, payments, the
+      drawer. What the shift's sales cost to make, and the profit and margin
+      that follow from it, are purchase costs by another name -- left off for
+      someone the shop hides those from. The EOD screen never showed them.
+    */
+    if (await purchaseCostsVisibleTo(this.prisma, user.tenantId!, user.role)) return report;
+    const { totalCogs: _cogs, grossProfit: _profit, grossMargin: _margin, ...rest } = report;
+    return rest;
   }
 
   // ─── Z-Read endpoints (BIR CAS daily tamper-proof totals) ─────────────────

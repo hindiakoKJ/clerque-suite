@@ -42,7 +42,12 @@ interface SubRecipe {
   id:         string;
   name:       string;
   unit:       string;
-  costPrice:  number | null;
+  /**
+   * Left out entirely for anyone the shop hides purchase costs from
+   * (Settings, "show purchase costs to staff"); null only when no cost is on
+   * file. The card prints it only when it is there.
+   */
+  costPrice?: number | null;
   batchYield: number | null;
   onHand:     number;
   /** Batches the shelf supports right now, with no prep in between. */

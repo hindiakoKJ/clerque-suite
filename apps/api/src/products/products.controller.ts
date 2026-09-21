@@ -30,6 +30,7 @@ import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { purchaseCostsVisibleTo } from '../procure/cost-visibility';
 import { ProductsService, CreateProductDto, UpdateProductDto } from './products.service';
 import { SuperAdminGuard } from '../admin/admin.guard';
 
@@ -44,6 +45,8 @@ export class ProductsController {
   constructor(
     private productsService: ProductsService,
     private storage: StorageService,
+    // Only to read the owner's "show purchase costs to staff" switch.
+    private prisma: PrismaService,
   ) {}
 
   @Get()
@@ -60,16 +63,25 @@ export class ProductsController {
   }
 
   @Get('pos')
-  findForPos(
+  async findForPos(
     @CurrentUser() user: JwtPayload,
     @Query('branchId') branchId: string,
     @Query('customerId') customerId?: string,
   ) {
-    return this.productsService.findForPos(
+    const tiles = await this.productsService.findForPos(
       user.tenantId!,
       branchId ?? user.branchId ?? '',
       customerId,
     );
+    /*
+      The till loads every product with what it costs to make, on every
+      load, for every cashier. For someone the shop hides purchase costs from,
+      that figure is left off. Nothing on the till reads it for display, and a
+      sale no longer needs it back: the server takes the cost of a sale from
+      the catalog itself (OrdersService, the SNAPSHOT step).
+    */
+    if (await purchaseCostsVisibleTo(this.prisma, user.tenantId!, user.role)) return tiles;
+    return tiles.map(({ costPrice: _hidden, ...tile }) => tile);
   }
 
   /** Barcode scanner integration — GET /products/barcode/:barcode */

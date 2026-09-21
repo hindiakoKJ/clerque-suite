@@ -172,6 +172,11 @@ export default function PhoneCloseAndPlanScreen(): React.ReactElement {
       }));
       qc.invalidateQueries({ queryKey: ['close-and-plan', 'summary'] });
     },
+    // A refused save used to fail silently. The server says which line needs
+    // what (a unit cost from the receipt, most often), so say it as sent.
+    onError: (err) => {
+      Alert.alert('Not saved', err instanceof Error ? err.message : 'Could not save these deliveries.');
+    },
   });
 
   const handlePrint = async () => {

@@ -7,14 +7,30 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
+import { PrismaService } from '../prisma/prisma.service';
 import { SubRecipesService, MakeBatchDto, SubRecipeLineInput } from './sub-recipes.service';
+import {
+  prepCostsVisibleTo, boardRowWithoutCost, recipeWithoutCosts, batchResultWithoutCosts,
+} from './prep-costs';
 
 @ApiTags('Sub-recipes')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('inventory/sub-recipes')
 export class SubRecipesController {
-  constructor(private readonly subRecipes: SubRecipesService) {}
+  constructor(
+    private readonly subRecipes: SubRecipesService,
+    // Only to read the owner's "show purchase costs to staff" switch.
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /**
+   * Costs come off the way out, for whoever the shop hides them from -- see
+   * prep-costs.ts. The service underneath always works with the real figures.
+   */
+  private seesCosts(user: JwtPayload): Promise<boolean> {
+    return prepCostsVisibleTo(this.prisma, user.tenantId!, user.role);
+  }
 
   /**
    * Everything the shop preps, with how much more each could make.
@@ -29,10 +45,11 @@ export class SubRecipesController {
          'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'GENERAL_EMPLOYEE')
   @Get()
   @ApiOperation({ summary: 'Every prepared ingredient, with batches still makeable' })
-  list(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
+  async list(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
     // The persona rides on the JWT already; a barista's board shows the bar's
     // preps and a cook's shows the kitchen's. Anyone without one sees all.
-    return this.subRecipes.list(user.tenantId!, branchId ?? user.branchId!, user.personaKey);
+    const rows = await this.subRecipes.list(user.tenantId!, branchId ?? user.branchId!, user.personaKey);
+    return (await this.seesCosts(user)) ? rows : rows.map(boardRowWithoutCost);
   }
 
   /**
@@ -57,8 +74,9 @@ export class SubRecipesController {
          'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'GENERAL_EMPLOYEE')
   @Get(':rawMaterialId')
   @ApiOperation({ summary: 'What one batch of this prepared ingredient is made from' })
-  get(@CurrentUser() user: JwtPayload, @Param('rawMaterialId') id: string) {
-    return this.subRecipes.get(user.tenantId!, id);
+  async get(@CurrentUser() user: JwtPayload, @Param('rawMaterialId') id: string) {
+    const recipe = await this.subRecipes.get(user.tenantId!, id);
+    return (await this.seesCosts(user)) ? recipe : recipeWithoutCosts(recipe);
   }
 
   /** How many more batches the raw materials on hand could produce. */
@@ -101,7 +119,7 @@ export class SubRecipesController {
   @Post(':rawMaterialId/batches')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Record that a batch was made: consume the inputs, add the yield (measured, if the cook weighed it)' })
-  makeBatch(
+  async makeBatch(
     @CurrentUser() user: JwtPayload,
     @Param('rawMaterialId') id: string,
     @Body() body: MakeBatchDto,
@@ -109,12 +127,14 @@ export class SubRecipesController {
     // stationId rides along in `body` untouched -- it is validated against the
     // tenant in the service, so a forged id cannot attribute another shop's
     // station.
-    return this.subRecipes.makeBatch(
+    const result = await this.subRecipes.makeBatch(
       user.tenantId!,
       id,
       { ...body, branchId: body.branchId ?? user.branchId! },
       user.sub,
       user.personaKey,
     );
+    // The batch is recorded at its real cost either way; only the answer changes.
+    return (await this.seesCosts(user)) ? result : batchResultWithoutCosts(result);
   }
 }

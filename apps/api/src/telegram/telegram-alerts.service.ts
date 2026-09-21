@@ -3,6 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { isManilaDay, UsageDay } from '../ingredient-reports/daily-usage';
 import { TelegramClient } from './telegram.client';
 import { AlertTopic, TelegramLinksService } from './telegram-links.service';
+// The notes grammar only (a plain module): no reach into the Procure service.
+import { lastPricedLines } from '../procure/procure-notes';
 import {
   RequestForAlert, SaleForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, photoCaption, postedMessage, saleMessage,
 } from './messages';
@@ -193,12 +195,13 @@ export class TelegramAlertsService {
     const req = await this.prisma.purchaseRequest.findFirst({
       where:  { id: requestId, tenantId },
       select: {
-        requestNumber: true, branchId: true,
+        requestNumber: true, branchId: true, notes: true,
         branch: { select: { name: true } },
         tenant: { select: { name: true } },
         lines: {
           orderBy: { lineNumber: 'asc' },
           select: {
+            id: true,
             packsBought: true, packSize: true, packCost: true, receivedAt: true,
             rawMaterial: { select: { name: true, unit: true } },
           },
@@ -206,6 +209,8 @@ export class TelegramAlertsService {
       },
     });
     if (!req) return null;
+    // Lines staff recorded that carry last time's price, for the owner to check.
+    const lastPriced = lastPricedLines(req.notes);
     return {
       branchId: req.branchId,
       alert: {
@@ -219,6 +224,7 @@ export class TelegramAlertsService {
           packSize:    l.packSize == null ? null : Number(l.packSize),
           packCost:    l.packCost == null ? null : Number(l.packCost),
           received:    l.receivedAt != null,
+          lastPrice:   lastPriced.has(l.id),
         })),
       },
     };

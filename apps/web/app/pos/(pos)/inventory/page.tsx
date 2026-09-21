@@ -40,7 +40,12 @@ interface RawMaterial {
   unit: string;
   /** INGREDIENT | KITCHEN_SUPPLY | BAR_SUPPLY | OFFICE_SUPPLY */
   category?:     string | null;
-  costPrice:     number | null;
+  /**
+   * Left out entirely for anyone the shop hides purchase costs from
+   * (Settings, "show purchase costs to staff"); null only when no cost is on
+   * file. The server decides, and this screen follows what it sent.
+   */
+  costPrice?:    number | null;
   lowStockAlert: number | null;
   stockQty:      number | null;
   /*
@@ -154,6 +159,14 @@ export default function InventoryPage() {
     enabled: matModal === 'receive' && receiveForm.paymentMethod === 'CREDIT',
     staleTime: 60_000,
   });
+
+  /*
+    Whether this person may see what the shop paid. The server leaves the cost
+    off every row for staff once the owner hides purchase costs, so the column
+    and the cost box on Edit go with it: an empty box there would read as "no
+    cost on file" and invite someone to type one over the real one.
+  */
+  const costsShown = rawMaterials.some((m) => 'costPrice' in m);
 
   // Filter the displayed list when "Low only" is on
   const displayed = rawMaterials
@@ -426,6 +439,13 @@ export default function InventoryPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/*
+            Reports and each ingredient's own page are money from top to bottom
+            (what each delivery cost, what the shelf is worth), and the server
+            refuses them to anyone the shop hides costs from -- so the links go
+            too. The Movement Log stays: it comes without the peso column.
+          */}
+          {costsShown && (
           <Link
             href={`${base}/reports`}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -434,6 +454,7 @@ export default function InventoryPage() {
             <BarChart3 className="h-3.5 w-3.5" />
             Reports
           </Link>
+          )}
           <Link
             href={`${base}/movements`}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -515,7 +536,7 @@ export default function InventoryPage() {
                   <th className="px-4 py-3 text-center font-semibold">Unit</th>
                   <th className="px-4 py-3 text-right font-semibold">Stock</th>
                   <th className="px-4 py-3 text-right font-semibold">Alert at</th>
-                  <th className="px-4 py-3 text-right font-semibold">Cost / Unit</th>
+                  {costsShown && <th className="px-4 py-3 text-right font-semibold">Cost / Unit</th>}
                   <th className="px-4 py-3 text-center font-semibold">Status</th>
                   {canEdit && <th className="px-4 py-3 text-right font-semibold">Actions</th>}
                 </tr>
@@ -528,25 +549,37 @@ export default function InventoryPage() {
                   >
                     {/* Name + low-stock badge — clickable to drill down */}
                     <td className="px-6 py-3 font-medium">
-                      <Link
-                        href={`${base}/${m.id}`}
-                        className="group inline-flex items-center gap-2 hover:underline"
-                        style={{ color: 'var(--accent)' }}
-                      >
-                        <span>{m.name}</span>
-                        {m.isLowStock && (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                            <AlertTriangle className="h-2.5 w-2.5" />
-                            Low
-                          </span>
-                        )}
-                        {isSupply(m) && (
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            Supply
-                          </span>
-                        )}
-                        <ChevronRight className="h-3 w-3 opacity-40 group-hover:opacity-100 transition-opacity" />
-                      </Link>
+                      {/* The drill-down is lot costs and values: only for those who see costs. */}
+                      {(() => {
+                        const label = (
+                          <>
+                            <span>{m.name}</span>
+                            {m.isLowStock && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                Low
+                              </span>
+                            )}
+                            {isSupply(m) && (
+                              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                Supply
+                              </span>
+                            )}
+                          </>
+                        );
+                        return costsShown ? (
+                          <Link
+                            href={`${base}/${m.id}`}
+                            className="group inline-flex items-center gap-2 hover:underline"
+                            style={{ color: 'var(--accent)' }}
+                          >
+                            {label}
+                            <ChevronRight className="h-3 w-3 opacity-40 group-hover:opacity-100 transition-opacity" />
+                          </Link>
+                        ) : (
+                          <span className="inline-flex items-center gap-2 text-foreground">{label}</span>
+                        );
+                      })()}
                     </td>
 
                     {/* Unit */}
@@ -605,10 +638,12 @@ export default function InventoryPage() {
                       )}
                     </td>
 
-                    {/* Cost / unit */}
-                    <td className="px-4 py-3 text-right text-muted-foreground tabular-nums text-sm">
-                      {m.costPrice != null ? `₱${m.costPrice.toFixed(4)}/${m.unit}` : '—'}
-                    </td>
+                    {/* Cost / unit -- only for those the shop shows purchase costs to */}
+                    {costsShown && (
+                      <td className="px-4 py-3 text-right text-muted-foreground tabular-nums text-sm">
+                        {m.costPrice != null ? `₱${m.costPrice.toFixed(4)}/${m.unit}` : '—'}
+                      </td>
+                    )}
 
                     {/* Active badge */}
                     <td className="px-4 py-3 text-center">
@@ -692,6 +727,12 @@ export default function InventoryPage() {
                     {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
                   </select>
                 </div>
+                {/*
+                  Not on Edit for someone the cost was hidden from: the box would
+                  arrive empty, and a cost typed into it would replace the real
+                  one. Left blank, the save sends no cost and the one on file stays.
+                */}
+                {(matModal === 'create' || (editingMat != null && 'costPrice' in editingMat)) && (
                 <div>
                   <label className="block text-xs font-medium text-muted-foreground mb-1">Cost / unit (₱)</label>
                   <input
@@ -708,11 +749,12 @@ export default function InventoryPage() {
                     <EditCostHint
                       rawMaterialId={editingMat.id}
                       typed={matForm.costPrice}
-                      loaded={editingMat.costPrice}
+                      loaded={editingMat.costPrice ?? null}
                       show={costEntered}
                     />
                   )}
                 </div>
+                )}
               </div>
               {/*
                 Ingredient or supply. This decides whether the item's cost ends

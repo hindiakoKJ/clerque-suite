@@ -23,6 +23,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { heldUsage, heldAt, availableQty } from '../orders/held-usage';
+import { COST_DECIDER_ROLES } from '../procure/cost-visibility';
+import type { UserRole } from '@prisma/client';
 
 @Injectable()
 export class NotificationsScheduler {
@@ -295,19 +297,49 @@ export class NotificationsScheduler {
         });
       }
       if (apOverdue._count > 0) {
-        await this.notifications.create({
+        const alert = {
           tenantId,
-          userId:    null,
-          kind:      'WARNING',
+          kind:      'WARNING' as const,
           title:     `${apOverdue._count} vendor bill${apOverdue._count === 1 ? '' : 's'} overdue — ₱${apOpen.toLocaleString('en-PH', { minimumFractionDigits: 2 })} due`,
           body:      'Vendors are waiting for payment past their terms. Schedule remittances.',
           link:      '/ledger/ap/bills',
-          dedupeKey: `ap-overdue-${apOverdue._count}`,
-        });
+        };
+        /*
+          What the shop owes its suppliers is what it paid for stock. A shop
+          that shows purchase costs to staff keeps the bell it always had, for
+          everyone. One that hides them sends it only to the people who see
+          costs anyway -- the owner, managers and the books -- one each, so a
+          barista's bell never carries the supplier total.
+        */
+        const recipients = await this.apBillRecipients(tenantId);
+        if (recipients === 'everyone') {
+          await this.notifications.create({ ...alert, userId: null, dedupeKey: `ap-overdue-${apOverdue._count}` });
+        } else {
+          for (const userId of recipients) {
+            await this.notifications.create({ ...alert, userId, dedupeKey: `ap-overdue-${apOverdue._count}-${userId}` });
+          }
+        }
       }
     } catch (err) {
       this.logger.error(`overdueArApProducer failed for ${tenantId}: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * Who the overdue-vendor-bills bell goes to: everyone, the way it always
+   * has, unless the owner hides purchase costs from staff -- then only the
+   * active users whose role sees them (COST_DECIDER_ROLES).
+   */
+  private async apBillRecipients(tenantId: string): Promise<'everyone' | string[]> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId }, select: { showPurchaseCostsToStaff: true },
+    });
+    if (tenant?.showPurchaseCostsToStaff !== false) return 'everyone';
+    const people = await this.prisma.user.findMany({
+      where:  { tenantId, isActive: true, role: { in: [...COST_DECIDER_ROLES] as UserRole[] } },
+      select: { id: true },
+    });
+    return people.map((p) => p.id);
   }
 
   /** 5 days before month-end, remind to close the prior period if still open. */

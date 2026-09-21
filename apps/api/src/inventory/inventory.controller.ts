@@ -21,7 +21,10 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { RequireIdempotency } from '../common/decorators/require-idempotency.decorator';
-import { InventoryService } from './inventory.service';
+import {
+  InventoryService, rawMaterialRowWithoutCost, rawMaterialStockRowWithoutCost,
+  movementWithoutValue, receiptWithoutValue,
+} from './inventory.service';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
@@ -32,7 +35,7 @@ import { WriteOffRawMaterialDto } from './dto/write-off-raw-material.dto';
 import { SANITY_HEADER, SanityConfirmation, sanityContext } from '../common/sanity/sanity.types';
 import { CostSanityService } from '../common/sanity/cost-sanity.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { canSeePurchaseCosts } from '../procure/cost-visibility';
+import { canSeePurchaseCosts, COST_DECIDER_ROLES } from '../procure/cost-visibility';
 
 @ApiTags('Inventory')
 @ApiBearerAuth('access-token')
@@ -198,7 +201,7 @@ export class InventoryController {
    */
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD', 'ACCOUNTANT', 'BOOKKEEPER', 'SUPER_ADMIN')
   @Get('movements')
-  getMovements(
+  async getMovements(
     @CurrentUser() user: JwtPayload,
     @Query('branchId') branchId?: string,
     @Query('from') from?: string,
@@ -206,13 +209,16 @@ export class InventoryController {
     @Query('kind') kind?: 'PRODUCT' | 'RAW_MATERIAL' | 'ALL',
     @Query('limit') limit?: string,
   ) {
-    return this.inventoryService.getAllMovements(user.tenantId!, {
+    const rows = await this.inventoryService.getAllMovements(user.tenantId!, {
       branchId: branchId ?? user.branchId ?? undefined,
       from,
       to,
       kind: kind ?? 'ALL',
       limit: limit ? Math.min(500, parseInt(limit)) : 200,
     });
+    // What moved, when and by whom, for everyone who may open the log; what
+    // it was worth only for those the shop shows purchase costs to.
+    return (await this.seesPurchaseCosts(user)) ? rows : rows.map(movementWithoutValue);
   }
 
   /** Manual stock-in / stock-out / adjustment — WAREHOUSE_STAFF is the new gatekeeper */
@@ -273,7 +279,7 @@ export class InventoryController {
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF',
          'GENERAL_EMPLOYEE')
   @Get('raw-materials')
-  listRawMaterials(
+  async listRawMaterials(
     @CurrentUser() user: JwtPayload,
     @Query('includeInactive') includeInactive?: string,
     @Query('branchId') branchId?: string,
@@ -281,17 +287,35 @@ export class InventoryController {
     // Prefer explicit branchId query param; fall back to the user's own branch.
     // This lets the Inventory page pass the currently-selected branch.
     const branch = branchId ?? user.branchId ?? undefined;
-    return this.inventoryService.listRawMaterials(user.tenantId!, includeInactive === 'true', branch);
+    const rows = await this.inventoryService.listRawMaterials(user.tenantId!, includeInactive === 'true', branch);
+    // Names, units and stock for everyone; what each one costs only for those
+    // the shop shows purchase costs to. The key is left OUT rather than
+    // nulled, so a screen can tell "hidden from you" from "no cost on file".
+    return (await this.seesPurchaseCosts(user)) ? rows : rows.map(rawMaterialRowWithoutCost);
   }
 
   /** Raw material stock levels for a branch */
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'FINANCE_LEAD')
   @Get('raw-materials/stock')
-  listRawMaterialStock(
+  async listRawMaterialStock(
     @CurrentUser() user: JwtPayload,
     @Query('branchId') branchId: string,
   ) {
-    return this.inventoryService.listRawMaterialStock(user.tenantId!, branchId ?? user.branchId!);
+    const rows = await this.inventoryService.listRawMaterialStock(user.tenantId!, branchId ?? user.branchId!);
+    return (await this.seesPurchaseCosts(user)) ? rows : rows.map(rawMaterialStockRowWithoutCost);
+  }
+
+  /**
+   * Whether this viewer may see what the shop paid (Tenant.showPurchaseCostsToStaff,
+   * judged by canSeePurchaseCosts). Read per request so the owner's switch
+   * takes effect on the next load; the deciders skip the query.
+   */
+  private async seesPurchaseCosts(user: JwtPayload): Promise<boolean> {
+    if (COST_DECIDER_ROLES.includes(user.role ?? '')) return true;
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: user.tenantId! }, select: { showPurchaseCostsToStaff: true },
+    });
+    return canSeePurchaseCosts(user.role, tenant?.showPurchaseCostsToStaff);
   }
 
   /** Create a new raw material (ingredient) */
@@ -308,14 +332,19 @@ export class InventoryController {
   @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'WAREHOUSE_STAFF')
   @Patch('raw-materials/:id')
   @HttpCode(HttpStatus.OK)
-  updateRawMaterial(
+  async updateRawMaterial(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: Partial<CreateRawMaterialDto> & { isActive?: boolean; sanityConfirmations?: SanityConfirmation[] },
     @Headers(SANITY_HEADER) sanity?: string,
   ) {
     const { sanityConfirmations, ...rest } = dto;
-    return this.inventoryService.updateRawMaterial(user.tenantId!, id, rest, sanityContext(sanity, sanityConfirmations, user.sub, user.role));
+    const updated = await this.inventoryService.updateRawMaterial(user.tenantId!, id, rest, sanityContext(sanity, sanityConfirmations, user.sub, user.role));
+    // The saved row comes back with the cost on file and what a cost change did
+    // to the menu's margins: neither is for someone the shop hides costs from.
+    if (await this.seesPurchaseCosts(user)) return updated;
+    const { marginAlerts: _alerts, ...row } = updated;
+    return rawMaterialRowWithoutCost(row);
   }
 
   /**
@@ -358,14 +387,28 @@ export class InventoryController {
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF')
   @Post('raw-materials/:id/receive')
   @HttpCode(HttpStatus.OK)
-  receiveRawMaterial(
+  async receiveRawMaterial(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: ReceiveRawMaterialDto,
     @Headers(SANITY_HEADER) sanity?: string,
   ) {
     const { sanityConfirmations, ...rest } = dto;
-    return this.inventoryService.receiveRawMaterialChecked(user.tenantId!, id, rest as ReceiveRawMaterialDto, sanityContext(sanity, sanityConfirmations, user.sub, user.role));
+    /*
+      Anyone who receives may type what the delivery cost -- it is on the
+      receipt in their hand -- and is still stopped when it looks ten times
+      off. For someone the shop hides costs from, the refusal does not recite
+      the cost on file (the "are you sure" question already does not), and
+      the answer leaves out what the delivery was worth -- at the cost on file
+      when none was typed -- and which drinks it pushed into a loss.
+    */
+    const sees = await this.seesPurchaseCosts(user);
+    const result = await this.inventoryService.receiveRawMaterialChecked(
+      user.tenantId!, id, rest as ReceiveRawMaterialDto,
+      sanityContext(sanity, sanityConfirmations, user.sub, user.role),
+      { costsHidden: !sees },
+    );
+    return sees ? result : receiptWithoutValue(result);
   }
 
   /**

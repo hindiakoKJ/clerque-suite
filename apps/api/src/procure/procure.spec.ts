@@ -1,4 +1,4 @@
-import { ProcureService, amountWords, namesInWords, onTheWay } from './procure.service';
+import { ProcureService, amountWords, namesInWords, onTheWay, lastPricedLines, priceFromLastTime } from './procure.service';
 import { Prisma } from '@prisma/client';
 import { servesSentences } from '@repo/shared-types';
 import { productCeiling } from '../products/recipe-ceiling';
@@ -1019,14 +1019,15 @@ describe('ProcureService', () => {
     });
   });
 
-  it('staff still cannot say an open list was paid, and a shop that hides costs from staff still refuses them', async () => {
+  it('staff still cannot say an open list was paid, whether or not the shop shows them costs', async () => {
     const line = { id: 'l1', rawMaterialId: 'rm-ice', packsBought: null, rawMaterial: { name: 'Ice' } };
     const row  = [{ lineId: 'l1', packsBought: 2, packSize: 5000, packCost: 60 }];
     const staff = { userId: 'barista', role: 'CASHIER' };
     await expect(build({ status: 'OPEN', lines: [line] }).svc.recordBought(TENANT, 'req1', row, staff, { onTheWay: true, paidFrom: 'CASH' }))
       .rejects.toThrow(/Only the owner or manager can say the order was paid/);
     const hidden = build({ status: 'OPEN', lines: [line], showCostsToStaff: false });
-    await expect(hidden.svc.recordBought(TENANT, 'req1', row, staff)).rejects.toThrow(/owner or manager records/i);
+    await expect(hidden.svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 5000 }], staff, { onTheWay: true, paidFrom: 'CASH' }))
+      .rejects.toThrow(/Only the owner or manager can say the order was paid/);
     expect(hidden.req().status).toBe('OPEN');
   });
 
@@ -1420,18 +1421,192 @@ describe('ProcureService', () => {
       .rejects.toThrow(/average cost down/i);
   });
 
-  it('lets staff record what they bought only when the shop shows them costs', async () => {
+  it('lets staff type the price only when the shop shows them costs; otherwise they record without one', async () => {
     const line = { id: 'l1', rawMaterialId: 'rm-haz', packsBought: null, rawMaterial: { name: 'Hazelnut Syrup' } };
     const row  = [{ lineId: 'l1', packsBought: 1, packSize: 750, packCost: 540 }];
 
+    // KJ, 2026-09-21: a shop that hides costs no longer refuses them -- packs and size, no price.
     const hidden = build({ status: 'SENT', lines: [line], showCostsToStaff: false });
-    await expect(hidden.svc.recordBought(TENANT, 'req1', row, { userId: 'cook', role: 'GENERAL_EMPLOYEE' }))
-      .rejects.toThrow(/owner or manager records/i);
+    const blind = await hidden.svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 1, packSize: 750 }], { userId: 'cook', role: 'GENERAL_EMPLOYEE' });
+    expect(blind.status).toBe('BOUGHT');
+    expect(hidden.updatedLines[0]).toMatchObject({ id: 'l1', packCost: null });
 
     const shown = build({ status: 'SENT', lines: [line], showCostsToStaff: true });
     const res = await shown.svc.recordBought(TENANT, 'req1', row, { userId: 'cook', role: 'GENERAL_EMPLOYEE' });
     expect(res.status).toBe('BOUGHT');
     expect(shown.updatedLines[0].id).toBe('l1');
+    expect(Number(shown.updatedLines[0].packCost)).toBe(540);
+    // Shown costs, so a price is still asked for.
+    const noPrice = build({ status: 'SENT', lines: [line], showCostsToStaff: true });
+    await expect(noPrice.svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 1, packSize: 750 }], { userId: 'cook', role: 'GENERAL_EMPLOYEE' }))
+      .rejects.toThrow(/What did one pack cost\?/);
+  });
+
+  describe('staff on a shop that hides purchase costs (KJ, 2026-09-21)', () => {
+    /*
+      Cafe Carolina: purchase costs are not shown to staff. A barista who
+      bought ice nearby used to be refused outright, so the ice never reached
+      the list. Now they record packs and size; the price is last time's, for
+      the owner to check against the receipt, and posting stays the owner's.
+    */
+    const ICE = {
+      id: 'l1', lineNumber: 'REQ-20260830-001-01', rawMaterialId: 'rm-ice', qtyRequested: 10000, shortBy: null,
+      packsBought: null, packSize: null, packCost: null, receivedAt: null, rawMaterial: { name: 'Ice', unit: 'g', costPrice: 0.012 },
+    };
+    const MILK = {
+      id: 'l2', lineNumber: 'REQ-20260830-001-02', rawMaterialId: 'rm-milk', qtyRequested: 2000, shortBy: null,
+      packsBought: null, packSize: null, packCost: null, receivedAt: null, rawMaterial: { name: 'Fresh Milk', unit: 'ml', costPrice: 0.095 },
+    };
+    const LAST_ICE = [{ rawMaterialId: 'rm-ice', packSize: 5000, packCost: 60, brandNote: null, receivedAt: new Date('2026-09-18T02:00:00Z') }];
+    const BARISTA = { userId: 'barista', role: 'CASHIER' };
+    const OWNER   = { userId: USER, role: 'BUSINESS_OWNER' };
+    const PEOPLE  = [{ id: 'owner', email: null, name: 'Carol', role: 'BUSINESS_OWNER' }];
+    const hidden  = (lines: any[], more: any = {}) => build({ status: 'OPEN', lines, showCostsToStaff: false, lastPacks: LAST_ICE, people: PEOPLE, ...more });
+
+    /** Every non-empty value under a money-sounding key, anywhere in what came back. */
+    const moneyIn = (x: any, path = ''): string[] => {
+      if (x == null || typeof x !== 'object') return [];
+      return Object.entries(x).flatMap(([k, v]) => {
+        const here = `${path}.${k}`;
+        if (/cost|price|amount|total|value|paid/i.test(k) && v != null && typeof v !== 'boolean') return [here];
+        return typeof v === 'object' ? moneyIn(v, here) : [];
+      });
+    };
+
+    it('records packs and size with no price: saved, the price filled from last time, and none of it sent back', async () => {
+      const { svc, req, updatedLines } = hidden([ICE]);
+      const res = await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 5000 }], BARISTA);
+
+      expect(res.status).toBe('BOUGHT');
+      expect(updatedLines[0]).toMatchObject({ id: 'l1' });
+      expect(Number(updatedLines[0].packCost)).toBe(60);           // last time's, same bag
+      expect(lastPricedLines(req().notes)).toEqual(new Set(['l1'])); // marked for the owner to check
+      // Nothing that comes back to the barista carries a peso.
+      expect(moneyIn(res)).toEqual([]);
+      expect(res.costsHidden).toBe(true);
+      expect(res.lines[0].packCost).toBeNull();
+      expect(res.lines[0].rawMaterial.costPrice).toBeNull();
+    });
+
+    it('the owner sees the filled-in price, and which lines it is on', async () => {
+      const { svc } = hidden([ICE]);
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 5000 }], BARISTA);
+
+      const seen = await svc.get(TENANT, 'req1', 'BUSINESS_OWNER');
+      expect(Number(seen.lines[0].packCost)).toBe(60);
+      expect(lastPricedLines(seen.notes)).toEqual(new Set(['l1']));
+      // The barista reading the same request still sees no price.
+      const blind = await svc.get(TENANT, 'req1', 'CASHIER');
+      expect(blind.lines[0].packCost).toBeNull();
+      expect(moneyIn(blind)).toEqual([]);
+    });
+
+    it('a different bag is priced per unit from last time; a first-time item is left without a price', async () => {
+      const { svc, req, updatedLines } = hidden([ICE, MILK]);
+      await svc.recordBought(TENANT, 'req1', [
+        { lineId: 'l1', packsBought: 1, packSize: 8000 },   // an 8 kg bag this time
+        { lineId: 'l2', packsBought: 2, packSize: 1000 },   // never bought before
+      ], BARISTA);
+      expect(Number(updatedLines.find((u) => u.id === 'l1').packCost)).toBe(96);   // 60 / 5000 g x 8000 g
+      expect(updatedLines.find((u) => u.id === 'l2').packCost).toBeNull();
+      expect(lastPricedLines(req().notes)).toEqual(new Set(['l1']));   // only the one that has a price to check
+    });
+
+    it('a price the client sends anyway is set aside, and nobody is asked whether it is right', async () => {
+      const { svc, updatedLines } = hidden([ICE]);
+      const sanity = { checkIngredientCosts: jest.fn(), enforce: jest.fn(), recordConfirmed: jest.fn() };
+      svc.sanity = sanity;
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 5000, packCost: 1 }], BARISTA,
+        { sanity: { optedIn: true } as any });
+      expect(Number(updatedLines[0].packCost)).toBe(60);
+      expect(sanity.checkIngredientCosts).not.toHaveBeenCalled();   // the question names what it usually costs
+    });
+
+    it('the owner still hears it: the bell and the Telegram alert', async () => {
+      const { svc, notified } = hidden([ICE]);
+      const alerts = { bought: jest.fn() };
+      svc.telegramAlerts = alerts;
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 5000 }], BARISTA);
+      expect(alerts.bought).toHaveBeenCalledWith(TENANT, 'req1', 'barista', null);
+      expect(notified).toHaveLength(1);
+      expect(notified[0]).toMatchObject({ userId: 'owner', title: 'Bought: REQ-20260830-001 — post it to stock' });
+      expect(notified[0].body).not.toMatch(/₱|\d+\.\d\d/);
+    });
+
+    it('staff still get one go at a line', async () => {
+      const { svc } = hidden([{ ...ICE, packsBought: 2, packSize: 5000, packCost: 60 }], { status: 'BOUGHT' });
+      await expect(svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 3, packSize: 5000 }], BARISTA))
+        .rejects.toThrow(/already recorded/i);
+    });
+
+    it('posting a line with no price is refused in plain words; the rest posts and the request stays open', async () => {
+      const { svc, req, received } = hidden([ICE, MILK], { status: 'BOUGHT' });
+      Object.assign(req().lines[0], { packsBought: 2, packSize: 5000, packCost: 60 });
+      Object.assign(req().lines[1], { packsBought: 2, packSize: 1000, packCost: null });
+
+      const res = await svc.receiveRequest(TENANT, 'req1', USER);
+      expect(res.failed).toEqual([{ line: 'REQ-20260830-001-02', name: 'Fresh Milk', reason: 'Add the price from the receipt before posting.' }]);
+      expect(received.map((r) => r.rawMaterialId)).toEqual(['rm-ice']);
+      expect(req().status).toBe('BOUGHT');   // not closed: the milk is still to post
+      expect(req().lines[1].receivedAt).toBeNull();
+    });
+
+    it('the owner adds the price from the receipt, then posts: the line is off the check list and in stock at that price', async () => {
+      const { svc, req, received } = hidden([ICE, MILK]);
+      await svc.recordBought(TENANT, 'req1', [
+        { lineId: 'l1', packsBought: 2, packSize: 5000 },
+        { lineId: 'l2', packsBought: 2, packSize: 1000 },
+      ], BARISTA);
+      expect(lastPricedLines(req().notes)).toEqual(new Set(['l1']));
+
+      // Posting before the milk has a price posts nothing of the milk.
+      const early = await svc.receiveRequest(TENANT, 'req1', USER, 'CASH', { lines: [{ lineId: 'l2' }] });
+      expect(early.failed[0].reason).toBe('Add the price from the receipt before posting.');
+      expect(received).toEqual([]);
+
+      // The receipt says the ice was 65 a bag and the milk 95 a litre.
+      await svc.recordBought(TENANT, 'req1', [
+        { lineId: 'l1', packsBought: 2, packSize: 5000, packCost: 65 },
+        { lineId: 'l2', packsBought: 2, packSize: 1000, packCost: 95 },
+      ], OWNER);
+      expect(lastPricedLines(req().notes)).toEqual(new Set());
+      expect(req().notes ?? '').not.toMatch(/LASTPRICE/);
+
+      const res = await svc.receiveRequest(TENANT, 'req1', USER);
+      expect(res.failed).toEqual([]);
+      expect(received.find((r) => r.rawMaterialId === 'rm-ice').costPrice).toBeCloseTo(65 / 5000);
+      expect(received.find((r) => r.rawMaterialId === 'rm-milk').costPrice).toBeCloseTo(0.095);
+      expect(req().status).toBe('RECEIVED');
+    });
+
+    it('the owner fixing one line leaves the other still marked to check', async () => {
+      const both = [{ rawMaterialId: 'rm-milk', packSize: 1000, packCost: 90, brandNote: null, receivedAt: new Date('2026-09-18T02:00:00Z') }, ...LAST_ICE];
+      const { svc, req } = hidden([ICE, MILK], { lastPacks: both });
+      await svc.recordBought(TENANT, 'req1', [
+        { lineId: 'l1', packsBought: 2, packSize: 5000 },
+        { lineId: 'l2', packsBought: 2, packSize: 1000 },
+      ], BARISTA);
+      expect(lastPricedLines(req().notes)).toEqual(new Set(['l1', 'l2']));
+      await svc.recordBought(TENANT, 'req1', [{ lineId: 'l2', packsBought: 2, packSize: 1000, packCost: 95 }], OWNER);
+      expect(lastPricedLines(req().notes)).toEqual(new Set(['l1']));
+    });
+
+    it('a shop that shows costs to staff keeps the old way: they type the price, nothing is marked', async () => {
+      const { svc, req, updatedLines } = build({ status: 'OPEN', lines: [ICE], lastPacks: LAST_ICE });
+      const res = await svc.recordBought(TENANT, 'req1', [{ lineId: 'l1', packsBought: 2, packSize: 5000, packCost: 62 }], BARISTA);
+      expect(Number(updatedLines[0].packCost)).toBe(62);
+      expect(req().notes).toBeUndefined();
+      expect(res.costsHidden).toBeUndefined();
+    });
+
+    it('last time\'s price, per unit', () => {
+      expect(priceFromLastTime({ packSize: 750, packCost: 540 }, 750)).toBe(540);
+      expect(priceFromLastTime({ packSize: 750, packCost: 540 }, 1000)).toBe(720);
+      expect(priceFromLastTime({ packSize: 3, packCost: 100 }, 1)).toBe(33.33);
+      expect(priceFromLastTime(undefined, 750)).toBeNull();
+      expect(priceFromLastTime({ packSize: 750, packCost: null }, 750)).toBeNull();
+      expect(priceFromLastTime({ packSize: 750, packCost: 540 }, 0)).toBeNull();
+    });
   });
 
   it('gives staff one go at a line; a manager may change it', async () => {

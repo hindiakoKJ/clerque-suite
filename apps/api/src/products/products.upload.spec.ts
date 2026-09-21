@@ -23,7 +23,7 @@ describe('ProductsController — uploadImage', () => {
       }),
       getPublicUrl: jest.fn((key: string) => `/api/v1/products/photos/${key.split('/').pop()}`),
     };
-    const ctrl = new ProductsController({} as any, storage);
+    const ctrl = new ProductsController({} as any, storage, {} as any);
     return { ctrl, storage, puts };
   }
 

@@ -82,3 +82,62 @@ export const recordsOn = (status: string): boolean =>
  */
 export const showsRecordBoxes = (status: string, ticked: boolean): boolean =>
   status !== 'OPEN' || ticked;
+
+// ── a shop that hides purchase costs from staff (KJ, 2026-09-21) ─────────────
+
+/**
+ * What the boxes ask staff to fill in. Staff on a shop that hides purchase
+ * costs never see a price box: they record packs and what one holds, and the
+ * server prices it from last time for the owner to check.
+ */
+export const fillInWords = (withPrice: boolean): string => (withPrice ? 'packs and price' : 'packs');
+
+/**
+ * What a row being saved still needs, in the words the Save shows, or null
+ * when it is complete. Only whoever sees costs is asked for a price.
+ */
+export function stillNeeds(
+  row: { packsBought: number; packSize: number; packCost?: number },
+  withPrice: boolean,
+): string | null {
+  const complete = row.packsBought > 0 && row.packSize > 0 && (!withPrice || (row.packCost ?? 0) > 0);
+  if (complete) return null;
+  return withPrice ? 'fill in packs, what one holds, and the price.' : 'fill in packs and what one holds.';
+}
+
+/**
+ * The lines staff recorded without a price that the server priced from last
+ * time: the request's [LASTPRICE:<line ids>] tag (ProcureService.recordBought).
+ * Ids only; a price saved by the owner takes its line off.
+ */
+export function lastPricedLines(notes: string | null | undefined): Set<string> {
+  const m = /\[LASTPRICE:([^\]]*)\]/.exec(notes ?? '');
+  return new Set((m?.[1] ?? '').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+/**
+ * What the owner is told about the price on a bought line not yet in stock:
+ * nothing, when somebody who sees costs typed it; a nudge to check it when it
+ * is last time's; and that it is missing when there was no last time.
+ */
+export function priceCheck(
+  line: { id: string; packsBought: unknown; packCost: unknown; receivedAt: unknown },
+  lastPriced: ReadonlySet<string>,
+): string | null {
+  if (line.receivedAt != null || line.packsBought == null) return null;
+  if (line.packCost == null) return 'No price yet — add it from the receipt before posting.';
+  if (lastPriced.has(line.id)) return 'Price from last purchase — check the receipt.';
+  return null;
+}
+
+/**
+ * The first line about to be posted with no price, saved or typed now. The
+ * server refuses it too; asking here keeps the rest of the post from going
+ * ahead without it.
+ */
+export function firstWithoutPrice<T extends { packCost: unknown }>(
+  posting: T[],
+  typedCost: (l: T) => number | undefined,
+): T | null {
+  return posting.find((l) => !((typedCost(l) ?? Number(l.packCost ?? 0)) > 0)) ?? null;
+}

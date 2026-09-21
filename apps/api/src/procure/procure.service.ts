@@ -15,7 +15,7 @@ import {
 import { productCeiling, servingsOf, LimitedBy } from '../products/recipe-ceiling';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
-import { appendNote, withTag, readTag, withoutTag, plainNotes } from './procure-notes';
+import { appendNote, withTag, readTag, withoutTag, plainNotes, LAST_PRICE_TAG, lastPricedLines } from './procure-notes';
 import { buildBuyListModel, renderBuyListPdf } from './purchase-request-pdf';
 import { BuyListCopy, BUY_LIST_PDF_LABEL } from './buy-list-labels';
 import { sanityValueKey } from '@repo/shared-types';
@@ -254,7 +254,8 @@ export interface BoughtLineDto {
   lineId:      string;
   packsBought: number;
   packSize:    number;
-  packCost:    number;
+  /** Required from anyone who sees costs. Staff who do not leave it out: see recordBought. */
+  packCost?:   number | null;
   brandNote?:  string;
   /** Where it was bought. Undefined leaves the line's store as it is; null clears it. */
   sourceKind?: SourceKind | null;
@@ -296,6 +297,26 @@ const USUALLY_BUYS = 10;
 const WHERE_BOUGHT_MAX_LINES = 20_000;
 /** A request that holds the balance of another's short delivery. */
 const isBalance = (notes: string | null | undefined) => !!readTag(notes, 'BALANCEOF');
+
+/*
+  [LASTPRICE:<line ids>] -- lines priced from last time for the owner to
+  check. Kept with the other notes tags (procure-notes.ts) so the receipt
+  path and the Telegram alerts read it without reaching into this service;
+  re-exported here for the callers that already import it from here.
+*/
+export { LAST_PRICE_TAG, lastPricedLines };
+
+/**
+ * What a pack of `packSize` cost at last time's price per unit: last time's
+ * own price when the pack is the same, else scaled to the centavo. Null when
+ * there is no last time to go by.
+ */
+export function priceFromLastTime(last: { packSize: number; packCost: number | null } | undefined, packSize: number): number | null {
+  if (!last || !(last.packSize > 0) || !((last.packCost ?? 0) > 0) || !(packSize > 0)) return null;
+  if (Math.abs(last.packSize - packSize) < 1e-9) return last.packCost;
+  const scaled = Math.round((last.packCost! / last.packSize) * packSize * 100) / 100;
+  return scaled > 0 ? scaled : null;
+}
 
 /** What somebody counted on the shelf while building the list, waiting to be posted. */
 export interface CountedLine {
@@ -846,10 +867,17 @@ export class ProcureService {
    * cost. Doing the packs-to-units maths here is what lets the spreadsheet be
    * a backup rather than the only place the conversion can happen.
    *
-   * Whoever is holding the bag may record it, not only the owner -- on one
-   * condition: the shop shows purchase costs to its staff. Recording a price
-   * you are not allowed to see makes no sense, and that one switch already
-   * says which kind of shop this is. Recording never posts anything.
+   * Whoever is holding the bag may record it, not only the owner. Recording
+   * never posts anything.
+   *
+   * On a shop that hides purchase costs from its staff (KJ, 2026-09-21: Cafe
+   * Carolina), staff still record -- the ice bought nearby cannot wait for
+   * the owner -- but without a price: packs and what one holds. The price is
+   * filled from what the ingredient cost last time, when there is a last
+   * time, and the line is marked [LASTPRICE] for the owner to check against
+   * the receipt; with no last time it stays empty, and posting refuses it
+   * until the owner adds the price. Nothing that comes back to them carries
+   * a peso. Anyone who sees costs records a price, as before.
    *
    * An OPEN list may be recorded on too (KJ, 2026-09-17). A barista's walk-in
    * buy, or ice that is only on today's open list, used to wait for the owner
@@ -887,16 +915,13 @@ export class ProcureService {
       );
     }
     const decider = !actor || COST_DECIDER_ROLES.includes(actor.role ?? '');
+    // Whether this person types the price, or records packs only and gets last time's.
+    let seesCosts = decider;
     if (!decider) {
       const tenant = await this.prisma.tenant.findUnique({
         where: { id: tenantId }, select: { showPurchaseCostsToStaff: true },
       });
-      if (!canSeePurchaseCosts(actor.role, tenant?.showPurchaseCostsToStaff)) {
-        throw new BadRequestException(
-          'On this account only the owner or manager records what was bought. '
-          + 'The owner can open it to staff by showing purchase costs to staff under Settings.',
-        );
-      }
+      seesCosts = canSeePurchaseCosts(actor.role, tenant?.showPurchaseCostsToStaff);
       /*
         Recording is not spending. Whoever is holding the bag writes down
         packs and prices; saying the money already left, and from which
@@ -925,7 +950,8 @@ export class ProcureService {
         every recipe using it gets cheaper on paper. A pack that really was
         free is left out of the count and mentioned under Brand.
       */
-      if (!(l.packCost > 0)) {
+      // Only from someone who sees costs: staff who do not are never asked for one.
+      if (seesCosts && !((l.packCost ?? 0) > 0)) {
         throw new BadRequestException(
           'What did one pack cost? A zero would pull the ingredient\'s average cost down. '
           + 'If a pack was free, leave it out of the count and say so under Brand.',
@@ -961,6 +987,23 @@ export class ProcureService {
     }
 
     /*
+      The price each line is saved with. Whoever sees costs typed it. Staff
+      who do not see costs typed none, and anything a client sent anyway is
+      set aside: the price is last time's for the same ingredient, per unit,
+      for the owner to check against the receipt -- or empty when this is the
+      first time it is bought, for the owner to fill in before posting.
+    */
+    const memory = seesCosts ? null : await this.lastPacks(tenantId, [
+      ...new Set(lines.map((l) => req.lines.find((x) => x.id === l.lineId)!.rawMaterialId)),
+    ]);
+    const priced = lines.map((l) => ({
+      ...l,
+      packCost: memory
+        ? priceFromLastTime(memory.get(req.lines.find((x) => x.id === l.lineId)!.rawMaterialId), l.packSize)
+        : (l.packCost ?? null),
+    }));
+
+    /*
       "Are you sure this is the correct cost?" -- here, where the price per pack
       is typed, and before anything is written. This is the moment it can
       still be fixed: by the time the goods are posted the number has been
@@ -968,12 +1011,16 @@ export class ProcureService {
       cost the instant it lands. What the person confirms is written down
       against the line, so posting it later does not ask the same question
       again.
+
+      Not for staff who do not see costs: they typed no price to be asked
+      about, and the question itself names what the item usually costs.
     */
     let confirmedCosts: Awaited<ReturnType<CostSanityService['checkIngredientCosts']>> = [];
-    if (this.sanity && extra.sanity?.optedIn) {
+    if (this.sanity && extra.sanity?.optedIn && seesCosts) {
+      const typed = priced.filter((l): l is typeof l & { packCost: number } => l.packCost != null);
       // Only prices that are new or changed. Saving the list again, or posting
       // a correction to one line, must not ask again about a line nobody touched.
-      const changed = lines.filter((l) => {
+      const changed = typed.filter((l) => {
         const owned = req.lines.find((x) => x.id === l.lineId)!;
         return !(owned.packCost != null && owned.packSize != null
           && Math.abs(Number(owned.packCost) - l.packCost) < 1e-9 && Math.abs(Number(owned.packSize) - l.packSize) < 1e-9);
@@ -998,16 +1045,16 @@ export class ProcureService {
       (milk from the market this morning, beans from the grocery this
       afternoon). A correction to a line already recorded is not news.
     */
-    const filledBlank = lines.filter((l) => req.lines.find((x) => x.id === l.lineId)?.packsBought == null);
+    const filledBlank = priced.filter((l) => req.lines.find((x) => x.id === l.lineId)?.packsBought == null);
 
     await this.prisma.$transaction(
-      lines.map((l) =>
+      priced.map((l) =>
         this.prisma.purchaseRequestLine.update({
           where: { id: l.lineId },
           data: {
             packsBought: new Prisma.Decimal(l.packsBought),
             packSize:    new Prisma.Decimal(l.packSize),
-            packCost:    new Prisma.Decimal(l.packCost),
+            packCost:    l.packCost != null ? new Prisma.Decimal(l.packCost) : null,
             brandNote:   l.brandNote?.trim() || null,
             // Only when said: a price fixed later, by a screen or a sheet that
             // does not mention the store, must not wipe where it was bought.
@@ -1035,6 +1082,22 @@ export class ProcureService {
     if (extra.note) notes = appendNote(notes, extra.note);
     const boughtDay = extra.boughtAt ? this.dayOf(extra.boughtAt) : null;
     if (extra.onTheWay || extra.paidFrom) notes = withTag(notes, 'ONTHEWAY', boughtDay ?? this.today());
+    /*
+      Which lines carry last time's price instead of the receipt's. Staff who
+      do not see costs add the lines they priced from memory; a price saved
+      by anyone who sees costs is the receipt's, and takes its line off.
+      Touched only when that changes, so a save that changes nothing here
+      does not rewrite the notes.
+    */
+    const wasLast = lastPricedLines(req.notes);
+    const nowLast = new Set(wasLast);
+    for (const l of priced) {
+      if (!seesCosts && l.packCost != null) nowLast.add(l.lineId);
+      else nowLast.delete(l.lineId);
+    }
+    if (nowLast.size !== wasLast.size || [...nowLast].some((id) => !wasLast.has(id))) {
+      notes = nowLast.size > 0 ? withTag(notes, LAST_PRICE_TAG, [...nowLast].join(',')) : withoutTag(notes, LAST_PRICE_TAG);
+    }
     const now = new Date();
     let updated = await this.prisma.purchaseRequest.update({
       where:   { id: requestId },
@@ -1095,7 +1158,7 @@ export class ProcureService {
     if (!extra.quiet && (firstRecording || filledBlank.length > 0)) {
       void this.telegramAlerts?.bought(tenantId, requestId, actor?.userId ?? null, firstRecording ? null : {
         items: filledBlank.length,
-        value: filledBlank.reduce((t, l) => t + l.packsBought * l.packCost, 0),
+        value: filledBlank.reduce((t, l) => t + l.packsBought * (l.packCost ?? 0), 0),
       });
     }
     /*
@@ -1108,6 +1171,12 @@ export class ProcureService {
     if (!extra.quiet && firstRecording && !decider && actor) {
       await this.bellBought(tenantId, updated, lines.length, actor.userId);
     }
+    /*
+      Staff who do not see costs get the request back the way their screen
+      reads it: no price, no running cost, no last-time price. They cannot
+      have paid ahead (refused above), so there is no pocket to settle.
+    */
+    if (!seesCosts) return this.stripCosts(updated);
     /*
       Already paid ahead? Then a corrected price is a correction to the
       money too, and the pocket is the one the request remembers -- the
@@ -1423,11 +1492,21 @@ export class ProcureService {
     for (const line of req.lines) {
       const name = line.rawMaterial.name;
       if (line.receivedAt) { skipped.push({ line: line.lineNumber, name, reason: 'Already posted.' }); continue; }
-      if (line.packsBought == null || line.packSize == null || line.packCost == null) {
+      if (line.packsBought == null || line.packSize == null) {
         skipped.push({ line: line.lineNumber, name, reason: 'Nothing was bought for this line.' });
         continue;
       }
       if (opts.lines && !chosen.has(line.id)) continue;   // left for a later post
+      /*
+        Bought, with no price: staff on a shop that hides costs recorded it,
+        and there was no last time to price it from. Posting it would put it
+        on the shelf at nothing and pull the ingredient's average cost down.
+        Refused as a failure, not skipped, so the request stays open for it.
+      */
+      if (line.packCost == null) {
+        failed.push({ line: line.lineNumber, name, reason: 'Add the price from the receipt before posting.' });
+        continue;
+      }
 
       const bought  = Number(line.packsBought);
       const arrived = chosen.get(line.id) ?? bought;

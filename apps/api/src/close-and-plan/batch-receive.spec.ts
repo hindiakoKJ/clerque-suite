@@ -113,4 +113,30 @@ describe('CloseAndPlanService — batchReceive delegates to the real receive pat
       svc.batchReceive(TENANT, BRANCH, USER, [line('rm1'), line('stolen')]),
     ).rejects.toThrow(/do not belong/i);
   });
+
+  /*
+    A line at ₱0 is not free to the books: with a cost on file it is valued at
+    that cost against Owner's Capital and no purchase posts, so the pocket that
+    paid is never charged. The Counter starts each line at the cost on file,
+    which staff on a shop that hides costs are not sent -- so an untouched line
+    arrived as ₱0.
+  */
+  it('refuses a line with no unit cost, names it, and saves nothing at all', async () => {
+    const { svc, inventory } = build();
+    await expect(
+      svc.batchReceive(TENANT, BRANCH, USER, [line('rm1'), line('Ice', { unitCost: 0 })]),
+    ).rejects.toThrow('Type what one unit cost, from the receipt: Ice. Nothing was saved.');
+    // Not even the priced line: the batch is one save.
+    expect(inventory.receiveRawMaterial).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing or negative cost the same way', async () => {
+    for (const unitCost of [undefined, null, -5, Number.NaN]) {
+      const { svc, inventory } = build();
+      await expect(
+        svc.batchReceive(TENANT, BRANCH, USER, [line('Milk', { unitCost })]),
+      ).rejects.toThrow(/Type what one unit cost.*Milk/);
+      expect(inventory.receiveRawMaterial).not.toHaveBeenCalled();
+    }
+  });
 });

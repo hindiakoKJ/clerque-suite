@@ -587,6 +587,32 @@ describe('ProcureReceiptsService', () => {
     expect(docs).toHaveLength(1);
   });
 
+  /*
+    Staff recorded the sugar with last time's price ([LASTPRICE:k1]) and a
+    second line the owner has not reached. The receipt now writes the sugar's
+    real price: that line is off the "check the receipt" list, the other is
+    not -- saved without posting, the notice used to stay on both.
+  */
+  it("takes the lines it priced off [LASTPRICE], and leaves the rest for the owner", async () => {
+    const req = kitchen();
+    req.status = 'BOUGHT';
+    req.notes = '[LASTPRICE:k1,k2] Ice from the corner store';
+    const { svc, requests } = build({ kitchen: req });
+    await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', postNow: false, receiptDate: '2026-09-04' });
+    expect(requests[0].notes).toMatch(/^\[LASTPRICE:k2\]/);
+    expect(requests[0].notes).toContain('Ice from the corner store');
+  });
+
+  it('drops [LASTPRICE] altogether once every line on it carries the receipt\'s price', async () => {
+    const req = kitchen();
+    req.status = 'BOUGHT';
+    req.notes = '[LASTPRICE:k1] Ice from the corner store';
+    const { svc, requests } = build({ kitchen: req });
+    await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, purchaseRequestId: 'req-k', postNow: false, receiptDate: '2026-09-04' });
+    expect(requests[0].notes).not.toMatch(/LASTPRICE/);
+    expect(requests[0].notes).toContain('Ice from the corner store');
+  });
+
   it('saved onto a sent list without a photo or posting, it tells Telegram it was bought -- once', async () => {
     const { svc } = build({ kitchen: kitchen() });
     const alerts = { bought: jest.fn(), purchasePhoto: jest.fn(), postedToStock: jest.fn() };

@@ -15,6 +15,9 @@
  * would be a cycle. Both sides call this with what they already know.
  */
 
+// Type only: nothing is loaded at run time, so this stays a plain module.
+import type { PrismaService } from '../prisma/prisma.service';
+
 /** Roles that decide on a request, and therefore always see its costs. */
 export const COST_DECIDER_ROLES: readonly string[] = [
   'BUSINESS_OWNER',
@@ -42,4 +45,25 @@ export function canSeePurchaseCosts(
 ): boolean {
   if (showToStaff !== false) return true;
   return !!role && COST_DECIDER_ROLES.includes(role);
+}
+
+/**
+ * The same answer for a controller that only has the person and the shop:
+ * the deciders are answered without a query, everyone else by reading the
+ * owner's switch now -- per request, not from the login, so turning it off
+ * takes effect on the next screen load rather than after every member of
+ * staff has signed out and back in.
+ *
+ * Takes the tenant reader rather than a service, for the reason above.
+ */
+export async function purchaseCostsVisibleTo(
+  prisma: Pick<PrismaService, 'tenant'>,
+  tenantId: string,
+  role: string | null | undefined,
+): Promise<boolean> {
+  if (role && COST_DECIDER_ROLES.includes(role)) return true;
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId }, select: { showPurchaseCostsToStaff: true },
+  });
+  return canSeePurchaseCosts(role, tenant?.showPurchaseCostsToStaff);
 }

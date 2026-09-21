@@ -54,6 +54,57 @@ export const noCostWarning = (name: string) =>
   `"${name}" has no cost on file, so this changed the shelf but not the books. `
   + 'Set its cost under Stock on hand; the books will not carry this until it has one.';
 
+/*
+  The ingredient list as someone the shop hides purchase costs from sees it.
+
+  GET raw-materials is how the cook's and the barista's pickers learn the
+  ingredient names, and it carried every ingredient's cost per unit with them;
+  the stock list carried that and the peso value of the shelf. Turning off
+  "show purchase costs to staff" hid none of it. These take the money off the
+  way out -- the stored cost is never touched, because the profit reports run
+  on it (see InventoryController.listRawMaterials).
+*/
+
+/** One ingredient row without its cost per unit. Name, unit, stock and levels stay. */
+export function rawMaterialRowWithoutCost<T extends { costPrice?: unknown }>(row: T): Omit<T, 'costPrice'> {
+  const { costPrice: _hidden, ...rest } = row;
+  return rest;
+}
+
+/** One stock row without its cost per unit, the value of the shelf, or the ingredient's own cost. */
+export function rawMaterialStockRowWithoutCost<
+  T extends { costPrice?: unknown; totalValue?: unknown; rawMaterial?: { costPrice?: unknown } | null },
+>(row: T) {
+  const { costPrice: _cost, totalValue: _value, rawMaterial, ...rest } = row;
+  if (!rawMaterial) return { ...rest, rawMaterial };
+  const { costPrice: _ingredientCost, ...ingredient } = rawMaterial;
+  return { ...rest, rawMaterial: ingredient };
+}
+
+/**
+ * Who a Stock on hand receipt is for. `costsHidden`: the person receiving is
+ * one the shop hides purchase costs from, so nothing said back to them may
+ * name the cost on file. Everything else about the receipt is the same.
+ */
+export interface ReceiveView { costsHidden?: boolean }
+
+/** One Movement Log row without what it was worth. What moved, when and by whom stay. */
+export function movementWithoutValue<T extends { totalValue?: unknown }>(row: T): Omit<T, 'totalValue'> {
+  const { totalValue: _value, ...rest } = row;
+  return rest;
+}
+
+/**
+ * The answer to "received" without what the delivery was worth or which
+ * drinks it pushed into a loss. Quantities, the date, the payment and any
+ * "no cost on file" warning stay: that is the person's own delivery.
+ */
+export function receiptWithoutValue<T extends object>(result: T) {
+  const { totalValue: _value, marginAlerts: _alerts, ...rest } =
+    result as T & { totalValue?: unknown; marginAlerts?: unknown };
+  return rest;
+}
+
 /** A drink that a cost change has just pushed from making money to losing it. */
 export interface MarginAlert {
   productId: string;
@@ -1601,9 +1652,12 @@ export class InventoryService {
    * front, before anything is written, and never inside a per-line loop that
    * would turn the question into a silent failure. This is that same up-front
    * check for the one screen that receives a single line directly.
+   *
+   * `view`: who is receiving, for how the ten-times refusal is worded -- see
+   * ReceiveView.
    */
-  async receiveRawMaterialChecked(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto, ctx?: SanityContext) {
-    if (!this.sanity || !ctx?.optedIn || dto.costPrice == null) return this.receiveRawMaterial(tenantId, rawMaterialId, dto);
+  async receiveRawMaterialChecked(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto, ctx?: SanityContext, view: ReceiveView = {}) {
+    if (!this.sanity || !ctx?.optedIn || dto.costPrice == null) return this.receiveRawMaterial(tenantId, rawMaterialId, dto, view);
     /*
       A delivery already received under this reference is a retry: the answer
       is "already received, nothing added", and asking about its price again
@@ -1615,7 +1669,7 @@ export class InventoryService {
         where: { tenantId, rawMaterialId, referenceNumber: dto.referenceNumber.trim() },
         select: { id: true },
       });
-      if (seen) return this.receiveRawMaterial(tenantId, rawMaterialId, dto);
+      if (seen) return this.receiveRawMaterial(tenantId, rawMaterialId, dto, view);
     }
     const warnings = await this.sanity.checkIngredientCosts(tenantId, [{
       key: `rm:${rawMaterialId}:receive`, rawMaterialId, grossPerUnit: dto.costPrice,
@@ -1625,7 +1679,7 @@ export class InventoryService {
     // A person who has just said this price is right has answered the old
     // ten-times guard's question too; refusing it again would be a dead end.
     const accept = confirmed.length > 0;
-    const result = await this.receiveRawMaterial(tenantId, rawMaterialId, accept ? { ...dto, acceptCostChange: true } : dto);
+    const result = await this.receiveRawMaterial(tenantId, rawMaterialId, accept ? { ...dto, acceptCostChange: true } : dto, view);
     if (!(result as { duplicate?: boolean }).duplicate) {
       await this.sanity.recordConfirmed(tenantId, ctx?.userId, confirmed, () => ({ type: 'RawMaterial', id: rawMaterialId }));
     }
@@ -1810,7 +1864,7 @@ export class InventoryService {
     });
   }
 
-  async receiveRawMaterial(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto) {
+  async receiveRawMaterial(tenantId: string, rawMaterialId: string, dto: ReceiveRawMaterialDto, view: ReceiveView = {}) {
     const material = await this.prisma.rawMaterial.findFirst({
       where: { id: rawMaterialId, tenantId },
     });
@@ -1952,6 +2006,21 @@ export class InventoryService {
       if (factor >= 10 || factor <= 0.1) {
         const money = (n: number) =>
           '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        /*
+          Someone the shop hides purchase costs from is stopped all the same --
+          what they typed is still probably a unit mix-up -- but in words that
+          do not recite the cost on file, nor a "times more" that would give it
+          back. Their own figure, as typed. The "are you sure" question already
+          speaks to them this way (CostSanityService).
+        */
+        if (view.costsHidden) {
+          throw new BadRequestException(
+            `"${material.name}": ${money(enteredCost!)} per ${material.unit} is about ten times off what it usually costs. ` +
+            `Check the unit: a price for a whole sack or bottle entered against a per-${material.unit} ` +
+            `ingredient will re-cost every recipe that uses it. If the price really did change, ` +
+            'tick "the price really changed" and receive again.',
+          );
+        }
         throw new BadRequestException(
           `"${material.name}" is on file at ${money(priorCost)} per ${material.unit}, ` +
           `and this delivery says ${money(netCostPrice)} per ${material.unit} — ` +

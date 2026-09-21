@@ -182,6 +182,41 @@ describe('OrdersService — costing mode vs inventory deduction', () => {
     expect(cogsOf(tx).costMethod).toBe('RECIPE_WAC');
   });
 
+  /*
+    The till used to send back the cost it loaded with the catalog, and the
+    sale fell back on that. A cashier on a shop that hides purchase costs is
+    no longer sent it (ProductsController.findForPos), so the sale reads the
+    catalog itself.
+  */
+  it('books the catalog cost when the till sends none (costs hidden from the cashier)', async () => {
+    const { svc, tx } = build('UNIT_BASED', 'UNIT_BASED');
+    const p = payload();
+    delete (p.items[0] as { costPrice?: number }).costPrice;
+    await svc.create(TENANT, 'cashier-1', p as never);
+
+    expect(Number(cogsOf(tx).unitCost)).toBe(FLAT_COST);
+    expect(cogsOf(tx).costMethod).toBe('SNAPSHOT');
+  });
+
+  it('prefers the catalog over a stale cost the till still holds', async () => {
+    const { svc, tx } = build('UNIT_BASED', 'UNIT_BASED');
+    const p = payload();
+    p.items[0].costPrice = 99;           // loaded before the owner changed it
+    await svc.create(TENANT, 'cashier-1', p as never);
+
+    expect(Number(cogsOf(tx).unitCost)).toBe(FLAT_COST);
+  });
+
+  it("falls back on the till's cost only when the catalog has none", async () => {
+    const { svc, tx } = build('UNIT_BASED', 'UNIT_BASED');
+    tx.product.findMany.mockResolvedValue([
+      { id: PRODUCT, name: 'Latte', inventoryMode: 'UNIT_BASED', costPrice: null },
+    ]);
+    await svc.create(TENANT, 'cashier-1', payload() as never);
+
+    expect(Number(cogsOf(tx).unitCost)).toBe(FLAT_COST);   // the till's 60
+  });
+
   it('costs from the recipe once ingredients are actually priced', async () => {
     MILK.costPrice = 0.085;              // the shop fills in its milk cost
     try {

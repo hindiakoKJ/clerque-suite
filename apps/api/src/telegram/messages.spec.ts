@@ -133,6 +133,60 @@ describe('Telegram alert messages', () => {
     expect(photoCaption(req, 'Receipt', 'Maria', at)).toContain('Bought on this request: ₱2,080.00 (2 items)');
   });
 
+  /*
+    A staff buy on a shop that hides purchase costs: packs only. The price is
+    last time's, or none at all the first time. The owner is the one person
+    who must see both -- the unpriced line was dropped ("Bought: ₱0.00" over
+    an empty list) and last time's price read as the receipt's.
+  */
+  const staffBuy = {
+    ...req,
+    lines: [
+      { name: 'Ice', unit: 'kg', packsBought: 2, packSize: 5, packCost: null, received: false },
+      { name: 'Whole milk', unit: 'ml', packsBought: 4, packSize: 1000, packCost: 95, received: false, lastPrice: true },
+      { name: 'Espresso beans', unit: 'g', packsBought: null, packSize: null, packCost: null, received: false },
+    ],
+  };
+
+  it('a staff buy lists the line with no price as "price to add", and says the total is so far', () => {
+    const text = boughtMessage(staffBuy, 'Barista', at);
+    expect(text).toContain('<b>Bought: PR-2026-0012</b>  ₱380.00 so far');
+    const lines = receipt(text).split('\n');
+    expect(lines).toContain('Ice');
+    expect(lines.find((l) => l.startsWith('  2 packs × 5 kg'))).toMatch(/price to add$/);
+    expect(lines.find((l) => l.startsWith('TOTAL so far'))).toMatch(/₱380\.00$/);
+    expect(text).toContain('1 item still needs the price from the receipt.');
+    expect(text).not.toContain('Espresso');   // not bought
+  });
+
+  it("marks last time's price for the owner to check against the receipt", () => {
+    const text = boughtMessage(staffBuy, 'Barista', at);
+    expect(receipt(text).split('\n').find((l) => l.startsWith('  4 packs × 1000 ml'))).toMatch(/380\.00\*$/);
+    expect(text).toContain("* Last time's price. Check it against the receipt.");
+  });
+
+  it('a first staff buy with nothing priced is still listed, not "₱0.00" over nothing', () => {
+    const first = { ...req, lines: [{ name: 'Ice', unit: 'kg', packsBought: 2, packSize: 5, packCost: null, received: false }] };
+    const text = boughtMessage(first, 'Barista', at);
+    expect(receipt(text)).toContain('Ice');
+    expect(text).toContain('1 item still needs the price from the receipt.');
+    expect(photoCaption(first, 'Receipt', 'Barista', at)).toContain('Bought on this request: ₱0.00 so far (1 item)');
+    expect(photoCaption(first, 'Receipt', 'Barista', at)).not.toContain('Nothing recorded as bought');
+  });
+
+  it('a photo caption counts the lines still to price and those at last time\'s price', () => {
+    const cap = photoCaption(staffBuy, 'Receipt', 'Barista', at);
+    expect(cap).toContain('Bought on this request: ₱380.00 so far (2 items)');
+    expect(cap).toContain('1 item still needs the price from the receipt.');
+    expect(cap).toContain("1 item at last time's price. Check against the receipt.");
+  });
+
+  it('a fully priced buy reads exactly as before: no "so far", no notes', () => {
+    const text = boughtMessage(req, 'Maria', at);
+    expect(text).not.toMatch(/so far|still need|Last time/);
+    expect(photoCaption(req, 'Receipt', 'Maria', at)).not.toMatch(/so far|still need|last time/);
+  });
+
   it('posted lists only what went on the shelf', () => {
     const text = postedMessage(req, 'Anne', at);
     expect(text).toContain('<b>In stock: PR-2026-0012</b>  ₱380.00');

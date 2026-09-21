@@ -27,6 +27,17 @@ import { RequireIdempotency } from '../common/decorators/require-idempotency.dec
 import { OrdersService } from './orders.service';
 import { OrderQuoteService, type QuoteRequest } from './order-quote.service';
 import { OfflineOrder } from '@repo/shared-types';
+import { PrismaService } from '../prisma/prisma.service';
+import { purchaseCostsVisibleTo } from '../procure/cost-visibility';
+
+/** An order with each line's cost to make left off. Prices, totals and tax stay. */
+export function orderWithoutLineCosts<T extends { items?: Array<{ costPrice?: unknown }> }>(order: T): T {
+  if (!order.items) return order;
+  return {
+    ...order,
+    items: order.items.map(({ costPrice: _hidden, ...item }) => item),
+  } as T;
+}
 
 interface CreateOrderBody {
   order: OfflineOrder;
@@ -79,7 +90,20 @@ export class OrdersController {
   constructor(
     private ordersService: OrdersService,
     private quoteService:  OrderQuoteService,
+    // Only to read the owner's "show purchase costs to staff" switch.
+    private prisma:        PrismaService,
   ) {}
+
+  /*
+    Each order line carries what it cost to make (OrderItem.costPrice) -- the
+    ingredient costs, summed. The receipt screens never show it, but the
+    cashier's order list sent it with every line. For someone the shop hides
+    purchase costs from it is left off; the order itself is unchanged.
+  */
+  private async withoutLineCosts<T extends { items?: Array<{ costPrice?: unknown }> }>(user: JwtPayload, order: T): Promise<T> {
+    if (await purchaseCostsVisibleTo(this.prisma, user.tenantId!, user.role)) return order;
+    return orderWithoutLineCosts(order);
+  }
 
   /**
    * Price a cart. Read-only: nothing is created, nothing is reserved.
@@ -125,11 +149,13 @@ export class OrdersController {
       // Branch-scoped roles (CASHIER, SALES_LEAD, BRANCH_MANAGER, etc.) are
       // forced to their own branchId — owners/accountants see whatever they ask for.
       const scoped = effectiveBranchId(user, branchId);
-      return await this.ordersService.findAll(
+      const page = await this.ordersService.findAll(
         user.tenantId!, scoped, shiftId,
         take ? Number(take) : undefined,
         skip ? Number(skip) : undefined,
       );
+      if (await purchaseCostsVisibleTo(this.prisma, user.tenantId!, user.role)) return page;
+      return { ...page, data: page.data.map(orderWithoutLineCosts) };
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
       if (err instanceof ForbiddenException) throw err;
@@ -156,7 +182,7 @@ export class OrdersController {
       // could GET /orders/<branch-B-order-id> and see PWD/SC IDs, customer
       // TIN, payment amounts, and pharmacist PRC.
       const branchScope = effectiveBranchId(user, undefined);
-      return await this.ordersService.findOne(user.tenantId!, id, branchScope);
+      return await this.withoutLineCosts(user, await this.ordersService.findOne(user.tenantId!, id, branchScope));
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
       if (err instanceof ForbiddenException) throw err;

@@ -13,7 +13,7 @@ import {
 } from './receipt-parser';
 import { idsInARecipe } from '../inventory/recipe-use';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
-import { readTag, withTag, appendNote } from './procure-notes';
+import { readTag, withTag, appendNote, withoutLastPriced } from './procure-notes';
 import { CostSanityService, IngredientCostLine } from '../common/sanity/cost-sanity.service';
 import { sanityValueKey } from '@repo/shared-types';
 import { SanityContext, SanityWarning } from '../common/sanity/sanity.types';
@@ -642,6 +642,13 @@ export class ProcureReceiptsService {
     let notes = req.notes;
     if (dto.idempotencyKey && !replay) notes = withTag(notes, 'RCPT', dto.idempotencyKey);
     if (label && !(notes ?? '').includes(label)) notes = appendNote(notes, label);
+    /*
+      The receipt's price is the real one. A line staff recorded with last
+      time's price, now carrying the receipt's, is no longer one for the owner
+      to check -- saved without posting, the "price from last purchase" notice
+      stayed on it, over a price that had just come off the receipt.
+    */
+    notes = withoutLastPriced(notes, landedOn.map((l) => l.lineId)) ?? null;
     const wasSent = req.status === 'SENT';
     const request = await this.prisma.purchaseRequest.update({
       where: { id: req.id },

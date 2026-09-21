@@ -85,6 +85,25 @@ describe('TelegramAlertsService', () => {
     expect(client.sendPhoto).toHaveBeenCalledWith('101', Buffer.from('jpg'), 'image/jpeg', expect.stringContaining('Receipt photo: PR-0012'), expect.any(String));
   });
 
+  it("marks the lines the request's notes say carry last time's price", async () => {
+    const { svc, client, prisma } = build({ chats: ['101'] });
+    prisma.purchaseRequest.findFirst.mockResolvedValueOnce({
+      ...REQUEST,
+      notes: '[LASTPRICE:l2] Ice from the corner store',
+      lines: [
+        { id: 'l1', packsBought: 2, packSize: 1000, packCost: 95, receivedAt: null, rawMaterial: { name: 'Milk', unit: 'ml' } },
+        { id: 'l2', packsBought: 1, packSize: 5, packCost: 60, receivedAt: null, rawMaterial: { name: 'Ice', unit: 'kg' } },
+        { id: 'l3', packsBought: 1, packSize: 1, packCost: null, receivedAt: null, rawMaterial: { name: 'Lemons', unit: 'kg' } },
+      ],
+    });
+    await svc.bought('t1', 'r1', 'u1');
+    const text: string = client.sendMessage.mock.calls[0][1];
+    expect(text).toMatch(/1 pack × 5 kg\s+60\.00\*/);          // Ice: last time's
+    expect(text).toMatch(/2 packs × 1000 ml\s+190\.00\n/);      // Milk: the receipt's, unmarked
+    expect(text).toMatch(/1 pack × 1 kg\s+price to add/);       // Lemons: first time bought
+    expect(text).toContain("* Last time's price. Check it against the receipt.");
+  });
+
   it('a list sent from a kitchen screen names the screen, not the person who paired it', async () => {
     const { svc, client, prisma } = build({ chats: ['101'] });
     await svc.buyListSent('t1', 'r1', [{ name: 'Milk', amount: '2 packs' }], 'u1', 'Kitchen screen');

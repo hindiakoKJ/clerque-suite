@@ -28,6 +28,13 @@ interface VarianceRow {
   deltaQty:            number | null;
   deltaPct:            number | null;
   cannotTell:          string | null;
+  /**
+   * The last time anybody counted it, adjusted or not: a weekly count sent
+   * from a station is RECORDED and leaves the books (and `countedAt`) alone.
+   */
+  lastCountedOn?:      string | null;
+  /** RECORDED: that last count left the books alone. POSTED: the books were adjusted from it. */
+  lastCountedStatus?:  'RECORDED' | 'POSTED' | null;
 }
 interface MarginRow {
   productId:   string;
@@ -45,6 +52,20 @@ interface DepletionRow {
   currentStock:  number;
   avgDailyConsumption: number;
   daysUntilStockout:   number | null;
+}
+
+/** "2026-09-21" on the shop's calendar, from a day or a moment. */
+const manilaDay = (at: string) =>
+  new Date(/^\d{4}-\d{2}-\d{2}$/.test(at) ? `${at}T12:00:00+08:00` : at).toLocaleDateString('en-CA', { timeZone: 'Asia/Manila' });
+
+/** Counted later than the count the books were last adjusted from: "Counted Sep 21 (recorded, books not adjusted)". */
+function recordedOnly(v: VarianceRow): string | null {
+  if (!v.lastCountedOn || v.lastCountedStatus === 'POSTED') return null;
+  const counted = manilaDay(v.lastCountedOn);
+  // An older server sends no status: a count on or before the adjusted one is that one.
+  if (!v.lastCountedStatus && v.countedAt && counted <= manilaDay(v.countedAt)) return null;
+  const label = new Date(`${counted}T12:00:00+08:00`).toLocaleDateString('en-PH', { day: 'numeric', month: 'short', timeZone: 'Asia/Manila' });
+  return `Counted ${label} (recorded, books not adjusted)`;
 }
 
 function fmt(n: number, frac = 2) {
@@ -131,7 +152,8 @@ export default function InventoryReportsPage() {
                   <td className="py-2 whitespace-nowrap">
                     {v.countedAt
                       ? new Date(v.countedAt).toLocaleDateString('en-PH', { day: 'numeric', month: 'short' })
-                      : <span className="text-xs text-slate-400">never</span>}
+                      : !recordedOnly(v) && <span className="text-xs text-slate-400">never</span>}
+                    {recordedOnly(v) && <span className="block text-xs text-slate-500">{recordedOnly(v)}</span>}
                   </td>
                   <td className="py-2">{v.startingQty != null ? fmt(v.startingQty, 4) : '—'}</td>
                   <td className="py-2">{fmt(v.receiptsQty, 4)}</td>

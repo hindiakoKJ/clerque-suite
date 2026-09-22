@@ -22,6 +22,11 @@
  * waste on paper -- and what never reached Procure left the stock too high and
  * the waste expense missing.
  *
+ * On the owner's copy only, a day on which a weekly count recorded (or
+ * adjusted) an item adds Counted and Difference -- counted minus what the
+ * books said at that moment. The columns appear only when a row has them, and
+ * a station's copy never carries them: the count is blind to the kitchen.
+ *
  * Printing is the browser's own, laid out for A4 (a 58 mm receipt printer cannot
  * hold the table). The copy is rendered straight into <body> and, while it is
  * there, a print rule hides everything else -- so it prints alone whichever page
@@ -35,11 +40,12 @@ import { ChevronLeft, ChevronRight, Loader2, Printer, Trash2, X } from 'lucide-r
 import { api } from '@/lib/api';
 import { keepTapKey, newTapKey, tapFailure, tapFailureText } from './station-taps';
 import {
-  WASTE_REASONS, addPack, inPacks, packButtonLabel, parseWasteAmount, wasteRequest, type WasteReason,
+  WASTE_REASONS, addPack, inPacks, packButtonLabel, parseWasteAmount, wasteNumber, wasteRequest, type WasteReason,
 } from './station-waste';
 
 export type SheetSectionKey = 'PREMADE' | 'INGREDIENTS' | 'SUPPLIES' | 'UNROUTED';
-type Column = 'beginning' | 'in' | 'waste' | 'used' | 'ending' | 'adjust';
+type Column = 'beginning' | 'in' | 'waste' | 'used' | 'ending' | 'adjust' | 'counted' | 'difference';
+type CountColumn = 'counted' | 'difference';
 
 export interface DailySheetRow {
   rawMaterialId: string;
@@ -53,7 +59,11 @@ export interface DailySheetRow {
   used: number;
   ending: number;
   adjust: number;
-  cells: Record<Column, string>;
+  /** Owner's copy only, on a day a weekly count recorded or adjusted this item. */
+  counted?: number | null;
+  /** Counted minus the books at the moment of the count. */
+  difference?: number | null;
+  cells: Record<Exclude<Column, CountColumn>, string> & Partial<Record<CountColumn, string>>;
 }
 
 export interface DailySheet {
@@ -78,8 +88,30 @@ export interface DailySheet {
 
 const COLUMNS: Array<[Column, string]> = [
   ['beginning', 'Beginning'], ['in', 'In'], ['waste', 'Waste'], ['used', 'Used'], ['ending', 'Ending'], ['adjust', 'Adjust'],
+  ['counted', 'Counted'], ['difference', 'Difference'],
 ];
-const columnsOf = (sheet: DailySheet) => COLUMNS.filter(([key]) => key !== 'adjust' || sheet.showAdjust);
+/** Counted and Difference only when a row has them: the owner's copy, on a day a weekly count covered. */
+const hasCounts = (sheet: DailySheet) => sheet.sections.some((s) => s.rows.some((r) => r.counted != null));
+const columnsOf = (sheet: DailySheet) => {
+  const counts = hasCounts(sheet);
+  return COLUMNS.filter(([key]) => (key === 'adjust' ? sheet.showAdjust : key === 'counted' || key === 'difference' ? counts : true));
+};
+
+/**
+ * A cell's words. The server writes every cell; for the two count columns an
+ * older server sent only the numbers, so they are written the sheet's way
+ * here: "2 pk + 100 ml", a difference with its sign.
+ */
+function cellText(row: DailySheetRow, key: Column): string {
+  const given = row.cells[key];
+  if (given != null) return given;
+  const q = key === 'counted' ? row.counted : key === 'difference' ? row.difference : null;
+  if (q == null || row.counted == null) return '';
+  const size = Math.abs(q);
+  const words = inPacks(size, row.unit, row.packSize) ?? `${wasteNumber(size)} ${row.unit}`;
+  if (key === 'counted') return words;
+  return size < 0.001 ? `0 ${row.unit}` : `${q < 0 ? '−' : '+'}${words}`;
+}
 
 /** The server's own words for a refusal ("This screen is paired to another station."), when it sent any. */
 export function sheetErrorMessage(error: unknown): string | null {
@@ -104,6 +136,8 @@ const TONE = {
     num:     'text-stone-200',
     ending:  'text-white',
     adjust:  'text-amber-300',
+    short:   'text-red-300',
+    over:    'text-emerald-300',
     empty:   'text-stone-400 border-stone-800',
   },
   light: {
@@ -117,6 +151,8 @@ const TONE = {
     num:     'text-foreground',
     ending:  'text-foreground',
     adjust:  'text-amber-600 dark:text-amber-400',
+    short:   'text-red-600 dark:text-red-400',
+    over:    'text-emerald-700 dark:text-emerald-400',
     empty:   'text-muted-foreground border-border',
   },
 } as const;
@@ -148,7 +184,7 @@ export function SheetTables({ sheet, tone, onThrowOut }: {
         <section key={section.key}>
           <h3 className={`mb-2 text-sm font-bold uppercase tracking-wider ${t.heading}`}>{section.title}</h3>
           <div className={`overflow-x-auto rounded-xl border ${t.wrap}`}>
-            <table className="w-full min-w-[640px] text-sm">
+            <table className={`w-full text-sm ${columns.length > 6 ? 'min-w-[820px]' : 'min-w-[640px]'}`}>
               <thead className={`text-xs uppercase tracking-wide ${t.head}`}>
                 <tr>
                   {/* The name stays put while the numbers scroll sideways. */}
@@ -181,10 +217,14 @@ export function SheetTables({ sheet, tone, onThrowOut }: {
                       <td
                         key={key}
                         className={`whitespace-nowrap px-3 py-2.5 text-right tabular-nums ${
-                          key === 'ending' ? `font-semibold ${t.ending}` : key === 'adjust' && row.adjust !== 0 ? `font-semibold ${t.adjust}` : t.num
+                          key === 'ending' ? `font-semibold ${t.ending}`
+                            : key === 'adjust' && row.adjust !== 0 ? `font-semibold ${t.adjust}`
+                            : key === 'difference' && row.counted != null && Math.abs(row.difference ?? 0) >= 0.001
+                              ? `font-semibold ${(row.difference ?? 0) < 0 ? t.short : t.over}`
+                              : t.num
                         }`}
                       >
-                        {row.cells[key]}
+                        {cellText(row, key)}
                       </td>
                     ))}
                   </tr>
@@ -264,7 +304,7 @@ export function SheetPrintCopy({ sheet, printedAt }: { sheet: DailySheet; printe
                   {row.name}
                   {row.alsoOn.length > 0 && <span style={{ color: '#555' }}> (also on {row.alsoOn.join(', ')})</span>}
                 </th>
-                {columns.map(([key]) => <td key={key}>{row.cells[key]}</td>)}
+                {columns.map(([key]) => <td key={key}>{cellText(row, key)}</td>)}
               </tr>
             )),
           ])}

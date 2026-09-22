@@ -114,3 +114,12 @@ test('a closed sheet with a running one after it offers that one in a single tap
   assert.match(sheet, /onClick=\{\(\) => setDay\(sheet\.today\)\}/);
   assert.match(sheet, /Open today&apos;s running sheet/);
 });
+
+test("the owner's copy adds Counted and Difference only when a weekly count covered the day; the station's never does", () => {
+  // The columns come from the data: a station's copy has no counted figures, so it never shows them.
+  assert.match(sheet, /const hasCounts = \(sheet: DailySheet\) => sheet\.sections\.some\(\(s\) => s\.rows\.some\(\(r\) => r\.counted != null\)\)/);
+  assert.match(sheet, /key === 'counted' \|\| key === 'difference' \? counts : true/);
+  assert.match(sheet, /\['counted', 'Counted'\], \['difference', 'Difference'\]/);
+  // The same words on the screen and on the printed copy.
+  assert.equal((sheet.match(/cellText\(row, key\)/g) ?? []).length, 2);
+});

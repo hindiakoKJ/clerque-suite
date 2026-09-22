@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
 import { stillWaiting } from '../orders/waste';
 import { netShareOfLines } from '../reports/reports.service';
+import { readLineTags } from '../procure/weekly-count';
 
 export interface VarianceRow {
   rawMaterialId: string;
@@ -30,6 +31,15 @@ export interface VarianceRow {
   deltaPct:            number | null;
   /** Why deltaQty is null, in words a shop owner can act on. */
   cannotTell:          string | null;
+  /**
+   * When the shelf was last counted, adjusted or not. A weekly count a
+   * kitchen or bar screen sent is RECORDED until the owner adjusts the books
+   * from it, and changes nothing above -- "Never counted" stays true of the
+   * books -- but the report can still say "Counted Sep 21 (recorded, books
+   * not adjusted)".
+   */
+  lastCountedOn:       string | null;
+  lastCountedStatus:   'RECORDED' | 'POSTED' | null;
 }
 
 export interface MarginRow {
@@ -120,16 +130,46 @@ export class InventoryReportsService {
         count: { tenantId, branchId, status: 'POSTED', postedAt: { not: null, lte: toD } },
       },
       select: {
-        rawMaterialId: true, countedQty: true,
+        rawMaterialId: true, countedQty: true, notes: true,
         count: { select: { postedAt: true, countNumber: true } },
       },
       orderBy: { count: { postedAt: 'asc' } },
     });
-    // Ascending, so the last write per ingredient is the most recent count.
+    /*
+      Ascending, so the last write per ingredient is the most recent count --
+      by the moment it was counted. A weekly count from a kitchen or bar
+      screen can be posted days after it was taken ("Adjust the books to
+      match" on a record), and what it found was on the shelf when it was
+      counted: each of its lines carries that moment ([AT:]). Anchored at the
+      post instead, every sale in between would read as missing, and a line
+      the post left out because the item was counted again later would
+      outrank the newer count. Every other count anchors at its post, as before.
+    */
     const anchorByMat = new Map<string, { at: Date; qty: number; countNumber: string }>();
     for (const c of counts) {
       if (!c.count.postedAt) continue;
-      anchorByMat.set(c.rawMaterialId, { at: c.count.postedAt, qty: Number(c.countedQty), countNumber: c.count.countNumber });
+      const at = readLineTags(c.notes).at ?? c.count.postedAt;
+      const was = anchorByMat.get(c.rawMaterialId);
+      if (was && was.at > at) continue;
+      anchorByMat.set(c.rawMaterialId, { at, qty: Number(c.countedQty), countNumber: c.count.countNumber });
+    }
+
+    // Counted but not adjusted: a weekly count still RECORDED. It anchors nothing; it only says when the shelf was last counted.
+    const recorded = await this.prisma.cycleCountLine.findMany({
+      where: {
+        rawMaterialId: { in: materials.map((m) => m.id) },
+        count: { tenantId, branchId, status: 'RECORDED', createdAt: { lte: toD } },
+      },
+      select: { rawMaterialId: true, notes: true, count: { select: { createdAt: true } } },
+    });
+    const lastCounted = new Map<string, { at: Date; status: 'RECORDED' | 'POSTED' }>(
+      [...anchorByMat].map(([id, a]) => [id, { at: a.at, status: 'POSTED' as const }]),
+    );
+    for (const r of recorded) {
+      const at = readLineTags(r.notes).at ?? r.count?.createdAt ?? null;
+      if (!(at instanceof Date) || Number.isNaN(at.getTime()) || at > toD) continue;
+      const was = lastCounted.get(r.rawMaterialId);
+      if (!was || at > was.at) lastCounted.set(r.rawMaterialId, { at, status: 'RECORDED' });
     }
 
     const currentInv = await this.prisma.rawMaterialInventory.findMany({
@@ -219,6 +259,9 @@ export class InventoryReportsService {
       const expectedConsume = consumptionByMat.get(m.id) ?? 0;
       const heldQty         = heldAt(held, branchId, m.id);
       const actualEnd       = availableQty(currentByMat.get(m.id) ?? 0, heldQty);
+      const counted         = lastCounted.get(m.id) ?? null;
+      const lastCountedOn     = counted?.at.toISOString() ?? null;
+      const lastCountedStatus = counted?.status ?? null;
       if (!anchor) {
         return {
           rawMaterialId: m.id, name: m.name, unit: m.unit,
@@ -232,6 +275,8 @@ export class InventoryReportsService {
           deltaQty: null,
           deltaPct: null,
           cannotTell: 'Never counted. Count this ingredient once and every count after it shows what went missing in between.',
+          lastCountedOn,
+          lastCountedStatus,
         };
       }
       const expectedEndingQty = anchor.qty + receipts - expectedConsume;
@@ -252,6 +297,8 @@ export class InventoryReportsService {
         deltaQty:            round(deltaQty),
         deltaPct:            deltaPct == null ? null : Math.round(deltaPct * 100) / 100,
         cannotTell:          null,
+        lastCountedOn,
+        lastCountedStatus,
       };
     });
   }

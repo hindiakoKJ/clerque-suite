@@ -343,6 +343,74 @@ export function postedMessage(req: RequestForAlert, postedBy: string | null, at:
   return fitItems(build, blocks, MESSAGE_LIMIT);
 }
 
+// ── weekly count ───────────────────────────────────────────────────────────
+
+export interface WeeklyCountForAlert {
+  shopName: string;
+  branchName: string | null;
+  stationName: string;
+  countNumber: string;
+  /** The name typed on the tablet, or the logged-in person's. */
+  countedBy: string;
+  sentAt: Date;
+  /** Every line answered the owner's "Ask for a recount". */
+  recount: boolean;
+  /** A full count that also answered a recount: those items. */
+  recounted?: string[];
+  /** Items on the station's sheet counted (here or, for a shared item, by the other station), of all of them. */
+  counted: number;
+  total: number;
+  /** In the item's own unit. `book` is the book at the moment the item was counted. */
+  lines: Array<{ name: string; unit: string; counted: number; book: number }>;
+  notCounted: string[];
+}
+
+function countedWords(l: { counted: number; book: number; unit: string }): { tail: string; relative: number } {
+  const d = Math.round((l.counted - l.book) * 1000) / 1000;
+  if (Math.abs(d) < 0.001) return { tail: 'matches', relative: 0 };
+  return {
+    tail: `${d < 0 ? 'short' : 'over'} ${usageQty(Math.abs(d), l.unit)}`,
+    relative: Math.abs(d) / Math.max(Math.abs(l.book), Math.abs(l.counted), 1),
+  };
+}
+
+/**
+ * A kitchen or bar screen sent its weekly count. It is a record: nothing has
+ * moved, and the message says so and where to adjust the books. A recount
+ * lists what was counted again; otherwise the lines that differ, the
+ * furthest off (for its size) first.
+ */
+export function weeklyCountMessage(c: WeeklyCountForAlert): string {
+  const worded = c.lines.map((l) => ({ l, w: countedWords(l) }));
+  const differing = worded.filter((x) => x.w.relative > 0).length;
+  const listed = (c.recount ? worded : worded.filter((x) => x.w.relative > 0)).sort((a, b) => b.w.relative - a.w.relative);
+  const blocks = listed.map(({ l, w }) => `• ${escapeHtml(clip(
+    `${l.name}: counted ${usageQty(l.counted, l.unit)}, book ${usageQty(l.book, l.unit)}, ${w.tail}`, 160))}`);
+  // A recount holds only what the owner asked about: how many of those, not of the whole sheet.
+  const summary = `${c.recount
+    ? `${c.lines.length} item${c.lines.length === 1 ? '' : 's'} counted again.`
+    : `${c.counted} of ${c.total} items counted.`} ${differing === 0
+    ? `All ${c.lines.length} match the book.`
+    : `${differing} differ${differing === 1 ? 's' : ''} from the book.`}`;
+  const names = (label: string, all: string[]) => (all.length === 0
+    ? []
+    : [escapeHtml(`${label}: ${all.slice(0, 15).map((n) => clip(n, 40)).join(', ')}${
+        all.length > 15 ? ` and ${all.length - 15} more` : ''}`)]);
+  const notCounted = [...(c.recount ? [] : names('Recounted', c.recounted ?? [])), ...names('Not counted', c.notCounted)];
+  const build = (shown: string[], more: number) => [
+    `📝 <b>${c.recount ? 'Recount sent' : 'Weekly count sent'}: ${escapeHtml(clip(c.stationName, 40))}</b>`,
+    place(clip(c.shopName, 120), c.branchName ? clip(c.branchName, 80) : null),
+    escapeHtml(`Counted by ${clip(c.countedBy, 40)} (${clip(c.stationName, 40)} screen) · ${manilaTime(c.sentAt)}`),
+    escapeHtml(summary),
+    ...(shown.length > 0 ? ['', ...shown] : []),
+    ...(more > 0 ? [`…and ${more} more`] : []),
+    ...notCounted,
+    '',
+    escapeHtml(`Recorded. Nothing has moved. To make the book match the shelf, open Procure > Counts (${c.countNumber}) and tap Adjust the books to match.`),
+  ].join('\n');
+  return fitItems(build, blocks, MESSAGE_LIMIT);
+}
+
 // ── end of day ─────────────────────────────────────────────────────────────
 
 /** How many ingredients the phone shows; the rest are counted in "+N more" and listed on the report page. */
@@ -361,6 +429,8 @@ export interface UsageForAlert {
   stillBeingMade: number;
   /** Sales rung up offline that reached Clerque after the sheet for their hours went out: on no sheet. */
   lateSales: number;
+  /** The weekly count's sentence, when it has one to say (procure/weekly-count.ts weeklyCountNote). */
+  countNote?: string | null;
 }
 
 /**
@@ -443,6 +513,7 @@ export function dailyUsageMessage(u: UsageForAlert): string {
       tail.push(escapeHtml(`${qty(n)} item${n === 1 ? '' : 's'} still at the kitchen or bar screen ${n === 1 ? 'is' : 'are'} not counted yet.`));
     }
     if (u.lateSales > 0) tail.push(escapeHtml(lateSalesNote(u.lateSales)));
+    if (u.countNote) tail.push(escapeHtml(clip(u.countNote, 200)));
     tail.push(escapeHtml('Full list: Inventory > Ingredients > Reports'));
     return [...head, ...tail].join('\n');
   };

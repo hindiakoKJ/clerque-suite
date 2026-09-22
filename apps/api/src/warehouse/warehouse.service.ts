@@ -476,9 +476,25 @@ export class WarehouseService {
   /**
    * Post the count: applies variances to RawMaterialInventory and writes
    * InventoryLog rows. Skips lines with zero variance.
+   *
+   * An OPEN count, or a RECORDED one: a weekly count a kitchen or bar screen
+   * sent, kept as a record until the owner adjusts the books from it.
+   * `skipRawMaterialIds` leaves those items' lines exactly as they are -- no
+   * stock change, no event, the variance as recorded. The weekly review
+   * passes the items a later count has replaced (station-count.service.ts),
+   * an empty list when there are none; the counts screen passes nothing, and
+   * so cannot post a RECORDED count.
    */
-  async postCycleCount(tenantId: string, id: string, userId: string, isOpeningBalance = false) {
+  async postCycleCount(tenantId: string, id: string, userId: string, isOpeningBalance = false, skipRawMaterialIds?: string[]) {
+    const skip = new Set(skipRawMaterialIds ?? []);
     return this.prisma.$transaction(async (tx) => {
+      /*
+        One post of a count at a time. Two taps in the same moment (the owner
+        and a manager, each from their own bell) both read the count as not
+        yet posted and moved every line twice. The second waits on this row
+        lock, then reads the count as POSTED and is refused.
+      */
+      await tx.$queryRaw`SELECT id FROM "cycle_counts" WHERE id = ${id} AND "tenantId" = ${tenantId} FOR UPDATE`;
       const c = await tx.cycleCount.findFirst({
         where:   { id, tenantId },
         // The raw material comes along so the variance can be VALUED and
@@ -491,8 +507,12 @@ export class WarehouseService {
         } } } },
       });
       if (!c) throw new NotFoundException('Cycle count not found.');
-      if (c.status !== 'OPEN') {
-        throw new BadRequestException(`Only OPEN counts can be posted (current: ${c.status}).`);
+      // Only the weekly review knows which of a record's lines a later count replaced.
+      if (c.status === 'RECORDED' && !skipRawMaterialIds) {
+        throw new BadRequestException('A weekly count is adjusted from its Review under Procure > Counts.');
+      }
+      if (c.status !== 'OPEN' && c.status !== 'RECORDED') {
+        throw new BadRequestException('Only open or recorded counts can be posted.');
       }
 
       /*
@@ -525,12 +545,13 @@ export class WarehouseService {
         counted, which can be later than the count was opened; those lines are
         measured from the opening too, as nothing records the later moment.
       */
+      const lines = c.lines.filter((l) => !skip.has(l.rawMaterialId));
       const snapshotted = [...new Set(
-        c.lines.filter((l) => new Prisma.Decimal(l.expectedQty).greaterThan(0)).map((l) => l.rawMaterialId),
+        lines.filter((l) => new Prisma.Decimal(l.expectedQty).greaterThan(0)).map((l) => l.rawMaterialId),
       )];
       const released = await releasedHolds(tx, tenantId, c.branchId, snapshotted, c.createdAt);
 
-      for (const line of c.lines) {
+      for (const line of lines) {
         const counted  = new Prisma.Decimal(line.countedQty);
         const snapshot = new Prisma.Decimal(line.expectedQty);
         const giveBack = snapshot.greaterThan(0) ? (released.get(line.rawMaterialId) ?? 0) : 0;

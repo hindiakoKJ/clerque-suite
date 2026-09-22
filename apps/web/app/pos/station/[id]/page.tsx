@@ -12,6 +12,7 @@ import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { StationPrepLevels } from '@/components/pos/StationPrepLevels';
 import { StationInventorySheet } from '@/components/pos/StationInventorySheet';
 import { StationRequestButton } from '@/components/pos/StationRequestButton';
+import { StationCountButton } from '@/components/pos/StationCountButton';
 import { StationScreenLayout, STATION_VIEWS, stationRootHeight, type StationView } from '@/components/pos/StationScreenLayout';
 import { useAuthStore } from '@/store/auth';
 import {
@@ -370,6 +371,9 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
           {/* Puts what is running low on the branch's buy list and sends it to the owner.
               Self-contained (its own panel); off until the screen is known to be paired to this station. */}
           <StationRequestButton stationId={stationId} enabled={pairState === 'ok'} />
+          {/* The weekly count: a record of what is on the shelf, sent to the owner. Nothing in stock moves.
+              Self-contained like the button before it; "Count due" once a week has passed. */}
+          <StationCountButton stationId={stationId} enabled={pairState === 'ok'} />
           {/* Kitchen bell. Browsers refuse to start audio without a gesture, so
               when it is still locked we say so plainly rather than letting the
               chef believe the bell is on when it is silent. */}

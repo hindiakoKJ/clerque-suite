@@ -8,10 +8,19 @@ import { STATION_ROLES } from '../kds/station-access';
 import { DailySheetController, StationSheetController } from './station-sheet.controller';
 import { buildSheet, stationSheet } from './stock-sheet';
 
-// The sheet itself has its own spec; here only who may read which sheet, and the day asked for.
+// The sheet itself has its own spec; here only who may read which sheet, the day asked for, and what the owner's copy adds.
+const SHEET_ROWS = () => [{
+  key: 'INGREDIENTS', title: 'Ingredients',
+  rows: [
+    { rawMaterialId: 'milk', name: 'Fresh Milk', unit: 'ml', packSize: 1000, alsoOn: [], cells: { ending: '3 pk + 400 ml' } },
+    { rawMaterialId: 'eggs', name: 'Eggs', unit: 'pc', packSize: null, alsoOn: [], cells: { ending: '24 pc' } },
+  ],
+}];
+const WINDOW = { from: '2026-09-20T15:00:00.000Z', to: '2026-09-21T15:00:00.000Z', fromLabel: '', toLabel: '' };
 jest.mock('./stock-sheet', () => ({
-  stationSheet: jest.fn(async () => ({ title: 'KITCHEN INVENTORY' })),
-  buildSheet: jest.fn(async () => ({ title: 'DAILY INVENTORY' })),
+  sheetAmount: jest.requireActual('./stock-sheet').sheetAmount,
+  stationSheet: jest.fn(async () => ({ title: 'KITCHEN INVENTORY', window: WINDOW, sections: SHEET_ROWS() })),
+  buildSheet: jest.fn(async () => ({ title: 'DAILY INVENTORY', window: WINDOW, sections: SHEET_ROWS() })),
 }));
 
 describe('the daily inventory sheet routes', () => {
@@ -24,7 +33,10 @@ describe('the daily inventory sheet routes', () => {
     { id: 'left', tenantId: 't1', name: 'Former Manager', branchId: 'b-main', isActive: false },
   ];
   const branches = [{ id: 'b-main', tenantId: 't1', name: 'Main' }, { id: 'b-naga', tenantId: 't1', name: 'Naga' }];
+  /** Weekly counts sent from the screens: none unless a test adds one. */
+  const weeklyCounts: any[] = [];
   const prisma: any = {
+    cycleCount: { findMany: jest.fn(async () => weeklyCounts) },
     station: {
       findFirst: jest.fn(async ({ where }: any) => stations.find((s) => s.id === where.id && s.tenantId === where.tenantId) ?? null),
       findMany: jest.fn(async () => stations.map(({ id, name, kind }) => ({ id, name, kind }))),
@@ -38,7 +50,21 @@ describe('the daily inventory sheet routes', () => {
       findMany: jest.fn(async () => branches.map(({ id, name }) => ({ id, name }))),
     },
   };
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    weeklyCounts.length = 0;
+  });
+  /** A weekly count the kitchen sent within the sheet's hours: milk 337 ml short of the book at that moment. */
+  const sentCount = () => ({
+    createdAt: new Date('2026-09-21T13:00:00Z'),
+    lines: [{ rawMaterialId: 'milk', countedQty: 2800, expectedQty: 3137, notes: '[BY:Joy] [AT:2026-09-21T13:05:00.000Z] [ST:s-kitchen]' }],
+  });
+  /** Every key anywhere in a response, however deep. */
+  const keysOf = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v.flatMap(keysOf);
+    if (v && typeof v === 'object') return Object.entries(v as Record<string, unknown>).flatMap(([k, x]) => [k, ...keysOf(x)]);
+    return [];
+  };
 
   describe('GET /kds/stations/:id/daily-inventory', () => {
     const controller = new StationSheetController(prisma);
@@ -51,7 +77,7 @@ describe('the daily inventory sheet routes', () => {
     });
 
     it('a kitchen screen reads its own station\'s sheet, for the branch of whoever paired it', async () => {
-      await expect(controller.dailyInventory(device(), 's-kitchen')).resolves.toEqual({ title: 'KITCHEN INVENTORY' });
+      await expect(controller.dailyInventory(device(), 's-kitchen')).resolves.toMatchObject({ title: 'KITCHEN INVENTORY' });
       expect(stationSheet).toHaveBeenCalledWith(prisma, expect.objectContaining({
         tenantId: 't1', station: { id: 's-kitchen', name: 'Kitchen', kind: 'KITCHEN' }, branch: { id: 'b-main', name: 'Main' }, isDevice: true,
       }), null, expect.any(Date));
@@ -132,6 +158,33 @@ describe('the daily inventory sheet routes', () => {
       const own = await controller.dailySheet(person('BRANCH_MANAGER', 'b-main'));
       expect(own.choices.branches).toEqual([{ id: 'b-main', name: 'Main' }]);
       await expect(controller.dailySheet(person('BRANCH_MANAGER', null), 'b-naga')).resolves.toBeDefined();
+    });
+
+    it('beside the book, says what a weekly count sent on the sheet hours found, and how far off it was', async () => {
+      weeklyCounts.push(sentCount());
+      const out: any = await controller.dailySheet(person('BUSINESS_OWNER', 'b-main'));
+      expect(out.showCounted).toBe(true);
+      const [milk, eggs] = out.sections[0].rows;
+      expect(milk).toMatchObject({ counted: 2800, difference: -337, cells: { ending: '3 pk + 400 ml', counted: '2 pk + 800 ml', difference: '−337 ml' } });
+      expect(eggs).not.toHaveProperty('counted');
+      expect(eggs).not.toHaveProperty('difference');
+      expect(prisma.cycleCount.findMany.mock.calls[0][0].where).toMatchObject({
+        tenantId: 't1', branchId: 'b-main', status: { in: ['RECORDED', 'POSTED'] }, notes: { startsWith: '[WEEKLY:' },
+      });
+    });
+
+    it('with no count on the sheet hours, no columns', async () => {
+      const out: any = await controller.dailySheet(person('BUSINESS_OWNER', 'b-main'));
+      expect(out.showCounted).toBe(false);
+      expect(keysOf(out.sections).filter((k) => k === 'counted' || k === 'difference')).toEqual([]);
+    });
+
+    it('the station copy never carries them, even on a day with a count', async () => {
+      weeklyCounts.push(sentCount());
+      const station = new StationSheetController(prisma);
+      const out = await station.dailyInventory({ sub: 'owner', tenantId: 't1', isDevice: true, deviceRole: 'KDS_KITCHEN', stationId: 's-kitchen', role: 'KIOSK_DISPLAY' } as any, 's-kitchen');
+      expect(keysOf(out).filter((k) => /counted|difference|showCounted/i.test(k))).toEqual([]);
+      expect(prisma.cycleCount.findMany).not.toHaveBeenCalled();
     });
 
     it('refuses an unknown branch or station and a day that is not a date', async () => {

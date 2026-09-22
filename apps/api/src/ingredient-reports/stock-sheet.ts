@@ -27,14 +27,14 @@ import { stationItems, UNROUTED } from './station-items';
 
 export type SectionKey = 'PREMADE' | 'INGREDIENTS' | 'SUPPLIES' | 'UNROUTED';
 
-const SECTION_TITLES: Record<SectionKey, string> = {
+export const SECTION_TITLES: Record<SectionKey, string> = {
   PREMADE:     'Pre-made',
   INGREDIENTS: 'Ingredients',
   SUPPLIES:    'Supplies',
   // Plain words, the same the prep tiles use: "not routed" meant nothing to a cook.
   UNROUTED:    'No station set yet',
 };
-const SECTION_ORDER: SectionKey[] = ['PREMADE', 'INGREDIENTS', 'SUPPLIES', 'UNROUTED'];
+export const SECTION_ORDER: SectionKey[] = ['PREMADE', 'INGREDIENTS', 'SUPPLIES', 'UNROUTED'];
 
 export interface SheetNumbers {
   beginning: number;
@@ -202,6 +202,28 @@ export function stationSheet(prisma: PrismaService, ctx: StationContext, day: st
   return buildSheet(prisma, { tenantId: ctx.tenantId, branch: ctx.branch, station: ctx.station }, day, now);
 }
 
+/**
+ * Pack sizes from the last purchases bought by the pack. Never the pack's
+ * cost. The weekly count reads the same, so its "2 pk + 100 ml" and the
+ * sheet's always agree.
+ */
+export async function sheetPackSizes(
+  prisma: Pick<PrismaService, 'purchaseRequestLine'>, tenantId: string, ids: string[],
+): Promise<Map<string, number | null>> {
+  const packs = ids.length
+    ? await prisma.purchaseRequestLine.findMany({
+        where:    {
+          rawMaterialId: { in: ids }, receivedAt: { not: null }, packSize: { gt: 0 }, packsBought: { gt: 0 },
+          purchaseRequest: { tenantId },
+        },
+        orderBy:  { receivedAt: 'desc' },
+        distinct: ['rawMaterialId'],
+        select:   { rawMaterialId: true, packSize: true },
+      })
+    : [];
+  return new Map(packs.map((p) => [p.rawMaterialId, p.packSize != null ? Number(p.packSize) : null]));
+}
+
 export async function buildSheet(prisma: PrismaService, scope: SheetScope, day: string | null, now: Date): Promise<DailySheet> {
   const { tenantId, branch, station } = scope;
   const place = await prisma.branch.findFirst({
@@ -250,19 +272,7 @@ export async function buildSheet(prisma: PrismaService, scope: SheetScope, day: 
     });
   }
 
-  // Pack sizes from the last purchases bought by the pack. Never the pack's cost.
-  const packs = chosen.length
-    ? await prisma.purchaseRequestLine.findMany({
-        where:    {
-          rawMaterialId: { in: chosen.map((c) => c.id) }, receivedAt: { not: null }, packSize: { gt: 0 }, packsBought: { gt: 0 },
-          purchaseRequest: { tenantId },
-        },
-        orderBy:  { receivedAt: 'desc' },
-        distinct: ['rawMaterialId'],
-        select:   { rawMaterialId: true, packSize: true },
-      })
-    : [];
-  const packOf = new Map(packs.map((p) => [p.rawMaterialId, p.packSize != null ? Number(p.packSize) : null]));
+  const packOf = await sheetPackSizes(prisma, tenantId, chosen.map((c) => c.id));
 
   const zero: SheetMovement = { in: 0, waste: 0, used: 0 };
   const bySection = new Map<SectionKey, SheetRow[]>();

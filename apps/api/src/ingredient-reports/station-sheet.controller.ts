@@ -9,7 +9,8 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { STATION_ROLES, StationCaller, stationContext } from '../kds/station-access';
 import { isManilaDay } from './daily-usage';
-import { buildSheet, DailySheet, stationSheet } from './stock-sheet';
+import { buildSheet, DailySheet, sheetAmount, stationSheet } from './stock-sheet';
+import { countedOnSheet } from '../procure/weekly-count';
 
 /** A day from the query string: absent means the default sheet; anything else has to be a real date. */
 function dayParam(day: string | undefined): string | null {
@@ -84,7 +85,7 @@ export class DailySheetController {
       station = { id: found.id, name: found.name, kind: String(found.kind) };
     }
 
-    const sheet = await buildSheet(this.prisma, { tenantId, branch, station }, dayParam(day), new Date());
+    const sheet = await withCounted(this.prisma, tenantId, branch.id, await buildSheet(this.prisma, { tenantId, branch, station }, dayParam(day), new Date()));
 
     // What the pickers offer: the branches this person may open, and the stations that can have a sheet.
     const [branches, stations] = await Promise.all([
@@ -106,4 +107,36 @@ export class DailySheetController {
     ]);
     return { ...sheet, choices: { branches, stations: stations.map((s) => ({ id: s.id, name: s.name, kind: String(s.kind) })) } };
   }
+}
+
+/**
+ * The owner's copy only: what a weekly count sent from a kitchen or bar screen
+ * found on this sheet's hours, and how far that was from the book at the
+ * moment of counting -- beside the book's own columns, for reconciling. The
+ * station's copy never carries it (a count there is blind). `showCounted`
+ * says whether any row has them, so the columns appear only when they mean
+ * something.
+ */
+async function withCounted(prisma: PrismaService, tenantId: string, branchId: string, sheet: DailySheet) {
+  const counted = await countedOnSheet(prisma, tenantId, branchId, new Date(sheet.window.from), new Date(sheet.window.to));
+  let showCounted = false;
+  const sections = sheet.sections.map((sec) => ({
+    ...sec,
+    rows: sec.rows.map((row) => {
+      const c = counted.get(row.rawMaterialId);
+      if (!c) return row;
+      showCounted = true;
+      return {
+        ...row,
+        counted: c.counted,
+        difference: c.difference,
+        cells: {
+          ...row.cells,
+          counted:    sheetAmount(c.counted, row.unit, row.packSize, 'balance'),
+          difference: sheetAmount(c.difference, row.unit, row.packSize, 'adjust'),
+        },
+      };
+    }),
+  }));
+  return { ...sheet, sections, showCounted };
 }

@@ -214,4 +214,44 @@ describe('TelegramAlertsService', () => {
       expect(client.sendMessage).not.toHaveBeenCalled();
     });
   });
+
+  describe('weeklyCountSent -- a kitchen or bar screen sent its weekly count', () => {
+    const COUNT = {
+      stationName: 'Kitchen', countNumber: 'CC-2026-000012', countedBy: 'Joy', sentAt: new Date('2026-09-21T21:12:00+08:00'),
+      recount: false, counted: 2, total: 3, lines: [{ name: 'Milk', unit: 'ml', counted: 2100, book: 3400 }], notCounted: ['Salt'],
+    };
+
+    it('goes to the recipients for that branch on the buying switch, in the words it is handed', async () => {
+      const { svc, client, links } = build();
+      await svc.weeklyCountSent('t1', 'b1', COUNT);
+      expect(links.anyoneListening).toHaveBeenCalledWith('t1', 'buying');
+      expect(links.recipients).toHaveBeenCalledWith('t1', 'b1', 'buying');
+      expect(client.sendMessage.mock.calls.map((c: any[]) => c[0])).toEqual(['101', '102']);
+      const text = client.sendMessage.mock.calls[0][1];
+      expect(text).toContain('<b>Weekly count sent: Kitchen</b>');
+      expect(text).toContain('Cafe Carolina · Main');
+      expect(text).toContain('• Milk: counted 2.1 L, book 3.4 L, short 1.3 L');
+      expect(text).toContain('Adjust the books to match.');
+    });
+
+    it('never rejects, and a shop nobody listens to is not read', async () => {
+      const quiet = build({ listening: false });
+      await quiet.svc.weeklyCountSent('t1', 'b1', COUNT);
+      expect(quiet.prisma.branch.findFirst).not.toHaveBeenCalled();
+      const { svc, client, prisma } = build();
+      prisma.branch.findFirst.mockRejectedValueOnce(new Error('database down'));
+      await expect(svc.weeklyCountSent('t1', 'b1', COUNT)).resolves.toBeUndefined();
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it('dailyUsage carries the weekly count\'s sentence when it is handed one', async () => {
+    const { svc, client } = build({ chats: ['101'] });
+    const day: UsageDay = {
+      day: '2026-09-16', rows: [], stillBeingMade: 0,
+      totals: { soldValue: 0, wastedValue: 0, intoPrepsValue: 0, writtenOffValue: 0, value: 0 },
+    };
+    await svc.dailyUsage('t1', 'b1', day, 0, 'No weekly count has been sent for 8 days.');
+    expect(client.sendMessage.mock.calls[0][1]).toContain('No weekly count has been sent for 8 days.');
+  });
 });

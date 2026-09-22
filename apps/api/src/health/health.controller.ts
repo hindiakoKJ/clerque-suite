@@ -40,6 +40,16 @@ export class HealthController {
    */
   @Get('ip')
   ip(@Req() req: Request) {
+    // TEMPORARY (2026-09-22): the proxy chain as it really arrives on Railway, to fix client-ip.ts. Remove with that fix.
+    this.logger.log(`ip-chain ${JSON.stringify({
+      xff: req.headers?.['x-forwarded-for'] ?? null,
+      xRealIp: req.headers?.['x-real-ip'] ?? null,
+      cf: req.headers?.['cf-connecting-ip'] ?? null,
+      envoy: req.headers?.['x-envoy-external-address'] ?? null,
+      forwarded: req.headers?.['forwarded'] ?? null,
+      socket: req.socket?.remoteAddress ?? null,
+      resolved: req.ip ?? null,
+    })}`);
     return { ip: req.ip ?? null };
   }
 }

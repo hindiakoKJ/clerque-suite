@@ -100,7 +100,9 @@ const columnsOf = (sheet: DailySheet) => {
 /**
  * A cell's words. The server writes every cell; for the two count columns an
  * older server sent only the numbers, so they are written the sheet's way
- * here: "2 pk + 100 ml", a difference with its sign.
+ * here: "2 pk + 100 ml", and a difference as "1 pk + 337 ml short" or
+ * "200 ml extra" -- never a sign in front, which read "−1 pk + 337 ml" as
+ * minus 1 pack, plus 337 ml. None at all is left blank, as the server does.
  */
 function cellText(row: DailySheetRow, key: Column): string {
   const given = row.cells[key];
@@ -110,7 +112,7 @@ function cellText(row: DailySheetRow, key: Column): string {
   const size = Math.abs(q);
   const words = inPacks(size, row.unit, row.packSize) ?? `${wasteNumber(size)} ${row.unit}`;
   if (key === 'counted') return words;
-  return size < 0.001 ? `0 ${row.unit}` : `${q < 0 ? '−' : '+'}${words}`;
+  return size < 0.001 ? '' : `${words} ${q < 0 ? 'short' : 'extra'}`;
 }
 
 /** The server's own words for a refusal ("This screen is paired to another station."), when it sent any. */
@@ -254,11 +256,22 @@ const PRINT_CSS = `
 [data-sheet-print] thead th { font-weight: 700; text-align: right; }
 [data-sheet-print] thead th:first-child, [data-sheet-print] tbody th { text-align: left; font-weight: 400; }
 [data-sheet-print] td { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-sheet-print] td .sheet-way { white-space: normal; }
 [data-sheet-print] tr.sheet-section td { text-align: left; font-weight: 700; background: #eee; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 `;
 
 const manilaTime = (at: Date) =>
   at.toLocaleString('en-PH', { timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+/**
+ * An A4 cell. "short" or "extra" may drop under its amount when the columns
+ * would otherwise run past the page (an owner's copy with Counted and
+ * Difference, packs in every column); the amount itself never breaks.
+ */
+function printCell(text: string): JSX.Element | string {
+  const way = /^(.+) (short|extra)$/.exec(text);
+  return way ? <>{way[1]}<span className="sheet-way"> {way[2]}</span></> : text;
+}
 
 /**
  * The white A4 sheet with lines to sign. Mounted only while a sheet is loaded;
@@ -304,7 +317,7 @@ export function SheetPrintCopy({ sheet, printedAt }: { sheet: DailySheet; printe
                   {row.name}
                   {row.alsoOn.length > 0 && <span style={{ color: '#555' }}> (also on {row.alsoOn.join(', ')})</span>}
                 </th>
-                {columns.map(([key]) => <td key={key}>{cellText(row, key)}</td>)}
+                {columns.map(([key]) => <td key={key}>{printCell(cellText(row, key))}</td>)}
               </tr>
             )),
           ])}

@@ -16,4 +16,4 @@ startCommand = "sh start.sh"
 healthcheckPath = "/api/v1/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 3
+restartPolicyMaxRetries = 10

@@ -5,6 +5,7 @@ import { AccountingPeriodsService } from '../accounting-periods/accounting-perio
 import { noCostWarning } from '../inventory/inventory.service';
 import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
 import { releasedHolds } from './released-holds';
+import { leftAloneMessage, leftAloneNotes, newerCounts } from './newer-count';
 
 // ── Stock Transfer DTOs ────────────────────────────────────────────────────────
 
@@ -484,6 +485,11 @@ export class WarehouseService {
    * passes the items a later count has replaced (station-count.service.ts),
    * an empty list when there are none; the counts screen passes nothing, and
    * so cannot post a RECORDED count.
+   *
+   * Whoever posts, newest count wins (newer-count.ts): a line whose item
+   * another count has adjusted, or a weekly count has counted again, since
+   * it was counted is left alone the same way, and `leftAlone` says which
+   * and why.
    */
   async postCycleCount(tenantId: string, id: string, userId: string, isOpeningBalance = false, skipRawMaterialIds?: string[]) {
     const skip = new Set(skipRawMaterialIds ?? []);
@@ -516,6 +522,15 @@ export class WarehouseService {
       }
 
       /*
+        One post per branch at a time, so each reads the others as they are.
+        Newest count wins (below) looks at what other counts have posted: a
+        buy list's count posted from here while a weekly count is adjusted
+        from its review would each read the other as not yet posted, and
+        move a shared item twice.
+      */
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cycle-count-post:${tenantId}:${c.branchId}`}))`;
+
+      /*
         Checked BEFORE any line is written, not per line: a count is one event
         on one date, and half a posted count is worse than none — the stock
         would have moved for some ingredients and not others with no record of
@@ -527,6 +542,21 @@ export class WarehouseService {
 
       // Variances the books could not value. Said back, not swallowed.
       const noCost: string[] = [];
+
+      /*
+        Newest count wins. A line whose item another count of this branch has
+        adjusted since this line was counted is left alone: the live figure
+        already holds that correction, and this line's older difference on
+        top would book the same loss twice (a buy list's count posted after
+        the owner adjusted the item from a newer weekly count). A line counted
+        after that post was measured against the corrected book and posts.
+        A line whose item a weekly count counted again later, sent or not,
+        is left alone too: the owner adjusts it from that newer record.
+        The rule is newer-count.ts's, shared with the weekly review.
+      */
+      const now = new Date();
+      const newer = await newerCounts(tx, c, now);
+      const leftAlone = c.lines.filter((l) => skip.has(l.rawMaterialId) || newer.has(l.id));
 
       /*
         Give back what a waiting ticket stopped holding without being made.
@@ -543,9 +573,10 @@ export class WarehouseService {
 
         A buy list's count takes each line's snapshot when that line is first
         counted, which can be later than the count was opened; those lines are
-        measured from the opening too, as nothing records the later moment.
+        measured from the opening too. Their [AT:] only decides which count
+        is newer, above.
       */
-      const lines = c.lines.filter((l) => !skip.has(l.rawMaterialId));
+      const lines = c.lines.filter((l) => !skip.has(l.rawMaterialId) && !newer.has(l.id));
       const snapshotted = [...new Set(
         lines.filter((l) => new Prisma.Decimal(l.expectedQty).greaterThan(0)).map((l) => l.rawMaterialId),
       )];
@@ -700,12 +731,35 @@ export class WarehouseService {
         }
       }
 
+      /*
+        A count with every line left alone still closes as POSTED, and says
+        so. Refusing would leave it open for good -- every later try would be
+        refused the same way, and a buy list's open count would keep showing
+        its old figures -- while the newer count has already set those items.
+        Each line left alone is marked so ([LEFT:] on the line, its figures
+        as they were), so a later count knows this one moved nothing for it.
+      */
+      for (const l of leftAlone) {
+        await tx.cycleCountLine.update({ where: { id: l.id }, data: { notes: leftAloneNotes(l.notes, now) } });
+      }
       const posted = await tx.cycleCount.update({
         where: { id },
-        data:  { status: 'POSTED', postedAt: new Date(), postedById: userId },
+        data:  { status: 'POSTED', postedAt: now, postedById: userId },
         include: { lines: { include: { rawMaterial: { select: { name: true, unit: true } } } } },
       });
-      return { ...posted, warnings: noCost.map((name) => noCostWarning(name)) };
+      return {
+        ...posted,
+        warnings:  noCost.map((name) => noCostWarning(name)),
+        leftAlone: leftAlone
+          .map((l) => {
+            const name = l.rawMaterial?.name ?? 'An item';
+            return { rawMaterialId: l.rawMaterialId, name, message: leftAloneMessage(name, newer.get(l.id)) };
+          })
+          .sort((a, b) => a.name.localeCompare(b.name)),
+        message: leftAlone.length > 0 && leftAlone.length === c.lines.length
+          ? 'Nothing moved: every item on this count was already adjusted or counted again by another count.'
+          : null,
+      };
     });
   }
 

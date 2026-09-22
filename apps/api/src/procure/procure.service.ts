@@ -2748,8 +2748,13 @@ export class ProcureService {
    * posts the count from the counts screen, and then the existing rules
    * apply: the variance is measured against that snapshot and applied to the
    * live figure, so a delivery in between is not undone.
+   *
+   * Each line keeps when its snapshot was taken ([AT:] in front of the line
+   * number), so a post can tell whether another count has adjusted the item
+   * since -- and leave this line alone rather than book the same loss twice
+   * (newer-count.ts).
    */
-  async recordCount(tenantId: string, requestId: string, lineId: string, userId: string, countedQty: number) {
+  async recordCount(tenantId: string, requestId: string, lineId: string, userId: string, countedQty: number, now: Date = new Date()) {
     if (!this.warehouse) throw new BadRequestException('Counting is not available on this deployment.');
     const req = await this.getRaw(tenantId, requestId);
     if (req.status !== 'OPEN' && req.status !== 'SENT') {
@@ -2792,15 +2797,23 @@ export class ProcureService {
 
     const existing = await this.prisma.cycleCountLine.findFirst({
       where:  { countId: count.id, rawMaterialId: line.rawMaterialId },
-      select: { id: true, expectedQty: true },
+      select: { id: true, expectedQty: true, notes: true },
     });
     let expected: number;
     if (existing) {
-      // The snapshot stays; only the count changed.
+      /*
+        The snapshot stays; only the count changed. So does its time: the
+        difference is still measured against the book as it was then, and a
+        count posted since has corrected that book.
+      */
       expected = Number(existing.expectedQty);
+      const at = readTag(existing.notes, 'AT');
       await this.prisma.cycleCountLine.update({
         where: { id: existing.id },
-        data:  { countedQty: new Prisma.Decimal(countedQty), varianceQty: new Prisma.Decimal(countedQty - expected), notes: line.lineNumber },
+        data:  {
+          countedQty: new Prisma.Decimal(countedQty), varianceQty: new Prisma.Decimal(countedQty - expected),
+          notes: at ? withTag(line.lineNumber, 'AT', at) : line.lineNumber,
+        },
       });
     } else {
       const live = await this.prisma.rawMaterialInventory.findUnique({
@@ -2823,7 +2836,7 @@ export class ProcureService {
         data: {
           countId: count.id, rawMaterialId: line.rawMaterialId,
           expectedQty: new Prisma.Decimal(expected), countedQty: new Prisma.Decimal(countedQty),
-          varianceQty: new Prisma.Decimal(countedQty - expected), notes: line.lineNumber,
+          varianceQty: new Prisma.Decimal(countedQty - expected), notes: withTag(line.lineNumber, 'AT', now.toISOString()),
         },
       });
     }

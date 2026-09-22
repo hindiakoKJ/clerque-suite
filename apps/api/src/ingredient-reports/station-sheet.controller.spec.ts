@@ -165,12 +165,23 @@ describe('the daily inventory sheet routes', () => {
       const out: any = await controller.dailySheet(person('BUSINESS_OWNER', 'b-main'));
       expect(out.showCounted).toBe(true);
       const [milk, eggs] = out.sections[0].rows;
-      expect(milk).toMatchObject({ counted: 2800, difference: -337, cells: { ending: '3 pk + 400 ml', counted: '2 pk + 800 ml', difference: '−337 ml' } });
+      expect(milk).toMatchObject({ counted: 2800, difference: -337, cells: { ending: '3 pk + 400 ml', counted: '2 pk + 800 ml', difference: '337 ml short' } });
       expect(eggs).not.toHaveProperty('counted');
       expect(eggs).not.toHaveProperty('difference');
       expect(prisma.cycleCount.findMany.mock.calls[0][0].where).toMatchObject({
         tenantId: 't1', branchId: 'b-main', status: { in: ['RECORDED', 'POSTED'] }, notes: { startsWith: '[WEEKLY:' },
       });
+    });
+
+    it('a difference of a pack or more says short or extra after the whole amount, never a sign in front', async () => {
+      // "−1 pk + 337 ml" read as minus 1 pack, plus 337 ml.
+      const off = (countedQty: number, expectedQty: number) => ({ ...sentCount(), lines: [{ ...sentCount().lines[0], countedQty, expectedQty }] });
+      weeklyCounts.push(off(1800, 3137));
+      let out: any = await controller.dailySheet(person('BUSINESS_OWNER', 'b-main'));
+      expect(out.sections[0].rows[0].cells).toMatchObject({ counted: '1 pk + 800 ml', difference: '1 pk + 337 ml short' });
+      weeklyCounts.splice(0, 1, off(4337, 3137));
+      out = await controller.dailySheet(person('BUSINESS_OWNER', 'b-main'));
+      expect(out.sections[0].rows[0].cells).toMatchObject({ counted: '4 pk + 337 ml', difference: '1 pk + 200 ml extra' });
     });
 
     it('with no count on the sheet hours, no columns', async () => {

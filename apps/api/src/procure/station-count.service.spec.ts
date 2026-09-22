@@ -188,7 +188,7 @@ describe('StationCountService', () => {
       postCycleCount: jest.fn(async (_t: string, id: string, userId: string, _opening: boolean, skip: string[] = []) => {
         const c = counts.find((x) => x.id === id)!;
         Object.assign(c, { status: 'POSTED', postedAt: clock, postedById: userId, updatedAt: clock });
-        return { ...shape(c), warnings: [], skipped: skip };
+        return { ...shape(c), warnings: [], leftAlone: skip.map((id) => ({ rawMaterialId: id, name: MATERIALS[id].name, message: '' })), message: null };
       }),
     };
     const notifications: any = { create: jest.fn(async () => ({ id: 'n1' })) };
@@ -676,7 +676,23 @@ describe('StationCountService', () => {
       expect(res.lines.find((l) => l.rawMaterialId === 'milk')!.superseded?.reason).toBe('COUNTED_AGAIN');
     });
 
-    it('a line is superseded by a later count posted from the counts screen; not by one posted before it was counted', async () => {
+    it('names an item the post itself left out too: another count of it posted a moment before', async () => {
+      const h = build();
+      await save(h, KITCHEN_CTX, 'milk', 2800);
+      await save(h, KITCHEN_CTX, 'eggs', 24);
+      await send(h, KITCHEN_CTX);
+      // Between the review and the tap, a buy list's count of eggs was posted; the post checks again and leaves eggs alone.
+      const post = h.warehouse.postCycleCount.getMockImplementation();
+      h.warehouse.postCycleCount.mockImplementationOnce(async (...args: any[]) => {
+        const r = await post(...args);
+        return { ...r, leftAlone: [{ rawMaterialId: 'eggs', name: 'Eggs', message: 'Left alone: Eggs was already adjusted by count CC-2026-000050 (posted Sep 21).' }] };
+      });
+      const res = await h.svc.adjust(OWNER, 'cc1', 'owner', {}, NOW);
+      expect(h.warehouse.postCycleCount).toHaveBeenCalledWith(T, 'cc1', 'owner', false, []);
+      expect(res).toMatchObject({ adjusted: 1, skipped: ['Eggs'] });
+    });
+
+    it('a line is superseded by a later count posted from the counts screen that moved it; not by one posted before it was counted, nor by a line nobody changed', async () => {
       const posted = (id: string, postedAt: Date) => ({
         id, tenantId: T, branchId: B, countNumber: `CC-2026-0000${id.slice(-2)}`, status: 'POSTED', notes: null,
         startedById: 'owner', postedAt, postedById: 'owner', createdAt: postedAt, updatedAt: postedAt,
@@ -684,8 +700,10 @@ describe('StationCountService', () => {
       const h = build({
         counts: [posted('full01', new Date(NOW.getTime() - DAY)), posted('full02', new Date(NOW.getTime() + DAY))],
         lines: [
-          { id: 'x1', countId: 'full01', rawMaterialId: 'eggs', expectedQty: 30, countedQty: 30, varianceQty: 0, notes: null },
-          { id: 'x2', countId: 'full02', rawMaterialId: 'milk', expectedQty: 3000, countedQty: 3000, varianceQty: 0, notes: null },
+          { id: 'x1', countId: 'full01', rawMaterialId: 'eggs', expectedQty: 30, countedQty: 24, varianceQty: -6, notes: null },
+          { id: 'x2', countId: 'full02', rawMaterialId: 'milk', expectedQty: 3000, countedQty: 2900, varianceQty: -100, notes: null },
+          // The book figure the counts screen filled in, left as it was: nobody counted eggs there.
+          { id: 'x3', countId: 'full02', rawMaterialId: 'eggs', expectedQty: 30, countedQty: 30, varianceQty: 0, notes: null },
         ],
       });
       await save(h, KITCHEN_CTX, 'milk', 2800);

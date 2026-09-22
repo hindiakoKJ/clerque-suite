@@ -122,9 +122,11 @@ const items = (n: number) => `${n} item${n === 1 ? '' : 's'}`;
  * not set it to the counted figure, so the sales since the count are kept.
  *
  * An item that will move and is also on another open count (a buy list's)
- * is named: that count applies its own difference when it is posted, so
- * posted after this one it would move the item a second time. Posted first,
- * this record's line counts as adjusted and is left alone.
+ * is named, with that count to post first. Posted first, whichever of the
+ * two counted the item later sets it and the other leaves it alone (newest
+ * count wins, warehouse newer-count.ts). Adjusted first, this record sets it
+ * even where that count counted it later, and that count's later figure is
+ * lost.
  */
 export function adjustPlan(lines: ReviewLineInfo[], recountAsked: string[]): {
   move: number; leftAlone: number; waiting: number; nothing: boolean; notes: string[];
@@ -144,7 +146,7 @@ export function adjustPlan(lines: ReviewLineInfo[], recountAsked: string[]): {
     const one = onOpen.length === 1;
     const oneCount = counts.length === 1;
     notes.push(`${onOpen.map((l) => l.name).join(', ')} ${one ? 'is' : 'are'} also on open count ${counts.join(', ')}. `
-      + `Post ${oneCount ? 'that count' : 'those counts'} first: posted after this one, ${oneCount ? 'it' : 'they'} would move ${one ? 'it' : 'them'} again.`);
+      + `Post ${oneCount ? 'that count' : 'those counts'} first, so the ${oneCount ? 'newer' : 'newest'} count${one ? '' : ' of each'} sets it.`);
   }
   return { move, leftAlone, waiting, nothing: move === 0, notes };
 }

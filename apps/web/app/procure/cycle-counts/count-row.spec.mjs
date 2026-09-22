@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { countBadge, countCaption, isWeeklyCount } from './count-row.ts';
+import { countBadge, countCaption, isWeeklyCount, leftAloneText, postedTitle } from './count-row.ts';
 
 test('an open count says when it was started, on the Manila calendar', () => {
   // 17:30 UTC on the 20th is 01:30 on the 21st in Manila.
@@ -24,6 +24,59 @@ test('a count a buy list started names the list, not the raw tag', () => {
     countCaption({ status: 'OPEN', createdAt: '2026-09-21T02:00:00.000Z', postedAt: null, notes: '[REQ:REQ-20260921-004] Counted while building the buy list' }),
     'Started Sep 21, 2026 · from buy list REQ-20260921-004',
   );
+});
+
+test('a posted count shows its words, never a tag the server keeps in front of them', () => {
+  assert.equal(
+    countCaption({ status: 'POSTED', createdAt: '2026-09-20T01:00:00.000Z', postedAt: '2026-09-22T02:00:00.000Z', notes: '[NOTE:salt,sugar] Monthly' }),
+    'Posted Sep 22, 2026 · Monthly',
+  );
+  assert.equal(
+    countCaption({ status: 'POSTED', createdAt: '2026-09-20T01:00:00.000Z', postedAt: '2026-09-22T02:00:00.000Z', notes: '[NOTE:salt]' }),
+    'Posted Sep 22, 2026',
+  );
+  assert.equal(
+    countCaption({ status: 'POSTED', createdAt: '2026-09-21T02:00:00.000Z', postedAt: '2026-09-22T02:00:00.000Z', notes: '[REQ:REQ-20260921-004] [NOTE:salt] Counted while building the buy list' }),
+    'Posted Sep 22, 2026 · from buy list REQ-20260921-004',
+  );
+});
+
+test('after Post: what moved, and which items another count had already adjusted, in plain words', () => {
+  const salt = { name: 'Salt', message: 'Left alone: Salt was already adjusted by count CC-2026-000009 (posted Sep 22).' };
+  assert.equal(postedTitle({ warnings: [], leftAlone: [] }, false), 'Posted — variances applied.');
+  assert.equal(postedTitle({ warnings: ['x'] }, false), 'Posted — the counts are saved.');
+  assert.equal(postedTitle({}, true), 'Posted as opening stock — booked to Owner’s Capital.');
+  assert.equal(postedTitle(undefined, false), 'Posted — variances applied.');
+  // Some left alone: the rest posted as usual, and the toast after it says which and why.
+  assert.equal(postedTitle({ leftAlone: [salt], message: null }, false), 'Posted — variances applied.');
+  assert.equal(leftAloneText({ leftAlone: [salt] }), 'Left alone: Salt was already adjusted by count CC-2026-000009 (posted Sep 22).');
+  // Every item left alone: the server says so.
+  assert.equal(
+    postedTitle({ leftAlone: [salt], message: 'Nothing moved: every item on this count was already adjusted or counted again by another count.' }, false),
+    'Posted. Nothing moved: every item on this count was already adjusted or counted again by another count.',
+  );
+  assert.equal(leftAloneText({ leftAlone: [] }), null);
+  assert.equal(leftAloneText(undefined), null);
+  const many = ['A', 'B', 'C', 'D', 'E', 'F'].map((n) => ({ name: n, message: `Left alone: ${n} was already adjusted by count CC-2026-000009 (posted Sep 22).` }));
+  const said = leftAloneText({ leftAlone: many });
+  assert.match(said, /^Left alone: A .* Left alone: D was already adjusted by count CC-2026-000009 \(posted Sep 22\)\. And 2 more items left alone the same way\.$/);
+  assert.doesNotMatch(said, /Left alone: E/);
+});
+
+test('a bell tapped while the Counts screen is open opens that review: ?review= is followed as the address changes', () => {
+  const page = readFileSync(new URL('../../pos/(pos)/warehouse/cycle-counts/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /import \{ useSearchParams \} from 'next\/navigation';/);
+  assert.match(page, /const wanted = useSearchParams\(\)\.get\('review'\);/);
+  assert.match(page, /if \(wanted\) setReviewId\(wanted\);\s*\}, \[wanted\]\);/);
+  // Read once on load, it missed every bell tapped after.
+  assert.doesNotMatch(page, /new URLSearchParams\(window\.location\.search\)\.get\('review'\)/);
+  // useSearchParams inside a Suspense boundary, the way the other pages do it.
+  assert.match(page, /<Suspense>\s*<CycleCounts \/>\s*<\/Suspense>/);
+  // A different count's review starts fresh.
+  assert.match(page, /<WeeklyCountReview key=\{reviewId\}/);
+  // Post says which items it left alone.
+  assert.match(page, /toast\.success\(postedTitle\(d, v\.isOpeningBalance\)\)/);
+  assert.match(page, /const left = leftAloneText\(d\);/);
 });
 
 test('a long note is cut short', () => {

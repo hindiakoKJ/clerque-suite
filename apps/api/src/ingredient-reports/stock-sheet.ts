@@ -101,19 +101,28 @@ export function sheetRow(b: number | null, m: SheetMovement, e: number): SheetNu
  * A quantity the way the sheet writes it: "12 pk + 815 g" when the item is
  * bought by the pack, else "1.25 kg" / "815 g" / "58 serving". Movements and
  * Adjust leave a zero blank, as a hand-filled sheet does; a balance says "0 g".
- * Only Adjust carries a plus; anything below zero carries a minus.
+ *
+ * Adjust (and the owner's Difference, written the same way) says which way in
+ * words: "8 pk + 586 g short", "200 ml extra". A sign in front read wrong in
+ * packs: "−8 pk + 586 g" looked like minus 8 packs, plus 586 g. A balance
+ * below zero keeps its minus, over the packs and the rest together:
+ * "−(2 pk + 500 g)", "−2 pk", "−5 g".
  */
 export function sheetAmount(q: number, unit: string, packSize: number | null, kind: 'balance' | 'movement' | 'adjust'): string {
   // To the 4 places every amount is kept to, so a pack short by a rounding crumb still reads as a pack.
   const size = round4(Math.abs(q));
   if (size < 0.00005) return kind === 'balance' ? usageQty(0, unit) : '';
-  const sign = q < 0 ? MINUS : kind === 'adjust' ? '+' : '';
+  let words = usageQty(size, unit);
+  let split = false;
   if (packSize != null && packSize > 0 && size >= packSize) {
     const packs = Math.floor(size / packSize + 1e-9);
     const rest = round4(size - packs * packSize);
-    return `${sign}${packs} pk${rest >= 0.00005 ? ` + ${usageQty(rest, unit)}` : ''}`;
+    split = rest >= 0.00005;
+    words = `${packs} pk${split ? ` + ${usageQty(rest, unit)}` : ''}`;
   }
-  return `${sign}${usageQty(size, unit)}`;
+  if (kind === 'adjust') return `${words} ${q < 0 ? 'short' : 'extra'}`;
+  if (q > 0) return words;
+  return split ? `${MINUS}(${words})` : `${MINUS}${words}`;
 }
 
 // Some ICU builds put a narrow no-break space before AM/PM; the sheet and its tests want a plain one.

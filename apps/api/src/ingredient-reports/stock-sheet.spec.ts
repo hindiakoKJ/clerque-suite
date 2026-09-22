@@ -53,17 +53,39 @@ describe('stock-sheet', () => {
 
     it('a zero movement or Adjust is left blank; a zero balance still reads', () => {
       expect(sheetAmount(0, 'g', null, 'movement')).toBe('');
+      expect(sheetAmount(0, 'g', 1000, 'adjust')).toBe('');
+      expect(sheetAmount(-0, 'ml', 1000, 'adjust')).toBe('');
       expect(sheetAmount(0.00001, 'g', null, 'adjust')).toBe('');
       expect(sheetAmount(0, 'g', null, 'balance')).toBe('0 g');
       expect(sheetAmount(0, 'g', 1000, 'balance')).toBe('0 g');
     });
 
-    it('only Adjust carries a plus; anything below zero carries a minus', () => {
-      expect(sheetAmount(30, 'g', null, 'adjust')).toBe('+30 g');
-      expect(sheetAmount(-30, 'g', null, 'adjust')).toBe('−30 g');
-      expect(sheetAmount(-2500, 'g', 1000, 'adjust')).toBe('−2 pk + 500 g');
-      expect(sheetAmount(30, 'g', null, 'movement')).toBe('30 g');
+    /*
+      "−8 pk + 586 g" read as minus 8 packs, plus 586 g. Adjust (and the
+      owner's Difference) says which way in words, after the whole amount.
+    */
+    it('Adjust says short or extra after the whole amount, never a sign in front', () => {
+      expect(sheetAmount(-8586, 'g', 1000, 'adjust')).toBe('8 pk + 586 g short');
+      expect(sheetAmount(1200, 'ml', 1000, 'adjust')).toBe('1 pk + 200 ml extra');
+      expect(sheetAmount(-2000, 'ml', 1000, 'adjust')).toBe('2 pk short');
+      // Less than one pack, and no pack size: the unit alone, scaled up as the messages do.
+      expect(sheetAmount(-586, 'g', 1000, 'adjust')).toBe('586 g short');
+      expect(sheetAmount(999, 'ml', 1000, 'adjust')).toBe('999 ml extra');
+      expect(sheetAmount(-30, 'g', null, 'adjust')).toBe('30 g short');
+      expect(sheetAmount(30, 'g', null, 'adjust')).toBe('30 g extra');
+      expect(sheetAmount(-1250, 'g', 0, 'adjust')).toBe('1.25 kg short');
+      expect(sheetAmount(2, 'pc', null, 'adjust')).toBe('2 pc extra');
+      for (const q of [-8586, 1200, -586, 30]) expect(sheetAmount(q, 'g', 1000, 'adjust')).not.toMatch(/^[−+-]/);
+    });
+
+    it('a balance below zero keeps its minus, over the packs and the rest together', () => {
+      expect(sheetAmount(-2500, 'g', 1000, 'balance')).toBe('−(2 pk + 500 g)');
+      expect(sheetAmount(-2000, 'g', 1000, 'balance')).toBe('−2 pk');
       expect(sheetAmount(-5, 'g', null, 'balance')).toBe('−5 g');
+      expect(sheetAmount(-500, 'g', 1000, 'balance')).toBe('−500 g');
+      // Above zero nothing carries a sign.
+      expect(sheetAmount(30, 'g', null, 'movement')).toBe('30 g');
+      expect(sheetAmount(2500, 'g', 1000, 'balance')).toBe('2 pk + 500 g');
     });
   });
 
@@ -203,12 +225,12 @@ describe('stock-sheet', () => {
       const sauce = rows.find((r) => r.name === 'Tomato Sauce (ready)')!;
       expect(sauce).toMatchObject({
         beginning: 1200, in: 2000, waste: 0, used: 1650, ending: 1520, adjust: -30, packSize: null, alsoOn: [],
-        cells: { beginning: '1.2 kg', in: '2 kg', waste: '', used: '1.65 kg', ending: '1.52 kg', adjust: '−30 g' },
+        cells: { beginning: '1.2 kg', in: '2 kg', waste: '', used: '1.65 kg', ending: '1.52 kg', adjust: '30 g short' },
       });
       const milk = rows.find((r) => r.name === 'Fresh Milk')!;
       expect(milk).toMatchObject({ alsoOn: ['Bar'], packSize: 1000, adjust: 0, cells: { beginning: '4 pk', in: '3 pk', waste: '250 ml', used: '2 pk + 100 ml', ending: '4 pk + 650 ml', adjust: '' } });
       // An item missing from the saved closing had none; one never stocked here reads 0.
-      expect(rows.find((r) => r.name === 'Tomatoes')).toMatchObject({ beginning: 0, used: 900, ending: 100, adjust: 1000 });
+      expect(rows.find((r) => r.name === 'Tomatoes')).toMatchObject({ beginning: 0, used: 900, ending: 100, adjust: 1000, cells: { adjust: '1 kg extra' } });
       expect(rows.find((r) => r.name === 'Flour')).toMatchObject({ beginning: 0, ending: 0, cells: { beginning: '0 g', in: '', ending: '0 g' } });
       for (const r of rows) expect(Math.abs(r.beginning + r.in - r.waste - r.used + r.adjust - r.ending)).toBeLessThan(0.0001);
       // Bar-only and office items are not on the kitchen's sheet.

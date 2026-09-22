@@ -118,7 +118,7 @@ export class WarehouseController {
     return this.svc.setLineCount(user.tenantId!, lineId, body.countedQty);
   }
 
-  @ApiOperation({ summary: 'Post the count — applies variances to inventory' })
+  @ApiOperation({ summary: 'Post the count — applies variances to inventory, leaving alone (and naming) items another count has adjusted or counted again since' })
   @Roles(...WarehouseController.WAREHOUSE_OPS)
   /**
    * `isOpeningBalance` changes where the value goes, not what the count says.

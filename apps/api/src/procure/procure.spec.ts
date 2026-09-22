@@ -1739,7 +1739,9 @@ describe('ProcureService', () => {
     const out = await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 750);
     expect(createdCounts[0]).toMatchObject({ branchId: BRANCH, countNumber: 'CC-2026-000007', status: 'OPEN', startedById: 'cook' });
     expect(createdCounts[0].notes).toMatch(/^\[REQ:REQ-20260830-001\]/);
-    expect(countLines[0]).toMatchObject({ rawMaterialId: 'rm-haz', notes: 'REQ-20260830-001-01' });
+    expect(countLines[0]).toMatchObject({ rawMaterialId: 'rm-haz' });
+    // The line number, and when it was counted: a post can then tell whether a newer count has adjusted the item since.
+    expect(countLines[0].notes).toMatch(/^\[AT:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\] REQ-20260830-001-01$/);
     expect(Number(countLines[0].expectedQty)).toBe(2250);
     expect(Number(countLines[0].countedQty)).toBe(750);
     expect(Number(countLines[0].varianceQty)).toBe(-1500);
@@ -1748,13 +1750,16 @@ describe('ProcureService', () => {
 
   it('a second count on the same line keeps the snapshot and changes only the count', async () => {
     const { svc, createdCounts, countLines, count } = build({ status: 'OPEN', lines: ASKED, onHand: [{ rawMaterialId: 'rm-haz', quantity: 2250 }] });
-    await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 750);
-    const out = await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 1500);
+    await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 750, new Date('2026-09-22T00:30:00Z'));
+    const out = await svc.recordCount(TENANT, 'req1', 'l1', 'cook', 1500, new Date('2026-09-22T02:00:00Z'));
     expect(createdCounts).toHaveLength(1);                       // one count per list
     expect(Number(countLines[1].countedQty)).toBe(1500);
     expect(Number(countLines[1].varianceQty)).toBe(-750);        // against the SAME 2250
     expect(out.expectedQty).toBe(2250);
     expect(count()!.lines).toHaveLength(1);
+    // And the same moment: the difference is still measured against the book as it was then.
+    expect(countLines[0].notes).toBe('[AT:2026-09-22T00:30:00.000Z] REQ-20260830-001-01');
+    expect(countLines[1].notes).toBe('[AT:2026-09-22T00:30:00.000Z] REQ-20260830-001-01');
   });
 
   it('the request then shows what was counted, next to what Clerque says', async () => {

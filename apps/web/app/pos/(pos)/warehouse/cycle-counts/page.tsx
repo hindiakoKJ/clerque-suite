@@ -1,12 +1,13 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClipboardCheck, Plus, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { activeBranches } from '@/app/procure/active-branches';
-import { countBadge, countCaption, isWeeklyCount, type BadgeTone } from '@/app/procure/cycle-counts/count-row';
+import { countBadge, countCaption, isWeeklyCount, leftAloneText, postedTitle, type BadgeTone, type PostResult } from '@/app/procure/cycle-counts/count-row';
 import { PostCountModal } from '@/components/procure/PostCountModal';
 import { WeeklyCountReview } from '@/components/procure/WeeklyCountReview';
 
@@ -33,21 +34,32 @@ const TINT: Record<BadgeTone, string> = {
   other:     'bg-muted text-muted-foreground',
 };
 
+// useSearchParams has to sit inside a Suspense boundary, or Next's build cannot prerender the page.
 export default function CycleCountsPage() {
+  return (
+    <Suspense>
+      <CycleCounts />
+    </Suspense>
+  );
+}
+
+function CycleCounts() {
   const qc = useQueryClient();
   const [showNew, setShowNew] = useState(false);
   const [openCountId, setOpenCountId] = useState<string | null>(null);
   /*
     A kitchen or bar screen's weekly count opens in its own review: the
     reconciliation, with "Adjust the books to match" and "Ask for a recount".
-    The bell for a sent count links here with ?review=<id>.
+    The bell for a sent count links here with ?review=<id>. Read from the
+    address as it changes, not once on load: the bell can be tapped while
+    this page is already open, and then only the address changes.
   */
   const [reviewId, setReviewId] = useState<string | null>(null);
   const canReview = useAuthStore((s) => !!s.user && (!!s.user.isSuperAdmin || WEEKLY_REVIEW_ROLES.includes(s.user.role)));
+  const wanted = useSearchParams().get('review');
   useEffect(() => {
-    const wanted = new URLSearchParams(window.location.search).get('review');
     if (wanted) setReviewId(wanted);
-  }, []);
+  }, [wanted]);
   const closeReview = () => {
     setReviewId(null);
     // Off the address too, so a refresh does not open it again.
@@ -79,7 +91,7 @@ export default function CycleCountsPage() {
     mutationFn: (v: { id: string; isOpeningBalance: boolean }) =>
       api.post(`/warehouse/cycle-counts/${v.id}/post`, { isOpeningBalance: v.isOpeningBalance })
         .then((r) => r.data),
-    onSuccess: (d: { warnings?: string[] }, v) => {
+    onSuccess: (d: PostResult, v) => {
       qc.invalidateQueries({ queryKey: ['cycle-counts'] });
       setPostTarget(null);
       /*
@@ -90,9 +102,10 @@ export default function CycleCountsPage() {
       */
       const warnings = d?.warnings ?? [];
       const n = warnings.length;
-      toast.success(v.isOpeningBalance
-        ? 'Posted as opening stock — booked to Owner’s Capital.'
-        : n === 0 ? 'Posted — variances applied.' : 'Posted — the counts are saved.');
+      toast.success(postedTitle(d, v.isOpeningBalance));
+      // An item another count had already adjusted or counted again is left alone: said, with why, so the shelf's figure does not surprise.
+      const left = leftAloneText(d);
+      if (left) toast.info(left, { duration: 15000 });
       if (n > 0) {
         toast.warning(
           `${n} ingredient${n === 1 ? '' : 's'} had no cost on file, so ${n === 1 ? 'that count' : 'those counts'} `
@@ -234,7 +247,7 @@ export default function CycleCountsPage() {
       )}
       {showNew && <NewCountModal onClose={() => setShowNew(false)} />}
       {openCountId && <CountSheetModal countId={openCountId} onClose={() => setOpenCountId(null)} />}
-      {reviewId && canReview && <WeeklyCountReview countId={reviewId} onClose={closeReview} />}
+      {reviewId && canReview && <WeeklyCountReview key={reviewId} countId={reviewId} onClose={closeReview} />}
     </div>
   );
 }

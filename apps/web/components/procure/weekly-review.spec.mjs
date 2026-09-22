@@ -93,7 +93,7 @@ test('Adjust says first what it will change, what it leaves alone, and what wait
   assert.equal(adjustedMessage(1, ['Salt']), 'Books adjusted: 1 item moved by the counted difference. Left alone (counted again later): Salt.');
 });
 
-test('Adjust names an item that will move and is also on another open count: posted later, that count would move it again', () => {
+test('Adjust names an item that will move and is also on another open count, and says to post that count first: then the newer count sets it', () => {
   const lines = [
     line({ alsoOpenIn: ['CC-2026-000010'] }),
     line({ rawMaterialId: 'sugar', name: 'Sugar', difference: 200, alsoOpenIn: [] }),
@@ -103,10 +103,12 @@ test('Adjust names an item that will move and is also on another open count: pos
   ];
   assert.equal(
     adjustPlan(lines, []).notes.at(-1),
-    'Milk is also on open count CC-2026-000010. Post that count first: posted after this one, it would move it again.',
+    'Milk is also on open count CC-2026-000010. Post that count first, so the newer count sets it.',
   );
   const two = adjustPlan([lines[0], line({ rawMaterialId: 'sugar', name: 'Sugar', difference: 200, alsoOpenIn: ['CC-2026-000011'] })], []);
-  assert.equal(two.notes.at(-1), 'Milk, Sugar are also on open count CC-2026-000010, CC-2026-000011. Post those counts first: posted after this one, they would move them again.');
+  assert.equal(two.notes.at(-1), 'Milk, Sugar are also on open count CC-2026-000010, CC-2026-000011. Post those counts first, so the newest count of each sets it.');
+  const both = adjustPlan([lines[0], line({ rawMaterialId: 'sugar', name: 'Sugar', difference: 200, alsoOpenIn: ['CC-2026-000010'] })], []);
+  assert.equal(both.notes.at(-1), 'Milk, Sugar are also on open count CC-2026-000010. Post that count first, so the newer count of each sets it.');
   assert.equal(adjustPlan([lines[1]], []).notes.some((n) => n.includes('open count')), false);
 });
 

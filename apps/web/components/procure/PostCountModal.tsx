@@ -47,7 +47,8 @@ export function PostCountModal({
 
         <p className="text-sm text-muted-foreground">
           Stock moves by the difference this count found, so anything sold while
-          you were counting is kept. This cannot be undone.
+          you were counting is kept. If another count has adjusted or counted an
+          item since this one did, that item is left alone. This cannot be undone.
         </p>
 
         <div className="space-y-2">

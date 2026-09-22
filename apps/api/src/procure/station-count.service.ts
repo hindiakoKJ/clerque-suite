@@ -7,6 +7,7 @@ import { DAY_MS, manilaDayOf } from '../ingredient-reports/daily-usage';
 import { StationItems, stationItems, UNROUTED } from '../ingredient-reports/station-items';
 import { SECTION_ORDER, SECTION_TITLES, SectionKey, sheetAmount, sheetPackSizes } from '../ingredient-reports/stock-sheet';
 import { WarehouseService } from '../warehouse/warehouse.service';
+import { newerCounts } from '../warehouse/newer-count';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 import { afterHeld, namesInWords } from './procure.service';
@@ -619,14 +620,15 @@ export class StationCountService {
     const moves = count.lines.filter((l) => !superseded.has(l.id) && differenceOf(Number(l.countedQty), Number(l.expectedQty)).kind !== 'MATCH');
     if (moves.length === 0) throw new BadRequestException('Nothing to adjust: every item matches or was counted again later.');
 
-    const skippedLines = count.lines.filter((l) => superseded.has(l.id));
-    const skip = new Set(skippedLines.map((l) => l.rawMaterialId));
+    const skip = new Set(count.lines.filter((l) => superseded.has(l.id)).map((l) => l.rawMaterialId));
     const posted = await this.warehouse.postCycleCount(scope.tenantId, id, userId, body?.isOpeningBalance === true, [...skip]);
+    // The post checks again under its lock, by the same rule: a count posted a moment ago can leave out one more.
+    const left = new Set([...skip, ...posted.leftAlone.map((l) => l.rawMaterialId)]);
     const view = await this.review(scope, id, now);
     return {
       ...view,
-      adjusted: posted.lines.filter((l) => !skip.has(l.rawMaterialId) && Math.abs(Number(l.varianceQty)) >= MATCH_BELOW).length,
-      skipped: skippedLines.map((l) => l.rawMaterial.name).sort((a, b) => a.localeCompare(b)),
+      adjusted: posted.lines.filter((l) => !left.has(l.rawMaterialId) && Math.abs(Number(l.varianceQty)) >= MATCH_BELOW).length,
+      skipped: count.lines.filter((l) => left.has(l.rawMaterialId)).map((l) => l.rawMaterial.name).sort((a, b) => a.localeCompare(b)),
       warnings: posted.warnings,
     };
   }
@@ -753,52 +755,30 @@ export class StationCountService {
    * adjusted from it (KJ's amendment, section E):
    *   - a newer weekly-count line for the same item in another count of the
    *     branch, any status but cancelled -- the item was counted again;
-   *   - any other count posted after this line was counted that holds the
-   *     item -- the books were already corrected for it.
+   *   - another count posted after this line was counted that moved the
+   *     item, or counted it later on a buy list -- the books were already
+   *     corrected for it. A counts-screen line nobody changed is not a count.
+   * The rule is newer-count.ts's, the one every count post obeys, so what
+   * this review leaves out is what posting leaves out.
    * A weekly count already posted is read as it stood when it was posted.
    */
   private async supersededLines(
     count: { id: string; tenantId: string; branchId: string; status: CycleCountStatus; postedAt: Date | null; createdAt: Date;
-             lines: Array<{ id: string; rawMaterialId: string; notes: string | null }> },
+             notes: string | null; lines: Array<{ id: string; rawMaterialId: string; notes: string | null }> },
     now: Date,
   ): Promise<Map<string, Superseded>> {
     const out = new Map<string, Superseded>();
-    const ids = [...new Set(count.lines.map((l) => l.rawMaterialId))];
-    if (ids.length === 0) return out;
     const asOf = count.status === 'POSTED' && count.postedAt ? count.postedAt : now;
-    const others = await this.prisma.cycleCountLine.findMany({
-      where:  { rawMaterialId: { in: ids }, count: { tenantId: count.tenantId, branchId: count.branchId, id: { not: count.id }, status: { not: 'CANCELLED' } } },
-      select: { rawMaterialId: true, notes: true, count: { select: { countNumber: true, status: true, notes: true, postedAt: true, createdAt: true } } },
-    });
-    const names = await this.stationNames(count.tenantId, others.map((o) => readWeekly(o.count.notes)?.stationId));
-
-    for (const line of count.lines) {
-      const at = readLineTags(line.notes).at ?? count.createdAt;
-      let best: { when: Date; s: Omit<Superseded, 'message' | 'on' | 'at'> } | null = null;
-      for (const o of others) {
-        if (o.rawMaterialId !== line.rawMaterialId) continue;
-        const weekly = readWeekly(o.count.notes);
-        let when: Date | null = null;
-        let s: Omit<Superseded, 'message' | 'on' | 'at'> | null = null;
-        if (weekly) {
-          const oAt = readLineTags(o.notes).at ?? o.count.createdAt;
-          if (oAt > at && oAt <= asOf) {
-            when = oAt;
-            s = { reason: 'COUNTED_AGAIN', countNumber: o.count.countNumber, stationName: weekly.stationId ? names.get(weekly.stationId) ?? null : null };
-          }
-        } else if (o.count.status === 'POSTED' && o.count.postedAt && o.count.postedAt > at && o.count.postedAt <= asOf) {
-          when = o.count.postedAt;
-          s = { reason: 'ADJUSTED', countNumber: o.count.countNumber, stationName: null };
-        }
-        if (when && s && (!best || when > best.when)) best = { when, s };
-      }
-      if (!best) continue;
-      const on = monthDay(best.when);
-      out.set(line.id, {
-        ...best.s, on, at: best.when.toISOString(),
-        message: best.s.reason === 'COUNTED_AGAIN'
-          ? `Counted again later (${best.s.stationName ?? best.s.countNumber}, ${on}). Not adjusted from this record.`
-          : `Adjusted by count ${best.s.countNumber} on ${on}. Not adjusted from this record.`,
+    const newer = await newerCounts(this.prisma, count, asOf);
+    const names = await this.stationNames(count.tenantId, [...newer.values()].map((n) => n.stationId));
+    for (const [lineId, n] of newer) {
+      const on = monthDay(n.when);
+      const stationName = n.stationId ? names.get(n.stationId) ?? null : null;
+      out.set(lineId, {
+        reason: n.reason, countNumber: n.countNumber, stationName, on, at: n.when.toISOString(),
+        message: n.reason === 'COUNTED_AGAIN'
+          ? `Counted again later (${stationName ?? n.countNumber}, ${on}). Not adjusted from this record.`
+          : `Adjusted by count ${n.countNumber} on ${on}. Not adjusted from this record.`,
       });
     }
     return out;

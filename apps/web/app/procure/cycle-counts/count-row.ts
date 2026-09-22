@@ -63,12 +63,41 @@ export function countCaption(c: CountRowInfo): string {
   const when = c.status === 'POSTED' && c.postedAt ? `Posted ${day(c.postedAt)}` : `Started ${day(c.createdAt)}`;
   const notes = (c.notes ?? '').trim();
   const fromList = /^\[REQ:([^\]]+)\]/.exec(notes);
-  // A weekly count's tags are for the server; the words after them ("Kitchen sent by Joy, …") are for people.
+  // Tags are for the server; the words after them ("Kitchen sent by Joy, …") are for people.
   const plain = notes.replace(TAGS, '').trim();
   const source = fromList
     ? `from buy list ${fromList[1]}`
-    : isWeeklyCount(notes) ? cut(weeklyWords(plain), WEEKLY_CAPTION_MAX) : cut(notes);
+    : isWeeklyCount(notes) ? cut(weeklyWords(plain), WEEKLY_CAPTION_MAX) : cut(plain);
   return source ? `${when} · ${source}` : when;
+}
+
+/** What posting a count answers (warehouse.service.ts postCycleCount), as far as this screen reads it. */
+export interface PostResult {
+  warnings?: string[];
+  /** Items another count had already adjusted or counted again: "Left alone: Salt was already adjusted by count CC-2026-000009 (posted Sep 22)." */
+  leftAlone?: Array<{ name?: string; message?: string }>;
+  /** Set when every item was left alone. */
+  message?: string | null;
+}
+
+/** The toast after Post. */
+export function postedTitle(d: PostResult | undefined, isOpeningBalance: boolean): string {
+  if (d?.message) return `Posted. ${d.message}`;
+  if (isOpeningBalance) return 'Posted as opening stock — booked to Owner’s Capital.';
+  return (d?.warnings?.length ?? 0) === 0 ? 'Posted — variances applied.' : 'Posted — the counts are saved.';
+}
+
+/** How many left-alone items a toast names before "and N more". */
+const LEFT_SHOWN = 4;
+
+/** The items the post left alone and why, one sentence each, or null when it left none. */
+export function leftAloneText(d: PostResult | undefined): string | null {
+  const said = (d?.leftAlone ?? []).map((l) => (l.message ?? '').trim()).filter(Boolean);
+  if (said.length === 0) return null;
+  const more = said.length - LEFT_SHOWN;
+  return more > 0
+    ? `${said.slice(0, LEFT_SHOWN).join(' ')} And ${more} more item${more === 1 ? '' : 's'} left alone the same way.`
+    : said.join(' ');
 }
 
 export type BadgeTone = 'open' | 'recorded' | 'posted' | 'cancelled' | 'other';

@@ -37,6 +37,8 @@ describe('WarehouseService — posting a count creates stock that does not exist
     const tx: any = {
       // The count's row lock, taken before it is read.
       $queryRaw: jest.fn().mockResolvedValue([]),
+      // The branch's post lock (newest count wins has its own spec, newer-count.spec.ts).
+      $executeRaw: jest.fn().mockResolvedValue(1),
       cycleCount: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN', createdAt: OPENED,
@@ -101,7 +103,8 @@ describe('WarehouseService — posting a count creates stock that does not exist
       },
       variantBomItem: { findMany: jest.fn(async () => []) },
       modifierOption: { findMany: jest.fn(async () => []) },
-      cycleCountLine: { update: jest.fn().mockResolvedValue({}) },
+      // No other count of these items: nothing newer to leave a line alone for.
+      cycleCountLine: { update: jest.fn().mockResolvedValue({}), findMany: jest.fn().mockResolvedValue([]) },
       /*
         The books' side of a count. Only created when the line's material has a
         cost price — a variance the books cannot value is a stock fact, not an
@@ -493,7 +496,10 @@ describe('WarehouseService — posting a count creates stock that does not exist
       await svc.postCycleCount(TENANT, 'cc1', 'u1', false, ['milk']);
       expect(upserts.map((u) => u.rawMaterialId)).toEqual(['beans']);
       expect(events.map((e) => e.payload.rawMaterialId)).toEqual(['beans']);
-      expect(tx.cycleCountLine.update.mock.calls.map((c: any[]) => c[0].where.id)).toEqual(['l2']);
+      // The skipped line's figures as recorded: only marked as left alone (newer-count.ts), so a later count knows it moved nothing.
+      const updates = tx.cycleCountLine.update.mock.calls.map((c: any[]) => c[0]);
+      expect(updates.filter((u: any) => u.where.id !== 'l1').map((u: any) => u.where.id)).toEqual(['l2']);
+      expect(updates.filter((u: any) => u.where.id === 'l1').map((u: any) => u.data)).toEqual([{ notes: expect.stringMatching(/^\[LEFT:[^\]]+\]$/) }]);
     });
 
     it('skipping every item moves nothing and asks nothing of the tickets, but still closes the count', async () => {
@@ -541,6 +547,7 @@ describe('WarehouseService.postCycleCount — the period lock', () => {
     const upserts: any[] = [];
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(1),
       cycleCount: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN', createdAt: new Date('2026-09-16T02:00:00Z'),
@@ -553,7 +560,7 @@ describe('WarehouseService.postCycleCount — the period lock', () => {
         upsert: jest.fn((a: any) => { upserts.push(a); return Promise.resolve({}); }),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
-      cycleCountLine:  { update: jest.fn().mockResolvedValue({}) },
+      cycleCountLine:  { update: jest.fn().mockResolvedValue({}), findMany: jest.fn().mockResolvedValue([]) },
       accountingEvent: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma: any = { $transaction: jest.fn((fn: any) => fn(tx)) };

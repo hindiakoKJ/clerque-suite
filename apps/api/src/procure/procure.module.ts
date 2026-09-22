@@ -6,6 +6,8 @@ import { ProcureReceiptsController } from './procure-receipts.controller';
 import { BuyListsExcelService } from './buy-lists-excel.service';
 import { StationRequestService } from './station-request.service';
 import { StationRequestController } from './station-request.controller';
+import { StationCountService } from './station-count.service';
+import { StationCountController, WeeklyCountReviewController } from './station-count.controller';
 import { ReceiptReadLimitGuard, ReceiptReadLedger, ReleaseReceiptReadInterceptor } from './receipt-read-limit.guard';
 import { InventoryModule } from '../inventory/inventory.module';
 import { AiModule } from '../ai/ai.module';
@@ -27,11 +29,11 @@ import { JwtOrDeviceTokenAuthGuard } from '../auth/guards/jwt-or-device-token.gu
     WarehouseModule,      // "remaining: 7 boxes" on the list is a line on a cycle count
     NotificationsModule,  // a sent list reaches the owners instead of waiting to be opened
     MailModule,
-    DisplayPairingModule, // a paired kitchen or bar tablet can ask for what is running low
+    DisplayPairingModule, // a paired kitchen or bar tablet can ask for what is running low, and count the shelf
   ],
-  controllers: [ProcureController, ProcureReceiptsController, StationRequestController],
+  controllers: [ProcureController, ProcureReceiptsController, StationRequestController, StationCountController, WeeklyCountReviewController],
   providers:   [ProcureService, ProcureReceiptsService, BuyListsExcelService, ReceiptReadLedger, ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor,
-                StationRequestService, JwtAuthGuard, JwtOrDeviceTokenAuthGuard],
+                StationRequestService, StationCountService, JwtAuthGuard, JwtOrDeviceTokenAuthGuard],
   exports:     [ProcureService, StationRequestService],
 })
 export class ProcureModule {}

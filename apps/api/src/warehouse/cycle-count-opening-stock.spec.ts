@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { WarehouseService } from './warehouse.service';
 
 /**
@@ -34,6 +35,8 @@ describe('WarehouseService — posting a count creates stock that does not exist
     const events: any[] = [];
 
     const tx: any = {
+      // The count's row lock, taken before it is read.
+      $queryRaw: jest.fn().mockResolvedValue([]),
       cycleCount: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN', createdAt: OPENED,
@@ -432,6 +435,93 @@ describe('WarehouseService — posting a count creates stock that does not exist
       expect(where.order).toMatchObject({ tenantId: TENANT, branchId: BRANCH, paidAt: { lt: OPENED } });
     });
   });
+  /*
+    A weekly count from a kitchen or bar screen is sent as a RECORD: frozen,
+    nothing moved. The owner adjusts the books from it later -- maybe days
+    later -- through this same post. It must apply what the count found to
+    the shelf as it is THEN, and leave out the items a later count replaced.
+  */
+  describe('a recorded weekly count', () => {
+    const recorded = (tx: any, status = 'RECORDED', lines?: any[]) => tx.cycleCount.findFirst.mockResolvedValue({
+      id: 'cc1', tenantId: TENANT, branchId: BRANCH, status, createdAt: OPENED, countNumber: 'CC-2026-000012',
+      lines: lines ?? [
+        { id: 'l1', rawMaterialId: 'milk',  countedQty: '2800', expectedQty: '3137', rawMaterial: { id: 'milk', name: 'Fresh milk', unit: 'ml', costPrice: '0.08', category: 'INGREDIENT' } },
+        { id: 'l2', rawMaterialId: 'beans', countedQty: '900',  expectedQty: '1000', rawMaterial: { id: 'beans', name: 'Beans', unit: 'g', costPrice: '1.85', category: 'INGREDIENT' } },
+      ],
+    });
+
+    it('is posted like an open count through the weekly review (a skip list, even empty), and marked POSTED', async () => {
+      const { svc, tx, upserts } = build({ existing: new Set(['milk', 'beans']), live: { milk: 3137, beans: 1000 } });
+      recorded(tx);
+      await svc.postCycleCount(TENANT, 'cc1', 'u1', false, []);
+      expect(upserts.map((u) => [u.rawMaterialId, u.qty])).toEqual([['milk', 2800], ['beans', 900]]);
+      expect(tx.cycleCount.update.mock.calls[0][0].data).toMatchObject({ status: 'POSTED', postedById: 'u1' });
+    });
+
+    it('is refused from the counts screen, which passes no skip list: it would move a line a later count replaced', async () => {
+      const { svc, tx, upserts, events } = build({ existing: new Set(['milk', 'beans']), live: { milk: 3137, beans: 1000 } });
+      recorded(tx);
+      await expect(svc.postCycleCount(TENANT, 'cc1', 'u1')).rejects.toThrow('A weekly count is adjusted from its Review under Procure > Counts.');
+      await expect(svc.postCycleCount(TENANT, 'cc1', 'u1', true)).rejects.toThrow(BadRequestException);
+      expect(upserts).toHaveLength(0);
+      expect(events).toHaveLength(0);
+      expect(tx.cycleCount.update).not.toHaveBeenCalled();
+    });
+
+    it('takes the count\'s row lock before reading it, so two taps at once post it once', async () => {
+      const { svc, tx } = build({ existing: new Set(['milk', 'beans']), live: { milk: 3137, beans: 1000 } });
+      recorded(tx);
+      await svc.postCycleCount(TENANT, 'cc1', 'u1', false, []);
+      const [sql, ...values] = tx.$queryRaw.mock.calls[0];
+      expect(sql.join('?')).toBe('SELECT id FROM "cycle_counts" WHERE id = ? AND "tenantId" = ? FOR UPDATE');
+      expect(values).toEqual(['cc1', TENANT]);
+      expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.cycleCount.findFirst.mock.invocationCallOrder[0]);
+    });
+
+    it('three days later, applies the difference to the shelf as it is then, keeping every sale in between', async () => {
+      // Counted 337 ml short of 3,137; 1,000 ml sold since. The shelf ends at 2,137 - 337 = 1,800, not the 2,800 counted.
+      const { svc, tx, upserts, events } = build({ existing: new Set(['milk', 'beans']), live: { milk: 2137, beans: 1000 } });
+      recorded(tx);
+      await svc.postCycleCount(TENANT, 'cc1', 'u1', false, []);
+      expect(upserts.find((u) => u.rawMaterialId === 'milk')!.qty).toBe(1800);
+      expect(events.find((e) => e.payload.rawMaterialId === 'milk').payload.quantity).toBe(-337);
+    });
+
+    it('leaves the skipped items untouched: no stock change, no event, the variance as recorded', async () => {
+      const { svc, tx, upserts, events } = build({ existing: new Set(['milk', 'beans']), live: { milk: 3137, beans: 1000 } });
+      recorded(tx);
+      await svc.postCycleCount(TENANT, 'cc1', 'u1', false, ['milk']);
+      expect(upserts.map((u) => u.rawMaterialId)).toEqual(['beans']);
+      expect(events.map((e) => e.payload.rawMaterialId)).toEqual(['beans']);
+      expect(tx.cycleCountLine.update.mock.calls.map((c: any[]) => c[0].where.id)).toEqual(['l2']);
+    });
+
+    it('skipping every item moves nothing and asks nothing of the tickets, but still closes the count', async () => {
+      const { svc, tx, upserts, events } = build({ existing: new Set(['milk', 'beans']), live: { milk: 3137, beans: 1000 } });
+      recorded(tx);
+      await svc.postCycleCount(TENANT, 'cc1', 'u1', false, ['milk', 'beans']);
+      expect(upserts).toHaveLength(0);
+      expect(events).toHaveLength(0);
+      expect(tx.orderItem.findMany).not.toHaveBeenCalled();
+      expect(tx.cycleCount.update.mock.calls[0][0].data.status).toBe('POSTED');
+    });
+
+    it('still refuses a count already posted, or cancelled', async () => {
+      for (const status of ['POSTED', 'CANCELLED']) {
+        const { svc, tx, upserts } = build();
+        recorded(tx, status);
+        await expect(svc.postCycleCount(TENANT, 'cc1', 'u1')).rejects.toThrow('Only open or recorded counts can be posted.');
+        expect(upserts).toHaveLength(0);
+      }
+    });
+
+    it('a line of a recorded count cannot be edited: only an OPEN count\'s lines are', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const svc = new WarehouseService({ cycleCountLine: { findFirst, update: jest.fn() } } as any) as any;
+      await expect(svc.setLineCount(TENANT, 'l1', 5)).rejects.toThrow('Line not found or count is not OPEN.');
+      expect(findFirst.mock.calls[0][0].where).toEqual({ id: 'l1', count: { tenantId: TENANT, status: 'OPEN' } });
+    });
+  });
 });
 
 /**
@@ -450,6 +540,7 @@ describe('WarehouseService.postCycleCount — the period lock', () => {
   function build(periods: any) {
     const upserts: any[] = [];
     const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       cycleCount: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'cc1', tenantId: TENANT, branchId: BRANCH, status: 'OPEN', createdAt: new Date('2026-09-16T02:00:00Z'),

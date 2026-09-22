@@ -10,6 +10,7 @@ import { IngredientReportsService } from './ingredient-reports.service';
 import { ReportsService } from '../reports/reports.service';
 import { DAY_MS, manilaDayOf, manilaDayStart, UsageDay } from './daily-usage';
 import { closingSaves, dayBefore, saveClosingBalances } from './stock-day-balances';
+import { weeklyCountNote } from '../procure/weekly-count';
 
 /**
  * The daily "ingredients used" sheet, sent when a branch's day is closed.
@@ -270,9 +271,10 @@ export function usageReportLinks(branchId: string, day: string): string[] {
 
 /**
  * The bell's words: the top few ingredients, the value, what is not counted
- * yet, and sales that reached Clerque too late for any sheet.
+ * yet, sales that reached Clerque too late for any sheet, and the weekly
+ * count's sentence when it has one.
  */
-export function usageBellBody(usage: UsageDay, lateSales = 0): string {
+export function usageBellBody(usage: UsageDay, lateSales = 0, countNote: string | null = null): string {
   const parts: string[] = [];
   if (usage.rows.length === 0) {
     parts.push(usage.stillBeingMade > 0
@@ -294,6 +296,7 @@ export function usageBellBody(usage: UsageDay, lateSales = 0): string {
     parts.push(`${n} item${n === 1 ? '' : 's'} still at the kitchen or bar screen ${n === 1 ? 'is' : 'are'} not counted yet.`);
   }
   if (lateSales > 0) parts.push(lateSalesNote(lateSales));
+  if (countNote) parts.push(countNote);
   return parts.join(' ');
 }
 
@@ -592,8 +595,9 @@ export class EndOfDayScheduler {
       return false;
     }
 
+    const countNote = await this.countNote(tenantId, branch.id, hours, due.day);
     const title = `Ingredients used today — ${branch.name}`;
-    const body = usageBellBody(usage, lateSales);
+    const body = usageBellBody(usage, lateSales, countNote);
     const dedupeKey = `usage-day-${branch.id}-${due.day}`;
     const claimed = await this.prisma.$transaction(async (tx) => {
       /*
@@ -617,8 +621,23 @@ export class EndOfDayScheduler {
       its own failures and never rejects. It is handed the reading the bell was
       built from, so the phone and the bell always show the same numbers.
     */
-    await this.telegram?.dailyUsage(tenantId, branch.id, usage, lateSales);
+    // The weekly count's sentence only when there is one: a day without it goes out exactly as before.
+    await this.telegram?.dailyUsage(tenantId, branch.id, usage, lateSales, ...(countNote ? [countNote] : []));
     return true;
+  }
+
+  /**
+   * The weekly count's sentence for the day's message: recorded today, or
+   * none sent for a week. Only a sentence -- a failure to read it leaves it
+   * off and the day still goes out.
+   */
+  private async countNote(tenantId: string, branchId: string, hours: DueSheet, day: string): Promise<string | null> {
+    try {
+      return await weeklyCountNote(this.prisma, tenantId, branchId, { from: hours.from, to: hours.to, day });
+    } catch (err) {
+      this.logger.warn(`Could not read the weekly count for branch ${branchId} (shop ${tenantId}), day ${day}: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
   }
 
   /**

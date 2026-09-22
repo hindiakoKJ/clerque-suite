@@ -6,12 +6,15 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { activeBranches } from '@/app/procure/active-branches';
-import { countCaption } from '@/app/procure/cycle-counts/count-row';
+import { countBadge, countCaption, isWeeklyCount, type BadgeTone } from '@/app/procure/cycle-counts/count-row';
+import { PostCountModal } from '@/components/procure/PostCountModal';
+import { WeeklyCountReview } from '@/components/procure/WeeklyCountReview';
 
 interface CycleCount {
   id:          string;
   countNumber: string;
-  status:      'OPEN' | 'POSTED' | 'CANCELLED';
+  // RECORDED: a kitchen or bar screen's weekly count as it was sent. Stock and the books untouched.
+  status:      'OPEN' | 'RECORDED' | 'POSTED' | 'CANCELLED';
   branch:      { id: string; name: string };
   createdAt:   string;
   postedAt:    string | null;
@@ -19,16 +22,37 @@ interface CycleCount {
   _count:      { lines: number };
 }
 
-const TINT: Record<string, string> = {
-  OPEN:      'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-  POSTED:    'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
-  CANCELLED: 'bg-muted text-muted-foreground',
+/** Who may open a weekly count's review (station-count.controller.ts WEEKLY_REVIEW_ROLES); warehouse staff see the badge only. */
+const WEEKLY_REVIEW_ROLES: string[] = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM', 'SUPER_ADMIN'];
+
+const TINT: Record<BadgeTone, string> = {
+  open:      'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+  recorded:  'bg-sky-500/15 text-sky-700 dark:text-sky-300',
+  posted:    'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+  cancelled: 'bg-muted text-muted-foreground',
+  other:     'bg-muted text-muted-foreground',
 };
 
 export default function CycleCountsPage() {
   const qc = useQueryClient();
   const [showNew, setShowNew] = useState(false);
   const [openCountId, setOpenCountId] = useState<string | null>(null);
+  /*
+    A kitchen or bar screen's weekly count opens in its own review: the
+    reconciliation, with "Adjust the books to match" and "Ask for a recount".
+    The bell for a sent count links here with ?review=<id>.
+  */
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const canReview = useAuthStore((s) => !!s.user && (!!s.user.isSuperAdmin || WEEKLY_REVIEW_ROLES.includes(s.user.role)));
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('review');
+    if (wanted) setReviewId(wanted);
+  }, []);
+  const closeReview = () => {
+    setReviewId(null);
+    // Off the address too, so a refresh does not open it again.
+    if (new URLSearchParams(window.location.search).has('review')) window.history.replaceState(null, '', window.location.pathname);
+  };
 
   const { data: counts = [] } = useQuery<CycleCount[]>({
     queryKey: ['cycle-counts'],
@@ -115,66 +139,86 @@ export default function CycleCountsPage() {
                 {/* Off on a phone, so Count and Post fit beside the number without scrolling. */}
                 <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Branch</th>
                 <th className="text-right px-3 sm:px-4 py-2 font-medium">Lines</th>
-                <th className="text-center px-3 sm:px-4 py-2 font-medium">Status</th>
+                {/* Under the number on a phone: "Recorded - books not changed" does not fit a column there. */}
+                <th className="hidden sm:table-cell text-center px-3 sm:px-4 py-2 font-medium">Status</th>
                 <th className="px-2 py-2"></th>
               </tr>
             </thead>
             <tbody>
-              {counts.map((c) => (
-                <tr key={c.id} className="border-t border-border/40">
-                  <td className="px-3 sm:px-4 py-2.5">
-                    <span className="block font-mono text-xs">{c.countNumber}</span>
-                    {/* When, and whether a buy list started it: six one-line counts from six lists looked the same. */}
-                    <span className="block text-[11px] text-muted-foreground">{countCaption(c)}</span>
-                  </td>
-                  <td className="hidden sm:table-cell px-4 py-2.5">{c.branch.name}</td>
-                  <td className="px-3 sm:px-4 py-2.5 text-right">{c._count.lines}</td>
-                  <td className="px-3 sm:px-4 py-2.5 text-center">
-                    <span className={`text-xs font-semibold rounded-full px-2 py-0.5 ${TINT[c.status]}`}>
-                      {c.status.toLowerCase()}
-                    </span>
-                  </td>
-                  <td className="px-2 py-2.5 text-right whitespace-nowrap">
-                    {c.status === 'OPEN' && (
-                      <>
+              {counts.map((c) => {
+                const weekly = isWeeklyCount(c.notes);
+                const badge = countBadge(c);
+                const badgeEl = (
+                  <span className={`inline-block text-xs font-semibold rounded-full px-2 py-0.5 ${TINT[badge.tone]}`}>
+                    {badge.label}
+                  </span>
+                );
+                return (
+                  <tr key={c.id} className="border-t border-border/40">
+                    <td className="px-3 sm:px-4 py-2.5">
+                      <span className="block font-mono text-xs">{c.countNumber}</span>
+                      {/* When, and whether a buy list started it: six one-line counts from six lists looked the same. */}
+                      <span className="block text-[11px] text-muted-foreground">{countCaption(c)}</span>
+                      <span className="mt-1 block sm:hidden">{badgeEl}</span>
+                    </td>
+                    <td className="hidden sm:table-cell px-4 py-2.5">{c.branch.name}</td>
+                    <td className="px-3 sm:px-4 py-2.5 text-right">{c._count.lines}</td>
+                    <td className="hidden sm:table-cell px-3 sm:px-4 py-2.5 text-center">{badgeEl}</td>
+                    <td className="px-2 py-2.5 text-right whitespace-nowrap">
+                      {/*
+                        A weekly count is reviewed, never counted or posted from
+                        here: a recorded one is the station's count as it was
+                        sent, and its review holds Adjust the books to match.
+                      */}
+                      {weekly && canReview && (
+                        <button
+                          onClick={() => setReviewId(c.id)}
+                          className="inline-flex min-h-9 items-center px-1 text-xs font-medium text-[var(--accent)] hover:underline"
+                        >
+                          Review
+                        </button>
+                      )}
+                      {!weekly && c.status === 'OPEN' && (
+                        <>
+                          <button
+                            onClick={() => setOpenCountId(c.id)}
+                            className="text-xs text-[var(--accent)] hover:underline mr-2"
+                          >
+                            Count
+                          </button>
+                          {/*
+                            Posting moves stock by the difference this count
+                            found and books the adjustment. There is no unpost --
+                            the only statuses are OPEN / POSTED / CANCELLED --
+                            and this was an unlabelled icon a thumb could catch
+                            while scrolling, so it opens a dialog rather than
+                            firing. That dialog also asks whether this is the
+                            shop's FIRST count, which decides whether the value
+                            lands in a write-off or in Owner's Capital.
+                          */}
+                          <button
+                            onClick={() => setPostTarget(c)}
+                            disabled={post.isPending}
+                            className="inline-flex items-center gap-1 rounded p-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/15"
+                            title="Post variances"
+                          >
+                            <CheckCircle2 className="h-4 w-4" /> Post
+                          </button>
+                        </>
+                      )}
+                      {/* A posted count can be opened to read what was counted; nothing on it can change. */}
+                      {!weekly && c.status === 'POSTED' && (
                         <button
                           onClick={() => setOpenCountId(c.id)}
-                          className="text-xs text-[var(--accent)] hover:underline mr-2"
+                          className="text-xs text-[var(--accent)] hover:underline"
                         >
-                          Count
+                          View
                         </button>
-                        {/*
-                          Posting moves stock by the difference this count
-                          found and books the adjustment. There is no unpost --
-                          the only statuses are OPEN / POSTED / CANCELLED --
-                          and this was an unlabelled icon a thumb could catch
-                          while scrolling, so it opens a dialog rather than
-                          firing. That dialog also asks whether this is the
-                          shop's FIRST count, which decides whether the value
-                          lands in a write-off or in Owner's Capital.
-                        */}
-                        <button
-                          onClick={() => setPostTarget(c)}
-                          disabled={post.isPending}
-                          className="inline-flex items-center gap-1 rounded p-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/15"
-                          title="Post variances"
-                        >
-                          <CheckCircle2 className="h-4 w-4" /> Post
-                        </button>
-                      </>
-                    )}
-                    {/* A posted count can be opened to read what was counted; nothing on it can change. */}
-                    {c.status === 'POSTED' && (
-                      <button
-                        onClick={() => setOpenCountId(c.id)}
-                        className="text-xs text-[var(--accent)] hover:underline"
-                      >
-                        View
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -190,80 +234,7 @@ export default function CycleCountsPage() {
       )}
       {showNew && <NewCountModal onClose={() => setShowNew(false)} />}
       {openCountId && <CountSheetModal countId={openCountId} onClose={() => setOpenCountId(null)} />}
-    </div>
-  );
-}
-
-/**
- * Which kind of count is this?
- *
- * The same counted numbers mean opposite things to the books depending on the
- * answer, and only the person who did the counting knows which it is. A
- * routine count found something WRONG and the difference is a write-off; a
- * first count found nothing wrong at all — it is the owner's stock arriving on
- * the books.
- *
- * Asked rather than inferred. The system could guess "no previous count means
- * opening", but a shop adopting Clerque mid-life has real stock AND a real
- * history, and guessing wrong writes tens of thousands of pesos into the wrong
- * account on the first statement anyone sees.
- */
-function PostCountModal({
-  count, pending, onCancel, onPost,
-}: {
-  count: { countNumber: string; branch: { name: string }; _count: { lines: number } };
-  pending: boolean;
-  onCancel: () => void;
-  onPost: (isOpeningBalance: boolean) => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-lg p-5 space-y-4">
-        <div>
-          <h2 className="font-semibold text-lg">Post {count.countNumber}</h2>
-          <p className="text-sm text-muted-foreground">
-            {count.branch?.name} · {count._count?.lines} item{count._count?.lines === 1 ? '' : 's'}
-          </p>
-        </div>
-
-        <p className="text-sm text-muted-foreground">
-          Stock moves by the difference this count found, so anything sold while
-          you were counting is kept. This cannot be undone.
-        </p>
-
-        <div className="space-y-2">
-          <button
-            onClick={() => onPost(false)}
-            disabled={pending}
-            className="w-full text-left rounded-xl border border-border p-3 hover:bg-muted disabled:opacity-50"
-          >
-            <span className="block text-sm font-semibold">Routine count</span>
-            <span className="block text-xs text-muted-foreground mt-0.5">
-              Correcting the records. The difference is booked as a stock
-              write-off or gain.
-            </span>
-          </button>
-          <button
-            onClick={() => onPost(true)}
-            disabled={pending}
-            className="w-full text-left rounded-xl border border-border p-3 hover:bg-muted disabled:opacity-50"
-          >
-            <span className="block text-sm font-semibold">
-              Opening stock — this shop&apos;s first count
-            </span>
-            <span className="block text-xs text-muted-foreground mt-0.5">
-              Nothing was wrong. Booked to Owner&apos;s Capital as stock the
-              owner put into the business.
-            </span>
-          </button>
-        </div>
-
-        <div className="flex justify-end">
-          <button onClick={onCancel} disabled={pending} className="px-4 py-2 rounded-lg text-sm hover:bg-muted">
-            Cancel
-          </button>
-        </div>
-      </div>
+      {reviewId && canReview && <WeeklyCountReview countId={reviewId} onClose={closeReview} />}
     </div>
   );
 }

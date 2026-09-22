@@ -6,7 +6,8 @@ import { AlertTopic, TelegramLinksService } from './telegram-links.service';
 // The notes grammar only (a plain module): no reach into the Procure service.
 import { lastPricedLines } from '../procure/procure-notes';
 import {
-  RequestForAlert, SaleForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, photoCaption, postedMessage, saleMessage,
+  RequestForAlert, SaleForAlert, WeeklyCountForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, photoCaption,
+  postedMessage, saleMessage, weeklyCountMessage,
 } from './messages';
 
 /**
@@ -152,13 +153,14 @@ export class TelegramAlertsService {
    * little after closing. `usage` is the very reading the job built the bell
    * notification from -- not read again here, so the phone and the bell show
    * the same numbers even when a sale lands in between. `usage.day` names the
-   * sheet (YYYY-MM-DD, Manila); `lateSales` counts sales on no sheet.
+   * sheet (YYYY-MM-DD, Manila); `lateSales` counts sales on no sheet;
+   * `countNote` is the weekly count's sentence, when it has one.
    *
    * On the buying switch: what was used today is what gets bought tomorrow,
    * and a new switch would need a new column and a new setting on the
    * Telegram page.
    */
-  dailyUsage(tenantId: string, branchId: string, usage: UsageDay, lateSales: number): Promise<void> {
+  dailyUsage(tenantId: string, branchId: string, usage: UsageDay, lateSales: number, countNote: string | null = null): Promise<void> {
     return this.fire('end-of-day usage', tenantId, 'buying', async () => {
       if (!isManilaDay(usage.day)) throw new Error(`"${usage.day}" is not a real day written YYYY-MM-DD`);
       const chats = await this.links.recipients(tenantId, branchId, 'buying');
@@ -176,7 +178,27 @@ export class TelegramAlertsService {
         totalValue:     usage.totals.value,
         stillBeingMade: usage.stillBeingMade,
         lateSales,
+        countNote,
       });
+      for (const chat of chats) this.client.sendMessage(chat, text);
+    });
+  }
+
+  /**
+   * A kitchen or bar screen sent its weekly count. `count` is what the bell
+   * was built from, so the phone and the bell say the same. On the buying
+   * switch, like the end-of-day usage: a count is about stock.
+   */
+  weeklyCountSent(tenantId: string, branchId: string, count: Omit<WeeklyCountForAlert, 'shopName' | 'branchName'>): Promise<void> {
+    return this.fire('weekly count', tenantId, 'buying', async () => {
+      const chats = await this.links.recipients(tenantId, branchId, 'buying');
+      if (chats.length === 0) return;
+      const branch = await this.prisma.branch.findFirst({
+        where:  { id: branchId, tenantId },
+        select: { name: true, tenant: { select: { name: true } } },
+      });
+      if (!branch) return;
+      const text = weeklyCountMessage({ ...count, shopName: branch.tenant.name, branchName: branch.name });
       for (const chat of chats) this.client.sendMessage(chat, text);
     });
   }

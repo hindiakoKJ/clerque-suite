@@ -1,6 +1,6 @@
 import {
   CAPTION_LIMIT, MESSAGE_LIMIT, SaleForAlert, USAGE_ROWS_SHOWN, UsageForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, escapeHtml,
-  lateSalesNote, manilaDayLabel, paidWith, photoCaption, postedMessage, saleMessage, usageQty,
+  lateSalesNote, manilaDayLabel, paidWith, photoCaption, postedMessage, saleMessage, usageQty, WeeklyCountForAlert, weeklyCountMessage,
 } from './messages';
 
 /** What the owner reads on their phone. */
@@ -375,5 +375,92 @@ describe('Telegram alert messages', () => {
 
   it('escapeHtml leaves nothing Telegram would read as markup', () => {
     expect(escapeHtml('<a href="x">&</a>')).toBe('&lt;a href="x"&gt;&amp;&lt;/a&gt;');
+  });
+
+  it('puts the weekly count\'s sentence before the pointer to the full list, only when there is one', () => {
+    const lines = dailyUsageMessage(usage({ countNote: 'Weekly count from Sep 21 is recorded. 5 items differ from the book.' })).split('\n');
+    expect(lines[lines.length - 2]).toBe('Weekly count from Sep 21 is recorded. 5 items differ from the book.');
+    expect(dailyUsageMessage(usage({ countNote: null }))).not.toContain('Weekly count');
+  });
+
+  describe('a weekly count sent from a kitchen or bar screen', () => {
+    const count = (over: Partial<WeeklyCountForAlert> = {}): WeeklyCountForAlert => ({
+      shopName: 'Cafe Carolina', branchName: 'Main', stationName: 'Kitchen', countNumber: 'CC-2026-000012', countedBy: 'Joy',
+      sentAt: new Date('2026-09-21T21:12:00+08:00'), recount: false, counted: 23, total: 25,
+      lines: [
+        { name: 'Eggs', unit: 'pc', counted: 22, book: 24 },
+        { name: 'Milk', unit: 'ml', counted: 2100, book: 3400 },
+        { name: 'Sugar', unit: 'g', counted: 5200, book: 5000 },
+        { name: 'Rice', unit: 'g', counted: 800, book: 800 },
+      ],
+      notCounted: ['Salt', 'Cooking oil'],
+      ...over,
+    });
+
+    it('says who counted, how many differ, the furthest off first, and that nothing has moved', () => {
+      const lines = weeklyCountMessage(count()).split('\n');
+      expect(lines[0]).toBe('📝 <b>Weekly count sent: Kitchen</b>');
+      expect(lines[1]).toBe('Cafe Carolina · Main');
+      expect(lines[2]).toMatch(/^Counted by Joy \(Kitchen screen\) · Sep 21, 9:12\sPM$/);
+      expect(lines[3]).toBe('23 of 25 items counted. 3 differ from the book.');
+      expect(lines.slice(5, 8)).toEqual([
+        '• Milk: counted 2.1 L, book 3.4 L, short 1.3 L',
+        '• Eggs: counted 22 pc, book 24 pc, short 2 pc',
+        '• Sugar: counted 5.2 kg, book 5 kg, over 200 g',
+      ]);
+      expect(lines).toContain('Not counted: Salt, Cooking oil');
+      // KJ's words: a record, not a posting, and where to make the book match.
+      expect(lines[lines.length - 1]).toBe(
+        'Recorded. Nothing has moved. To make the book match the shelf, open Procure &gt; Counts (CC-2026-000012) and tap Adjust the books to match.',
+      );
+      expect(lines.join('\n')).not.toContain('Rice');
+    });
+
+    it('when everything matches, says so and lists nothing', () => {
+      const text = weeklyCountMessage(count({ lines: [{ name: 'Rice', unit: 'g', counted: 800, book: 800 }], counted: 1, total: 1, notCounted: [] }));
+      expect(text).toContain('1 of 1 items counted. All 1 match the book.');
+      expect(text).not.toContain('•');
+      expect(text).not.toContain('Not counted');
+    });
+
+    it('a recount is titled so and lists every recounted line, matches too', () => {
+      const text = weeklyCountMessage(count({ recount: true, lines: [{ name: 'Milk', unit: 'ml', counted: 3400, book: 3400 }], notCounted: [] }));
+      expect(text.split('\n')[0]).toBe('📝 <b>Recount sent: Kitchen</b>');
+      // How many were counted again, not "1 of 25": the rest of the sheet was never asked for.
+      expect(text.split('\n')[3]).toBe('1 item counted again. All 1 match the book.');
+      expect(text).toContain('• Milk: counted 3.4 L, book 3.4 L, matches');
+      expect(text).not.toContain('Not counted');
+    });
+
+    it('a full count that also answered a recount is a weekly count, every difference listed, and names what was recounted', () => {
+      const lines = weeklyCountMessage(count({ recounted: ['Milk', 'Eggs'] })).split('\n');
+      expect(lines[0]).toBe('📝 <b>Weekly count sent: Kitchen</b>');
+      expect(lines[3]).toBe('23 of 25 items counted. 3 differ from the book.');
+      expect(lines).toContain('• Sugar: counted 5.2 kg, book 5 kg, over 200 g');
+      expect(lines).toContain('Recounted: Milk, Eggs');
+      expect(lines).toContain('Not counted: Salt, Cooking oil');
+    });
+
+    it('escapes every name, typed or not', () => {
+      const text = weeklyCountMessage(count({
+        shopName: 'A&B <Cafe>', stationName: 'Bar <1>', countedBy: '<b>Joy</b>',
+        lines: [{ name: 'Milk & <cream>', unit: 'ml', counted: 1, book: 2 }], notCounted: ['<Salt>'],
+      }));
+      expect(text).toContain('A&amp;B &lt;Cafe&gt;');
+      expect(text).toContain('Weekly count sent: Bar &lt;1&gt;');
+      expect(text).toContain('Counted by &lt;b&gt;Joy&lt;/b&gt;');
+      expect(text).toContain('• Milk &amp; &lt;cream&gt;: counted');
+      expect(text).toContain('Not counted: &lt;Salt&gt;');
+      expect(text.replace(/<\/?b>/g, '')).not.toMatch(/[<>]/);
+    });
+
+    it('a 200-line count with 200 items not counted still fits one message, and says how many were left off', () => {
+      const lines = Array.from({ length: 200 }, (_, i) => ({ name: `Ingredient number ${i} with a long name`, unit: 'g', counted: i, book: 1000 + i }));
+      const text = weeklyCountMessage(count({ lines, counted: 200, total: 400, notCounted: lines.map((l) => `Not ${l.name}`) }));
+      expect(text.length).toBeLessThanOrEqual(MESSAGE_LIMIT);
+      expect(text).toMatch(/…and \d+ more/);
+      expect(text).toMatch(/and 185 more$/m);
+      expect(text).toContain('Adjust the books to match.');
+    });
   });
 });

@@ -148,4 +148,78 @@ describe('Stock variance, measured from the last real count', () => {
     expect(row(rows, 'milk').startingQty).toBe(3_000);
     expect(row(rows, 'milk').countNumber).toBe('CC-2026-000004');
   });
+
+  /*
+    A weekly count from a kitchen or bar screen is RECORDED when it is sent:
+    the shelf was counted, the books were not changed. It anchors nothing --
+    "Never counted" stays true of the books -- but the report can say when
+    the shelf was last counted. Once the owner adjusts the books from it, it
+    anchors at the moment it was counted, not at the post days later.
+  */
+  describe('weekly counts from the kitchen and bar screens', () => {
+    /** Answers the posted and the recorded query apart, the way the database would. */
+    function withLines(h: ReturnType<typeof build>, posted: any[], recorded: any[]) {
+      h.prisma.cycleCountLine.findMany.mockImplementation(async ({ where }: any) =>
+        (where.count.status === 'RECORDED' ? recorded : posted));
+      return h.svc.variance(TENANT, BRANCH, '2026-09-01', '2026-09-30');
+    }
+    const at = (iso: string) => `[BY:Joy] [AT:${new Date(iso).toISOString()}] [ST:s-kitchen]`;
+
+    it('a recorded count does not anchor the variance, but says when the shelf was last counted', async () => {
+      const h = build({ onHand: [{ rawMaterialId: 'milk', quantity: 3_000 }] });
+      const rows = await withLines(h, [], [
+        { rawMaterialId: 'milk', notes: at('2026-09-21T13:12:00Z'), count: { createdAt: new Date('2026-09-21T13:00:00Z') } },
+      ]);
+      const milk = row(rows, 'milk');
+      expect(milk.countedAt).toBeNull();
+      expect(milk.countNumber).toBeNull();
+      expect(milk.cannotTell).toMatch(/^Never counted/);
+      expect(milk.lastCountedOn).toBe('2026-09-21T13:12:00.000Z');
+      expect(milk.lastCountedStatus).toBe('RECORDED');
+      expect(row(rows, 'sugar').lastCountedOn).toBeNull();
+      expect(h.prisma.cycleCountLine.findMany.mock.calls.map((c: any[]) => c[0].where.count.status)).toEqual(['POSTED', 'RECORDED']);
+    });
+
+    it('a posted count stays the anchor; a newer recorded count only moves lastCountedOn', async () => {
+      const h = build({ onHand: [{ rawMaterialId: 'milk', quantity: 3_000 }] });
+      const rows = await withLines(h,
+        [{ rawMaterialId: 'milk', countedQty: 3_000, notes: null, count: { postedAt: new Date('2026-09-08T02:00:00Z'), countNumber: 'CC-2026-000004' } }],
+        [{ rawMaterialId: 'milk', notes: at('2026-09-21T13:12:00Z'), count: { createdAt: new Date('2026-09-21T13:00:00Z') } }],
+      );
+      const milk = row(rows, 'milk');
+      expect(milk.countedAt).toBe('2026-09-08T02:00:00.000Z');
+      expect(milk.countNumber).toBe('CC-2026-000004');
+      expect([milk.lastCountedOn, milk.lastCountedStatus]).toEqual(['2026-09-21T13:12:00.000Z', 'RECORDED']);
+    });
+
+    it('a weekly count adjusted days later anchors when it was counted, so the sales in between are not read as missing', async () => {
+      // Counted 10,000 on the 1st, posted on the 4th. 30 lattes (6,000 ml) sold on the 2nd; 4,000 on the shelf now.
+      const h = build({
+        sold:   [{ productId: 'latte', quantity: 30, at: '2026-09-02T02:00:00Z' }],
+        boms:   [{ productId: 'latte', rawMaterialId: 'milk', quantity: 200 }],
+        onHand: [{ rawMaterialId: 'milk', quantity: 4_000 }],
+      });
+      const rows = await withLines(h, [{
+        rawMaterialId: 'milk', countedQty: 10_000, notes: at('2026-09-01T02:00:00Z'),
+        count: { postedAt: new Date('2026-09-04T02:00:00Z'), countNumber: 'CC-2026-000007' },
+      }], []);
+      const milk = row(rows, 'milk');
+      expect(milk.countedAt).toBe('2026-09-01T02:00:00.000Z');
+      expect(milk.expectedConsumption).toBe(6_000);
+      expect(milk.deltaQty).toBe(0);
+      expect([milk.lastCountedOn, milk.lastCountedStatus]).toEqual(['2026-09-01T02:00:00.000Z', 'POSTED']);
+    });
+
+    it('of two posted weekly lines, the one counted later wins, whatever order they were posted in', async () => {
+      const h = build({ onHand: [{ rawMaterialId: 'milk', quantity: 2_900 }] });
+      const rows = await withLines(h, [
+        // Posted first: the bar's newer count.
+        { rawMaterialId: 'milk', countedQty: 2_900, notes: at('2026-09-22T13:00:00Z'), count: { postedAt: new Date('2026-09-22T14:00:00Z'), countNumber: 'CC-2026-000009' } },
+        // Posted after it: the kitchen's older record, whose milk line the post left out.
+        { rawMaterialId: 'milk', countedQty: 2_800, notes: at('2026-09-21T13:00:00Z'), count: { postedAt: new Date('2026-09-23T02:00:00Z'), countNumber: 'CC-2026-000008' } },
+      ], []);
+      expect(row(rows, 'milk').countNumber).toBe('CC-2026-000009');
+      expect(row(rows, 'milk').startingQty).toBe(2_900);
+    });
+  });
 });

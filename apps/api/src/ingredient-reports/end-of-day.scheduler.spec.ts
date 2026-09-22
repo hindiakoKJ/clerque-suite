@@ -107,6 +107,8 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
     zReads?: Array<{ tenantId: string; branchId: string; day: string }>;
     /** true: generating a Z-Read fails. */
     zReadFails?: boolean;
+    /** The weekly count: how many kitchen or bar screens the shop has (none by default), its counts, or a read that fails. */
+    weekly?: { stations?: number; counts?: any[]; fails?: boolean };
   } = {}) {
     const branches = opts.branches ?? [MAIN];
     const people = opts.people ?? PEOPLE;
@@ -184,6 +186,14 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
       zReadLog: {
         findFirst: jest.fn(async ({ where }: any) => zReadRows.find((r) =>
           r.branchId === where.branchId && r.date === where.date.getTime()) ?? null),
+      },
+      // The weekly count's sentence (procure/weekly-count.ts has its own spec for which counts it reads).
+      station: { count: jest.fn(async () => opts.weekly?.stations ?? 0) },
+      cycleCount: {
+        findMany: jest.fn(async ({ where }: any) => {
+          if (opts.weekly?.fails) throw new Error('database down');
+          return (opts.weekly?.counts ?? []).filter((c) => c.tenantId === where.tenantId && c.branchId === where.branchId);
+        }),
       },
       $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>) => {
         const held: { release?: () => void } = {};
@@ -751,6 +761,52 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
     expect(h.reports.usageForWindow).not.toHaveBeenCalled();
   });
 
+  describe('the weekly count sentence', () => {
+    // A weekly count the kitchen sent that evening, with one item off the book.
+    const sentCount = (at: string) => ({
+      tenantId: 't1', branchId: 'b-main', status: 'RECORDED',
+      notes: `[WEEKLY:2026-09-16] [ST:s-kitchen] [DONE:s-kitchen=${manila(at).toISOString()}=Joy] Weekly count, Kitchen`,
+      lines: [
+        { rawMaterialId: 'milk', countedQty: 2100, expectedQty: 3400, notes: `[BY:Joy] [AT:${manila(at).toISOString()}] [ST:s-kitchen]` },
+        { rawMaterialId: 'eggs', countedQty: 24, expectedQty: 24, notes: `[BY:Joy] [AT:${manila(at).toISOString()}] [ST:s-kitchen]` },
+      ],
+    });
+
+    it('on the day a count was sent, the bell and Telegram both say it is recorded and how many items differ', async () => {
+      const h = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())], weekly: { stations: 2, counts: [sentCount('2026-09-16T21:12:00')] } });
+      expect(await h.runAt('2026-09-16T23:00:02')).toBe(1);
+      const note = 'Weekly count from Sep 16 is recorded. 1 item differs from the book.';
+      expect(h.table[0].body).toBe(`Fresh Milk 8.1 L · Espresso Beans 1.25 kg. Value at cost ₱1,872.50. ${note}`);
+      expect(h.telegram.dailyUsage).toHaveBeenCalledWith('t1', 'b-main', expect.objectContaining({ day: '2026-09-16' }), 0, note);
+    });
+
+    it('a week without a count says so; a shop that never sent one is told too', async () => {
+      const late = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())], weekly: { stations: 2, counts: [sentCount('2026-09-08T21:00:00')] } });
+      await late.runAt('2026-09-16T23:00:02');
+      expect(late.table[0].body).toContain('No weekly count has been sent for 8 days.');
+      const never = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())], weekly: { stations: 2 } });
+      await never.runAt('2026-09-16T23:00:02');
+      expect(never.telegram.dailyUsage.mock.calls[0][4]).toBe('No weekly count has been sent yet.');
+    });
+
+    it('says nothing when a count went out in the last week, or the shop has no kitchen or bar screen', async () => {
+      const recent = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())], weekly: { stations: 2, counts: [sentCount('2026-09-12T21:00:00')] } });
+      await recent.runAt('2026-09-16T23:00:02');
+      expect(recent.table[0].body).toBe('Fresh Milk 8.1 L · Espresso Beans 1.25 kg. Value at cost ₱1,872.50.');
+      expect(recent.telegram.dailyUsage.mock.calls[0]).toHaveLength(4);
+      const none = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())], weekly: { stations: 0 } });
+      await none.runAt('2026-09-16T23:00:02');
+      expect(none.table[0].body).not.toContain('weekly count');
+    });
+
+    it('a failed read only leaves the sentence off: the day still goes out', async () => {
+      const h = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())], weekly: { stations: 2, fails: true } });
+      expect(await h.runAt('2026-09-16T23:00:02')).toBe(1);
+      expect(h.table[0].body).toBe('Fresh Milk 8.1 L · Espresso Beans 1.25 kg. Value at cost ₱1,872.50.');
+      expect(h.telegram.dailyUsage).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('without Telegram wired in, the bell still goes', async () => {
     const h = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())], telegram: false });
     expect(await h.runAt('2026-09-16T23:00:02')).toBe(1);
@@ -1074,6 +1130,11 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
         + 'Value at cost ₱2,250.00. Wasted or written off: ₱375.00. '
         + '1 item still at the kitchen or bar screen is not counted yet.',
       );
+    });
+
+    it('ends with the weekly count sentence when there is one', () => {
+      expect(usageBellBody(usageDay('2026-09-16', [usageRow('Straws', 'pcs', 40, 0)]), 0, 'No weekly count has been sent for 8 days.'))
+        .toBe('Straws 40 pcs. No weekly count has been sent for 8 days.');
     });
 
     it('leaves out the value when nothing has a cost', () => {

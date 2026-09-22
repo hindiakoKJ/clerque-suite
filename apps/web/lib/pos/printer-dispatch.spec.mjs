@@ -19,7 +19,8 @@ registerHooks({
   },
 });
 
-const { dispatchPrintJob, buildStationTicket } = await import('./printer-dispatch.ts');
+const { dispatchPrintJob, buildStationTicket, dispatchOrderToStations, summariseDispatch, dispatchToast } =
+  await import('./printer-dispatch.ts');
 
 /** Just enough browser for the RawBT hand-off: records what the page creates and clicks. */
 function fakeAndroidBrowser() {
@@ -101,4 +102,96 @@ test('a bar ticket is plain ASCII: "2x Cafe Latte", no garbled × or é', () => 
   assert.ok(text.includes('2x Cafe Latte (Iced)'), text);
   assert.ok(text.includes('   - Oat milk - 1/2 sugar'), text);
   assert.ok(text.includes('   * "less ice"'), text);
+});
+
+// ── The till and printers that belong to other devices ─────────────────────
+
+const barPrinter     = { ...rawbtPrinter, id: 'bar-p', name: 'Bar Printer', printsReceipts: false };
+const kitchenPrinter = { ...rawbtPrinter, id: 'kit-p', name: 'Kitchen Printer', printsReceipts: false };
+const cafeStations = [
+  { id: 'bar', name: 'Bar',     hasPrinter: true, printerId: 'bar-p', categoryIds: ['drinks'] },
+  { id: 'kit', name: 'Kitchen', hasPrinter: true, printerId: 'kit-p', categoryIds: ['food'] },
+];
+const latteAndWings = {
+  orderNumber: 'ORD-2026-000101',
+  completedAt: '2026-09-22T02:00:00.000Z',
+  items: [
+    { productName: 'Cafe Latte', quantity: 1, categoryId: 'drinks' },
+    { productName: 'Chicken wings', quantity: 1, categoryId: 'food' },
+  ],
+};
+
+function onWindowsLaptop() {
+  fakeAndroidBrowser();
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140.0' },
+    configurable: true,
+  });
+}
+
+test('a till on a laptop leaves the RawBT station printers alone and says nothing (no red toast on every sale)', async () => {
+  onWindowsLaptop();
+  const results = await dispatchOrderToStations({
+    order: latteAndWings, stations: cafeStations, printers: [barPrinter, kitchenPrinter], webSerialPrinter: null,
+  });
+
+  assert.equal(results.length, 2);
+  assert.ok(results.every((r) => r.skipped === true && r.ok === false), 'both were skipped, not tried');
+  const summary = summariseDispatch(results);
+  assert.equal(summary.failedCount, 0, 'a printer that belongs to another device is not a failure');
+  assert.equal(summary.skippedCount, 2);
+  assert.equal(dispatchToast(results), null, 'nothing is shown to the cashier');
+});
+
+test('a USB or network station printer the till cannot drive is skipped quietly too', async () => {
+  onWindowsLaptop();
+  const usb = { ...barPrinter, interface: 'USB' };
+  const net = { ...kitchenPrinter, interface: 'NETWORK' };
+  const results = await dispatchOrderToStations({
+    order: latteAndWings, stations: cafeStations, printers: [usb, net], webSerialPrinter: null,
+  });
+  assert.deepEqual(results.map((r) => r.skipped), [true, true]);
+  assert.equal(dispatchToast(results), null);
+});
+
+test('an Android till still sends the station tickets through RawBT', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const { created } = fakeAndroidBrowser();
+    const results = await dispatchOrderToStations({
+      order: latteAndWings, stations: cafeStations, printers: [barPrinter, kitchenPrinter], webSerialPrinter: null,
+    });
+    assert.deepEqual(results.map((r) => r.ok), [true, true]);
+    assert.equal(created.filter((el) => el.tagName === 'A').length, 2, 'one rawbt: link per station');
+    assert.deepEqual(dispatchToast(results), { level: 'success', message: 'Sent 2 tickets to stations.' });
+    mock.timers.tick(1000);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('a real failure is a warning that says the sale is safe, never a red error', async () => {
+  onWindowsLaptop();
+  const usb = { ...barPrinter, interface: 'USB' };
+  const results = await dispatchOrderToStations({
+    order: latteAndWings,
+    stations: [cafeStations[0]],
+    printers: [usb],
+    webSerialPrinter: { connected: true, send: async () => { throw new Error('Printer is out of paper.'); } },
+  });
+  const t = dispatchToast(results);
+  assert.equal(t.level, 'warning');
+  assert.match(t.message, /^The sale is saved/);
+  assert.match(t.message, /Bar Printer: Printer is out of paper./);
+});
+
+test('the reasons shown for a printer this screen cannot use are plain and never say "coming soon"', async () => {
+  onWindowsLaptop();
+  const rawbt = await dispatchPrintJob(barPrinter, new Uint8Array([0x0a]), null);
+  const net   = await dispatchPrintJob({ ...barPrinter, interface: 'NETWORK' }, new Uint8Array([0x0a]), null);
+  for (const r of [rawbt, net]) {
+    assert.equal(r.ok, false);
+    assert.doesNotMatch(r.reason, /coming soon|requires Android/i);
+    assert.match(r.reason, /Bar Printer/);
+  }
 });

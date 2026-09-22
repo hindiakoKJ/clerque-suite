@@ -13,7 +13,7 @@ const SECTIONS: HelpSection[] = [
         q: 'What is the Ledger app for?',
         a: (
           <p>
-            The Ledger is your books — the official record of every peso that flows in and out. Sales from Counter
+            The Ledger is your books — the official record of every peso that flows in and out. Sales from the POS
             automatically generate journal entries here. You also enter bills, invoices, expense claims, and manual
             adjustments. At month-end you close the period; at year-end you produce statements for BIR filing.
           </p>
@@ -43,10 +43,10 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'How is data flowing between Counter and Ledger?',
+        q: 'How is data flowing between the POS and Ledger?',
         a: (
           <ol className="list-decimal pl-5 space-y-1">
-            <li>Counter completes a sale → creates an <strong>AccountingEvent</strong> with status PENDING.</li>
+            <li>The POS completes a sale → creates an <strong>AccountingEvent</strong> with status PENDING.</li>
             <li>A background process (runs every minute) picks up PENDING events and creates the journal entry.</li>
             <li>JE goes to status POSTED. You see it in Journal Entries with a green badge.</li>
             <li>If something goes wrong (e.g. period locked), the event goes to FAILED — visible in Event Queue.</li>
@@ -126,7 +126,7 @@ const SECTIONS: HelpSection[] = [
             <li><span className="text-emerald-500 font-medium">Green</span> = within target (e.g. lag ≤ 1m, voids ≤ 2%, missing cost = 0).</li>
             <li><span className="text-amber-500 font-medium">Amber</span> = warning (e.g. lag 1-10m, voids 2-5%, 1-5 missing cost).</li>
             <li><span className="text-red-500 font-medium">Red</span> = needs intervention (e.g. lag &gt; 10m, voids &gt; 5%, 5+ missing cost).</li>
-            <li>Thresholds are sensible MSME defaults; per-tenant tuning is on the roadmap.</li>
+            <li>The colour limits are sensible defaults for a small business.</li>
           </ul>
         ),
       },
@@ -189,7 +189,7 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'What is &ldquo;Posting Control&rdquo; on each account?',
+        q: 'What is “Posting Control” on each account?',
         a: (
           <ul className="list-disc pl-5 space-y-1">
             <li><strong>OPEN</strong> — humans and the system can post to this account.</li>
@@ -355,12 +355,11 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'I clicked an aging bucket — what does &ldquo;Showing overdue only&rdquo; mean?',
+        q: 'I clicked an aging bucket — what does “Showing overdue only” mean?',
         a: (
           <p>
             The list filtered to only invoices past their due date. Use this to chase overdue customers. Tap{' '}
-            <strong>Clear filter</strong> to show all invoices again. (Bucket-precise drill-down — e.g. only 60-90 days
-            past due — is on the roadmap.)
+            <strong>Clear filter</strong> to show all invoices again.
           </p>
         ),
       },
@@ -510,7 +509,7 @@ const SECTIONS: HelpSection[] = [
           <p>
             The cash outflow = total − WHT. The WHT stays on your books as a payable to BIR until you remit it. At
             year-end, you issue the vendor a 2307 form showing the total WHT you withheld on their behalf so they can
-            claim it as a tax credit. (2307 PDF generation is on the roadmap.)
+            claim it as a tax credit. Download each vendor&apos;s 2307 as an Excel file from Tax Estimation.
           </p>
         ),
       },
@@ -619,12 +618,14 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'Bank reconciliation (full bank statement matching) — when?',
+        q: 'How do I check my books against the bank statement?',
         a: (
           <p>
-            Currently Settlement covers digital wallet reconciliation. Full bank-statement reconciliation (matching
-            line items in your BPI/BDO statement to JE lines on accounts 1010/1020) is on the roadmap as LED-1 in
-            BACKLOG.md.
+            Open <strong>Bank Reconciliation</strong>. Pick the bank account, enter the dates and the closing balance
+            printed on the statement, then add the statement lines and match each one to its entry in the books.
+            Anything left over (a deposit the bank has not shown yet, a cheque not yet cashed) is listed as a
+            reconciling item. GCash and Maya payouts are
+            matched on the <strong>Settlement</strong> page instead.
           </p>
         ),
       },
@@ -657,7 +658,7 @@ const SECTIONS: HelpSection[] = [
             <li>Periods → pick the month → tap <strong>Close</strong>.</li>
             <li>Enter a brief description of any adjustments made.</li>
             <li>Confirm. Status → CLOSED. Any attempt to post in this period now fails.</li>
-            <li>Sales in Counter for this period also fail to sync — they go to FAILED in the Event Queue. This is intentional.</li>
+            <li>Sales in the POS for this period also fail to sync — they go to FAILED in the Event Queue. This is intentional.</li>
           </ol>
         ),
       },
@@ -730,11 +731,11 @@ const SECTIONS: HelpSection[] = [
         ),
       },
       {
-        q: 'Cash Flow Statement — when?',
+        q: 'Where is the Cash Flow Statement?',
         a: (
           <p>
-            On the roadmap (LED-2 in BACKLOG.md). Required for BIR audit. Will derive Operating / Investing /
-            Financing activities from P&amp;L + Balance Sheet movements.
+            Open <strong>Cash Flow Statement</strong> in the menu (full accounting). It shows where the cash came from
+            and where it went, split into Operating, Investing and Financing, for the dates you pick.
           </p>
         ),
       },

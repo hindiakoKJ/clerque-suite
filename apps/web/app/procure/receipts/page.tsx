@@ -11,7 +11,11 @@ import { formatPeso } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
 import { SOURCE_KINDS, SOURCE_KIND_LABEL, type SourceKind } from '@repo/shared-types';
-import { receiptDateFor, listToAsk, askText, keepWorkOnList, readTag, type WaitingList } from './receipt-list';
+import {
+  receiptDateFor, listsToAsk, askChoice, ASK_QUESTION, ASK_DETAIL, ASK_NONE, unitCostText, nothingToPostText,
+  keepWorkOnList, readTag, closestByName, type WaitingList,
+} from './receipt-list';
+import { activeBranches } from '../active-branches';
 
 /**
  * A receipt photo in, stock and expenses out.
@@ -321,8 +325,13 @@ export default function ReceiptsPage() {
   };
   /** The URL has been read, so "no ?request" really means none was given. */
   const [urlRead, setUrlRead] = useState(false);
-  /** Lists the person said this receipt is not for. */
-  const [notThisList, setNotThisList] = useState<string[]>([]);
+  /**
+   * The waiting lists the person said "none of these" to. Kept for as long as
+   * the screen is open -- Another receipt and Start over do not clear it -- so
+   * three receipts from one separate trip are asked once, not three times. A
+   * list that turns up later brings the question back (listsToAsk).
+   */
+  const [notTheseLists, setNotTheseLists] = useState<string[]>([]);
   /** A date the reader found on the paper or the person typed: a list picked later does not replace it. */
   const dateChosen = useRef(false);
   useEffect(() => {
@@ -348,8 +357,10 @@ export default function ReceiptsPage() {
     staleTime: 30_000,
   });
   // Never about the list this receipt itself just made: fixing a failed line and posting again replays onto it by key.
-  const ask = urlRead && !requestId ? listToAsk(waiting.filter((r) => readTag(r.notes, 'RCPT') !== idemKey), notThisList) : null;
-  const askCopy = ask ? askText(ask) : null;
+  const waitingNow = waiting.filter((r) => readTag(r.notes, 'RCPT') !== idemKey);
+  const asking = urlRead && !requestId ? listsToAsk(waitingNow, notTheseLists) : [];
+  // Said "none of these" while lists are still waiting: a quiet way back, in case that was a slip.
+  const declinedSome = urlRead && !requestId && asking.length === 0 && listsToAsk(waitingNow).length > 0;
   const { data: request } = useQuery<RequestForReceipt>({
     queryKey: ['receipt-request', requestId],
     queryFn:  () => api.get(`/procure/requests/${requestId}`).then((r) => r.data),
@@ -424,7 +435,7 @@ export default function ReceiptsPage() {
     enabled:  !!user,
     staleTime: 60_000,
   });
-  const { data: branches = [] } = useQuery<{ id: string; name: string }[]>({
+  const { data: branches = [] } = useQuery<{ id: string; name: string; isActive?: boolean }[]>({
     queryKey: ['branches'],
     queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
     enabled:  !!user,
@@ -433,15 +444,25 @@ export default function ReceiptsPage() {
   // An owner or MDM with no branch on their account still has to post
   // somewhere. Default to the first branch, and show the picker whenever
   // the choice is not already made for them.
-  useEffect(() => { if (!branchId && branches[0]) setBranchId(branches[0].id); }, [branches, branchId]);
-  const showBranch = branches.length > 1 || (!user?.branchId && branches.length > 0);
+  // Branches still in use only: a closed branch is not somewhere to receive stock.
+  const openBranches = useMemo(() => activeBranches(branches), [branches]);
+  useEffect(() => { if (!branchId && openBranches[0]) setBranchId(openBranches[0].id); }, [openBranches, branchId]);
+  const showBranch = openBranches.length > 1 || (!user?.branchId && openBranches.length > 0);
   const byId = useMemo(() => new Map(ingredients.map((i) => [i.id, i])), [ingredients]);
-  // Today's reads and the cap, so the wall is never a surprise. Fails quiet:
-  // a shop whose plan has no AI simply sees no count.
+  /*
+    Whether the reader is switched on for this shop. The sign-in token carries
+    the month's AI allowance and it is 0 when AI is off (the server's master
+    switch, or a plan without it) -- the signal the journal and the cash-out
+    screens already hide their AI buttons on. With it off this screen used to
+    offer "Read the receipt" anyway, answer every tap with "not available", and
+    ask the server for today's read count on every load only to be refused.
+  */
+  const readerOn = (user?.aiQuotaMonthly ?? 0) > 0;
+  // Today's reads and the cap, so the wall is never a surprise. Fails quiet.
   const { data: reads } = useQuery<Reads>({
     queryKey: ['receipt-reads'],
     queryFn:  () => api.get('/procure/receipts/reads').then((r) => r.data),
-    enabled:  !!user,
+    enabled:  !!user && readerOn,
     staleTime: 30_000,
     retry: false,
   });
@@ -651,7 +672,8 @@ export default function ReceiptsPage() {
   // ── validation, in words the person can act on ───────────────────────────
   const problems = useMemo(() => {
     const out: string[] = [];
-    if (rows.every((r) => r.kind === 'skip')) out.push('Add at least one line.');
+    const nothing = nothingToPostText(rows);
+    if (nothing) out.push(nothing);
     // Numbered the way the screen numbers them -- skipped rows included --
     // so "Line 4" is the fourth thing the person sees.
     rows.forEach((r, i) => {
@@ -669,9 +691,9 @@ export default function ReceiptsPage() {
       }
     });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) out.push('The receipt date needs to be a real date.');
-    if (ask) out.push(`First answer the question at the top: is this the shopping for ${ask.requestNumber}?`);
+    if (asking.length > 0) out.push('First answer the question at the top: is this receipt for a list that is already waiting?');
     return out;
-  }, [rows, date, byId, ask]);
+  }, [rows, date, byId, asking.length]);
 
   const stockTotal   = rows.filter((r) => r.kind === 'stock').reduce((s, r) => s + pos(r.packs) * pos(r.cost), 0);
   const expenseTotal = rows.filter((r) => r.kind === 'expense').reduce((s, r) => s + pos(r.amount), 0);
@@ -689,7 +711,7 @@ export default function ReceiptsPage() {
     setReading(null); setResult(null);
     // The next receipt is its own shopping: a list picked by answering the question does not carry over.
     if (!new URLSearchParams(window.location.search).get('request')) { setRequestId(null); seeded.current = null; }
-    setNotThisList([]);
+    // "None of these" is NOT forgotten here: the next receipt from the same trip is not asked again.
     // The next receipt starts from its own kind of photo, not the last one's choice.
     setPlaceByHand(false);
     setPlaceKind(documentKind === 'order_screen' ? 'ONLINE' : documentKind === 'delivery_receipt' ? 'SUPPLIER' : '');
@@ -724,7 +746,7 @@ export default function ReceiptsPage() {
                 <li key={p.line}>
                   <div className="flex justify-between gap-3">
                     <span>{p.name}</span>
-                    <span className="font-mono text-xs text-muted-foreground">{p.quantity.toLocaleString()} @ {formatPeso(p.unitCost)}</span>
+                    <span className="font-mono text-xs text-muted-foreground">{p.quantity.toLocaleString()}{p.unit ? ` ${p.unit}` : ''} @ {unitCostText(p.unitCost, p.unit)}</span>
                   </div>
                   {p.warning && <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">{p.warning}</p>}
                 </li>
@@ -790,25 +812,43 @@ export default function ReceiptsPage() {
       <input ref={takeRef}   type="file" accept="image/*" capture="environment" className="hidden" onChange={onPhoto} />
       <input ref={chooseRef} type="file" accept="image/*" className="hidden" onChange={onPhoto} />
 
-      {/* 0. a list already waiting for this shopping? */}
-      {ask && askCopy && (
+      {/*
+        0. Lists already waiting for this shopping? One question, every list in
+        it, and one way to say "none of them". It used to ask about one list at
+        a time, so a shop with many lists waiting tapped No once per list.
+      */}
+      {asking.length > 0 && (
         <div className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-xs">
           <ClipboardList className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-foreground">{askCopy.question}</p>
-            <p className="mt-0.5 leading-relaxed text-muted-foreground">{askCopy.detail}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button type="button" onClick={() => setRequestId(ask.id)}
-                className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-white">
-                Yes, it is for {ask.requestNumber}
-              </button>
-              <button type="button" onClick={() => setNotThisList((ids) => [...ids, ask.id])}
-                className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs hover:bg-muted">
-                No, a different trip
-              </button>
+            <p className="text-sm font-semibold text-foreground">{ASK_QUESTION}</p>
+            <p className="mt-0.5 leading-relaxed text-muted-foreground">{ASK_DETAIL}</p>
+            <div className="mt-2 max-h-64 space-y-1.5 overflow-y-auto">
+              {asking.map((r) => {
+                const c = askChoice(r);
+                return (
+                  <button key={r.id} type="button" onClick={() => setRequestId(r.id)}
+                    className="block w-full rounded-lg border border-border bg-background px-3 py-2 text-left hover:border-[var(--accent)] hover:bg-[var(--accent)]/5">
+                    <span className="block font-mono text-xs font-semibold text-foreground">{c.label}</span>
+                    <span className="mt-0.5 block leading-relaxed text-muted-foreground">{c.detail}</span>
+                  </button>
+                );
+              })}
             </div>
+            <button type="button" onClick={() => setNotTheseLists(waitingNow.map((r) => r.id))}
+              className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-left text-xs font-semibold hover:bg-muted">
+              {ASK_NONE}
+            </button>
           </div>
         </div>
+      )}
+      {declinedSome && (
+        <p className="px-1 text-[11px] text-muted-foreground">
+          A separate trip — not for a list that is waiting.{' '}
+          <button type="button" onClick={() => setNotTheseLists([])} className="text-[var(--accent)] hover:underline">
+            Choose a list instead
+          </button>
+        </p>
       )}
 
       {/* 0. the request this belongs to */}
@@ -818,11 +858,12 @@ export default function ReceiptsPage() {
           {request ? (
             <span>
               Onto <span className="font-mono font-semibold">{request.requestNumber}</span>
-              {request.branch?.name ? ` · ${request.branch.name}` : ''} — the lines below are the kitchen&apos;s list.
+              {request.branch?.name ? ` · ${request.branch.name}` : ''}{' '}— the lines below are the kitchen&apos;s list.
               Nothing becomes a second request.
             </span>
           ) : <span>Loading the request…</span>}
-          {filed.length > 0 && (
+          {/* A filed photo is only worth opening here to have it read. */}
+          {readerOn && filed.length > 0 && (
             <span className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
               <span className="text-muted-foreground">Read a filed photo:</span>
               {filed.map((d) => (
@@ -843,9 +884,18 @@ export default function ReceiptsPage() {
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold">Upload a receipt</div>
             <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-              Photograph it flat, whole, in good light. The reader fills the lines in; you correct
-              what it got wrong and post. You can also type the lines without a photo.
-              {requestId ? ' A second photo (another stall, the rest of a long receipt) adds to the lines.' : ''}
+              {readerOn ? (
+                <>
+                  Photograph it flat, whole, in good light. The reader fills the lines in; you correct
+                  what it got wrong and post. You can also type the lines without a photo.
+                  {requestId ? ' A second photo (another stall, the rest of a long receipt) adds to the lines.' : ''}
+                </>
+              ) : (
+                <>
+                  Photograph it flat, whole, in good light, so it is filed with the purchase. Then type
+                  its lines in below and post. You can also type the lines without a photo.
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -865,7 +915,7 @@ export default function ReceiptsPage() {
           <button onClick={() => chooseRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
             Choose a photo
           </button>
-          {photo && (
+          {photo && readerOn && (
             <button onClick={readReceipt} disabled={read.isPending || readsLeft === 0}
               title={readsLeft === 0 ? "Today's reads are used up" : undefined}
               className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
@@ -930,7 +980,7 @@ export default function ReceiptsPage() {
             Received at
             <select value={branchId} onChange={(e) => setBranchId(e.target.value)}
               className="mt-0.5 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              {openBranches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </label>
         )}
@@ -962,13 +1012,17 @@ export default function ReceiptsPage() {
         </div>
         {rows.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            Take a photo and read it, or add lines by hand.
+            {readerOn ? 'Take a photo and read it, or add lines by hand.' : 'Add the lines by hand. A photo of the receipt is filed with them.'}
           </p>
         ) : (
           <ul className="divide-y divide-border">
             {rows.map((r, i) => {
               const ing = byId.get(r.rawMaterialId);
               const unit = r.createNew ? r.newUnit : (ing?.unit ?? '');
+              // The top of the ingredient picker: the reader's matches, or for a hand-typed line the names that share a word with it.
+              const near = r.alternatives.length > 0
+                ? r.alternatives.map((a) => ({ id: a.rawMaterialId, name: a.name, unit: a.unit }))
+                : r.kind === 'stock' && !r.createNew ? closestByName(r.description, ingredients) : [];
               const lineTotal = r.kind === 'stock' ? pos(r.packs) * pos(r.cost) : pos(r.amount);
               return (
                 <li key={r.key} className={`px-4 py-3 ${r.kind === 'skip' ? 'opacity-50' : ''}`}>
@@ -1024,9 +1078,9 @@ export default function ReceiptsPage() {
                                 }}
                                 className={`min-w-0 flex-1 rounded-lg border bg-background px-2 py-1.5 text-sm ${!r.rawMaterialId || (r.score != null && r.score < 0.85) ? 'border-amber-500/60' : 'border-border'}`}>
                                 <option value="">Which ingredient is this?</option>
-                                {r.alternatives.length > 0 && (
+                                {near.length > 0 && (
                                   <optgroup label="Closest">
-                                    {r.alternatives.map((a) => <option key={a.rawMaterialId} value={a.rawMaterialId}>{a.name} ({a.unit})</option>)}
+                                    {near.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.unit})</option>)}
                                   </optgroup>
                                 )}
                                 <optgroup label="All">

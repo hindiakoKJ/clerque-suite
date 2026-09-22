@@ -102,3 +102,15 @@ test('the sheet records it through the station route, only on the running day, w
   const code = sheet.replace(/^\s*(\*|\/\/).*$/gm, '');
   assert.equal(/cost|price|₱/i.test(code), false, 'no costs reach a kitchen or bar screen');
 });
+
+test('a closed sheet with a running one after it offers that one in a single tap', () => {
+  /*
+    The day closes when its last shift closes near closing time. A cook who
+    opens Today's inventory after that lands on the closed sheet, with no
+    "Thrown out" buttons; one tap takes them to the running sheet, where waste
+    is recorded, instead of the arrows.
+  */
+  assert.match(sheet, /\{sheet\.status === 'CLOSED' && sheet\.today !== sheet\.day && \(/);
+  assert.match(sheet, /onClick=\{\(\) => setDay\(sheet\.today\)\}/);
+  assert.match(sheet, /Open today&apos;s running sheet/);
+});

@@ -8,6 +8,7 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { STOCK_ROLES } from './layout';
+import { isMultiBranch } from './active-branches';
 import { SauceLevelsCard } from '@/components/shared/SauceLevelsCard';
 
 /**
@@ -35,12 +36,19 @@ export default function ProcureHome() {
     staleTime: 30_000,
   });
 
-  // Only to decide whether the all-branches tile is worth showing. Owners
-  // only, so a cashier never fires it.
-  const { data: branches = [] } = useQuery<{ id: string }[]>({
+  // A barista is in REQUEST_ROLES but not STOCK_ROLES. Rendering every tile
+  // to them meant three of these snapped straight back to this page with no
+  // explanation -- the layout redirect firing silently. Show what the role can
+  // actually open.
+  const canStock = !!user && STOCK_ROLES.includes(user.role);
+
+  // Only to decide whether the between-branches tiles (Transfers, All
+  // branches) are worth showing. Asked by whoever can open those screens, so a
+  // cook or a cashier never fires it.
+  const { data: branches = [] } = useQuery<{ id: string; isActive?: boolean }[]>({
     queryKey: ['branches'],
     queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
-    enabled:  user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN',
+    enabled:  canStock,
     staleTime: 300_000,
   });
 
@@ -58,13 +66,11 @@ export default function ProcureHome() {
   */
   const shortages = low.filter((r) => r.kind === 'INGREDIENT').length;
 
-  // A barista is in REQUEST_ROLES but not STOCK_ROLES. Rendering all four
-  // tiles to them meant three of these snapped straight back to this page with
-  // no explanation -- the layout redirect firing silently. Show what the role
-  // can actually open.
-  const canStock    = !!user && STOCK_ROLES.includes(user.role);
-  const isOwner     = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
-  const multiBranch = branches.length > 1;
+  const isOwner    = user?.role === 'BUSINESS_OWNER' || user?.role === 'SUPER_ADMIN';
+  // Branches still in use only: a closed branch is not somewhere to move stock to.
+  const multiBranch = isMultiBranch(branches);
+  // The sign-in token carries the month's AI allowance; 0 means the receipt reader is off for this shop.
+  const readerOn    = (user?.aiQuotaMonthly ?? 0) > 0;
 
   const canPost = !!user && ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM'].includes(user.role);
 
@@ -79,7 +85,9 @@ export default function ProcureHome() {
       href:  '/procure/receipts',
       Icon:  Receipt,
       title: 'Upload a receipt',
-      desc:  'Photograph a receipt. Ingredients go into stock, the rest into the books, the photo is filed.',
+      desc:  readerOn
+        ? 'Photograph a receipt. Ingredients go into stock, the rest into the books, the photo is filed.'
+        : 'Photograph a receipt and type in its lines. Ingredients go into stock, the rest into the books, the photo is filed.',
       note:  null,
       show:  canPost,
     },
@@ -172,12 +180,13 @@ export default function ProcureHome() {
       show:  canStock,
     },
     {
+      // Moves stock from one branch to another, so a one-branch shop has no use for it.
       href:  '/procure/transfers',
       Icon:  ArrowLeftRight,
       title: 'Transfers',
-      desc:  'Move stock between locations.',
-      note:  'Between branches today — see below',
-      show:  canStock,
+      desc:  'Move stock from one branch to another.',
+      note:  null,
+      show:  canStock && multiBranch,
     },
     {
       // Owner-only at the API, and meaningless with one branch. It lost its
@@ -194,9 +203,16 @@ export default function ProcureHome() {
 
   return (
     <div className="space-y-5">
-      {/* the only thing that should pull someone in here unprompted */}
+      {/*
+        The only thing that should pull someone in here unprompted.
+
+        With something short it opens the list being BUILT (?view=open), where
+        Check stock and Add are. The plain link opened whichever list needed
+        the owner most, and for an owner that is a Bought list waiting to be
+        posted -- a screen with no way to add anything.
+      */}
       <Link
-        href="/procure/requests"
+        href={shortages > 0 || lowError ? '/procure/requests?view=open' : '/procure/requests'}
         className={`block rounded-xl border p-4 transition-colors sm:p-5 ${
           shortages > 0
             ? 'border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10'
@@ -253,23 +269,6 @@ export default function ProcureHome() {
           </Link>
         ))}
       </div>
-
-      {/*
-        Said plainly rather than hidden behind a tile that half-works. Stock
-        transfers move between BRANCHES; a stockroom, a bar and a kitchen are
-        rooms inside one branch, and RawMaterialInventory is keyed on
-        (branch, ingredient) with no room in between. Until that is decided,
-        the tile above goes to the branch-to-branch transfer that does exist.
-      */}
-      <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-        <ArrowLeftRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span>
-          <strong className="font-medium text-foreground">Room-to-room transfers are not built yet.</strong>{' '}
-          Stock is currently held per branch, so moving from the stockroom to the bar has nowhere to
-          go. Either those rooms become branches, or ingredients gain a location — worth deciding
-          before it is built, because the second one changes how every stock read works.
-        </span>
-      </p>
     </div>
   );
 }

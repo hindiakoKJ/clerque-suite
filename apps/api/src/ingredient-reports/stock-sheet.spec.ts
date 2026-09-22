@@ -71,7 +71,7 @@ describe('stock-sheet', () => {
     const base: SheetWindow = {
       day: '2026-09-17', today: '2026-09-17', previousDay: '2026-09-16', nextDay: null, status: 'LIVE',
       from: ph('2026-09-16T21:30:05'), to: ph('2026-09-17T14:00:00'), begin: { day: '2026-09-16', takenAt: ph('2026-09-16T21:30:05') },
-      end: null, workedBack: null, missingSaveDay: null, closesAt: ph('2026-09-17T21:30:00'),
+      end: null, closedBy: null, workedBack: null, missingSaveDay: null, closesAt: ph('2026-09-17T21:30:00'),
     };
     const notes = (over: Partial<SheetWindow>, extra: Partial<{ stillWaiting: number; anyAdjust: boolean; now: Date }> = {}) =>
       sheetNotes({ ...base, ...over }, { stillWaiting: 0, anyAdjust: false, now: ph('2026-09-17T14:00:00'), ...extra });
@@ -83,7 +83,13 @@ describe('stock-sheet', () => {
       expect(notes({ closesAt: null })).toEqual(['Running totals so far.']);
     });
 
-    it('CLOSED says when', () => {
+    it('CLOSED says when, and who closed it: the last shift, or Clerque on the clock', () => {
+      // A day its last shift closed before the fallback clock says so: closed at 10:19 AM with no word why read as a bug.
+      expect(notes({ status: 'CLOSED', to: ph('2026-09-17T10:19:00'), closesAt: null, closedBy: 'SHIFT' }))
+        .toEqual(["Closed at 10:19 AM, when the day's last shift was closed. Waste and batches since then go on the next sheet."]);
+      expect(notes({ status: 'CLOSED', to: ph('2026-09-17T23:00:02'), closesAt: null, closedBy: 'CLOCK' }))
+        .toEqual(["Closed at 11:00 PM by Clerque: the day's last shift was not closed by then, so it closed on the clock."]);
+      // A past day with no save of its own (it runs to the next save) has nobody to name.
       expect(notes({ status: 'CLOSED', to: ph('2026-09-17T21:30:02'), closesAt: null })).toEqual(['Closed at 9:30 PM.']);
     });
 
@@ -191,7 +197,7 @@ describe('stock-sheet', () => {
         ['PREMADE', 'Pre-made', ['Tomato Sauce (ready)']],
         ['INGREDIENTS', 'Ingredients', ['Fresh Milk', 'Tomatoes']],
         ['SUPPLIES', 'Supplies', ['Foil']],
-        ['UNROUTED', 'Not routed to a station', ['Flour']],
+        ['UNROUTED', 'No station set yet', ['Flour']],
       ]);
       const rows = sheet.sections.flatMap((s) => s.rows);
       const sauce = rows.find((r) => r.name === 'Tomato Sauce (ready)')!;
@@ -226,7 +232,8 @@ describe('stock-sheet', () => {
       });
       const sheet = await stationSheet(prisma, ctx, '2026-09-17', ph('2026-09-18T09:00:00'));
       expect(sheet).toMatchObject({ status: 'CLOSED', nextDay: '2026-09-18', nextDayLabel: 'Fri, Sep 18', stillWaiting: 0 });
-      expect(sheet.notes[0]).toBe('Closed at 9:30 PM.');
+      // Saved at 9:30 PM, before the 11:00 PM fallback: its last shift closed it, and the sheet says so.
+      expect(sheet.notes[0]).toBe("Closed at 9:30 PM, when the day's last shift was closed. Waste and batches since then go on the next sheet.");
       expect(sheet.sections[0].rows[0]).toMatchObject({ beginning: 1200, ending: 1550, adjust: 0 });
       expect(prisma.rawMaterialInventory.findMany).not.toHaveBeenCalled();
       expect(prisma.orderItem.count).not.toHaveBeenCalled();

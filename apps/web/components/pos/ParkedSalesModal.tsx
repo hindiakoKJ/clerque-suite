@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react';
 import { Clock, ShoppingBag, Trash2, RotateCcw } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DIALOG_FIT_SCROLL } from './dialog-fit';
 import { Button } from '@/components/ui/button';
 import { useParkedSalesStore, type ParkedSale } from '@/store/pos/parkedSales';
 import { useCartStore } from '@/store/pos/cart';
@@ -78,7 +79,7 @@ export function ParkedSalesModal({ open, onClose }: ParkedSalesModalProps) {
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-        <DialogContent className="max-w-md">
+        <DialogContent className={`max-w-md ${DIALOG_FIT_SCROLL}`}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShoppingBag className="h-5 w-5" />
@@ -94,7 +95,7 @@ export function ParkedSalesModal({ open, onClose }: ParkedSalesModalProps) {
               No parked sales. Tap "Park Sale" in the cart to save the current order for later.
             </div>
           ) : (
-            <ul className="divide-y divide-border max-h-[60vh] overflow-y-auto -mx-6">
+            <ul className="divide-y divide-border max-h-[55dvh] overflow-y-auto -mx-6">
               {sales
                 .slice()
                 .sort((a, b) => b.parkedAt - a.parkedAt)
@@ -136,7 +137,7 @@ export function ParkedSalesModal({ open, onClose }: ParkedSalesModalProps) {
 
       {/* Confirm replace */}
       <Dialog open={!!confirmRecall} onOpenChange={(v) => !v && setConfirmRecall(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className={`max-w-sm ${DIALOG_FIT_SCROLL}`}>
           <DialogHeader>
             <DialogTitle>Replace current cart?</DialogTitle>
           </DialogHeader>

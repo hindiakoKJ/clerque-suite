@@ -84,16 +84,16 @@ m.note('Simple books HIDES Chart of Accounts, Journal, Periods, Trial Balance an
 
 /* ───────────────────── Import ───────────────────── */
 m.h1('6.  Importing their data');
-m.p('Templates: owner login → Settings → "Import Templates" (/settings/imports) → each row has an ".xlsx" download. Order for a cafe: Products → Ingredients → Recipes (→ Inventory). Sample rows in every template start with "SAMPLE - " and are ignored on import.');
+m.p('Templates: owner login → Settings → "Import Templates" (/settings/imports) → each row has an ".xlsx" download and, beside it, an "Import" button that uploads the filled-in file. Order for a cafe: Products → Ingredients → Made in batches (preps) → Recipes (→ Inventory). Sample rows in every template start with "SAMPLE - " and are ignored on import.');
 m.table(['Data', 'Where the UPLOAD button is'], [
   ['Products', 'POS → "Products" → "Import" (also "Setup Pack" for products + opening stock)'],
   ['Customers', 'Ledger → AR → Customers → "Import Customers"'],
   ['Vendors / Suppliers', 'Ledger → AP → Vendors → "Import Vendors"'],
   ['Chart of Accounts', 'Ledger → Accounts → "Import Chart of Accounts" (Full accounting)'],
   ['Journal Entries', 'Ledger → Journal → "Import" - but for OPENING BALANCES use Ledger → Journal → Trial Balance import instead'],
-  ['**Ingredients, Recipes, Opening stock, Stock receipts', '**NO upload button in the web UI yet - API only. WE upload these for the client (see note).'],
+  ['Ingredients, Made in batches (preps), Recipes, Inventory (stock count), Stock receipts', 'Settings → "Import Templates" → "Import" on that same row. The "Recipe Costing" export can be edited and uploaded back on the Recipes row.'],
 ], [140, 375]);
-m.careful('Ingredients and Recipes have download templates but no upload screen. Plan to load them yourself via the API (POST /import/ingredients, /import/recipes) or enter them on-screen with the client. Do not promise the owner a self-serve upload for these.');
+m.note('Ingredients and Recipes upload from the same Import Templates page they download from - the "Import" button on each row. Load them with the client on-screen, or from your own desktop against production; the API routes those buttons call are POST /import/ingredients and /import/recipes.');
 m.tip('Do the data migration from the old POS on Thursday from your own desktop, against production, and review it with the client on a call. Friday becomes verification and training instead of a live migration.');
 
 /* ───────────────────── Health ───────────────────── */

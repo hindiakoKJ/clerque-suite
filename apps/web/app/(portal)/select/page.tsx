@@ -10,6 +10,7 @@ import { accessibleApps, type AppCardWithRoute } from '@/lib/apps';
 import { api } from '@/lib/api';
 import { BusinessSetupWizard, useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { useBranding } from '@/hooks/useBranding';
+import { restrictedMessage } from './restricted-reason';
 
 /* ─── App card registry ──────────────────────────────────────────────────── */
 
@@ -75,9 +76,17 @@ export default function SelectPage() {
 
   // Redirect to login if unauthenticated, or straight to the only app the
   // user has access to. Both effects run unconditionally each render.
+  //
+  // `hydrated` matters: on a reload the first render still has the store's
+  // EMPTY starting state (no token) — the saved session is only read once the
+  // page is live in the browser. Without the wait, pressing F5 on this page,
+  // or opening it from a bookmark, sent a signed-in person to /login every
+  // time. Same gate as app/pos/(pos)/layout.tsx.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
   useEffect(() => {
-    if (!accessToken) router.replace('/login');
-  }, [accessToken, router]);
+    if (hydrated && !accessToken) router.replace('/login');
+  }, [hydrated, accessToken, router]);
 
   // If we're on the console subdomain, super-admins go straight to /admin.
   // (Middleware also enforces this, but routing here avoids a flash.)
@@ -92,21 +101,23 @@ export default function SelectPage() {
     if (onlyApp) router.replace(onlyApp.resolvedRoute);
   }, [onlyApp, router]);
 
-  // Sprint 19 — toast when redirected from a restricted app (e.g. middleware
-  // hard-blocked POS for a non-till role).
+  // Say why someone landed here when the edge guard sent them back from an
+  // app their role cannot open (middleware.ts adds ?reason=). All three
+  // reasons get a message — Procure had none — and the reason always comes off
+  // the address, so a reload or a bookmark does not repeat the message.
+  // Waits for `hydrated` so it knows whether this person has a single app (and
+  // is about to be forwarded to it) or will see the picker.
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const reason = new URLSearchParams(window.location.search).get('reason');
-    if (reason === 'pos-restricted') {
-      toast.error('POS is restricted to Owner / Manager / Cashier. Use Ledger or Sync if those apply to your role.');
-    } else if (reason === 'ledger-restricted') {
-      toast.error('Ledger is restricted to accounting roles. Use POS or Sync if those apply to your role.');
-      // Clean the URL
-      const url = new URL(window.location.href);
-      url.searchParams.delete('reason');
-      window.history.replaceState({}, '', url.pathname);
-    }
-  }, []);
+    if (!hydrated || typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    const reason = url.searchParams.get('reason');
+    if (!reason) return;
+    const message = restrictedMessage(reason, onlyApp?.name ?? null);
+    if (message) toast.error(message);
+    url.searchParams.delete('reason');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, after hydration
+  }, [hydrated]);
 
   if (!user) return null;
 

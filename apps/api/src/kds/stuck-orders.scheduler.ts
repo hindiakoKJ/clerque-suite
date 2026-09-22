@@ -111,20 +111,39 @@ export class StuckOrdersScheduler {
     let total = 0;
     for (const [tenantId, n] of perTenant) {
       total += n;
+      if (!this.notifications) continue;
       try {
-        await this.notifications?.create({
-          tenantId, userId: null, kind: 'INFO',
+        const note = {
+          tenantId, kind: 'INFO' as const,
           title: `${n} kitchen/bar item${n === 1 ? '' : 's'} counted as made overnight`,
           body:  'Nobody marked them ready on the station screen yesterday, so Clerque took their ingredients and booked their cost at 2:30 AM, dated to the sale. If some were never made, void or refund them.',
-          link:  '/pos/orders',
           dedupeKey: `nightly-confirm-${manilaDayStart(now).toISOString().slice(0, 10)}`,
-        });
+        };
+        /*
+          To the people who can act on it, one each -- not to the whole shop.
+          Sent to everyone, the cook saw it in Procure, tapped it, and was
+          thrown out to the app picker: a cook cannot open Orders, and cannot
+          void or refund either.
+        */
+        const tellThem = await this.whoCanVoid(tenantId);
+        for (const userId of tellThem) await this.notifications?.create({ ...note, userId, link: '/pos/orders' });
+        // Nobody found to tell by name: everyone is told, with no link a cook cannot open.
+        if (tellThem.length === 0) await this.notifications?.create({ ...note, userId: null });
       } catch (err) {
         this.logger.warn(`Could not tell shop ${tenantId} about the overnight confirm: ${(err as Error).message}`);
       }
     }
     this.logger.log(`Confirmed ${total} waiting kitchen/bar line(s) from before today.`);
     return total;
+  }
+
+  /** The shop's active owners and managers: the people who can open Orders and void or refund. */
+  private async whoCanVoid(tenantId: string): Promise<string[]> {
+    const users = await this.prisma.user.findMany({
+      where:  { tenantId, isActive: true, role: { in: ['BUSINESS_OWNER', 'BRANCH_MANAGER'] } },
+      select: { id: true },
+    });
+    return users.map((u) => u.id);
   }
 
   /** Step 2: at-sale tickets from before today nobody tapped, marked ready. Returns how many lines were cleared. */

@@ -25,6 +25,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { PH_TIMEZONE } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
@@ -39,10 +40,11 @@ export class AuditArchiveScheduler {
   ) {}
 
   /**
-   * 02:30 UTC daily. Deliberately offset from the 02:00 main backup so
-   * Postgres connection-pool contention doesn't spike.
+   * 02:30 Manila time daily. Deliberately offset from the 02:00 main backup
+   * so Postgres connection-pool contention doesn't spike. (Railway runs in
+   * UTC; without the timeZone this ran at 10:30 in the morning.)
    */
-  @Cron('30 2 * * *')
+  @Cron('30 2 * * *', { timeZone: PH_TIMEZONE })
   async runDailyArchive() {
     if (this.running) return;
     this.running = true;

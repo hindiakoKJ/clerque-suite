@@ -127,7 +127,7 @@ export default function WhereBoughtPage() {
           </p>
           {data.totals.buys > data.totals.withStore && (
             <p className="text-xs text-muted-foreground">
-              Purchases recorded before today, or without a store, count toward the totals but not toward a store.
+              Purchases recorded before stores were tracked, or without a store, count toward the totals but not toward a store.
             </p>
           )}
           {data.truncated && (

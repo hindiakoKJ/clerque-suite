@@ -56,8 +56,14 @@ const DEFAULT_MODEL = process.env.AI_DEFAULT_MODEL ?? MODEL_SONNET;
   are aliases: Google retires the numbers, not the alias.
 */
 export type AiProvider = 'gemini' | 'anthropic';
+// With AI_PROVIDER unset, follow the key that is actually there: a server
+// with only an Anthropic key and no Google project would otherwise pick
+// Gemini and answer every AI button with a 503.
 export const AI_PROVIDER: AiProvider =
-  process.env.AI_PROVIDER === 'anthropic' ? 'anthropic' : 'gemini';
+  process.env.AI_PROVIDER === 'anthropic' ? 'anthropic'
+  : process.env.AI_PROVIDER === 'gemini' ? 'gemini'
+  : process.env.ANTHROPIC_API_KEY && !process.env.GOOGLE_CLOUD_PROJECT ? 'anthropic'
+  : 'gemini';
 export const MODEL_GEMINI = process.env.GEMINI_MODEL ?? 'gemini-flash-latest';
 
 // Pricing per 1M tokens (input / output USD). Cache reads cost ~0.1x base

@@ -9,6 +9,9 @@ on:
   pull_request:
     branches: [master, main, develop]
 
+env:
+  NEXT_TELEMETRY_DISABLED: 1
+
 jobs:
   # ── Type check both apps ────────────────────────────────────────────────────
   typecheck:
@@ -40,7 +43,55 @@ jobs:
       - name: Type check — Web
         run: npm run check-types --workspace=apps/web
 
+  # ── Production builds ───────────────────────────────────────────────────────
+  #
+  # Type-checking is not building. `nest build` is what Railway runs and
+  # `next build` is what Vercel runs; until 2026-09 neither ran in CI, so a
+  # page that fails to prerender, a CSP/env regression or a broken
+  # middleware was first seen by Vercel at deploy time — i.e. by the shop.
+  # This job makes the PR red instead.
+  build:
+    name: Build (API + Web)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --workspaces --include-workspace-root
+
+      - name: Build shared-types
+        run: npm run build --workspace=packages/shared-types
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/db/prisma/schema.prisma
+
+      - name: Build — API (nest build, same as Railway)
+        run: npm run build --workspace=apps/api
+
+      - name: Build — Web (next build, same as Vercel)
+        # NEXT_PUBLIC_* values are baked in at build time. These mirror the
+        # Vercel Production values (DEPLOY.md §3) so the CSP connect-src and
+        # the receipt phase are built exactly as they ship. No secret is
+        # needed: the web app talks to the API only from the browser.
+        env:
+          NEXT_PUBLIC_API_URL: https://api.clerque.cc/api/v1
+          NEXT_PUBLIC_PROVIDER_PHASE: '1'
+        run: npm run build --workspace=apps/web
+
   # ── Lint ────────────────────────────────────────────────────────────────────
+  #
+  # API only. The web app has no lint target yet: `next lint` was removed in
+  # Next 16 and the workspace has no ESLint config. Wiring one needs
+  # `eslint-config-next` (a new dependency — KJ's call); add
+  # `npm run lint --workspace=apps/web` here once it is in.
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -74,8 +125,10 @@ jobs:
   # would know; coverage was theatre.
   #
   # This job runs `jest` on every PR + push so the existing tests become
-  # a real safety net. Web + Counter have no specs yet so they're skipped;
-  # add their jobs here when specs land.
+  # a real safety net. The web app's helper specs (*.spec.mjs, run with
+  # `node --test`, loading the .ts helpers directly) need Node 24, not the
+  # Node 20 used here; add a Node 24 job for them once they are all green on
+  # master. The Counter app is not in use and has no job.
   tests:
     name: Tests (API)
     runs-on: ubuntu-latest

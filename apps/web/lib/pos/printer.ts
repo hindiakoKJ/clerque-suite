@@ -12,6 +12,7 @@
 
 import { receiptAuthority } from '@repo/shared-types';
 import { thermalBytes, toThermalText } from './thermal-text';
+import { receiptBusinessName, receiptBranchLine } from './receipt-header';
 
 // ── Web Serial type shim ──────────────────────────────────────────────────────────
 declare global {
@@ -211,12 +212,19 @@ export function buildReceipt(data: PrintReceiptData): Uint8Array {
   const isPhase2 = (process.env.NEXT_PUBLIC_PROVIDER_PHASE ?? '1').trim() === '2';
 
   // ── Header: business name + BIR classification ─────────────────────────────
-  parts.push(C.alignCenter, C.doubleOn);
-  p(txt((data.businessName ?? data.branchName ?? 'DEMO STORE').toUpperCase()));
-  parts.push(C.doubleOff);
+  // The caller passes the shop's real name (see receipt-header.ts). There is
+  // no placeholder: with nothing known the heading is left out, never invented.
+  parts.push(C.alignCenter);
+  const heading = receiptBusinessName({ corBusinessName: data.businessName, branchName: data.branchName });
+  if (heading) {
+    parts.push(C.doubleOn);
+    p(txt(heading.toUpperCase()));
+    parts.push(C.doubleOff);
+  }
   // Show branch name below business name if both exist
-  if (data.businessName && data.branchName) {
-    p(txt(data.branchName));
+  const branchLine = receiptBranchLine(heading, data.branchName);
+  if (branchLine) {
+    p(txt(branchLine));
   }
   // Registered address (Phase 2, BIR-registered tenants)
   if (isPhase2 && data.registeredAddress) {

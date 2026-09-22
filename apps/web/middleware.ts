@@ -52,8 +52,6 @@ const PUBLIC_PREFIXES = [
   '/pay',
   // Sprint 24 — marketing/welcome + signup pages
   '/welcome', '/signup',
-  // Sprint 25 — Counter design preview (static HTML mockup under /public)
-  '/design-preview',
   // Sprint 25 — Paired display surfaces. Access controlled by device token
   // in localStorage (verified against the API on every poll), not JWT.
   // Lets a TV / second tablet show the customer screen or KDS without
@@ -216,7 +214,13 @@ export const config = {
   // `manifest.webmanifest` and `sw.js` must stay public: the auth redirect
   // was swallowing both, so the install metadata never loaded and the service
   // worker could not be fetched (a redirected script fails registration).
+  // So must the generated icon routes (/icon, /icon1, /icon2 from
+  // app/icon*.tsx, and /apple-icon): they have no file extension, so they fell
+  // through to the sign-in redirect, and Chrome, checking the manifest's icons
+  // on the login page, got HTML instead of a PNG. The kitchen tablets'
+  // "Add to Home screen" then had no icon and no install prompt.
+  // middleware.spec.mjs pins this list.
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|icon\\d*$|apple-icon$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

@@ -30,7 +30,7 @@ import {
   type PrepStatus, type RotationRow, type UseBy,
 } from '@repo/shared-types';
 import { api } from '@/lib/api';
-import { MadeButton, PrepChainCard, type PrepChain, type StageNote } from './PrepChainCard';
+import { MadeButton, NO_STATION_YET, NO_STATION_YET_HELP, PrepChainCard, type PrepChain, type StageNote } from './PrepChainCard';
 import { tileMadeLabel } from './station-taps';
 
 interface PrepRow {
@@ -46,6 +46,8 @@ interface PrepRow {
   useBy: UseBy;
   rotation: RotationRow | null;
   batches: number;
+  /** What one batch makes, so the Made button can say what its second tap records. Absent on older answers. */
+  batchYield?: number | null;
   limitedBy: string | null;
   rootLimitedBy: string | null;
   batchesWithPrep?: number;
@@ -131,6 +133,7 @@ const madeButton = (r: PrepRow, stationId: string, compact = false) => {
       rawMaterialId={r.id}
       label={label}
       uses={null}
+      makes={r.batchYield != null && r.batchYield > 0 ? amount(r.batchYield, r.unit) : null}
       tone={todo(r) != null ? 'primary' : 'secondary'}
       compact={compact}
     />
@@ -218,7 +221,7 @@ export function StationPrepLevels({
       <div className={`flex flex-col items-center justify-center text-center text-stone-500 ${compact ? 'py-8' : 'py-32'}`}>
         <UtensilsCrossed className={`opacity-30 ${compact ? 'mb-2 h-8 w-8' : 'mb-4 h-14 w-14'}`} />
         <p className={`font-semibold ${compact ? 'text-base' : 'text-2xl'}`}>No pre-made items here</p>
-        <p className={`mt-1 ${compact ? 'text-xs' : 'text-sm'}`}>Items made in batches show up once their dishes are routed to this station.</p>
+        <p className={`mt-1 ${compact ? 'text-xs' : 'text-sm'}`}>Items made in batches show up here once the owner sets this station for their dishes.</p>
       </div>
     );
   }
@@ -285,7 +288,7 @@ export function StationPrepLevels({
               {dates.map((d) => (
                 <p key={d} className={`mt-0.5 text-xs leading-snug ${r.useBy.expired && d.includes('past') ? 'text-red-300' : 'text-orange-200'}`}>{d}</p>
               ))}
-              {!r.assigned && <p className="mt-0.5 text-[10px] uppercase tracking-wider text-stone-500">Not routed to a station</p>}
+              {!r.assigned && <p className="mt-0.5 text-[10px] uppercase tracking-wider text-stone-500">{NO_STATION_YET}</p>}
               {made && <div className="mt-2">{made}</div>}
             </div>
           );
@@ -305,7 +308,7 @@ export function StationPrepLevels({
                       <span className="min-w-0 leading-snug text-stone-300">
                         {r.level === 2 && <Snowflake className="mr-1 inline h-3 w-3 align-[-1px] text-sky-300" aria-label="Parked" />}
                         {r.name}
-                        {!r.assigned && <span className="ml-1 text-[10px] uppercase text-stone-500">not routed</span>}
+                        {!r.assigned && <span className="ml-1 text-[10px] uppercase text-stone-500">no station yet</span>}
                       </span>
                       <span className="shrink-0 text-right tabular-nums leading-snug text-stone-400">
                         {amount(r.onHand, r.unit)}
@@ -382,7 +385,9 @@ export function StationPrepLevels({
       )}
       {loose.length > 0 && (
         <div>
-          <p className="mb-2 text-sm font-semibold text-stone-400">Not routed to a station</p>
+          {/* Room here for the one line that tells the owner what to do about it; the compact column and the cards only carry the mark. */}
+          <p className="text-sm font-semibold text-stone-400">{NO_STATION_YET}</p>
+          <p className="mb-2 text-xs text-stone-500">{NO_STATION_YET_HELP}</p>
           <div className="grid grid-cols-1 gap-4 opacity-80 md:grid-cols-2 xl:grid-cols-3">{loose.map(tile)}</div>
         </div>
       )}

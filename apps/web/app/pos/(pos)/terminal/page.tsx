@@ -570,8 +570,10 @@ export default function PosTerminal() {
           <ProductGrid products={products} categories={categories} loading={loadingProducts} />
         </div>
 
-        {/* ── Cart Panel — Desktop: fixed right column (Counter 440px rail) ── */}
-        <div className="hidden lg:flex w-[440px] shrink-0 flex-col">
+        {/* ── Cart Panel — Desktop: fixed right column (Counter 440px rail) ──
+            340px below 1280 wide: on the 1024x600 till the full 440px rail plus
+            the sidebar left the product tiles only ~320px. */}
+        <div className="hidden lg:flex w-[340px] xl:w-[440px] shrink-0 flex-col">
           <CartPanel
             onCheckout={() => setShowPayment(true)}
             onApplyPwdSc={() => setShowPwdSc(true)}

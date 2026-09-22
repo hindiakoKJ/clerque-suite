@@ -168,10 +168,12 @@ describe('stock-day-balances', () => {
       expect(tonight).toMatchObject({
         day: '2026-09-17', today: '2026-09-18', nextDay: '2026-09-18', status: 'CLOSED',
         from: manila('2026-09-16T23:00:05'), to: manila('2026-09-17T23:00:02'), end: { day: '2026-09-17' }, closesAt: null,
+        // Saved at the fallback moment (23:00): the job closed it.
+        closedBy: 'CLOCK',
       });
       // The next morning the running day opens, starting exactly where the closed one ended.
       const morning = await window(saves, '2026-09-18T08:00:00');
-      expect(morning).toMatchObject({ day: '2026-09-18', status: 'LIVE', from: manila('2026-09-17T23:00:02') });
+      expect(morning).toMatchObject({ day: '2026-09-18', status: 'LIVE', from: manila('2026-09-17T23:00:02'), closedBy: null });
       // And the closed one still opens by its date.
       expect((await window(saves, '2026-09-18T08:00:00', '2026-09-17')).status).toBe('CLOSED');
     });
@@ -183,6 +185,8 @@ describe('stock-day-balances', () => {
       expect(tonight).toMatchObject({
         day: '2026-09-17', today: '2026-09-18', nextDay: '2026-09-18', status: 'CLOSED',
         from: manila('2026-09-16T23:00:05'), to: manila('2026-09-17T20:40:00'), end: { day: '2026-09-17' },
+        // Saved before the fallback moment: its last shift closed it, and the sheet can say so.
+        closedBy: 'SHIFT',
       });
       // The next day can be opened already, running from the close.
       const next = await window(saves, '2026-09-17T21:30:00', '2026-09-18');

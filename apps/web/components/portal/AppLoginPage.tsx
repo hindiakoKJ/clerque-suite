@@ -7,6 +7,7 @@ import {
   Sun, Moon, Lock, Hash, Delete,
 } from 'lucide-react';
 import { brandLogoSrc, readLastBusiness, type LastBusiness } from '@/lib/branding';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 
 /* ─── Product registry ─────────────────────────────────────────────────── */
 
@@ -122,6 +123,9 @@ export interface AppLoginPageProps {
   loading?: boolean;
   error?: string;
   siblingUrls?: Partial<Record<AppProduct, string>>;
+  /** Tenant ID and email to start the form with (a brand-new owner arriving
+   *  from signup). Only fills boxes that are still empty. */
+  prefill?: { tenantId?: string; email?: string } | null;
 }
 
 /* ─── Theme toggle (reused by AppShell) ─────────────────────────────────── */
@@ -144,6 +148,7 @@ export function AppLoginPage({
   loading = false,
   error,
   siblingUrls = {},
+  prefill = null,
 }: AppLoginPageProps) {
   const p = PRODUCTS[product];
   const { Icon } = p;
@@ -166,6 +171,14 @@ export function AppLoginPage({
     if (product === 'console') return;
     setLastBusiness(readLastBusiness());
   }, [product]);
+
+  // A new owner arriving from signup: start with their Tenant ID and email
+  // typed in. Never overwrites something already typed.
+  useEffect(() => {
+    if (!prefill) return;
+    if (prefill.tenantId) setTenantId((cur) => cur || prefill.tenantId!);
+    if (prefill.email)    setEmail((cur) => cur || prefill.email!);
+  }, [prefill]);
 
   /* Sync dark state — layout.tsx script sets class before paint */
   useEffect(() => {
@@ -282,7 +295,7 @@ export function AppLoginPage({
           <span className="ml-auto flex gap-3">
             <a href="/legal/terms" className="hover:underline">Terms</a>
             <a href="/legal/privacy" className="hover:underline">Privacy</a>
-            <a href="mailto:devsupport@hnscorpph.com" className="hover:underline">Support</a>
+            <a href={supportMailto()} className="hover:underline">Support</a>
           </span>
         </div>
       </div>
@@ -554,16 +567,20 @@ export function AppLoginPage({
               )}
             </button>
 
-            {/* Sprint 21 — dual CTA: existing tenant staff contact their admin;
-                prospects looking for standalone accounting sign up directly. */}
+            {/* Staff get their sign-in from the owner; an owner who is stuck
+                writes to support; someone new reads what Clerque is. The first
+                of these used to be a "Contact your admin" link to "#", which
+                did nothing when tapped. */}
             <p className="pt-2 text-center text-xs text-muted-foreground">
-              Need access?{' '}
-              <a href="#" className="font-medium text-foreground hover:underline">
-                Contact your admin
+              Need access? Ask your owner or manager for your Tenant ID and sign-in.
+              <br />
+              Owner and stuck?{' '}
+              <a href={supportMailto('I cannot sign in to Clerque')} className="font-medium text-foreground hover:underline">
+                Email {SUPPORT_EMAIL}
               </a>
               {' · '}
               <a href="/welcome/ledger" className="font-medium hover:underline" style={{ color: accent }}>
-                Just need accounting?
+                New to Clerque?
               </a>
             </p>
 

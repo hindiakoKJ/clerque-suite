@@ -80,6 +80,17 @@ interface ProductGridProps {
   loading?: boolean;
 }
 
+/**
+ * As many columns as FIT the catalog column, never a count picked from the
+ * window width. The catalog is what is left after the sidebar and the cart
+ * rail: on the 1024x600 till that is about 420px, and "4 columns at lg" cut it
+ * into 68px tiles whose names ran into each other and scrolled sideways. Each
+ * tile is now at least 124px (three across on that screen, two on a phone),
+ * and wider screens simply get more of them.
+ */
+const PRODUCT_GRID_COLS =
+  'grid gap-3 sm:gap-4 grid-cols-[repeat(auto-fill,minmax(124px,1fr))] 2xl:grid-cols-[repeat(auto-fill,minmax(168px,1fr))]';
+
 export function ProductGrid({ products, categories, loading }: ProductGridProps) {
   const [search, setSearch] = useState('');
   const [activeCat, setActiveCat] = useState<string | null>(null);
@@ -247,7 +258,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
       {/* Product grid */}
       <div className="flex-1 overflow-y-auto p-3">
         {loading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          <div className={PRODUCT_GRID_COLS}>
             {Array.from({ length: 8 }).map((_, i) => (
               <div key={i} className="h-28 rounded-xl bg-muted animate-pulse" />
             ))}
@@ -257,7 +268,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
             No products found
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
+          <div className={PRODUCT_GRID_COLS}>
             {filtered.map((p) => {
               // Prefer the server-computed maxProducible (handles both unit-based
               // products and recipe-based dishes uniformly). Fall back to the
@@ -276,7 +287,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                   onClick={() => handleAdd(p)}
                   disabled={isOut}
                   className={cn(
-                    'group relative flex flex-col items-start p-3 rounded-xl border bg-card hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all text-left min-h-[200px] sm:min-h-[220px] shadow-sm',
+                    'group relative flex flex-col items-start p-3 rounded-xl border bg-card hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all text-left min-w-0 min-h-[200px] sm:min-h-[220px] [@media(max-height:700px)]:min-h-0 shadow-sm',
                     isOut
                       ? 'bg-muted border-border opacity-60 cursor-not-allowed'
                       : isLow
@@ -286,7 +297,8 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                 >
                   {/* Image tile — prominent for tablet/touch, falls back to category emoji */}
                   <div className={cn(
-                    'w-full aspect-square rounded-lg flex items-center justify-center mb-2 transition-colors overflow-hidden',
+                    // Square on a normal screen; shallower on the 600px-tall tablet so two rows of tiles show at once.
+                    'w-full aspect-square [@media(max-height:700px)]:aspect-[16/10] rounded-lg flex items-center justify-center mb-2 transition-colors overflow-hidden',
                     isLow
                       ? 'bg-amber-500/10 group-hover:bg-amber-500/15'
                       : 'bg-[var(--accent-soft)] group-hover:bg-[var(--accent-soft)]/80',
@@ -315,7 +327,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                     )}
                   </div>
 
-                  <p className="text-sm sm:text-base font-semibold text-foreground leading-tight line-clamp-2 font-display">{p.name}</p>
+                  <p className="w-full text-sm sm:text-base font-semibold text-foreground leading-tight line-clamp-2 break-words font-display">{p.name}</p>
 
                   {/* Pharmacy badges — Rx and DDB controlled. Sit just above
                       the price so the cashier sees them before tapping. */}

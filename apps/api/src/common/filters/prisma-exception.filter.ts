@@ -8,6 +8,10 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+import { redactUrl } from '../http/redact-url';
+
+/** Where staff are sent when trying again does not help. */
+const SUPPORT_EMAIL = 'devsupport@hnscorpph.com';
 
 /**
  * Global exception filter — centralises all error handling so no internals
@@ -29,13 +33,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     const { status, code, messages, warnings } = this.classify(exception);
 
+    // Never the raw URL: a paired tablet's credential rides in a query string.
+    const safeUrl = redactUrl(req.originalUrl ?? req.url);
     if (status >= 500) {
       this.logger.error(
-        `${req.method} ${req.url} → ${status}`,
+        `${req.method} ${safeUrl} → ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     } else {
-      this.logger.warn(`${req.method} ${req.url} → ${status}: ${messages.join('; ')}`);
+      this.logger.warn(`${req.method} ${safeUrl} → ${status}: ${messages.join('; ')}`);
     }
 
     res.status(status).json({
@@ -43,7 +49,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       code,
       message: messages,
       ...(warnings ? { warnings } : {}),
-      path:      req.url,
+      path:      safeUrl,
       timestamp: new Date().toISOString(),
     });
   }
@@ -179,7 +185,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         return {
           status:   HttpStatus.INTERNAL_SERVER_ERROR,
           code:     'RAW_QUERY_FAILED',
-          messages: ['A database query failed. Please try again or contact support.'],
+          messages: [`Something went wrong on our side. Please try again. If it keeps happening, email ${SUPPORT_EMAIL} and mention code ${err.code}.`],
         };
 
       // Check constraint failed → 400
@@ -228,16 +234,19 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
       // Schema drift — a column or table referenced in code doesn't exist in
       // the live database. Almost always caused by a missing `prisma db push`
-      // (or migrate deploy) after a schema change. Explicit message helps
-      // operators fix it instead of staring at the generic "database error".
+      // (or migrate deploy) after a schema change. The LOG says so, for
+      // whoever is on call; the person at the till gets words they can act on,
+      // and the code SCHEMA_OUT_OF_SYNC tells support what happened.
       case 'P2021':
       case 'P2022':
-        this.logger.error(`Schema drift [${err.code}]: ${err.message}`);
+        this.logger.error(
+          `Schema drift [${err.code}]: ${err.message} -- the database is behind the code: run \`prisma migrate deploy\` (prod) or \`prisma db push\` (dev).`,
+        );
         return {
           status:   HttpStatus.INTERNAL_SERVER_ERROR,
           code:     'SCHEMA_OUT_OF_SYNC',
           messages: [
-            'The database schema is out of sync. An admin needs to run `prisma db push` (dev) or `prisma migrate deploy` (prod) to apply pending schema changes.',
+            `Clerque is being updated and this part is not ready yet. Please try again in a few minutes. If it keeps happening, email ${SUPPORT_EMAIL} and mention code ${err.code}.`,
           ],
         };
 
@@ -261,13 +270,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         const firstLine = err.message.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
         const isDev = process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'staging';
         const detail = isDev ? firstLine : '';
+        // Staff-facing words. The Prisma code stays in `code` and in the
+        // sentence, so a screenshot is enough for support to find the log line.
         return {
           status:   HttpStatus.INTERNAL_SERVER_ERROR,
           code:     `PRISMA_${err.code}`,
           messages: [
-            `A database error occurred (Prisma ${err.code}).` +
-              (detail ? ` Detail: ${detail}` : '') +
-              ` If this persists, run \`prisma db push\` (dev) or \`prisma migrate deploy\` (prod).`,
+            `Something went wrong saving this. Please try again. If it keeps happening, email ${SUPPORT_EMAIL} and mention code ${err.code}.` +
+              (detail ? ` (Developer detail: ${detail})` : ''),
           ],
         };
       }

@@ -9,6 +9,8 @@ import {
 import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso, startOfMonthIso } from '@/lib/today';
+import { ledgerExportFilename } from './ledger-filename';
 
 type AccountType    = 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
 type NormalBalance  = 'DEBIT' | 'CREDIT';
@@ -78,22 +80,14 @@ function fmtDate(dateStr: string) {
   });
 }
 
-function todayStr() {
-  return new Date().toISOString().split('T')[0];
-}
-
-function firstDayOfMonth() {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
-}
-
 
 export default function AccountLedgerPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
 
-  const [from, setFrom]         = useState(firstDayOfMonth());
-  const [to,   setTo]           = useState(todayStr());
+  // Wall-clock dates (lib/today): the UTC version opened on "Aug 31" all through September.
+  const [from, setFrom]         = useState(startOfMonthIso());
+  const [to,   setTo]           = useState(todayIso());
   const [page, setPage]         = useState(1);
   const [exporting, setExporting] = useState(false);
 
@@ -103,7 +97,7 @@ export default function AccountLedgerPage() {
       const params = new URLSearchParams({ from, to });
       await downloadAuthFile(
         `/export/account-ledger/${id}?${params}`,
-        `ledger-${id}-${from}_to_${to}.xlsx`,
+        ledgerExportFilename(data?.account ?? accountDetail, from, to),
       );
     } catch {
       toast.error('Failed to download account ledger. Please try again.');
@@ -221,7 +215,7 @@ export default function AccountLedgerPage() {
             type="date"
             value={to}
             min={from}
-            max={todayStr()}
+            max={todayIso()}
             onChange={(e) => { setTo(e.target.value); setPage(1); }}
             className="h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
           />

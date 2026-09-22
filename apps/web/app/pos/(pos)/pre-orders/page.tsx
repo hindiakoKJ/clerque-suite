@@ -20,6 +20,7 @@ import {
   Plus, Calendar, Cake, Phone, CheckCircle2, X, ChevronRight, Pencil,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { BRANCHES_ROUTE, activeBranchesOnly } from '../branch-options';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/store/auth';
@@ -120,7 +121,9 @@ export default function PreOrdersPage() {
 
   const branchesQ = useQuery<Branch[]>({
     queryKey: ['pre-orders', 'branches'],
-    queryFn: () => api.get('/branches').then((r) => r.data),
+    // GET /branches never existed; the list lives at /tenant/branches, which also
+    // returns switched-off branches, so those are left out of the picker.
+    queryFn: () => api.get(BRANCHES_ROUTE).then((r) => activeBranchesOnly<Branch>(r.data)),
     staleTime: 5 * 60_000,
   });
   const customersQ = useQuery<Customer[]>({

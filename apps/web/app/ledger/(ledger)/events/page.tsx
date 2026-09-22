@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Zap, RefreshCw, CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -176,8 +176,9 @@ export default function EventsPage() {
                     {data.data.map((evt) => {
                       const open = expanded.has(evt.id);
                       return (
-                        <>
-                          <tr key={evt.id} className="hover:bg-muted/40 transition-colors">
+                        // The key belongs on the Fragment: on a bare <> React warned on every row.
+                        <Fragment key={evt.id}>
+                          <tr className="hover:bg-muted/40 transition-colors">
                             <td
                               className="px-4 py-2.5 cursor-pointer text-muted-foreground"
                               onClick={() => toggleExpand(evt.id)}
@@ -221,7 +222,7 @@ export default function EventsPage() {
                             )}
                           </tr>
                           {open && (
-                            <tr key={`${evt.id}-payload`}>
+                            <tr>
                               <td colSpan={canProcess ? 7 : 6} className="px-6 pb-4 bg-muted/30">
                                 {evt.lastError && (
                                   <div className="mb-2 text-xs text-rose-600 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-700 rounded-lg px-3 py-2">
@@ -234,7 +235,7 @@ export default function EventsPage() {
                               </td>
                             </tr>
                           )}
-                        </>
+                        </Fragment>
                       );
                     })}
                   </tbody>

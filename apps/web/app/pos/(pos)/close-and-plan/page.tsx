@@ -352,7 +352,7 @@ export default function CloseAndPlanPage() {
                 />
               </label>
               <label className="block">
-                <span className="text-xs text-muted-foreground">Cost / unit (P)</span>
+                <span className="text-xs text-muted-foreground">Cost / unit (₱)</span>
                 <input type="number" step="0.01" min="0"
                   value={picker.unitCost}
                   onChange={(e) => setPicker({ ...picker, unitCost: Number(e.target.value) })}

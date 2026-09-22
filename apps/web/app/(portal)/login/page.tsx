@@ -9,6 +9,7 @@ import { AppLoginPage } from '@/components/portal/AppLoginPage';
 import { useAuthStore } from '@/store/auth';
 import { api } from '@/lib/api';
 import { rememberBusinessAfterLogin } from '@/lib/branding';
+import { takeLoginPrefill, type LoginPrefill } from './prefill';
 
 /* The valid ?app= values that map to a product config */
 const VALID_PRODUCTS: AppProduct[] = ['pos', 'ledger', 'procure', 'payroll', 'console'];
@@ -25,6 +26,11 @@ function LoginInner() {
     if (typeof window === 'undefined') return;
     setIsConsoleHost(window.location.hostname.startsWith('console.'));
   }, []);
+
+  // A brand-new owner arriving from signup: their Tenant ID and email, handed
+  // over once in this tab's sessionStorage (never in the address).
+  const [prefill, setPrefill] = useState<LoginPrefill | null>(null);
+  useEffect(() => { setPrefill(takeLoginPrefill()); }, []);
 
   const appParam = searchParams.get('app') as AppProduct | null;
   const product: AppProduct = isConsoleHost
@@ -229,6 +235,7 @@ function LoginInner() {
       loading={loading}
       error={error}
       siblingUrls={siblingUrls}
+      prefill={prefill}
     />
   );
 }

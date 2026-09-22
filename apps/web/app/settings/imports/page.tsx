@@ -24,6 +24,7 @@ import { toast } from 'sonner';
 import { api, resolveAssetUrl } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { isRecipeBusinessType } from '@repo/shared-types';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 
 interface TenantProfile {
   businessType?: string | null;
@@ -410,8 +411,10 @@ export default function ImportTemplatesPage() {
         <div className="text-sm">
           <div className="font-medium text-foreground">Tailored to your business</div>
           <div className="text-xs text-muted-foreground mt-0.5">
-            Your Products template is generated for <strong>{verticalLabel}</strong>. Switch business type in
-            Settings → Business Profile if it&apos;s set wrong; the template will follow.
+            Your Products template is generated for <strong>{verticalLabel}</strong>. If that is not your
+            kind of business, email{' '}
+            <a href={supportMailto('Wrong business type on my account')} className="underline">{SUPPORT_EMAIL}</a>{' '}
+            and we will change it; the template will follow.
           </div>
         </div>
       </div>

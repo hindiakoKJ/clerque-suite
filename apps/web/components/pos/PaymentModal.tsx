@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { X, ChevronDown, ChevronUp, Building2, Search, Check, Delete } from 'lucide-react';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { formatPeso } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
@@ -311,22 +311,32 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
-        className="max-w-[1100px] w-[95vw] p-0 gap-0 border-0 bg-transparent shadow-none"
+        aria-describedby={undefined}
+        className="max-w-[1100px] w-[calc(100vw-1.5rem)] p-0 gap-0 border-0 bg-transparent shadow-none"
         style={{ background: 'transparent' }}
       >
-        {/* Full-screen Counter-style sheet */}
+        {/* Screen readers need a name for the dialog; the visible heading below is the one sighted staff read. */}
+        <DialogTitle className="sr-only">Payment</DialogTitle>
+        {/*
+          Full-screen Counter-style sheet.
+
+          Sized for the real tills: on a short screen (the 1024x600 tablet) the
+          header, tabs and footer tighten up so the whole keypad shows without
+          scrolling, and on a phone the header wraps and the tabs swipe
+          sideways instead of being cut off. The footer never scrolls away.
+        */}
         <div
-          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh] shadow-2xl"
+          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[calc(100dvh-1.5rem)] shadow-2xl"
         >
           {/* ── Header: back, title, total ─────────────────────────── */}
-          <div className="flex items-center px-8 py-5 bg-card border-b border-border">
+          <div className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 px-4 sm:px-8 py-3 sm:py-5 [@media(max-height:700px)]:py-2 pr-12 sm:pr-12 bg-card border-b border-border">
             <button
               onClick={handleClose}
               className="font-display text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               ← Back to Order
             </button>
-            <div className="ml-8">
+            <div className="sm:ml-4">
               <div className="font-display text-[20px] font-bold leading-tight">
                 Tendering · {tab === 'CASH' ? 'Bayad' : TABS.find((t) => t.key === tab)?.label}
               </div>
@@ -339,7 +349,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
                 Amount due
               </div>
               <div
-                className="font-display tnum text-[44px] font-extrabold leading-none mt-1"
+                className="font-display tnum text-[28px] sm:text-[44px] [@media(max-height:700px)]:text-[28px] font-extrabold leading-none mt-1"
                 style={{ color: tabBrand, letterSpacing: '-0.02em' }}
               >
                 {formatPeso(total)}
@@ -366,7 +376,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
           )}
 
           {/* ── Segmented tabs ─────────────────────────────────────── */}
-          <div className="flex gap-1.5 px-6 pt-3 pb-3 bg-card border-b border-border">
+          <div className="shrink-0 flex gap-1.5 overflow-x-auto px-3 sm:px-6 py-3 [@media(max-height:700px)]:py-1.5 bg-card border-b border-border">
             {TABS.map((t) => {
               const isOn = tab === t.key;
               // Cash and Split both put notes in a drawer, so both need a till.
@@ -378,12 +388,11 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
                   key={t.key}
                   onClick={() => chooseTab(t.key)}
                   disabled={disabled}
-                  className="font-display flex items-center gap-2.5 px-5 rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  className="font-display shrink-0 whitespace-nowrap flex items-center gap-2.5 px-3 sm:px-5 min-h-[48px] [@media(max-height:700px)]:min-h-[40px] rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   style={{
                     background: isOn ? brandColor : 'transparent',
                     color: isOn ? '#fff' : 'hsl(var(--foreground))',
                     fontWeight: isOn ? 700 : 600,
-                    minHeight: 48,
                     boxShadow: isOn ? '0 4px 12px rgba(0,0,0,0.12)' : 'none',
                   }}
                 >
@@ -409,7 +418,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
           </div>
 
           {/* ── Body ────────────────────────────────────────────────── */}
-          <div className="flex-1 overflow-y-auto p-8">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-8 [@media(max-height:700px)]:p-4">
             {tab === 'CASH' && (
               <CashTab
                 total={remaining}
@@ -579,21 +588,19 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
           </div>
 
           {/* ── Footer CTA (64dp) ───────────────────────────────────── */}
-          <div className="flex gap-3 px-6 py-4 bg-card border-t border-border">
+          <div className="shrink-0 flex gap-3 px-3 sm:px-6 py-4 [@media(max-height:700px)]:py-2 bg-card border-t border-border">
             <button
               onClick={handleClose}
               disabled={loading}
-              className="font-display rounded-xl px-6 text-sm font-semibold text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40"
-              style={{ minHeight: 64, flex: '0 0 200px' }}
+              className="font-display shrink-0 sm:basis-[200px] min-h-[64px] [@media(max-height:700px)]:min-h-[48px] rounded-xl px-4 sm:px-6 text-sm font-semibold text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40"
             >
               Cancel sale
             </button>
             <button
               onClick={handleConfirm}
               disabled={ctaDisabled}
-              className="font-display flex-1 rounded-xl text-white text-base font-bold flex items-center justify-center gap-3 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity hover:opacity-95"
+              className="font-display flex-1 min-w-0 min-h-[64px] [@media(max-height:700px)]:min-h-[48px] rounded-xl text-white text-base font-bold flex items-center justify-center gap-3 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity hover:opacity-95"
               style={{
-                minHeight: 64,
                 background: tabBrand,
                 boxShadow: tab === 'GCASH' ? '0 4px 12px rgba(0,123,252,.30)' :
                            tab === 'PAYMAYA' ? '0 4px 12px rgba(0,177,79,.30)' :
@@ -629,22 +636,22 @@ function CashTab({
   onKeypad: (ch: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8 [@media(max-height:700px)]:gap-4">
       {/* LEFT: Bayad + Sukli cards */}
       <div className="space-y-4">
-        <div className="rounded-2xl border border-border bg-card p-7 shadow-md">
+        <div className="rounded-2xl border border-border bg-card p-4 sm:p-7 [@media(max-height:700px)]:p-4 shadow-md">
           <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
             Bayad · cash received
           </div>
           <div
-            className="font-display tnum font-extrabold leading-none"
-            style={{ fontSize: 60, letterSpacing: '-0.02em' }}
+            className="font-display tnum font-extrabold leading-none text-[40px] sm:text-[60px] [@media(max-height:700px)]:text-[40px]"
+            style={{ letterSpacing: '-0.02em' }}
           >
             {formatPeso(bayadNum)}
           </div>
         </div>
         <div
-          className="rounded-2xl border p-7 shadow-md"
+          className="rounded-2xl border p-4 sm:p-7 [@media(max-height:700px)]:p-4 shadow-md"
           style={{
             background: cashShort ? '#FEF2F2' :
                         bayadNum >= total && total > 0 ? '#E8F8F0' : 'hsl(var(--card))',
@@ -662,9 +669,9 @@ function CashTab({
             Sukli · change
           </div>
           <div
-            className="font-display tnum font-extrabold leading-none"
+            className="font-display tnum font-extrabold leading-none text-[40px] sm:text-[60px] [@media(max-height:700px)]:text-[40px]"
             style={{
-              fontSize: 60, letterSpacing: '-0.02em',
+              letterSpacing: '-0.02em',
               color: cashShort ? '#991B1B' :
                      bayadNum >= total && total > 0 ? '#065F46' : 'var(--foreground)',
             }}
@@ -681,7 +688,7 @@ function CashTab({
 
       {/* RIGHT: keypad + quick amounts */}
       <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4 self-start">
-        <div className="grid grid-cols-3 gap-2.5">
+        <div className="grid grid-cols-3 gap-2.5 justify-items-center sm:justify-items-start">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
             <Key key={n} onClick={() => onKeypad(String(n))}>{n}</Key>
           ))}
@@ -750,9 +757,9 @@ function BrandTab({
   setReference: (v: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-4 sm:gap-8 [@media(max-height:700px)]:gap-4">
       <div className="space-y-5">
-        <div className="rounded-2xl border border-border bg-card shadow-md p-7">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-4 sm:p-7 [@media(max-height:700px)]:p-4">
           <div className="flex gap-4 mb-4 items-start">
             <span
               className="inline-flex items-center justify-center w-8 h-8 rounded-full text-white font-display font-extrabold text-base"
@@ -767,7 +774,7 @@ function BrandTab({
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-6">
+          <div className="flex flex-wrap items-center gap-4 sm:gap-6">
             {/* QR placeholder */}
             <div
               className="rounded-xl border-2 flex items-center justify-center text-muted-foreground bg-white"
@@ -807,7 +814,7 @@ function BrandTab({
 
       <div className="space-y-4">
         <div
-          className="rounded-2xl border-2 p-7 bg-card"
+          className="rounded-2xl border-2 p-4 sm:p-7 [@media(max-height:700px)]:p-4 bg-card"
           style={{ borderColor: brand }}
         >
           <div
@@ -817,8 +824,8 @@ function BrandTab({
             Receive · {brandName}
           </div>
           <div
-            className="font-display tnum font-extrabold leading-none text-foreground"
-            style={{ fontSize: 60, letterSpacing: '-0.02em' }}
+            className="font-display tnum font-extrabold leading-none text-foreground text-[40px] sm:text-[60px] [@media(max-height:700px)]:text-[40px]"
+            style={{ letterSpacing: '-0.02em' }}
           >
             {formatPeso(amount)}
           </div>
@@ -842,9 +849,9 @@ function CardTab({ amount, reference, setReference }: {
 }) {
   const [last4, setLast4] = useState('');
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-4 sm:gap-8 [@media(max-height:700px)]:gap-4">
       <div className="space-y-5">
-        <div className="rounded-2xl border border-border bg-card shadow-md p-7">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-4 sm:p-7 [@media(max-height:700px)]:p-4">
           <div className="font-display text-lg font-bold mb-4">Card payment</div>
           <div className="space-y-3">
             <div>
@@ -874,15 +881,15 @@ function CardTab({ amount, reference, setReference }: {
       </div>
       <div>
         <div
-          className="rounded-2xl border p-7"
+          className="rounded-2xl border p-4 sm:p-7 [@media(max-height:700px)]:p-4"
           style={{ background: 'var(--counter-primary-container)', borderColor: 'var(--counter-primary)' }}
         >
           <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--counter-primary-press)' }}>
             Charge · Card
           </div>
           <div
-            className="font-display tnum font-extrabold leading-none"
-            style={{ fontSize: 60, letterSpacing: '-0.02em', color: 'var(--counter-primary-press)' }}
+            className="font-display tnum font-extrabold leading-none text-[40px] sm:text-[60px] [@media(max-height:700px)]:text-[40px]"
+            style={{ letterSpacing: '-0.02em', color: 'var(--counter-primary-press)' }}
           >
             {formatPeso(amount)}
           </div>
@@ -919,7 +926,7 @@ function SplitTab({
 }) {
   const activeMethod = activeMethods.find((m) => m.value === method) ?? activeMethods[0]!;
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-4 sm:gap-8 [@media(max-height:700px)]:gap-4">
       <div className="space-y-4">
         {/* Existing payment lines */}
         <div className="rounded-2xl border border-border bg-card shadow-md p-5">
@@ -1000,12 +1007,12 @@ function SplitTab({
 
       {/* Running totals */}
       <div className="space-y-4">
-        <div className="rounded-2xl border border-border bg-card shadow-md p-7">
+        <div className="rounded-2xl border border-border bg-card shadow-md p-4 sm:p-7 [@media(max-height:700px)]:p-4">
           <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Total · Bayaran</div>
           <div className="font-display tnum text-4xl font-extrabold">{formatPeso(total)}</div>
         </div>
         <div
-          className="rounded-2xl border p-7"
+          className="rounded-2xl border p-4 sm:p-7 [@media(max-height:700px)]:p-4"
           style={{
             background: settled ? '#E8F8F0' : 'hsl(var(--muted))',
             borderColor: settled ? '#B5E6D2' : 'hsl(var(--border))',
@@ -1018,7 +1025,7 @@ function SplitTab({
             {settled ? (change > 0 ? 'Sukli · change' : 'Settled') : 'Remaining'}
           </div>
           <div
-            className="font-display tnum text-5xl font-extrabold leading-none"
+            className="font-display tnum text-4xl sm:text-5xl font-extrabold leading-none"
             style={{ color: settled ? '#065F46' : 'var(--foreground)' }}
           >
             {settled ? formatPeso(change) : formatPeso(remaining)}

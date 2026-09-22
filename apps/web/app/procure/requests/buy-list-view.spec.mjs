@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   chipsInOrder, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
-  fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice,
+  fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice, viewWanted,
 } from './buy-list-view.ts';
 
 const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
@@ -66,7 +66,8 @@ test('the page records on an open list: the boxes, the footer and Save once tick
   assert.match(page, /const recording = canRecord && recordsOn\(req\.status\);/);
   assert.match(page, /\{recording && !l\.receivedAt && showsRecordBoxes\(req\.status, tick\) && \(/);
   assert.match(page, /\{recording && postable\.length \+ unposted\.length > 0 && showsRecordBoxes\(req\.status, tickedAny\) && \(/);
-  assert.match(page, /\{recording && \(req\.status === 'OPEN' \? tickedAny : \(req\.status === 'SENT' \|\| !canDecide\)\) && \(/);
+  assert.match(page, /const showSave\s+= recording && \(req\.status === 'OPEN' \? tickedAny : \(req\.status === 'SENT' \|\| !canDecide\)\);/);
+  assert.match(page, /\{showSave && \(/);
   // Add photo: every status but cancelled, the open list included.
   assert.doesNotMatch(page, /canRecord && req\.status !== 'OPEN'/);
   // Twice for Add photo, once for "Record something you bought".
@@ -206,4 +207,53 @@ test('the page: the owner sees the price from last time flagged, and posting ref
   assert.match(page, /if \(unpriced\) throw new Error\(`\$\{unpriced\.rawMaterial\.name\}: add the price from the receipt before posting\.`\);/);
   // Checked before the fixes are sent, so nothing posts half-way.
   assert.ok(page.indexOf('if (unpriced) throw') < page.indexOf("await api.post(`/procure/requests/${req.id}/bought`, { lines: fixes }"));
+});
+
+// ── ?view= and the sticky buttons (production sweep, 2026-09-22) ────────────
+
+test('?view=open opens the list being built, even when a Bought list outranks it for the owner', () => {
+  const lists = [
+    { id: 'b', status: 'BOUGHT', requestNumber: 'REQ-20260913-008' },
+    { id: 'o', status: 'OPEN',   requestNumber: 'REQ-20260922-001' },
+  ];
+  assert.deepEqual(viewWanted('open', lists), { kind: 'show', id: 'o' });
+  assert.deepEqual(viewWanted(' OPEN ', lists), { kind: 'show', id: 'o' });
+  // None being built: the screen starts one, as the server does for staff.
+  assert.deepEqual(viewWanted('open', [lists[0]]), { kind: 'start' });
+});
+
+test('?view=REQ-… opens that request; an unknown number says so; no parameter does nothing', () => {
+  const lists = [{ id: 'b', status: 'BOUGHT', requestNumber: 'REQ-20260913-008' }];
+  assert.deepEqual(viewWanted('REQ-20260913-008', lists), { kind: 'show', id: 'b' });
+  assert.deepEqual(viewWanted('REQ-19990101-001', lists), { kind: 'missing', wanted: 'REQ-19990101-001' });
+  assert.deepEqual(viewWanted(null, lists), { kind: 'none' });
+  assert.deepEqual(viewWanted('', lists), { kind: 'none' });
+});
+
+test('the page reads ?view= through viewWanted and starts a list when none is being built', () => {
+  assert.match(page, /const want = viewWanted\(new URLSearchParams\(window\.location\.search\)\.get\('view'\), all\);/);
+  assert.match(page, /else if \(want\.kind === 'start'\) openForView\.mutate\(\);/);
+});
+
+test('only the buttons stick to the bottom of the screen, on an opaque background', () => {
+  // Exactly one sticky block, and it holds buttons only.
+  assert.equal((page.match(/className="sticky bottom-4/g) ?? []).length, 1);
+  const start = page.indexOf('className="sticky bottom-4');
+  const block = page.slice(start, page.indexOf('\n      )}\n', start));
+  assert.match(page, /className="sticky bottom-4 z-10 space-y-2 rounded-xl bg-background"/);
+  // The "Who paid for this?" card, the price-changed tick, the hints, Close and Cancel are ordinary page content.
+  assert.doesNotMatch(block, /Who paid for this\?<\/p>|The price really changed|Keep adding what you need|Cancel this request|the rest isn&apos;t coming|<ChargeRows/);
+  assert.ok(page.indexOf('ref={whoPaidCard}') < start, 'the card is above the sticky buttons');
+  assert.ok(page.indexOf('Cancel this request') > start, 'Cancel is below them');
+  // The staff hints are readable: no see-through background.
+  assert.doesNotMatch(page, /bg-muted\/30 px-4 py-3 text-center text-xs/);
+});
+
+test('Add photo lets the phone offer the gallery: no capture attribute on the buy list', () => {
+  assert.doesNotMatch(page, /capture="environment"/);
+});
+
+test('"Read the receipt" is only offered where the reader is switched on', () => {
+  assert.match(page, /const readerOn = \(user\?\.aiQuotaMonthly \?\? 0\) > 0;/);
+  assert.match(page, /\{canDecide && readerOn && req\.status !== 'RECEIVED' && \(/);
 });

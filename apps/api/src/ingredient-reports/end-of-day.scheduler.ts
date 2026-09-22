@@ -250,9 +250,22 @@ export function sheetDays(closesAt: string | null | undefined, now: Date): Sheet
   };
 }
 
-/** Where the bell opens. It also marks the day as sent, so it names the branch and the day. */
+/**
+ * Where the bell opens. It also marks the day as sent, so it names the branch
+ * and the day. Stock lives in Procure, so the bell stays there (the same page
+ * as /pos/inventory/reports, in the Procure shell).
+ */
 export function usageReportLink(branchId: string, day: string): string {
-  return `/pos/inventory/reports?from=${day}&to=${day}&branchId=${branchId}`;
+  return `/procure/stock/reports?from=${day}&to=${day}&branchId=${branchId}`;
+}
+
+/**
+ * Every link a day may have been sent under: the current one and the one the
+ * bell used before it moved into Procure. Matched on both, so a day already
+ * sent under the old link on the day this ships is not sent a second time.
+ */
+export function usageReportLinks(branchId: string, day: string): string[] {
+  return [usageReportLink(branchId, day), `/pos/inventory/reports?from=${day}&to=${day}&branchId=${branchId}`];
 }
 
 /**
@@ -549,7 +562,7 @@ export class EndOfDayScheduler {
     const { tenantId } = branch;
     const link = usageReportLink(branch.id, due.day);
     // The day closes at least 8 hours into the day it is named for (sheetDay), so this catches every send of it.
-    const sentAlready = { tenantId, link, createdAt: { gte: manilaDayStart(due.day) } };
+    const sentAlready = { tenantId, link: { in: usageReportLinks(branch.id, due.day) }, createdAt: { gte: manilaDayStart(due.day) } };
 
     // A cheap look first: after the day went out, each run until the window closes costs this one query.
     if (await this.prisma.notification.findFirst({ where: sentAlready, select: { id: true } })) return false;
@@ -666,7 +679,7 @@ export class EndOfDayScheduler {
     // The last sheet is the one due when this window starts; it went out when its bell was written.
     const lastDay = sheetDay(due.from);
     const last = await this.prisma.notification.findFirst({
-      where:   { tenantId, link: usageReportLink(branchId, lastDay), createdAt: { gte: manilaDayStart(lastDay) } },
+      where:   { tenantId, link: { in: usageReportLinks(branchId, lastDay) }, createdAt: { gte: manilaDayStart(lastDay) } },
       orderBy: { createdAt: 'asc' },
       select:  { createdAt: true },
     });

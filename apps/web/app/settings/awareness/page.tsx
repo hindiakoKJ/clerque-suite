@@ -12,6 +12,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, ShieldCheck, AlertTriangle, KeyRound, Smartphone, Wifi, Eye, BookOpen } from 'lucide-react';
 import { useAuthStore } from '@/store/auth';
+import { SUPPORT_EMAIL } from '@/lib/support';
 
 export default function SecurityAwarenessPage() {
   const router = useRouter();
@@ -66,7 +67,7 @@ export default function SecurityAwarenessPage() {
               log into eFPS directly.
             </li>
             <li>
-              <strong>Fake Clerque emails.</strong> We only send from <code>@clerque.ph</code> and
+              <strong>Fake Clerque emails.</strong> We only send from <code>@clerque.cc</code> and
               <code> @hnscorpph.com</code>. Anything else is fake. We will <strong>never</strong>{' '}
               ask for your password.
             </li>
@@ -81,7 +82,7 @@ export default function SecurityAwarenessPage() {
             </li>
           </ul>
           <p className="mt-2">
-            When unsure: forward to <strong>support@clerque.ph</strong> and do nothing else.
+            When unsure: forward it to <strong>{SUPPORT_EMAIL}</strong> and do nothing else.
           </p>
         </Section>
 
@@ -132,10 +133,10 @@ export default function SecurityAwarenessPage() {
               location, what was logged in.
             </li>
             <li>
-              <strong>Mass-revoke all sessions</strong> from Settings → Security → &ldquo;Sign out all
-              devices.&rdquo; Invalidates every JWT, forcing re-login.
+              <strong>Change the password</strong> of every account that was signed in on that device.
+              That stops the lost device from renewing its sign-in. To lock a staff account out at once,
+              the owner can switch it off on the Staff page, then set a new password and switch it back on.
             </li>
-            <li><strong>Change the password</strong> of every account that was signed in on that device.</li>
             <li><strong>Change the supervisor PIN</strong> if the device was a POS or had POS access.</li>
             <li>File a police blotter for insurance / liability — yes, even for a tablet.</li>
           </ol>
@@ -195,7 +196,7 @@ export default function SecurityAwarenessPage() {
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="text-sm font-semibold text-foreground mb-2">When in doubt</h2>
           <p className="text-sm text-muted-foreground">
-            Email <strong>support@clerque.ph</strong> before you click, share, or pay. We would
+            Email <strong>{SUPPORT_EMAIL}</strong> before you click, share, or pay. We would
             rather answer a hundred &ldquo;is this real?&rdquo; emails than clean up one breach.
           </p>
         </div>

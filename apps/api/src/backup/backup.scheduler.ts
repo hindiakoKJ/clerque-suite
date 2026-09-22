@@ -26,6 +26,7 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { PH_TIMEZONE } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
@@ -40,13 +41,14 @@ export class BackupScheduler {
   ) {}
 
   /**
-   * 02:00 server time every day. Picks 02:00 because:
+   * 02:00 Manila time every day. Picks 02:00 because:
    *   - PH businesses are closed; no contention with live writes
-   *   - Sales for the previous PH day (00:00 UTC+8) are fully posted
-   *     and journal-synced by 17:00 UTC the previous day, so a 02:00 UTC
-   *     snapshot captures a clean closed accounting period
+   *   - The day's sales are posted and journal-synced hours earlier, so
+   *     the snapshot captures a clean, closed business day
+   * The timeZone matters: Railway containers run in UTC, and a plain
+   * '0 2 * * *' fired at 10:00 in the morning, in the middle of service.
    */
-  @Cron('0 2 * * *')
+  @Cron('0 2 * * *', { timeZone: PH_TIMEZONE })
   async runDailyBackup() {
     if (this.running) return; // overlap-skip
     this.running = true;

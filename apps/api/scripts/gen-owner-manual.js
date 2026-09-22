@@ -15,7 +15,7 @@ const m = createDoc({
 });
 
 /* ───────────────────────────── WELCOME ───────────────────────────── */
-m.p('Clerque is two things in one login: a till for ringing sales (we call it Counter) and a set of books that writes itself from those sales (we call it Ledger). You ring the sale; Clerque records the money, reduces the stock, and works out your profit. You never have to "do the accounting" - but you can always see it.');
+m.p('Clerque is three apps in one login: a till for ringing sales (we call it Counter), your ingredients, stock and buying (we call it Procure), and a set of books that writes itself from those sales (we call it Ledger). After you sign in you pick the app; inside any of them, "Switch app" in the left menu takes you to another. You ring the sale; Clerque records the money, reduces the stock, and works out your profit. You never have to "do the accounting" - but you can always see it.');
 m.p('This manual is written for the owner and the people at the counter. It uses the exact words you will see on the screen, so when it says click "Close Shift", that is the button\'s name.');
 m.note('Two ways to use the till: on a computer or tablet in the web browser (clerque.cc), or the Counter app on an Android tablet or phone. They do the same job. A few actions are web-only - the manual says so where it matters.');
 
@@ -115,12 +115,16 @@ m.tip('Set up sizes and add-ons together with us on-site. They cannot be importe
 /* ───────────────────────────── STOCK ───────────────────────────── */
 m.h1('4.  Your stock and your real cost per cup');
 m.p('Clerque can track two kinds of stock. "Unit" items (bottled water, a pastry) go down by one each sale. "Recipe" drinks (latte, americano) go down by their ingredients - 18 g of beans, 200 ml of milk, one cup, one lid. If you set up ingredients and recipes, you will know what each cup truly costs and how many you can still make.');
+m.p('Ingredients live in the Procure app. After signing in choose "Procure" (or, from Counter, "Switch app" in the left menu → "Procure"), then the tile "Stock on hand". The page is called "Ingredients & Supplies".');
 m.h2('Ingredients (beans, milk, syrups, cups)');
 m.steps([
-  'Left menu → "Ingredients". Click to add each raw material with its unit (g, ml, pc) and its cost per unit.',
-  'When a delivery arrives: find the ingredient, click "Receive stock". Type "Quantity", "Cost / unit (₱)", the "Receipt date", and "Paid by": "Cash" (shop cash kept apart from the POS drawer - it does not change the drawer count), "Credit / Net-30" (supplier bill to pay later), or "Owner funds" (you paid from your own pocket).',
+  'Procure → "Stock on hand" → "New Ingredient". Give each raw material its unit (g, ml, pc), its "Cost / unit (₱)" and its "Reorder level" - the amount at which it shows as low. Click "Create".',
+  'When a delivery arrives: find the ingredient in the list and click "Receive stock". Your branch is already chosen. Type "Quantity", "Cost / unit (₱)", the "Receipt date", and "Who paid?": "Shop cash (not the POS drawer)" (cash kept apart from the till - it does not change the drawer count), "On credit (pay the supplier later)" (a supplier bill), or "Owner paid" (you paid from your own pocket).',
   'Click "Receive". Clerque updates the stock, updates the average cost, and writes the books entry for you - the screen even tells you: "A journal entry will be posted automatically".',
+  'Spoiled milk, a dropped bottle: click "Write off" on the same row, type the quantity and pick the reason.',
 ]);
+m.tip('Shopping at the market from a list? Procure → "Purchase request" is the buy list. The kitchen adds what is short (or taps "Check stock"), the list is sent ("Send to the owners"), whoever shops records what was bought, and "Add it all to stock" receives the whole trip in one tap. A supermarket receipt can go in through Procure → "Upload a receipt" instead, with its photo filed beside the lines.');
+m.p('Counting the shelf: Procure → "Cycle counts" → "Start Count". Tap "Count" on the new count, type what is really on the shelf, then "Post". The first count of a new shop is posted as "Opening stock"; every later one as a "Routine count".');
 m.h2('Recipes (what goes into each drink)');
 m.steps([
   'Open a drink in "Products" → "Edit" → turn on "Recipe-based inventory".',
@@ -128,13 +132,13 @@ m.steps([
   'The "Cost Price" turns read-only with a "DERIVED" badge - Clerque now computes it from the ingredients and keeps it up to date when bean prices change.',
 ]);
 m.h2('Packaged items (bottles, pastries you buy in)');
-m.p('To receive stock of a unit item, open "Inventory" and use the stock adjustment. Choose "Stock In", the quantity, what you paid per unit, and "Paid with": "Cash on hand" or "Owner funds". For an opening count, pick the reason "Initial count" - it defaults to owner funds, which is usually right.');
+m.p('To receive stock of a unit item, open "Products" in Counter and click the "Adjust stock" icon on that product\'s row. In the "Adjust Stock" box choose "Stock In", the quantity, what you paid per unit, and "Who paid?": "Shop cash" or "Owner paid". For an opening count, pick the reason "Initial count" - it defaults to "Owner paid", which is usually right.');
 m.tip('Low stock shows on the product tile as "LOW · x" and "OUT" when empty. Out-of-stock tiles cannot be sold.');
 
 /* ───────────────────────────── MONEY ───────────────────────────── */
 m.h1('5.  Your money (Ledger, the simple way)');
-m.p('Sales from the till go into your books automatically. The Ledger is for everything that did NOT go through the till: the rent, the electric bill, money you put in, money you took out. You do not need to know accounting. Open the left menu and click "Ledger".');
-m.note('Your Ledger is set to "Simple books": you see Record Entry, Settlement, Reports, and your Dashboard - nothing more. If you ever want the full accountant\'s view (journal, statements, tax), the owner can switch it in Settings → "Ledger mode". Your records are kept either way.');
+m.p('Sales from the till go into your books automatically. The Ledger is for everything that did NOT go through the till: the rent, the electric bill, money you put in, money you took out. You do not need to know accounting. Open the left menu, click "Switch app" and choose "Ledger".');
+m.note('Your Ledger is set to "Simple books": you see your Dashboard, Record Entry, Settlement, Reports and "POS-derived AR" (money still owed on till sales) - nothing more. If you ever want the full accountant\'s view (journal, statements, tax), the owner can switch it in Settings → "Ledger mode". Your records are kept either way.');
 m.h2('Record a bill, an expense, or owner money');
 m.steps([
   'Ledger → "Record Entry". The page says: "Log money in and out that doesn\'t go through the till - rent, utilities, owner cash, deposits."',

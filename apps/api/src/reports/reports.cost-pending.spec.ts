@@ -54,6 +54,7 @@ describe('Reports: cost pending for lines still waiting at a screen', () => {
       aPBill: { findMany: jest.fn().mockResolvedValue([]) },
       aRInvoice: { findMany: jest.fn().mockResolvedValue([]) },
       inventoryItem: { findMany: jest.fn().mockResolvedValue([]) },
+      rawMaterialInventory: { findMany: jest.fn().mockResolvedValue([]) },
     };
     return new ReportsService(prisma);
   }

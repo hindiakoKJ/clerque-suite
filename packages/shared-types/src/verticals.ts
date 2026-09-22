@@ -577,7 +577,7 @@ export const truckingPack: VerticalPack = {
 
   settings: {
     extraCards: [
-      { label: 'Fleet Setup', desc: 'Vehicles, PM schedules, driver assignment', href: '/settings/fleet', iconName: 'Truck' },
+      { label: 'Fleet Setup', desc: 'Vehicles, PM schedules, driver assignment', href: '/pos/trucking/fleet', iconName: 'Truck' },
     ],
   },
 

@@ -33,7 +33,7 @@ interface PublicCard {
   tenantId:            string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
 async function fetchCard(token: string): Promise<PublicCard> {
   // Bypass the auth-injecting axios client — anonymous endpoint.

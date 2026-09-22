@@ -5,6 +5,7 @@ import { Bell, CheckCheck, Info, AlertTriangle, AlertCircle, CheckCircle2 } from
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { notificationHref } from './notification-link';
 
 type Kind = 'INFO' | 'WARNING' | 'ERROR' | 'SUCCESS';
 
@@ -80,7 +81,11 @@ export function NotificationBell() {
       qc.invalidateQueries({ queryKey: ['notif-list'] });
     }
     setOpen(false);
-    if (n.link) router.push(n.link);
+    // Only into an app this person's role can enter. A cook tapping a
+    // Counter or Ledger alert used to be thrown out of Procure by the edge
+    // guard; now the alert simply reads as read.
+    const href = notificationHref(n.link, user?.role);
+    if (href) router.push(href);
   }
   async function markAll() {
     await api.patch('/notifications/read-all');
@@ -124,13 +129,15 @@ export function NotificationBell() {
             ) : (
               list.map((n) => {
                 const Icon = ICONS[n.kind];
+                const opens = !!notificationHref(n.link, user?.role);
                 return (
                   <button
                     key={n.id}
                     onClick={() => handleClick(n)}
                     className={`w-full text-left px-3 py-2.5 border-b border-border last:border-0 hover:bg-muted/50 transition-colors flex gap-2 items-start ${
                       !n.readAt ? 'bg-[var(--accent-soft)]/20' : ''
-                    }`}
+                    } ${opens ? '' : 'cursor-default'}`}
+                    title={opens ? 'Open' : undefined}
                   >
                     <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${COLORS[n.kind]}`} />
                     <div className="flex-1 min-w-0">

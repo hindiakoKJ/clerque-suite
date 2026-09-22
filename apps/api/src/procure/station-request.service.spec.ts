@@ -294,6 +294,20 @@ describe('StationRequestService', () => {
     expect(requests[0].lines[0]).toMatchObject({ rawMaterialId: 'milk', qtyRequested: 2000 });
   });
 
+  it('first day, an item out with no pack size is still asked for, at a starting amount, so the tap sends something', async () => {
+    // Sugar is out, never bought through Clerque (no pack size) and has no reorder level: it used to go under "Check these" and off the list,
+    // and a tap with 25 such items out sent nothing at all.
+    const { svc, requests, procure } = build({ noHistory: true, stock: { milk: 50_000, sugar: 0, syrup: 5000, tissue: 20 } });
+    const res = await svc.apply(KITCHEN, [], NOW);
+    expect(res).toMatchObject({ outcome: 'SENT', learning: true, check: [] });
+    expect(res.added).toEqual([{
+      rawMaterialId: 'sugar', name: 'White sugar', amount: '1,000 g',
+      why: ['Out. No pack size or sales history yet, so this is a starting amount. Add more with + if you need it.'],
+    }]);
+    expect(requests[0].lines[0]).toMatchObject({ rawMaterialId: 'sugar', qtyRequested: 1000, shortBy: null });
+    expect(procure.tellTheOwners).toHaveBeenCalledTimes(1);
+  });
+
   it('first day at closing: an empty list is not called an all-clear', async () => {
     const { svc, procure } = build({ noHistory: true, stock: { milk: 50_000, sugar: 50_000, syrup: 5000, tissue: 20 } });
     const closing: RequestContext = { ...KITCHEN, stationKind: null, stationName: null, actorId: null, createdById: 'owner1', byLabel: 'Clerque at closing time', source: 'CLOSING' };
@@ -326,7 +340,8 @@ describe('StationRequestService', () => {
   // ── "+" ──────────────────────────────────────────────────────────────────
 
   it('adds an item picked from the list, rounded up to a pack', async () => {
-    const { svc, requests } = build({ stock: { milk: 50_000 }, requests: [openList()] });
+    // Everything else in stock: an item that is out goes on the list by itself now, with a starting amount.
+    const { svc, requests } = build({ stock: { milk: 50_000, sugar: 50_000, syrup: 5000, tissue: 20 }, requests: [openList()] });
     const res = await svc.apply(KITCHEN, [{ rawMaterialId: 'milk', qty: 1 }], NOW);
     expect(res.added).toEqual([{ rawMaterialId: 'milk', name: 'Fresh milk', amount: '1 pack (1,000 ml)', why: ['Added by hand on the Kitchen screen'] }]);
     expect(requests[0].lines[0]).toMatchObject({ rawMaterialId: 'milk', qtyRequested: 1000, shortBy: null });

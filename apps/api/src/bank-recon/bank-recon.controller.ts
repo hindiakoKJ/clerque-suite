@@ -30,6 +30,13 @@ export class BankReconciliationController {
     return this.svc.list(user.tenantId!);
   }
 
+  /** Cash-in-bank accounts only — the picker's source. Declared before ':id'. */
+  @Roles(...RECON_ROLES)
+  @Get('accounts')
+  bankAccounts(@CurrentUser() user: JwtPayload) {
+    return this.svc.bankAccounts(user.tenantId!);
+  }
+
   @Roles(...RECON_ROLES)
   @Get('draft')
   draft(

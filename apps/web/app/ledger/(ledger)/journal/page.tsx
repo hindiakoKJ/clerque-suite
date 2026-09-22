@@ -1,10 +1,10 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronDown, ChevronRight, Plus, X, Receipt,
-  RotateCcw, CheckCircle2, Clock, FileText, AlertTriangle, Download, Upload,
+  RotateCcw, CheckCircle2, Clock, FileText, AlertTriangle, Download,
   FileSpreadsheet,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -12,16 +12,21 @@ import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
 import { toast } from 'sonner';
 import { ReceiptModal, type ReceiptData } from '@/components/pos/ReceiptModal';
-import { ImportModal } from '@/components/ui/ImportModal';
+import { canEnterApp } from '@/lib/app-roles';
+import { todayIso, startOfMonthIso, addDaysIso } from '@/lib/today';
+import { readHighlight, pinHighlighted } from './highlight';
 
 /**
  * A reference that names a purchase request links to it. Stock receipts post
  * with the request's number as their reference, so from the books you can
  * reach the delivery that made the entry -- before this, the number was text.
  */
-function refLink(reference: string) {
+function refLink(reference: string, role?: string) {
   const m = /^(REQ-\d{8}-\d{3})/.exec(reference);
   if (!m) return reference;
+  // An accountant or bookkeeper cannot open Procure: for them the link only
+  // threw them out to the app picker. Plain text instead.
+  if (!role || !canEnterApp('procure', role)) return reference;
   return (
     <Link
       href={`/procure/requests?view=${encodeURIComponent(m[1])}`}
@@ -58,7 +63,7 @@ interface JournalEntry {
   createdAt: string;      // Entry Date (system auto)
   description: string;
   reference?: string;     // External ref: invoice #, voucher #, etc.
-  status: 'DRAFT' | 'POSTED' | 'VOIDED';
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'POSTED' | 'VOIDED';
   source: 'MANUAL' | 'SYSTEM' | 'AP' | 'AR';
   createdBy?: string;
   postedBy?: string;
@@ -82,6 +87,9 @@ const INPUT_CLS = 'h-9 px-3 rounded-lg border border-border bg-background text-s
 
 const STATUS_CONFIG = {
   DRAFT:  { label: 'Draft',  color: 'bg-muted text-muted-foreground',                                    Icon: FileText    },
+  // A manual entry at or above the shop's approval limit waits here until the owner
+  // approves it. This row was missing, and one such entry crashed the whole page.
+  PENDING_APPROVAL: { label: 'Needs approval', color: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', Icon: Clock },
   POSTED: { label: 'Posted', color: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',                   Icon: CheckCircle2 },
   VOIDED: { label: 'Voided', color: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',                   Icon: AlertTriangle },
 };
@@ -111,7 +119,8 @@ export default function JournalPage() {
   const [receiptData, setReceiptData]       = useState<ReceiptData | null>(null);
   const [loadingReceipt, setLoadingReceipt] = useState<string | null>(null);
   const [exporting, setExporting]           = useState(false);
-  const [showImport, setShowImport]         = useState(false);
+  // "View in journal" from an account's ledger: /ledger/journal?highlight=<entry id>
+  const [highlightId, setHighlightId]       = useState<string | null>(null);
 
   async function handleExport() {
     setExporting(true);
@@ -168,11 +177,50 @@ export default function JournalPage() {
     enabled: !!user,
   });
 
+  // ── "View in journal" from an account's ledger ───────────────────────────
+  // The link carries ?highlight=<entry id>. The list is 50 to a page, so the
+  // entry is fetched on its own, put on top, opened and scrolled to.
+  useEffect(() => {
+    const id = readHighlight(window.location.search);
+    if (!id) return;
+    setHighlightId(id);
+    setExpanded((prev) => new Set(prev).add(id));
+  }, []);
+
+  const { data: highlighted, isError: highlightMissing } = useQuery<JournalEntry>({
+    // Under the ['journal'] key on purpose: posting or reversing refreshes it too.
+    queryKey: ['journal', 'entry', highlightId],
+    queryFn: () => api.get(`/accounting/journal/${highlightId}`).then((r) => r.data),
+    enabled: !!user && !!highlightId,
+    retry: false,
+  });
+
+  const rows = pinHighlighted(data?.data ?? [], highlightId ? highlighted : null);
+
+  useEffect(() => {
+    if (!highlighted) return;
+    document.getElementById(`je-${highlighted.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlighted]);
+
+  function clearHighlight() {
+    setHighlightId(null);
+    // Drop the parameter so a refresh does not bring the pinned entry back.
+    window.history.replaceState(null, '', window.location.pathname);
+  }
+
   // Post a draft
   const postMut = useMutation({
     mutationFn: (id: string) => api.patch(`/accounting/journal/${id}/post`).then((r) => r.data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['journal'] }); toast.success('Entry posted.'); },
     onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed to post entry.'),
+  });
+
+  // Approve a large manual entry that is waiting (owner / finance lead; the API checks again)
+  const canApprove = user?.role === 'BUSINESS_OWNER' || user?.role === 'FINANCE_LEAD' || user?.isSuperAdmin;
+  const approveMut = useMutation({
+    mutationFn: (id: string) => api.patch(`/accounting/journal/${id}/approve`).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['journal'] }); toast.success('Entry approved and posted.'); },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Could not approve the entry.'),
   });
 
   // Reverse a posted entry
@@ -255,34 +303,30 @@ export default function JournalPage() {
             <Download className="w-4 h-4" />
             <span className="hidden sm:inline">{exporting ? 'Exporting…' : '.xlsx'}</span>
           </button>
-          {canEdit && (
-            <button
-              onClick={() => setShowImport(true)}
-              className="flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border bg-background text-sm font-medium text-foreground hover:bg-muted transition-colors"
-              title="Import journal entries from Excel/CSV"
-            >
-              <Upload className="w-4 h-4" />
-              <span className="hidden sm:inline">Import</span>
-            </button>
-          )}
         </div>
       </div>
 
-      <ImportModal
-        open={showImport}
-        title="Import Journal Entries"
-        templateUrl="/import/template/journal-entries"
-        uploadUrl="/import/journal-entries"
-        onClose={() => setShowImport(false)}
-        onSuccess={() => qc.invalidateQueries({ queryKey: ['journal'] })}
-      />
+      {highlightId && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--accent)]/30 bg-[var(--accent-soft)] px-3 py-2 text-xs text-foreground">
+          <span>
+            {highlighted
+              ? <>Showing <span className="font-mono font-semibold">{highlighted.entryNumber}</span> from the account ledger. It is on top and opened.</>
+              : highlightMissing
+                ? 'That journal entry could not be found.'
+                : 'Finding that journal entry…'}
+          </span>
+          <button onClick={clearHighlight} className="ml-auto flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors">
+            <X className="h-3.5 w-3.5" /> Clear
+          </button>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">Loading journal entries…</div>
       ) : (
         <>
           <div className="bg-background rounded-xl border border-border overflow-hidden">
-            {!data?.data.length ? (
+            {!rows.length ? (
               <div className="text-center py-12 text-muted-foreground text-sm">No journal entries found</div>
             ) : (
               <div className="overflow-x-auto">
@@ -302,20 +346,21 @@ export default function JournalPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {data.data.map((entry) => {
+                    {rows.map((entry) => {
                       const totalDebit  = entry.lines.reduce((s, l) => s + Number(l.debit),  0);
                       const totalCredit = entry.lines.reduce((s, l) => s + Number(l.credit), 0);
                       const open = expanded.has(entry.id);
-                      const sc = STATUS_CONFIG[entry.status];
+                      const sc = STATUS_CONFIG[entry.status] ?? STATUS_CONFIG.DRAFT;
+                      const isHighlighted = entry.id === highlightId;
                       const isReversed  = !!entry.reversedBy;
                       const isReversal  = !!entry.reversalOf;
 
                       return (
-                        <>
+                        <Fragment key={entry.id}>
                           <tr
-                            key={entry.id}
+                            id={`je-${entry.id}`}
                             onClick={() => toggleExpand(entry.id)}
-                            className={`hover:bg-muted/40 cursor-pointer transition-colors ${isReversed ? 'opacity-60' : ''}`}
+                            className={`hover:bg-muted/40 cursor-pointer transition-colors ${isReversed ? 'opacity-60' : ''} ${isHighlighted ? 'bg-[var(--accent-soft)]' : ''}`}
                           >
                             <td className="px-4 py-2.5 text-muted-foreground">
                               {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -330,7 +375,7 @@ export default function JournalPage() {
                             <td className="px-4 py-2.5 max-w-xs">
                               <p className="text-foreground truncate">{entry.description}</p>
                               {entry.reference && (
-                                <p className="text-xs text-muted-foreground mt-0.5 truncate">Ref: {refLink(entry.reference)}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5 truncate">Ref: {refLink(entry.reference, user?.role)}</p>
                               )}
                               {isReversal && (
                                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
@@ -385,6 +430,16 @@ export default function JournalPage() {
                                       Post
                                     </button>
                                   )}
+                                  {entry.status === 'PENDING_APPROVAL' && canApprove && (
+                                    <button
+                                      onClick={() => approveMut.mutate(entry.id)}
+                                      disabled={approveMut.isPending}
+                                      title="This entry is large, so it waits for approval before it is posted"
+                                      className="text-xs font-medium text-amber-600 border border-amber-400/30 hover:bg-amber-500/5 px-2 py-1 rounded-lg transition-colors"
+                                    >
+                                      Approve
+                                    </button>
+                                  )}
                                   {entry.status === 'POSTED' && !entry.reversedBy && entry.source === 'MANUAL' && (
                                     <button
                                       onClick={() => {
@@ -393,7 +448,7 @@ export default function JournalPage() {
                                           setReversalWarning(entry);
                                         } else {
                                           setReverseTarget(entry);
-                                          setReverseDate(new Date().toISOString().split('T')[0]);
+                                          setReverseDate(todayIso());
                                         }
                                       }}
                                       title="Reverse this entry"
@@ -408,7 +463,7 @@ export default function JournalPage() {
                           </tr>
 
                           {open && (
-                            <tr key={`${entry.id}-lines`}>
+                            <tr>
                               <td colSpan={canEdit ? 9 : 8} className="px-6 pb-4 bg-muted/30">
                                 <div className="rounded-lg border border-border overflow-hidden mt-1">
                                   <table className="w-full text-xs">
@@ -439,16 +494,14 @@ export default function JournalPage() {
                                 {/* EIS e-Invoice download — BIR-registered tenants only, SALE events only */}
                                 {user?.isBirRegistered && entry.accountingEvent?.orderId && entry.accountingEvent.type === 'SALE' && (
                                   <div className="mt-2 mb-1">
-                                    <a
-                                      href={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}/api/v1/bir/eis/${entry.accountingEvent.orderId}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={async (e) => {
-                                        // Use downloadAuthFile so the Bearer token is attached
-                                        e.preventDefault();
+                                    {/* A button, not a link: the file needs the login token, so an
+                                        address to open in a new tab could never work (and the old
+                                        one doubled /api/v1). downloadAuthFile builds the right URL. */}
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
                                         try {
-                                          const { downloadAuthFile: dlf } = await import('@/lib/utils');
-                                          await dlf(
+                                          await downloadAuthFile(
                                             `/bir/eis/${entry.accountingEvent!.orderId}`,
                                             `eis-${entry.entryNumber}.json`,
                                           );
@@ -460,7 +513,7 @@ export default function JournalPage() {
                                     >
                                       <Download className="w-3 h-3" />
                                       Download EIS Invoice
-                                    </a>
+                                    </button>
                                   </div>
                                 )}
                                 <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
@@ -487,7 +540,7 @@ export default function JournalPage() {
                                   {entry.reference && (
                                     <span>
                                       <span className="font-medium text-foreground">Reference:</span>{' '}
-                                      {refLink(entry.reference)}
+                                      {refLink(entry.reference, user?.role)}
                                     </span>
                                   )}
                                   {entry.createdBy && (
@@ -506,7 +559,7 @@ export default function JournalPage() {
                               </td>
                             </tr>
                           )}
-                        </>
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -579,7 +632,7 @@ export default function JournalPage() {
                   const entry = reversalWarning;
                   setReversalWarning(null);
                   setReverseTarget(entry);
-                  setReverseDate(new Date().toISOString().split('T')[0]);
+                  setReverseDate(todayIso());
                 }}
                 className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-xl py-2 text-sm font-medium transition-colors"
               >
@@ -644,7 +697,9 @@ export default function JournalPage() {
         </div>
       )}
 
-      <ReceiptModal open={!!receiptData} data={receiptData} onClose={() => setReceiptData(null)} />
+      {/* viewOnly: this is the source receipt of an old sale, not a sale just rung up,
+          so no "Start next sale" or void controls. */}
+      <ReceiptModal open={!!receiptData} data={receiptData} onClose={() => setReceiptData(null)} viewOnly />
     </div>
   );
 }
@@ -668,7 +723,7 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
   // Only show OPEN accounts for manual posting
   const openAccounts = accounts.filter((a: AccountOption) => a.postingControl === 'OPEN');
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayIso(); // wall-clock day, not UTC (lib/today)
   const [docDate,     setDocDate]     = useState(today);
   const [postingDate, setPostingDate] = useState(today);
   const [desc,        setDesc]        = useState('');
@@ -827,7 +882,7 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
     if (!isBalanced) { toast.error('Journal entry must be balanced (debits = credits)'); return; }
     setSaving(true);
     try {
-      await api.post('/accounting/journal', {
+      const { data: saved } = await api.post('/accounting/journal', {
         date:        docDate,
         postingDate: postingDate !== docDate ? postingDate : undefined,
         description: desc,
@@ -842,7 +897,12 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
             credit: parseFloat(l.credit) || 0,
           })),
       });
-      toast.success(saveDraft ? 'Draft saved — post it when ready.' : 'Journal entry posted.');
+      // A large manual entry is held for approval instead of being posted; say so.
+      if (saved?.status === 'PENDING_APPROVAL') {
+        toast.success('Saved. This is a large entry, so it is waiting for approval: the owner can press Approve in the list to post it.');
+      } else {
+        toast.success(saveDraft ? 'Draft saved — post it when ready.' : 'Journal entry posted.');
+      }
       onSaved();
     } catch (err: unknown) {
       const msg = (err as any)?.response?.data?.message;
@@ -996,7 +1056,7 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
 
             {/* Lines */}
             <div>
-              <div className="grid grid-cols-[1fr_1fr_100px_100px_32px] gap-1.5 text-xs font-medium text-muted-foreground mb-1 px-1">
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px_100px_32px] gap-1.5 text-xs font-medium text-muted-foreground mb-1 px-1">
                 <span>Account</span><span>Description</span>
                 <span className="text-right">Debit</span>
                 <span className="text-right">Credit</span>
@@ -1017,19 +1077,19 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
                     fieldCls={fieldCls}
                     aiEnabled={aiEnabled}
                   >
-                    <select value={line.accountId} onChange={(e) => updateLine(i, { accountId: e.target.value })} className={fieldCls}>
+                    <select value={line.accountId} onChange={(e) => updateLine(i, { accountId: e.target.value })} className={`${fieldCls} w-full min-w-0`}>
                       <option value="">Select account…</option>
                       {openAccounts.map((a: AccountOption) => (
                         <option key={a.id} value={a.id}>{a.code} — {a.name}</option>
                       ))}
                     </select>
-                    <input value={line.description} onChange={(e) => updateLine(i, { description: e.target.value })} placeholder="Optional" className={fieldCls} />
+                    <input value={line.description} onChange={(e) => updateLine(i, { description: e.target.value })} placeholder="Optional" className={`${fieldCls} w-full min-w-0`} />
                     <input type="number" min="0" step="0.01" value={line.debit}
                       onChange={(e) => updateLine(i, { debit: e.target.value, credit: '' })}
-                      placeholder="0.00" className={`${fieldCls} text-right`} />
+                      placeholder="0.00" className={`${fieldCls} w-full min-w-0 text-right`} />
                     <input type="number" min="0" step="0.01" value={line.credit}
                       onChange={(e) => updateLine(i, { credit: e.target.value, debit: '' })}
-                      placeholder="0.00" className={`${fieldCls} text-right`} />
+                      placeholder="0.00" className={`${fieldCls} w-full min-w-0 text-right`} />
                     <button type="button" onClick={() => setLines((prev) => prev.filter((_, idx) => idx !== i))}
                       disabled={lines.length <= 2}
                       className="h-9 w-8 flex items-center justify-center text-muted-foreground hover:text-rose-500 disabled:opacity-20 transition-colors">
@@ -1047,7 +1107,7 @@ function ManualJournalModal({ onClose, onSaved }: { onClose: () => void; onSaved
             </div>
 
             {/* Totals */}
-            <div className="grid grid-cols-[1fr_1fr_100px_100px_32px] gap-1.5 border-t border-border pt-2 text-sm font-semibold">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px_100px_32px] gap-1.5 border-t border-border pt-2 text-sm font-semibold">
               <span className="col-span-2 text-muted-foreground">Totals</span>
               <span className="text-right font-mono text-foreground">{totalDebit.toFixed(2)}</span>
               <span className="text-right font-mono text-foreground">{totalCredit.toFixed(2)}</span>
@@ -1242,7 +1302,7 @@ function SmartAccountLine({ line, memo, excludeIds, onUpdate, aiEnabled, childre
           ))}
         </div>
       )}
-      <div className="grid grid-cols-[1fr_1fr_100px_100px_32px] gap-1.5 items-center">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px_100px_32px] gap-1.5 items-center">
         {children}
       </div>
     </div>
@@ -1268,10 +1328,9 @@ function ImportJournalButton({ onImported }: { onImported: () => void }) {
   const [uploading, setUploading]     = useState(false);
   const [result, setResult]           = useState<ImportResult | null>(null);
   const [tbDate, setTbDate]           = useState(() => {
-    // Default to last day of previous month — most common migration date
-    const d = new Date();
-    d.setDate(0);
-    return d.toISOString().slice(0, 10);
+    // Default to last day of previous month — most common migration date.
+    // Calendar arithmetic (lib/today): the UTC version gave the day before that.
+    return addDaysIso(startOfMonthIso(), -1);
   });
   const [tbMemo, setTbMemo]           = useState('');
   const fileInputRef                  = useRef<HTMLInputElement>(null);
@@ -1283,8 +1342,8 @@ function ImportJournalButton({ onImported }: { onImported: () => void }) {
         ? '/accounting/journal/import/template'
         : '/accounting/journal/import/trial-balance/template';
       const filename = mode === 'je'
-        ? `je-import-template-${new Date().toISOString().slice(0, 10)}.xlsx`
-        : `trial-balance-template-${new Date().toISOString().slice(0, 10)}.xlsx`;
+        ? `je-import-template-${todayIso()}.xlsx`
+        : `trial-balance-template-${todayIso()}.xlsx`;
       const res = await api.get(url, { responseType: 'blob' });
       const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const objUrl = URL.createObjectURL(blob);

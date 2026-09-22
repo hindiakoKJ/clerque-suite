@@ -8,10 +8,43 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { keepTapKey, newTapKey, tapFailure, tapFailureText, tileMadeLabel } from './station-taps.ts';
+import { ARM_MS, armedLabel, keepTapKey, newTapKey, tapFailure, tapFailureText, tileMadeLabel } from './station-taps.ts';
 
 const card = readFileSync(new URL('./PrepChainCard.tsx', import.meta.url), 'utf8');
 const levels = readFileSync(new URL('./StationPrepLevels.tsx', import.meta.url), 'utf8');
+
+test('Made takes two taps: the first arms the button and says what the second records', () => {
+  assert.equal(armedLabel('2,000 g'), 'Tap again to record 1 batch (2,000 g)');
+  assert.equal(armedLabel('1.4 L'), 'Tap again to record 1 batch (1.4 L)');
+  // No yield on the recipe: still two taps, just no amount to promise.
+  assert.equal(armedLabel(null), 'Tap again to record 1 batch');
+  assert.equal(armedLabel(undefined), 'Tap again to record 1 batch');
+  assert.equal(armedLabel(''), 'Tap again to record 1 batch');
+  // Long enough to look down and tap again, short enough that a forgotten first tap does not wait for a stray second one.
+  assert.ok(ARM_MS >= 4000 && ARM_MS <= 6000, `${ARM_MS}`);
+
+  // The button itself: the first tap arms, the second records, and the POST is never on the first.
+  assert.match(card, /onClick=\{tap\}/);
+  assert.doesNotMatch(card, /onClick=\{record\}/);
+  assert.match(card, /if \(!armed\) \{\s*setArmed\(true\);\s*armTimer\.current = setTimeout\([\s\S]*?, ARM_MS\);\s*return;\s*\}/);
+  assert.match(card, /armed \? armedLabel\(makes\) : label/);
+  // What the batch makes reaches every Made button: the chain's big one, a stage's small one, and a free tile's.
+  assert.match(card, /makes=\{action\.makes \?\? null\}/);
+  assert.match(card, /makes=\{s\.made\.makes \?\? null\}/);
+  assert.match(levels, /makes=\{r\.batchYield != null && r\.batchYield > 0 \? amount\(r\.batchYield, r\.unit\) : null\}/);
+});
+
+test('an item with no station is marked in plain words, never "routed"', () => {
+  assert.match(card, /export const NO_STATION_YET = 'No station set yet'/);
+  assert.match(card, /Settings > Floor Layout/);
+  // Block comments first, then line comments: what is left is code and the words on screen.
+  const code = (source) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const source of [card, levels]) {
+    assert.equal(/routed/i.test(code(source)), false, 'no "routed" on a kitchen or bar screen');
+  }
+  // The full view has room for the one line that tells the owner what to do; the column only carries the mark.
+  assert.match(levels, /\{NO_STATION_YET_HELP\}/);
+});
 
 /** What the server accepts as a tap key (station-waste.controller.ts, the Made route). */
 const SERVER_KEY = /^[A-Za-z0-9-]{8,64}$/;

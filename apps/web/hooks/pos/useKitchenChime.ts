@@ -134,26 +134,32 @@ export function useKitchenChime() {
     [getCtx],
   );
 
-  // Unlock on the first interaction anywhere. Passive, once, then gone.
+  // Unlock on the first interaction anywhere. Passive, then gone once audio runs.
+  // Android Chrome only lets audio start on the finger LIFTING (touchend /
+  // pointerup / click), not on touch-down, so those are listened for too, and
+  // the listeners stay until the context is really running: a touch-down that
+  // could not start audio no longer uses up the unlock.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     let done = false;
-    const unlock = () => {
+    const EVENTS = ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'click', 'keydown'] as const;
+    const finish = () => {
       if (done) return;
       done = true;
-      const ctx = getCtx();
-      if (ctx && ctx.state !== 'suspended') setUnlocked(true);
-      else if (ctx) void ctx.resume().then(() => setUnlocked(true)).catch(() => {});
+      setUnlocked(true);
       remove();
     };
-    const remove = () => {
-      window.removeEventListener('pointerdown', unlock);
-      window.removeEventListener('keydown', unlock);
-      window.removeEventListener('touchstart', unlock);
+    const unlock = () => {
+      if (done) return;
+      const ctx = getCtx();
+      if (!ctx) return;
+      if (ctx.state === 'running') { finish(); return; }
+      void ctx.resume().then(() => { if (ctx.state === 'running') finish(); }).catch(() => {});
     };
-    window.addEventListener('pointerdown', unlock, { passive: true });
-    window.addEventListener('keydown', unlock);
-    window.addEventListener('touchstart', unlock, { passive: true });
+    const remove = () => {
+      for (const e of EVENTS) window.removeEventListener(e, unlock);
+    };
+    for (const e of EVENTS) window.addEventListener(e, unlock, { passive: true });
     return remove;
   }, [getCtx]);
 

@@ -557,6 +557,23 @@ export function StationInventorySheet({ stationId, open, onClose }: { stationId:
                   {sheet.notes.map((note) => <li key={note}>{note}</li>)}
                 </ul>
               )}
+              {/*
+                A closed sheet with a newer one behind it: the day was closed by its
+                last shift (or by the clock), and this is still the default sheet for a
+                while so staff finishing up see tonight's. The cook who opens it later
+                gets the running one in one tap -- with its "Thrown out" buttons -- not
+                the arrows to work out which day is which.
+              */}
+              {sheet.status === 'CLOSED' && sheet.today !== sheet.day && (
+                <button
+                  type="button"
+                  onClick={() => setDay(sheet.today)}
+                  className="flex min-h-12 items-center gap-2 rounded-xl bg-amber-500 px-4 text-base font-semibold text-stone-950 transition-colors hover:bg-amber-400"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                  Open today&apos;s running sheet
+                </button>
+              )}
               <SheetTables sheet={sheet} tone="dark" onThrowOut={recordable ? setThrowOut : undefined} />
             </>
           )}

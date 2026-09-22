@@ -157,7 +157,24 @@ export async function downloadAuthFile(url: string, filename: string): Promise<v
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 
-  if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    // Keep the API's own reason so a page can show it (in the same
+    // `response.data.message` place an axios error has it). The status stays in
+    // the message for callers that test it (e.g. a 404 meaning "nothing filed").
+    let message: string | undefined;
+    try {
+      const body = await res.json();
+      const m = body?.message;
+      message = Array.isArray(m) ? m.join(' ') : typeof m === 'string' ? m : undefined;
+    } catch {
+      // Not JSON: no reason to pass on.
+    }
+    const err = new Error(`Download failed: ${res.status} ${res.statusText}`) as Error & {
+      response?: { status: number; data: { message?: string } };
+    };
+    err.response = { status: res.status, data: { message } };
+    throw err;
+  }
 
   const blob = await res.blob();
   const blobUrl = URL.createObjectURL(blob);

@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 import {
   Dialog,
   DialogContent,
@@ -109,7 +110,7 @@ function ExpenseModal({
   onSaved: () => void;
 }) {
   const isEdit = !!expense;
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayIso(); // wall-clock day, not UTC (lib/today)
 
   const [form, setForm] = useState<ExpenseFormData>({
     vendorId: expense?.vendor?.id ?? '',
@@ -376,7 +377,7 @@ function PayModal({
   const net = Number(expense.netAmount);
   const alreadyPaid = Number(expense.paidAmount ?? 0);
   const remaining = net - alreadyPaid;
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayIso(); // wall-clock day, not UTC (lib/today)
 
   const [paidAmount, setPaidAmount] = useState(String(remaining.toFixed(2)));
   const [paymentRef, setPaymentRef] = useState('');

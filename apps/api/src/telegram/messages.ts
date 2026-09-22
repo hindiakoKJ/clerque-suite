@@ -56,6 +56,7 @@ function place(shop: string, branch: string | null): string {
   return escapeHtml(branch ? `${shop} · ${branch}` : shop);
 }
 
+/** One word per PaymentMethod in the schema. A method added there later shows as its raw name until it gets a word here. */
 const PAYMENT_WORDS: Record<string, string> = {
   CASH: 'Cash',
   GCASH_PERSONAL: 'GCash',
@@ -65,6 +66,24 @@ const PAYMENT_WORDS: Record<string, string> = {
   QR_PH: 'QR Ph',
   CARD: 'Card',
 };
+
+function paymentWord(method: string): string {
+  return PAYMENT_WORDS[method] ?? method;
+}
+
+/**
+ * How the sale was paid, for the headline: "GCash", or "Cash + GCash" for a
+ * split. Each way of paying is named once, in the order it was taken.
+ */
+export function paidWith(payments: Array<{ method: string }>): string {
+  return [...new Set(payments.map((p) => paymentWord(p.method)))].join(' + ');
+}
+
+/** The reference the cashier typed, on one line; nothing for cash or when none was typed. */
+function paymentRef(p: { method: string; reference?: string | null }): string {
+  if (p.method === 'CASH') return '';
+  return (p.reference ?? '').replace(/\s+/g, ' ').trim();
+}
 
 const DISCOUNT_WORDS: Record<string, string> = {
   PWD: 'PWD discount',
@@ -103,8 +122,25 @@ export interface SaleForAlert {
   vatAmount: number;
   totalAmount: number;
   items: Array<{ name: string; quantity: number; unitPrice: number; lineTotal: number; modifiers: Array<{ name: string; price: number }> }>;
-  payments: Array<{ method: string; amount: number }>;
+  /** `reference`: what the cashier typed for a GCash, Maya, QR Ph or card payment. */
+  payments: Array<{ method: string; amount: number; reference?: string | null }>;
   discountTypes: string[];
+}
+
+/**
+ * One payment on the receipt: "GCash #1234567" and the amount. A reference
+ * too long to share the line goes whole on the line under it -- the last
+ * digits are the ones the owner matches against the GCash app, so it is
+ * never cut short with the amount beside it.
+ */
+function paymentLines(p: { method: string; amount: number; reference?: string | null }): string[] {
+  const word = paymentWord(p.method);
+  const ref = paymentRef(p);
+  const amount = money(p.amount);
+  if (!ref) return [row(word, amount)];
+  const oneLine = `${word} #${ref}`;
+  if ([...oneLine].length <= WIDTH - [...amount].length - 1) return [row(oneLine, amount)];
+  return [row(word, amount), clip(`  #${ref}`, WIDTH)];
 }
 
 export function saleMessage(sale: SaleForAlert): string {
@@ -133,10 +169,12 @@ export function saleMessage(sale: SaleForAlert): string {
     }
     body.push(row('TOTAL', `₱${money(sale.totalAmount)}`));
     if (sale.vatAmount > 0.004) body.push(row('VAT included', money(sale.vatAmount)));
-    for (const p of sale.payments) body.push(row(PAYMENT_WORDS[p.method] ?? p.method, money(p.amount)));
+    for (const p of sale.payments) body.push(...paymentLines(p));
 
+    // How it was paid sits in the headline, in bold: it is the first thing the owner looks for.
+    const paid = paidWith(sale.payments);
     const head = [
-      `🧾 <b>Sale ${escapeHtml(sale.orderNumber)}</b>  ₱${money(sale.totalAmount)}`,
+      `🧾 <b>Sale ${escapeHtml(sale.orderNumber)}</b>  ₱${money(sale.totalAmount)}${paid ? ` - <b>${escapeHtml(paid)}</b>` : ''}`,
       place(sale.shopName, sale.branchName),
     ];
     if (sale.channel !== 'POS') head.push(escapeHtml(`Came in through ${sale.channel}`));

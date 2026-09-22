@@ -1,9 +1,12 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClipboardCheck, Plus, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { useAuthStore } from '@/store/auth';
+import { activeBranches } from '@/app/procure/active-branches';
+import { countCaption } from '@/app/procure/cycle-counts/count-row';
 
 interface CycleCount {
   id:          string;
@@ -95,27 +98,38 @@ export default function CycleCountsPage() {
         </button>
       </header>
 
-      <section className="rounded-xl border border-border bg-card overflow-hidden">
+      {/*
+        Scrolls sideways rather than clipping: on a phone the table is wider
+        than the card, and with overflow hidden the Count and Post buttons on
+        the right were cut off -- the count is done standing at the shelf with
+        a phone, and nobody could open or post one.
+      */}
+      <section className="rounded-xl border border-border bg-card overflow-x-auto">
         {counts.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">No counts yet.</div>
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="text-left px-4 py-2 font-medium">Number</th>
-                <th className="text-left px-4 py-2 font-medium">Branch</th>
-                <th className="text-right px-4 py-2 font-medium">Lines</th>
-                <th className="text-center px-4 py-2 font-medium">Status</th>
+                <th className="text-left px-3 sm:px-4 py-2 font-medium">Number</th>
+                {/* Off on a phone, so Count and Post fit beside the number without scrolling. */}
+                <th className="hidden sm:table-cell text-left px-4 py-2 font-medium">Branch</th>
+                <th className="text-right px-3 sm:px-4 py-2 font-medium">Lines</th>
+                <th className="text-center px-3 sm:px-4 py-2 font-medium">Status</th>
                 <th className="px-2 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {counts.map((c) => (
                 <tr key={c.id} className="border-t border-border/40">
-                  <td className="px-4 py-2.5 font-mono text-xs">{c.countNumber}</td>
-                  <td className="px-4 py-2.5">{c.branch.name}</td>
-                  <td className="px-4 py-2.5 text-right">{c._count.lines}</td>
-                  <td className="px-4 py-2.5 text-center">
+                  <td className="px-3 sm:px-4 py-2.5">
+                    <span className="block font-mono text-xs">{c.countNumber}</span>
+                    {/* When, and whether a buy list started it: six one-line counts from six lists looked the same. */}
+                    <span className="block text-[11px] text-muted-foreground">{countCaption(c)}</span>
+                  </td>
+                  <td className="hidden sm:table-cell px-4 py-2.5">{c.branch.name}</td>
+                  <td className="px-3 sm:px-4 py-2.5 text-right">{c._count.lines}</td>
+                  <td className="px-3 sm:px-4 py-2.5 text-center">
                     <span className={`text-xs font-semibold rounded-full px-2 py-0.5 ${TINT[c.status]}`}>
                       {c.status.toLowerCase()}
                     </span>
@@ -142,12 +156,21 @@ export default function CycleCountsPage() {
                         <button
                           onClick={() => setPostTarget(c)}
                           disabled={post.isPending}
-                          className="p-1.5 rounded text-emerald-700 hover:bg-emerald-500/15"
+                          className="inline-flex items-center gap-1 rounded p-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/15"
                           title="Post variances"
                         >
-                          <CheckCircle2 className="h-4 w-4" />
+                          <CheckCircle2 className="h-4 w-4" /> Post
                         </button>
                       </>
+                    )}
+                    {/* A posted count can be opened to read what was counted; nothing on it can change. */}
+                    {c.status === 'POSTED' && (
+                      <button
+                        onClick={() => setOpenCountId(c.id)}
+                        className="text-xs text-[var(--accent)] hover:underline"
+                      >
+                        View
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -255,14 +278,23 @@ function NewCountModal({ onClose }: { onClose: () => void }) {
     at all. Accept either shape so it cannot break again if the endpoint is
     ever wrapped.
   */
-  type Br = { id: string; name: string };
+  type Br = { id: string; name: string; isActive?: boolean };
   const { data: branchData } = useQuery<Br[] | { data: Br[] }>({
     queryKey: ['branches'],
     queryFn:  () => api.get('/tenant/branches').then((r) => r.data),
   });
-  const branches: Br[] = Array.isArray(branchData) ? branchData : branchData?.data ?? [];
+  // Branches still in use only: a closed branch has no shelf to count.
+  const branches: Br[] = activeBranches(Array.isArray(branchData) ? branchData : branchData?.data ?? []);
+  const user = useAuthStore((s) => s.user);
   const [branchId, setBranchId] = useState('');
   const [notes, setNotes] = useState('');
+  /*
+    Chosen for the person whenever it can be: their own branch, or the only
+    one the shop has. A one-branch owner was shown "— branch —" and a greyed
+    Start button on every count.
+  */
+  const defaultBranch = user?.branchId || (branches.length === 1 ? branches[0].id : '');
+  useEffect(() => { if (!branchId && defaultBranch) setBranchId(defaultBranch); }, [branchId, defaultBranch]);
 
   const start = useMutation({
     mutationFn: () => api.post('/warehouse/cycle-counts', { branchId, notes }).then((r) => r.data),
@@ -307,15 +339,21 @@ function CountSheetModal({ countId, onClose }: { countId: string; onClose: () =>
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cycle-count', countId] }),
     onError:   (e: any) => toast.error(e?.response?.data?.message ?? 'Failed.'),
   });
+  // Only an open count takes numbers; a posted one is opened to read.
+  const editable = count?.status === 'OPEN';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
         <header className="px-5 pt-5 pb-3 flex items-center justify-between border-b border-border">
-          <h2 className="font-semibold font-mono text-sm">{count?.countNumber}</h2>
+          <h2 className="font-semibold font-mono text-sm">
+            {count?.countNumber}
+            {count && !editable && <span className="ml-2 font-sans text-xs font-normal text-muted-foreground">{count.status.toLowerCase()} — view only</span>}
+          </h2>
           <button onClick={onClose} className="text-xs text-muted-foreground hover:text-foreground">Close</button>
         </header>
-        <div className="px-5 py-3 max-h-[70vh] overflow-y-auto">
+        {/* Sideways too: four columns and a number box do not fit a phone. */}
+        <div className="px-5 py-3 max-h-[70vh] overflow-auto">
           <table className="w-full text-sm">
             <thead className="text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
@@ -336,7 +374,9 @@ function CountSheetModal({ countId, onClose }: { countId: string; onClose: () =>
                       <input
                         type="number" step="0.001"
                         defaultValue={l.countedQty}
+                        readOnly={!editable}
                         onBlur={(e) => {
+                          if (!editable) return;
                           const val = Number(e.target.value);
                           if (!isNaN(val) && val !== Number(l.countedQty)) {
                             setLine.mutate({ lineId: l.id, countedQty: val });

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { useCartStore } from '@/store/pos/cart';
 import { computeDiscount } from '@/lib/pos/utils';
 import { formatPeso } from '@/lib/utils';
+import { DIALOG_FIT_FRAME, DIALOG_FIT_BODY, DIALOG_FIT_FOOTER } from './dialog-fit';
 
 interface PwdScModalProps {
   open: boolean;
@@ -139,8 +140,13 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted">
-        <DialogHeader className="px-6 pt-6 pb-3">
+      {/*
+        The form is taller than a 1024x600 tablet. The panel is capped to the
+        screen, the form scrolls in the middle, and Cancel / Apply stay pinned
+        at the bottom so the cashier can always reach them.
+      */}
+      <DialogContent className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}>
+        <DialogHeader className="mb-0 shrink-0 px-6 pt-5 pb-3">
           <DialogTitle className="font-display text-xl font-bold">
             {isAdditional
               ? `Add PWD / Senior #${totalExisting + 1}`
@@ -151,7 +157,7 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
           </p>
         </DialogHeader>
 
-        <div className="px-6 py-4 space-y-4">
+        <div className={`px-6 py-4 space-y-4 ${DIALOG_FIT_BODY}`}>
           {/* Law notice */}
           <div className={`${ACCENT_SOFT_BG} rounded-xl p-3 text-sm`}>
             <p className={`font-medium ${ACCENT_CLS}`}>
@@ -343,18 +349,21 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
               </p>
             </div>
           </div>
+
+          <p className="text-[10px] text-muted-foreground text-center">
+            PH RA 9994 / RA 7277 — applies to one ID per order
+          </p>
         </div>
 
-        <DialogFooter className="px-6 pb-6 pt-2 gap-2">
+        <DialogFooter className={`mt-0 px-6 py-3 gap-2 bg-muted ${DIALOG_FIT_FOOTER}`}>
           <Button variant="outline" onClick={handleClose} className="font-display" style={{ minHeight: 48 }}>
             Cancel
           </Button>
           <button
             onClick={handleApply}
             disabled={selectedSubtotal <= 0}
-            className="font-display rounded-xl text-white text-sm font-bold px-6 disabled:opacity-40 transition-opacity hover:opacity-95"
+            className="font-display rounded-xl text-white text-sm font-bold px-6 min-h-[56px] [@media(max-height:700px)]:min-h-[48px] disabled:opacity-40 transition-opacity hover:opacity-95"
             style={{
-              minHeight: 64,
               minWidth: 180,
               background: 'var(--counter-primary)',
               boxShadow: '0 4px 12px rgba(59,130,246,.30)',
@@ -363,11 +372,6 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
             Apply Discount
           </button>
         </DialogFooter>
-        <div className="px-6 pb-4">
-          <p className="text-[10px] text-muted-foreground text-center">
-            PH RA 9994 / RA 7277 — applies to one ID per order
-          </p>
-        </div>
       </DialogContent>
     </Dialog>
   );

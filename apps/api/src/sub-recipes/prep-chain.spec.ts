@@ -18,16 +18,16 @@ describe('prep level chains', () => {
     ({ rawMaterialId: id, name, unit: 'g', quantity, onHand: -1, isPrep: true });
 
   const ready = (onHand: number, over: Partial<BoardRow> = {}) => row({
-    id: 'ready', name: 'Sauce ready', level: 1, depth: 1, kind: 'MOVE', onHand, parLevel: 600,
+    id: 'ready', name: 'Sauce ready', level: 1, depth: 1, kind: 'MOVE', onHand, parLevel: 600, batchYield: 2000,
     serves: [{ productName: 'Spaghetti', perServing: 150, servingsLeft: Math.floor(onHand / 150) }],
     components: [prep('frozen', 'Sauce frozen', 2000)], ...over,
   });
   const frozen = (onHand: number, over: Partial<BoardRow> = {}) => row({
-    id: 'frozen', name: 'Sauce frozen', level: 2, depth: 2, onHand, parLevel: null,
+    id: 'frozen', name: 'Sauce frozen', level: 2, depth: 2, onHand, parLevel: null, batchYield: 2000,
     components: [prep('base', 'Tomato base', 2000)], ...over,
   });
   const base = (onHand: number, sugar = 5000, over: Partial<BoardRow> = {}) => row({
-    id: 'base', name: 'Tomato base', level: 2, depth: 3, onHand, parLevel: null,
+    id: 'base', name: 'Tomato base', level: 2, depth: 3, onHand, parLevel: null, batchYield: 2500,
     components: [raw('tom', 'Tomato', 1000, 9000), raw('sugar', 'Sugar', 500, sugar)], ...over,
   });
   const only = (board: BoardRow[]): PrepChain => {
@@ -54,7 +54,8 @@ describe('prep level chains', () => {
     const c = only([ready(300), frozen(2000), base(5000)]);
     expect(c.severity).toBe('NOW');
     expect(c.headline).toBe('Level 1: 2 servings left — refill from Level 2 (Sauce frozen).');
-    expect(c.action).toEqual({ rawMaterialId: 'ready', label: 'Refilled Level 1', uses: 'Uses 2,000 g Sauce frozen', enabled: true });
+    // `makes` is what the one batch records, said on the button before the second tap.
+    expect(c.action).toEqual({ rawMaterialId: 'ready', label: 'Refilled Level 1', uses: 'Uses 2,000 g Sauce frozen', makes: '2,000 g', enabled: true });
     expect(c.alertTitle).toBe('Sauce ready: refill from Level 2');
     expect(c.alertBody).toBe('Refill Level 1 from Level 2 (Sauce frozen).');
     expect(c.stages.map((s) => s.line)).toEqual([
@@ -79,7 +80,7 @@ describe('prep level chains', () => {
     expect(c.headline).toBe('Out of Sugar. Buy it now.');
     expect(c.blockedBy).toBe('Sugar');
     expect(c.action).toEqual({
-      rawMaterialId: 'ready', label: 'Refilled Level 1', uses: 'Uses 2,000 g Sauce frozen', enabled: false, disabledReason: 'Buy Sugar first',
+      rawMaterialId: 'ready', label: 'Refilled Level 1', uses: 'Uses 2,000 g Sauce frozen', makes: '2,000 g', enabled: false, disabledReason: 'Buy Sugar first',
     });
     expect(c.stages.map((s) => s.dot)).toEqual(['RED', 'AMBER', 'AMBER']);
     expect(c.alertTitle).toBe('Sauce ready: buy Sugar');
@@ -198,7 +199,8 @@ describe('prep level chains', () => {
       expect(c.severity).toBe('NOW');
       expect(c.headline).toBe('Level 1: 400 g left. Level 2 (Simple syrup) is low — ask Bar for a batch.');
       expect(c.action).toEqual({
-        rawMaterialId: 'syrup', label: 'Made Level 2', uses: 'Uses 500 g Sugar · 500 g Water', enabled: false, disabledReason: 'Bar makes this',
+        // No batch yield set on the syrup: the button then just says one batch.
+        rawMaterialId: 'syrup', label: 'Made Level 2', uses: 'Uses 500 g Sugar · 500 g Water', makes: null, enabled: false, disabledReason: 'Bar makes this',
       });
     });
 
@@ -258,7 +260,7 @@ describe('prep level chains', () => {
       const onKitchen = glazeOf(chainsFromBoard(board, KITCHEN));
       expect(onKitchen.severity).toBe('OK');
       expect(onKitchen.stages.map((s) => [s.id, s.made])).toEqual([
-        ['glaze', { label: 'Made a batch', uses: 'Uses 500 g Simple syrup · 100 g Butter' }],
+        ['glaze', { label: 'Made a batch', uses: 'Uses 500 g Simple syrup · 100 g Butter', makes: null }],
         // The bar's syrup: the Made route refuses it from the kitchen, so no button here.
         ['syrup', null],
       ]);
@@ -278,9 +280,9 @@ describe('prep level chains', () => {
       const c = chainsFromBoard([ready(3000), frozen(4000), base(5000)], KITCHEN)[0];
       expect(c).toMatchObject({ severity: 'OK', action: null, headline: null });
       expect(c.stages.map((s) => s.made)).toEqual([
-        { label: 'Refilled Level 1', uses: 'Uses 2,000 g Sauce frozen' },
-        { label: 'Made Level 2', uses: 'Uses 2,000 g Tomato base' },
-        { label: 'Made Level 3', uses: 'Uses 1,000 g Tomato · 500 g Sugar' },
+        { label: 'Refilled Level 1', uses: 'Uses 2,000 g Sauce frozen', makes: '2,000 g' },
+        { label: 'Made Level 2', uses: 'Uses 2,000 g Tomato base', makes: '2,000 g' },
+        { label: 'Made Level 3', uses: 'Uses 1,000 g Tomato · 500 g Sugar', makes: '2,500 g' },
       ]);
     });
 

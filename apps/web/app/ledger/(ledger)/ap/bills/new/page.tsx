@@ -35,7 +35,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
-import { todayIso } from '@/lib/today';
+import { todayIso, addDaysIso } from '@/lib/today';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -133,10 +133,8 @@ export default function NewAPBillPage() {
   }, [lines, whtAmount]);
 
   const dueDate = useMemo(() => {
-    const d = new Date(billDate);
-    const days = parseInt(termsDays, 10) || 0;
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    // Calendar arithmetic on the typed day (lib/today); a cleared date box gives ''.
+    return addDaysIso(billDate, parseInt(termsDays, 10) || 0);
   }, [billDate, termsDays]);
 
   // ── Vendor change auto-fills WHT defaults ─────────────────────────────────

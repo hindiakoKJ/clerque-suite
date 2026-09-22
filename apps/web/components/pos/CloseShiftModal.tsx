@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from '@/components/ui/button';
 import { formatPeso } from '@/lib/utils';
 import type { ActiveShift } from '@/store/pos/shift';
+import { DIALOG_FIT_FRAME, DIALOG_FIT_BODY, DIALOG_FIT_FOOTER } from './dialog-fit';
 
 interface CloseShiftModalProps {
   open: boolean;
@@ -53,12 +54,17 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
 
   return (
     <Dialog open={open} onOpenChange={loading ? undefined : onClose}>
-      <DialogContent className="max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted">
-        <DialogHeader className="px-6 pt-6 pb-3">
+      {/*
+        Taller than the 1024x600 till screen once refunds, paid-outs and the
+        digital breakdown show. Capped to the screen: the figures scroll, the
+        title and the Cancel / Close Shift buttons stay where they are.
+      */}
+      <DialogContent className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}>
+        <DialogHeader className="mb-0 shrink-0 px-6 pt-5 pb-3">
           <DialogTitle className="font-display text-xl font-bold">Close Shift</DialogTitle>
         </DialogHeader>
 
-        <div className="px-6 py-2 space-y-4">
+        <div className={`px-6 pt-2 pb-4 space-y-4 ${DIALOG_FIT_BODY}`}>
           {/* Shift summary */}
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="rounded-xl p-3 border border-border shadow-sm bg-card">
@@ -196,16 +202,15 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
           {error && <p className="text-sm text-red-500 text-center">{error}</p>}
         </div>
 
-        <DialogFooter className="px-6 pb-6 pt-2 gap-2">
+        <DialogFooter className={`mt-0 px-6 py-3 gap-2 bg-muted ${DIALOG_FIT_FOOTER}`}>
           <Button variant="outline" onClick={onClose} disabled={loading} className="font-display" style={{ minHeight: 48 }}>
             Cancel
           </Button>
           <button
             onClick={handleConfirm}
             disabled={!declaredStr || loading}
-            className="font-display rounded-xl text-white text-sm font-bold px-6 disabled:opacity-40 transition-opacity hover:opacity-95"
+            className="font-display rounded-xl text-white text-sm font-bold px-6 min-h-[56px] [@media(max-height:700px)]:min-h-[48px] disabled:opacity-40 transition-opacity hover:opacity-95"
             style={{
-              minHeight: 64,
               minWidth: 160,
               background: 'var(--counter-primary)',
               boxShadow: '0 4px 12px rgba(59,130,246,.30)',

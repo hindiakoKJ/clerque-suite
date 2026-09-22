@@ -15,6 +15,7 @@ import { envValidationSchema } from './common/config/env.validation';
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { initSentry } from './observability/sentry';
+import { clientIpMiddleware, trustProxy } from './common/http/client-ip';
 
 // Initialize Sentry error tracking before NestFactory.create. Graceful no-op
 // if SENTRY_DSN is unset (dev / local environments).
@@ -188,12 +189,18 @@ async function bootstrap() {
   */
   app.useBodyParser('json', { limit: '10mb' });
 
-  // SecAudit 2026-05 I16 — trust the Railway edge proxy so req.ip is the
-  // real client address (not the Railway edge IP). Without this, the global
-  // throttler keys every request to the same IP and either lets through too
-  // much or blocks legitimate traffic. Same applies to audit-log IP capture.
-  // One hop = Railway -> our process; if you put Cloudflare in front, bump to 2.
-  app.set('trust proxy', 1);
+  // SecAudit 2026-05 I16 — req.ip must be the real caller: the rate limiter,
+  // the bad-login lockout and the login/audit logs are all keyed on it.
+  // Production is browser -> Cloudflare -> Railway edge -> here. Trusting one
+  // hop made req.ip Cloudflare's address (every shop in one bucket); trusting
+  // two blindly would let anyone who calls the Railway hostname directly type
+  // their own address into X-Forwarded-For. So: trust the socket (Railway) and
+  // Cloudflare's published ranges only, and believe CF-Connecting-IP only when
+  // the request really came from Cloudflare. See common/http/client-ip.ts.
+  // Check after a deploy: GET /api/v1/health/ip from the shop must show the
+  // shop's public address, not a 104.x / 162.158.x / 172.6x Cloudflare one.
+  app.set('trust proxy', trustProxy);
+  app.use(clientIpMiddleware);
 
   app.use(compression());
   app.use(cookieParser());

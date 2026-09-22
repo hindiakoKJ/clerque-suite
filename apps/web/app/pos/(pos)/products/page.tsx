@@ -15,6 +15,8 @@ import { StockAdjustModal } from '@/components/pos/StockAdjustModal';
 import { useBusinessSetup } from '@/components/portal/BusinessSetupWizard';
 import { isFnbType, isLaundryType, getVerticalPack, isRecipeBusinessType } from '@repo/shared-types';
 import { ImportModal } from '@/components/ui/ImportModal';
+import { todayIso } from '@/lib/today';
+import { fetchAllPages, vatBadge, isProductLow } from './product-rows';
 
 interface Category { id: string; name: string; }
 interface Uom { id: string; name: string; abbreviation: string; isActive: boolean; }
@@ -179,14 +181,20 @@ export default function ProductsPage() {
     lowStockAlert: number | null;
     isLowStock: boolean;
   }
-  const { data: stockResponse } = useQuery<{ data: InventoryStockRow[] }>({
+  const { data: stockRows = [] } = useQuery<InventoryStockRow[]>({
     queryKey: ['inventory', userBranchId, 'all'],
-    queryFn: () =>
-      api.get(`/inventory?branchId=${userBranchId}&page=1`).then((r) => r.data),
+    /*
+      GET /inventory answers 50 rows a page. Reading page 1 alone left every
+      product past the 50th with a blank stock figure, out of the low-stock
+      filter, and opening the adjust box at zero. Read every page.
+    */
+    queryFn: () => fetchAllPages<InventoryStockRow>(
+      (page) => api.get('/inventory', { params: { branchId: userBranchId, page } }).then((r) => r.data),
+    ),
     enabled: !!userBranchId,
     staleTime: 15_000,
   });
-  const stockByProductId = (stockResponse?.data ?? []).reduce<Record<string, InventoryStockRow>>(
+  const stockByProductId = stockRows.reduce<Record<string, InventoryStockRow>>(
     (acc, row) => { acc[row.productId] = row; return acc; },
     {},
   );
@@ -405,7 +413,7 @@ export default function ProductsPage() {
       const url  = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `recipe-costing-${new Date().toISOString().slice(0, 10)}.pdf`;
+      link.download = `recipe-costing-${todayIso()}.pdf`;   // the shop's date, not the UTC one
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -465,7 +473,9 @@ export default function ProductsPage() {
         p.name.toLowerCase().includes(search.toLowerCase()) ||
         (p.sku ?? '').toLowerCase().includes(search.toLowerCase()),
     )
-    .filter((p) => !filterLow || stockByProductId[p.id]?.isLowStock);
+    // The same answer the amber triangle in the Stock column uses, so the filter
+    // and the table agree (recipe-based products included).
+    .filter((p) => !filterLow || isProductLow(p, stockByProductId[p.id]));
 
   return (
     <div className="flex flex-col h-full bg-muted/30 overflow-auto">
@@ -686,11 +696,17 @@ export default function ProductsPage() {
                       {p.unitOfMeasure?.abbreviation ?? '—'}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                        p.isVatable ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-muted text-muted-foreground'
-                      }`}>
-                        {p.isVatable ? 'VAT' : 'EXEMPT'}
-                      </span>
+                      {/* A Non-VAT shop charges no VAT at all; "EXEMPT" is a different BIR class. */}
+                      {(() => {
+                        const badge = vatBadge(p.isVatable, user?.taxStatus);
+                        return (
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${
+                            badge.highlighted ? 'bg-[var(--accent-soft)] text-[var(--accent)]' : 'bg-muted text-muted-foreground'
+                          }`}>
+                            {badge.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${
@@ -736,7 +752,8 @@ export default function ProductsPage() {
                               setAdjustTarget({
                                 productId:   p.id,
                                 productName: p.name,
-                                quantity:    stock?.quantity ?? 0,
+                                // The figure shown in the Stock column, so the box never opens on a different number.
+                                quantity:    p.stockQty ?? stock?.quantity ?? 0,
                                 branchId:    userBranchId,
                               });
                             }}

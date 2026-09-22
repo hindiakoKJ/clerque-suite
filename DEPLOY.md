@@ -166,25 +166,56 @@ Old API + new web = 404s on the POS; new API + old web is harmless.
       links), `ALLOWED_ORIGINS=https://clerque.cc,https://console.clerque.cc`
       (main.ts also hard-codes the clerque.cc family, so this is belt and
       braces).
-      Recommended: `RESEND_API_KEY`, `MAIL_FROM`, `SENTRY_DSN`,
+      Recommended: `RESEND_API_KEY`, `MAIL_FROM` (an address on a domain
+      verified in Resend → Domains, e.g. `Clerque <noreply@clerque.cc>`;
+      without both, password-reset and new-staff emails are silently
+      dropped), `SENTRY_DSN`,
       R2/S3 upload vars (see INFRA_SETUP.md — Railway disk is wiped on
       every deploy, so logo/product images must be on R2 before go-live).
-- [ ] **Postgres backups** — Railway → Postgres → Backups: enabled.
+      AI (optional, currently OFF): switch on `AI_FEATURES_ENABLED=true`,
+      `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` TOGETHER, or leave
+      all three unset. `AI_FEATURES_ENABLED=true` alone routes every AI
+      call to Gemini, which has no Google project on Railway, and every
+      receipt scan returns 503.
+- [ ] **Postgres backups** — Railway → Postgres → Backups: enabled, AND
+      at least one snapshot is listed there (the toggle alone proves
+      nothing). Until the R2/S3 vars above are set, the API's own
+      nightly backup (02:00 Manila) and audit archive (02:30) log a
+      "skipped" warning and do nothing — the Railway
+      snapshot is then the ONLY copy of the shop's data.
+- [ ] **Someone hears about an outage.** `railway.toml` retries a
+      crashed API 3 times, then leaves it down. Railway → Project →
+      Settings → Notifications: deploy failed + service crashed → your
+      email. UptimeRobot (free): monitor
+      `https://api.clerque.cc/api/v1/health` (a 503 means the database
+      is unreachable) and `https://clerque.cc/login`, alerts to email or
+      Telegram.
 
 ### Vercel → the web project (serves both `clerque.cc` and `console.clerque.cc`) → Settings → Environment Variables
 (If you ever split Console into its own Vercel project, set the same
 variables there too.)
 - [ ] `NEXT_PUBLIC_API_URL=https://api.clerque.cc/api/v1`
-      (no trailing slash; must match what the browser can reach).
+      (no trailing slash; must match what the browser can reach; the
+      `/api/v1` is required — a bare host 404s every call while
+      `/health` still answers). If it is set for Preview too, every PR
+      preview talks to the LIVE API and writes to the shop's database:
+      scope it to Production, or accept that knowingly.
 - [ ] `NEXT_PUBLIC_PROVIDER_PHASE=1` — set it EXPLICITLY, Production
       scope. The code defaults to `1` when unset,
       but set it so nobody flips it by accident. Phase 1 = every receipt
       prints **ACKNOWLEDGEMENT RECEIPT** (we do not yet hold BIR
       CAS/PTU; printing "OFFICIAL RECEIPT"/"SALES INVOICE" without it is
       a violation). Phase 2 is for later, after accreditation.
-- [ ] `NEXT_PUBLIC_APP_URL=https://clerque.cc`.
 - [ ] Env var changes need a **Redeploy** to take effect (NEXT_PUBLIC_*
       is baked in at build time).
+      (`NEXT_PUBLIC_APP_URL` used to be listed here; no code reads it.)
+- [ ] **Old hostnames** `clerque.hnscorpph.com` / `console.hnscorpph.com`:
+      Vercel → Domains → set each to **redirect** to `clerque.cc` /
+      `console.clerque.cc` (or remove them). Only AFTER that, delete the
+      two legacy entries in the CORS list in `apps/api/src/main.ts` and
+      in `images.remotePatterns` in `apps/web/next.config.js`. Doing it
+      the other way round leaves anyone on an old bookmark with a login
+      page whose every request fails.
 
 ### HNS Console (https://console.clerque.cc) — BEFORE creating the client tenant
 - [ ] Sign in as the platform admin.
@@ -225,6 +256,12 @@ schema in place is safe. Do NOT run `prisma migrate reset` or
 Use a real browser on the production URLs, not localhost.
 
 - [ ] `https://api.clerque.cc/api/v1/health` → `"status":"ok","db":"ok"`.
+- [ ] `https://api.clerque.cc/api/v1/health/ip` opened from the shop's
+      wifi (or your phone on mobile data) shows YOUR public address —
+      not a Cloudflare one (104.16–31.x, 162.158.x, 172.64–71.x). The
+      rate limiter and the bad-login lockout are keyed on this value;
+      if it shows Cloudflare, every shop shares one bucket (see
+      `apps/api/src/common/http/client-ip.ts`).
 - [ ] **Console login** at `https://console.clerque.cc` works.
 - [ ] **Create the client tenant** (coffee shop) — Console → Tenants →
       **New Tenant** → "Create Tenant". Business name, address, TIN, tax
@@ -265,3 +302,44 @@ Use a real browser on the production URLs, not localhost.
       (JWT_REFRESH_SECRET is correct).
 
 If every box is ticked, hand over. If not, §4.
+
+---
+
+## 6. Known gap: the migrations cannot build a fresh database (open, KJ)
+
+The 91 folders in `packages/db/prisma/migrations/` do not replay on an
+empty Postgres: migration 12 (`20260429180000_ar_ap_backbone`) adds a
+foreign key to `customers`, which no migration creates. 24 tables
+(customers, payroll, laundry, cycle counts, stock transfers, projects,
+console logs, ...) exist only because `start.sh` falls back to
+`prisma db push`. Production works; a restore into a NEW database, a
+staging copy or a second Railway environment only works through that
+fallback. The fix is a one-time baseline (a schema change, so not done
+without KJ):
+
+1. `npx prisma migrate diff --from-empty --to-schema-datamodel packages/db/prisma/schema.prisma --script > packages/db/prisma/migrations/20260922000000_baseline/migration.sql`
+   — the whole current schema (every enum, table, index and foreign
+   key) in one file.
+2. Move the 91 old folders to `packages/db/prisma/migrations_archive/`.
+3. Mark the baseline as applied WITHOUT running it, on every existing
+   database: `npx prisma migrate resolve --applied 20260922000000_baseline`
+   (local, then production through a Railway shell) — BEFORE the push
+   that contains the new folder reaches Railway.
+4. Rehearse on a throwaway localhost database: `migrate deploy` from
+   empty, then `migrate diff --from-migrations ... --to-schema-datamodel ...`
+   must print nothing.
+
+Risk: if step 3 is missed on production, `migrate deploy` tries to
+CREATE tables that exist, fails, and `start.sh` path B marks it applied
+and `db push` catches up — so the API still boots, but only by luck.
+The local database already differs from schema.prisma by ~59 foreign
+key definitions and 7 index names; production likely does too, so
+step 4 must be run against a copy of production before trusting it.
+
+Same decision, smaller: the day reports filter orders on
+`branchId` + `paidAt` with no index for that pair. When convenient:
+`@@index([branchId, paidAt])` on `model Order` plus a migration
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS "orders_branchId_paidAt_idx" ON "orders"("branchId", "paidAt");`
+(hand-written, and the only statement in its migration file, because
+Postgres refuses `CONCURRENTLY` inside a multi-statement script — or a
+plain `CREATE INDEX` while the table is still small).

@@ -758,9 +758,24 @@ function MakeBatchModal({
   const expectedTotal = (recipe.batchYield ?? 0) * (n || 1);
   const measuredNum   = parseFloat(measured) || 0;
 
+  /*
+    What the summary says goes onto the shelf: what the cook measured, when
+    they measured it. It kept saying "Adds 2,000 ml" with 1,900 typed in the
+    box below, and 1,900 is what gets recorded.
+  */
+  const addsTotal = measuredNum > 0 ? measuredNum : n * (recipe.batchYield ?? 0);
+
+  /*
+    Never taller than the screen. A prep with six ingredients made this 625px on
+    a 600px kitchen tablet (less, with the browser's toolbar), nothing scrolled,
+    and Cancel and Record it fell off the bottom. The body scrolls; the two
+    buttons stay put underneath it. dvh, the same as the payment dialog, so the
+    tablet's toolbar is not counted as screen.
+  */
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-4">
+      <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-md max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+       <div className="min-h-0 flex-1 overflow-y-auto p-5 space-y-4">
         <div>
           <h2 className="font-semibold text-lg">{recipe.name}</h2>
           <p className="text-sm text-muted-foreground">
@@ -781,7 +796,7 @@ function MakeBatchModal({
         {n > 0 && !tooMany && (
           <div className="rounded-lg bg-muted/40 p-3 space-y-1 text-xs">
             <p className="font-semibold">
-              Adds {(n * (recipe.batchYield ?? 0)).toLocaleString('en-PH')} {recipe.unit} of {recipe.name}
+              Adds {addsTotal.toLocaleString('en-PH')} {recipe.unit} of {recipe.name}
             </p>
             <p className="text-muted-foreground">
               {recipe.kind === 'MOVE' ? 'and takes the same amount from:' : 'and takes off the shelf:'}
@@ -882,8 +897,10 @@ function MakeBatchModal({
             {recipe.limitedBy ? ` — ${recipe.limitedBy} runs out first.` : '.'}
           </p>
         )}
+       </div>
 
-        <div className="flex gap-2">
+        {/* Outside the scrolling part, so both buttons are always in reach. */}
+        <div className="flex shrink-0 gap-2 border-t border-border p-4">
           <button onClick={onCancel} disabled={pending} className="flex-1 rounded-lg border border-border py-2 text-sm hover:bg-muted">
             Cancel
           </button>

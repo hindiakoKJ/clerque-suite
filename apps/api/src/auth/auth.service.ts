@@ -21,6 +21,7 @@ import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFl
 import type { TaxStatus, AiAddonType } from '@repo/shared-types';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { LOCKOUT_MINUTES, MAX_FAILED_ATTEMPTS, recentFailedLogins } from './lockout';
+import { receiptBusinessName } from './receipt-business-name';
 
 // 8h access token = one login covers a full work shift; no mid-shift logouts.
 // Refresh-token rotation still happens silently in the background via the
@@ -690,7 +691,7 @@ export class AuthService {
       try {
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, allowSelfClockIn: true, returnsOwnerOnly: true, ledgerMode: true, country: true, currency: true, timezone: true },
+          select: { name: true, taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, allowSelfClockIn: true, returnsOwnerOnly: true, ledgerMode: true, country: true, currency: true, timezone: true },
         });
       } catch (err: any) {
         // PrismaClientValidationError or P2022 (column doesn't exist) means
@@ -698,7 +699,7 @@ export class AuthService {
         console.warn('[auth] Tenant select failed for new fields; falling back to legacy fields. Run `prisma db push` to sync. Original error:', err?.message);
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true },
+          select: { name: true, taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true },
         });
       }
     }
@@ -729,7 +730,11 @@ export class AuthService {
       isVatRegistered: flags.isVatRegistered,
       isBirRegistered: flags.isBirRegistered,
       tinNumber:         tenant?.tinNumber ?? null,
-      businessName:      tenant?.businessName ?? null,
+      // The receipt header. The BIR "business name as on COR" when the owner
+      // has filled it in, else the name the business was created with. It was
+      // the BIR field alone, so a shop that never opened BIR & Tax printed
+      // "DEMO STORE" (the receipt's last-resort text) on every customer slip.
+      businessName:      receiptBusinessName(tenant),
       registeredAddress: tenant?.registeredAddress ?? null,
       isPtuHolder:       tenant?.isPtuHolder ?? false,
       ptuNumber:         tenant?.ptuNumber ?? null,

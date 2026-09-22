@@ -13,6 +13,7 @@ import { useAuthStore } from '@/store/auth';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { isFnbType } from '@repo/shared-types';
 import { LoadFailed } from '@/components/shared/LoadFailed';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ const INTERFACE_LABEL: Record<string, string> = {
   BLUETOOTH_RAWBT:  'Bluetooth (via RawBT)',
   BLUETOOTH_NATIVE: 'Bluetooth (native — Android app)',
   USB:              'USB',
-  NETWORK:          'Network (TCP/IP)',
+  NETWORK:          'Network (not supported yet)',
 };
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -382,6 +383,7 @@ export default function FloorLayoutSettingsPage() {
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-0.5 text-[10px] text-muted-foreground">
+                  {p.interface === 'NETWORK' && <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600">Cannot print from the browser</span>}
                   {p.printsReceipts && <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600">Receipts</span>}
                   {p.printsOrders && <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600">Tickets</span>}
                 </div>
@@ -391,7 +393,9 @@ export default function FloorLayoutSettingsPage() {
         </div>
         <p className="text-[11px] text-muted-foreground italic mt-3">
           Bluetooth printers via RawBT need the RawBT app installed on your tablet.
-          Network printer support arrives with the Android app.
+          A printer set up as Network cannot be printed to from the browser yet. To switch it to
+          Bluetooth (RawBT) or USB, email{' '}
+          <a href={supportMailto('Switch my network printer to Bluetooth or USB')} className="underline not-italic">{SUPPORT_EMAIL}</a>.
         </p>
       </section>
 

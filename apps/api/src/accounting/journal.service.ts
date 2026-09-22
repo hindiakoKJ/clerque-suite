@@ -411,6 +411,35 @@ export class JournalService {
 
   // ── Process a single AccountingEvent → Journal Entry ────────────────────────
 
+  /**
+   * The order number to show in a journal description. Uses the payload's
+   * orderNumber when the event carries one; otherwise looks the order up.
+   * Falls back to the id only when the order cannot be found. A label must
+   * never fail a posting, so any lookup error is swallowed.
+   */
+  private async orderLabel(
+    tenantId: string,
+    payload:  Record<string, unknown>,
+    event:    { id: string; orderId?: string | null },
+  ): Promise<string> {
+    const fromPayload = payload['orderNumber'];
+    if (typeof fromPayload === 'string' && fromPayload.trim()) return fromPayload.trim();
+
+    const orderId =
+      (typeof payload['orderId'] === 'string' && payload['orderId']) || event.orderId || null;
+    if (!orderId) return event.id;
+    try {
+      const order = await this.prisma.order.findFirst({
+        where:  { id: orderId, tenantId },
+        select: { orderNumber: true },
+      });
+      if (order?.orderNumber) return order.orderNumber;
+    } catch {
+      /* description only — fall through to the id */
+    }
+    return orderId;
+  }
+
   async processEvent(tenantId: string, eventId: string): Promise<{ skipped?: boolean; journalEntry?: unknown }> {
     const event = await this.prisma.accountingEvent.findFirst({
       where: { id: eventId, tenantId },
@@ -577,7 +606,9 @@ export class JournalService {
           return { skipped: true };
         }
 
-        description = `COGS ${payload['orderId'] ?? event.id}`;
+        // COGS payloads carry only the order id — look the number up so the
+        // entry reads "COGS ORD-2026-000088", matching its sale line.
+        description = `COGS ${await this.orderLabel(tenantId, payload, event)}`;
         lines.push({ accountId: await getAccount('5010'), debit: totalCost,  description: 'Cost of goods sold' });
 
         /*
@@ -625,9 +656,12 @@ export class JournalService {
         const mode = String(payload['mode'] ?? 'FULL_VOID');
         const isItemRefund = mode === 'ITEM_REFUND';
 
+        // The ORDER NUMBER, never the raw database id: a bookkeeper matches
+        // "Void reversal ORD-2026-000088" to "Sale ORD-2026-000088" by reading.
+        const voidOrderLabel = await this.orderLabel(tenantId, payload, event);
         description = isItemRefund
-          ? `Item refund ${payload['orderNumber'] ?? payload['orderId'] ?? event.id}`
-          : `Void reversal ${payload['orderId'] ?? event.id}`;
+          ? `Item refund ${voidOrderLabel}`
+          : `Void reversal ${voidOrderLabel}`;
 
         if (isItemRefund) {
           // Proportional reversal — refundAmount is pro-rated lineTotal
@@ -1617,18 +1651,20 @@ export class JournalService {
 
   // ── List journal entries ─────────────────────────────────────────────────────
 
-  async findAll(tenantId: string, opts: { page?: number; from?: string; to?: string; status?: string }) {
-    const { page = 1, from, to, status } = opts;
-    const take = 50;
-    const skip = (page - 1) * take;
-
+  /** The list filter, shared by the on-screen list and the .xlsx export so the
+   *  file always contains exactly what the chosen filters describe. */
+  private listWhere(
+    tenantId: string,
+    opts: { from?: string; to?: string; status?: string },
+  ): Prisma.JournalEntryWhereInput {
+    const { from, to, status } = opts;
     // Date filter: prefer postingDate; fall back to document date for legacy entries.
     const dateRange = (from || to) ? {
       ...(from ? { gte: new Date(from) } : {}),
       ...(to   ? { lte: new Date(to)   } : {}),
     } : undefined;
 
-    const where: Prisma.JournalEntryWhereInput = {
+    return {
       tenantId,
       ...(status ? { status: status as any } : {}),
       ...(dateRange ? {
@@ -1638,6 +1674,48 @@ export class JournalService {
         ],
       } : {}),
     };
+  }
+
+  /**
+   * Every journal entry matching the filter, WITH its lines — for the .xlsx
+   * export. `findAll` is paged at 50 for the screen; the export used to call it
+   * with no page and silently shipped only the newest 50 entries to the
+   * bookkeeper. Read in chunks so a full year does not become one giant query.
+   * Oldest first: a journal is read top-to-bottom in date order.
+   */
+  async findAllForExport(tenantId: string, opts: { from?: string; to?: string; status?: string }) {
+    const where = this.listWhere(tenantId, opts);
+    const CHUNK = 500;
+    const out: Array<Prisma.JournalEntryGetPayload<{
+      include: { lines: { include: { account: { select: { code: true; name: true } } } } };
+    }>> = [];
+
+    for (let skip = 0; ; skip += CHUNK) {
+      const batch = await this.prisma.journalEntry.findMany({
+        where,
+        // `id` is the final tie-break so chunk boundaries are stable.
+        orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        skip,
+        take: CHUNK,
+        include: {
+          lines: {
+            include: { account: { select: { code: true, name: true } } },
+            orderBy: [{ debit: 'desc' }, { id: 'asc' }],
+          },
+        },
+      });
+      out.push(...batch);
+      if (batch.length < CHUNK) break;
+    }
+    return out;
+  }
+
+  async findAll(tenantId: string, opts: { page?: number; from?: string; to?: string; status?: string }) {
+    const { page = 1 } = opts;
+    const take = 50;
+    const skip = (page - 1) * take;
+
+    const where = this.listWhere(tenantId, opts);
 
     const [total, entries] = await Promise.all([
       this.prisma.journalEntry.count({ where }),

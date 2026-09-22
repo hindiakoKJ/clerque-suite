@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 type SettlementStatus = 'PENDING' | 'SETTLED' | 'RECONCILED' | 'DISPUTED';
 type PaymentMethod = 'GCASH_PERSONAL' | 'GCASH_BUSINESS' | 'MAYA_PERSONAL' | 'MAYA_BUSINESS' | 'QR_PH';
@@ -260,7 +261,7 @@ export default function SettlementPage() {
                         <td className="px-4 py-3 text-right">
                           {b.status === 'PENDING' && (
                             <button
-                              onClick={() => { setSelectedBatch(b.id); setConfirmForm({ actualAmount: String(Number(b.expectedAmount)), settledAt: new Date().toISOString().slice(0, 10), bankReference: '' }); }}
+                              onClick={() => { setSelectedBatch(b.id); setConfirmForm({ actualAmount: String(Number(b.expectedAmount)), settledAt: todayIso(), bankReference: '' }); }}
                               className="text-xs font-medium px-2 py-1 rounded transition-colors hover:opacity-80"
                               style={{ color: 'var(--accent)', background: 'var(--accent-soft)' }}
                             >

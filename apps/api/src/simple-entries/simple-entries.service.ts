@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { JournalService } from '../accounting/journal.service';
 import {
-  CreateSimpleEntryDto, SimpleEntryType, ExpenseCategory,
+  CreateSimpleEntryDto, SimpleEntryType, ExpenseCategory, PaidFrom,
 } from './dto/simple-entry.dto';
 
 /**
@@ -27,6 +27,21 @@ const OTHER_INCOME = '4050';
 /** Money paid for goods not yet here. Cleared when they arrive, refunded, or written off. */
 const PAID_AHEAD = '1063';
 const MISC_EXPENSE = '6140';
+/**
+ * 1075 Machinery & Equipment -- the seeded, OPEN fixed-asset account an
+ * espresso machine, fridge or grinder belongs in. (1070 is the PP&E header,
+ * 1077 is furniture, 1081 is computers.)
+ */
+const EQUIPMENT = '1075';
+/** 6010 Salaries and Wages -- seeded, OPEN; the same account Payroll debits. */
+const WAGES = '6010';
+
+/** Where the money came from, for EQUIPMENT_PURCHASE and WAGES_PAID. */
+const PAID_FROM_ACCOUNT: Record<PaidFrom, string> = {
+  CASH:  CASH,
+  BANK:  BANK,
+  OWNER: OWNER_CAPITAL,
+};
 
 const EXPENSE_ACCOUNT: Record<ExpenseCategory, string> = {
   RENT:      '6050',
@@ -111,15 +126,23 @@ export class SimpleEntriesService {
   /** Map a plain-language entry to its debit/credit account codes + a label. */
   private plan(dto: CreateSimpleEntryDto): Posting {
     const note = dto.note?.trim() ? ` — ${dto.note.trim()}` : '';
-    const fund = FUNDING[dto.source ?? 'CASH'];
 
+    // The older kinds move the shop's own money: Cash or Bank only. `source`
+    // is their field; `paidFrom` CASH/BANK is accepted too so one form control
+    // can drive every kind. Defaults to CASH when neither is sent.
     const requireFunding = (): string => {
-      if (!dto.source) {
-        // Default to CASH if omitted for the money-in/out types.
-        return FUNDING.CASH;
+      if (dto.source) return FUNDING[dto.source];
+      if (dto.paidFrom === 'OWNER') {
+        throw new BadRequestException(
+          '"Paid by the owner" only applies to equipment and wages. Choose Cash or Bank.',
+        );
       }
-      return fund;
+      return FUNDING[dto.paidFrom ?? 'CASH'];
     };
+
+    // Equipment and wages can also be paid out of the owner's own pocket.
+    const paidFrom: PaidFrom = dto.paidFrom ?? dto.source ?? 'CASH';
+    const byOwner = paidFrom === 'OWNER' ? ' (paid by the owner)' : '';
 
     switch (dto.type) {
       case 'EXPENSE': {
@@ -146,6 +169,20 @@ export class SimpleEntriesService {
         return { drCode: requireFunding(), crCode: PAID_AHEAD, description: `Refund of goods paid ahead${note}` };
       case 'PAID_AHEAD_WRITE_OFF':
         return { drCode: MISC_EXPENSE, crCode: PAID_AHEAD, description: `Paid ahead, never received${note}` };
+      case 'EQUIPMENT_PURCHASE': {
+        const asset = dto.assetName?.trim();
+        return {
+          drCode: EQUIPMENT,
+          crCode: PAID_FROM_ACCOUNT[paidFrom],
+          description: `Equipment bought${asset ? `: ${asset}` : ''}${byOwner}${note}`,
+        };
+      }
+      case 'WAGES_PAID':
+        return {
+          drCode: WAGES,
+          crCode: PAID_FROM_ACCOUNT[paidFrom],
+          description: `Wages paid${byOwner}${note}`,
+        };
       default: {
         // Exhaustiveness guard — DTO validation should prevent reaching here.
         const _never: never = dto.type;
@@ -156,10 +193,18 @@ export class SimpleEntriesService {
 
   async create(tenantId: string, userId: string, dto: CreateSimpleEntryDto) {
     const posting = this.plan(dto);
-    const [drAcct, crAcct] = await Promise.all([
+    const lookup = () => Promise.all([
       this.accounts.findByCode(tenantId, posting.drCode),
       this.accounts.findByCode(tenantId, posting.crCode),
     ]);
+    let [drAcct, crAcct] = await lookup();
+    if (!drAcct || !crAcct) {
+      // A shop set up before an account joined the standard chart (equipment,
+      // wages) does not have it yet. Back-fill the missing standard accounts
+      // -- it never touches existing ones -- and look again.
+      await this.accounts.seedDefaultAccounts(tenantId);
+      [drAcct, crAcct] = await lookup();
+    }
     if (!drAcct || !crAcct) {
       throw new BadRequestException(
         'Your bookkeeping accounts are not fully set up yet. Please contact support.',
@@ -232,7 +277,10 @@ export class SimpleEntriesService {
   async list(tenantId: string) {
     const rows = await this.prisma.journalEntry.findMany({
       where:   { tenantId, reference: SE_REFERENCE, status: 'POSTED' },
-      orderBy: { date: 'desc' },
+      // The entry date has no time part, so same-day rows tied and came back in
+      // arbitrary order -- the entry just saved was not reliably on top, and an
+      // owner reversed the wrong one. createdAt (then id) makes the order stable.
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take:    50,
       include: { lines: true, reversedBy: { select: { entryNumber: true } } },
     });

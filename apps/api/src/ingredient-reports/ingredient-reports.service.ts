@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { availableQty, heldAcross, heldUsage } from '../orders/held-usage';
+import { loadLineRecipes } from '../orders/line-recipes';
 import { stillWaiting } from '../orders/waste';
 import { DAY_MS, isManilaDay, manilaDayStart, usedByDay, UsageDay, UsageRow } from './daily-usage';
 
@@ -8,7 +9,8 @@ import { DAY_MS, isManilaDay, manilaDayStart, usedByDay, UsageDay, UsageRow } fr
  * Ingredient (raw-material) reporting.
  *
  * Four report shapes:
- *   1. Per-ingredient movements    — receipts + consumption timeline
+ *   1. Per-ingredient movements    — deliveries, sales, prep batches,
+ *                                    write-offs and counts, one timeline
  *   2. Per-ingredient FIFO lots    — what's on the shelf, in age order
  *   3. Aggregated tenant report    — opening / purchases / consumption / closing
  *                                    across all ingredients for a date range
@@ -24,19 +26,60 @@ import { DAY_MS, isManilaDay, manilaDayStart, usedByDay, UsageDay, UsageRow } fr
  * drift between two separately-maintained tables). A line still waiting at a kitchen or bar
  * screen is left out: its ingredients leave stock when it is marked ready.
  */
+export type IngredientMovementKind = 'RECEIPT' | 'CONSUMPTION' | 'PREP' | 'WRITE_OFF' | 'COUNT';
+
 export interface IngredientMovementRow {
   id:            string;
-  kind:          'RECEIPT' | 'CONSUMPTION';
+  /**
+   * RECEIPT      a delivery, or a batch of this prep made
+   * CONSUMPTION  used by a sale, through the full recipe walk (size, add-ons)
+   * PREP         used by a batch of a syrup, sauce or dough
+   * WRITE_OFF    spoiled, dropped, thrown out at a station
+   * COUNT        a physical count's correction (+ found, - missing)
+   */
+  kind:          IngredientMovementKind;
   occurredAt:    string;
+  /** Signed: + arrived on the shelf, - left it. */
   quantity:      number;
   qtyRemaining:  number;
   unitCost:      number;
+  /** Signed like `quantity`. */
   totalValue:    number;
   reference:     string | null;
   paymentMethod: string | null;
   branchId:      string | null;
   orderId:       string | null;
   orderNumber:   string | null;
+  /** Why, when the record said: a write-off's reason, a count's kind. */
+  reason:        string | null;
+}
+
+/** Plain words for a write-off's reason code, so the timeline never reads "DAMAGE". */
+const WRITE_OFF_REASON_TEXT: Record<string, string> = {
+  EXPIRY:       'Past its date',
+  DAMAGE:       'Dropped, spilled or spoiled',
+  THEFT:        'Missing',
+  SAMPLE:       'Given away',
+  INTERNAL_USE: 'Staff use',
+  OTHER:        'Other',
+};
+
+/** A write-off's books entry may be stamped a little after its lot; this far apart they are still one write-off. */
+const WRITE_OFF_MATCH_MS = 10 * 60 * 1000;
+
+/**
+ * The window a report asks for. A bare day (YYYY-MM-DD, what the date
+ * pickers send) is the whole Manila day, `to` included: `new Date('2026-09-16')`
+ * is UTC midnight, 8 AM here, which dropped the first morning's delivery and
+ * cut the last day off at breakfast. Anything else is the instant it names.
+ */
+function windowOf(from?: string, to?: string): { fromDate?: Date; toDate?: Date } {
+  const fromDate = from ? (isManilaDay(from) ? manilaDayStart(from) : new Date(from)) : undefined;
+  const toDate   = to   ? (isManilaDay(to)   ? new Date(manilaDayStart(to).getTime() + DAY_MS - 1) : new Date(to)) : undefined;
+  if ((fromDate && Number.isNaN(fromDate.getTime())) || (toDate && Number.isNaN(toDate.getTime()))) {
+    throw new BadRequestException('The report dates are not valid dates.');
+  }
+  return { fromDate, toDate };
 }
 
 @Injectable()
@@ -44,9 +87,17 @@ export class IngredientReportsService {
   constructor(private prisma: PrismaService) {}
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Per-ingredient movements (receipts + consumption)
+  // Per-ingredient movements (everything that put it on the shelf or took it off)
   // ─────────────────────────────────────────────────────────────────────────
 
+  /*
+    Every way this ingredient moves, from the same records the stock book and
+    the daily usage sheet read. It used to show deliveries and the sales of
+    products whose OWN recipe named the ingredient, and nothing else: a syrup
+    used only through add-ons read "consumed 0", the 100 ml just written off
+    was not on the timeline, and the 760 g a batch of teriyaki took was
+    missing while the shelf said it was gone.
+  */
   async getMovements(
     tenantId: string,
     rawMaterialId: string,
@@ -58,58 +109,184 @@ export class IngredientReportsService {
     });
     if (!rm) throw new NotFoundException('Ingredient not found');
 
-    const fromDate = opts.from ? new Date(opts.from) : undefined;
-    const toDate   = opts.to   ? new Date(opts.to)   : undefined;
-    const limit    = Math.min(500, opts.limit ?? 200);
+    const { fromDate, toDate } = windowOf(opts.from, opts.to);
+    const limit  = Math.min(500, opts.limit ?? 200);
+    const branch = opts.branchId ? { branchId: opts.branchId } : {};
+    const between = (field: string) =>
+      fromDate || toDate
+        ? { [field]: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
+        : {};
+    const inRange = (at: Date) =>
+      (!fromDate || at.getTime() >= fromDate.getTime()) && (!toDate || at.getTime() <= toDate.getTime());
+    const cost = rm.costPrice != null ? Number(rm.costPrice) : 0;
+    const rows: IngredientMovementRow[] = [];
 
-    // Receipts — straight from RawMaterialLot (the canonical receipt record).
+    /*
+      1. Lots. A delivery or a batch of this prep made is a lot with a
+      positive qtyReceived. A write-off leaves a marker lot with a NEGATIVE
+      qtyReceived (written for every write-off, priced or not), so both come
+      from one query and the sign says which is which.
+    */
     const lots = await this.prisma.rawMaterialLot.findMany({
-      where: {
-        tenantId,
-        rawMaterialId,
-        // Purchases only — a write-off's sentinel lot carries a negative
-        // qtyReceived so it can hold the idempotency reference, and counting
-        // it here would net removals against what was bought.
-        qtyReceived: { gt: 0 },
-        ...(opts.branchId ? { branchId: opts.branchId } : {}),
-        ...(fromDate || toDate
-          ? { receivedAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
-          : {}),
-      },
+      where:   { tenantId, rawMaterialId, ...branch, ...between('receivedAt') },
       orderBy: { receivedAt: 'desc' },
     });
 
-    const receipts: IngredientMovementRow[] = lots.map((lot) => ({
-      id:           `lot-${lot.id}`,
-      kind:         'RECEIPT',
-      occurredAt:   lot.receivedAt.toISOString(),
-      quantity:     Number(lot.qtyReceived),
-      qtyRemaining: Number(lot.qtyRemaining),
-      unitCost:     Number(lot.unitCost),
-      totalValue:   Number(lot.qtyReceived) * Number(lot.unitCost),
-      reference:    lot.referenceNumber,
-      paymentMethod: lot.paymentMethod,
-      branchId:     lot.branchId,
-      // Consumption-specific fields
-      orderId:      null,
-      orderNumber:  null,
-    }));
+    /*
+      2. The books: every batch (to find the ones that took this ingredient),
+      and every entry about this ingredient (a write-off's reason, a count's
+      correction). Read from the start of the window with no upper bound: a
+      batch is dated when it was made, which can be before it was recorded,
+      and a write-off's entry lands a moment after its lot.
+    */
+    const events = await this.prisma.accountingEvent.findMany({
+      where: {
+        tenantId,
+        type: 'INVENTORY_ADJUSTMENT',
+        ...(fromDate ? { createdAt: { gte: fromDate } } : {}),
+        OR: [
+          { payload: { path: ['kind'],          equals: 'SUB_RECIPE_BATCH' } },
+          { payload: { path: ['rawMaterialId'], equals: rawMaterialId } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      select:  { id: true, createdAt: true, payload: true },
+    });
+    const payloads = events.map((ev) => ({ ev, p: (ev.payload ?? null) as Record<string, unknown> | null }));
+    const writeOffEntries = payloads.filter(({ p }) =>
+      p && p['adjustmentType'] === 'WRITE_OFF' && p['rawMaterialId'] === rawMaterialId,
+    );
+    const reasonOfWriteOff = (lot: { referenceNumber: string | null; qtyReceived: unknown; receivedAt: Date }): string | null => {
+      const qty = Math.abs(Number(lot.qtyReceived));
+      const hit = writeOffEntries.find(({ ev, p }) =>
+        lot.referenceNumber
+          ? p!['referenceNumber'] === lot.referenceNumber
+          : Math.abs(Number(p!['quantity'])) === qty
+            && Math.abs(ev.createdAt.getTime() - lot.receivedAt.getTime()) <= WRITE_OFF_MATCH_MS,
+      );
+      if (!hit) return null;
+      const said = hit.p!['reason'];
+      const code = hit.p!['reasonCode'];
+      if (typeof said === 'string' && said && said !== code) return said;   // the note the person typed
+      return typeof code === 'string' ? (WRITE_OFF_REASON_TEXT[code] ?? code) : null;
+    };
 
-    // Consumption — derived from paid orders (PAID + COMPLETED) that
-    // include products whose BOM contains this raw material. Most lines
-    // take their ingredients at the sale, so a PAID order has used them even
-    // before production finishes. A line that waits at a kitchen or bar
-    // screen takes them only when it is marked ready, so while it waits it
-    // has used nothing and is left out below.
+    for (const lot of lots) {
+      const received = Number(lot.qtyReceived);
+      if (received > 0) {
+        rows.push({
+          id:            `lot-${lot.id}`,
+          kind:          'RECEIPT',
+          occurredAt:    lot.receivedAt.toISOString(),
+          quantity:      received,
+          qtyRemaining:  Number(lot.qtyRemaining),
+          unitCost:      Number(lot.unitCost),
+          totalValue:    received * Number(lot.unitCost),
+          reference:     lot.referenceNumber,
+          paymentMethod: lot.paymentMethod,
+          branchId:      lot.branchId,
+          orderId:       null,
+          orderNumber:   null,
+          reason:        null,
+        });
+      } else if (received < 0) {
+        rows.push({
+          id:            `wo-${lot.id}`,
+          kind:          'WRITE_OFF',
+          occurredAt:    lot.receivedAt.toISOString(),
+          quantity:      received,
+          qtyRemaining:  0,
+          unitCost:      Number(lot.unitCost),
+          totalValue:    received * Number(lot.unitCost),
+          reference:     lot.referenceNumber,
+          paymentMethod: null,
+          branchId:      lot.branchId,
+          orderId:       null,
+          orderNumber:   null,
+          reason:        reasonOfWriteOff(lot),
+        });
+      }
+    }
+
+    for (const { ev, p } of payloads) {
+      if (!p) continue;
+      if (opts.branchId && p['branchId'] && p['branchId'] !== opts.branchId) continue;
+
+      // A batch of a syrup, sauce or dough that took this ingredient. The
+      // batch of THIS prep being made is its lot above, so it is not repeated.
+      if (p['kind'] === 'SUB_RECIPE_BATCH') {
+        const stated = typeof p['madeAt'] === 'string' ? new Date(p['madeAt']) : null;
+        const madeAt = stated && !Number.isNaN(stated.getTime()) ? stated : ev.createdAt;
+        if (!inRange(madeAt)) continue;
+        const mine = ((Array.isArray(p['consumed']) ? p['consumed'] : []) as unknown[])
+          .filter((c): c is Record<string, unknown> =>
+            !!c && typeof c === 'object' && (c as Record<string, unknown>)['rawMaterialId'] === rawMaterialId);
+        const took = mine.reduce((s, c) => s + Number(c['quantity'] ?? 0), 0);
+        if (!(took > 0)) continue;
+        const statedCost = Number(mine[0]['unitCost']);
+        const unitCost = Number.isFinite(statedCost) && statedCost > 0 ? statedCost : cost;
+        const batches = Number(p['batches'] ?? 1);
+        const station = typeof p['stationName'] === 'string' && p['stationName'] ? ` · ${p['stationName']}` : '';
+        rows.push({
+          id:            `prep-${ev.id}`,
+          kind:          'PREP',
+          occurredAt:    madeAt.toISOString(),
+          quantity:      -took,
+          qtyRemaining:  0,
+          unitCost,
+          totalValue:    -took * unitCost,
+          reference:     `${String(p['rawMaterialName'] ?? 'a prep')}${batches > 1 ? ` (${batches} batches)` : ''}${station}`,
+          paymentMethod: null,
+          branchId:      typeof p['branchId'] === 'string' ? p['branchId'] : null,
+          orderId:       null,
+          orderNumber:   null,
+          reason:        null,
+        });
+        continue;
+      }
+
+      // A physical count's correction, or the shop's opening count.
+      const adjustment = p['adjustmentType'];
+      if (p['rawMaterialId'] === rawMaterialId && (adjustment === 'COUNT_CORRECTION' || adjustment === 'OPENING_BALANCE')) {
+        if (!inRange(ev.createdAt)) continue;
+        const qty = Number(p['quantity'] ?? 0);
+        if (!qty) continue;
+        const statedCost = Number(p['unitCost']);
+        const unitCost = Number.isFinite(statedCost) && statedCost > 0 ? statedCost : cost;
+        rows.push({
+          id:            `count-${ev.id}`,
+          kind:          'COUNT',
+          occurredAt:    ev.createdAt.toISOString(),
+          quantity:      qty,
+          qtyRemaining:  0,
+          unitCost,
+          totalValue:    qty * unitCost,
+          reference:     typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
+          paymentMethod: null,
+          branchId:      typeof p['branchId'] === 'string' ? p['branchId'] : null,
+          orderId:       null,
+          orderNumber:   null,
+          reason:        adjustment === 'OPENING_BALANCE' ? 'Opening stock' : 'Physical count',
+        });
+      }
+    }
+
+    /*
+      3. Sales. Orders paid in the window, each line walked through the same
+      recipe walk the sale and the ready tap use (the size's recipe, the
+      add-ons, oat milk netting out dairy), so a syrup used only through
+      add-ons shows the drinks that used it. A line taken at the sale used
+      every unit, refunded or not: a refund puts no ingredient back. A line
+      that waits at a kitchen or bar screen used nothing until it was marked
+      ready, and then what was left of it.
+    */
     const orders = await this.prisma.order.findMany({
       where: {
         tenantId,
-        status:    { in: ['PAID', 'COMPLETED'] },
+        status:    { in: ['PAID', 'COMPLETED', 'RETURNED'] },
         deletedAt: null,
-        ...(opts.branchId ? { branchId: opts.branchId } : {}),
-        ...(fromDate || toDate
-          ? { paidAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
-          : {}),
+        ...branch,
+        ...between('paidAt'),
       },
       select: {
         id:          true,
@@ -119,62 +296,57 @@ export class IngredientReportsService {
         branchId:    true,
         items: {
           select: {
-            quantity:      true,
+            id:            true,
             productId:     true,
+            variantId:     true,
+            quantity:      true,
+            refundedQty:   true,
             usageOnReady:  true,
             usagePostedAt: true,
+            modifiers:     { select: { modifierOptionId: true } },
             product:       { select: { name: true } },
           },
         },
       },
       orderBy: { paidAt: 'desc' },
     });
+    const lines = orders.flatMap((o) => o.items);
+    const usageOf = lines.length ? await loadLineRecipes(this.prisma, tenantId, lines) : () => [];
 
-    // Pre-load all BOM rows for the products that appear in these orders so
-    // we don't N+1 the database. Filter to only the ingredient we care about.
-    const productIds = [...new Set(orders.flatMap((o) => o.items.map((i) => i.productId)))];
-    const bomRows = productIds.length
-      ? await this.prisma.bomItem.findMany({
-          where: { productId: { in: productIds }, rawMaterialId },
-          select: { productId: true, quantity: true },
-        })
-      : [];
-    const bomByProduct = new Map<string, number>(
-      bomRows.map((b) => [b.productId, Number(b.quantity)]),
-    );
-
-    const consumption: IngredientMovementRow[] = [];
     for (const order of orders) {
       let totalQty = 0;
       const productNames: string[] = [];
       for (const it of order.items) {
         if (stillWaiting(it)) continue;   // nothing has left the shelf for it yet
-        const perUnit = bomByProduct.get(it.productId);
-        if (!perUnit) continue;
-        totalQty += Number(it.quantity) * perUnit;
-        if (it.product?.name) productNames.push(`${it.quantity}× ${it.product.name}`);
+        const perUnit = usageOf(it).find((u) => u.rawMaterialId === rawMaterialId)?.perUnit ?? 0;
+        if (!(perUnit > 0)) continue;
+        const units = it.usageOnReady
+          ? Math.max(0, Number(it.quantity) - Number(it.refundedQty))
+          : Number(it.quantity);
+        if (!(units > 0)) continue;
+        totalQty += units * perUnit;
+        if (it.product?.name) productNames.push(`${units}× ${it.product.name}`);
       }
       if (totalQty <= 0) continue;
-      consumption.push({
-        id:           `ord-${order.id}`,
-        kind:         'CONSUMPTION',
-        occurredAt:   (order.paidAt ?? order.completedAt ?? new Date()).toISOString(),
-        quantity:     -totalQty, // negative = outflow
-        qtyRemaining: 0,
-        unitCost:     rm.costPrice != null ? Number(rm.costPrice) : 0,
-        totalValue:   rm.costPrice != null ? -totalQty * Number(rm.costPrice) : 0,
-        reference:    productNames.join(', ') || null,
+      rows.push({
+        id:            `ord-${order.id}`,
+        kind:          'CONSUMPTION',
+        occurredAt:    (order.paidAt ?? order.completedAt ?? new Date()).toISOString(),
+        quantity:      -totalQty,
+        qtyRemaining:  0,
+        unitCost:      cost,
+        totalValue:    -totalQty * cost,
+        reference:     productNames.join(', ') || null,
         paymentMethod: null,
-        branchId:     order.branchId,
-        orderId:      order.id,
-        orderNumber:  order.orderNumber,
+        branchId:      order.branchId,
+        orderId:       order.id,
+        orderNumber:   order.orderNumber,
+        reason:        null,
       });
     }
 
-    // Merge, sort by date desc, cap to limit.
-    const merged = [...receipts, ...consumption].sort((a, b) =>
-      b.occurredAt.localeCompare(a.occurredAt),
-    );
+    // Newest first, capped.
+    rows.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
 
     return {
       ingredient: {
@@ -183,7 +355,7 @@ export class IngredientReportsService {
         unit:      rm.unit,
         costPrice: rm.costPrice != null ? Number(rm.costPrice) : null,
       },
-      movements: merged.slice(0, limit),
+      movements: rows.slice(0, limit),
     };
   }
 
@@ -194,7 +366,7 @@ export class IngredientReportsService {
   async getLots(tenantId: string, rawMaterialId: string, branchId?: string) {
     const rm = await this.prisma.rawMaterial.findFirst({
       where: { id: rawMaterialId, tenantId },
-      select: { id: true, name: true, unit: true },
+      select: { id: true, name: true, unit: true, costPrice: true },
     });
     if (!rm) throw new NotFoundException('Ingredient not found');
 
@@ -205,8 +377,23 @@ export class IngredientReportsService {
       orderBy: { receivedAt: 'asc' }, // FIFO order — oldest first
     });
 
+    /*
+      What is on the shelf: the stock book's figure, the same one Stock on
+      hand shows, valued at today's average cost. The lots' remaining
+      quantities are NOT it -- a write-off, a batch or a count moves the book
+      without always draining a lot -- and adding them up put 1,969 ml on the
+      page for a shelf holding 1,829 ml.
+    */
+    const stock = await this.prisma.rawMaterialInventory.findMany({
+      where:  { tenantId, rawMaterialId, ...(branchId ? { branchId } : {}) },
+      select: { quantity: true },
+    });
+    const onHandQty = stock.reduce((s, r) => s + Number(r.quantity), 0);
+    const cost = rm.costPrice != null ? Number(rm.costPrice) : 0;
+
     return {
-      ingredient: rm,
+      ingredient: { id: rm.id, name: rm.name, unit: rm.unit },
+      onHand: { quantity: onHandQty, value: onHandQty * cost },
       lots: lots.map((lot) => ({
         id:              lot.id,
         receivedAt:      lot.receivedAt.toISOString(),

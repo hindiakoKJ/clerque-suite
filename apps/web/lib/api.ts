@@ -8,7 +8,7 @@ import { demoApi } from './demo/api';
 import { requestSlugConfirmation } from '@/components/admin/ConfirmSlugModal';
 import { requestSanityConfirmation, type SanityWarning } from '@/components/shared/SanityConfirmModal';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
 /**
  * Resolve a server-relative path (e.g. "/uploads/public/products/..jpg") into

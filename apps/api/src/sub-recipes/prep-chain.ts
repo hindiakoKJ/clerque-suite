@@ -89,6 +89,8 @@ export interface ChainStage {
 export interface StageMade {
   label: string;
   uses: string;
+  /** "2,000 g": what the one batch makes, for the button's "tap again to record" words. Null with no yield set. */
+  makes: string | null;
 }
 
 export interface ChainAction {
@@ -97,6 +99,8 @@ export interface ChainAction {
   label: string;
   /** "Uses 2,000 g Tomato Sauce (frozen)": one batch, no costs. */
   uses: string;
+  /** "2,000 g": what the one batch makes, for the button's "tap again to record" words. Null with no yield set. */
+  makes: string | null;
   enabled: boolean;
   disabledReason?: string;
 }
@@ -234,6 +238,11 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
   };
   const uses = (i: number): string =>
     `Uses ${facts[i].used.map((c) => `${amount(c.quantity, c.unit)} ${c.name}`).join(' · ')}`;
+  // What the tap records, said on the button before the second tap: one batch at the recipe's own yield.
+  const makes = (i: number): string | null => {
+    const y = facts[i].row.batchYield;
+    return y != null && y > 0 ? amount(y, facts[i].row.unit) : null;
+  };
 
   /*
     A batch made ahead -- wings marinated overnight, a sauce cooked before the
@@ -249,7 +258,7 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
     const maker = facts[i].row.station ?? null;
     const mayRecordHere = !at || !maker || maker.id === at.id;
     const isMain = !!action?.enabled && action.rawMaterialId === facts[i].row.id;
-    return { ...s, made: facts[i].canMakeNow && mayRecordHere && !isMain ? { label: label(i), uses: uses(i) } : null };
+    return { ...s, made: facts[i].canMakeNow && mayRecordHere && !isMain ? { label: label(i), uses: uses(i), makes: makes(i) } : null };
   });
 
   const base = { id: l1.id, name: l1.name, station: l1.station ?? null };
@@ -295,7 +304,7 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
   let action: ChainAction;
   if (actionAt != null) {
     headline = severity === 'NOW' && actionAt >= 1 ? `${prefix}. ${sentence(actionAt)}` : sentence(actionAt);
-    action = { rawMaterialId: facts[actionAt].row.id, label: label(actionAt), uses: uses(actionAt), enabled: true };
+    action = { rawMaterialId: facts[actionAt].row.id, label: label(actionAt), uses: uses(actionAt), makes: makes(actionAt), enabled: true };
     if (actionAt === 0) {
       alertTitle = movesFromBelow(0) ? `${L1}: refill from Level 2` : `${L1}: make a batch`;
       alertBody = movesFromBelow(0) ? `Refill Level 1 from Level 2 (${L2}).`
@@ -313,7 +322,7 @@ function chainOf(l1: BoardRow, byId: Map<string, BoardRow>, at: { id: string } |
   } else {
     // Nothing can be made yet: the button stays on the stage that needs action, disabled, saying why.
     const reason = blockedRaw ? `Buy ${blockedRaw} first` : `Level ${blockedPrep!.at + 2} first`;
-    action = { rawMaterialId: facts[k].row.id, label: label(k), uses: uses(k), enabled: false, disabledReason: reason };
+    action = { rawMaterialId: facts[k].row.id, label: label(k), uses: uses(k), makes: makes(k), enabled: false, disabledReason: reason };
     if (blockedRaw) {
       headline = `Out of ${blockedRaw}. Buy it now.`;
       alertTitle = `${L1}: buy ${blockedRaw}`;

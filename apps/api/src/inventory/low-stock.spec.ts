@@ -309,7 +309,7 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
 
     const header = (ws.getRow(5).values as unknown[]).slice(1).map(String);
     expect(header).toEqual([
-      'Item', 'Unit', 'On hand', 'Alert at', 'SHORT BY',
+      'Item', 'Unit', 'On hand', 'Reorder level', 'SHORT BY',
       'Date bought', 'Store', 'Area', 'Pack size', 'Pack unit',
       'Qty (packs)', 'Unit price (₱)', 'Amount (₱)',
     ]);

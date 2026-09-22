@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { LoadFailed } from '@/components/shared/LoadFailed';
+import { canEnterApp } from '@/lib/app-roles';
 
 interface ProcessMetrics {
   generatedAt: string;
@@ -136,6 +137,9 @@ export default function LedgerDashboardPage() {
   // missing-cost products, offline syncs). Default to true so the existing
   // tenants and pre-modular JWTs continue to see everything.
   const posEnabled = user?.modulePos !== false;
+  // An accountant or bookkeeper cannot open the POS: sending them to
+  // /pos/products only threw them out to the app picker.
+  const canOpenPos = !!user && canEnterApp('pos', user.role);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery<ProcessMetrics>({
     queryKey: ['ledger-process-metrics'],
@@ -234,7 +238,13 @@ export default function LedgerDashboardPage() {
                 {data.control.productsMissingCost > 0 && (
                   <li className="flex justify-between">
                     <span>{data.control.productsMissingCost} active product{data.control.productsMissingCost === 1 ? '' : 's'} missing cost price (breaks COGS)</span>
-                    <span className="text-muted-foreground">Fix in POS → Products</span>
+                    {canOpenPos ? (
+                      <button onClick={() => router.push('/pos/products')} className="text-red-400 hover:underline flex items-center gap-1">
+                        Fix in POS → Products <ArrowRight className="w-3 h-3" />
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground">Ask the owner to set the cost in POS → Products</span>
+                    )}
                   </li>
                 )}
                 {(data.timeliness.daysSinceLastClose ?? 0) > 60 && (
@@ -449,7 +459,7 @@ export default function LedgerDashboardPage() {
                   sub="No cost price → COGS not booked → profit overstated."
                   severity={sev.missingCost}
                   icon={FileWarning}
-                  onClick={() => router.push('/pos/products')}
+                  onClick={canOpenPos ? () => router.push('/pos/products') : undefined}
                 />
               </PosOnly>
               <MetricCard
@@ -470,7 +480,7 @@ export default function LedgerDashboardPage() {
 
           {/* Methodology footer */}
           <div className="text-xs text-muted-foreground border-t border-border pt-4 leading-relaxed space-y-1">
-            <p><strong>How we compute these.</strong> Process metrics are derived live from the database — no caching. DSO/DPO are weighted averages over the last 90 days of paid invoices/bills. Event Lag is the average time from event creation to JE creation across the last 24 hours. Severity thresholds (good / warn / bad) are tunable per tenant — current values are sensible defaults for an MSME.</p>
+            <p><strong>How we compute these.</strong> Process metrics are derived live from the database — no caching. DSO/DPO are weighted averages over the last 90 days of paid invoices/bills. Event Lag is the average time from event creation to JE creation across the last 24 hours. The good / warning / bad colours use sensible defaults for a small business.</p>
             <p>For account-level financials (revenue by GL account, expense balances) see <button onClick={() => router.push('/ledger/trial-balance')} className="underline hover:text-foreground">Trial Balance</button>, <button onClick={() => router.push('/ledger/pl-statement')} className="underline hover:text-foreground">Income Statement</button>, and <button onClick={() => router.push('/ledger/balance-sheet')} className="underline hover:text-foreground">Balance Sheet</button>.</p>
           </div>
         </div>

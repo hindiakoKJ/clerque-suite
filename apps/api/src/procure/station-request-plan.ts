@@ -111,7 +111,12 @@ export interface PlanResult {
   onTheWay: Array<{ rawMaterialId: string; name: string; unit: string; packSize: number | null; qty: number }>;
   /** Preps that will need making, shallowest first. */
   toMake: Array<{ rawMaterialId: string; name: string; batches: number }>;
-  /** Out, used on the menu, and nothing to go on: somebody has to say how much. */
+  /**
+   * Items somebody has to look at by hand. Nothing is put here now: an item that
+   * is out with nothing to size the ask by goes on the list with a starting
+   * amount instead (startingQty), so a tap never sends nothing while items are
+   * out. Kept so the screen's "Check these" section has its field.
+   */
   check: Array<{ rawMaterialId: string; name: string; reason: string }>;
   /** Preps whose recipes loop back into each other; left out of the plan. */
   cycle: string[];
@@ -215,6 +220,20 @@ export function roundQty(need: number, unit: string, packSize: number | null): n
   if (u === 'kg' || u === 'l') return round4(Math.ceil(need * 10 - EPS) / 10);
   return Math.ceil(need - EPS);
 }
+
+/**
+ * What to ask for when an item is out and there is nothing to size the ask by:
+ * no pack size, no sales history, no reorder level. One round amount in the
+ * item's own unit -- a kilo, a litre, or one of whatever it is counted in --
+ * and the line says so (STARTING_AMOUNT_WHY), so nobody reads it as a forecast.
+ */
+export function startingQty(unit: string): number {
+  const u = unit.trim().toLowerCase();
+  return u === 'g' || u === 'ml' ? 1000 : 1;
+}
+
+/** Why a starting amount is on the list, in the words the kitchen and the owner both read. */
+export const STARTING_AMOUNT_WHY = 'Out. No pack size or sales history yet, so this is a starting amount. Add more with + if you need it.';
 
 /** The smallest step roundQty moves in, for an amount this size. */
 export function roundingStep(qty: number, unit: string, packSize: number | null): number {
@@ -329,6 +348,7 @@ export function planRequest(input: PlanInput): PlanResult {
     let need = round4(Math.max(lowWanted, forecastNeed) - coming);
     const extra = extras.get(item.id);
     let outNoHistory = false;
+    let startingAmount = false;
 
     if (need <= 0 && item.available <= 0 && item.inActiveRecipe && !(coming > 0) && level == null) {
       // Out, on the menu, and no sales yet to learn from.
@@ -336,7 +356,15 @@ export function planRequest(input: PlanInput): PlanResult {
         need = item.packSize;
         outNoHistory = true;
       } else if (extra == null) {
-        check.push({ rawMaterialId: item.id, name: item.name, reason: 'Out, and Clerque has no pack size for it yet. Add it with +.' });
+        /*
+          No pack size either -- most of a new shop's items, until each has been
+          bought once. It used to be left off the list under "Check these", so a
+          tap with 25 items out could send nothing. It goes on the list with a
+          round starting amount in its own unit, and the line says that is what
+          it is: the owner sees it is out, and buys the usual pack.
+        */
+        need = startingQty(item.unit);
+        startingAmount = true;
       }
     }
     if (need <= 0 && coming > 0 && Math.max(lowWanted, forecastNeed) > 0 && extra == null) {
@@ -358,6 +386,7 @@ export function planRequest(input: PlanInput): PlanResult {
     if (fromPlan > 0) why.push(...(madeFor.get(item.id) ?? []));
     if (coming > 0) why.push(`${usageQty(coming, item.unit)} already on the way`);
     if (outNoHistory) why.push('Out, no sales history yet');
+    if (startingAmount && fromPlan > 0) why.push(STARTING_AMOUNT_WHY);
     if (byHand > 0 && input.extraReason) why.push(input.extraReason);
 
     const existing = input.existing.get(item.id);
@@ -367,7 +396,8 @@ export function planRequest(input: PlanInput): PlanResult {
       unit: item.unit,
       packSize: item.packSize,
       qty,
-      shortBy: need > 0 ? need : null,
+      // A starting amount is a guess, not a shortfall: the buy list must not say "short by 1,000 g".
+      shortBy: need > 0 && !startingAmount ? need : null,
       why,
       existing: existing ?? null,
       action: existing == null ? 'ADD' : isRaise(qty, existing, item.unit, item.packSize) ? 'RAISE' : 'KEEP',

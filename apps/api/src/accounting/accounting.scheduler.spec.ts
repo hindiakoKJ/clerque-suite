@@ -3,10 +3,18 @@ import { AccountingScheduler } from './accounting.scheduler';
 /**
  * An accounting event that fails five times is money missing from the books,
  * and until now the only place that said so was a log line nobody at the shop
- * reads. The retry job now tells the tenant, once per count, where to look.
+ * reads. The retry job now tells the people who can fix it, once per count,
+ * where to look.
+ *
+ * It goes to the ledger roles by name, never as a tenant-wide broadcast: a
+ * broadcast reached the cook and the barista too, and tapping the link threw
+ * them out of their app to the app picker ("Ledger is restricted").
  */
-describe('AccountingScheduler — stuck events reach a person', () => {
-  function build(stuck: Array<{ tenantId: string; n: number; lastError?: string }>) {
+describe('AccountingScheduler — stuck events reach a person who can fix them', () => {
+  function build(
+    stuck: Array<{ tenantId: string; n: number; lastError?: string }>,
+    ledgerUsers: Array<{ id: string }> = [{ id: 'owner' }, { id: 'bookkeeper' }],
+  ) {
     const created: any[] = [];
     const prisma: any = {
       accountingEvent: {
@@ -17,6 +25,7 @@ describe('AccountingScheduler — stuck events reach a person', () => {
           return Promise.resolve(s ? { id: 'ev-1', type: 'INVENTORY_ADJUSTMENT', lastError: s.lastError ?? null } : null);
         }),
       },
+      user: { findMany: jest.fn().mockResolvedValue(ledgerUsers) },
     };
     const journal: any = { processAllPending: jest.fn() };
     const notifications: any = {
@@ -26,20 +35,42 @@ describe('AccountingScheduler — stuck events reach a person', () => {
     return { svc, created, prisma };
   }
 
-  it('sends a warning to the tenant with the count, the reason and the place to fix it', async () => {
+  it('sends the warning to each ledger person with the count, the reason and the place to fix it', async () => {
     const { svc, created } = build([{ tenantId: 't1', n: 3, lastError: 'Period 2026-08 is closed.' }]);
     await svc.retryFailedEvents();
+    expect(created).toHaveLength(2);
+    expect(created.map((c) => c.userId).sort()).toEqual(['bookkeeper', 'owner']);
+    for (const c of created) {
+      expect(c).toMatchObject({ tenantId: 't1', kind: 'WARNING', link: '/ledger/events', dedupeKey: 'accounting-stuck-3' });
+      expect(c.title).toBe('3 stock entries could not be posted to the books');
+      expect(c.body).toContain('Period 2026-08 is closed.');
+      expect(c.body).toContain('The shelf is right; the books are missing it');
+    }
+  });
+
+  it('asks for active users in ledger roles only — never the cook or the cashier, never a broadcast', async () => {
+    const { svc, created, prisma } = build([{ tenantId: 't1', n: 2 }]);
+    await svc.retryFailedEvents();
+
+    const where = prisma.user.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ tenantId: 't1', isActive: true });
+    const roles: string[] = where.role.in;
+    expect(roles).toEqual(expect.arrayContaining(['BUSINESS_OWNER', 'BOOKKEEPER', 'ACCOUNTANT', 'FINANCE_LEAD', 'BRANCH_MANAGER']));
+    expect(roles).not.toContain('CASHIER');
+    expect(roles).not.toContain('GENERAL_EMPLOYEE');
+    expect(roles).not.toContain('KIOSK_DISPLAY');
+    expect(created.some((c) => c.userId === null)).toBe(false);
+  });
+
+  it('falls back to telling the tenant when no ledger user exists, rather than nobody', async () => {
+    const { svc, created } = build([{ tenantId: 't1', n: 1 }], []);
+    await svc.retryFailedEvents();
     expect(created).toHaveLength(1);
-    expect(created[0]).toMatchObject({
-      tenantId: 't1', userId: null, kind: 'WARNING', link: '/ledger/events', dedupeKey: 'accounting-stuck-3',
-    });
-    expect(created[0].title).toBe('3 stock entries could not be posted to the books');
-    expect(created[0].body).toContain('Period 2026-08 is closed.');
-    expect(created[0].body).toContain('The shelf is right; the books are missing it');
+    expect(created[0].userId).toBeNull();
   });
 
   it('says it once, in the singular, for one event', async () => {
-    const { svc, created } = build([{ tenantId: 't1', n: 1 }]);
+    const { svc, created } = build([{ tenantId: 't1', n: 1 }], [{ id: 'owner' }]);
     await svc.retryFailedEvents();
     expect(created[0].title).toBe('1 stock entry could not be posted to the books');
     expect(created[0].body).toMatch(/^A stock movement could not be recorded/);

@@ -372,7 +372,7 @@ export default function ModifierRecipesPage() {
                                         }}
                                         className="border rounded px-2 py-1 text-sm flex-1 min-w-[160px] bg-white"
                                       >
-                                        <option value="">Select raw material…</option>
+                                        <option value="">Select ingredient…</option>
                                         {rmQ.data?.map((r) => (
                                           <option key={r.id} value={r.id}>{r.name}</option>
                                         ))}

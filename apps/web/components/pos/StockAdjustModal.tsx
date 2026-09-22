@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DIALOG_FIT_SCROLL } from './dialog-fit';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 
@@ -132,7 +133,7 @@ export function StockAdjustModal({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className={`max-w-sm ${DIALOG_FIT_SCROLL}`}>
         <DialogHeader>
           <DialogTitle>Adjust Stock</DialogTitle>
         </DialogHeader>
@@ -212,9 +213,9 @@ export function StockAdjustModal({
           {/* Paid with — only for STOCK_IN, tells the ledger the funding source */}
           {direction === 'STOCK_IN' && (
             <div>
-              <label className="text-xs text-muted-foreground font-medium">Paid with</label>
+              <label className="text-xs text-muted-foreground font-medium">Who paid?</label>
               <div className="mt-1 flex rounded-lg border border-border overflow-hidden text-xs font-medium">
-                {([['CASH', 'Cash on hand'], ['OWNER_FUNDED', 'Owner funds']] as const).map(([value, label]) => (
+                {([['CASH', 'Shop cash'], ['OWNER_FUNDED', 'Owner paid']] as const).map(([value, label]) => (
                   <button
                     key={value}
                     onClick={() => setPaymentMethod(value)}

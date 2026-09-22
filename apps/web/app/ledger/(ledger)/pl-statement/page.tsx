@@ -7,14 +7,8 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { downloadAuthFile } from '@/lib/utils';
 import { Spinner } from '@/components/ui/Spinner';
-import { todayIso } from '@/lib/today';
-
-interface Row {
-  id:      string;
-  code:    string;
-  name:    string;
-  balance: number;
-}
+import { todayIso, startOfMonthIso } from '@/lib/today';
+import { type StatementRow as Row, visibleRows, emptyCount } from '../_lib/statement-rows';
 
 interface PlSummary {
   from:             string;
@@ -28,10 +22,9 @@ interface PlSummary {
 
 const READ_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BRANCH_MANAGER', 'FINANCE_LEAD'];
 
-function startOfMonth() {
-  const d = new Date(); d.setDate(1);
-  return d.toISOString().slice(0, 10);
-}
+// Wall-clock first of the month (lib/today). The UTC version made "this month"
+// start on the last day of LAST month when opened on the 1st before 08:00.
+const startOfMonth = startOfMonthIso;
 
 /**
  * Segment expense accounts:
@@ -63,15 +56,20 @@ function segmentExpenses(expenses: Row[]) {
   };
 }
 
-function Section({ title, rows, total, accent }: {
+function Section({ title, rows, total, accent, always }: {
   title: string; rows: Row[]; total: number; accent?: boolean;
+  /** Revenue, cost of goods and operating expenses keep their total line even with nothing in them. */
+  always?: boolean;
 }) {
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !always) return null;
   return (
     <div className="space-y-1">
       <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mt-3 mb-1">
         {title}
       </div>
+      {rows.length === 0 && (
+        <div className="text-sm pl-4 text-muted-foreground/70">Nothing recorded in these dates.</div>
+      )}
       {rows.map((r) => (
         <div key={r.id} className="flex justify-between text-sm pl-4">
           <span className="text-muted-foreground">
@@ -93,6 +91,9 @@ export default function PLStatementPage() {
   const user = useAuthStore((s) => s.user);
   const [from, setFrom] = useState(startOfMonth());
   const [to,   setTo]   = useState(todayIso());
+  // Accounts with nothing in them are hidden until asked for. Every shop is given
+  // the full chart of accounts (court rental included); a cafe uses a dozen lines.
+  const [showEmpty, setShowEmpty] = useState(false);
 
   const canRead = user ? READ_ROLES.includes(user.role) : false;
 
@@ -110,7 +111,10 @@ export default function PLStatementPage() {
     );
   }
 
+  // Totals come from ALL rows (a zero row adds nothing); only the printing is filtered.
   const seg = data ? segmentExpenses(data.expenseAccounts) : null;
+  const hiddenCount = data ? emptyCount(data.revenueAccounts, data.expenseAccounts) : 0;
+  const show = (rows: Row[]) => visibleRows(rows, showEmpty);
   const grossProfit = data && seg ? data.totalRevenue - seg.cogsTotal : 0;
   const operatingIncome = seg ? grossProfit - seg.opexTotal - seg.otherOpTotal : 0;
 
@@ -123,7 +127,7 @@ export default function PLStatementPage() {
             Income Statement (P&amp;L)
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Revenue minus expenses for the selected period. Period must be within an open accounting period for live data.
+            What the shop earned minus what it spent, for the dates you pick.
           </p>
         </div>
         <button
@@ -145,6 +149,17 @@ export default function PLStatementPage() {
           <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
             className="h-9 px-3 rounded-lg border border-border bg-background text-sm" />
         </div>
+        {hiddenCount > 0 && (
+          <label className="flex items-center gap-2 h-9 text-xs text-muted-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showEmpty}
+              onChange={(e) => setShowEmpty(e.target.checked)}
+              className="rounded border-border"
+            />
+            Show empty accounts ({hiddenCount})
+          </label>
+        )}
       </div>
 
       {isLoading ? (
@@ -155,19 +170,19 @@ export default function PLStatementPage() {
         </div>
       ) : data && seg ? (
         <div className="rounded-xl border border-border bg-background p-5 sm:p-6 space-y-5">
-          <Section title="Revenue" rows={data.revenueAccounts} total={data.totalRevenue} accent />
-          <Section title="Cost of Goods Sold" rows={seg.cogs} total={seg.cogsTotal} />
+          <Section title="Revenue" rows={show(data.revenueAccounts)} total={data.totalRevenue} accent always />
+          <Section title="Cost of Goods Sold" rows={show(seg.cogs)} total={seg.cogsTotal} always />
           <div className="flex justify-between text-sm font-bold border-y-2 border-foreground/20 py-2">
             <span>Gross Profit</span>
             <span className="tabular-nums">{formatPeso(grossProfit)}</span>
           </div>
-          <Section title="Operating Expenses" rows={seg.opex} total={seg.opexTotal} />
-          <Section title="Other Operating Expenses" rows={seg.otherOp} total={seg.otherOpTotal} />
+          <Section title="Operating Expenses" rows={show(seg.opex)} total={seg.opexTotal} always />
+          <Section title="Other Operating Expenses" rows={show(seg.otherOp)} total={seg.otherOpTotal} />
           <div className="flex justify-between text-sm font-bold border-y-2 border-foreground/20 py-2">
             <span>Operating Income</span>
             <span className="tabular-nums">{formatPeso(operatingIncome)}</span>
           </div>
-          <Section title="Non-Operating / Other" rows={seg.nonOp} total={seg.nonOpTotal} />
+          <Section title="Non-Operating / Other" rows={show(seg.nonOp)} total={seg.nonOpTotal} />
           <div className="flex justify-between text-base font-bold border-y-2 border-[var(--accent)] py-3 text-[var(--accent)]">
             <span>Net Income</span>
             <span className="tabular-nums">{formatPeso(data.netIncome)}</span>

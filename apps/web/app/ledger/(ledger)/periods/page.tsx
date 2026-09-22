@@ -9,6 +9,8 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
+import { suggestNextPeriod, daysLeftText } from './suggest-period';
 
 type PeriodStatus = 'OPEN' | 'CLOSED';
 
@@ -118,35 +120,20 @@ export default function PeriodsPage() {
   // ── Helpers ───────────────────────────────────────────────────────────────
   const openPeriods   = periods.filter((p) => p.status === 'OPEN');
   const closedPeriods = periods.filter((p) => p.status === 'CLOSED');
-  const currentPeriod = openPeriods.find((p) => {
-    const now = new Date();
-    return new Date(p.startDate) <= now && new Date(p.endDate) >= now;
-  });
+  // Compared as calendar days: the API sends the end day at UTC midnight (08:00
+  // in Manila), so comparing instants dropped the period on its own last day.
+  const today = todayIso();
+  const currentPeriod = openPeriods.find(
+    (p) => p.startDate.slice(0, 10) <= today && p.endDate.slice(0, 10) >= today,
+  );
 
-  // Suggest next period dates
+  // Suggest next period dates. Done on YYYY-MM-DD strings, never through
+  // toISOString(): in Manila that turned September into "Aug 31 to Sep 29".
   function suggestDates() {
     const sorted = [...periods].sort(
       (a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime(),
     );
-    const latest = sorted[0];
-    if (!latest) {
-      const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), 1);
-      const end   = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      return {
-        startDate: start.toISOString().split('T')[0],
-        endDate:   end.toISOString().split('T')[0],
-        name:      `${start.toLocaleString('en-PH', { month: 'long', year: 'numeric' })}`,
-      };
-    }
-    const after = new Date(latest.endDate);
-    after.setDate(after.getDate() + 1);
-    const end = new Date(after.getFullYear(), after.getMonth() + 1, 0);
-    return {
-      startDate: after.toISOString().split('T')[0],
-      endDate:   end.toISOString().split('T')[0],
-      name:      `${after.toLocaleString('en-PH', { month: 'long', year: 'numeric' })}`,
-    };
+    return suggestNextPeriod(sorted[0]?.endDate ?? null, todayIso());
   }
 
   function handleOpenCreate() {
@@ -178,7 +165,7 @@ export default function PeriodsPage() {
           <div>
             <h1 className="text-lg font-semibold text-foreground">Accounting Periods</h1>
             <p className="text-xs text-muted-foreground">
-              Control which date range is open for journal postings
+              Close each month once it is checked, so nothing in it can change afterwards
             </p>
           </div>
         </div>
@@ -226,8 +213,9 @@ export default function PeriodsPage() {
           <CalendarClock className="w-10 h-10 text-muted-foreground/40" />
           <p className="text-sm font-medium text-muted-foreground">No accounting periods yet</p>
           <p className="text-xs text-muted-foreground max-w-xs">
-            Create your first period to enable journal postings. Only entries dated
-            within an <span className="font-medium text-foreground">Open</span> period can be posted.
+            You can keep recording without one. Create a period for each month so you can
+            <span className="font-medium text-foreground"> close</span> it once the month is checked:
+            a closed period stops anyone from changing those dates.
           </p>
           {isOwner && (
             <button onClick={handleOpenCreate} className={BTN_PRIMARY + ' mt-2'}>
@@ -322,9 +310,9 @@ export default function PeriodsPage() {
             <div className="rounded-lg bg-blue-500/8 border border-blue-400/20 p-3 text-xs text-blue-700 dark:text-blue-300 space-y-1">
               <p className="font-medium">What happens when a period is open?</p>
               <ul className="space-y-0.5 pl-3 list-disc text-blue-600/80 dark:text-blue-400/80">
-                <li>Journal entries with dates in this range can be posted.</li>
-                <li>Sales, settlements, and cost postings are gated by period status.</li>
-                <li>Periods cannot overlap — the system will reject conflicting dates.</li>
+                <li>Anything dated in this range is recorded as normal.</li>
+                <li>Once you close the period, nothing dated inside it can be added or changed, sales included.</li>
+                <li>Periods cannot overlap: dates already in another period are refused.</li>
               </ul>
             </div>
 
@@ -542,7 +530,7 @@ function PeriodRow({
                 : 'text-[var(--accent)] bg-[var(--accent-soft)]'
             }`}>
               {urgent ? <AlertTriangle className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
-              {urgent ? `${days}d left` : 'Open'}
+              {urgent && days !== null ? daysLeftText(days) : 'Open'}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full text-muted-foreground bg-muted/60">
@@ -578,7 +566,7 @@ function PeriodRow({
                   className="flex items-center gap-1.5 text-xs font-medium text-foreground border border-border hover:bg-muted px-3 py-1.5 rounded-lg transition-colors"
                 >
                   <Lock className="w-3.5 h-3.5" />
-                  Close with Checklist (CLOCO)
+                  Close with Checklist
                 </Link>
               )}
               {isOpen && onClose && (

@@ -12,7 +12,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name:        'Clerque',
     short_name:  'Clerque',
-    description: 'Clerque — Counter, Ledger, and Sync for Philippine MSMEs.',
+    description: 'Clerque — POS, Procure and Ledger for Philippine small businesses.',
     start_url:   '/',
     display:     'standalone',
     background_color: '#F4ECFB', // light lavender (matches the inner cards)

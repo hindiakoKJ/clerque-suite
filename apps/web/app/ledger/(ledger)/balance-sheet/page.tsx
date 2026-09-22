@@ -9,18 +9,20 @@ import { formatPeso, downloadAuthFile } from '@/lib/utils';
 import { Spinner } from '@/components/ui/Spinner';
 import { todayIso } from '@/lib/today';
 
-interface Row {
-  id:      string;
-  code:    string;
-  name:    string;
-  balance: number;
-}
+import {
+  type StatementRow as Row,
+  type RowGroup,
+  ASSET_BUCKETS, LIABILITY_BUCKETS, segmentRows, visibleRows, emptyCount, shownGroups,
+} from '../_lib/statement-rows';
 
 interface BalanceSheet {
   asOf:                       string;
   assets:                     Row[];
   liabilities:                Row[];
   equity:                     Row[];
+  /** Sub-headings with subtotals where contra accounts reduce their group. */
+  assetGroups?:               RowGroup<Row>[];
+  liabilityGroups?:           RowGroup<Row>[];
   totalAssets:                number;
   totalLiabilities:           number;
   totalEquity:                number;
@@ -31,48 +33,8 @@ interface BalanceSheet {
 
 const READ_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD', 'EXTERNAL_AUDITOR'];
 
-
-/**
- * Segment assets by code:
- *   1000-1099 → Cash & Cash Equivalents
- *   1100-1299 → Receivables
- *   1300-1499 → Inventory
- *   1500-1799 → Prepaid / Other Current
- *   1800-1899 → PPE (Property, Plant & Equipment)
- *   1900+     → Intangible / Other Non-Current
- *
- * Liabilities by code:
- *   2000-2099 → AP & Trade Payables
- *   2100-2299 → Tax Payables (VAT, WHT)
- *   2300-2499 → Accrued / Short-term
- *   2500+     → Long-term debt
- */
-function segmentRows(rows: Row[], buckets: { label: string; from: number; to: number }[]) {
-  const out: { label: string; rows: Row[]; total: number }[] = buckets.map((b) => ({ label: b.label, rows: [], total: 0 }));
-  const overflow: Row[] = [];
-  for (const r of rows) {
-    const code = parseInt(r.code, 10);
-    const idx = buckets.findIndex((b) => code >= b.from && code <= b.to);
-    if (idx >= 0) { out[idx].rows.push(r); out[idx].total += r.balance; }
-    else overflow.push(r);
-  }
-  return { groups: out.filter((g) => g.rows.length > 0), overflow };
-}
-
-const ASSET_BUCKETS = [
-  { label: 'Cash & Cash Equivalents', from: 1000, to: 1099 },
-  { label: 'Receivables',             from: 1100, to: 1299 },
-  { label: 'Inventory',               from: 1300, to: 1499 },
-  { label: 'Prepayments & Other Current', from: 1500, to: 1799 },
-  { label: 'Property, Plant & Equipment', from: 1800, to: 1899 },
-  { label: 'Intangible & Other Non-Current', from: 1900, to: 1999 },
-];
-const LIABILITY_BUCKETS = [
-  { label: 'Trade Payables',          from: 2000, to: 2099 },
-  { label: 'Tax Payables',            from: 2100, to: 2299 },
-  { label: 'Accrued & Short-term',    from: 2300, to: 2499 },
-  { label: 'Long-term Debt',          from: 2500, to: 2999 },
-];
+// The groups (cash, receivables, inventory ...) and the hide-empty-rows rule
+// live in ../_lib/statement-rows.ts, where they are tested.
 
 function Group({ label, rows, total }: { label: string; rows: Row[]; total: number }) {
   return (
@@ -100,6 +62,9 @@ export default function BalanceSheetPage() {
   const user = useAuthStore((s) => s.user);
   const [asOf, setAsOf] = useState(todayIso());
   const [exporting, setExporting] = useState(false);
+  // Accounts with nothing in them are hidden until asked for: the seeded chart
+  // has about a hundred, and a cafe uses a dozen.
+  const [showEmpty, setShowEmpty] = useState(false);
   const canRead = user ? READ_ROLES.includes(user.role) : false;
 
   const { data, isLoading, error } = useQuery<BalanceSheet>({
@@ -123,8 +88,16 @@ export default function BalanceSheetPage() {
     return <div className="p-8 text-center text-muted-foreground">Balance Sheet is restricted to finance roles.</div>;
   }
 
-  const assetGroups = data ? segmentRows(data.assets, ASSET_BUCKETS) : null;
-  const liabilityGroups = data ? segmentRows(data.liabilities, LIABILITY_BUCKETS) : null;
+  // Prefer the API's groups: their subtotals subtract contra accounts
+  // (Accumulated Depreciation). The local grouping is only a fallback.
+  const assetGroups = !data ? null
+    : data.assetGroups ? { groups: shownGroups(data.assetGroups, showEmpty), overflow: [] as Row[] }
+    : segmentRows(visibleRows(data.assets, showEmpty), ASSET_BUCKETS);
+  const liabilityGroups = !data ? null
+    : data.liabilityGroups ? { groups: shownGroups(data.liabilityGroups, showEmpty), overflow: [] as Row[] }
+    : segmentRows(visibleRows(data.liabilities, showEmpty), LIABILITY_BUCKETS);
+  const equityRows = data ? visibleRows(data.equity, showEmpty) : [];
+  const hiddenCount = data ? emptyCount(data.assets, data.liabilities, data.equity) : 0;
 
   return (
     <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
@@ -178,6 +151,18 @@ export default function BalanceSheetPage() {
             </div>
           )}
 
+          {hiddenCount > 0 && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none w-fit">
+              <input
+                type="checkbox"
+                checked={showEmpty}
+                onChange={(e) => setShowEmpty(e.target.checked)}
+                className="rounded border-border"
+              />
+              Show empty accounts ({hiddenCount})
+            </label>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* ASSETS */}
             <div className="rounded-xl border border-border bg-background p-5 space-y-3">
@@ -205,7 +190,7 @@ export default function BalanceSheetPage() {
                 <span className="tabular-nums">{formatPeso(data.totalLiabilities)}</span>
               </div>
 
-              <Group label="Equity" rows={data.equity} total={data.totalEquity} />
+              <Group label="Equity" rows={equityRows} total={data.totalEquity} />
 
               <div className="flex justify-between text-base font-bold border-t-2 border-[var(--accent)] pt-2 mt-3">
                 <span>Total Liabilities + Equity</span>

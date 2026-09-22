@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, Plus, X } from 'lucide-react';
 import { api } from '@/lib/api';
+import { BRANCHES_ROUTE, activeBranchesOnly } from '../../branch-options';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/store/auth';
 
@@ -58,7 +59,9 @@ export default function TankDipsPage() {
 
   const branchesQ = useQuery<Branch[]>({
     queryKey: ['tank-dips', 'branches'],
-    queryFn: () => api.get('/branches').then((r) => r.data),
+    // GET /branches never existed; the list lives at /tenant/branches, which also
+    // returns switched-off branches, so those are left out of the picker.
+    queryFn: () => api.get(BRANCHES_ROUTE).then((r) => activeBranchesOnly<Branch>(r.data)),
     staleTime: 5 * 60_000,
   });
   const dipsQ = useQuery<TankDip[]>({

@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Banknote, Plus, Save, FileCheck, Upload, Trash2, Paperclip, X } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import DocumentAttachments from '@/components/shared/DocumentAttachments';
-import { todayIso } from '@/lib/today';
+import { todayIso, startOfMonthIso } from '@/lib/today';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ interface StatementRow {
 
 const READ_ROLES = ['BUSINESS_OWNER', 'ACCOUNTANT', 'FINANCE_LEAD', 'SUPER_ADMIN'];
 
-function startOfMonth() { const d = new Date(); d.setDate(1); return d.toISOString().slice(0, 10); }
+const startOfMonth = startOfMonthIso; // wall-clock, not UTC (lib/today)
 
 let stmtSeq = 0;
 function newStmt(): StatementRow {
@@ -86,16 +86,14 @@ export default function BankReconPage() {
     enabled:  !!user && canRead,
   });
 
-  // Cash / bank GL accounts (codes 10xx)
-  const { data: accounts = [] } = useQuery<Account[]>({
-    queryKey: ['accounts-list'],
-    queryFn:  () => api.get('/accounting/accounts').then((r) => r.data),
+  // Bank accounts only, as the API defines them (1020-1029 or "Cash in Bank…"),
+  // the same list the period-close checklist counts. Not "every code starting
+  // with 10": in the seeded chart that is every asset, inventory included.
+  const { data: cashAccounts = [] } = useQuery<Account[]>({
+    queryKey: ['bank-recon-accounts'],
+    queryFn:  () => api.get('/bank-recon/accounts').then((r) => r.data),
     enabled:  !!user && canRead,
   });
-  const cashAccounts = useMemo(
-    () => accounts.filter((a) => a.type === 'ASSET' && a.code.startsWith('10')),
-    [accounts],
-  );
 
   // Draft worksheet — fetched when account + period chosen
   const { data: draft } = useQuery<DraftResponse>({
@@ -223,7 +221,7 @@ export default function BankReconPage() {
           <label className="block text-xs font-medium text-muted-foreground mb-1">Cash / Bank Account *</label>
           <select className="h-9 px-3 rounded-md border border-border bg-background text-sm w-full"
             value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-            <option value="">— Pick account —</option>
+            <option value="">{cashAccounts.length ? '— Pick account —' : 'No bank account in the chart of accounts'}</option>
             {cashAccounts.map((a) => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
           </select>
         </div>

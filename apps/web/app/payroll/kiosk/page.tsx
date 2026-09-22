@@ -26,7 +26,7 @@ import {
   LogIn, LogOut,
 } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
 type View = 'dashboard' | 'choice' | 'pin';
 type Intent = 'IN' | 'OUT';

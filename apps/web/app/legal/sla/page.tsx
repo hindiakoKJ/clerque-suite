@@ -1,5 +1,6 @@
 'use client';
 import { ShieldCheck } from 'lucide-react';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 
 /**
  * Public-facing Data Recovery SLA — the rendered view of docs/RECOVERY_SLA.md.
@@ -112,7 +113,7 @@ export default function RecoverySlaPage() {
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-2">How to invoke a restore</h2>
         <ol className="list-decimal pl-6 space-y-1">
-          <li>Email <a className="text-[var(--accent)]" href="mailto:support@clerque.ph">support@clerque.ph</a></li>
+          <li>Email <a className="text-[var(--accent)]" href={supportMailto('URGENT — restore from backup')}>{SUPPORT_EMAIL}</a></li>
           <li>Subject line: <code>URGENT — restore from backup</code></li>
           <li>
             Body must include:
@@ -130,10 +131,9 @@ export default function RecoverySlaPage() {
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-2">Communication during an incident</h2>
         <p>
-          Live status is published at <strong>status.clerque.ph</strong>{' '}
-          <em>(placeholder — page goes live in the next sprint)</em>. Until then, the
-          business-owner email on file receives updates every 30 minutes during an active
-          restore.
+          During an active restore, the business-owner email on file receives an update every
+          30 minutes until the restore is complete. Reply to any of those updates, or write to{' '}
+          <a className="text-[var(--accent)]" href={supportMailto()}>{SUPPORT_EMAIL}</a>, to reach us.
         </p>
       </section>
 

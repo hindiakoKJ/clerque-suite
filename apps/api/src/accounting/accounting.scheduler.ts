@@ -3,6 +3,18 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from './journal.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import type { UserRole } from '@prisma/client';
+
+/**
+ * Who is told when entries are stuck: the people whose role can open
+ * Ledger > Events and fix it. A tenant-wide broadcast (userId null) also
+ * reached the cook and the barista, and tapping it threw them out of their
+ * app to the app picker ("Ledger is restricted") — their roles cannot enter
+ * Ledger at all.
+ */
+const LEDGER_FIXER_ROLES: UserRole[] = [
+  'BUSINESS_OWNER', 'BRANCH_MANAGER', 'ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD',
+];
 
 /**
  * How many times an event is re-offered before it is left alone.
@@ -121,17 +133,26 @@ export class AccountingScheduler {
           count, with the reason and the place to fix it.
         */
         const n = row._count._all;
-        await this.notifications.create({
-          tenantId:  row.tenantId,
-          userId:    null,
-          kind:      'WARNING',
-          title:     `${n} stock entr${n === 1 ? 'y' : 'ies'} could not be posted to the books`,
-          body:      `${n === 1 ? 'A stock movement' : `${n} stock movements`} could not be recorded after ${MAX_RETRIES} tries`
-                     + (sample?.lastError ? ` (${sample.lastError})` : '')
-                     + '. The shelf is right; the books are missing it until this is fixed.',
-          link:      '/ledger/events',
-          dedupeKey: `accounting-stuck-${n}`,
-        }).catch((e: unknown) => this.logger.error(`stuck-event notification failed: ${(e as Error).message}`));
+        const recipients = await this.prisma.user.findMany({
+          where:  { tenantId: row.tenantId, isActive: true, role: { in: LEDGER_FIXER_ROLES } },
+          select: { id: true },
+        });
+        // Every shop has an owner, so this is never empty in practice; if it
+        // somehow is, the tenant hears it rather than nobody.
+        const targets: Array<string | null> = recipients.length > 0 ? recipients.map((u) => u.id) : [null];
+        for (const userId of targets) {
+          await this.notifications.create({
+            tenantId:  row.tenantId,
+            userId,
+            kind:      'WARNING',
+            title:     `${n} stock entr${n === 1 ? 'y' : 'ies'} could not be posted to the books`,
+            body:      `${n === 1 ? 'A stock movement' : `${n} stock movements`} could not be recorded after ${MAX_RETRIES} tries`
+                       + (sample?.lastError ? ` (${sample.lastError})` : '')
+                       + '. The shelf is right; the books are missing it until this is fixed.',
+            link:      '/ledger/events',
+            dedupeKey: `accounting-stuck-${n}`,
+          }).catch((e: unknown) => this.logger.error(`stuck-event notification failed: ${(e as Error).message}`));
+        }
       }
     } catch (err) {
       this.logger.error(`Failed to retry accounting events: ${(err as Error).message}`);

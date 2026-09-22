@@ -7,6 +7,7 @@ import { useParkedSalesStore } from '@/store/pos/parkedSales';
 import { useAuthStore } from '@/store/auth';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DIALOG_FIT_SCROLL } from './dialog-fit';
 import { ManualDiscountModal } from '@/components/pos/ManualDiscountModal';
 import { RxAttestModal } from '@/components/pos/RxAttestModal';
 import { toast } from 'sonner';
@@ -427,7 +428,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
 
       {/* Park-sale name dialog */}
       <Dialog open={parkOpen} onOpenChange={(v) => { if (!v) { setParkOpen(false); setParkName(''); } }}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className={`max-w-sm ${DIALOG_FIT_SCROLL}`}>
           <DialogHeader>
             <DialogTitle>Park this sale</DialogTitle>
           </DialogHeader>
@@ -455,7 +456,7 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
 
       {/* Clear confirm */}
       <Dialog open={confirmClear} onOpenChange={(v) => !v && setConfirmClear(false)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className={`max-w-sm ${DIALOG_FIT_SCROLL}`}>
           <DialogHeader>
             <DialogTitle>Clear cart?</DialogTitle>
           </DialogHeader>

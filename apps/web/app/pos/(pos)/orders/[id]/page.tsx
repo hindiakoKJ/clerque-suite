@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { downloadAuthFile } from '@/lib/utils';
 
 interface OrderItem {
   id:           string;
@@ -304,14 +305,22 @@ export default function OrderDetailPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <a
-                      href={`/api/documents/${a.id}/download`}
-                      target="_blank"
-                      rel="noreferrer"
+                    {/*
+                      The API streams the file and wants the sign-in token, so
+                      this is a fetch, not a plain link: a bare <a> to a web
+                      /api route opened a 404 page in a new tab.
+                    */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadAuthFile(`/documents/${a.id}/download`, a.filename).catch(() =>
+                          toast.error('Could not download this file. Check the connection and try again.'),
+                        )
+                      }
                       className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium hover:bg-muted text-muted-foreground hover:text-foreground"
                     >
                       <Download className="h-3 w-3" /> Download
-                    </a>
+                    </button>
                     <button
                       onClick={() => {
                         if (confirm(`Delete "${a.label ?? a.filename}"?`)) remove.mutate(a.id);

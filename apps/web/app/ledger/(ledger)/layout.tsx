@@ -75,7 +75,9 @@ function makeLedgerNavItem(
     sectionStart: opts.sectionStart,
     disabled: !hasAccess,
     disabledReason: !extraCondition
-      ? (opts.lockedReason ?? 'Requires BIR registration — enable in Settings → BIR & Tax')
+      // Must keep starting with "Requires": the nav filter below shows such items grayed out.
+      // The owner cannot switch this on herself (tax status is set by Clerque support).
+      ? (opts.lockedReason ?? 'Requires a BIR-registered business. Tax status is set by Clerque support — see Settings → BIR & Tax')
       : hasAccess ? undefined : 'Your role doesn\'t have access to this section',
   };
 }
@@ -220,8 +222,11 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
     makeLedgerNavItem('/ledger/cash-flow',       'Cash Flow Statement', BarChart3,      PERIODS_ROLES,    role,
       { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+    // Two different locks, two different reasons: a shop already on full
+    // accounting but not BIR-registered was being told to "upgrade".
     makeLedgerNavItem('/ledger/bir',             'Tax Estimation',     FileText,        BIR_ROLES,        role,
-      { extraCondition: isFullLedger && isBirRegistered, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger && isBirRegistered,
+        lockedReason: isFullLedger ? undefined : 'Upgrade to full accounting to unlock this' }),
 
     // ── Reports hub (Sprint 21) ─────────────────────────────────────────────
     // Single entry point for every exportable XLSX report across the Ledger.

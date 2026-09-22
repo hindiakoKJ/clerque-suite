@@ -15,6 +15,7 @@
 
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { bankAccountWhere } from '../accounting/bank-accounts';
 
 interface SaveItemInput {
   itemType:        'STATEMENT' | 'JE_LINE' | 'MATCHED';
@@ -40,6 +41,19 @@ export class BankReconciliationService {
         preparedBy: { select: { name: true } },
         _count:     { select: { items: true } },
       },
+    });
+  }
+
+  /**
+   * The accounts a bank reconciliation can be done on — cash-in-bank only.
+   * The page's picker used to offer every asset account (receivables,
+   * inventory, furniture …) because it filtered on "code starts with 10".
+   */
+  async bankAccounts(tenantId: string) {
+    return this.prisma.account.findMany({
+      where:   { tenantId, isActive: true, ...bankAccountWhere() },
+      select:  { id: true, code: true, name: true, type: true, normalBalance: true },
+      orderBy: { code: 'asc' },
     });
   }
 

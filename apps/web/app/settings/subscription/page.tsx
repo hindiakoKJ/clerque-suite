@@ -21,6 +21,8 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { planCapsFor, planLabel, effectiveSeatCeiling, normalizePlanCode } from '@repo/shared-types';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
+import { branchUsageLabel, isUncapped, seatUsageLabel } from '../plan-limits-view';
 import { toast } from 'sonner';
 import { ShoppingCart, BookOpen, Users as UsersIcon, ArrowRight } from 'lucide-react';
 
@@ -32,6 +34,9 @@ interface SubscriptionResponse {
   branchCount:       number;
   branchQuota:       number;
   cashierSeatQuota:  number;
+  /** The branch cap the API actually enforces (the plan's). branchQuota is an
+   *  older per-tenant column that nothing enforces any more. */
+  limits?: { maxBranches: number };
   hasTimeMonitoring: boolean;
   hasBirForms:       boolean;
   isDemoTenant:      boolean;
@@ -100,8 +105,8 @@ export default function SubscriptionPage() {
 
   const staffCap  = data.cashierSeatQuota;
   const staffUsed = data.staffCount;
-  const staffPct  = staffCap === -1 ? 0 : Math.min(100, Math.round((staffUsed / Math.max(1, staffCap)) * 100));
-  const isAtCap   = staffCap !== -1 && staffUsed >= staffCap;
+  const staffPct  = isUncapped(staffCap) ? 0 : Math.min(100, Math.round((staffUsed / Math.max(1, staffCap)) * 100));
+  const isAtCap   = !isUncapped(staffCap) && staffUsed >= staffCap;
   const expiringSoon = data.expiresAt
     ? new Date(data.expiresAt).getTime() - Date.now() < 14 * 24 * 60 * 60 * 1000
     : false;
@@ -183,10 +188,10 @@ export default function SubscriptionPage() {
                 Staff seats
               </span>
               <span className={`font-semibold ${isAtCap ? 'text-red-600' : 'text-foreground'}`}>
-                {staffUsed} {staffCap === -1 ? '(unlimited)' : `of ${staffCap}`}
+                {seatUsageLabel(staffUsed, staffCap)}
               </span>
             </div>
-            {staffCap !== -1 && (
+            {!isUncapped(staffCap) && (
               <div className="h-2 rounded-full bg-secondary overflow-hidden">
                 <div
                   className={`h-full transition-all ${isAtCap ? 'bg-red-500' : staffPct > 80 ? 'bg-amber-500' : 'bg-emerald-500'}`}
@@ -196,7 +201,8 @@ export default function SubscriptionPage() {
             )}
             {isAtCap && (
               <p className="text-xs text-red-600">
-                You've reached the staff cap. Upgrade to add more team members.
+                Every staff seat is in use. Email{' '}
+                <a href={supportMailto('Add staff seats')} className="underline">{SUPPORT_EMAIL}</a> to add more.
               </p>
             )}
           </div>
@@ -208,7 +214,7 @@ export default function SubscriptionPage() {
               Branches
             </span>
             <span className="font-semibold text-foreground">
-              {data.branchCount} of {data.branchQuota === 0 ? '∞' : data.branchQuota}
+              {branchUsageLabel(data.branchCount, data.limits?.maxBranches ?? data.branchQuota)}
             </span>
           </div>
 
@@ -248,29 +254,31 @@ export default function SubscriptionPage() {
               {data.ai.source === 'addon_only'    && data.ai.addonPackage && `${data.ai.addonPackage.displayName} add-on — renews ${formatExpiry(data.ai.addonExpiresAt)}.`}
               {data.ai.source === 'plan+addon'    && data.ai.addonPackage && `Plan-included plus ${data.ai.addonPackage.displayName} add-on.`}
               {data.ai.source === 'override'      && 'Custom quota set by support.'}
-              {data.ai.source === 'kill_switch'   && 'Disabled by support — contact us to re-enable.'}
+              {data.ai.source === 'kill_switch'   && 'AI features are not switched on for Clerque yet.'}
             </p>
           </div>
         </div>
 
-        {/* AI add-on packages */}
-        {(
-          true) && (
+        {/* AI add-on packages. Hidden while AI is switched off for the whole
+            service: the API refuses to assign an add-on then, so offering one
+            would sell something that does nothing. No prices: the price is
+            agreed with Clerque, never printed. */}
+        {data.ai.source !== 'kill_switch' && (
           <div className="rounded-xl border border-border bg-card p-5 sm:p-6 space-y-3">
             <div className="flex items-start gap-3">
               <Sparkles className="w-5 h-5 text-[var(--accent)] shrink-0 mt-0.5" />
               <div>
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">AI Add-ons</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Stack on top of the quota your plan includes. Cheaper than a part-time bookkeeper.
+                  More AI prompts each month, on top of what your plan includes.
                 </p>
               </div>
             </div>
             <div className="grid sm:grid-cols-3 gap-3 pt-1">
               {[
-                { type: 'STARTER_50',   name: 'Starter',  prompts: 50,  price: 250,   pitch: '~2 prompts/day' },
-                { type: 'STANDARD_200', name: 'Standard', prompts: 200, price: 600,   pitch: '~7 prompts/day' },
-                { type: 'PRO_500',      name: 'Pro',      prompts: 500, price: 1_400, pitch: 'Heavy usage' },
+                { type: 'STARTER_50',   name: 'Starter',  prompts: 50,  pitch: 'About 2 a day' },
+                { type: 'STANDARD_200', name: 'Standard', prompts: 200, pitch: 'About 7 a day' },
+                { type: 'PRO_500',      name: 'Pro',      prompts: 500, pitch: 'Heavy use' },
               ].map((pkg) => {
                 const isActive = data.ai.addonType === pkg.type;
                 return (
@@ -283,23 +291,22 @@ export default function SubscriptionPage() {
                       <p className="font-bold text-foreground">{pkg.name}</p>
                       {isActive && <span className="text-[9px] uppercase font-bold tracking-wider text-emerald-600">Active</span>}
                     </div>
-                    <p className="text-2xl font-bold text-foreground mt-1">₱{pkg.price.toLocaleString('en-PH')}<span className="text-xs font-normal text-muted-foreground">/mo</span></p>
-                    <p className="text-xs text-foreground mt-1">{pkg.prompts} prompts</p>
+                    <p className="text-xs text-foreground mt-1">{pkg.prompts} prompts a month</p>
                     <p className="text-[10px] text-muted-foreground">{pkg.pitch}</p>
                   </div>
                 );
               })}
             </div>
             <a
-              href="mailto:devsupport@hnscorpph.com?subject=AI%20Add-on%20Request"
+              href={supportMailto('AI add-on request')}
               className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-white font-semibold hover:brightness-110 active:scale-[0.98] transition-all text-sm"
               style={{ background: 'var(--accent)' }}
             >
-              {data.ai.addonType ? 'Change add-on' : 'Buy add-on'}
+              {data.ai.addonType ? 'Change add-on' : 'Ask for an add-on'}
               <ArrowUpRight className="w-3.5 h-3.5" />
             </a>
             <p className="text-[10px] text-muted-foreground">
-              Add-on requests are processed manually by our team within 1 business day. Self-service billing coming soon.
+              We reply to add-on requests within 1 business day.
             </p>
           </div>
         )}
@@ -331,8 +338,7 @@ function ModulePlanCard({
   const ceiling     = effectiveSeatCeiling(planCode, 0);
   const seatsLeft   = Math.max(0, ceiling - staffCount);
   const usedPct     = Math.min(100, Math.round((staffCount / Math.max(1, ceiling)) * 100));
-  const monthlyPhp  = Math.round(cap.pricePhpMonthlyCents / 100);
-  const addonPhp    = Math.round(cap.addonSeatPhpMonthlyCents / 100);
+  const uncapped    = isUncapped(ceiling);
 
   // A module being off is now a choice this business made, not something a
   // cheaper plan withheld — so there is no upsell note to show.
@@ -349,23 +355,9 @@ function ModulePlanCard({
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Modular plan</p>
           <h2 className="text-2xl font-bold text-foreground mt-1">{planLabel(planCode)}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Switch modules on or off from the admin console.
+            To add or remove a module, email{' '}
+            <a href={supportMailto('Change my Clerque modules')} className="underline">{SUPPORT_EMAIL}</a>.
           </p>
-        </div>
-        <div className="text-right">
-          <p className="text-2xl font-bold text-foreground">
-            {monthlyPhp > 0 ? (
-              <>
-                ₱{monthlyPhp.toLocaleString('en-PH')}
-                <span className="text-sm font-normal text-muted-foreground">/mo</span>
-              </>
-            ) : (
-              <span className="text-base font-medium text-muted-foreground">Pricing not set</span>
-            )}
-          </p>
-          {addonPhp > 0 && (
-            <p className="text-[11px] text-muted-foreground mt-0.5">+₱{addonPhp.toLocaleString('en-PH')} per add-on seat/mo</p>
-          )}
         </div>
       </header>
 
@@ -399,10 +391,11 @@ function ModulePlanCard({
             <UsersIcon className="w-3.5 h-3.5" />
             Staff seats
           </span>
-          <span className={`font-semibold ${seatsLeft === 0 ? 'text-red-600' : 'text-foreground'}`}>
-            {staffCount} of {ceiling} <span className="text-muted-foreground font-normal">({seatsLeft} remaining)</span>
+          <span className={`font-semibold ${!uncapped && seatsLeft === 0 ? 'text-red-600' : 'text-foreground'}`}>
+            {seatUsageLabel(staffCount, ceiling)}
           </span>
         </div>
+        {!uncapped && (
         <div className="h-2 rounded-full bg-secondary overflow-hidden">
           <div
             className={`h-full transition-all ${
@@ -413,27 +406,32 @@ function ModulePlanCard({
             style={{ width: `${usedPct}%` }}
           />
         </div>
-        {cap.maxAddons > 0 ? (
+        )}
+        {uncapped ? (
           <p className="text-[11px] text-muted-foreground">
-            Buy up to {cap.maxAddons} additional seats at ₱{addonPhp.toLocaleString('en-PH')}/mo each (max plan ceiling: {cap.maxTotal} staff).
+            Add as many staff as you need.
+          </p>
+        ) : cap.maxAddons > 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            You can add up to {cap.maxAddons} more seats ({cap.maxTotal} staff in all). Email us to add them.
           </p>
         ) : (
           <p className="text-[11px] text-muted-foreground">
-            Seat add-ons not available on this plan — upgrade to add more staff.
+            To add more staff, email us.
           </p>
         )}
       </div>
 
       {/* Plan switch CTA — opens email since billing is sales-led */}
       <a
-        href={`mailto:devsupport@hnscorpph.com?subject=Plan%20change%20request%20-%20${planCode}`}
+        href={supportMailto(`Plan change request - ${planCode}`)}
         className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg border border-border hover:bg-muted text-sm font-medium transition-colors"
       >
         Change plan or buy seats
         <ArrowRight className="w-3.5 h-3.5" />
       </a>
       <p className="text-[10px] text-muted-foreground -mt-1">
-        Plan changes are processed manually by our team within 1 business day.
+        We reply to plan changes within 1 business day.
       </p>
     </div>
   );

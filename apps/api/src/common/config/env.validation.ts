@@ -48,8 +48,11 @@ export const envValidationSchema = Joi.object({
   RESEND_API_KEY: Joi.string().optional()
     .description('Resend API key for transactional email. Optional - mail is silently skipped if absent.'),
 
-  MAIL_FROM: Joi.string().default('noreply@clerque.app')
-    .description('Sender address for all outbound emails. Defaults to noreply@clerque.app.'),
+  // The default is on the domain we own. Resend still refuses to send until
+  // that domain is verified in Resend -> Domains (DEPLOY.md §3), and with no
+  // RESEND_API_KEY nothing is sent at all.
+  MAIL_FROM: Joi.string().default('Clerque <noreply@clerque.cc>')
+    .description('Sender address for all outbound emails. Defaults to Clerque <noreply@clerque.cc>; the domain must be verified in Resend.'),
 
   APP_URL: Joi.string().default('http://localhost:3000')
     .description('Public URL of the frontend app - used in email links (reset password, payslips).'),

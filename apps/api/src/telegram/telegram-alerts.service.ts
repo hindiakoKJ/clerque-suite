@@ -47,7 +47,8 @@ export class TelegramAlertsService {
               modifiers: { select: { optionName: true, priceAdjustment: true } },
             },
           },
-          payments:  { select: { method: true, amount: true } },
+          // reference: what the cashier typed for a GCash / Maya / QR Ph / card payment.
+          payments:  { orderBy: { createdAt: 'asc' }, select: { method: true, amount: true, reference: true } },
           discounts: { select: { discountType: true } },
         },
       });
@@ -73,7 +74,7 @@ export class TelegramAlertsService {
           lineTotal: Number(i.lineTotal),
           modifiers: i.modifiers.map((m) => ({ name: m.optionName, price: Number(m.priceAdjustment) })),
         })),
-        payments:      order.payments.map((p) => ({ method: p.method, amount: Number(p.amount) })),
+        payments:      order.payments.map((p) => ({ method: p.method, amount: Number(p.amount), reference: p.reference })),
         discountTypes: order.discounts.map((d) => d.discountType),
       };
       const text = saleMessage(sale);

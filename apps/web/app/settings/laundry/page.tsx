@@ -56,6 +56,11 @@ export default function LaundrySettingsPage() {
   }
 
   const [tab, setTab] = useState<'prices' | 'addons' | 'promos' | 'machines' | 'cycles'>('prices');
+  // The laundry dashboard links here with ?tab=machines; open that tab on arrival.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('tab');
+    if (wanted === 'prices' || wanted === 'addons' || wanted === 'promos' || wanted === 'machines' || wanted === 'cycles') setTab(wanted);
+  }, []);
 
   if (user && !canManage) return null;
 

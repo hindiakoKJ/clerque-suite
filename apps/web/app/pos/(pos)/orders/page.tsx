@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { Fragment, Suspense, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search, Ban, Receipt, ChevronDown, ChevronUp } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -8,6 +9,7 @@ import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import DocumentAttachments from '@/components/shared/DocumentAttachments';
 import { Spinner } from '@/components/ui/Spinner';
+import { resolveOrderFocus } from '@/lib/pos/order-focus';
 
 interface Payment { method: string; amount: number | string; reference?: string; }
 interface ItemRefund {
@@ -46,7 +48,8 @@ interface Order {
   items: OrderItem[];
   payments: Payment[];
   createdBy?: { id: string; name: string };
-  voidedBy?: { id: string; name: string };
+  // The list carries the name only; GET /orders/:id also has the id.
+  voidedBy?: { id?: string; name: string };
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -61,7 +64,16 @@ function fmtDate(d?: string | null) {
   });
 }
 
+// useSearchParams has to sit inside a Suspense boundary, or Next's build cannot prerender the page.
 export default function OrdersPage() {
+  return (
+    <Suspense>
+      <OrdersList />
+    </Suspense>
+  );
+}
+
+function OrdersList() {
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
   const [search, setSearch] = useState('');
@@ -99,7 +111,7 @@ export default function OrdersPage() {
   // Backwards-compat alias for existing UI bindings below.
   const canVoid = canInitiateVoid;
 
-  const { data: orders = [], isLoading } = useQuery<Order[]>({
+  const { data: orders = [], isLoading, isSuccess } = useQuery<Order[]>({
     queryKey: ['orders', user?.branchId],
     queryFn: () =>
       api.get(`/orders?branchId=${user!.branchId}&take=200`).then((r) => {
@@ -114,6 +126,24 @@ export default function OrdersPage() {
     // and the live "PREPARING · Xm" wait counter feel responsive.
     refetchInterval: 15_000,
   });
+
+  // /pos/orders?focus=<order id>: a stock page asked for one order ("which
+  // sale used up this stock?"). Open that row and scroll to it, or go to the
+  // order's own page when it is not in this list. See lib/pos/order-focus.ts.
+  const router = useRouter();
+  const focus = useSearchParams().get('focus');
+  const focusHandled = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focus || !isSuccess || focusHandled.current === focus) return;
+    focusHandled.current = focus;
+    const outcome = resolveOrderFocus(focus, orders);
+    if (!outcome) return;
+    if (outcome.kind === 'open') { router.replace(outcome.href); return; }
+    setExpanded(outcome.orderId);
+    requestAnimationFrame(() => {
+      document.getElementById(`order-${outcome.orderId}`)?.scrollIntoView({ block: 'center' });
+    });
+  }, [focus, isSuccess, orders, router]);
 
   const filtered = orders.filter(
     (o) =>
@@ -225,9 +255,11 @@ export default function OrdersPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {filtered.map((o) => (
-                  <>
+                  // A keyed Fragment: the bare <> here had no key, so React
+                  // warned on every load and refetch.
+                  <Fragment key={o.id}>
                     <tr
-                      key={o.id}
+                      id={`order-${o.id}`}
                       className={`hover:bg-muted/40 transition-colors cursor-pointer ${o.status === 'VOIDED' ? 'opacity-50' : ''}`}
                       onClick={() => setExpanded(expanded === o.id ? null : o.id)}
                     >
@@ -311,7 +343,7 @@ export default function OrdersPage() {
 
                     {/* Expanded detail row */}
                     {expanded === o.id && (
-                      <tr key={`${o.id}-detail`} className="bg-[var(--accent-soft)]/30">
+                      <tr className="bg-[var(--accent-soft)]/30">
                         <td colSpan={canVoid ? 7 : 6} className="px-8 py-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                             <div>
@@ -430,7 +462,7 @@ export default function OrdersPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

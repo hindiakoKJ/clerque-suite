@@ -1,7 +1,7 @@
 'use client';
 /**
  * Retail terminal — scan-first, dense SKU table.
- * Built to match the `POSRetail` mock in apps/web/public/design-preview/screens-verticals.jsx.
+ * Built to match the `POSRetail` design mock (the design-preview folder was removed; see git history).
  *
  * Layout:
  *   Top   — large scan field (autofocus, USB scanner indicator), Tingi toggle

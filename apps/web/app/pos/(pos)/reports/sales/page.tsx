@@ -24,6 +24,8 @@ import { formatPeso } from '@/lib/utils';
 interface ByDay {
   date: string; orderCount: number; voidCount: number;
   totalRevenue: number; totalCogs: number; grossProfit: number;
+  // Money handed back that day. Optional because an older API does not send it.
+  refundTotal?: number;
 }
 interface ByPaymentMethod { method: string; total: number; count: number; }
 interface TopProduct {
@@ -36,6 +38,8 @@ interface SalesRange {
     totalRevenue: number; totalCogs: number; grossProfit: number;
     grossMargin: number; totalOrders: number; voidCount: number;
     avgOrderValue: number;
+    // Money handed back in the range; gross profit and the average are after it.
+    refundTotal?: number;
     // Kitchen/bar lines not marked ready yet: sold, but their cost is not booked,
     // so grossProfit leaves it out. Optional because an older API does not send it.
     costPending?: { lineCount: number; revenue: number };
@@ -67,9 +71,14 @@ export default function SalesReportPage() {
 
   const { data, isLoading } = useQuery<SalesRange>({
     queryKey: ['sales-range', branchId, from, to],
-    queryFn:  () => api.get('/reports/sales-range', { params: { from, to, branchId } }).then((r) => r.data),
-    enabled:  !!from && !!to && !!branchId,
+    // An owner with no home branch still gets the report: without a branch
+    // the API answers for the whole shop.
+    queryFn:  () => api.get('/reports/sales-range', { params: { from, to, ...(branchId ? { branchId } : {}) } }).then((r) => r.data),
+    enabled:  !!from && !!to,
   });
+
+  // The Refunds column only takes up room when something was handed back.
+  const hasRefunds = (data?.totals.refundTotal ?? 0) > 0;
 
   function setRange(days: number) {
     const t = todayPH();
@@ -80,12 +89,12 @@ export default function SalesReportPage() {
   function exportCsv() {
     if (!data) return;
     const rows: string[] = [];
-    rows.push('Date,Orders,Voids,Revenue,COGS,Gross Profit');
+    rows.push('Date,Orders,Voids,Revenue,Refunds,COGS,Gross Profit');
     for (const d of data.byDay) {
-      rows.push([d.date, d.orderCount, d.voidCount, d.totalRevenue, d.totalCogs, d.grossProfit].join(','));
+      rows.push([d.date, d.orderCount, d.voidCount, d.totalRevenue, d.refundTotal ?? 0, d.totalCogs, d.grossProfit].join(','));
     }
     rows.push('');
-    rows.push('TOTAL,,,' + data.totals.totalRevenue + ',' + data.totals.totalCogs + ',' + data.totals.grossProfit);
+    rows.push('TOTAL,,,' + data.totals.totalRevenue + ',' + (data.totals.refundTotal ?? 0) + ',' + data.totals.totalCogs + ',' + data.totals.grossProfit);
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -166,7 +175,14 @@ export default function SalesReportPage() {
           <>
             {/* KPI cards */}
             <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <Kpi icon={ShoppingCart} label="Total Revenue" value={formatPeso(data.totals.totalRevenue)} sub={`${data.totals.totalOrders} orders`} accent />
+              <Kpi
+                icon={ShoppingCart}
+                label="Total Revenue"
+                value={formatPeso(data.totals.totalRevenue)}
+                // Gross profit and the average are after refunds, so say how much went back.
+                sub={`${data.totals.totalOrders} order${data.totals.totalOrders === 1 ? '' : 's'}${hasRefunds ? ` · ${formatPeso(data.totals.refundTotal ?? 0)} refunded` : ''}`}
+                accent
+              />
               <Kpi icon={Wallet} label="Gross Profit" value={formatPeso(data.totals.grossProfit)} sub={`${(data.totals.grossMargin * 100).toFixed(1)}% margin`} />
               <Kpi icon={TrendingUp} label="Avg Order Value" value={formatPeso(data.totals.avgOrderValue)} />
               <Kpi icon={Ban} label="Voids" value={String(data.totals.voidCount)} sub="excluded from revenue" tone="warn" />
@@ -189,14 +205,17 @@ export default function SalesReportPage() {
               {data.byDay.length === 0 ? (
                 <div className="p-6 text-sm text-muted-foreground text-center">No paid orders in this range.</div>
               ) : (
-                <table className="w-full text-sm">
+                // Scrolls sideways inside its card on a phone instead of being cut off.
+                <div className="overflow-x-auto">
+                <table className="w-full text-sm whitespace-nowrap">
                   <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                     <tr>
                       <th className="text-left px-4 py-2 font-medium">Date</th>
                       <th className="text-right px-4 py-2 font-medium">Orders</th>
                       <th className="text-right px-4 py-2 font-medium">Voids</th>
                       <th className="text-right px-4 py-2 font-medium">Revenue</th>
-                      <th className="text-right px-4 py-2 font-medium">COGS</th>
+                      {hasRefunds && <th className="text-right px-4 py-2 font-medium">Refunds</th>}
+                      <th className="text-right px-4 py-2 font-medium">Cost</th>
                       <th className="text-right px-4 py-2 font-medium">Gross Profit</th>
                     </tr>
                   </thead>
@@ -207,12 +226,18 @@ export default function SalesReportPage() {
                         <td className="px-4 py-2.5 text-right tabular-nums">{d.orderCount}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{d.voidCount}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums font-mono">{formatPeso(d.totalRevenue)}</td>
+                        {hasRefunds && (
+                          <td className="px-4 py-2.5 text-right tabular-nums font-mono text-muted-foreground">
+                            {(d.refundTotal ?? 0) > 0 ? `−${formatPeso(d.refundTotal ?? 0)}` : '—'}
+                          </td>
+                        )}
                         <td className="px-4 py-2.5 text-right tabular-nums font-mono text-muted-foreground">{formatPeso(d.totalCogs)}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums font-mono font-semibold text-emerald-700 dark:text-emerald-400">{formatPeso(d.grossProfit)}</td>
+                        <td className={`px-4 py-2.5 text-right tabular-nums font-mono font-semibold ${d.grossProfit < 0 ? 'text-red-700 dark:text-red-400' : 'text-emerald-700 dark:text-emerald-400'}`}>{formatPeso(d.grossProfit)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </section>
 
@@ -268,8 +293,9 @@ export default function SalesReportPage() {
         )}
 
         <div className="text-[11px] text-muted-foreground pb-4">
-          Revenue is recognized at <span className="font-mono">paidAt</span>. Voided orders excluded from revenue/profit
-          but counted under Voids. COGS is the sum of <span className="font-mono">OrderItem.costPrice × quantity</span> at sale time.
+          A sale counts on the day it was paid. Voided orders are left out of revenue and profit and counted under Voids.
+          Refunds come off gross profit and the average on the day the money was handed back.
+          Cost is what each item cost to make at the time it was sold.
         </div>
       </div>
     </div>

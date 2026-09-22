@@ -160,7 +160,10 @@ export async function dispatchPrintJob(
         // On desktop (no RawBT installed) the URL would fail silently, so say why.
         if (typeof window === 'undefined') return { ok: false, reason: 'No window' };
         if (!isLikelyAndroid()) {
-          return { ok: false, reason: 'RawBT requires Android with the RawBT app installed.' };
+          return {
+            ok: false,
+            reason: `${printer.name} prints through the RawBT app on an Android tablet. Print from that tablet, or use the browser print button here.`,
+          };
         }
         // Same hand-off as the station tablets and the test slip: a link click,
         // not a hidden iframe, which newer Android Chrome silently blocks.
@@ -178,12 +181,11 @@ export async function dispatchPrintJob(
       }
 
       case 'NETWORK': {
-        // Reach the printer's IP via a server-side proxy. Browsers can't open
-        // raw TCP sockets directly. Phase 3D adds the backend proxy endpoint;
-        // for now, fail with a friendly message.
+        // A browser cannot open a raw connection to a printer's IP address, so
+        // this screen cannot print to a network printer. Say what to do instead.
         return {
           ok: false,
-          reason: `Network printer support coming soon. Set ${printer.name} to Bluetooth (RawBT) or USB.`,
+          reason: `${printer.name} is set up as a network printer, which this screen cannot print to. Ask Clerque support to switch it to Bluetooth (RawBT) or USB, or turn it off in Settings > Floor layout.`,
         };
       }
 
@@ -232,6 +234,43 @@ export interface DispatchResult {
   jobType: 'STATION_TICKET';
   ok: boolean;
   reason?: string;
+  /**
+   * This device cannot drive that printer at all, so nothing was attempted.
+   * Not a failure: the station prints its own ticket from its own screen.
+   */
+  skipped?: boolean;
+}
+
+/**
+ * Can THIS device drive that printer at all?
+ *
+ * A station printer belongs to the station's tablet: the bar's Bluetooth
+ * printer is paired to the bar tablet through RawBT, not to the till. A till on
+ * a laptop used to try anyway, fail, and put a red "Station tickets failed ...
+ * RawBT requires Android" toast over every single sale, which reads as "the
+ * sale went wrong" when nothing had. The kitchen and bar screens have their
+ * own print button per ticket, so the right thing for the till to do about a
+ * printer it cannot reach is nothing, quietly.
+ */
+export function printerReachableHere(
+  printer: PrinterConfig,
+  webSerialPrinter: { send?: (b: Uint8Array) => Promise<void>; connected?: boolean } | null,
+): boolean {
+  switch (printer.interface) {
+    case 'BLUETOOTH_RAWBT':
+      return isLikelyAndroid();
+    case 'USB':
+      return !!webSerialPrinter?.send && !!webSerialPrinter.connected;
+    case 'NETWORK':
+      return false;
+    case 'BLUETOOTH_NATIVE': {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cap = typeof window !== 'undefined' ? (window as any).Capacitor : undefined;
+      return !!cap?.isNative;
+    }
+    default:
+      return false;
+  }
 }
 
 /**
@@ -257,6 +296,19 @@ export async function dispatchOrderToStations(
       (it) => it.categoryId && station.categoryIds.includes(it.categoryId),
     );
     if (items.length === 0) continue;
+
+    // Not this device's printer: leave it to the station's own screen.
+    if (!printerReachableHere(printer, webSerialPrinter)) {
+      results.push({
+        printer,
+        station,
+        jobType: 'STATION_TICKET',
+        ok: false,
+        skipped: true,
+        reason: `${station.name} prints its own tickets.`,
+      });
+      continue;
+    }
 
     const ticket: StationTicketData = {
       orderNumber: order.orderNumber,
@@ -327,30 +379,47 @@ export function isLikelyAndroid(): boolean {
 export function summariseDispatch(results: DispatchResult[]): {
   printedCount: number;
   failedCount:  number;
+  /** Printers this device cannot drive; nothing was tried, nothing went wrong. */
+  skippedCount: number;
   failureSummary?: string;
 } {
   const printed = results.filter((r) => r.ok);
-  const failed = results.filter((r) => !r.ok);
+  const skipped = results.filter((r) => !r.ok && r.skipped);
+  const failed = results.filter((r) => !r.ok && !r.skipped);
   let failureSummary: string | undefined;
   if (failed.length > 0) {
     const reasons = [...new Set(failed.map((f) => f.reason ?? 'unknown'))];
     const printers = [...new Set(failed.map((f) => f.printer.name))];
     failureSummary = `${printers.join(', ')}: ${reasons.join('; ')}`;
   }
-  return { printedCount: printed.length, failedCount: failed.length, failureSummary };
+  return { printedCount: printed.length, failedCount: failed.length, skippedCount: skipped.length, failureSummary };
+}
+
+/**
+ * What, if anything, to tell the cashier after the tickets went out. Null means
+ * say nothing: there was nothing to print, or the only printers involved
+ * belong to other devices.
+ */
+export function dispatchToast(results: DispatchResult[]): { level: 'success' | 'warning'; message: string } | null {
+  const { printedCount, failedCount, failureSummary } = summariseDispatch(results);
+  if (printedCount > 0 && failedCount === 0) {
+    return { level: 'success', message: `Sent ${printedCount} ticket${printedCount === 1 ? '' : 's'} to stations.` };
+  }
+  if (printedCount > 0 && failedCount > 0) {
+    return { level: 'warning', message: `The sale is saved. ${printedCount} station ticket${printedCount === 1 ? '' : 's'} sent, ${failedCount} did not print: ${failureSummary}` };
+  }
+  if (failedCount > 0) {
+    return { level: 'warning', message: `The sale is saved, but the station ticket did not print: ${failureSummary}` };
+  }
+  return null;
 }
 
 // ── Toast convenience ───────────────────────────────────────────────────────
 
 /** Toast a friendly summary after a multi-printer dispatch. */
 export function toastDispatchSummary(results: DispatchResult[]) {
-  const { printedCount, failedCount, failureSummary } = summariseDispatch(results);
-  if (printedCount > 0 && failedCount === 0) {
-    toast.success(`Sent ${printedCount} ticket${printedCount === 1 ? '' : 's'} to stations.`);
-  } else if (printedCount > 0 && failedCount > 0) {
-    toast.warning(`${printedCount} sent, ${failedCount} failed: ${failureSummary}`);
-  } else if (printedCount === 0 && failedCount > 0) {
-    toast.error(`Station tickets failed: ${failureSummary}`);
-  }
-  // 0 printed, 0 failed = nothing to dispatch — silent
+  const t = dispatchToast(results);
+  if (!t) return; // nothing to print, or only other devices' printers: silent
+  if (t.level === 'success') toast.success(t.message);
+  else toast.warning(t.message);
 }

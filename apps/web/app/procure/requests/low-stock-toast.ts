@@ -35,7 +35,8 @@ export function lowStockToast(d: PullLowStockResult): { kind: 'success' | 'warni
     : '';
 
   if (d.added) {
-    return { kind: 'success', message: `Added ${d.added} item${d.added === 1 ? '' : 's'} that are below their reorder level.${comingNote}${blindNote}` };
+    // "1 item that is", "2 items that are": the toast is read aloud across a kitchen.
+    return { kind: 'success', message: `Added ${d.added} item${d.added === 1 ? ' that is below its' : 's that are below their'} reorder level.${comingNote}${blindNote}` };
   }
   if (coming.length) return { kind: 'warning', message: `Nothing new to add.${comingNote}${blindNote}` };
   if (blind > 0) return { kind: 'warning', message: `Nothing is below its reorder level.${blindNote}` };

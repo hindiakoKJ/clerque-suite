@@ -79,6 +79,7 @@ import { InventoryReportsModule } from './inventory-reports/inventory-reports.mo
 import { HealthController } from './health/health.controller';
 import { IdempotencyInterceptor } from './common/interceptors/idempotency.interceptor';
 import { CleanupScheduler } from './common/cleanup.scheduler';
+import { throttleTracker } from './common/http/throttle-tracker';
 
 @Module({
   controllers: [HealthController],
@@ -86,17 +87,24 @@ import { CleanupScheduler } from './common/cleanup.scheduler';
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     // SECURITY D5-03 — global API rate limiter.
-    // Defaults: 100 requests / minute per IP. Authenticated endpoints can
-    // override via @Throttle on the controller for tighter or looser limits
-    // (e.g., login is already throttled per-account in auth.service). The
-    // limiter uses an in-memory LRU; acceptable for single-instance Railway,
+    // Three windows, each counted PER ROUTE (the limiter's key includes the
+    // controller + handler) and per caller. The caller is the signed-in user
+    // when the request carries a genuine access token, and the real client
+    // address otherwise -- always the address on /auth/* routes. See
+    // common/http/throttle-tracker.ts and common/http/client-ip.ts.
+    // Controllers can override via @Throttle (login: 10 / minute) or opt out
+    // with @SkipThrottle({ short: true, medium: true, long: true }).
+    // The limiter uses an in-memory LRU; acceptable for single-instance Railway,
     // swap for the Redis storage adapter (`@nestjs/throttler/storage-redis`)
     // before enabling horizontal scaling.
-    ThrottlerModule.forRoot([
-      { name: 'short',  ttl: 1000,    limit: 30 },   // 30 req / 1s
-      { name: 'medium', ttl: 10_000,  limit: 100 },  // 100 req / 10s
-      { name: 'long',   ttl: 60_000,  limit: 600 },  // 600 req / min
-    ]),
+    ThrottlerModule.forRoot({
+      getTracker: (req) => throttleTracker(req),
+      throttlers: [
+        { name: 'short',  ttl: 1000,    limit: 30 },   // 30 req / 1s
+        { name: 'medium', ttl: 10_000,  limit: 100 },  // 100 req / 10s
+        { name: 'long',   ttl: 60_000,  limit: 600 },  // 600 req / min
+      ],
+    }),
     PrismaModule,
     SanityModule,
     AuthModule,

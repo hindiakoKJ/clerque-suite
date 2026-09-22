@@ -66,8 +66,7 @@ export class AccountingPeriodsController {
     @Param('id') id: string,
     @Req() req: Request,
   ) {
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-             ?? req.socket?.remoteAddress;
+    const ip = req.ip ?? req.socket?.remoteAddress; // req.ip is the checked client address (common/http/client-ip.ts)
     return this.periodsService.closePeriod(user.tenantId!, id, user.sub, ip);
   }
 
@@ -88,8 +87,7 @@ export class AccountingPeriodsController {
     @Body() body: ReopenPeriodDto,
     @Req() req: Request,
   ) {
-    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-             ?? req.socket?.remoteAddress;
+    const ip = req.ip ?? req.socket?.remoteAddress; // req.ip is the checked client address (common/http/client-ip.ts)
     return this.periodsService.reopenPeriod(
       user.tenantId!, id, user.sub, body.reason, ip,
     );

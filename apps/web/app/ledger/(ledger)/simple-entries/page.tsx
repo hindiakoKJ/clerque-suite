@@ -3,21 +3,27 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowUpCircle, ArrowDownCircle, PlusCircle, MinusCircle, ArrowRightLeft, Loader2,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Wrench, Banknote,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { formatPeso, currencySymbol } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 import { todayIso } from '@/lib/today';
+import {
+  type EntryType, type PaidFrom, type EntryForm,
+  isTransfer as isTransferType, paidFromOptions, paidFromFor, pocketLabel,
+  entryProblem, buildEntryPayload, reverseQuestion,
+} from './entry-payload';
 
-type EntryType =
-  | 'EXPENSE' | 'OTHER_INCOME' | 'OWNER_CONTRIBUTION'
-  | 'OWNER_DRAWING' | 'DEPOSIT_TO_BANK' | 'WITHDRAW_TO_CASH';
+// What the payload looks like, and which kinds may be paid by the owner, live in
+// ./entry-payload.ts where they are tested. This file is only the form.
 
 const TYPES: { key: EntryType; label: string; hint: string; Icon: React.ElementType }[] = [
   { key: 'EXPENSE',            label: 'Expense',          hint: 'Money out for a cost',        Icon: ArrowUpCircle },
   { key: 'OTHER_INCOME',       label: 'Other income',     hint: 'Money in (not a sale)',       Icon: ArrowDownCircle },
+  { key: 'EQUIPMENT_PURCHASE', label: 'Bought equipment', hint: 'Machine, fridge, furniture',  Icon: Wrench },
+  { key: 'WAGES_PAID',         label: 'Paid wages',       hint: 'Staff pay handed out',        Icon: Banknote },
   { key: 'OWNER_CONTRIBUTION', label: 'Owner put in',     hint: 'Owner added money',           Icon: PlusCircle },
   { key: 'OWNER_DRAWING',      label: 'Owner took out',   hint: 'Owner took money',            Icon: MinusCircle },
   { key: 'DEPOSIT_TO_BANK',    label: 'Cash → Bank',      hint: 'Deposited till cash',         Icon: ArrowRightLeft },
@@ -29,6 +35,12 @@ const CATEGORIES: { key: string; label: string }[] = [
   { key: 'SUPPLIES', label: 'Supplies' }, { key: 'REPAIRS', label: 'Repairs' },
   { key: 'TRANSPORT', label: 'Transport' }, { key: 'OTHER', label: 'Other' },
 ];
+
+const PAID_FROM_LABEL: Record<PaidFrom, string> = {
+  CASH:  'Cash on hand',
+  BANK:  'Bank / GCash / Maya',
+  OWNER: 'Owner paid (own money)',
+};
 
 interface RecentEntry {
   id: string; entryNumber: string; date: string; description: string; amount: number;
@@ -60,16 +72,24 @@ const INPUT =
 export default function SimpleEntriesPage() {
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
-  const [type, setType]         = useState<EntryType>('EXPENSE');
-  const [amount, setAmount]     = useState('');
-  const [date, setDate]         = useState(today());
-  const [source, setSource]     = useState<'CASH' | 'BANK'>('CASH');
-  const [category, setCategory] = useState('OTHER');
-  const [note, setNote]         = useState('');
+  const [type, setType]           = useState<EntryType>('EXPENSE');
+  const [amount, setAmount]       = useState('');
+  const [date, setDate]           = useState(today());
+  const [paidFrom, setPaidFrom]   = useState<PaidFrom>('CASH');
+  const [category, setCategory]   = useState('OTHER');
+  const [note, setNote]           = useState('');
+  const [assetName, setAssetName] = useState('');
 
-  const isTransfer = type === 'DEPOSIT_TO_BANK' || type === 'WITHDRAW_TO_CASH';
-  const isExpense  = type === 'EXPENSE';
-  const sourceLabel = isExpense || type === 'OWNER_DRAWING' ? 'Paid from' : 'Received in';
+  const isTransfer  = isTransferType(type);
+  const isExpense   = type === 'EXPENSE';
+  const isEquipment = type === 'EQUIPMENT_PURCHASE';
+  const pockets     = paidFromOptions(type);
+
+  function pickType(next: EntryType) {
+    setType(next);
+    // "Owner paid" only exists for equipment and wages; fall back to cash elsewhere.
+    setPaidFrom((p) => paidFromFor(next, p));
+  }
 
   const now = new Date();
   const [month, setMonth]       = useState<{ year: number; month: number }>({ year: now.getFullYear(), month: now.getMonth() });
@@ -93,19 +113,13 @@ export default function SimpleEntriesPage() {
     });
   }
 
+  const form: EntryForm = { type, amount, date, paidFrom, category, note, assetName };
+
   const { mutate, isPending } = useMutation({
-    mutationFn: () =>
-      api.post('/simple-entries', {
-        type,
-        amount: Number(amount),
-        date,
-        ...(isTransfer ? {} : { source }),
-        ...(isExpense ? { category } : {}),
-        note: note.trim() || undefined,
-      }).then((r) => r.data),
+    mutationFn: () => api.post('/simple-entries', buildEntryPayload(form)).then((r) => r.data),
     onSuccess: (d: { description: string; amount: number }) => {
       toast.success(`Recorded: ${d.description} · ${formatPeso(d.amount)}`);
-      setAmount(''); setNote('');
+      setAmount(''); setNote(''); setAssetName('');
       qc.invalidateQueries({ queryKey: ['simple-entries'] });
       qc.invalidateQueries({ queryKey: ['simple-entries-summary'] });
     },
@@ -126,8 +140,8 @@ export default function SimpleEntriesPage() {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    const amt = Number(amount);
-    if (!amt || amt <= 0) { toast.error('Enter an amount greater than zero.'); return; }
+    const problem = entryProblem(form);
+    if (problem) { toast.error(problem); return; }
     mutate();
   }
 
@@ -136,7 +150,7 @@ export default function SimpleEntriesPage() {
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-foreground">Record Entry</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Log money in and out that doesn&apos;t go through the till — rent, utilities, owner cash, deposits.
+          Log money in and out that doesn&apos;t go through the till — rent, utilities, wages, equipment, owner cash, deposits.
           Every entry is saved to your books automatically.
         </p>
       </div>
@@ -188,7 +202,8 @@ export default function SimpleEntriesPage() {
           </div>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          Sales and expenses only — money you put in or take out yourself, and cash↔bank transfers, don&rsquo;t change profit.
+          Sales and costs only — money you put in or take out yourself, cash↔bank transfers, and equipment you bought
+          (something the shop owns, not a cost) don&rsquo;t change profit.
         </p>
       </div>
 
@@ -196,14 +211,14 @@ export default function SimpleEntriesPage() {
         {/* Type picker */}
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">What happened?</label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {TYPES.map((t) => {
               const active = type === t.key;
               return (
                 <button
                   key={t.key}
                   type="button"
-                  onClick={() => setType(t.key)}
+                  onClick={() => pickType(t.key)}
                   className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors ${
                     active
                       ? 'border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_10%,transparent)]'
@@ -244,24 +259,43 @@ export default function SimpleEntriesPage() {
           </div>
         )}
 
-        {/* Funding source (hidden for transfers — those are fixed Cash↔Bank) */}
+        {/* What was bought (equipment only) */}
+        {isEquipment && (
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">What was bought</label>
+            <input
+              type="text" maxLength={120} value={assetName} onChange={(e) => setAssetName(e.target.value)}
+              placeholder="e.g. Espresso machine, chest freezer, 4 tables" className={INPUT}
+            />
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Equipment is recorded as something the shop owns, not as this month&rsquo;s cost.
+            </p>
+          </div>
+        )}
+
+        {/* Where the money came from (hidden for transfers — those are fixed Cash↔Bank) */}
         {!isTransfer && (
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">{sourceLabel}</label>
-            <div className="grid grid-cols-2 gap-2">
-              {(['CASH', 'BANK'] as const).map((s) => (
+            <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">{pocketLabel(type)}</label>
+            <div className={`grid gap-2 ${pockets.length === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
+              {pockets.map((s) => (
                 <button
-                  key={s} type="button" onClick={() => setSource(s)}
+                  key={s} type="button" onClick={() => setPaidFrom(s)}
                   className={`rounded-lg border p-2.5 text-sm font-medium transition-colors ${
-                    source === s
+                    paidFrom === s
                       ? 'border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_10%,transparent)] text-foreground'
                       : 'border-border bg-background text-muted-foreground hover:bg-muted/40'
                   }`}
                 >
-                  {s === 'CASH' ? 'Cash on hand' : 'Bank / GCash / Maya'}
+                  {PAID_FROM_LABEL[s]}
                 </button>
               ))}
             </div>
+            {paidFrom === 'OWNER' && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                The shop&rsquo;s cash and bank do not move. This counts as money the owner put into the business.
+              </p>
+            )}
           </div>
         )}
 
@@ -270,7 +304,7 @@ export default function SimpleEntriesPage() {
           <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Note (optional)</label>
           <input
             type="text" maxLength={200} value={note} onChange={(e) => setNote(e.target.value)}
-            placeholder="e.g. June rent, Meralco bill, supplier deposit" className={INPUT}
+            placeholder="e.g. June rent, Meralco bill, Saturday pay for 2 baristas" className={INPUT}
           />
         </div>
 
@@ -310,7 +344,7 @@ export default function SimpleEntriesPage() {
                   {!r.reversed && (
                     <button
                       type="button"
-                      onClick={() => { if (window.confirm('Reverse this entry? This posts an offsetting entry to undo it. The original stays for your records.')) reverse(r.id); }}
+                      onClick={() => { if (window.confirm(reverseQuestion(r, formatPeso(r.amount)))) reverse(r.id); }}
                       disabled={reversing}
                       className="text-xs text-muted-foreground hover:text-red-500 underline disabled:opacity-50"
                     >

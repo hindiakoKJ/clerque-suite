@@ -1,6 +1,6 @@
 import {
   CAPTION_LIMIT, MESSAGE_LIMIT, SaleForAlert, USAGE_ROWS_SHOWN, UsageForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, escapeHtml,
-  lateSalesNote, manilaDayLabel, photoCaption, postedMessage, saleMessage, usageQty,
+  lateSalesNote, manilaDayLabel, paidWith, photoCaption, postedMessage, saleMessage, usageQty,
 } from './messages';
 
 /** What the owner reads on their phone. */
@@ -24,7 +24,8 @@ describe('Telegram alert messages', () => {
 
   it('a sale reads like a receipt, 32 characters wide, in Manila time', () => {
     const text = saleMessage(sale());
-    expect(text).toContain('<b>Sale ORD-2026-000123</b>  ₱365.00');
+    // The first line is the phone's notification preview: the sale, the amount and how it was paid.
+    expect(text.split('\n')[0]).toBe('🧾 <b>Sale ORD-2026-000123</b>  ₱365.00 - <b>GCash</b>');
     expect(text).toContain('Cafe Carolina · Main');
     const lines = receipt(text).split('\n');
     expect(lines.every((l) => [...l].length <= 32)).toBe(true);
@@ -48,7 +49,63 @@ describe('Telegram alert messages', () => {
   it('escapes what the shop typed, so a product name cannot break the message', () => {
     const text = saleMessage(sale({ items: [{ name: 'Tea <b>&</b> "Milk"', quantity: 1, unitPrice: 50, lineTotal: 50, modifiers: [] }] }));
     expect(text).toContain('Tea &lt;b&gt;&amp;&lt;/b&gt; "Milk"');
-    expect(text.match(/<b>/g)).toHaveLength(1);   // only our own bold
+    expect(text.match(/<b>/g)).toHaveLength(2);   // only our own bold: the sale and how it was paid
+  });
+
+  describe('how the sale was paid', () => {
+    it('a cash sale says Cash in the headline and shows no reference, even if one was saved', () => {
+      const text = saleMessage(sale({ orderNumber: 'ORD-2026-000086', totalAmount: 216, payments: [{ method: 'CASH', amount: 216, reference: 'till 2' }] }));
+      expect(text.split('\n')[0]).toBe('🧾 <b>Sale ORD-2026-000086</b>  ₱216.00 - <b>Cash</b>');
+      expect(receipt(text).split('\n').find((l) => l.startsWith('Cash'))).toMatch(/^Cash +216\.00$/);
+      expect(text).not.toContain('till 2');
+    });
+
+    it('a split payment names each way once, in the order taken', () => {
+      const text = saleMessage(sale({ payments: [
+        { method: 'CASH', amount: 100 },
+        { method: 'GCASH_PERSONAL', amount: 165, reference: '1234567' },
+        { method: 'GCASH_BUSINESS', amount: 100, reference: '7654321' },
+      ] }));
+      expect(text.split('\n')[0]).toBe('🧾 <b>Sale ORD-2026-000123</b>  ₱365.00 - <b>Cash + GCash</b>');
+      expect(paidWith([{ method: 'MAYA_BUSINESS' }, { method: 'CARD' }, { method: 'QR_PH' }])).toBe('Maya + Card + QR Ph');
+    });
+
+    it('shows the reference the cashier typed next to a non-cash payment', () => {
+      const lines = receipt(saleMessage(sale({ payments: [
+        { method: 'CASH', amount: 100 },
+        { method: 'GCASH_BUSINESS', amount: 265, reference: ' 1234567 ' },
+      ] }))).split('\n');
+      expect(lines.find((l) => l.startsWith('GCash'))).toMatch(/^GCash #1234567 +265\.00$/);
+      expect(lines.find((l) => l.startsWith('Cash'))).toMatch(/^Cash +100\.00$/);
+      expect(lines.every((l) => [...l].length <= 32)).toBe(true);
+    });
+
+    it('a non-cash payment with no reference typed shows just the method', () => {
+      for (const reference of [undefined, null, '', '   ']) {
+        const lines = receipt(saleMessage(sale({ payments: [{ method: 'MAYA_PERSONAL', amount: 365, reference }] }))).split('\n');
+        expect(lines.find((l) => l.startsWith('Maya'))).toMatch(/^Maya +365\.00$/);
+        expect(lines.some((l) => l.includes('#'))).toBe(false);
+      }
+    });
+
+    it('a long reference goes whole on its own line, never cut short beside the amount', () => {
+      const ref = '9021345678123456789012';   // 22 digits: too long to share a 32-character line with the amount
+      const lines = receipt(saleMessage(sale({ totalAmount: 12365, payments: [{ method: 'QR_PH', amount: 12365, reference: ref }] }))).split('\n');
+      const at = lines.findIndex((l) => l.startsWith('QR Ph'));
+      expect(lines[at]).toMatch(/^QR Ph +12,365\.00$/);
+      expect(lines[at + 1]).toBe(`  #${ref}`);
+      expect(lines.every((l) => [...l].length <= 32)).toBe(true);
+    });
+
+    it('a reference cannot break the message or the layout', () => {
+      const text = saleMessage(sale({ payments: [{ method: 'CARD', amount: 365, reference: '<b>12\n34</b>' }] }));
+      expect(text).toContain('Card #&lt;b&gt;12 34&lt;/b&gt;');
+      expect(text.match(/<b>/g)).toHaveLength(2);
+    });
+
+    it('a sale with no payment rows keeps the plain headline', () => {
+      expect(saleMessage(sale({ payments: [] })).split('\n')[0]).toBe('🧾 <b>Sale ORD-2026-000123</b>  ₱365.00');
+    });
   });
 
   it('an offline sale says so, with when it reached Clerque', () => {

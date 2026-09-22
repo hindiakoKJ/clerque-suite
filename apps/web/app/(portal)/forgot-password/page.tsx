@@ -4,6 +4,7 @@ import { useState, Suspense, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ArrowLeft, Mail, Sun, Moon, CheckCircle2 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 import type { AppProduct } from '@/components/portal/AppLoginPage';
 import { toggleTheme } from '@/components/portal/AppLoginPage';
 
@@ -117,6 +118,14 @@ function ForgotPasswordInner() {
                 >
                   try again
                 </button>
+                .
+              </p>
+              <p className="text-muted-foreground text-xs">
+                Staff: the owner can set a new password for you from the Staff page.
+                Owners who are still locked out can email{' '}
+                <a href={supportMailto('I cannot reset my Clerque password')} className="font-medium underline" style={{ color: accent }}>
+                  {SUPPORT_EMAIL}
+                </a>
                 .
               </p>
             </div>

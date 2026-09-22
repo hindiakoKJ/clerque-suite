@@ -8,9 +8,9 @@ import { downloadAuthFile } from '@/lib/utils';
 import { ComingSoon } from '@/components/ui/ComingSoon';
 import { toast } from 'sonner';
 
-// Sprint 21 — video walkthrough URLs per BIR form. Empty string renders a
-// "coming soon" placeholder; once the Loom/YouTube recording exists, drop
-// the embed URL here and the modal will play it. Keep these env-driven so
+// Video walkthrough URLs per BIR form. An empty string shows no "How to file"
+// button at all; once the Loom/YouTube recording exists, drop the embed URL
+// here and the modal will play it. Keep these env-driven so
 // marketing can swap URLs without a deploy:
 const BIR_VIDEO_URLS = {
   '2550Q': process.env.NEXT_PUBLIC_BIR_2550Q_VIDEO ?? '',
@@ -21,6 +21,9 @@ const BIR_VIDEO_URLS = {
 function HowToVideoButton({ form }: { form: keyof typeof BIR_VIDEO_URLS }) {
   const [open, setOpen] = useState(false);
   const url = BIR_VIDEO_URLS[form];
+  // No recording yet: no button. A "How to file" button that opened on
+  // "coming soon" was a dead end for the owner.
+  if (!url) return null;
   return (
     <>
       <button
@@ -38,21 +41,13 @@ function HowToVideoButton({ form }: { form: keyof typeof BIR_VIDEO_URLS }) {
               <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
             </div>
             <div className="aspect-video bg-muted flex items-center justify-center">
-              {url ? (
-                <iframe
-                  src={url}
-                  className="w-full h-full"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  title={`How to file BIR ${form}`}
-                />
-              ) : (
-                <div className="text-center p-8 text-sm text-muted-foreground">
-                  <Play className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                  <p>Video walkthrough coming soon.</p>
-                  <p className="text-xs mt-1">Meanwhile: every line in the form has a tooltip — hover for the BIR-line reference.</p>
-                </div>
-              )}
+              <iframe
+                src={url}
+                className="w-full h-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                title={`How to file BIR ${form}`}
+              />
             </div>
           </div>
         </div>
@@ -686,12 +681,11 @@ function Section2307({ year, quarter }: { year: number; quarter: Quarter }) {
     queryFn:  () => api.get(`/bir/2307/vendors?${params.toString()}`).then((r) => r.data),
   });
 
-  function downloadFor(vendorId: string) {
-    // Use authenticated download utility
-    const tokenized = `${process.env.NEXT_PUBLIC_API_URL ?? ''}/bir/2307/excel?vendorId=${vendorId}&year=${year}${effectiveQuarter ? `&quarter=${effectiveQuarter}` : ''}`;
-    downloadAuthFile(`/bir/2307/excel?vendorId=${vendorId}&year=${year}${effectiveQuarter ? `&quarter=${effectiveQuarter}` : ''}`,
-      `BIR-2307-${effectiveQuarter ? `Q${effectiveQuarter}-${year}` : year}-${vendorId}.xlsx`);
-    void tokenized; // silence unused warning, keeps the comment readable
+  function downloadFor(v: Vendor2307Row) {
+    // Named after the vendor, not its database id, so the file says whose certificate it is.
+    const who = v.vendorName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'vendor';
+    downloadAuthFile(`/bir/2307/excel?vendorId=${encodeURIComponent(v.vendorId)}&year=${year}${effectiveQuarter ? `&quarter=${effectiveQuarter}` : ''}`,
+      `BIR-2307-${effectiveQuarter ? `Q${effectiveQuarter}-${year}` : year}-${who}.xlsx`);
   }
 
   return (
@@ -747,7 +741,7 @@ function Section2307({ year, quarter }: { year: number; quarter: Quarter }) {
                     <td className="py-2 text-right font-mono font-semibold text-amber-600">{fmtPeso(v.totalWithheld)}</td>
                     <td className="py-2 text-right">
                       <button
-                        onClick={() => downloadFor(v.vendorId)}
+                        onClick={() => downloadFor(v)}
                         className="inline-flex items-center gap-1 h-8 px-3 rounded-md border border-border bg-background text-xs font-medium hover:bg-muted transition-colors"
                       >
                         <Download className="w-3.5 h-3.5" /> 2307.xlsx
@@ -796,8 +790,9 @@ function SectionBooksOfAccount() {
         `${API_URL}/bir/books/${type}?year=${bookYear}&month=${bookMonth}`,
         names[type]!,
       );
-    } catch {
-      toast.error(`Failed to download ${names[type]}.`);
+    } catch (e: unknown) {
+      const reason = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(reason ? `Could not download ${names[type]}: ${reason}` : `Could not download ${names[type]}. Please try again.`);
     } finally {
       setLoading(null);
     }
@@ -885,8 +880,8 @@ export default function BirPage() {
       <ComingSoon
         icon={FileText}
         feature="Tax Estimation Guide"
-        eta="Available once BIR registration is enabled for your account"
-        description="Tax estimation views (2550Q, 2551Q, 1701Q) and EIS e-invoicing are available for BIR-registered businesses. Contact your administrator to enable these features."
+        eta="Available once your business is marked BIR-registered"
+        description="Tax estimates (2550Q, 2551Q, 1701Q) and the BIR books are for BIR-registered businesses. Your tax status is set by Clerque support: if you are registered with the BIR, write to us and we will switch it on."
       />
     );
   }
@@ -902,8 +897,9 @@ export default function BirPage() {
         `${API_URL}/export/accountant-csv?from=${csvFrom}&to=${csvTo}`,
         `accountant-export-${csvFrom}_to_${csvTo}.csv`,
       );
-    } catch {
-      toast.error('Failed to download accountant export.');
+    } catch (e: unknown) {
+      const reason = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(reason ? `Could not download the accountant export: ${reason}` : 'Could not download the accountant export. Please try again.');
     } finally {
       setCsvLoading(false);
     }

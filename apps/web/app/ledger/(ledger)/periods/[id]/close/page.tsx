@@ -119,8 +119,8 @@ export default function PeriodCloseChecklistPage({ params }: { params: Promise<{
           Close {period.name}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Pre-close checklist (CLOCO) — every check below must pass before the period
-          can be locked. Auto-checks evaluate live; manual attestations require your sign-off.
+          Every check below must pass before the period can be locked. The automatic
+          checks run live; the manual ones need your sign-off.
         </p>
       </div>
 

@@ -4,7 +4,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readTag, manilaDay, receiptDateFor, listToAsk, askText, keepWorkOnList } from './receipt-list.ts';
+import { readFileSync } from 'node:fs';
+import {
+  readTag, manilaDay, receiptDateFor, listsToAsk, askChoice, ASK_NONE, unitCostText, nothingToPostText, keepWorkOnList,
+  closestByName,
+} from './receipt-list.ts';
 
 // ── the receipt date ─────────────────────────────────────────────────────────
 
@@ -41,32 +45,71 @@ const sent   = { id: 's1', requestNumber: 'REQ-20260917-002', status: 'SENT',   
 const bought = { id: 'b1', requestNumber: 'REQ-20260916-001', status: 'BOUGHT', notes: 'Puregold', lines: [line('Sugar'), line('Fresh Milk')] };
 const parcel = { id: 'p1', requestNumber: 'REQ-20260912-001', status: 'BOUGHT', notes: '[ONTHEWAY:2026-09-12] [PREPAID:OWNER_FUNDED]', lines: [line('Matcha')] };
 
-test('shopping saved as bought is asked about before a sent list', () => {
-  assert.equal(listToAsk([sent, bought])?.id, 'b1');
+const ids = (lists) => lists.map((r) => r.id);
+
+test('every waiting list is offered at once, shopping saved as bought before a sent list', () => {
+  assert.deepEqual(ids(listsToAsk([sent, bought])), ['b1', 's1']);
 });
 
-test('an order still on the way is never asked about', () => {
-  assert.equal(listToAsk([parcel]), null);
-  assert.equal(listToAsk([parcel, sent])?.id, 's1');
+test('sixteen waiting lists are one question, not sixteen', () => {
+  const many = Array.from({ length: 16 }, (_, i) => ({ ...sent, id: `s${i}`, requestNumber: `REQ-20260917-${String(i + 1).padStart(3, '0')}` }));
+  assert.equal(listsToAsk(many).length, 16);
+  // One "none of these" answers for all of them.
+  assert.deepEqual(listsToAsk(many, ids(many)), []);
 });
 
-test('a list the person said no to is not asked about again; the next one is', () => {
-  assert.equal(listToAsk([sent, bought], ['b1'])?.id, 's1');
-  assert.equal(listToAsk([sent, bought], ['b1', 's1']), null);
+test('an order still on the way is never offered', () => {
+  assert.deepEqual(listsToAsk([parcel]), []);
+  assert.deepEqual(ids(listsToAsk([parcel, sent])), ['s1']);
+});
+
+test('"none of these" is remembered: the same lists are not asked about again for the next receipt', () => {
+  assert.deepEqual(listsToAsk([sent, bought], ['b1', 's1']), []);
+});
+
+test('a list that turns up after "none of these" brings the question back, with every list in it', () => {
+  const later = { ...sent, id: 's2', requestNumber: 'REQ-20260918-001' };
+  assert.deepEqual(ids(listsToAsk([later, sent, bought], ['b1', 's1'])), ['b1', 's2', 's1']);
 });
 
 test('a list with every line already in stock is not waiting for anything', () => {
   const done = { ...bought, lines: [line('Sugar', '2026-09-16T02:00:00.000Z')] };
-  assert.equal(listToAsk([done]), null);
+  assert.deepEqual(listsToAsk([done]), []);
 });
 
-test('the question names the list and what is on it, in plain words', () => {
-  assert.deepEqual(askText(bought), {
-    question: 'Is this the shopping for REQ-20260916-001?',
-    detail:   'That list is saved as bought but is not in stock yet: Sugar and Fresh Milk. If yes, this receipt goes onto that list, so nothing is added twice.',
+test('each choice names the list, where it is up to and what is on it, in plain words', () => {
+  assert.deepEqual(askChoice(bought), {
+    label:  'REQ-20260916-001',
+    detail: 'Saved as bought, not in stock yet: Sugar and Fresh Milk',
   });
   const long = { ...sent, lines: ['Ice', 'Water', 'Sugar', 'Milk', 'Cups'].map((n) => line(n)) };
-  assert.equal(askText(long).detail, 'That list was sent out for buying: Ice, Water, Sugar and 2 more. If yes, this receipt goes onto that list, so nothing is added twice.');
+  assert.equal(askChoice(long).detail, 'Sent out for buying: Ice, Water, Sugar and 2 more');
+  assert.equal(ASK_NONE, 'None of these — it is a separate trip');
+});
+
+test('the screen asks once with every list, offers "none of these", and keeps the answer across Another receipt', () => {
+  const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /listsToAsk\(/);
+  assert.match(page, /ASK_NONE/);
+  // reset() is what Another receipt and Start over run: it must not forget the answer.
+  const reset = page.slice(page.indexOf('function reset('), page.indexOf('function fixAndRetry('));
+  assert.ok(reset.length > 0);
+  assert.doesNotMatch(reset, /setNotTheseLists\(/);
+});
+
+// ── what the posted screen and the problems list say ─────────────────────────
+
+test('a cost per millilitre keeps the decimals it lives in, and says its unit', () => {
+  assert.equal(unitCostText(0.098, 'ml'), '₱0.098 / ml');
+  assert.equal(unitCostText(0.0049, 'g'), '₱0.0049 / g');
+  assert.equal(unitCostText(45, 'pc'), '₱45.00 / pc');
+  assert.equal(unitCostText(1.5), '₱1.50');
+});
+
+test('a list whose lines all start on Skip is told what to tap, not "add a line"', () => {
+  assert.equal(nothingToPostText([]), 'Add at least one line.');
+  assert.equal(nothingToPostText([{ kind: 'skip' }, { kind: 'skip' }]), 'Every line is on Skip. Tap "Goes on the shelf" on what was bought.');
+  assert.equal(nothingToPostText([{ kind: 'skip' }, { kind: 'stock' }]), null);
 });
 
 // ── picking the list after lines are already on screen ──────────────────────
@@ -119,4 +162,35 @@ test('a second screen line of the same ingredient stays its own line; a new ingr
   assert.deepEqual(out.map((r) => r.description), ['SUGAR A', 'SUGAR B', 'Oat milk']);
   assert.equal(out[0].fromLine, true);
   assert.equal(out[1].fromLine, false);
+});
+
+// ── a hand-typed line gets a short list at the top of the picker ────────────
+
+const shelf = [
+  { id: 'm1', name: 'Fresh Milk', unit: 'ml' },
+  { id: 'm2', name: 'Emborg Fresh Milk', unit: 'ml' },
+  { id: 'c1', name: 'Chocolate Syrup', unit: 'ml' },
+  { id: 's1', name: 'Sugar', unit: 'g' },
+  { id: 'i1', name: 'Ice', unit: 'g' },
+];
+
+test('a typed line puts the ingredients that share its words first, best first', () => {
+  assert.deepEqual(closestByName('Emborg fresh milk 1L', shelf).map((x) => x.id), ['m2', 'm1']);
+  assert.deepEqual(closestByName('CHOC SYRUP', shelf).map((x) => x.id), ['c1']);
+});
+
+test('nothing typed, or only short words, suggests nothing', () => {
+  assert.deepEqual(closestByName('', shelf), []);
+  assert.deepEqual(closestByName('1L x2', shelf), []);
+});
+
+test('never more than five', () => {
+  const many = Array.from({ length: 9 }, (_, i) => ({ id: `x${i}`, name: `Milk ${i}` }));
+  assert.equal(closestByName('milk', many).length, 5);
+});
+
+test('the picker uses it when the reader gave no matches', () => {
+  const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /: r\.kind === 'stock' && !r\.createNew \? closestByName\(r\.description, ingredients\) : \[\];/);
+  assert.match(page, /\{near\.map\(\(a\) => <option key=\{a\.id\} value=\{a\.id\}>/);
 });

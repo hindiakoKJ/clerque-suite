@@ -4,6 +4,7 @@ import { CalendarDays, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso, downloadAuthFile } from '@/lib/utils';
+import { todayIso } from '@/lib/today';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -123,7 +124,7 @@ export default function AgingPage() {
             </div>
           )}
           <button
-            onClick={() => downloadAuthFile('/export/ap-aging', `ap-aging-${new Date().toISOString().slice(0, 10)}.xlsx`)}
+            onClick={() => downloadAuthFile('/export/ap-aging', `ap-aging-${todayIso()}.xlsx`)}
             className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-3 py-1.5 text-muted-foreground hover:bg-muted transition-colors"
           >
             <Download className="h-4 w-4" />

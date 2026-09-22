@@ -1,5 +1,6 @@
 import {
-  HistoryDay, PlanInput, PlanItem, closingSentSince, historyFromUsage, isRaise, planRequest, plannedDayFor, roundQty,
+  HistoryDay, PlanInput, PlanItem, STARTING_AMOUNT_WHY, closingSentSince, historyFromUsage, isRaise, planRequest, plannedDayFor, roundQty,
+  startingQty,
 } from './station-request-plan';
 
 /**
@@ -212,16 +213,56 @@ describe('station request plan', () => {
     expect(roundQty(0, 'pc', null)).toBe(0);
   });
 
-  it('an item out with no sales yet asks for one pack, or asks somebody to check', () => {
+  it('an item out with no sales yet asks for one pack', () => {
     const withPack = plan({ items: [item({ id: 'oat', name: 'Oat milk', unit: 'ml', available: 0, packSize: 1000 })] });
     expect(line(withPack, 'oat')).toMatchObject({ qty: 1000, why: ['Out, no sales history yet'] });
+  });
 
-    const noPack = plan({ items: [item({ id: 'oat', name: 'Oat milk', unit: 'ml', available: 0 })] });
-    expect(noPack.lines).toEqual([]);
-    expect(noPack.check).toEqual([{ rawMaterialId: 'oat', name: 'Oat milk', reason: 'Out, and Clerque has no pack size for it yet. Add it with +.' }]);
+  /*
+    A new shop: most items have never been bought through Clerque, so there is
+    no pack size. These used to go under "Check these" and off the list, and a
+    tap with 25 items out sent nothing at all.
+  */
+  it('out with no pack size either: still asked for, a round starting amount in its own unit, and the line says so', () => {
+    const noPack = plan({ items: [
+      item({ id: 'flour', name: 'All Purpose Flour', unit: 'g', available: 0 }),
+      item({ id: 'oat', name: 'Oat milk', unit: 'ml', available: 0 }),
+      item({ id: 'rice', name: 'Rice', unit: 'kg', available: 0 }),
+      item({ id: 'egg', name: 'Eggs', unit: 'pc', available: 0 }),
+    ] });
+    expect(noPack.lines.map((l) => [l.rawMaterialId, l.qty, l.action])).toEqual([
+      ['flour', 1000, 'ADD'], ['egg', 1, 'ADD'], ['oat', 1000, 'ADD'], ['rice', 1, 'ADD'],
+    ]);
+    for (const l of noPack.lines) expect(l.why).toEqual([STARTING_AMOUNT_WHY]);
+    // Not a shortfall Clerque worked out: the buy list does not show "short by" for it.
+    for (const l of noPack.lines) expect(l.shortBy).toBeNull();
+    expect(STARTING_AMOUNT_WHY).toBe('Out. No pack size or sales history yet, so this is a starting amount. Add more with + if you need it.');
+    // On the list, so nothing is left to "check".
+    expect(noPack.check).toEqual([]);
 
+    expect(startingQty('g')).toBe(1000);
+    expect(startingQty(' ML ')).toBe(1000);
+    expect(startingQty('kg')).toBe(1);
+    expect(startingQty('L')).toBe(1);
+    expect(startingQty('pack')).toBe(1);
+  });
+
+  it('a starting amount is only for an item that is out, on the menu, with nothing coming and nothing else to go on', () => {
+    const one = (over: Partial<PlanItem>, more: Partial<PlanInput> = {}) =>
+      plan({ items: [item({ id: 'oat', name: 'Oat milk', unit: 'ml', available: 0, ...over })], ...more });
     // Not on the menu: nothing to say about it.
-    expect(plan({ items: [item({ id: 'oat', available: 0, inActiveRecipe: false })] }).check).toEqual([]);
+    expect(one({ inActiveRecipe: false }).lines).toEqual([]);
+    // Still some on the shelf.
+    expect(one({ available: 50 }).lines).toEqual([]);
+    // Already sent for: not asked for twice.
+    expect(one({}, { onTheWay: new Map([['oat', 2000]]) }).lines).toEqual([]);
+    // The owner's reorder level decides instead, as it always has.
+    expect(line(one({ lowStockAlert: 500 }), 'oat')).toMatchObject({ qty: 1000, why: ['Low now: 0 ml left, reorder at 500 ml'] });
+    // The cook said how much with +: that amount stands, in the cook's words.
+    expect(line(one({}, { extras: new Map([['oat', 3000]]), extraReason: 'Added by hand on the Bar screen' }), 'oat'))
+      .toMatchObject({ qty: 3000, why: ['Added by hand on the Bar screen'] });
+    // Already on the list at the starting amount: left as it is, so a second tap tells nobody.
+    expect(line(one({}, { existing: new Map([['oat', 1000]]) }), 'oat')).toMatchObject({ qty: 1000, action: 'KEEP' });
   });
 
   it('plans for today until 10:00 Manila, and for tomorrow from then', () => {

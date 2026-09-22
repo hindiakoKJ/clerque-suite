@@ -32,7 +32,7 @@ interface PublicStub {
   customer: { name: string; loyaltyVisits: number } | null;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
 async function fetchStub(token: string): Promise<PublicStub> {
   // Bypass the auth-injecting axios client — this endpoint must be reachable

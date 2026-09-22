@@ -112,7 +112,7 @@ export default function BuyListsExcelPage() {
         <h1 className="flex items-center gap-2 text-lg font-semibold"><FileSpreadsheet className="h-5 w-5 text-[var(--accent)]" /> Buy lists in Excel</h1>
         <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
           A copy of the buy lists to keep, fill in and upload back. The upload only records what was bought;
-          nothing goes into stock until someone taps <strong>Post to stock</strong> on the request.
+          nothing goes into stock until someone taps <strong>Add it all to stock</strong> on the request.
         </p>
       </div>
 

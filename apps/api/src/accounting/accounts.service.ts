@@ -1,3 +1,4 @@
+import { ASSET_GROUPS, LIABILITY_GROUPS, balanceSheetGroup, groupStatementRows } from './statement-groups';
 import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
@@ -408,6 +409,44 @@ export const LEDGER_ONLY_ACCOUNTS: typeof DEFAULT_ACCOUNTS = [
   { code: '5000', name: 'Cost of Services',            type: 'EXPENSE',   normalBalance: 'DEBIT',  postingControl: 'OPEN', isSystem: false },
 ];
 
+/**
+ * Which part of the Cash Flow Statement an account's movement belongs in.
+ *
+ * Follows the SEEDED chart first (all assets 1010-1099, all liabilities
+ * 2010-2096), then the older wide bands for a shop that built its own chart.
+ *
+ * The old rule sent 1030-1799 to Operating, so buying an espresso machine
+ * (1075 Machinery & Equipment) showed up as a working-capital change instead
+ * of an investment, and sent every liability under 2500 to Operating, so a
+ * bank loan (2070/2071/2090) looked like money the shop earned from trading.
+ */
+export type CashFlowSection = 'CASH' | 'OPERATING' | 'INVESTING' | 'FINANCING' | 'SKIP';
+
+export function cashFlowSection(code: number): CashFlowSection {
+  if (!Number.isFinite(code)) return 'SKIP';
+  // Real cash and bank: opening / ending balance, not a section.
+  if (code >= 1000 && code <= 1029) return 'CASH';
+  // P&L accounts and retained earnings arrive through Net Income.
+  if (code >= 3900) return 'SKIP';
+
+  // ── Assets ──
+  if (code >= 1030 && code <= 1069) return 'OPERATING';   // receivables, tax assets, inventory, prepayments
+  if (code >= 1070 && code <= 1099) return 'INVESTING';   // equipment, buildings, intangibles, long-term investments
+  if (code >= 1100 && code <  1800) return 'OPERATING';   // older wide bands
+  if (code >= 1800 && code <  2000) return 'INVESTING';
+
+  // ── Liabilities ──
+  if (code >= 2070 && code <= 2073) return 'FINANCING';   // loans, short-term bank loans, current LTD, finance lease
+  if (code === 2076)                return 'FINANCING';   // dividends payable
+  if (code >= 2090 && code <= 2093) return 'FINANCING';   // long-term loans, mortgage, lease liabilities
+  if (code >= 2000 && code <  2500) return 'OPERATING';   // payables, taxes, accruals, customer deposits
+  if (code >= 2500 && code <  3000) return 'FINANCING';   // older wide band: long-term debt
+
+  // ── Equity ──
+  if (code >= 3000 && code <  3900) return 'FINANCING';
+  return 'SKIP';
+}
+
 /** Template selector for `seedDefaultAccounts`. */
 export type CoaTemplate = 'FULL' | 'LEDGER_ONLY';
 
@@ -586,9 +625,11 @@ export class AccountsService {
   async getAccountLedger(
     tenantId: string,
     accountId: string,
-    opts: { from?: string; to?: string; page?: number },
+    /** `all: true` returns every line in the range (no paging) — used by the
+     *  .xlsx export, which otherwise shipped only the first 50 lines. */
+    opts: { from?: string; to?: string; page?: number; all?: boolean },
   ) {
-    const { from, to, page = 1 } = opts;
+    const { from, to, page = 1, all = false } = opts;
     const take = 50;
     const skip = (page - 1) * take;
 
@@ -617,9 +658,13 @@ export class AccountsService {
       this.prisma.journalLine.count({ where }),
       this.prisma.journalLine.findMany({
         where,
-        orderBy: { journalEntry: { postingDate: 'asc' } },
-        skip,
-        take,
+        // createdAt + id break same-day ties so rows do not shuffle between loads.
+        orderBy: [
+          { journalEntry: { postingDate: 'asc' } },
+          { journalEntry: { createdAt: 'asc' } },
+          { id: 'asc' },
+        ],
+        ...(all ? {} : { skip, take }),
         include: {
           journalEntry: {
             select: {
@@ -667,8 +712,8 @@ export class AccountsService {
       },
       rows,
       total,
-      page,
-      pages: Math.ceil(total / take),
+      page:  all ? 1 : page,
+      pages: all ? 1 : Math.ceil(total / take),
     };
   }
 
@@ -761,10 +806,14 @@ export class AccountsService {
       },
     });
 
-    type Row = { id: string; code: string; name: string; balance: number };
+    // `group` is the sub-heading (Cash & Cash Equivalents, Receivables,
+    // Inventory …) — see statement-groups.ts.
+    type Row = { id: string; code: string; name: string; balance: number; group: string };
     const assets:      Row[] = [];
     const liabilities: Row[] = [];
     const equity:      Row[] = [];
+    // Direction-uniform amount per row (see below), for the group subtotals.
+    const uniform = new Map<string, number>();
     let totalAssets = 0;
     let totalLiabilities = 0;
     let totalEquity = 0;
@@ -783,9 +832,12 @@ export class AccountsService {
       // equity and accumulated depreciation RAISED assets — and the equation
       // Assets = Liabilities + Equity silently broke. See getPLSummary.
       const bal = acct.normalBalance === 'DEBIT' ? debit - credit : credit - debit;
-      const row = { id: acct.id, code: acct.code, name: acct.name, balance: bal };
-      if (acct.type === 'ASSET')        { assets.push(row);      totalAssets      += debit - credit; }
-      else if (acct.type === 'LIABILITY'){ liabilities.push(row); totalLiabilities += credit - debit; }
+      const row: Row = {
+        id: acct.id, code: acct.code, name: acct.name, balance: bal,
+        group: balanceSheetGroup(acct.type, acct.code),
+      };
+      if (acct.type === 'ASSET')        { assets.push(row);      totalAssets      += debit - credit; uniform.set(row.id, debit - credit); }
+      else if (acct.type === 'LIABILITY'){ liabilities.push(row); totalLiabilities += credit - debit; uniform.set(row.id, credit - debit); }
       else if (acct.type === 'EQUITY')   { equity.push(row);      totalEquity      += credit - debit; }
       else if (acct.type === 'REVENUE')  { retainedEarnings      += credit - debit; }
       else if (acct.type === 'EXPENSE')  { retainedEarnings      -= debit - credit; }
@@ -800,6 +852,7 @@ export class AccountsService {
         code: '3900',
         name: 'Retained Earnings (current period)',
         balance: retainedEarnings,
+        group: 'Equity',
       });
       totalEquity += retainedEarnings;
     }
@@ -807,11 +860,18 @@ export class AccountsService {
     const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
     const balanced = Math.abs(totalAssets - totalLiabilitiesAndEquity) < 0.005; // ₱0.005 tolerance
 
+    // Sub-headings with their own subtotals, in chart order. A contra account
+    // reduces its group the same way it reduces the section (uniform amounts).
+    const assetGroups     = groupStatementRows(assets,      ASSET_GROUPS,     (r) => uniform.get(r.id) ?? 0);
+    const liabilityGroups = groupStatementRows(liabilities, LIABILITY_GROUPS, (r) => uniform.get(r.id) ?? 0);
+
     return {
       asOf: cutoff.toISOString().slice(0, 10),
       assets,
       liabilities,
       equity,
+      assetGroups,
+      liabilityGroups,
       totalAssets,
       totalLiabilities,
       totalEquity,
@@ -953,16 +1013,13 @@ export class AccountsService {
         a section is worse than one that mislabels it: `reconciles` would go
         false with no indication of which accounts went missing.
       */
-      if (code >= 1030 && code < 1800) {
+      const where = cashFlowSection(code);
+      if (where === 'OPERATING') {
         operating.push({ ...section, label: 'Working capital change' });
-      } else if (code >= 1800 && code < 2000) {
-        investing.push({ ...section, label: 'PPE / Intangibles' });
-      } else if (code >= 2000 && code < 2500) {
-        operating.push({ ...section, label: 'Working capital change' });
-      } else if (code >= 2500 && code < 3000) {
-        financing.push({ ...section, label: 'Long-term debt' });
-      } else if (code >= 3000 && code < 3900) {
-        financing.push({ ...section, label: 'Owner equity' });
+      } else if (where === 'INVESTING') {
+        investing.push({ ...section, label: 'Equipment & long-term assets' });
+      } else if (where === 'FINANCING') {
+        financing.push({ ...section, label: code >= 3000 ? 'Owner equity' : 'Loans & long-term debt' });
       }
     }
 

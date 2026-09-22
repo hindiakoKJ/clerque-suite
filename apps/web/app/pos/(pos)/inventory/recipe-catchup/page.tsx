@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import { useInventoryBase } from '@/lib/inventory-base';
+import { todayIso } from '@/lib/today';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -79,7 +80,8 @@ const WARN_STYLE: Record<CatchupWarning['level'], { box: string; icon: typeof In
  */
 export default function RecipeCatchupPage() {
   const base = useInventoryBase();   // stays inside POS or Procure, whichever opened it
-  const today = new Date().toISOString().slice(0, 10);
+  // The date on the wall: the UTC date is still yesterday before 8 AM in Manila.
+  const today = todayIso();
 
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);

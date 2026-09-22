@@ -136,7 +136,7 @@ export default function DocumentAttachments({
   // ── Download handler ─────────────────────────────────────────────────────
 
   function handleDownload(doc: DocumentRecord) {
-    const url = `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}/documents/${doc.id}/download`;
+    const url = `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1'}/documents/${doc.id}/download`;
 
     // Construct a temporary link to trigger download with auth header is not
     // straightforward via <a>, so we fetch via axios and create an object URL.

@@ -342,16 +342,26 @@ function PairingCodeModal({
     return () => clearInterval(id);
   }, [code]);
 
-  if (!code) return null;
-
   // Use the actual site's origin so the QR works on any deployed
   // domain — clerque.cc (current prod), clerque.com (future),
   // staging, localhost, whatever. Falls back to clerque.com only on
   // server render where window doesn't exist (and this dialog is
   // client-only anyway, so the fallback never paints).
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://clerque.com';
-  const pairUrl = `${origin}/pair?code=${code.code}&tenant=${tenantSlug}`;
-  const qrSrc   = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(pairUrl)}`;
+  const pairUrl = code ? `${origin}/pair?code=${code.code}&tenant=${tenantSlug}` : '';
+
+  // The QR is drawn by Clerque's own API: an outside QR website would be sent
+  // the company code and the live pairing number, and is often blocked on
+  // shop Wi-Fi. Until it arrives (or if it fails) the code and link still work.
+  const { data: qrSrc } = useQuery<string>({
+    queryKey: ['pairing-qr', pairUrl],
+    queryFn:  () => api.post('/display-pairing/qr', { url: pairUrl }).then((r) => r.data.dataUrl as string),
+    enabled:  !!pairUrl,
+    staleTime: Infinity,
+    retry:    1,
+  });
+
+  if (!code) return null;
 
   const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
   const ss = String(remaining % 60).padStart(2, '0');
@@ -394,14 +404,18 @@ function PairingCodeModal({
             {code.code}
           </p>
 
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={qrSrc}
-            alt="Pairing QR code"
-            width={240}
-            height={240}
-            className="rounded-xl border border-border bg-white p-2"
-          />
+          {qrSrc ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={qrSrc}
+              alt="Pairing QR code"
+              width={240}
+              height={240}
+              className="rounded-xl border border-border bg-white p-2"
+            />
+          ) : (
+            <div className="w-[240px] h-[240px] rounded-xl border border-border bg-muted/30" aria-hidden />
+          )}
 
           <div className="w-full">
             <p className="text-xs text-muted-foreground mb-1.5">Or visit on the device:</p>

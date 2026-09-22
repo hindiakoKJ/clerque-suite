@@ -46,6 +46,39 @@ export function listToOpen<T extends { status: string }>(
 }
 
 /**
+ * What a link into this screen asked for with ?view=.
+ *
+ * `?view=open` is the list being built, whatever else is waiting. The home
+ * page's "N items below the reorder level" banner uses it: the owner was being
+ * dropped on an old Bought list (which outranks the open one for them, above),
+ * where there is no Check stock and no Add. When no list is being built the
+ * screen starts one ('start'), the same as the server does for staff.
+ *
+ * `?view=REQ-20260902-001` is one request by its number (the books link here
+ * from a stock receipt's reference); 'missing' when this branch has no such
+ * request. No parameter, nothing to do.
+ */
+export type ViewWanted =
+  | { kind: 'none' }
+  | { kind: 'show'; id: string }
+  | { kind: 'start' }
+  | { kind: 'missing'; wanted: string };
+
+export function viewWanted<T extends { id: string; status: string; requestNumber: string }>(
+  param: string | null | undefined,
+  all: readonly T[],
+): ViewWanted {
+  const wanted = (param ?? '').trim();
+  if (!wanted) return { kind: 'none' };
+  if (wanted.toLowerCase() === 'open') {
+    const open = all.find((r) => r.status === 'OPEN');
+    return open ? { kind: 'show', id: open.id } : { kind: 'start' };
+  }
+  const hit = all.find((r) => r.requestNumber === wanted);
+  return hit ? { kind: 'show', id: hit.id } : { kind: 'missing', wanted };
+}
+
+/**
  * The tick a line starts with before anyone touches it. A recorded line starts
  * ticked, so "Add it all to stock" posts the shopping in one tap -- except on
  * an order that is on the way, where the person ticks what is in the box.

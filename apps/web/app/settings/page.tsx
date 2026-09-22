@@ -19,6 +19,9 @@ import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 import { BusinessLogoCard } from '@/components/settings/BusinessLogoCard';
 import { useBranding } from '@/hooks/useBranding';
+import { receiptHeaderName } from './receipt-header-name';
+import { settingsCardHref } from './settings-card-href';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -34,6 +37,16 @@ interface TenantProfile {
   address: string | null;
   contactEmail: string | null;
   contactPhone: string | null;
+  // BIR & Tax fields as SAVED. The login token carries copies, but its
+  // businessName falls back to `name` for the receipt header, so the BIR form
+  // must read these and never the token.
+  taxStatus?:         TaxStatus | null;
+  tinNumber?:         string | null;
+  businessName?:      string | null;
+  registeredAddress?: string | null;
+  isPtuHolder?:       boolean | null;
+  ptuNumber?:         string | null;
+  minNumber?:         string | null;
   status: string;
   /** Legacy SubscriptionTier (TIER_1..TIER_6). Retained for backward compat;
    *  not authoritative — read planCode instead. */
@@ -206,7 +219,10 @@ export default function SettingsPage() {
   const [taxForm, setTaxForm] = useState({
     taxStatus:         (user?.taxStatus ?? 'UNREGISTERED') as TaxStatus,
     tinNumber:         user?.tinNumber ?? '',
-    businessName:      user?.businessName ?? '',
+    // Not from the token: its businessName is the receipt header, which falls
+    // back to the business's own name when this BIR field is blank. Filled from
+    // the saved profile below, so a blank field stays blank on the form.
+    businessName:      '',
     registeredAddress: user?.registeredAddress ?? '',
     isPtuHolder:       user?.isPtuHolder ?? false,
     ptuNumber:         user?.ptuNumber ?? '',
@@ -249,6 +265,20 @@ export default function SettingsPage() {
       receiptHeaderNote: profile.receiptHeaderNote ?? '',
       receiptFooterNote: profile.receiptFooterNote ?? '',
     });
+    // BIR & Tax shows what is SAVED, not the login token's copy (stale until
+    // the next sign-in). Skipped while the owner has unsaved edits there.
+    if (!taxDirty) {
+      setTaxForm((f) => ({
+        taxStatus:         (profile.taxStatus ?? f.taxStatus) as TaxStatus,
+        tinNumber:         profile.tinNumber ?? '',
+        businessName:      profile.businessName ?? '',
+        registeredAddress: profile.registeredAddress ?? '',
+        isPtuHolder:       profile.isPtuHolder ?? false,
+        ptuNumber:         profile.ptuNumber ?? '',
+        minNumber:         profile.minNumber ?? '',
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run on new profile data only
   }, [profile]);
 
   const { data: users = [], isLoading: usersLoading } = useQuery<StaffUser[]>({
@@ -424,7 +454,7 @@ export default function SettingsPage() {
               return (
                 <SettingsCard
                   key={card.href}
-                  href={card.href}
+                  href={settingsCardHref(card.href)}
                   icon={Icon}
                   title={card.label}
                   desc={card.desc}
@@ -503,7 +533,7 @@ export default function SettingsPage() {
                 href="/settings/data"
                 icon={Database}
                 title="Data Backups"
-                desc="Nightly off-box cloud snapshots — download for cold storage or share with your accountant"
+                desc="Nightly copies of your data. Download one for your accountant or to keep"
               />
             )}
             {/* Sprint 20 — 2FA / Security: managed inline from the Security
@@ -575,7 +605,7 @@ export default function SettingsPage() {
                     className={INPUT_CLS}
                     value={profileForm.name}
                     onChange={(e) => setField('name', e.target.value)}
-                    placeholder="Demo Business"
+                    placeholder="e.g. Kape Central"
                     disabled={!isOwner}
                   />
                 </Field>
@@ -698,7 +728,7 @@ export default function SettingsPage() {
                       onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                     />
                   )}
-                  <p className="font-bold">{profile?.name ?? 'Your Business Name'}</p>
+                  <p className="font-bold">{receiptHeaderName(profile) || 'YOUR BUSINESS NAME'}</p>
                   {receiptForm.receiptHeaderNote && (
                     <p className="italic text-muted-foreground whitespace-pre-line">{receiptForm.receiptHeaderNote}</p>
                   )}
@@ -707,6 +737,11 @@ export default function SettingsPage() {
                     {receiptForm.receiptFooterNote || 'Thank you for your purchase!'}
                   </p>
                 </div>
+                <p className="text-[11px] text-muted-foreground text-center">
+                  The name at the top is your &ldquo;Business name (as on COR)&rdquo; from the BIR &amp; Tax
+                  tab when you have filled it in. Until then it is your Business Name above.
+                  After you change either one, sign out and back in so new receipts pick it up.
+                </p>
 
                 <div className="flex justify-end pt-1">
                   <button
@@ -832,10 +867,11 @@ export default function SettingsPage() {
                 <p className="font-semibold text-sm">BIR Tax Classification</p>
                 <p>
                   Your registration status (VAT / Non-VAT / Unregistered) is set during onboarding
-                  and is now <strong>controlled by HNS support</strong> — switching mid-life flips
-                  VAT computation and receipt format, which BIR has to approve. You can still
-                  update operational fields like TIN, business name, PTU, and registered address
-                  yourself. To change your registration status, contact us.
+                  and is <strong>changed only by Clerque support</strong>, because switching it changes
+                  how VAT is computed and what your receipts are called. You can still update your TIN,
+                  business name, PTU and registered address yourself. To change your registration
+                  status, email{' '}
+                  <a href={supportMailto('Change of BIR registration status')} className="underline font-medium">{SUPPORT_EMAIL}</a>.
                 </p>
               </div>
             </div>
@@ -845,7 +881,7 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-foreground">Registration Status</h3>
                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-                  <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+                  <Lock className="w-2.5 h-2.5" /> SET BY CLERQUE SUPPORT
                 </span>
               </div>
 
@@ -917,7 +953,7 @@ export default function SettingsPage() {
                     <div>
                       <p className="text-sm font-medium text-foreground">BIR Permit to Use (PTU)</p>
                       <p className="text-xs text-muted-foreground">
-                        Required for CAS-accredited POS systems. Enables Phase 2 receipt titles on all terminals.
+                        Turn this on only after BIR has issued your Permit to Use, then type the numbers from the certificate.
                       </p>
                     </div>
                     <button
@@ -1173,12 +1209,11 @@ export default function SettingsPage() {
               <h3 className="text-sm font-semibold text-foreground">Active Session</h3>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <InfoRow label="Logged in as"  value={user?.name ?? '—'} />
-                <InfoRow label="Role"           value={user?.role ?? '—'} />
-                <InfoRow label="Email"          value={'(session)' } />
+                <InfoRow label="Role"           value={ROLES.find((r) => r.value === user?.role)?.label ?? user?.role ?? '—'} />
               </div>
               <p className="text-xs text-muted-foreground">
-                Changing your password will sign out all other devices. Your current session stays active
-                until you sign out or your access token expires (15 minutes).
+                Changing your password signs you out on every other device. This device stays signed in
+                for the rest of the day at most (up to 8 hours), then asks for the new password.
               </p>
             </div>
 
@@ -1580,7 +1615,7 @@ function CostingCard({
         <div className="flex items-center justify-between">
           <label className="text-xs font-medium text-muted-foreground">Valuation method</label>
           <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-            <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+            <Lock className="w-2.5 h-2.5" /> SET BY CLERQUE SUPPORT
           </span>
         </div>
         <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border bg-muted/20">
@@ -1590,7 +1625,7 @@ function CostingCard({
           </span>
         </div>
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          The inventory valuation method is set by HNS support during onboarding. Changing it
+          The inventory valuation method is set by Clerque support when your account is set up. Changing it
           mid-life would produce inconsistent COGS, so it requires a planned fiscal-year cutover —
           contact support to discuss.
         </p>
@@ -1604,7 +1639,7 @@ function CostingCard({
         <div className="flex items-center justify-between">
           <label className="text-xs font-medium text-muted-foreground">Accounting basis</label>
           <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-            <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+            <Lock className="w-2.5 h-2.5" /> SET BY CLERQUE SUPPORT
           </span>
         </div>
         <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border bg-muted/20">
@@ -1619,7 +1654,7 @@ function CostingCard({
         </div>
         <p className="text-[11px] text-muted-foreground leading-relaxed">
           Your accounting basis determines when revenue and expenses are recognized in the books.
-          Changing it mid-year corrupts year-over-year comparability — contact HNS support to plan a
+          Changing it mid-year corrupts year-over-year comparability — email Clerque support to plan a
           fiscal-year cutover.
         </p>
       </div>
@@ -1632,15 +1667,16 @@ function CostingCard({
               Manufacturing overhead (₱ per unit produced)
             </label>
             <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-              <Lock className="w-2.5 h-2.5" /> CONSOLE-CONTROLLED
+              <Lock className="w-2.5 h-2.5" /> SET BY CLERQUE SUPPORT
             </span>
           </div>
           <div className="px-3 py-2.5 rounded-lg border border-border bg-muted/20 text-sm font-semibold">
             {overheadStr}
           </div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Overhead allocation is set by HNS support based on your CPA's recommendation. Contact
-            support to adjust.
+            Overhead allocation is set by Clerque support based on your CPA's recommendation. To change
+            it, email{' '}
+            <a href={supportMailto('Change my overhead rate')} className="underline">{SUPPORT_EMAIL}</a>.
           </p>
         </div>
       )}
@@ -2006,7 +2042,7 @@ function VoidApprovalThresholdCard({
         <h3 className="text-sm font-semibold text-foreground">Maker-checker Void Approvals</h3>
         <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
           When set above ₱0, voids/refunds at or above this amount require a manager to approve before they
-          can be processed at the POS. Available on Solo Pro and Suite plans. Set to ₱0 to disable.
+          can be processed at the POS. Set to ₱0 to turn this off.
         </p>
       </div>
       <div className="flex items-end gap-2 flex-wrap">

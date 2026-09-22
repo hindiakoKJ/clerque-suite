@@ -32,6 +32,7 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
+import { todayIso, startOfMonthIso } from '@/lib/today';
 
 // ─── Report registry ──────────────────────────────────────────────────────
 
@@ -124,11 +125,9 @@ const SECTION_ICONS: Record<ReportDef['section'], React.ElementType> = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
-const monthStartIso = () => {
-  const d = new Date(); d.setDate(1);
-  return d.toISOString().slice(0, 10);
-};
+// Wall-clock dates come from lib/today: the UTC version gave yesterday before
+// 08:00 in Manila, and last month's final day on the 1st.
+const monthStartIso = startOfMonthIso;
 
 interface CustomerOpt { id: string; name: string; }
 interface VendorOpt   { id: string; name: string; }

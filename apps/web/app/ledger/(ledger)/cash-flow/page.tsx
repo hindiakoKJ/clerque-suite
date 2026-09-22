@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { Spinner } from '@/components/ui/Spinner';
-import { todayIso } from '@/lib/today';
+import { todayIso, startOfMonthIso } from '@/lib/today';
 
 interface FlowRow {
   label:        string;
@@ -34,7 +34,7 @@ interface CashFlow {
 
 const READ_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BRANCH_MANAGER', 'FINANCE_LEAD'];
 
-function startOfMonth() { const d = new Date(); d.setDate(1); return d.toISOString().slice(0, 10); }
+const startOfMonth = startOfMonthIso; // wall-clock, not UTC (lib/today)
 
 function FlowSection({
   title, subtitle, rows, total, accent,

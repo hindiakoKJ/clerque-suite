@@ -713,6 +713,8 @@ export class SubRecipesService {
         useBy,
         rotation:      rot,
         batches:       r.batches,
+        /** What one batch makes, so a tile's Made button can say what the second tap records. */
+        batchYield:    r.batchYield,
         limitedBy:     r.limitedBy,
         rootLimitedBy: r.rootLimitedBy,
         batchesWithPrep: r.batchesWithPrep,

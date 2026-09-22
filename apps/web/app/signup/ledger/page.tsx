@@ -11,7 +11,8 @@
  *   3. Tax status: VAT / NON_VAT / UNREGISTERED — pick once, change later in Settings
  *
  * Submits to POST /auth/signup-ledger (public). On success, lands on
- * /login?app=ledger&tenant=<slug> with a toast confirming the trial start.
+ * /login?app=ledger with the Tenant ID and email already typed in (handed over
+ * in sessionStorage, see app/(portal)/login/prefill.ts — never in the address).
  */
 
 import { useState } from 'react';
@@ -19,6 +20,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { BookOpen, ArrowRight, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
+import { writeLoginPrefill } from '@/app/(portal)/login/prefill';
 
 const ACCENT      = '#8B5E3C';
 const ACCENT_SOFT = '#EEE9DF';
@@ -85,10 +88,13 @@ export default function LedgerSignupPage() {
         businessType:  form.businessType,
       });
       setSuccess(data);
-      // Brief pause so the success state is visible, then redirect to login
-      // pre-filled with the tenant slug + email.
+      // Brief pause so the success state is visible, then go to sign-in with
+      // the Tenant ID and email already typed in. They travel in this tab's
+      // sessionStorage, not the address: the sign-in page never read the old
+      // ?tenant=&email= query, and an email does not belong in a URL.
+      writeLoginPrefill({ tenantId: data.tenantSlug, email: form.ownerEmail });
       setTimeout(() => {
-        router.push(`/login?app=ledger&tenant=${encodeURIComponent(data.tenantSlug)}&email=${encodeURIComponent(form.ownerEmail.trim())}`);
+        router.push('/login?app=ledger');
       }, 2500);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
@@ -106,8 +112,9 @@ export default function LedgerSignupPage() {
           </div>
           <h1 className="text-xl font-bold text-zinc-900 mb-2">Your books are ready</h1>
           <p className="text-sm text-zinc-600 mb-4">
-            Tenant <span className="font-mono font-semibold">{success.tenantSlug}</span> created.
-            We sent a welcome email to <span className="font-semibold">{form.ownerEmail}</span>.
+            Your Tenant ID is <span className="font-mono font-semibold">{success.tenantSlug}</span>.
+            Write it down: you type it every time you sign in, together with{' '}
+            <span className="font-semibold">{form.ownerEmail}</span>.
           </p>
           <p className="text-xs text-zinc-500">Redirecting you to sign in…</p>
           <Loader2 className="h-4 w-4 mx-auto mt-3 animate-spin text-zinc-400" />
@@ -261,7 +268,7 @@ export default function LedgerSignupPage() {
               {busy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Setting up your books…</>) : (<>Start free trial <ArrowRight className="h-4 w-4" /></>)}
             </button>
             <p className="text-[11px] text-zinc-500 text-center mt-3">
-              90 days free. No card on file. Email <a href="mailto:support@clerque.ph" className="underline">support@clerque.ph</a> to cancel.
+              90 days free. No card on file. Email <a href={supportMailto('Cancel my Clerque trial')} className="underline">{SUPPORT_EMAIL}</a> to cancel.
             </p>
           </section>
         </form>

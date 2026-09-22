@@ -2,7 +2,12 @@
 # Clerque API — startup script (used by Railway nixpacks)
 #
 # Handles three DB states:
-#   A) Fresh DB — migrate deploy applies all migrations cleanly.
+#   A) Fresh DB — NOT clean today (2026-09): migration 12
+#      (20260429180000_ar_ap_backbone) references "customers", a table
+#      no migration creates (24 tables only ever came from db push).
+#      A fresh DB therefore fails here and is built by path B below plus
+#      the db push catch-up. Fixing that needs a baseline migration --
+#      KJ's decision, see DEPLOY.md §6.
 #   B) Pre-pushed DB — tables already exist from `prisma db push`;
 #      migrate deploy fails on the first migration (objects exist).
 #      We mark all historical migrations as applied, then the post-

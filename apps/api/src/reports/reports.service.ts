@@ -1,7 +1,11 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma } from '@prisma/client';
+import { Prisma, BillStatus, InvoiceStatus } from '@prisma/client';
 import { stillWaiting } from '../orders/waste';
+
+/** Bills and invoices that are not money owed: never posted, or posted and reversed. */
+export const UNPOSTED_BILL_STATUSES: BillStatus[] = ['DRAFT', 'CANCELLED', 'VOIDED'];
+export const UNPOSTED_INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'CANCELLED', 'VOIDED'];
 
 /**
  * Lines still waiting at a kitchen or bar screen.
@@ -754,11 +758,18 @@ export class ReportsService {
       Money handed back, on the day it was handed back, so a week's chart
       shows the dip on the day the customer was refunded rather than
       quietly overstating every day in it.
+
+      Not the refunds of an order that was then voided, the same rule as
+      refundsIn above: a voided order is already left out of the sales, so
+      taking its refunds off as well took the money off twice. On a month with
+      a few refund-then-void corrections that alone pushed net sales, gross
+      profit and the average sale below zero while the rows underneath were
+      all positive.
     */
     const refundRows = await this.prisma.orderItemRefund.findMany({
       where: {
         createdAt: { gte: start, lte: end },
-        orderItem: { order: { tenantId, ...(branchId ? { branchId } : {}) } },
+        orderItem: { order: { tenantId, status: { not: 'VOIDED' }, ...(branchId ? { branchId } : {}) } },
       },
       select: { refundAmount: true, createdAt: true },
     });
@@ -767,8 +778,17 @@ export class ReportsService {
       const amount = Number(r.refundAmount);
       refundTotal += amount;
       const day = isoDay(r.createdAt);
-      const bucket = buckets.get(day);
-      if (bucket) bucket.refundTotal += amount;
+      // A day with a refund and no sale still gets its row, so the rows
+      // always add up to the tiles above them.
+      let bucket = buckets.get(day);
+      if (!bucket) {
+        bucket = {
+          date: day, orderCount: 0, voidCount: 0, totalRevenue: 0, refundTotal: 0, netSales: 0, totalCogs: 0,
+          costPending: { lineCount: 0, revenue: 0 },
+        };
+        buckets.set(day, bucket);
+      }
+      bucket.refundTotal += amount;
     }
     for (const b of buckets.values()) b.netSales = Math.round((b.totalRevenue - b.refundTotal) * 100) / 100;
 
@@ -798,8 +818,11 @@ export class ReportsService {
         .map((b) => ({
           ...b,
           totalRevenue: Math.round(b.totalRevenue * 100) / 100,
+          refundTotal:  Math.round(b.refundTotal * 100) / 100,
           totalCogs:    Math.round(b.totalCogs * 100) / 100,
-          grossProfit:  Math.round((b.totalRevenue - b.totalCogs) * 100) / 100,
+          // Net of what was handed back, the same sum as the tile: the rows
+          // used to ignore refunds, so they never added up to the total.
+          grossProfit:  Math.round((b.netSales - b.totalCogs) * 100) / 100,
           costPending:  { lineCount: b.costPending.lineCount, revenue: Math.round(b.costPending.revenue * 100) / 100 },
         })),
       byPaymentMethod: Array.from(byPayment.values())
@@ -826,7 +849,7 @@ export class ReportsService {
     const start = new Date(`${fromDate}T00:00:00+08:00`);
     const end   = new Date(`${toDate}T23:59:59.999+08:00`);
 
-    const [branches, orders, apBills, arInvoices, inventoryRows] = await Promise.all([
+    const [branches, orders, apBills, arInvoices, inventoryRows, ingredientRows, refundRows] = await Promise.all([
       this.prisma.branch.findMany({
         where:   { tenantId, isActive: true },
         orderBy: { name: 'asc' },
@@ -840,11 +863,19 @@ export class ReportsService {
           items: { select: { quantity: true, costPrice: true, lineTotal: true, usageOnReady: true, usagePostedAt: true } },
         },
       }),
+      /*
+        Posted documents only. The filter used to read `not: 'VOID'`, which is
+        not a status either enum has (it is VOIDED), so Prisma refused the whole
+        query and the report answered 400 for every range. No `as any` and no
+        catch-all here: a wrong status must fail the build, not the owner.
+        A draft or cancelled bill never reached the books, and a voided one was
+        reversed, so none of the three is money owed.
+      */
       this.prisma.aPBill.findMany({
         where: {
           tenantId,
           createdAt: { gte: start, lte: end },
-          status: { not: 'VOID' as any },
+          status: { notIn: UNPOSTED_BILL_STATUSES },
         },
         select: { branchId: true, totalAmount: true, balanceAmount: true },
       }),
@@ -852,13 +883,37 @@ export class ReportsService {
         where: {
           tenantId,
           invoiceDate: { gte: start, lte: end },
-          status: { not: 'VOID' as any },
+          status: { notIn: UNPOSTED_INVOICE_STATUSES },
         },
         select: { branchId: true, totalAmount: true, balanceAmount: true },
-      }).catch(() => []), // ARInvoice may not exist in all schemas
+      }),
       this.prisma.inventoryItem.findMany({
         where: { tenantId, quantity: { gt: 0 } },
         select: { branchId: true, quantity: true, avgCost: true, product: { select: { costPrice: true } } },
+      }),
+      /*
+        Ingredients and preps on the shelf. A cafe's stock is almost all
+        here (its menu items are made to order and hold no stock of their
+        own), so leaving this out read "stock value 0" for a shop holding
+        thousands in milk, beans and syrups. Valued at the average cost, the
+        same figure Stock on hand shows.
+      */
+      this.prisma.rawMaterialInventory.findMany({
+        where:  { tenantId, quantity: { gt: 0 } },
+        select: { branchId: true, quantity: true, rawMaterial: { select: { costPrice: true } } },
+      }),
+      /*
+        Money handed back in the range, on the day it was handed back: the
+        same rule as the Sales Report, so the two pages give one gross profit
+        for the same days. Not the refunds of a voided order -- that order is
+        already out of the sales.
+      */
+      this.prisma.orderItemRefund.findMany({
+        where: {
+          createdAt: { gte: start, lte: end },
+          orderItem: { order: { tenantId, status: { not: 'VOIDED' } } },
+        },
+        select: { refundAmount: true, orderItem: { select: { order: { select: { branchId: true } } } } },
       }),
     ]);
 
@@ -867,6 +922,8 @@ export class ReportsService {
       branchId:        string;
       branchName:      string;
       revenue:         number;
+      /** Money handed back in the range. Revenue is before it; gross profit and the average are after it. */
+      refundTotal:     number;
       cogs:            number;
       grossProfit:     number;
       orderCount:      number;
@@ -883,6 +940,7 @@ export class ReportsService {
       branchId:       b.id,
       branchName:     b.name,
       revenue:        0,
+      refundTotal:    0,
       cogs:           0,
       grossProfit:    0,
       orderCount:     0,
@@ -923,7 +981,7 @@ export class ReportsService {
     // AP (branchId may be null → assign to a synthetic "shared" pool)
     const sharedBucket: Bucket = {
       branchId: '_shared', branchName: 'Shared / no branch',
-      revenue: 0, cogs: 0, grossProfit: 0,
+      revenue: 0, refundTotal: 0, cogs: 0, grossProfit: 0,
       orderCount: 0, voidCount: 0, avgOrderValue: 0,
       apBilled: 0, apOutstanding: 0, arInvoiced: 0, arOutstanding: 0,
       inventoryValue: 0,
@@ -934,7 +992,7 @@ export class ReportsService {
       bucket.apBilled      += Number(b.totalAmount);
       bucket.apOutstanding += Number(b.balanceAmount);
     }
-    for (const inv of arInvoices as any[]) {
+    for (const inv of arInvoices) {
       const bucket = inv.branchId ? (map.get(inv.branchId) ?? sharedBucket) : sharedBucket;
       bucket.arInvoiced    += Number(inv.totalAmount);
       bucket.arOutstanding += Number(inv.balanceAmount);
@@ -949,10 +1007,20 @@ export class ReportsService {
         : Number(row.product.costPrice ?? 0);
       bucket.inventoryValue += qty * cost;
     }
-    // Derived metrics
+    for (const row of ingredientRows) {
+      const bucket = map.get(row.branchId);
+      if (!bucket) continue;
+      bucket.inventoryValue += Number(row.quantity) * Number(row.rawMaterial.costPrice ?? 0);
+    }
+    for (const r of refundRows) {
+      const bucket = map.get(r.orderItem.order.branchId);
+      if (!bucket) continue;
+      bucket.refundTotal += Number(r.refundAmount);
+    }
+    // Derived metrics: after refunds, the same sums as the Sales Report.
     for (const b of map.values()) {
-      b.grossProfit   = b.revenue - b.cogs;
-      b.avgOrderValue = b.orderCount > 0 ? b.revenue / b.orderCount : 0;
+      b.grossProfit   = b.revenue - b.refundTotal - b.cogs;
+      b.avgOrderValue = b.orderCount > 0 ? (b.revenue - b.refundTotal) / b.orderCount : 0;
     }
 
     // Round to 2 decimals everywhere for the wire response
@@ -960,6 +1028,7 @@ export class ReportsService {
     const finalize = (b: Bucket) => ({
       ...b,
       revenue:        round(b.revenue),
+      refundTotal:    round(b.refundTotal),
       cogs:           round(b.cogs),
       grossProfit:    round(b.grossProfit),
       avgOrderValue:  round(b.avgOrderValue),
@@ -976,18 +1045,24 @@ export class ReportsService {
       ? [finalize(sharedBucket)]
       : [];
 
-    // Tenant-wide totals
-    const totals = branchRows.reduce(
+    /*
+      Tenant-wide totals: every row on the page, the "no branch" row included,
+      each counted once. The shared row's outstanding used to be added inside
+      the loop (once per branch, so twice over for a two-branch shop) and its
+      billed amount not at all, so "billed" could read lower than "unpaid".
+    */
+    const totals = [...branchRows, ...sharedRow].reduce(
       (acc, b) => ({
         revenue:        acc.revenue + b.revenue,
+        refundTotal:    acc.refundTotal + b.refundTotal,
         cogs:           acc.cogs + b.cogs,
         grossProfit:    acc.grossProfit + b.grossProfit,
         orderCount:     acc.orderCount + b.orderCount,
         voidCount:      acc.voidCount + b.voidCount,
         apBilled:       acc.apBilled + b.apBilled,
-        apOutstanding:  acc.apOutstanding + b.apOutstanding + (sharedRow[0]?.apOutstanding ?? 0),
+        apOutstanding:  acc.apOutstanding + b.apOutstanding,
         arInvoiced:     acc.arInvoiced + b.arInvoiced,
-        arOutstanding:  acc.arOutstanding + b.arOutstanding + (sharedRow[0]?.arOutstanding ?? 0),
+        arOutstanding:  acc.arOutstanding + b.arOutstanding,
         inventoryValue: acc.inventoryValue + b.inventoryValue,
         costPending:    {
           lineCount: acc.costPending.lineCount + b.costPending.lineCount,
@@ -995,12 +1070,14 @@ export class ReportsService {
         },
       }),
       {
-        revenue: 0, cogs: 0, grossProfit: 0, orderCount: 0, voidCount: 0,
+        revenue: 0, refundTotal: 0, cogs: 0, grossProfit: 0, orderCount: 0, voidCount: 0,
         apBilled: 0, apOutstanding: 0, arInvoiced: 0, arOutstanding: 0, inventoryValue: 0,
         costPending: { lineCount: 0, revenue: 0 } as CostPending,
       },
     );
-    const grossMargin = totals.revenue > 0 ? totals.grossProfit / totals.revenue : 0;
+    // Of what the shop kept, like the Sales Report's margin.
+    const kept = totals.revenue - totals.refundTotal;
+    const grossMargin = kept > 0 ? totals.grossProfit / kept : 0;
 
     return {
       from: fromDate,
@@ -1009,6 +1086,11 @@ export class ReportsService {
       shared:   sharedRow,
       totals: {
         ...totals,
+        revenue:        round(totals.revenue),
+        refundTotal:    round(totals.refundTotal),
+        cogs:           round(totals.cogs),
+        grossProfit:    round(totals.grossProfit),
+        inventoryValue: round(totals.inventoryValue),
         grossMargin: Math.round(grossMargin * 10000) / 10000,
       },
     };

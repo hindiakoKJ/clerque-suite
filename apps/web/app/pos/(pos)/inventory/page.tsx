@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, Plus, Pencil, FlaskConical, History, BarChart3, ChevronRight, RotateCcw,
@@ -15,6 +15,7 @@ import { todayIso } from '@/lib/today';
 import { INGREDIENT_UNITS } from '@repo/shared-types';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
+import { activeBranches } from '@/app/procure/active-branches';
 
 /** A drink a cost change just pushed from making money to losing it. */
 type MarginAlert = { name: string; price: number; cost: number; lossEach: number };
@@ -60,7 +61,7 @@ interface RawMaterial {
   lotsTracked?:  boolean;
 }
 
-interface Branch { id: string; name: string; }
+interface Branch { id: string; name: string; isActive?: boolean; }
 
 const INPUT_CLS =
   'w-full border border-border bg-background rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent transition-shadow';
@@ -150,6 +151,22 @@ export default function InventoryPage() {
     enabled: matModal === 'receive' || matModal === 'writeoff',
     staleTime: 120_000,
   });
+  // Branches still in use only: a closed branch is not somewhere to receive stock.
+  const openBranches = useMemo(() => activeBranches(branches), [branches]);
+  /*
+    The branch is chosen for the person whenever it can be: their own, or the
+    only one the shop has. A one-branch owner with no branch on their account
+    was shown "— Select branch —" on every delivery and told "Please select a
+    branch." when they pressed Receive. Done here, not only when the dialog
+    opens, because the branch list is fetched on open and may not be in yet.
+  */
+  const defaultBranch = branchId || (openBranches.length === 1 ? openBranches[0].id : '');
+  useEffect(() => {
+    if (!defaultBranch) return;
+    if (matModal === 'receive'  && !receiveForm.branchId)  setReceiveForm((f)  => ({ ...f, branchId: defaultBranch }));
+    if (matModal === 'writeoff' && !writeOffForm.branchId) setWriteOffForm((f) => ({ ...f, branchId: defaultBranch }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matModal, defaultBranch, receiveForm.branchId, writeOffForm.branchId]);
 
   // Vendors — only fetched when receiving on credit
   interface Vendor { id: string; name: string; }
@@ -229,7 +246,7 @@ export default function InventoryPage() {
   function openReceiveMat(m: RawMaterial) {
     setEditingMat(m);
     setReceiveForm({
-      branchId: '',
+      branchId: branchId || '',
       quantity: '',
       costPrice: String(m.costPrice ?? ''),
       note: '',
@@ -438,7 +455,8 @@ export default function InventoryPage() {
             {filterLow && rawMaterials.filter((m) => m.isLowStock).length > 0 && ` · ${rawMaterials.filter((m) => m.isLowStock).length} low`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* Wraps: on a phone this row was 626px wide under an overflow-hidden root, and New Ingredient, Low stock only and the type filter were cut off with no way to reach them. */}
+        <div className="flex flex-wrap items-center gap-2">
           {/*
             Reports and each ingredient's own page are money from top to bottom
             (what each delivery cost, what the shelf is worth), and the server
@@ -535,7 +553,8 @@ export default function InventoryPage() {
                   <th className="px-6 py-3 text-left font-semibold">Ingredient</th>
                   <th className="px-4 py-3 text-center font-semibold">Unit</th>
                   <th className="px-4 py-3 text-right font-semibold">Stock</th>
-                  <th className="px-4 py-3 text-right font-semibold">Alert at</th>
+                  {/* "Reorder level" everywhere: the Procure home, the buy list and the toasts all call it that. */}
+                  <th className="px-4 py-3 text-right font-semibold">Reorder level</th>
                   {costsShown && <th className="px-4 py-3 text-right font-semibold">Cost / Unit</th>}
                   <th className="px-4 py-3 text-center font-semibold">Status</th>
                   {canEdit && <th className="px-4 py-3 text-right font-semibold">Actions</th>}
@@ -627,7 +646,7 @@ export default function InventoryPage() {
                       ) : (
                         <span
                           className={`cursor-pointer hover:text-foreground transition-colors ${canEdit ? 'hover:underline underline-offset-2' : ''}`}
-                          title={canEdit ? 'Click to set low-stock alert' : undefined}
+                          title={canEdit ? 'Click to set the reorder level' : undefined}
                           onClick={() => canEdit && setEditMatThreshold({ id: m.id, value: m.lowStockAlert != null ? String(m.lowStockAlert) : '' })}
                         >
                           {m.lowStockAlert != null
@@ -831,7 +850,7 @@ export default function InventoryPage() {
               )}
               <div>
                 <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  Low-stock alert (in {matForm.recipeUnit || matForm.unit || 'units'})
+                  Reorder level (in {matForm.recipeUnit || matForm.unit || 'units'})
                 </label>
                 <input
                   type="number" min="0" step="any"
@@ -905,7 +924,7 @@ export default function InventoryPage() {
                   className={INPUT_CLS}
                 >
                   <option value="">— select —</option>
-                  {branches.map((br) => <option key={br.id} value={br.id}>{br.name}</option>)}
+                  {openBranches.map((br) => <option key={br.id} value={br.id}>{br.name}</option>)}
                 </select>
               </div>
               <div>
@@ -999,7 +1018,7 @@ export default function InventoryPage() {
                   className={INPUT_CLS}
                 >
                   <option value="">— Select branch —</option>
-                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  {openBranches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -1051,15 +1070,16 @@ export default function InventoryPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">Paid by</label>
+                  {/* The same words as Procure's receipts: one name for who paid, on every stock-in screen. */}
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Who paid?</label>
                   <select
                     value={receiveForm.paymentMethod}
                     onChange={(e) => setReceiveForm((f) => ({ ...f, paymentMethod: e.target.value as 'CASH' | 'CREDIT' | 'OWNER_FUNDED' }))}
                     className={INPUT_CLS}
                   >
-                    <option value="CASH">Cash</option>
-                    <option value="CREDIT">Credit / Net-30</option>
-                    <option value="OWNER_FUNDED">Owner funds</option>
+                    <option value="CASH">Shop cash (not the POS drawer)</option>
+                    <option value="CREDIT">On credit (pay the supplier later)</option>
+                    <option value="OWNER_FUNDED">Owner paid</option>
                   </select>
                 </div>
               </div>

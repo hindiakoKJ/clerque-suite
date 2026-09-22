@@ -18,12 +18,20 @@
  * server records a key once, so a double-tap or a retry after the signal
  * dropped cannot make the sauce twice. No costs anywhere.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { keepTapKey, newTapKey, tapFailure, tapFailureText } from './station-taps';
+import { ARM_MS, armedLabel, keepTapKey, newTapKey, tapFailure, tapFailureText } from './station-taps';
+
+/**
+ * An item or chain the owner has not set a station for. It is shown on every
+ * screen until then, marked with these words -- not "not routed to a station",
+ * which meant nothing to a cook.
+ */
+export const NO_STATION_YET = 'No station set yet';
+export const NO_STATION_YET_HELP = 'Shown on every screen until the owner picks a station for these dishes in Settings > Floor Layout.';
 
 export type ChainSeverity = 'NOW' | 'NEXT' | 'OK';
 export type ChainDot = 'RED' | 'AMBER' | 'GREEN' | 'GREY';
@@ -54,6 +62,8 @@ export interface ChainStage {
 export interface StageMade {
   label: string;
   uses: string;
+  /** "2,000 g": what the one batch makes, said on the button before the second tap. Absent on older answers, null with no yield. */
+  makes?: string | null;
 }
 
 export interface PrepChain {
@@ -64,7 +74,7 @@ export interface PrepChain {
   stages: ChainStage[];
   headline: string | null;
   severity: ChainSeverity;
-  action: { rawMaterialId: string; label: string; uses: string; enabled: boolean; disabledReason?: string } | null;
+  action: { rawMaterialId: string; label: string; uses: string; makes?: string | null; enabled: boolean; disabledReason?: string } | null;
   blockedBy: string | null;
   /** Routed to this station; false for a chain routed to none. */
   assigned: boolean;
@@ -101,18 +111,25 @@ const amount = (n: number, unit: string) => `${Math.max(0, n).toLocaleString('en
 /**
  * One batch recorded, from the big button or from a stage's own small one.
  *
+ * Two taps: the first arms the button ("Tap again to record 1 batch (2,000 g)")
+ * for a few seconds, the second records. One tap used to record outright, so a
+ * knock on a wall tablet took a batch's ingredients off the books with nothing
+ * to undo it. Still no dialog, still fine with wet hands.
+ *
  * Its own key, so the big button and a stage button are never the same tap,
  * and its own pending, so only the button that was tapped waits. The prep
  * tiles that are not inside a chain use it too (StationPrepLevels).
  */
 export function MadeButton({
-  stationId, rawMaterialId, label, uses, tone, enabled = true, disabledLabel, compact = false,
+  stationId, rawMaterialId, label, uses, makes = null, tone, enabled = true, disabledLabel, compact = false,
 }: {
   stationId: string;
   rawMaterialId: string;
   label: string;
   /** "Uses 2 kg Chicken · 200 g Marinade" -- shown under the button, so nothing is recorded blind. */
   uses: string | null;
+  /** "2,000 g": what the one batch makes, said on the armed button. Null when the recipe has no yield set. */
+  makes?: string | null;
   /** The one thing to do now, or a batch made ahead. */
   tone: 'primary' | 'secondary';
   enabled?: boolean;
@@ -123,6 +140,27 @@ export function MadeButton({
   const qc = useQueryClient();
   const key = useRef(newTapKey());
   const [pending, setPending] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const disarm = () => {
+    if (armTimer.current) clearTimeout(armTimer.current);
+    armTimer.current = null;
+    setArmed(false);
+  };
+  // Left armed and forgotten, the button goes back to its own words; unmounted, the timer goes with it.
+  useEffect(() => () => { if (armTimer.current) clearTimeout(armTimer.current); }, []);
+
+  function tap() {
+    if (!enabled || pending) return;
+    if (!armed) {
+      setArmed(true);
+      armTimer.current = setTimeout(() => { armTimer.current = null; setArmed(false); }, ARM_MS);
+      return;
+    }
+    disarm();
+    void record();
+  }
 
   async function record() {
     if (!enabled || pending) return;
@@ -157,17 +195,20 @@ export function MadeButton({
         : 'cursor-not-allowed bg-stone-700 text-stone-400'}`
     : 'min-h-11 w-full px-3 text-sm font-semibold border border-amber-500/60 text-amber-200 '
       + 'hover:bg-amber-500/15 active:bg-amber-500/25 disabled:opacity-60';
+  // Armed: plainly a different button, so the second tap is never taken for the first.
+  const armedLook = tone === 'primary' ? 'ring-4 ring-amber-200 bg-amber-400' : 'ring-2 ring-amber-300 bg-amber-500/20';
 
   return (
     <div>
       <button
         type="button"
-        onClick={record}
+        onClick={tap}
         disabled={!enabled || pending}
-        className={`flex items-center justify-center gap-2 rounded-xl leading-tight transition-colors ${look}`}
+        aria-pressed={armed}
+        className={`flex items-center justify-center gap-2 rounded-xl leading-tight transition-colors ${look} ${armed ? armedLook : ''}`}
       >
         {pending && <Loader2 className={tone === 'primary' ? 'h-5 w-5 animate-spin' : 'h-4 w-4 animate-spin'} />}
-        {enabled ? label : (disabledLabel ?? label)}
+        {!enabled ? (disabledLabel ?? label) : armed ? armedLabel(makes) : label}
       </button>
       {enabled && uses && (
         <p className={`mt-1 text-center leading-snug text-stone-400 ${tone === 'primary' ? 'text-xs' : 'text-[11px]'}`}>
@@ -191,7 +232,7 @@ export function PrepChainCard({
   return (
     <div className={`rounded-2xl border-l-4 bg-stone-900 ${EDGE[chain.severity]} ${compact ? 'px-3 py-2.5' : 'p-4'}`}>
       {!chain.assigned && (
-        <p className="mb-1 text-[10px] uppercase tracking-wider text-stone-500">Not routed to a station</p>
+        <p className="mb-1 text-[10px] uppercase tracking-wider text-stone-500">{NO_STATION_YET}</p>
       )}
       {chain.headline ? (
         <p className={`font-semibold leading-snug ${compact ? 'text-base' : 'text-lg'} ${HEADLINE[chain.severity]}`}>
@@ -232,6 +273,7 @@ export function PrepChainCard({
                   rawMaterialId={s.id}
                   label={s.made.label}
                   uses={s.made.uses}
+                  makes={s.made.makes ?? null}
                   tone="secondary"
                   compact={compact}
                 />
@@ -250,6 +292,7 @@ export function PrepChainCard({
             rawMaterialId={action.rawMaterialId}
             label={action.label}
             uses={action.uses}
+            makes={action.makes ?? null}
             tone="primary"
             enabled={action.enabled}
             disabledLabel={action.disabledReason}

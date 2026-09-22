@@ -42,7 +42,7 @@ export interface WhoamiResponse {
   label:     string | null;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
 /** Read the stored device-token bundle, or null if not paired. */
 export function readDeviceToken(): StoredDeviceToken | null {
@@ -82,7 +82,8 @@ export async function verifyDeviceToken(token: string): Promise<WhoamiResponse |
   try {
     const { data } = await axios.get<WhoamiResponse>(
       `${API_URL}/display-pairing/whoami`,
-      { params: { token } },
+      // In a header, not the address: a URL ends up in logs (this runs every 30 s).
+      { headers: { 'X-Device-Token': token } },
     );
     return data;
   } catch {

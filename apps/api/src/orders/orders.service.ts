@@ -1921,6 +1921,10 @@ export class OrdersService {
           payments: true,
           discounts: true,
           createdBy: { select: { id: true, name: true } },
+          // Orders > "voided by ___". The list had no voidedBy at all, so every
+          // voided row read "voided by ?". Name only: the screen shows nothing
+          // else, and a list has no reason to hand out supervisor ids in bulk.
+          voidedBy: { select: { name: true } },
         },
         orderBy: { createdAt: 'desc' },
         take:    safeTake,

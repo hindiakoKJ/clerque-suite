@@ -6,12 +6,14 @@ import {
   Body,
   Param,
   Query,
+  Headers,
   HttpCode,
   HttpStatus,
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
 import { DisplayPairingService } from './display-pairing.service';
+import { isPairLink, pairQrDataUrl } from './pair-qr';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -41,6 +43,21 @@ export class DisplayPairingController {
       stationId: body.stationId,
       label:     body.label,
     });
+  }
+
+  /**
+   * The pairing link as a QR image (PNG data URL), so the dialog never sends
+   * the company code and pairing number to an outside QR website.
+   */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...ALL_ROLES)
+  @Post('qr')
+  @HttpCode(HttpStatus.OK)
+  async qr(@Body() body: { url?: string }) {
+    if (!isPairLink(body?.url)) {
+      throw new BadRequestException('Only a pairing link can be made into a QR code.');
+    }
+    return { dataUrl: await pairQrDataUrl(body.url) };
   }
 
   /** List paired + pending displays for this tenant. */
@@ -79,9 +96,17 @@ export class DisplayPairingController {
    * Public: device-token sanity check. Lets a paired display verify on
    * boot that its token is still good (e.g. after a TV power-cycle).
    * Returns the pairing metadata or 404 on revoked/missing.
+   *
+   * The token comes in the X-Device-Token header, so it stays out of URLs
+   * (and every log that records one). `?token=` is still read for a tablet
+   * that has not reloaded the new web app yet.
    */
   @Get('whoami')
-  async whoami(@Query('token') token: string) {
+  async whoami(
+    @Headers('x-device-token') headerToken: string | undefined,
+    @Query('token') queryToken: string | undefined,
+  ) {
+    const token = (headerToken ?? '').trim() || (queryToken ?? '').trim();
     const row = await this.svc.resolveToken(token);
     if (!row) throw new BadRequestException('Invalid or revoked token');
     return {

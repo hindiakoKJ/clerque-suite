@@ -43,6 +43,21 @@ export function tapFailureText(error: unknown): string {
     : 'No connection. Tap again when it is back: it will not be counted twice.';
 }
 
+/** How long a first tap on "Made" waits for the second before the button goes back to its own words. */
+export const ARM_MS = 5000;
+
+/**
+ * The words on a Made button after its first tap: what the second tap records.
+ * One tap used to record a batch outright, so a knock on a kitchen tablet took
+ * 1,400 ml of Breve Milk off the books with nothing to undo it. Now the first
+ * tap arms the button for a few seconds and the second records -- still two
+ * taps with wet hands, no dialog. `makes` is what the batch makes ("2,000 g"),
+ * when the recipe has a yield.
+ */
+export function armedLabel(makes: string | null | undefined): string {
+  return makes ? `Tap again to record 1 batch (${makes})` : 'Tap again to record 1 batch';
+}
+
 /**
  * The words on a prep tile's own "Made" button: a pre-made item drawn as a tile
  * (not inside a chain card) that has enough on hand for one batch. Null when a

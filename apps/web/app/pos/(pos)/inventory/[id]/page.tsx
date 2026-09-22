@@ -4,11 +4,13 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Package, Layers, History, AlertTriangle, ShoppingBag,
-  FlaskConical, ExternalLink, Calendar,
+  FlaskConical, ExternalLink, Calendar, ClipboardList,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { useInventoryBase } from '@/lib/inventory-base';
+import { todayIso, isoDaysFromToday } from '@/lib/today';
+import { rowTitle, rowTone, summarize, onHandOf, orderHref, perUnitPeso, type TimelineKind, type TimelineTone } from './timeline-view';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -21,7 +23,8 @@ interface IngredientInfo {
 
 interface MovementRow {
   id:            string;
-  kind:          'RECEIPT' | 'CONSUMPTION';
+  /** Delivery, sale, prep batch, write-off or count; see ./timeline-view. */
+  kind:          TimelineKind;
   occurredAt:    string;
   quantity:      number;
   qtyRemaining:  number;
@@ -32,6 +35,8 @@ interface MovementRow {
   branchId:      string | null;
   orderId:       string | null;
   orderNumber:   string | null;
+  /** A write-off's reason or a count's kind, when the record said. */
+  reason?:       string | null;
 }
 
 interface MovementsResponse {
@@ -57,8 +62,18 @@ interface LotRow {
 
 interface LotsResponse {
   ingredient: { id: string; name: string; unit: string };
+  /** The stock book's figure for the shelf, valued at today's average cost. Optional because an older API does not send it. */
+  onHand?:    { quantity: number; value: number } | null;
   lots:       LotRow[];
 }
+
+const TONE_CLS: Record<TimelineTone, string> = {
+  in:    'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  sale:  'bg-blue-500/10 text-blue-600 dark:text-blue-400',
+  prep:  'bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  out:   'bg-red-500/10 text-red-600 dark:text-red-400',
+  count: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -82,13 +97,9 @@ function fmtDateTime(iso: string) {
   });
 }
 
+/** The last 30 days by the shop's calendar: before 8 AM in Manila the UTC date is still yesterday. */
 function defaultRange() {
-  const to = new Date();
-  const from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
-  return {
-    from: from.toISOString().slice(0, 10),
-    to:   to.toISOString().slice(0, 10),
-  };
+  return { from: isoDaysFromToday(-30), to: todayIso() };
 }
 
 // ─── Page ────────────────────────────────────────────────────────────────────
@@ -122,25 +133,11 @@ export default function IngredientDrilldownPage({
     staleTime: 15_000,
   });
 
-  // Derived summary from the movements list (so it's always perfectly
-  // consistent with the timeline shown below).
-  const summary = useMemo(() => {
-    const movements = movResp?.movements ?? [];
-    let purchasesQty = 0, purchasesValue = 0;
-    let consumptionQty = 0, consumptionValue = 0;
-    for (const m of movements) {
-      if (m.kind === 'RECEIPT') {
-        purchasesQty   += m.quantity;
-        purchasesValue += m.totalValue;
-      } else {
-        consumptionQty   += -m.quantity;       // quantity is negative
-        consumptionValue += -m.totalValue;     // totalValue is negative
-      }
-    }
-    const lotsRemaining = (lotsResp?.lots ?? []).reduce((s, l) => s + l.qtyRemaining, 0);
-    const lotsValue     = (lotsResp?.lots ?? []).reduce((s, l) => s + l.valueRemaining, 0);
-    return { purchasesQty, purchasesValue, consumptionQty, consumptionValue, lotsRemaining, lotsValue };
-  }, [movResp, lotsResp]);
+  // The range's figures come from the same rows the timeline shows, so the
+  // two always agree. What is on the shelf comes from the stock book, the
+  // same number Stock on hand shows: the lots' leftovers added up are not it.
+  const summary = useMemo(() => summarize(movResp?.movements ?? []), [movResp]);
+  const onHand  = useMemo(() => onHandOf(lotsResp), [lotsResp]);
 
   const ingredient = movResp?.ingredient ?? lotsResp?.ingredient ?? null;
   const unit = ingredient?.unit ?? '';
@@ -167,7 +164,7 @@ export default function IngredientDrilldownPage({
             <p className="text-xs text-muted-foreground mt-0.5">
               Tracked in <span className="font-mono">{unit}</span>
               {ingredient && 'costPrice' in ingredient && ingredient.costPrice != null && (
-                <> · WAC {peso(ingredient.costPrice as number)} / {unit}</>
+                <> · WAC {perUnitPeso(ingredient.costPrice as number)} / {unit}</>
               )}
             </p>
           </div>
@@ -196,8 +193,8 @@ export default function IngredientDrilldownPage({
         <KpiCard
           icon={Package}
           label="On Hand"
-          primary={qty(summary.lotsRemaining, unit)}
-          secondary={peso(summary.lotsValue)}
+          primary={qty(onHand.quantity, unit)}
+          secondary={peso(onHand.value)}
           tone="neutral"
         />
         <KpiCard
@@ -209,9 +206,11 @@ export default function IngredientDrilldownPage({
         />
         <KpiCard
           icon={FlaskConical}
-          label="Consumed (range)"
-          primary={qty(summary.consumptionQty, unit)}
-          secondary={peso(summary.consumptionValue)}
+          label="Used (range)"
+          primary={qty(summary.usedQty, unit)}
+          secondary={summary.writtenOffQty > 0
+            ? `${peso(summary.usedValue)} · ${qty(summary.writtenOffQty, unit)} written off`
+            : peso(summary.usedValue)}
           tone="negative"
         />
         <KpiCard
@@ -262,7 +261,7 @@ export default function IngredientDrilldownPage({
                               <div className="text-[10px] text-muted-foreground">
                                 {lot.ageDays}d old
                                 {lot.reference && <> · {lot.reference}</>}
-                                {lot.paymentMethod && <> · {lot.paymentMethod.toLowerCase()}</>}
+                                {lot.paymentMethod && <> · {lot.paymentMethod.toLowerCase().replace(/_/g, ' ')}</>}
                               </div>
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
@@ -283,7 +282,7 @@ export default function IngredientDrilldownPage({
                               </div>
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-                              {peso(lot.unitCost)}
+                              {perUnitPeso(lot.unitCost)}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums font-medium text-foreground">
                               {peso(lot.valueRemaining)}
@@ -318,35 +317,36 @@ export default function IngredientDrilldownPage({
               ) : (
                 <ul className="divide-y divide-border max-h-[600px] overflow-y-auto">
                   {movResp!.movements.map((m) => {
-                    const isReceipt = m.kind === 'RECEIPT';
+                    const tone   = rowTone(m);
+                    const Icon   = tone === 'in' ? ShoppingBag
+                      : tone === 'out' ? AlertTriangle
+                      : tone === 'count' ? ClipboardList
+                      : tone === 'prep' ? Layers
+                      : FlaskConical;
+                    const amount = Math.abs(m.quantity);
+                    const worth  = Math.abs(m.totalValue);
                     return (
                       <li key={m.id} className="px-3 py-2.5 flex items-start gap-3 hover:bg-muted/40 transition-colors">
-                        <div className={`mt-0.5 flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${
-                          isReceipt
-                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                            : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                        }`}>
-                          {isReceipt ? <ShoppingBag className="h-3.5 w-3.5" /> : <FlaskConical className="h-3.5 w-3.5" />}
+                        <div className={`mt-0.5 flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${TONE_CLS[tone]}`}>
+                          <Icon className="h-3.5 w-3.5" />
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-baseline justify-between gap-2">
-                            <span className="text-xs font-semibold text-foreground">
-                              {isReceipt ? 'Stock received' : 'Consumed for sale'}
-                            </span>
+                            <span className="text-xs font-semibold text-foreground">{rowTitle(m)}</span>
                             <span className="text-[10px] text-muted-foreground tabular-nums whitespace-nowrap">
                               {fmtDateTime(m.occurredAt)}
                             </span>
                           </div>
                           <div className="text-xs text-muted-foreground mt-0.5">
-                            {isReceipt ? (
+                            {m.kind === 'RECEIPT' ? (
                               <>
-                                +{qty(m.quantity, unit)} @ {peso(m.unitCost)}/{unit} = {peso(m.totalValue)}
+                                +{qty(m.quantity, unit)} @ {perUnitPeso(m.unitCost)}/{unit} = {peso(m.totalValue)}
                                 {m.reference && <> · ref {m.reference}</>}
-                                {m.paymentMethod && <> · {m.paymentMethod.toLowerCase()}</>}
+                                {m.paymentMethod && <> · {m.paymentMethod.toLowerCase().replace(/_/g, ' ')}</>}
                               </>
-                            ) : (
+                            ) : m.kind === 'CONSUMPTION' ? (
                               <>
-                                −{qty(-m.quantity, unit)} (cost {peso(-m.totalValue)})
+                                −{qty(amount, unit)} (cost {peso(worth)})
                                 {m.orderNumber && (
                                   /*
                                     The order lives in POS, and this page also
@@ -360,9 +360,9 @@ export default function IngredientDrilldownPage({
                                     throw them out.
                                   */
                                   <> · order{' '}
-                                    {inPos ? (
+                                    {inPos && m.orderId ? (
                                       <Link
-                                        href={`/pos/orders?focus=${m.orderId ?? ''}`}
+                                        href={orderHref(m.orderId)}
                                         className="hover:underline inline-flex items-center gap-0.5"
                                         style={{ color: 'var(--accent)' }}
                                       >
@@ -375,6 +375,13 @@ export default function IngredientDrilldownPage({
                                   </>
                                 )}
                                 {m.reference && <div className="text-[10px] mt-0.5 italic">{m.reference}</div>}
+                              </>
+                            ) : (
+                              <>
+                                {m.quantity >= 0 ? '+' : '−'}{qty(amount, unit)} ({m.kind === 'WRITE_OFF' ? 'worth' : 'cost'} {peso(worth)})
+                                {m.kind === 'PREP' && m.reference && <> · for {m.reference}</>}
+                                {m.kind !== 'PREP' && m.reference && <> · ref {m.reference}</>}
+                                {m.reason && <div className="text-[10px] mt-0.5 italic">{m.reason}</div>}
                               </>
                             )}
                           </div>
@@ -422,5 +429,3 @@ function KpiCard({
     </div>
   );
 }
-
-void AlertTriangle;

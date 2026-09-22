@@ -43,7 +43,8 @@ test('a long list is cut at three', () => {
 test('the messages from before onTheWay are unchanged', () => {
   assert.deepEqual(lowStockToast({ added: 0, unmonitored: 0 }), { kind: 'success', message: 'Nothing is below its reorder level right now.' });
   assert.deepEqual(lowStockToast({ added: 0, onTheWay: [] }), { kind: 'success', message: 'Nothing is below its reorder level right now.' });
-  assert.deepEqual(lowStockToast({ added: 1 }), { kind: 'success', message: 'Added 1 item that are below their reorder level.' });
+  // One item is "that is below its", not "that are below their".
+  assert.deepEqual(lowStockToast({ added: 1 }), { kind: 'success', message: 'Added 1 item that is below its reorder level.' });
   assert.deepEqual(
     lowStockToast({ added: 0, unmonitored: 3 }),
     { kind: 'warning', message: 'Nothing is below its reorder level. 3 ingredients have no reorder level, so they can never show up here.' },

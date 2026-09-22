@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreatePeriodDto } from './dto/create-period.dto';
 import { manilaEndOfDay, ticketsHoldingMessage, ticketsHoldingPeriod } from './kitchen-tickets';
+import { bankAccountWhere } from '../accounting/bank-accounts';
 export { CreatePeriodDto };
 
 @Injectable()
@@ -393,12 +394,30 @@ export class AccountingPeriodsService {
     });
 
     // ── Group: RECONCILIATION ─────────────────────────────────────────────
-    const cashAccounts = await this.prisma.account.findMany({
-      where: { tenantId, isActive: true, code: { startsWith: '10' } },
-      select: { id: true, code: true },
+    // Only BANK accounts, and only the ones this shop actually uses.
+    //  - `code startsWith '10'` matched all 55 seeded asset accounts (receivables,
+    //    inventory, furniture …), so the check read "0 of 55 bank accounts" and
+    //    flipped to FAIL — blocking the close — the moment the owner reconciled
+    //    her one real bank account.
+    //  - The chart seeds four bank accounts; a small shop uses one. An account
+    //    nothing was ever posted to has nothing to reconcile, so it is not counted.
+    const bankAccounts = await this.prisma.account.findMany({
+      where: {
+        tenantId, isActive: true, ...bankAccountWhere(),
+        journalLines: {
+          some: {
+            journalEntry: {
+              tenantId, status: 'POSTED',
+              OR: [{ postingDate: { lte: periodEnd } }, { postingDate: null, date: { lte: periodEnd } }],
+            },
+          },
+        },
+      },
+      select: { id: true, code: true, name: true },
     });
     let reconCount = 0;
-    for (const a of cashAccounts) {
+    const notReconciled: string[] = [];
+    for (const a of bankAccounts) {
       const recon = await this.prisma.bankReconciliation.findFirst({
         where: {
           tenantId, accountId: a.id, status: 'COMPLETED',
@@ -406,17 +425,20 @@ export class AccountingPeriodsService {
         },
       });
       if (recon) reconCount++;
+      else notReconciled.push(`${a.code} ${a.name}`);
     }
     checks.push({
       id: 'bank-recon', group: 'Reconciliation',
       title: 'Bank reconciliation completed',
-      detail: 'Each cash/bank account should have a completed reconciliation for the period.',
-      status: cashAccounts.length === 0 ? 'N_A' :
-              reconCount === cashAccounts.length ? 'PASS' :
+      detail: 'Each bank account you use should be checked against its bank statement for the period.',
+      status: bankAccounts.length === 0 ? 'N_A' :
+              reconCount === bankAccounts.length ? 'PASS' :
               reconCount > 0 ? 'FAIL' : 'MANUAL',
-      count: cashAccounts.length,
-      hint: cashAccounts.length === 0 ? 'No cash accounts seeded.' :
-            `${reconCount} of ${cashAccounts.length} bank accounts reconciled.`,
+      count: bankAccounts.length,
+      hint: bankAccounts.length === 0 ? 'No bank account has any entries yet, so there is nothing to reconcile.' :
+            reconCount === bankAccounts.length
+              ? `${reconCount} of ${bankAccounts.length} bank account${bankAccounts.length === 1 ? '' : 's'} reconciled.`
+              : `${reconCount} of ${bankAccounts.length} bank account${bankAccounts.length === 1 ? '' : 's'} reconciled. Still to do: ${notReconciled.join(', ')}.`,
       link: '/ledger/bank-recon',
     });
 

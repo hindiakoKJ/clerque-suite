@@ -29,7 +29,7 @@ import {
   type StoredDeviceToken,
 } from '@/lib/pos/device-token';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
 interface RedeemResponse {
   deviceToken: string;

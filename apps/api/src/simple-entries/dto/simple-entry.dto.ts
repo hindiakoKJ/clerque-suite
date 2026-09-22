@@ -25,6 +25,17 @@ export const SIMPLE_ENTRY_TYPES = [
   'PAID_AHEAD',           // Dr 1063 / Cr pocket
   'PAID_AHEAD_REFUND',    // Dr pocket / Cr 1063
   'PAID_AHEAD_WRITE_OFF', // Dr 6140 / Cr 1063
+  /*
+    Something the shop will use for years -- an espresso machine, a fridge, a
+    grinder. It is an ASSET, not this month's expense: Dr 1075 Machinery &
+    Equipment / Cr where the money came from. `assetName` says what was bought.
+  */
+  'EQUIPMENT_PURCHASE',   // Dr 1075 / Cr paid-from
+  /*
+    Wages handed to staff outside the Payroll app (a small shop paying its
+    barista in cash on Saturday): Dr 6010 Salaries and Wages / Cr paid-from.
+  */
+  'WAGES_PAID',           // Dr 6010 / Cr paid-from
 ] as const;
 export type SimpleEntryType = (typeof SIMPLE_ENTRY_TYPES)[number];
 
@@ -32,6 +43,16 @@ export const EXPENSE_CATEGORIES = [
   'RENT', 'UTILITIES', 'SUPPLIES', 'REPAIRS', 'TRANSPORT', 'FREIGHT', 'OTHER',
 ] as const;
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
+/**
+ * Where the money came from, for EQUIPMENT_PURCHASE and WAGES_PAID.
+ *   CASH  -> 1010 Cash on Hand
+ *   BANK  -> 1020 Cash in Bank
+ *   OWNER -> 3010 Owner's Capital (the owner paid out of her own pocket; the
+ *            shop's cash did not move, her stake in the business went up)
+ */
+export const PAID_FROM = ['CASH', 'BANK', 'OWNER'] as const;
+export type PaidFrom = (typeof PAID_FROM)[number];
 
 export class CreateSimpleEntryDto {
   @IsIn(SIMPLE_ENTRY_TYPES)
@@ -59,4 +80,20 @@ export class CreateSimpleEntryDto {
   @IsString()
   @MaxLength(200)
   note?: string;
+
+  /**
+   * Where the money came from -- EQUIPMENT_PURCHASE and WAGES_PAID. Defaults
+   * to CASH. 'OWNER' is only meaningful for those two kinds. For the older
+   * kinds `source` is still the field; `paidFrom` CASH/BANK is accepted there
+   * too so one form control can drive every kind.
+   */
+  @IsOptional()
+  @IsIn(PAID_FROM)
+  paidFrom?: PaidFrom;
+
+  /** What was bought -- EQUIPMENT_PURCHASE only, e.g. "Espresso machine". */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  assetName?: string;
 }

@@ -248,8 +248,8 @@ table(
   [
     ['1', 'Chart of Accounts (only if you need extra accounts)', 'Ledger > Chart of Accounts', 'About 196 PH-standard accounts are already built in. Most cafes need none.'],
     ['2', 'Products', 'POS > Products', 'Your menu items and prices.'],
-    ['3', 'Ingredients', 'Template: Settings > Imports. We upload the filled file with you (no self-serve button yet).', 'Raw materials with cost per unit.'],
-    ['4', 'Recipes', 'Template: Settings > Imports. We upload the filled file with you (no self-serve button yet).', 'Links each drink to its ingredients. Needs 2 and 3 first.'],
+    ['3', 'Ingredients', 'Settings > Imports: download the template, fill it in, then "Import" on the same row.', 'Raw materials with cost per unit.'],
+    ['4', 'Recipes', 'Settings > Imports: "Import" on the Recipes row. Preps made in batches go in first, on their own row.', 'Links each drink to its ingredients. Needs 2 and 3 first.'],
     ['5', 'Suppliers', 'Ledger > Vendors page (we open it with you)', 'Your suppliers.'],
     ['6', 'Customers (only if you sell on credit)', 'Ledger > Invoices > Customers', 'Charge accounts.'],
     ['7', 'Opening balances', 'Ledger > Journal > Trial Balance Import', 'Your starting financial position.'],

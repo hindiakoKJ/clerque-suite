@@ -20,6 +20,7 @@ import { ArrowLeft, Plus, Building2, Pencil, ToggleRight, ToggleLeft, Lock } fro
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { branchUsageLabel, isUncapped } from '../plan-limits-view';
 import { planLabel, type PlanCode } from '@repo/shared-types';
 import { closesAtToSave } from './closes-at';
 
@@ -70,8 +71,11 @@ export default function BranchesPage() {
   });
 
   const activeCount  = branches.filter((b) => b.isActive).length;
-  const remaining    = Math.max(0, maxBranches - activeCount);
-  const atCap        = activeCount >= maxBranches;
+  // 999 is the plan table's stand-in for "no limit" (see plan-limits-view.ts):
+  // shown as it was, the owner read "1 of 999 active · 998 slots left".
+  const uncapped     = isUncapped(maxBranches);
+  const remaining    = uncapped ? 0 : Math.max(0, maxBranches - activeCount);
+  const atCap        = !uncapped && activeCount >= maxBranches;
 
   const createBranch = useMutation({
     mutationFn: (body: { name: string; address: string; closesAt: string | null }) =>
@@ -151,9 +155,9 @@ export default function BranchesPage() {
             Add or rename your physical locations. Plan: {planCode ? planLabel(planCode) : '—'} ·
             {' '}
             <span className={atCap ? 'text-amber-600 font-medium' : ''}>
-              {activeCount} of {maxBranches} active
+              {branchUsageLabel(activeCount, maxBranches)}
             </span>
-            {!atCap && remaining > 0 && (
+            {!atCap && !uncapped && remaining > 0 && (
               <span className="text-muted-foreground"> · {remaining} slot{remaining === 1 ? '' : 's'} left</span>
             )}
           </p>

@@ -15,7 +15,7 @@ import { CostHint, useCostBands } from '@/components/shared/CostHint';
 import { lowStockToast, type PullLowStockResult } from './low-stock-toast';
 import {
   chipsInOrder, isStillOpen, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
-  fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice,
+  fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice, viewWanted,
 } from './buy-list-view';
 import { pickerOrder, showNotInRecipe } from './ingredient-picker';
 import {
@@ -286,7 +286,14 @@ export default function ProcurePage() {
     server prices it from last time for the owner to check (KJ, 2026-09-21).
   */
   const canDecide = !!user && ['BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN', 'MDM'].includes(user.role);
-  const [bought, setBought]     = useState<Record<string, { packs: string; size: string; cost: string; brand: string; source?: 'line' | 'last' | 'none' }>>({});
+  /*
+    Whether the receipt reader is switched on for this shop. The sign-in token
+    carries the month's AI allowance and it is 0 when AI is off (the server's
+    master switch, or a plan without it) -- the same signal the journal and the
+    cash-out screens already hide their AI buttons on.
+  */
+  const readerOn = (user?.aiQuotaMonthly ?? 0) > 0;
+  const [bought, setBought]    = useState<Record<string, { packs: string; size: string; cost: string; brand: string; source?: 'line' | 'last' | 'none' }>>({});
   /** Per line: it is here. Doubles as "post this line now" once the request is bought. */
   const [ticked, setTicked]     = useState<Record<string, boolean>>({});
   /** Per line: the pack count is typed in the bigger unit (kg for a gram-counted ingredient). */
@@ -308,6 +315,8 @@ export default function ProcurePage() {
   const [orderCharges, setOrderCharges] = useState<Charge[]>([]);
   const [photoLabel, setPhotoLabel] = useState<PhotoLabel>('Receipt');
   const fileInput = useRef<HTMLInputElement | null>(null);
+  /** The "Who paid for this?" card, so the line above the post button can bring it into view. */
+  const whoPaidCard = useRef<HTMLDivElement | null>(null);
 
   /*
     Which request this screen is showing.
@@ -341,14 +350,29 @@ export default function ProcurePage() {
     refetch later does not yank the person back to it.
   */
   const viewParamHandled = useRef(false);
+  /*
+    ?view=open with no list being built: start one, the way the server does
+    for staff, and show it. (With no lists at all the screen already opens a
+    fresh one below, so this only runs when other lists are waiting.)
+  */
+  const openForView = useMutation({
+    mutationFn: () => api.post('/procure/requests/open', { branchId }).then((r) => r.data as Request),
+    onSuccess: (open) => {
+      // On screen now, not after the refetch: the page shows a list only once it is in `all`.
+      qc.setQueryData<Request[]>(['procure-requests', branchId], (old = []) =>
+        old.some((r) => r.id === open.id) ? old : [open, ...old]);
+      setViewing(open.id);
+    },
+    // Not worth an error: the screen falls back to the list it would have opened anyway.
+  });
   useEffect(() => {
     if (viewParamHandled.current || all.length === 0 || typeof window === 'undefined') return;
-    const wanted = new URLSearchParams(window.location.search).get('view');
-    if (!wanted) { viewParamHandled.current = true; return; }
-    const hit = all.find((r) => r.requestNumber === wanted);
+    const want = viewWanted(new URLSearchParams(window.location.search).get('view'), all);
     viewParamHandled.current = true;
-    if (hit) setViewing(hit.id);
-    else toast.error(`${wanted} is not in this branch's list.`);
+    if (want.kind === 'show') setViewing(want.id);
+    else if (want.kind === 'start') openForView.mutate();
+    else if (want.kind === 'missing') toast.error(`${want.wanted} is not in this branch's list.`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [all]);
 
   const live = all.filter((r) => isStillOpen(r.status));
@@ -1033,6 +1057,10 @@ export default function ProcurePage() {
   const tickedNow  = postable.filter((l) => isTicked(l));
   // Anything ticked as bought on this list: on an open list, what brings out the boxes and the Save.
   const tickedAny  = unposted.some((l) => isTicked(l));
+  // The three things that stick to the bottom of the screen. Buttons only.
+  const showSend   = req.status === 'OPEN' && canDecide;
+  const showSave   = recording && (req.status === 'OPEN' ? tickedAny : (req.status === 'SENT' || !canDecide));
+  const showPost   = req.status === 'BOUGHT' && canDecide;
   const inputCls   = 'mt-0.5 w-full rounded-lg border border-border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]';
 
   return (
@@ -1073,11 +1101,16 @@ export default function ProcurePage() {
                       {attachPhoto.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
                       Add photo
                     </button>
+                    {/*
+                      No `capture`: that attribute makes Android open the camera
+                      and nothing else, and an online order is a screenshot
+                      already on the phone. Without it the phone asks -- camera
+                      or gallery.
+                    */}
                     <input
                       ref={fileInput}
                       type="file"
                       accept="image/*"
-                      capture="environment"
                       className="hidden"
                       onChange={(e) => {
                         const f = e.target.files?.[0];
@@ -1233,7 +1266,8 @@ export default function ProcurePage() {
                   <Copy className="h-3.5 w-3.5" /> Send as message
                 </button>
               )}
-              {canDecide && req.status !== 'RECEIVED' && (
+              {/* Only where the reader is switched on: with it off this led to a button that could only say no. */}
+              {canDecide && readerOn && req.status !== 'RECEIVED' && (
                 <button
                   type="button"
                   onClick={() => router.push(`/procure/receipts?request=${req.id}`)}
@@ -1851,46 +1885,34 @@ export default function ProcurePage() {
         )}
       </div>
 
-      {/* whatever this request wants next */}
-      <div className="sticky bottom-4 space-y-2">
-        {!canRecord && req.status !== 'RECEIVED' && req.status !== 'CANCELLED' && (
-          <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
-            {req.status === 'OPEN'
-              ? 'Keep adding what you need. It is sent to the owner from the kitchen or bar screen, or at closing time.'
-              : req.status === 'SENT'
-                ? 'Sent — waiting for whoever shops to record what they bought.'
-                : 'Bought — waiting for the owner or manager to add it to stock.'}
-          </p>
-        )}
-        {canRecord && !canDecide && req.status === 'OPEN' && (
-          <p className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
-            Keep adding what you need. It is sent to the owner from the kitchen or bar screen, or at closing time.
-            {' '}Bought something? Tick it if it is on the list, or tap Record something you bought above, then save.
-          </p>
-        )}
-        {req.status === 'OPEN' && canDecide && (
-          <button
-            onClick={() => send.mutate()}
-            disabled={send.isPending}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            Send to the owners
-          </button>
-        )}
-        {/* On an open list, once something is ticked as bought: the save sends the list as well. */}
-        {recording && (req.status === 'OPEN' ? tickedAny : (req.status === 'SENT' || !canDecide)) && (
-          <button
-            onClick={() => saveBought.mutate()}
-            disabled={saveBought.isPending}
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {saveBought.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            Save what was bought
-          </button>
-        )}
-        {req.status === 'BOUGHT' && canDecide && (
-          <div className="rounded-xl border border-border bg-card p-3">
+      {/*
+        Whatever this request wants next.
+
+        Only the buttons stick to the bottom of the screen. The hints, the
+        "Who paid for this?" card, its date and note, the charges and the
+        price-changed tick used to stick with them: on a Bought list that block
+        was 377px of a 600px tablet and 518px of a phone, the lines and their
+        price boxes sat underneath it, and with no background the list showed
+        through it. They are ordinary page content now, above the buttons, and
+        "Close" and "Cancel" are ordinary content below them.
+      */}
+      {!canRecord && req.status !== 'RECEIVED' && req.status !== 'CANCELLED' && (
+        <p className="rounded-xl border border-border bg-card px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
+          {req.status === 'OPEN'
+            ? 'Keep adding what you need. It is sent to the owner from the kitchen or bar screen, or at closing time.'
+            : req.status === 'SENT'
+              ? 'Sent — waiting for whoever shops to record what they bought.'
+              : 'Bought — waiting for the owner or manager to add it to stock.'}
+        </p>
+      )}
+      {canRecord && !canDecide && req.status === 'OPEN' && (
+        <p className="rounded-xl border border-border bg-card px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground">
+          Keep adding what you need. It is sent to the owner from the kitchen or bar screen, or at closing time.
+          {' '}Bought something? Tick it if it is on the list, or tap Record something you bought above, then save.
+        </p>
+      )}
+      {req.status === 'BOUGHT' && canDecide && (
+          <div ref={whoPaidCard} className="scroll-mt-24 rounded-xl border border-border bg-card p-3">
             {prepaid ? (
               <>
                 <p className="text-xs font-medium">Paid ahead from {pocketLabel(prepaid)}</p>
@@ -1942,74 +1964,120 @@ export default function ProcurePage() {
             {/* charges that came with the goods but are not stock */}
             <ChargeRows rows={charges} onChange={setCharges} first={prepaid ? 'Fees at the door' : 'Other charges'} />
           </div>
-        )}
-        {req.status === 'BOUGHT' && canDecide && postable.length > 0 && (
-          <label className="flex items-start gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
-            <input type="checkbox" checked={acceptCost} onChange={(e) => setAcceptCost(e.target.checked)} className="mt-0.5" />
-            <span>
-              <strong className="font-medium text-foreground">The price really changed a lot.</strong>{' '}
-              A delivery costed ten times above or below what is on file is refused as a likely typo. Tick this to post it anyway.
-            </span>
-          </label>
-        )}
-        {req.status === 'BOUGHT' && canDecide && (
-          <div className="flex gap-2">
+      )}
+      {req.status === 'BOUGHT' && canDecide && postable.length > 0 && (
+        <label className="flex items-start gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">
+          <input type="checkbox" checked={acceptCost} onChange={(e) => setAcceptCost(e.target.checked)} className="mt-0.5" />
+          <span>
+            <strong className="font-medium text-foreground">The price really changed a lot.</strong>{' '}
+            A delivery costed ten times above or below what is on file is refused as a likely typo. Tick this to post it anyway.
+          </span>
+        </label>
+      )}
+
+      {/* The buttons, and nothing else, stay in reach while the list scrolls. Opaque, so nothing shows through. */}
+      {(showSend || showSave || showPost) && (
+        <div className="sticky bottom-4 z-10 space-y-2 rounded-xl bg-background">
+          {showSend && (
             <button
-              onClick={() => receive.mutate(false)}
-              disabled={receive.isPending}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
+              onClick={() => send.mutate()}
+              disabled={send.isPending}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              {receive.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
-              {tickedNow.length === postable.length ? 'Add it all to stock' : `Add ${tickedNow.length} of ${postable.length} to stock`}
+              {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Send to the owners
             </button>
+          )}
+          {/* On an open list, once something is ticked as bought: the save sends the list as well. */}
+          {showSave && (
             <button
               onClick={() => saveBought.mutate()}
               disabled={saveBought.isPending}
-              title="Save corrections to packs, size or price without posting"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-xs font-medium shadow-lg transition-colors hover:bg-muted disabled:opacity-50"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              {saveBought.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShoppingCart className="h-3.5 w-3.5" />}
-              Save
+              {saveBought.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+              Save what was bought
             </button>
-          </div>
-        )}
-        {req.status === 'BOUGHT' && canDecide && unposted.length > tickedNow.length && (
-          <button
-            type="button"
-            onClick={() => {
-              if (!window.confirm(
-                'Close this request?\n\nWhat is ticked is added to stock. Everything else goes back on the shopping list, '
-                + 'because it still has to be bought.')) return;
-              receive.mutate(true);
-            }}
-            disabled={receive.isPending}
-            className="w-full py-1 text-center text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-          >
-            Close — the rest isn&apos;t coming, put it back on the list
-          </button>
-        )}
-        {req.status === 'RECEIVED' && (
-          <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-            <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-            All in stock. The next shortage starts a new request.
-          </div>
-        )}
-        {canDecide && (req.status === 'OPEN' || req.status === 'SENT' || req.status === 'BOUGHT') && (
-          <button
-            type="button"
-            onClick={() => {
-              if (!window.confirm(req.status === 'BOUGHT'
-                ? 'Cancel this request?\n\nWhat was bought will NOT be added to stock. This cannot be undone.'
-                : 'Cancel this request?\n\nIts lines are dropped. The next shortage starts a fresh one.')) return;
-              cancelReq.mutate();
-            }}
-            disabled={cancelReq.isPending}
-            className="w-full py-2 text-center text-xs text-muted-foreground hover:text-red-600 disabled:opacity-50"
-          >
-            {cancelReq.isPending ? 'Cancelling…' : 'Cancel this request'}
-          </button>
-        )}
-      </div>
+          )}
+          {showPost && (
+            <>
+              {/*
+                Who paid is asked, not assumed, and its card no longer rides
+                along with the button. So the answer it will post with is said
+                here, one line, with the way back to change it.
+              */}
+              {!prepaid && (
+                <button
+                  type="button"
+                  onClick={() => whoPaidCard.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                  className="flex w-full items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-1.5 text-left text-[11px] text-muted-foreground shadow-lg"
+                >
+                  <span className="min-w-0 truncate">
+                    Paid by: <strong className="font-medium text-foreground">{pocketLabel(paidBy)}</strong>
+                  </span>
+                  <span className="shrink-0 text-[var(--accent)]">Change</span>
+                </button>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => receive.mutate(false)}
+                  disabled={receive.isPending}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {receive.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                  {tickedNow.length === postable.length ? 'Add it all to stock' : `Add ${tickedNow.length} of ${postable.length} to stock`}
+                </button>
+                <button
+                  onClick={() => saveBought.mutate()}
+                  disabled={saveBought.isPending}
+                  title="Save corrections to packs, size or price without posting"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 text-xs font-medium shadow-lg transition-colors hover:bg-muted disabled:opacity-50"
+                >
+                  {saveBought.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShoppingCart className="h-3.5 w-3.5" />}
+                  Save
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {req.status === 'BOUGHT' && canDecide && unposted.length > tickedNow.length && (
+        <button
+          type="button"
+          onClick={() => {
+            if (!window.confirm(
+              'Close this request?\n\nWhat is ticked is added to stock. Everything else goes back on the shopping list, '
+              + 'because it still has to be bought.')) return;
+            receive.mutate(true);
+          }}
+          disabled={receive.isPending}
+          className="w-full py-1 text-center text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+        >
+          Close — the rest isn&apos;t coming, put it back on the list
+        </button>
+      )}
+      {req.status === 'RECEIVED' && (
+        <div className="flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+          <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+          All in stock. The next shortage starts a new request.
+        </div>
+      )}
+      {canDecide && (req.status === 'OPEN' || req.status === 'SENT' || req.status === 'BOUGHT') && (
+        <button
+          type="button"
+          onClick={() => {
+            if (!window.confirm(req.status === 'BOUGHT'
+              ? 'Cancel this request?\n\nWhat was bought will NOT be added to stock. This cannot be undone.'
+              : 'Cancel this request?\n\nIts lines are dropped. The next shortage starts a fresh one.')) return;
+            cancelReq.mutate();
+          }}
+          disabled={cancelReq.isPending}
+          className="w-full py-2 text-center text-xs text-muted-foreground hover:text-red-600 disabled:opacity-50"
+        >
+          {cancelReq.isPending ? 'Cancelling…' : 'Cancel this request'}
+        </button>
+      )}
 
       {canDecide && (req.status === 'OPEN' || req.status === 'SENT') && req.lines.some((l) => l.counted) && (
         <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">

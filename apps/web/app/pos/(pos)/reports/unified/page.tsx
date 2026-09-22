@@ -23,6 +23,8 @@ interface BranchRow {
   branchId:        string;
   branchName:      string;
   revenue:         number;
+  // Money handed back in the range; gross profit and AOV are after it. Optional for an older API.
+  refundTotal?:    number;
   cogs:            number;
   grossProfit:     number;
   orderCount:      number;
@@ -41,6 +43,8 @@ interface UnifiedReport {
   shared:   BranchRow[];
   totals: {
     revenue: number; cogs: number; grossProfit: number; grossMargin: number;
+    // Money handed back in the range; gross profit and the margin are after it.
+    refundTotal?: number;
     orderCount: number; voidCount: number;
     apBilled: number; apOutstanding: number;
     arInvoiced: number; arOutstanding: number;
@@ -76,7 +80,7 @@ export default function UnifiedReportPage() {
   const [from, setFrom] = useState(isoDay(thirtyAgo));
   const [to,   setTo]   = useState(isoDay(today));
 
-  const { data, isLoading } = useQuery<UnifiedReport>({
+  const { data, isLoading, isError, refetch } = useQuery<UnifiedReport>({
     queryKey: ['unified-report', from, to],
     queryFn:  () => api.get(`/reports/unified?from=${from}&to=${to}`).then((r) => r.data),
     enabled:  !!user && isOwner,
@@ -92,11 +96,11 @@ export default function UnifiedReportPage() {
   function exportCsv() {
     if (!data) return;
     const headers = [
-      'Branch','Revenue','COGS','Gross Profit','Orders','Voids','AOV',
+      'Branch','Revenue','Refunds','COGS','Gross Profit','Orders','Voids','AOV',
       'AP Billed','AP Outstanding','AR Invoiced','AR Outstanding','Inventory Value',
     ];
     const rows = [...data.branches, ...data.shared].map((b) => [
-      b.branchName, b.revenue, b.cogs, b.grossProfit,
+      b.branchName, b.revenue, b.refundTotal ?? 0, b.cogs, b.grossProfit,
       b.orderCount, b.voidCount, b.avgOrderValue.toFixed(2),
       b.apBilled, b.apOutstanding, b.arInvoiced, b.arOutstanding, b.inventoryValue,
     ]);
@@ -104,7 +108,7 @@ export default function UnifiedReportPage() {
       headers.join(','),
       ...rows.map((r) => r.map((v) => typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : v).join(',')),
       [
-        'TOTAL', data.totals.revenue, data.totals.cogs, data.totals.grossProfit,
+        'TOTAL', data.totals.revenue, data.totals.refundTotal ?? 0, data.totals.cogs, data.totals.grossProfit,
         data.totals.orderCount, data.totals.voidCount, '',
         data.totals.apBilled, data.totals.apOutstanding,
         data.totals.arInvoiced, data.totals.arOutstanding, data.totals.inventoryValue,
@@ -139,8 +143,8 @@ export default function UnifiedReportPage() {
             Unified Report — All Branches
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-3xl">
-            Single read-out of the whole business. Sales, COGS, AP, AR, and inventory value
-            broken down per branch with tenant-wide totals.
+            The whole business on one page: sales, cost of goods, what you owe suppliers (AP),
+            what customers owe you (AR) and stock value, per branch, with totals for the whole business.
           </p>
         </div>
         <button
@@ -183,13 +187,26 @@ export default function UnifiedReportPage() {
 
       {isLoading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
+      ) : isError ? (
+        // A failed load is not the same as an empty month, so it does not say "No data".
+        <div className="rounded-xl border border-border bg-card p-4 text-sm">
+          <p className="font-medium">This report did not load.</p>
+          <p className="text-muted-foreground mt-1">Check the internet connection, then try again.</p>
+          <button
+            onClick={() => refetch()}
+            className="mt-3 text-xs rounded-md border border-border px-2.5 py-1 hover:bg-muted"
+          >
+            Try again
+          </button>
+        </div>
       ) : !data ? (
         <div className="text-sm text-muted-foreground">No data.</div>
       ) : (
         <>
           {/* Tenant-wide KPIs */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Kpi label="Revenue" value={fmtPeso(data.totals.revenue)} accent />
+            <Kpi label="Revenue" value={fmtPeso(data.totals.revenue)} accent
+              sub={(data.totals.refundTotal ?? 0) > 0 ? `${fmtPeso(data.totals.refundTotal ?? 0)} refunded` : undefined} />
             <Kpi label="Gross profit" value={fmtPeso(data.totals.grossProfit)}
               sub={`${(data.totals.grossMargin * 100).toFixed(1)}% margin`} />
             <Kpi label="Orders" value={String(data.totals.orderCount)}
@@ -289,8 +306,9 @@ export default function UnifiedReportPage() {
           <div className="text-xs text-muted-foreground space-y-1">
             <p className="flex items-start gap-1.5">
               <TrendingUp className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              Revenue + COGS + Gross profit + Order count are filtered to the date range. Inventory value
-              is point-in-time as of right now.
+              Sales, cost, gross profit and orders are for the dates chosen. Refunds come off gross profit
+              and the average sale, the same as the Sales Report. Inventory value is what is on the shelf
+              right now, ingredients included.
             </p>
             {data.shared.length > 0 && (
               <p className="flex items-start gap-1.5">

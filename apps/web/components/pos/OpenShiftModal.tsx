@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { DollarSign } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { formatPeso } from '@/lib/utils';
+import { DIALOG_FIT_FRAME, DIALOG_FIT_BODY, DIALOG_FIT_FOOTER } from './dialog-fit';
 
 const BILL_DENOMINATIONS = [1000, 500, 200, 100, 50, 20];
 const COIN_DENOMINATIONS = [10, 5, 1, 0.25];
@@ -65,18 +66,22 @@ export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShif
   return (
     // non-dismissable: always open until shift is started
     <Dialog open modal>
+      {/*
+        Counting by denomination makes this far taller than the 1024x600 till
+        screen. Capped to the screen: the count scrolls, Start Shift stays put.
+      */}
       <DialogContent
-        className="max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted"
+        className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}
         onInteractOutside={(e) => e.preventDefault()}
       >
-        <DialogHeader className="px-6 pt-6 pb-3">
+        <DialogHeader className="mb-0 shrink-0 px-6 pt-5 pb-3">
           <DialogTitle className="font-display text-xl font-bold flex items-center gap-2">
             <DollarSign className="h-5 w-5" style={{ color: 'var(--counter-primary)' }} />
             Open Shift
           </DialogTitle>
         </DialogHeader>
 
-        <div className="px-6 py-2 space-y-4">
+        <div className={`px-6 pt-2 pb-4 space-y-4 ${DIALOG_FIT_BODY}`}>
           <p className="text-sm text-muted-foreground">
             Welcome, <span className="font-medium text-foreground">{cashierName}</span>. Enter the
             opening cash before starting your shift.
@@ -185,13 +190,12 @@ export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShif
           {error && <p className="text-sm text-red-500 text-center">{error}</p>}
         </div>
 
-        <div className="px-6 pb-6">
+        <div className={`px-6 py-3 bg-muted ${DIALOG_FIT_FOOTER}`}>
           <button
             onClick={handleSubmit}
             disabled={loading}
-            className="font-display w-full rounded-xl text-white text-base font-bold disabled:opacity-40 transition-opacity hover:opacity-95"
+            className="font-display w-full rounded-xl text-white text-base font-bold min-h-[56px] [@media(max-height:700px)]:min-h-[48px] disabled:opacity-40 transition-opacity hover:opacity-95"
             style={{
-              minHeight: 64,
               background: 'var(--counter-primary)',
               boxShadow: '0 4px 12px rgba(59,130,246,.30)',
             }}

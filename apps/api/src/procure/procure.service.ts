@@ -1477,7 +1477,8 @@ export class ProcureService {
       }
     }
 
-    const posted:  Array<{ line: string; name: string; quantity: number; unitCost: number; warning: string | null }> = [];
+    // `unit` so the screen can say "2,000 ml @ ₱0.098 / ml" -- a bare "2,000 @ ₱0.10" reads as a price for the lot.
+    const posted:  Array<{ line: string; name: string; quantity: number; unit: string; unitCost: number; warning: string | null }> = [];
     const skipped: Array<{ line: string; name: string; reason: string }> = [];
     const failed:  Array<{ line: string; name: string; reason: string }> = [];
     const short:   Array<{
@@ -1535,7 +1536,7 @@ export class ProcureService {
           if (res.duplicate) {
             skipped.push({ line: line.lineNumber, name, reason: 'This line was already received.' });
           } else {
-            posted.push({ line: line.lineNumber, name, quantity, unitCost, warning: res.warning ?? null });
+            posted.push({ line: line.lineNumber, name, quantity, unit: line.rawMaterial.unit, unitCost, warning: res.warning ?? null });
             // Drinks this delivery just pushed into a loss -- told, not asked.
             for (const alert of res.marginAlerts ?? []) {
               if (!marginAlerts.some((a) => a.productId === alert.productId)) marginAlerts.push(alert);

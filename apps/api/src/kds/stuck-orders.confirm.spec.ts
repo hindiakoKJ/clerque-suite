@@ -11,7 +11,11 @@ jest.mock('../orders/usage-confirm', () => ({ confirmLineUsage: jest.fn(async ()
 describe('StuckOrdersScheduler — the overnight confirm', () => {
   const NOW = new Date('2026-09-16T02:30:00+08:00');
 
-  function build(lines: Array<{ id: string; orderId: string; tenantId: string; left?: number }>) {
+  function build(
+    lines: Array<{ id: string; orderId: string; tenantId: string; left?: number }>,
+    /** Each shop's active owners and managers. */
+    bosses: Record<string, string[]> = { carolina: ['owner-1', 'manager-1'], other: ['owner-2'] },
+  ) {
     const tx: any = {
       $queryRaw: jest.fn().mockResolvedValue([]),
       orderItem: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
@@ -25,6 +29,7 @@ describe('StuckOrdersScheduler — the overnight confirm', () => {
           .slice(0, take)
           .map((l) => ({ id: l.id, orderId: l.orderId, quantity: 1, refundedQty: 1 - (l.left ?? 1), order: { tenantId: l.tenantId } }))),
       },
+      user: { findMany: jest.fn(async ({ where }: any) => (bosses[where.tenantId] ?? []).map((id) => ({ id }))) },
       $transaction: jest.fn((fn: any) => fn(tx)),
     };
     const notifications = { create: jest.fn().mockResolvedValue({}) };
@@ -51,8 +56,27 @@ describe('StuckOrdersScheduler — the overnight confirm', () => {
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);   // one lock per order
     expect(tx.orderItem.updateMany).toHaveBeenCalledWith({ where: { id: { in: ['a1', 'a2'] }, prepStatus: 'PENDING' }, data: { prepStatus: 'READY', readyAt: NOW } });
 
-    expect(notifications.create).toHaveBeenCalledTimes(2);
-    expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'carolina', title: '2 kitchen/bar items counted as made overnight' }));
+    // One each to the people who can open Orders and void or refund -- never to the whole shop.
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 'carolina', isActive: true, role: { in: ['BUSINESS_OWNER', 'BRANCH_MANAGER'] } }, select: { id: true },
+    });
+    expect(notifications.create).toHaveBeenCalledTimes(3);
+    for (const userId of ['owner-1', 'manager-1']) {
+      expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId: 'carolina', userId, link: '/pos/orders', title: '2 kitchen/bar items counted as made overnight',
+      }));
+    }
+    expect(notifications.create).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 'other', userId: 'owner-2' }));
+    expect(notifications.create.mock.calls.every((c: any[]) => c[0].userId != null)).toBe(true);
+  });
+
+  it('a cook is never sent a link to Orders: with no owner or manager to name, everyone is told with no link', async () => {
+    const { job, notifications } = build([{ id: 'a1', orderId: 'o1', tenantId: 'carolina' }], {});
+    await expect(job.confirmUntapped(NOW)).resolves.toBe(1);
+    expect(notifications.create).toHaveBeenCalledTimes(1);
+    const sent = notifications.create.mock.calls[0][0];
+    expect(sent).toMatchObject({ tenantId: 'carolina', userId: null, title: '1 kitchen/bar item counted as made overnight' });
+    expect(sent.link).toBeUndefined();
   });
 
   it('one order failing does not stop the others, and nothing confirmed tells nobody', async () => {

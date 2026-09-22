@@ -34,4 +34,15 @@ export class CreateCustomerDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /**
+   * Special price list for this customer. The Ledger > Customers form always
+   * sends this field — `null` means "use default pricing". It was missing
+   * here, so the global whitelist pipe rejected every create and every edit
+   * with "property priceListId should not exist".
+   * (@IsOptional lets both null and undefined through.)
+   */
+  @IsOptional()
+  @IsString()
+  priceListId?: string | null;
 }

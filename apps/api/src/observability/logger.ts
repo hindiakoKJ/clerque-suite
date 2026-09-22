@@ -1,4 +1,5 @@
 import pino from 'pino';
+import { REDACT_PATHS } from './redact-paths';
 
 /**
  * Structured logger for Clerque API.
@@ -29,12 +30,7 @@ export const logger = pino({
   },
   // Redact sensitive fields anywhere they appear in log payloads.
   redact: {
-    paths: [
-      'password', 'passwordHash', '*.password', '*.passwordHash',
-      'token', 'refreshToken', '*.token', '*.refreshToken',
-      'creditCard', 'tin', 'tinNumber',
-      'authorization', 'cookie',
-    ],
+    paths: REDACT_PATHS,
     censor: '[REDACTED]',
   },
   ...(isProd ? {} : {

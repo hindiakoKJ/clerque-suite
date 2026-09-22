@@ -9,6 +9,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { MailService } from './mail.service';
+import { DEFAULT_MAIL_FROM } from './support';
 
 describe('MailService.sendInvoice', () => {
   it('runs without crashing when RESEND_API_KEY is not configured', async () => {
@@ -72,5 +73,66 @@ describe('MailService.sendInvoice', () => {
     expect(arg.attachments).toEqual([{ filename: 'INV-00042.pdf', content: pdf }]);
 
     jest.dontMock('resend');
+  });
+});
+
+/**
+ * Every email must reach a real support contact.
+ *
+ * The admin-reset notice told the owner to "contact support immediately at
+ * <APP_URL>/help": a page that does not exist, behind the sign-in redirect,
+ * in the one email that warns of a possibly compromised account. And with
+ * MAIL_FROM unset the sender was noreply@clerque.app, a domain nobody owns.
+ */
+describe('MailService — support contact in every email', () => {
+  async function freshService(env: Record<string, string>) {
+    const sendSpy = jest.fn().mockResolvedValue({ error: null });
+    jest.resetModules();
+    jest.doMock('resend', () => ({
+      Resend: jest.fn().mockImplementation(() => ({ emails: { send: sendSpy } })),
+    }));
+    const { MailService: FreshMailService } = await import('./mail.service');
+    const config = { get: jest.fn((key: string) => env[key]) } as unknown as ConfigService;
+    const svc = new FreshMailService(config);
+    return { svc, sendSpy };
+  }
+  afterEach(() => { jest.dontMock('resend'); });
+
+  it('the admin-reset notice links to the support mailbox, never to a /help page', async () => {
+    const { svc, sendSpy } = await freshService({ RESEND_API_KEY: 'test-key', APP_URL: 'https://clerque.cc' });
+    await svc.sendAdminPasswordResetNotice({
+      to: 'anne@example.com', name: 'Anne', actorEmail: 'kj@hnscorpph.com', when: new Date('2026-09-22T09:00:00+08:00'), tenantSlug: 'cafe-carolina',
+    });
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const html: string = sendSpy.mock.calls[0][0].html;
+    expect(html).toContain('href="mailto:devsupport@hnscorpph.com');
+    expect(html).toContain('>devsupport@hnscorpph.com<');
+    expect(html).not.toContain('/help');
+    expect(html).not.toContain('clerque.cc/help');
+  });
+
+  it('with MAIL_FROM unset, the sender is the same default the env schema gives (never clerque.app)', async () => {
+    const { svc, sendSpy } = await freshService({ RESEND_API_KEY: 'test-key' });
+    await svc.sendPasswordReset({ to: 'anne@example.com', name: 'Anne', token: 't', tenantSlug: 'cafe-carolina' });
+    expect(sendSpy.mock.calls[0][0].from).toBe('Clerque <noreply@clerque.cc>');
+    expect(sendSpy.mock.calls[0][0].from).not.toContain('clerque.app');
+    // The running API reads MAIL_FROM through the validated config, whose
+    // default wins over the service's own fallback. The two must agree.
+    const { envValidationSchema } = await import('../common/config/env.validation');
+    expect(envValidationSchema.describe().keys.MAIL_FROM.flags.default).toBe(DEFAULT_MAIL_FROM);
+  });
+
+  it('every email replies to the support mailbox and names it in the footer', async () => {
+    const { svc, sendSpy } = await freshService({ RESEND_API_KEY: 'test-key' });
+    await svc.sendPasswordReset({ to: 'anne@example.com', name: 'Anne', token: 't', tenantSlug: 'cafe-carolina' });
+    const arg = sendSpy.mock.calls[0][0];
+    expect(arg.replyTo).toBe('devsupport@hnscorpph.com');
+    expect(arg.html).toContain('href="mailto:devsupport@hnscorpph.com"');
+  });
+
+  it('a configured MAIL_FROM still wins', async () => {
+    const { svc, sendSpy } = await freshService({ RESEND_API_KEY: 'test-key', MAIL_FROM: 'Clerque <noreply@clerque.cc>' });
+    await svc.sendPasswordReset({ to: 'anne@example.com', name: 'Anne', token: 't', tenantSlug: 'cafe-carolina' });
+    expect(sendSpy.mock.calls[0][0].from).toBe('Clerque <noreply@clerque.cc>');
   });
 });

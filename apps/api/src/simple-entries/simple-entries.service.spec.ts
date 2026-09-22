@@ -14,6 +14,7 @@ describe('SimpleEntriesService', () => {
   const accounts = {
     findByCode: jest.fn((_t: string, code: string) => Promise.resolve({ id: `acct-${code}`, code })),
     getPLSummary: jest.fn(),
+    seedDefaultAccounts: jest.fn(() => Promise.resolve()),
   };
   const journal = {
     create: jest.fn((_t: string, dto: any) => {
@@ -135,9 +136,90 @@ describe('SimpleEntriesService', () => {
     expect(journal.create).toHaveBeenCalledWith(TID, expect.anything(), UID, 'MANUAL');
   });
 
-  it('throws a friendly error if an account is missing', async () => {
-    accounts.findByCode.mockResolvedValueOnce(null as any);
+  it('throws a friendly error if an account is still missing after the back-fill', async () => {
+    // Two lookups (before and after the back-fill) x two accounts.
+    for (let i = 0; i < 4; i++) accounts.findByCode.mockResolvedValueOnce(null as any);
     await expect(run({ type: 'EXPENSE', source: 'CASH' })).rejects.toThrow(/not fully set up/i);
+    expect(accounts.seedDefaultAccounts).toHaveBeenCalledWith(TID);
+    expect(journal.create).not.toHaveBeenCalled();
+  });
+
+  it('an older shop missing a standard account gets it back-filled, then the entry posts', async () => {
+    // First lookup: the wages account is not there yet. After the back-fill it is.
+    accounts.findByCode.mockResolvedValueOnce(null as any);
+    await run({ type: 'WAGES_PAID', paidFrom: 'CASH' });
+    expect(accounts.seedDefaultAccounts).toHaveBeenCalledTimes(1);
+    expect(dr()).toBe('acct-6010');
+    expect(cr()).toBe('acct-1010');
+  });
+
+  it('does not touch the chart when every account is already there', async () => {
+    await run({ type: 'WAGES_PAID', paidFrom: 'CASH' });
+    expect(accounts.seedDefaultAccounts).not.toHaveBeenCalled();
+  });
+
+  // ── Equipment bought / wages paid ──────────────────────────────────────────
+
+  it('EQUIPMENT_PURCHASE (cash) → DR 1075 Machinery & Equipment / CR 1010, balanced', async () => {
+    await run({ type: 'EQUIPMENT_PURCHASE', paidFrom: 'CASH', assetName: 'Espresso machine', amount: 85000 });
+    expect(dr()).toBe('acct-1075');
+    expect(cr()).toBe('acct-1010');
+    expect(balanced()).toBe(true);
+    expect((captured as any).description).toBe('Equipment bought: Espresso machine');
+  });
+
+  it('EQUIPMENT_PURCHASE (bank) → CR 1020', async () => {
+    await run({ type: 'EQUIPMENT_PURCHASE', paidFrom: 'BANK', assetName: 'Chest freezer' });
+    expect(dr()).toBe('acct-1075');
+    expect(cr()).toBe('acct-1020');
+  });
+
+  it("EQUIPMENT_PURCHASE (owner's own money) → CR 3010 Owner's Capital, and says so", async () => {
+    await run({ type: 'EQUIPMENT_PURCHASE', paidFrom: 'OWNER', assetName: 'Grinder', note: 'from savings' });
+    expect(dr()).toBe('acct-1075');
+    expect(cr()).toBe('acct-3010');
+    expect((captured as any).description).toBe('Equipment bought: Grinder (paid by the owner) — from savings');
+  });
+
+  it('EQUIPMENT_PURCHASE with no asset name still posts, with a plain description', async () => {
+    await run({ type: 'EQUIPMENT_PURCHASE' });
+    expect(dr()).toBe('acct-1075');
+    expect(cr()).toBe('acct-1010'); // defaults to cash
+    expect((captured as any).description).toBe('Equipment bought');
+  });
+
+  it('WAGES_PAID (cash) → DR 6010 Salaries and Wages / CR 1010, balanced', async () => {
+    await run({ type: 'WAGES_PAID', paidFrom: 'CASH', amount: 3500, note: 'Ana, week of Sep 14' });
+    expect(dr()).toBe('acct-6010');
+    expect(cr()).toBe('acct-1010');
+    expect(balanced()).toBe(true);
+    expect((captured as any).description).toBe('Wages paid — Ana, week of Sep 14');
+  });
+
+  it('WAGES_PAID (bank) → CR 1020; (owner) → CR 3010', async () => {
+    await run({ type: 'WAGES_PAID', paidFrom: 'BANK' });
+    expect(cr()).toBe('acct-1020');
+    await run({ type: 'WAGES_PAID', paidFrom: 'OWNER' });
+    expect(cr()).toBe('acct-3010');
+  });
+
+  it('the new kinds also accept the older `source` field', async () => {
+    await run({ type: 'WAGES_PAID', source: 'BANK' });
+    expect(cr()).toBe('acct-1020');
+  });
+
+  it('the older kinds accept paidFrom CASH/BANK, but refuse OWNER in plain words', async () => {
+    await run({ type: 'EXPENSE', category: 'RENT', paidFrom: 'BANK' });
+    expect(cr()).toBe('acct-1020');
+    await expect(run({ type: 'EXPENSE', paidFrom: 'OWNER' })).rejects.toThrow(/only applies to equipment and wages/i);
+  });
+
+  it('list: newest first with a stable order for same-day entries', async () => {
+    prisma.journalEntry.findMany.mockResolvedValueOnce([]);
+    await svc.list(TID);
+    expect(prisma.journalEntry.findMany.mock.calls[0][0].orderBy).toEqual([
+      { date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' },
+    ]);
   });
 
   it('reverse: delegates to journal.reverse for a simple entry', async () => {

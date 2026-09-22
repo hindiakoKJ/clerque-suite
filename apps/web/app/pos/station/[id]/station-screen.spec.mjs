@@ -10,9 +10,59 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { queueProblem, stationTitle } from './station-screen.ts';
+import { queueProblem, screenLabel, stationTitle, waitLabel } from './station-screen.ts';
 
 const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+
+test('the line under the title names the kind of screen: the Bar is not a "Kitchen display"', () => {
+  assert.equal(screenLabel('KITCHEN'), 'Kitchen display');
+  assert.equal(screenLabel('BAR'), 'Bar display');
+  assert.equal(screenLabel('HOT_BAR'), 'Bar display');
+  assert.equal(screenLabel('COLD_BAR'), 'Bar display');
+  assert.equal(screenLabel('PASTRY_PASS'), 'Pastry display');
+  assert.equal(screenLabel('COUNTER'), 'Counter display');
+  // Until the station has loaded, or a kind this screen does not know.
+  assert.equal(screenLabel(null), 'Station display');
+  assert.equal(screenLabel(undefined), 'Station display');
+  assert.equal(screenLabel('SOMETHING_NEW'), 'Station display');
+  assert.match(page, /\{screenLabel\(stationKind\)\} · /);
+  assert.doesNotMatch(page, /Kitchen Display ·/);
+});
+
+test('a wait is read in the biggest unit that fits: a days-old ticket is not "28549m 42s"', () => {
+  assert.equal(waitLabel(0), '0s');
+  assert.equal(waitLabel(42), '42s');
+  assert.equal(waitLabel(60), '1m 0s');
+  assert.equal(waitLabel(5 * 60 + 7), '5m 7s');
+  assert.equal(waitLabel(59 * 60 + 59), '59m 59s');
+  assert.equal(waitLabel(3600), '1h 0m');
+  assert.equal(waitLabel(3 * 3600 + 12 * 60 + 30), '3h 12m');
+  assert.equal(waitLabel(23 * 3600 + 59 * 60), '23h 59m');
+  assert.equal(waitLabel(24 * 3600), '1d');
+  assert.equal(waitLabel(27 * 3600 + 5 * 60), '1d 3h');
+  // The 20-day-old test ticket the sweep found.
+  assert.equal(waitLabel(28549 * 60 + 42), '19d 19h');
+  assert.equal(waitLabel(7 * 24 * 3600), '7d');
+  // Never a negative or a fraction.
+  assert.equal(waitLabel(-5), '0s');
+  assert.equal(waitLabel(61.9), '1m 1s');
+  assert.match(page, /\{waitLabel\(oldestWait\)\}/);
+});
+
+test('the "tap once to let the bell ring" notice never sits in the flow above the tickets', () => {
+  /*
+    The first touch unlocks the bell and removes the notice. In the flow above
+    the tickets, its going shifted every ticket up under the finger between
+    pointerdown and pointerup, so the first tap on a ticket bumped nothing.
+    Fixed to the screen's edge, and taps pass through it.
+  */
+  const notice = page.match(/\{chime\.enabled && !chime\.unlocked && \(\s*<div className="([^"]+)"/);
+  assert.ok(notice, 'the notice is still drawn while the bell is locked');
+  const classes = notice[1].split(/\s+/);
+  assert.ok(classes.includes('fixed'), 'fixed to the screen, out of the flow');
+  assert.ok(classes.includes('pointer-events-none'), 'taps pass through it');
+  assert.ok(!classes.includes('border-b'), 'not the old in-flow strip under the header');
+});
 
 test('a paired tablet is titled Kitchen or Bar, from whichever answer arrived', () => {
   // Logged in: the floor layout knows it.
@@ -63,4 +113,19 @@ test('the station page uses both, and never shows "All caught up" to a signed-ou
   assert.match(page, /const items = signedOut \? NO_ITEMS : \(queued \?\? NO_ITEMS\)/);
   assert.match(page, /This screen is signed out or unpaired/);
   assert.match(page, /Pair it again from Settings &gt; Displays/);
+});
+
+test('the display picker names each screen the same way: the Bar is not a "Kitchen Display"', () => {
+  const picker = readFileSync(new URL('../../select-display/page.tsx', import.meta.url), 'utf8');
+  assert.match(picker, /\{screenLabel\(station\.kind\)\}/);
+  assert.doesNotMatch(picker, /Kitchen Display —/);
+});
+
+test('the bell unlocks on the finger lifting too, as Android Chrome requires, and only once audio runs', () => {
+  const hook = readFileSync(new URL('../../../../hooks/pos/useKitchenChime.ts', import.meta.url), 'utf8');
+  const events = hook.match(/const EVENTS = \[([^\]]+)\]/);
+  assert.ok(events, 'one list of unlock events');
+  for (const e of ['pointerup', 'touchend', 'click']) assert.match(events[1], new RegExp(`'${e}'`));
+  // A touch-down that could not start audio does not use up the unlock.
+  assert.match(hook, /if \(ctx\.state === 'running'\) finish\(\)/);
 });

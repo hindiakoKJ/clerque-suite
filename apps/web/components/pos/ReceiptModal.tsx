@@ -17,7 +17,9 @@ import { getProviderPhase, receiptAuthority } from '@repo/shared-types';
 import { isDemoMode } from '@/lib/demo/config';
 import { useSound } from '@/hooks/pos/useSound';
 import { useBranding } from '@/hooks/useBranding';
-import { waitForImages } from '@/lib/branding';
+import { readLastBusiness, waitForImages } from '@/lib/branding';
+import { receiptBusinessName, receiptBranchLine } from '@/lib/pos/receipt-header';
+import { DIALOG_FIT_SCROLL } from './dialog-fit';
 
 /**
  * Roles allowed to void directly from the terminal (no supervisor co-auth).
@@ -100,6 +102,12 @@ interface ReceiptModalProps {
   open:    boolean;
   data:    ReceiptData | null;
   onClose: () => void;
+  /**
+   * Looking up an old receipt (Ledger > Journal > View source receipt), not
+   * finishing a sale. Drops the "Sale complete" heading, the "Start next sale"
+   * button and the void link: none of them mean anything outside the till.
+   */
+  viewOnly?: boolean;
 }
 
 // ── Document kind ────────────────────────────────────────────────────────────
@@ -224,7 +232,7 @@ function TaxFooter({
 
 // ── Main modal ────────────────────────────────────────────────────────────────
 
-export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
+export function ReceiptModal({ open, data, onClose, viewOnly = false }: ReceiptModalProps) {
   const printRef      = useRef<HTMLDivElement>(null);
   const printerConnected = usePrinterStore((s) => s.connected);
 
@@ -239,7 +247,6 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const playSound     = useSound();
   const taxStatus: TaxStatus = user?.taxStatus ?? 'UNREGISTERED';
   const tinNumber             = user?.tinNumber;
-  const businessName          = user?.businessName;
   const registeredAddress     = user?.registeredAddress;
   const isPtuHolder           = user?.isPtuHolder ?? false;
   const ptuNumber             = user?.ptuNumber;
@@ -249,14 +256,24 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
   const receiptFooterNote     = user?.receiptFooterNote;
   // The logo comes from GET /tenant/branding, never from the login token (an
   // inline image there could overflow the session cookie). '' = no logo.
-  const { logoSrc: receiptLogoSrc } = useBranding({ enabled: !!user?.tenantId });
+  const { logoSrc: receiptLogoSrc, displayName: brandingName } = useBranding({ enabled: !!user?.tenantId });
+  // The heading on the slip: the shop's real name, never a placeholder. The
+  // name this device remembered at sign-in covers a till that came up offline.
+  const remembered   = readLastBusiness();
+  const businessName = receiptBusinessName({
+    corBusinessName: user?.businessName,
+    brandingName,
+    rememberedName:  remembered && remembered.tenantId === user?.tenantId ? remembered.name : null,
+    branchName:      data?.branchName,
+  });
+  const branchLine   = receiptBranchLine(businessName, data?.branchName);
 
   // ── In-receipt void (role-gated) ───────────────────────────────────────────
   // Visible only when:
   //   - the order has a real server id (not offline / not LOCAL-)
   //   - the current user's role is allowed to void without supervisor co-auth
   // CASHIER and lower must use the Orders page where supervisor co-auth is collected.
-  const canVoid = !!data?.orderId && !data?.isOffline &&
+  const canVoid = !viewOnly && !!data?.orderId && !data?.isOffline &&
     !!user?.role && VOID_DIRECT_ROLES.has(user.role);
   const [voidOpen, setVoidOpen]       = useState(false);
   const [voidReason, setVoidReason]   = useState('');
@@ -412,18 +429,23 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
     <>
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent
-        className="max-w-[980px] w-[95vw] p-0 gap-0 border-0 bg-transparent shadow-none"
+        aria-describedby={undefined}
+        className="max-w-[980px] w-[calc(100vw-1.5rem)] p-0 gap-0 border-0 bg-transparent shadow-none"
         style={{ background: 'transparent' }}
       >
+        {/* Screen readers need a name for the dialog; sighted staff read the heading below. */}
+        <DialogTitle className="sr-only">
+          {viewOnly ? `Receipt ${data.orderNumber}` : `Sale complete, receipt ${data.orderNumber}`}
+        </DialogTitle>
         <div
-          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh] shadow-2xl"
+          className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[calc(100dvh-1.5rem)] shadow-2xl"
           style={{ background: 'hsl(var(--muted))' }}
         >
           {/* ── Counter-styled header ─────────────────────────── */}
-          <div className="flex items-center px-8 py-5 bg-card border-b border-border">
+          <div className="shrink-0 flex flex-wrap items-center gap-y-1 px-4 sm:px-8 py-3 sm:py-5 [@media(max-height:700px)]:py-2 pr-12 sm:pr-12 bg-card border-b border-border">
             <div>
-              <div className="font-display text-[22px] font-bold leading-tight">
-                Sale complete · #{data.orderNumber}
+              <div className="font-display text-lg sm:text-[22px] font-bold leading-tight">
+                {viewOnly ? 'Receipt' : 'Sale complete'} · #{data.orderNumber}
               </div>
               <div className="flex items-center gap-2.5 mt-1.5">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
@@ -456,8 +478,8 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-8 md:p-10 flex flex-col md:flex-row gap-8 md:gap-12 items-start justify-center">
-          <div ref={printRef} className="bg-white rounded-2xl border border-border shadow-lg p-8 w-full max-w-[480px] font-mono-counter text-xs space-y-1 text-gray-900">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-8 md:p-10 [@media(max-height:700px)]:p-4 flex flex-col md:flex-row gap-4 sm:gap-8 md:gap-12 items-center md:items-start justify-start md:justify-center">
+          <div ref={printRef} className="bg-white rounded-2xl border border-border shadow-lg p-4 sm:p-8 w-full max-w-[480px] font-mono-counter text-xs space-y-1 text-gray-900">
 
             {/* Demo watermark — printed AND on-screen, can't be removed */}
             {isDemoMode() && (
@@ -487,9 +509,11 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                   onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                 />
               )}
-              <p className="font-display font-extrabold text-lg tracking-tight">{(businessName ?? data.branchName ?? 'Demo Store').toUpperCase()}</p>
-              {data.branchName && businessName && (
-                <p className="text-gray-500 text-[10px]">{data.branchName}</p>
+              {businessName && (
+                <p className="font-display font-extrabold text-lg tracking-tight">{businessName.toUpperCase()}</p>
+              )}
+              {branchLine && (
+                <p className="text-gray-500 text-[10px]">{branchLine}</p>
               )}
               {receiptHeaderNote && (
                 <p className="text-gray-600 text-[10px] italic whitespace-pre-line">{receiptHeaderNote}</p>
@@ -719,11 +743,17 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
                 boxShadow: '0 4px 12px rgba(59,130,246,.30)',
               }}
             >
-              Start next sale →
+              {viewOnly ? 'Close' : 'Start next sale →'}
             </button>
-            {taxStatus !== 'UNREGISTERED' && (
+            {/*
+              Only when this slip IS the shop's official sales document (a Sales
+              Invoice under its own Permit to Use). A non-VAT shop with no PTU
+              hands out an Acknowledgement Receipt, which belongs to no BIR
+              series, so telling her it joins one was simply untrue.
+            */}
+            {isOfficialReceipt && !viewOnly && (
               <div className="rounded-xl px-4 py-3 text-[12px] text-muted-foreground leading-relaxed bg-secondary">
-                <b className="text-foreground">BIR ·</b> This sale is appended to your OR sequence (gap-free). Daily Z-read closes at 23:59 or when shift ends.
+                <b className="text-foreground">BIR ·</b> This sale takes the next number in your Sales Invoice series, with no gaps. The day&apos;s Z-reading closes at 11:59 PM or when the shift ends.
               </div>
             )}
             {canVoid && !isVoided && (
@@ -743,7 +773,7 @@ export function ReceiptModal({ open, data, onClose }: ReceiptModalProps) {
 
     {/* Void confirmation modal — separate Dialog tree so it's not nested */}
     <Dialog open={voidOpen} onOpenChange={(v) => { if (!v && !voidPending) { setVoidOpen(false); setVoidReason(''); } }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className={`max-w-sm ${DIALOG_FIT_SCROLL}`}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-red-600">
             <Ban className="h-5 w-5" />

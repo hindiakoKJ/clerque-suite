@@ -9,6 +9,7 @@ import {
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
+import { todayIso } from '@/lib/today';
 import { ImportModal } from '@/components/ui/ImportModal';
 
 type AccountType    = 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
@@ -39,9 +40,9 @@ const TYPE_CONFIG: Record<AccountType, { label: string; color: string }> = {
 
 const CTRL_CONFIG: Record<PostingControl, { label: string; Icon: React.ElementType; color: string; tip: string }> = {
   OPEN:        { label: 'Open',    Icon: BookOpen,    color: 'text-[var(--accent)] bg-[var(--accent-soft)]',      tip: 'Manual journal entries allowed' },
-  AP_ONLY:     { label: 'AP Only', Icon: ShieldAlert, color: 'text-amber-600 bg-amber-500/10',    tip: 'Only the AP module may post here (Phase 4)' },
-  AR_ONLY:     { label: 'AR Only', Icon: ShieldAlert, color: 'text-sky-600 bg-sky-500/10',        tip: 'Only the AR module may post here (Phase 5)' },
-  SYSTEM_ONLY: { label: 'System',  Icon: Lock,        color: 'text-muted-foreground bg-muted/60', tip: 'Posted automatically by the event queue only' },
+  AP_ONLY:     { label: 'AP Only', Icon: ShieldAlert, color: 'text-amber-600 bg-amber-500/10',    tip: 'Only vendor bills and payments post here' },
+  AR_ONLY:     { label: 'AR Only', Icon: ShieldAlert, color: 'text-sky-600 bg-sky-500/10',        tip: 'Only customer invoices and collections post here' },
+  SYSTEM_ONLY: { label: 'System',  Icon: Lock,        color: 'text-muted-foreground bg-muted/60', tip: 'Posted automatically from sales; no manual entries' },
 };
 
 
@@ -66,7 +67,7 @@ export default function AccountsPage() {
     setExporting(true);
     try {
       const url      = `/export/chart-of-accounts`;
-      const filename = `chart-of-accounts-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const filename = `chart-of-accounts-${todayIso()}.xlsx`;
       await downloadAuthFile(url, filename);
     } finally {
       setExporting(false);

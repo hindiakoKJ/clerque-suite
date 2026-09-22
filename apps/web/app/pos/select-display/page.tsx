@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Coffee, Snowflake, ChefHat, Cake, Store, Monitor, LogOut } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { screenLabel } from '@/app/pos/station/[id]/station-screen';
 
 /**
  * Station picker for KIOSK_DISPLAY accounts.
@@ -87,7 +88,7 @@ export default function SelectDisplayPage() {
                   <div className="min-w-0 flex-1">
                     <p className="font-semibold text-base">{station.name}</p>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Kitchen Display — {station.kind.replace(/_/g, ' ').toLowerCase()}
+                      {screenLabel(station.kind)}
                     </p>
                   </div>
                 </button>

@@ -142,7 +142,9 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
 
     const notification = {
       findFirst: jest.fn(async ({ where }: any) => table.find((n) =>
-        n.tenantId === where.tenantId && n.link === where.link && n.createdAt >= where.createdAt.gte) ?? null),
+        n.tenantId === where.tenantId
+        && (where.link?.in ? where.link.in.includes(n.link) : n.link === where.link)
+        && n.createdAt >= where.createdAt.gte) ?? null),
       createMany: jest.fn(async ({ data }: any) => {
         for (const d of data) table.push({ id: `n${table.length + 1}`, readAt: null, createdAt: clock, ...d });
         return { count: data.length };
@@ -286,7 +288,7 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
       tenantId: 't1',
       kind:     'INFO',
       title:    'Ingredients used today — Main',
-      link:     '/pos/inventory/reports?from=2026-09-16&to=2026-09-16&branchId=b-main',
+      link:     '/procure/stock/reports?from=2026-09-16&to=2026-09-16&branchId=b-main',
     });
     expect(bell.body).toBe('Fresh Milk 8.1 L · Espresso Beans 1.25 kg. Value at cost ₱1,872.50.');
     expect(h.telegram.dailyUsage).toHaveBeenCalledTimes(1);
@@ -371,7 +373,7 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
     expect(await h.runAt('2026-09-17T03:00:03')).toBe(1);
     expect(h.reports.usageForWindow).toHaveBeenCalledWith('t1', 'b-late', '2026-09-16', manila('2026-09-16T03:00:00'), manila('2026-09-17T03:00:00'));
     expect(h.lastSentNames()).toEqual(['Fresh Milk', 'Espresso Beans', 'Oat Milk']);
-    expect(h.table[0].link).toBe('/pos/inventory/reports?from=2026-09-16&to=2026-09-16&branchId=b-late');
+    expect(h.table[0].link).toBe('/procure/stock/reports?from=2026-09-16&to=2026-09-16&branchId=b-late');
 
     // Later on the 17th, nothing: the 17th's own sheet goes at 03:00 on the 18th, starting where this one ended.
     expect(await h.runAt('2026-09-17T23:00:00')).toBe(0);
@@ -385,7 +387,7 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
     expect(await h.runAt('2026-09-17T06:30:01')).toBe(1);
     expect(h.reports.usageForWindow).toHaveBeenCalledWith('t1', 'b-main', '2026-09-16', manila('2026-09-16T06:30:00'), manila('2026-09-17T06:30:00'));
     expect(h.lastSentNames()).toEqual(['Fresh Milk', 'Espresso Beans']);
-    expect(h.table[0].link).toBe('/pos/inventory/reports?from=2026-09-16&to=2026-09-16&branchId=b-main');
+    expect(h.table[0].link).toBe('/procure/stock/reports?from=2026-09-16&to=2026-09-16&branchId=b-main');
   });
 
   it('skips branches with no closing time, closed branches, demo shops and suspended shops -- but not a shop in grace', async () => {
@@ -669,7 +671,7 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
       expect(h.reports.usageForWindow).toHaveBeenLastCalledWith('t1', 'b-main', '2026-09-17', manila('2026-09-16T23:05:00'), manila('2026-09-17T23:00:02'));
       expect(h.lastSentNames()).toEqual(['Syrup']);
       // Still named, and kept from going out twice, by the day.
-      expect(h.table[3].link).toBe('/pos/inventory/reports?from=2026-09-17&to=2026-09-17&branchId=b-main');
+      expect(h.table[3].link).toBe('/procure/stock/reports?from=2026-09-17&to=2026-09-17&branchId=b-main');
     });
   });
 
@@ -1151,7 +1153,19 @@ describe('EndOfDayScheduler -- the ingredients-used sheet after closing', () => 
     });
   });
 
+  it('a day already sent under the old /pos link is not sent again after the link moved to Procure', async () => {
+    const h = build({ recorded: [used('b-main', '2026-09-16T14:00:00', MILK())] });
+    // What the bell looked like before this change shipped.
+    h.table.push({
+      id: 'old', tenantId: 't1', userId: 'owner', readAt: null, createdAt: manila('2026-09-16T23:00:01'),
+      link: '/pos/inventory/reports?from=2026-09-16&to=2026-09-16&branchId=b-main',
+    });
+    expect(await h.runAt('2026-09-16T23:05:00')).toBe(0);
+    expect(h.table).toHaveLength(1);
+    expect(h.telegram.dailyUsage).not.toHaveBeenCalled();
+  });
+
   it('the report link carries the day and the branch', () => {
-    expect(usageReportLink('b-main', '2026-09-16')).toBe('/pos/inventory/reports?from=2026-09-16&to=2026-09-16&branchId=b-main');
+    expect(usageReportLink('b-main', '2026-09-16')).toBe('/procure/stock/reports?from=2026-09-16&to=2026-09-16&branchId=b-main');
   });
 });

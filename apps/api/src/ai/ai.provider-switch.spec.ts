@@ -117,6 +117,16 @@ describe('AiService — who does the work', () => {
     }
   });
 
+  it('with AI_PROVIDER unset, uses Claude when only an Anthropic key is set', () => {
+    const { mod } = load({ AI_PROVIDER: undefined, GOOGLE_CLOUD_PROJECT: undefined, ANTHROPIC_API_KEY: 'k' });
+    expect(mod.AI_PROVIDER).toBe('anthropic');
+  });
+
+  it('with AI_PROVIDER unset and a Google project set, stays on Gemini', () => {
+    const { mod } = load({ AI_PROVIDER: undefined });
+    expect(mod.AI_PROVIDER).toBe('gemini');
+  });
+
   it('refuses when the provider on duty is the one that is not configured', async () => {
     const { svc } = load({ AI_PROVIDER: 'gemini' });
     svc.gemini = null;

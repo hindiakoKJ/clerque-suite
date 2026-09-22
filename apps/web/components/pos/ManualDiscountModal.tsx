@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import { Percent, DollarSign, AlertTriangle } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DIALOG_FIT_SCROLL } from './dialog-fit';
 import { Button } from '@/components/ui/button';
 import { useCartStore } from '@/store/pos/cart';
 import { formatPeso } from '@/lib/utils';
@@ -65,7 +66,7 @@ export function ManualDiscountModal({ open, onClose }: ManualDiscountModalProps)
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className={`max-w-sm ${DIALOG_FIT_SCROLL}`}>
         <DialogHeader>
           <DialogTitle>Apply discount</DialogTitle>
         </DialogHeader>

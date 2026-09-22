@@ -15,7 +15,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service';
-import { planFeaturesFor } from '@repo/shared-types';
+import { PH_TIMEZONE, planFeaturesFor } from '@repo/shared-types';
 
 export interface AutoBackupConfig {
   /** Placeholder for the OAuth refresh token once Google Drive lands. */
@@ -81,13 +81,15 @@ export class AutoBackupService {
   }
 
   /**
-   * Cron entry-point. Runs nightly at 02:00 local, sweeps every tenant whose
-   * plan has the autoBackup feature, writes one file per tenant to disk.
+   * Cron entry-point. Runs nightly at 02:00 Manila time, sweeps every tenant
+   * whose plan has the autoBackup feature, writes one file per tenant to disk.
+   * (Railway runs in UTC: without the timeZone this ran at 10:00 in the
+   * morning, in the middle of service.)
    *
    * TODO: After Google Drive OAuth lands, also push the JSON to the owner's
    * connected drive folder and update autoBackupConfigJson.lastBackupAt.
    */
-  @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  @Cron(CronExpression.EVERY_DAY_AT_2AM, { timeZone: PH_TIMEZONE })
   async runDailyBackups(): Promise<void> {
     const tenants = await this.prisma.tenant.findMany({
       where:  { status: 'ACTIVE' },

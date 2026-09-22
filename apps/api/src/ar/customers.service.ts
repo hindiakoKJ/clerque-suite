@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { CreateCustomerDto } from './dto/create-customer.dto';
@@ -61,10 +61,35 @@ export class CustomersService {
     return { ...customer, outstandingBalance };
   }
 
+  /**
+   * Resolve the price list a customer form sent. `undefined` = field not sent
+   * (leave as is); `null` / '' = "use default pricing"; an id must be one of
+   * THIS shop's price lists — never trust a raw id from the browser.
+   */
+  private async resolvePriceListId(
+    tenantId: string,
+    priceListId: string | null | undefined,
+  ): Promise<string | null | undefined> {
+    if (priceListId === undefined) return undefined;
+    if (priceListId === null || priceListId.trim() === '') return null;
+    const list = await this.prisma.priceList.findFirst({
+      where:  { id: priceListId, tenantId },
+      select: { id: true },
+    });
+    if (!list) {
+      throw new BadRequestException(
+        'That price list no longer exists. Pick another one, or choose default pricing.',
+      );
+    }
+    return list.id;
+  }
+
   async create(tenantId: string, dto: CreateCustomerDto) {
+    const priceListId = await this.resolvePriceListId(tenantId, dto.priceListId);
     return this.prisma.customer.create({
       data: {
         tenantId,
+        ...(priceListId ? { priceListId } : {}),
         name:           dto.name,
         tin:            dto.tin,
         address:        dto.address,
@@ -79,6 +104,7 @@ export class CustomersService {
 
   async update(id: string, tenantId: string, dto: UpdateCustomerDto) {
     await this.findOne(id, tenantId);
+    const priceListId = await this.resolvePriceListId(tenantId, dto.priceListId);
     // Atomic tenant-scoped update — closes the TOCTOU window between findOne()
     // and update() that an unscoped `where: { id }` would leave open.
     const data = {
@@ -91,6 +117,8 @@ export class CustomersService {
       ...(dto.creditLimit     !== undefined ? { creditLimit: new Prisma.Decimal(dto.creditLimit!) }           : {}),
       ...(dto.notes           !== undefined ? { notes: dto.notes }                                            : {}),
       ...(dto.isActive        !== undefined ? { isActive: dto.isActive }                                      : {}),
+      // null clears the special pricing (back to default); undefined leaves it alone.
+      ...(priceListId         !== undefined ? { priceListId }                                                 : {}),
     };
     const result = await this.prisma.customer.updateMany({ where: { id, tenantId }, data });
     if (result.count === 0) throw new NotFoundException('Customer not found');

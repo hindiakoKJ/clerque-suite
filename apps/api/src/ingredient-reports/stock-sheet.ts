@@ -31,7 +31,8 @@ const SECTION_TITLES: Record<SectionKey, string> = {
   PREMADE:     'Pre-made',
   INGREDIENTS: 'Ingredients',
   SUPPLIES:    'Supplies',
-  UNROUTED:    'Not routed to a station',
+  // Plain words, the same the prep tiles use: "not routed" meant nothing to a cook.
+  UNROUTED:    'No station set yet',
 };
 const SECTION_ORDER: SectionKey[] = ['PREMADE', 'INGREDIENTS', 'SUPPLIES', 'UNROUTED'];
 
@@ -157,6 +158,16 @@ export function sheetNotes(w: SheetWindow, extra: { stillWaiting: number; anyAdj
       : w.closesAt.getTime() > extra.now.getTime()
         ? 'Running totals so far. This sheet closes when the last shift of the day is closed.'
         : "Running totals so far. Clerque is saving this sheet's closing balance now.");
+  } else if (w.closedBy === 'SHIFT') {
+    /*
+      Said plainly: a sheet closed at 10:19 AM with no word why read as a bug.
+      A last shift closed within 2 hours of the closing time (or from 5 PM with
+      no closing time) ends the day; earlier is a handover and closes nothing
+      (end-of-day.scheduler.ts lastShiftCloseDue).
+    */
+    notes.push(`Closed at ${timeLabel(w.to)}, when the day's last shift was closed. Waste and batches since then go on the next sheet.`);
+  } else if (w.closedBy === 'CLOCK') {
+    notes.push(`Closed at ${timeLabel(w.to)} by Clerque: the day's last shift was not closed by then, so it closed on the clock.`);
   } else {
     notes.push(`Closed at ${timeLabel(w.to)}.`);
   }

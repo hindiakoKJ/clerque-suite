@@ -18,6 +18,40 @@ export function stationTitle(
   return fromLayout?.name || fromPrep?.name || 'Station';
 }
 
+/**
+ * The line under the title: what kind of screen this is, from the station's
+ * kind. It said "Kitchen display" on the Bar too.
+ */
+export function screenLabel(kind: string | null | undefined): string {
+  switch (kind) {
+    case 'KITCHEN':     return 'Kitchen display';
+    case 'BAR':
+    case 'HOT_BAR':
+    case 'COLD_BAR':    return 'Bar display';
+    case 'PASTRY_PASS': return 'Pastry display';
+    case 'COUNTER':     return 'Counter display';
+    default:            return 'Station display';
+  }
+}
+
+/**
+ * How long a ticket has waited, readable from across the kitchen. Seconds
+ * under a minute, then minutes and seconds; from an hour, hours and minutes;
+ * from a day, days and hours. It used to count minutes for good, so a ticket
+ * nobody tapped read "28549m 42s" -- a number, not a wait.
+ */
+export function waitLabel(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s`;
+  const mins = Math.floor(s / 60);
+  if (mins < 60) return `${mins}m ${s % 60}s`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
+  const days = Math.floor(hours / 24);
+  const h = hours % 24;
+  return h > 0 ? `${days}d ${h}h` : `${days}d`;
+}
+
 export type QueueProblem =
   /** Signed out, unpaired, paired to a station that is gone: only pairing again fixes it. */
   | { kind: 'unpaired'; detail: string | null }

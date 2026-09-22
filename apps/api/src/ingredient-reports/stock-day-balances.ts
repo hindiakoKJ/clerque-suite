@@ -108,6 +108,13 @@ export interface SheetWindow {
   begin: { day: string; takenAt: Date } | null;
   /** The save Ending is read from; null for the stock as it is now. */
   end: { day: string; takenAt: Date } | null;
+  /**
+   * CLOSED with its own save: who closed it. SHIFT when its last shift closed
+   * it before the fallback clock (the sheet says so, since a day closed at
+   * 10:19 AM with no word why looked like a bug); CLOCK when the job closed it
+   * at the fallback moment. Null while LIVE, or for a past day with no save.
+   */
+  closedBy: 'SHIFT' | 'CLOCK' | null;
   /** Why Beginning is worked back: no save before this day, or the last one is over a week old. */
   workedBack: 'NO_SAVE' | 'TOO_OLD' | null;
   /** A day in the window whose closing balance Clerque did not save. */
@@ -173,10 +180,13 @@ export async function sheetWindow(
   let end: SheetWindow['end'] = null;
   let missingSaveDay: string | null = null;
   let closesAt: Date | null = null;
+  let closedBy: SheetWindow['closedBy'] = null;
   if (save) {
     status = 'CLOSED';
     to = save.takenAt;
     end = save;
+    // Saved before the fallback moment: its last shift closed it. At or after: the job did.
+    closedBy = save.takenAt.getTime() < days.dueAt(D).getTime() ? 'SHIFT' : 'CLOCK';
   } else if (D === today) {
     status = 'LIVE';
     to = now;
@@ -209,6 +219,6 @@ export async function sheetWindow(
     today,
     previousDay: first && dayBefore(D) >= first.day ? dayBefore(D) : null,
     nextDay: D < today ? dayAfter(D) : null,
-    status, from, to, begin, end, workedBack, missingSaveDay, closesAt,
+    status, from, to, begin, end, closedBy, workedBack, missingSaveDay, closesAt,
   };
 }

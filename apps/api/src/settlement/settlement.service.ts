@@ -4,11 +4,21 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma, PaymentMethod, SettlementStatus } from '@prisma/client';
+import { Prisma, PaymentMethod, SettlementStatus, OrderStatus } from '@prisma/client';
 import { CreateSettlementBatchDto } from './dto/create-settlement.dto';
 import { ConfirmSettlementDto } from './dto/confirm-settlement.dto';
 import { AddItemsToSettlementDto } from './dto/add-items-settlement.dto';
 export { CreateSettlementBatchDto, ConfirmSettlementDto, AddItemsToSettlementDto };
+
+/**
+ * Orders whose GCash / Maya money has really been received.
+ *
+ * PAID counts as much as COMPLETED: the sale entry debits 1031 Digital Wallet
+ * Receivable the moment the customer pays, whether or not the kitchen or bar
+ * ever bumped the ticket. Listing COMPLETED only kept a paid-but-never-bumped
+ * order out of Settlement for good, so "Awaiting settlement" sat below the books.
+ */
+export const SETTLEABLE_ORDER_STATUSES: OrderStatus[] = ['PAID', 'COMPLETED'];
 
 @Injectable()
 export class SettlementService {
@@ -244,6 +254,16 @@ export class SettlementService {
     from?: string,
     to?: string,
   ) {
+    // Filter on when the money came in (paidAt). A PAID order has no
+    // completedAt yet, so filtering on completedAt would drop it again.
+    // Older rows without paidAt fall back to completedAt.
+    const range = from || to
+      ? {
+          ...(from ? { gte: new Date(from) } : {}),
+          ...(to ? { lte: new Date(to) } : {}),
+        }
+      : undefined;
+
     return this.prisma.orderPayment.findMany({
       where: {
         method,
@@ -251,14 +271,9 @@ export class SettlementService {
         order: {
           tenantId,
           branchId,
-          status: 'COMPLETED',
-          ...(from || to
-            ? {
-                completedAt: {
-                  ...(from ? { gte: new Date(from) } : {}),
-                  ...(to ? { lte: new Date(to) } : {}),
-                },
-              }
+          status: { in: SETTLEABLE_ORDER_STATUSES },
+          ...(range
+            ? { OR: [{ paidAt: range }, { paidAt: null, completedAt: range }] }
             : {}),
         },
       },
@@ -266,6 +281,8 @@ export class SettlementService {
         order: {
           select: {
             orderNumber: true,
+            status: true,
+            paidAt: true,
             completedAt: true,
           },
         },
@@ -290,7 +307,7 @@ export class SettlementService {
             order: {
               tenantId,
               ...(branchId ? { branchId } : {}),
-              status: 'COMPLETED',
+              status: { in: SETTLEABLE_ORDER_STATUSES },
             },
           },
           _sum: { amount: true },

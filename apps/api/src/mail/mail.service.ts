@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
+import { DEFAULT_MAIL_FROM, SUPPORT_EMAIL, supportMailto } from './support';
 
 @Injectable()
 export class MailService {
@@ -15,7 +16,7 @@ export class MailService {
   constructor(private config: ConfigService) {
     const apiKey = this.config.get<string>('RESEND_API_KEY');
     this.resend  = apiKey ? new Resend(apiKey) : null;
-    this.from    = this.config.get<string>('MAIL_FROM')    ?? 'noreply@clerque.app';
+    this.from    = this.config.get<string>('MAIL_FROM')    ?? DEFAULT_MAIL_FROM;
     this.appUrl  = this.config.get<string>('APP_URL')      ?? 'http://localhost:3000';
     if (!this.resend) {
       this.logger.warn(
@@ -154,7 +155,7 @@ export class MailService {
   // via the Console. Closes a real attack: pre-Sprint-12, a compromised
   // SUPER_ADMIN credential could reset a tenant owner's password silently
   // and then log in as them. This email gives the affected user independent
-  // notice — if it lands unexpectedly, they call HNS support immediately.
+  // notice — if it lands unexpectedly, they call Clerque support immediately.
   //
   // The reset itself still works (we still surface the new password to the
   // SUPER_ADMIN, who needs to communicate it to the user); we just no longer
@@ -166,14 +167,16 @@ export class MailService {
     when:         Date;
     tenantSlug:   string;
   }): Promise<void> {
-    const supportUrl = `${this.appUrl}/help`;
+    // A mailto, not a page: this went to APP_URL/help, which does not exist,
+    // so the one link a possibly-compromised owner was told to use was dead.
+    const supportUrl = supportMailto('I did not ask for this password reset');
     const whenStr = opts.when.toLocaleString('en-PH', {
       dateStyle: 'long', timeStyle: 'short',
     });
 
     await this.send({
       to:      opts.to,
-      subject: 'Your Clerque password was reset by HNS support',
+      subject: 'Your Clerque password was reset by Clerque support',
       html:    this.layout(`
         <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
           Password Reset Notice
@@ -182,18 +185,18 @@ export class MailService {
           Hi <strong>${this.escape(opts.name)}</strong>,
         </p>
         <p style="margin:0 0 16px;color:#555;line-height:1.6;">
-          A member of the HNS support team (<strong>${this.escape(opts.actorEmail)}</strong>)
+          A member of the Clerque support team (<strong>${this.escape(opts.actorEmail)}</strong>)
           reset your Clerque password on <strong>${whenStr}</strong>.
         </p>
         <p style="margin:0 0 16px;color:#555;line-height:1.6;">
           The new password will be communicated to you directly through the same channel
-          you've been using with HNS support. Once you log in with it, change it to
+          you've been using with Clerque support. Once you log in with it, change it to
           something only you know.
         </p>
         <div style="margin:0 0 24px;padding:14px;border-radius:8px;background:#fef3c7;border-left:4px solid #f59e0b;">
           <p style="margin:0;color:#78350f;line-height:1.6;font-size:14px;">
-            <strong>Didn't expect this?</strong> Contact HNS support immediately at
-            <a href="${supportUrl}" style="color:#92400e;text-decoration:underline;">${supportUrl}</a>
+            <strong>Didn't expect this?</strong> Contact Clerque support immediately at
+            <a href="${supportUrl}" style="color:#92400e;text-decoration:underline;">${SUPPORT_EMAIL}</a>
             and don't log in until we confirm. This is the kind of email that flags
             a compromised support account — your alert helps us catch it.
           </p>
@@ -597,14 +600,17 @@ export class MailService {
     attachments?: { filename: string; content: Buffer }[];
   }) {
     if (!this.resend) {
-      // No API key configured — skip silently with a debug-level note.
-      // The constructor already logged a single warn at startup.
-      this.logger.debug(`Mail skipped (no RESEND_API_KEY): "${opts.subject}" → ${opts.to}`);
+      // No API key configured. Warn per message: a password reset that never
+      // arrives is a locked-out owner, and the startup line is long gone by then.
+      this.logger.warn(`Mail skipped (no RESEND_API_KEY): "${opts.subject}" → ${opts.to}`);
       return;
     }
     try {
       const { error } = await this.resend.emails.send({
         from:    this.from,
+        // Replies reach a person. The sender is a no-reply address, and
+        // several templates say "reply to this email if you have questions".
+        replyTo: SUPPORT_EMAIL,
         to:      opts.to,
         subject: opts.subject,
         html:    opts.html,
@@ -655,7 +661,8 @@ export class MailService {
           <td style="padding:16px 32px 24px;border-top:1px solid #f0f0f0;">
             <p style="margin:0;color:#bbb;font-size:12px;line-height:1.6;">
               This email was sent by Clerque on behalf of your employer.<br/>
-              If you have questions, contact your Business Owner or manager.
+              If you have questions, contact your Business Owner or manager.<br/>
+              Clerque support: <a href="${supportMailto()}" style="color:#999;">${SUPPORT_EMAIL}</a>
             </p>
           </td>
         </tr>

@@ -30,6 +30,7 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { downloadAuthFile } from '@/lib/utils';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 
 interface SnapshotMeta {
   key:          string;
@@ -213,8 +214,8 @@ export default function BackupDataPage() {
               Data Backups
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Off-box cloud snapshots taken nightly at 02:00 UTC (10:00 AM Manila).
-              Download any to hand to your accountant or keep as a cold copy.
+              A copy of your data is saved to separate cloud storage every night.
+              Download any copy to give to your accountant or to keep for yourself.
             </p>
           </div>
         </div>
@@ -228,12 +229,10 @@ export default function BackupDataPage() {
           <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 flex gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
             <div className="text-sm text-foreground">
-              <p className="font-semibold">Backup destination not configured on this deployment.</p>
+              <p className="font-semibold">Nightly backups are not switched on for your account yet.</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Ask your administrator to set <code className="px-1 py-0.5 bg-muted rounded text-[10px]">S3_BUCKET</code> +
-                {' '}<code className="px-1 py-0.5 bg-muted rounded text-[10px]">S3_ACCESS_KEY_ID</code> +
-                {' '}<code className="px-1 py-0.5 bg-muted rounded text-[10px]">S3_SECRET_ACCESS_KEY</code> in the Railway env.
-                Without this, no off-box backups are running — only the in-database snapshot before destructive operations.
+                Your records are still saved in Clerque as usual, but no separate nightly copy is being made.
+                Email <a href={supportMailto('Switch on nightly backups')} className="underline text-foreground">{SUPPORT_EMAIL}</a> and we will switch it on.
               </p>
             </div>
           </div>
@@ -243,7 +242,7 @@ export default function BackupDataPage() {
             <div className="text-sm text-foreground">
               <p className="font-semibold">No backups yet.</p>
               <p className="text-xs text-muted-foreground mt-1">
-                The nightly cron runs at 02:00 UTC. Your first backup will appear here tomorrow.
+                Backups are made once every night. Your first one will appear here tomorrow.
               </p>
             </div>
           </div>
@@ -255,8 +254,8 @@ export default function BackupDataPage() {
                 {data.count} snapshot{data.count !== 1 ? 's' : ''} available — most recent: {formatDateNice(data.snapshots[0].date)}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Off-box cloud copy in Cloudflare R2. If your live database is compromised or wiped,
-                support can restore from any of these within an hour.
+                These copies are kept in cloud storage separate from Clerque itself. If your records are ever
+                damaged or wiped, support can restore from any of them.
               </p>
             </div>
           </div>
@@ -355,13 +354,12 @@ export default function BackupDataPage() {
           </h2>
           <ol className="text-xs text-muted-foreground space-y-2 ml-4 list-decimal">
             <li>Download the snapshot from the date BEFORE the incident.</li>
-            <li>Email it to <span className="text-foreground">support@clerque.ph</span> with the subject <em>"URGENT — restore from backup"</em>.</li>
-            <li>We re-insert the data within 1 business hour (paying customers) or 4 business hours (free tier).</li>
+            <li>Email it to <a href={supportMailto('URGENT — restore from backup')} className="text-foreground underline">{SUPPORT_EMAIL}</a> with the subject <em>"URGENT — restore from backup"</em>.</li>
+            <li>We reply within 1 business hour and usually finish the restore within 4 business hours.</li>
             <li>On restore, every staff member's password is reset; they re-set on next login.</li>
           </ol>
           <p className="text-[11px] text-muted-foreground border-t border-border pt-3">
-            Recovery Point Objective (RPO) = up to 24 hours · last cron run was 02:00 UTC ·
-            Recovery Time Objective (RTO) = 1 business hour for restoring from any snapshot listed above.
+            Backups run once every night, so a restore can lose at most one day of entries.
             {' '}
             <Link href="/legal/sla" className="text-[var(--accent)] hover:underline">
               Read the full Data Recovery SLA →

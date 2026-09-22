@@ -31,6 +31,7 @@ import { BirService } from '../bir/bir.service';
 import { Bir2307Service, type Bir2307Data } from '../bir/bir-2307.service';
 import { AuditService } from '../audit/audit.service';
 import { LedgerMetricsService } from '../ledger-metrics/ledger-metrics.service';
+import { cashAccountWhere } from '../accounting/bank-accounts';
 import type { AuditAction } from '@prisma/client';
 
 // ── Shared formatting helpers ────────────────────────────────────────────────
@@ -117,6 +118,119 @@ function writeReportHeader(
   subCell.alignment = { horizontal: 'center' };
 
   ws.addRow([]); // row 3 — spacer
+}
+
+/**
+ * Rows worth printing on a statement: the ones with a balance. Every shop is
+ * seeded with the full chart (about 190 accounts, court-rental income
+ * included), so the P&L and Balance Sheet files were ninety ₱0.00 lines around
+ * a cafe's nine real ones. A zero row adds nothing to any total, so hiding it
+ * never changes a figure. Less than half a centavo either way is nothing.
+ * (The screens hide them the same way.)
+ */
+export function withBalance<T extends { balance: number }>(rows: T[]): T[] {
+  return rows.filter((r) => Math.abs(Number(r.balance) || 0) >= 0.005);
+}
+
+// ── Journal Entries export (pure row builder — unit-tested) ─────────────────
+
+export const JOURNAL_EXPORT_COLUMNS: Array<Partial<ExcelJS.Column> & { key: string; header: string }> = [
+  { key: 'entryNumber',  header: 'Entry #',       width: 16 },
+  { key: 'postingDate',  header: 'Posting Date',  width: 16, style: { numFmt: DATE_FMT } },
+  { key: 'docDate',      header: 'Doc Date',      width: 16, style: { numFmt: DATE_FMT } },
+  { key: 'description',  header: 'Description',   width: 40 },
+  { key: 'reference',    header: 'Reference',     width: 20 },
+  { key: 'source',       header: 'Source',        width: 14 },
+  { key: 'status',       header: 'Status',        width: 12 },
+  { key: 'accountCode',  header: 'Account Code',  width: 14 },
+  { key: 'accountName',  header: 'Account Name',  width: 34 },
+  { key: 'lineNote',     header: 'Line Note',     width: 30 },
+  { key: 'debit',        header: 'Debit',         width: 18, style: { numFmt: PESO_FMT } },
+  { key: 'credit',       header: 'Credit',        width: 18, style: { numFmt: PESO_FMT } },
+];
+
+export interface JournalExportEntry {
+  entryNumber: string;
+  date:        Date | string;
+  postingDate: Date | string | null;
+  description: string;
+  reference:   string | null;
+  source:      string;
+  status:      string;
+  lines: Array<{
+    description: string | null;
+    debit:       unknown;
+    credit:      unknown;
+    account:     { code: string; name: string };
+  }>;
+}
+
+export interface JournalExportRow {
+  entryIndex:  number;
+  entryNumber: string;
+  postingDate: Date;
+  docDate:     Date;
+  description: string;
+  reference:   string;
+  source:      string;
+  status:      string;
+  accountCode: string;
+  accountName: string;
+  lineNote:    string;
+  debit:       number | null;
+  credit:      number | null;
+}
+
+/**
+ * One spreadsheet row per journal LINE (account, debit, credit), repeating the
+ * entry's header fields on every row so the sheet can be filtered and pivoted.
+ *
+ * Totals add POSTED entries only: drafts, entries awaiting approval and voided
+ * entries are listed (the bookkeeper wants to see them) but are not part of
+ * the books, so adding them would make the total disagree with the trial
+ * balance. When the caller filtered to a single status, pass `totalAll` so the
+ * total matches what is listed.
+ */
+export function journalExportRows(
+  entries: JournalExportEntry[],
+  totalAll = false,
+): { rows: JournalExportRow[]; totalDebit: number; totalCredit: number } {
+  const rows: JournalExportRow[] = [];
+  let debitCents  = 0;
+  let creditCents = 0;
+
+  entries.forEach((entry, entryIndex) => {
+    const docDate     = new Date(entry.date);
+    const postingDate = entry.postingDate ? new Date(entry.postingDate) : docDate;
+    const counts      = totalAll || entry.status === 'POSTED';
+
+    for (const line of entry.lines) {
+      const debit  = Number(line.debit)  || 0;
+      const credit = Number(line.credit) || 0;
+      if (counts) {
+        debitCents  += Math.round(debit  * 100);
+        creditCents += Math.round(credit * 100);
+      }
+      rows.push({
+        entryIndex,
+        entryNumber: entry.entryNumber,
+        postingDate,
+        docDate,
+        description: entry.description,
+        reference:   entry.reference ?? '',
+        source:      entry.source,
+        status:      entry.status,
+        accountCode: line.account.code,
+        accountName: line.account.name,
+        lineNote:    line.description ?? '',
+        // Blank (not 0.00) on the side the line does not touch — reads like a journal.
+        debit:       debit  !== 0 ? debit  : null,
+        credit:      credit !== 0 ? credit : null,
+      });
+    }
+  });
+
+  return { rows, totalDebit: debitCents / 100, totalCredit: creditCents / 100 };
 }
 
 // ── ExportService ────────────────────────────────────────────────────────────
@@ -207,44 +321,50 @@ export class ExportService {
     opts: { from?: string; to?: string; status?: string },
   ): Promise<Buffer> {
     const name = await this.tenantName(tenantId);
-    const result = await this.journal.findAll(tenantId, {
+    // EVERY entry in the chosen range, with its lines. This used to call the
+    // screen's paged list (50 per page, no page given) and had no amount
+    // columns — the bookkeeper got the newest 50 entries and no debits/credits.
+    const entries = await this.journal.findAllForExport(tenantId, {
       from:   opts.from,
       to:     opts.to,
-      status: opts.status as any,
+      status: opts.status,
     });
-    const entries = result.data;
 
     const wb = buildWorkbook();
     const ws = wb.addWorksheet('Journal Entries', { views: [{ state: 'frozen', ySplit: 4 }] });
     ws.properties.tabColor = { argb: 'FF6C71C4' };
 
     const range = [opts.from, opts.to].filter(Boolean).join(' – ') || 'All dates';
-    writeReportHeader(ws, name, 'Journal Entries', `${range}   |   Generated: ${new Date().toLocaleString()}`, 7);
+    const statusLabel = opts.status ? `${opts.status} only` : 'All statuses';
+    writeReportHeader(
+      ws, name, 'Journal Entries',
+      `${range}   |   ${statusLabel}   |   ${entries.length} entries   |   Generated: ${new Date().toLocaleString()}`,
+      JOURNAL_EXPORT_COLUMNS.length,
+    );
 
-    ws.columns = [
-      { key: 'entryNumber',  header: 'Entry #',       width: 16 },
-      { key: 'postingDate',  header: 'Posting Date',  width: 16, style: { numFmt: DATE_FMT } },
-      { key: 'docDate',      header: 'Doc Date',      width: 16, style: { numFmt: DATE_FMT } },
-      { key: 'description',  header: 'Description',   width: 40 },
-      { key: 'reference',    header: 'Reference',     width: 20 },
-      { key: 'source',       header: 'Source',        width: 14 },
-      { key: 'status',       header: 'Status',        width: 12 },
-    ];
+    ws.columns = JOURNAL_EXPORT_COLUMNS.map((c) => ({ ...c }));
 
     applyHeaderStyle(ws.getRow(4));
 
-    entries.forEach((entry, idx) => {
-      const row = ws.addRow({
-        entryNumber:  entry.entryNumber,
-        postingDate:  entry.postingDate ? new Date(entry.postingDate) : new Date(entry.date),
-        docDate:      new Date(entry.date),
-        description:  entry.description,
-        reference:    entry.reference ?? '',
-        source:       entry.source,
-        status:       entry.status,
-      });
-      applyAlternatingFill(row, idx);
+    // A single-status listing totals what it lists; a mixed listing totals the
+    // POSTED entries only so the figure agrees with the trial balance.
+    const totalAll = !!opts.status;
+    const { rows, totalDebit, totalCredit } = journalExportRows(entries, totalAll);
+    rows.forEach((r) => {
+      const row = ws.addRow(r);
+      // Shade by ENTRY, not by row, so the lines of one entry read as a block.
+      applyAlternatingFill(row, r.entryIndex);
     });
+
+    const totRow = ws.addRow({
+      description: totalAll
+        ? `TOTAL — ${entries.length} entries`
+        : 'TOTAL — posted entries only',
+      debit:  totalDebit,
+      credit: totalCredit,
+    });
+    totRow.font   = { bold: true };
+    totRow.border = { top: { style: 'thin' } };
 
     autoWidth(ws);
     return Buffer.from(await wb.xlsx.writeBuffer());
@@ -258,11 +378,12 @@ export class ExportService {
     opts: { from?: string; to?: string },
   ): Promise<Buffer> {
     const name = await this.tenantName(tenantId);
-    // Fetch all rows (no pagination for export)
+    // Every row in the range. `page: 1` alone returned only the first 50 lines
+    // (the screen's page size), so a busy Cash on Hand ledger was cut short.
     const data = await this.accounts.getAccountLedger(tenantId, accountId, {
       from: opts.from,
       to:   opts.to,
-      page: 1,
+      all:  true,
     });
 
     const wb = buildWorkbook();
@@ -341,7 +462,7 @@ export class ExportService {
     const revHeader = ws.addRow({ code: '', name: 'REVENUE', amount: null });
     revHeader.font = { bold: true, color: { argb: 'FF268BD2' } };
 
-    data.revenueAccounts.forEach((r, idx) => {
+    withBalance(data.revenueAccounts).forEach((r, idx) => {
       applyAlternatingFill(ws.addRow({ code: r.code, name: r.name, amount: r.balance }), idx);
     });
 
@@ -355,7 +476,7 @@ export class ExportService {
     const expHeader = ws.addRow({ code: '', name: 'EXPENSES', amount: null });
     expHeader.font = { bold: true, color: { argb: 'FFDC322F' } };
 
-    data.expenseAccounts.forEach((r, idx) => {
+    withBalance(data.expenseAccounts).forEach((r, idx) => {
       applyAlternatingFill(ws.addRow({ code: r.code, name: r.name, amount: r.balance }), idx);
     });
 
@@ -473,7 +594,13 @@ export class ExportService {
 
     const orders = await this.prisma.order.findMany({
       where,
-      include: { payments: true },
+      include: {
+        payments: true,
+        // Refunds live per line. Without them a fully refunded sale was listed
+        // at full value, so the file's total sat above the revenue in the books
+        // — and this is the file used to work out percentage tax.
+        items: { select: { refunds: { select: { refundAmount: true } } } },
+      },
       orderBy: { paidAt: 'asc' },
     });
 
@@ -486,6 +613,7 @@ export class ExportService {
     lines.push(`"Period: ${from ?? 'All'} to ${to ?? 'All'}"`);
     lines.push(`"Generated: ${new Date().toISOString()}"`);
     lines.push(`"Tax Status: ${tenant?.taxStatus ?? 'UNREGISTERED'}"`);
+    lines.push(`"Refunded = money given back on that sale. Net Sales = Total Amount less Refunded."`);
     lines.push('');
 
     // Column headers
@@ -496,10 +624,18 @@ export class ExportService {
       'Discount',
       'VAT',
       'Total Amount',
+      'Refunded',
+      'Net Sales',
       'Cash',
       'Non-Cash',
       'Payment Methods',
     ].map(csvCell).join(','));
+
+    // Work in centavos so the totals row adds up exactly.
+    const cents = (v: unknown) => Math.round((Number(v) || 0) * 100);
+    const peso  = (c: number)  => (c / 100).toFixed(2);
+
+    let totalGrossC = 0, totalDiscountC = 0, totalVatC = 0, totalAmountC = 0, totalRefundedC = 0;
 
     // Data rows
     for (const order of orders) {
@@ -512,33 +648,44 @@ export class ExportService {
                               .reduce((s, p) => s + Number(p.amount), 0);
       const methodsSummary = [...new Set(order.payments.map((p) => p.method))].join(' + ');
 
+      const amountC   = cents(order.totalAmount);
+      const refundedC = (order.items ?? []).reduce(
+        (s, it) => s + (it.refunds ?? []).reduce((r, rf) => r + cents(rf.refundAmount), 0),
+        0,
+      );
+
+      totalGrossC    += cents(order.subtotal);
+      totalDiscountC += cents(order.discountAmount);
+      totalVatC      += cents(order.vatAmount);
+      totalAmountC   += amountC;
+      totalRefundedC += refundedC;
+
       lines.push([
         order.orderNumber,
         phDate,
         Number(order.subtotal).toFixed(2),
         Number(order.discountAmount).toFixed(2),
         Number(order.vatAmount).toFixed(2),
-        Number(order.totalAmount).toFixed(2),
+        peso(amountC),
+        peso(refundedC),
+        peso(amountC - refundedC),
         cash.toFixed(2),
         nonCash.toFixed(2),
         methodsSummary,
       ].map(csvCell).join(','));
     }
 
-    // Totals row
-    const totalGross   = orders.reduce((s, o) => s + Number(o.subtotal),       0);
-    const totalDiscount = orders.reduce((s, o) => s + Number(o.discountAmount), 0);
-    const totalVat     = orders.reduce((s, o) => s + Number(o.vatAmount),       0);
-    const totalNet     = orders.reduce((s, o) => s + Number(o.totalAmount),     0);
-
+    // Totals row — "Net Sales" is the figure that agrees with POS revenue in the books.
     lines.push('');
     lines.push([
       `TOTALS (${orders.length} orders)`,
       '',
-      totalGross.toFixed(2),
-      totalDiscount.toFixed(2),
-      totalVat.toFixed(2),
-      totalNet.toFixed(2),
+      peso(totalGrossC),
+      peso(totalDiscountC),
+      peso(totalVatC),
+      peso(totalAmountC),
+      peso(totalRefundedC),
+      peso(totalAmountC - totalRefundedC),
       '', '', '',
     ].map(csvCell).join(','));
 
@@ -926,22 +1073,44 @@ export class ExportService {
 
     applyHeaderStyle(ws.getRow(4));
 
-    const writeSection = (
-      title: string,
-      colorArgb: string,
-      rows: { code: string; name: string; balance: number }[],
-      totalLabel: string,
-      totalAmount: number,
-    ) => {
-      const sec = ws.addRow({ code: '', name: title, amount: null });
-      sec.font = { bold: true, color: { argb: colorArgb } };
-
-      rows.forEach((r, idx) => {
+    type BsRow = { code: string; name: string; balance: number };
+    // Zero-balance accounts are left out (see withBalance); totals are unchanged.
+    const writeRows = (rows: BsRow[]) => {
+      withBalance(rows).forEach((r, idx) => {
         applyAlternatingFill(
           ws.addRow({ code: r.code, name: r.name, amount: r.balance }),
           idx,
         );
       });
+    };
+
+    const writeSection = (
+      title: string,
+      colorArgb: string,
+      rows: BsRow[],
+      totalLabel: string,
+      totalAmount: number,
+      // Sub-headings with their own subtotal (Cash & Cash Equivalents,
+      // Receivables, Inventory …) so the file reads like the screen. Equity
+      // has none and prints flat.
+      groups?: Array<{ label: string; rows: BsRow[]; total: number }>,
+    ) => {
+      const sec = ws.addRow({ code: '', name: title, amount: null });
+      sec.font = { bold: true, color: { argb: colorArgb } };
+
+      if (groups && groups.length > 0) {
+        // A group with nothing but ₱0.00 accounts is left out entirely.
+        for (const g of groups.filter((grp) => withBalance(grp.rows).length > 0)) {
+          const head = ws.addRow({ code: '', name: g.label, amount: null });
+          head.font = { bold: true, italic: true };
+          writeRows(g.rows);
+          const sub = ws.addRow({ code: '', name: `Total ${g.label}`, amount: g.total });
+          sub.font   = { italic: true };
+          sub.border = { top: { style: 'hair' } };
+        }
+      } else {
+        writeRows(rows);
+      }
 
       const tot = ws.addRow({ code: '', name: totalLabel, amount: totalAmount });
       tot.font   = { bold: true };
@@ -949,8 +1118,8 @@ export class ExportService {
       ws.addRow([]);
     };
 
-    writeSection('ASSETS',      'FF2AA198', data.assets,      'Total Assets',      data.totalAssets);
-    writeSection('LIABILITIES', 'FFDC322F', data.liabilities, 'Total Liabilities', data.totalLiabilities);
+    writeSection('ASSETS',      'FF2AA198', data.assets,      'Total Assets',      data.totalAssets,      data.assetGroups);
+    writeSection('LIABILITIES', 'FFDC322F', data.liabilities, 'Total Liabilities', data.totalLiabilities, data.liabilityGroups);
     writeSection('EQUITY',      'FF268BD2', data.equity,      'Total Equity',      data.totalEquity);
 
     const lePlusE = ws.addRow({
@@ -1914,13 +2083,14 @@ export class ExportService {
     const cutoff = asOf ? new Date(asOf) : new Date();
     cutoff.setHours(23, 59, 59, 999);
 
-    // Cash accounts: type=ASSET + code starts with "10"
+    // Cash on hand, petty cash and the bank accounts (1000–1029) — nothing
+    // else. `code startsWith '10'` was every asset in the seeded chart, so
+    // "TOTAL CASH" added up receivables, inventory, furniture and goodwill.
     const accounts = await this.prisma.account.findMany({
       where: {
         tenantId,
         isActive: true,
-        type: 'ASSET',
-        code: { startsWith: '10' },
+        ...cashAccountWhere(),
       },
       orderBy: { code: 'asc' },
       include: {

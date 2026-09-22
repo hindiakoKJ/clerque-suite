@@ -42,6 +42,24 @@ describe('TelegramAlertsService', () => {
     expect(links.recipients).toHaveBeenCalledWith('t1', 'b1', 'sales');
     expect(client.sendMessage.mock.calls.map((c: any[]) => c[0])).toEqual(['101', '102']);
     expect(client.sendMessage.mock.calls[0][1]).toContain('Sale ORD-2026-000123');
+    // How it was paid is in the headline.
+    expect(client.sendMessage.mock.calls[0][1].split('\n')[0]).toBe('🧾 <b>Sale ORD-2026-000123</b>  ₱150.00 - <b>Cash</b>');
+  });
+
+  it('reads the reference the cashier typed and shows it beside the GCash payment', async () => {
+    const { svc, client, prisma } = build({ chats: ['101'] });
+    prisma.order.findFirst.mockResolvedValueOnce({
+      ...ORDER,
+      orderNumber: 'ORD-2026-000086', subtotal: 216, totalAmount: 216, vatAmount: 0,
+      payments: [{ method: 'CASH', amount: 100, reference: null }, { method: 'GCASH_BUSINESS', amount: 116, reference: '1234567' }],
+    });
+    await svc.saleConfirmed('t1', 'o1');
+    // The reference is asked for: without it in the select, Prisma never returns it.
+    expect(prisma.order.findFirst.mock.calls[0][0].select.payments.select).toEqual({ method: true, amount: true, reference: true });
+    const text: string = client.sendMessage.mock.calls[0][1];
+    expect(text.split('\n')[0]).toBe('🧾 <b>Sale ORD-2026-000086</b>  ₱216.00 - <b>Cash + GCash</b>');
+    expect(text).toMatch(/GCash #1234567 +116\.00/);
+    expect(text).toMatch(/\nCash +100\.00\n/);
   });
 
   it('a shop nobody listens to costs one count and nothing else', async () => {

@@ -9,6 +9,8 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { useInventoryBase } from '@/lib/inventory-base';
+import { todayIso, isoDaysFromToday } from '@/lib/today';
+import { movementLabel, movementDirection, stockAfter, referenceText, manilaStamp } from './movement-view';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -33,16 +35,11 @@ interface Movement {
   accountingEventId: string | null;
 }
 
-// ─── Type → label + icon map ──────────────────────────────────────────────────
+// The Type label, the arrow, "stock after" and the reference are decided in
+// ./movement-view (a write-off is not "Stock In"; an unknown figure is not 0).
 
-const TYPE_LABEL: Record<string, string> = {
-  INITIAL:        'Opening Stock',
-  STOCK_IN:       'Stock In',
-  STOCK_OUT:      'Stock Out',
-  ADJUSTMENT:     'Adjustment',
-  SALE_DEDUCTION: 'Sale',
-  VOID_REVERSAL:  'Void Reversed',
-};
+// The most rows the API hands back in one go (inventory.controller caps it).
+const MAX_ROWS = 500;
 
 const PAYMENT_LABEL: Record<string, string> = {
   CASH:         'Cash',
@@ -57,8 +54,9 @@ export default function StockMovementsPage() {
   const user = useAuthStore((s) => s.user);
   const branchId = user?.branchId ?? '';
 
-  const today = new Date().toISOString().slice(0, 10);
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  // The date on the wall, not the UTC one: before 8 AM in Manila that is still yesterday.
+  const today = todayIso();
+  const sevenDaysAgo = isoDaysFromToday(-7);
 
   const [from, setFrom] = useState(sevenDaysAgo);
   const [to,   setTo]   = useState(today);
@@ -69,15 +67,23 @@ export default function StockMovementsPage() {
     queryFn: () => {
       const params = new URLSearchParams({
         ...(branchId ? { branchId } : {}),
-        ...(from ? { from: new Date(from).toISOString() } : {}),
-        ...(to   ? { to:   new Date(`${to}T23:59:59`).toISOString() } : {}),
+        // The shop's day, midnight to midnight in Manila. A bare `new Date(from)`
+        // is UTC midnight, 8 AM here, which dropped the first day's early deliveries.
+        ...(from ? { from: new Date(`${from}T00:00:00+08:00`).toISOString() } : {}),
+        ...(to   ? { to:   new Date(`${to}T23:59:59.999+08:00`).toISOString() } : {}),
         kind,
+        limit: String(MAX_ROWS),
       });
       return api.get(`/inventory/movements?${params}`).then((r) => r.data);
     },
-    enabled: !!branchId,
+    // An owner with no home branch still gets the log: the API answers for the whole shop.
+    enabled: !!user,
     staleTime: 15_000,
   });
+
+  // The API names who did it (ingredient rows too). A row with a person but
+  // no name reads "staff", never "system".
+  const doneBy = (m: Movement) => m.createdByName ?? null;
 
   /*
     The server leaves the peso value off every row for someone the shop hides
@@ -90,22 +96,23 @@ export default function StockMovementsPage() {
   function exportCsv() {
     const header = [
       'Date', 'Kind', 'Type', 'Item', 'Unit', 'Quantity',
-      'Stock Before', 'Stock After', ...(valuesShown ? ['Value'] : []), 'Payment', 'Reference', 'Reason', 'Cashier',
+      'Stock Before', 'Stock After', ...(valuesShown ? ['Value'] : []), 'Payment', 'Reference', 'Reason', 'By',
     ];
     const rows = movements.map((m) => [
-      new Date(m.occurredAt).toISOString().slice(0, 19).replace('T', ' '),
+      manilaStamp(m.occurredAt),   // the shop's clock, not UTC
       m.kind === 'PRODUCT' ? 'Product' : 'Ingredient',
-      TYPE_LABEL[m.type] ?? m.type,
+      movementLabel(m),
       m.itemName,
       m.unit ?? '',
       m.quantity.toString(),
-      m.quantityBefore?.toString() ?? '',
-      m.quantityAfter?.toString() ?? '',
+      // Blank when the log never recorded them, the same as on screen.
+      stockAfter(m) != null ? (m.quantityBefore?.toString() ?? '') : '',
+      stockAfter(m)?.toString() ?? '',
       ...(valuesShown ? [m.totalValue != null ? m.totalValue.toFixed(2) : ''] : []),
       m.paymentMethod ? (PAYMENT_LABEL[m.paymentMethod] ?? m.paymentMethod) : '',
       m.reference ?? '',
       m.reason ?? '',
-      m.createdByName ?? '',
+      doneBy(m) ?? '',
     ]);
     const csv = [header, ...rows]
       .map((row) => row.map((v) => `"${(v ?? '').toString().replace(/"/g, '""')}"`).join(','))
@@ -139,7 +146,7 @@ export default function StockMovementsPage() {
           </Link>
           <h1 className="text-lg font-semibold text-foreground">Stock Movements</h1>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Every stock change in one place — sales, receipts, adjustments. Click any row for the underlying record.
+            Every stock change in one place: sales, deliveries, prep batches, write-offs and adjustments.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -190,7 +197,9 @@ export default function StockMovementsPage() {
           ))}
         </div>
         <p className="text-[11px] text-muted-foreground ml-auto">
-          {movements.length} movement{movements.length !== 1 ? 's' : ''}
+          {movements.length >= MAX_ROWS
+            ? `Showing the latest ${MAX_ROWS}. Pick fewer days to see the rest.`
+            : `${movements.length} movement${movements.length !== 1 ? 's' : ''}`}
         </p>
       </div>
 
@@ -222,6 +231,10 @@ export default function StockMovementsPage() {
             <tbody className="divide-y divide-border">
               {movements.map((m) => {
                 const isStockIn = m.quantity > 0;
+                const direction = movementDirection(m);
+                const after     = stockAfter(m);
+                const reference = referenceText(m.reference);
+                const by        = doneBy(m);
                 return (
                   <tr key={`${m.kind}-${m.id}`} className="hover:bg-muted/40 transition-colors">
                     {/* Date */}
@@ -248,20 +261,20 @@ export default function StockMovementsPage() {
                     {/* Type */}
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                        m.type === 'SALE_DEDUCTION'
+                        direction === 'sale'
                           ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                          : isStockIn
+                          : direction === 'in'
                           ? 'bg-green-500/10 text-green-600 dark:text-green-400'
                           : 'bg-red-500/10 text-red-600 dark:text-red-400'
                       }`}>
-                        {m.type === 'SALE_DEDUCTION' ? (
+                        {direction === 'sale' ? (
                           <ShoppingCart className="h-2.5 w-2.5" />
-                        ) : isStockIn ? (
+                        ) : direction === 'in' ? (
                           <ArrowUpCircle className="h-2.5 w-2.5" />
                         ) : (
                           <ArrowDownCircle className="h-2.5 w-2.5" />
                         )}
-                        {TYPE_LABEL[m.type] ?? m.type}
+                        {movementLabel(m)}
                       </span>
                     </td>
 
@@ -275,21 +288,22 @@ export default function StockMovementsPage() {
 
                     {/* Stock after */}
                     <td className="px-4 py-3 text-right text-muted-foreground tabular-nums whitespace-nowrap">
-                      {m.quantityAfter != null
-                        ? m.quantityAfter.toLocaleString(undefined, { maximumFractionDigits: 4 })
+                      {after != null
+                        ? after.toLocaleString(undefined, { maximumFractionDigits: 4 })
                         : '—'}
                     </td>
 
                     {/* Value -- only for those the shop shows purchase costs to */}
                     {valuesShown && (
                       <td className="px-4 py-3 text-right text-muted-foreground tabular-nums whitespace-nowrap">
-                        {m.totalValue != null && m.totalValue > 0 ? formatPeso(m.totalValue) : '—'}
+                        {/* A write-off carries its value as a minus; what it was worth still belongs here. */}
+                        {m.totalValue != null && m.totalValue !== 0 ? formatPeso(Math.abs(m.totalValue)) : '—'}
                       </td>
                     )}
 
                     {/* Reference (order # or supplier ref) */}
                     <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {m.reference ?? '—'}
+                      {reference ?? '—'}
                       {m.paymentMethod && (
                         <span className="ml-1 text-[10px] uppercase tracking-wide opacity-70">
                           · {PAYMENT_LABEL[m.paymentMethod] ?? m.paymentMethod}
@@ -304,7 +318,7 @@ export default function StockMovementsPage() {
 
                     {/* Created by */}
                     <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {m.createdByName ?? <span className="opacity-50">system</span>}
+                      {by ?? <span className="opacity-50">{m.createdById ? 'staff' : 'system'}</span>}
                     </td>
                   </tr>
                 );

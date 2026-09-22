@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 import DocumentAttachments from '@/components/shared/DocumentAttachments';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -98,7 +99,7 @@ function CollectModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayIso(); // wall-clock day, not UTC (lib/today)
   const [amount,        setAmount]        = useState(invoice.balance.toFixed(2));
   const [paymentMethod, setPaymentMethod] = useState('CASH');
   const [reference,     setReference]     = useState('');

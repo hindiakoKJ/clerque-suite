@@ -19,7 +19,7 @@ import {
   verifyDeviceToken,
   clearDeviceToken,
 } from '@/lib/pos/device-token';
-import { queueProblem, stationTitle } from './station-screen';
+import { queueProblem, screenLabel, stationTitle, waitLabel } from './station-screen';
 
 interface QueueItem {
   id:           string;
@@ -47,13 +47,6 @@ const STATION_ICON: Record<string, React.ElementType> = {
   COLD_BAR:    Snowflake,
   PASTRY_PASS: Cake,
 };
-
-function fmtElapsed(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}m ${secs}s`;
-}
 
 export default function StationKdsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: stationId } = use(params);
@@ -298,7 +291,8 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
       return aTs - bTs;
     });
 
-  const Icon = STATION_ICON[station?.kind ?? prepInfo?.station?.kind ?? ''] ?? ChefHat;
+  const stationKind = station?.kind ?? prepInfo?.station?.kind ?? null;
+  const Icon = STATION_ICON[stationKind ?? ''] ?? ChefHat;
   const stationName = stationTitle(station, prepInfo?.station);
 
   // ── Mismatch guard — paired to a different station than the URL ──────────
@@ -349,7 +343,7 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{stationName}</h1>
             <p className="text-xs text-stone-400 uppercase tracking-wider mt-0.5">
-              Kitchen Display · {items.filter((i) => i.prepStatus === 'PENDING').length} pending
+              {screenLabel(stationKind)} · {items.filter((i) => i.prepStatus === 'PENDING').length} pending
             </p>
           </div>
           <div className="sm:ml-4 flex overflow-hidden rounded-xl border border-stone-700 text-sm font-semibold">
@@ -431,9 +425,14 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
       </header>
 
       {/* Audio stays blocked until the browser sees a touch. Say so, because a
-          silent bell that looks switched on is worse than no bell. */}
+          silent bell that looks switched on is worse than no bell.
+
+          Laid over the screen, never in its flow: the first touch unlocks the
+          bell and this notice goes, and when it sat above the tickets they
+          all jumped up under the finger mid-tap, so the tap landed on nothing
+          and the first ticket had to be tapped twice. Taps pass through it. */}
       {chime.enabled && !chime.unlocked && (
-        <div className="px-6 py-2 bg-amber-500/15 border-b border-amber-500/30 text-amber-200 text-xs flex items-center gap-2">
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex items-center gap-2 border-t border-amber-500/30 bg-amber-950/90 px-6 py-2 text-xs text-amber-200 print:hidden">
           <Bell className="h-3.5 w-3.5 shrink-0" />
           <span>Tap anywhere on this screen once to let the bell ring — your tablet blocks sound until then.</span>
         </div>
@@ -511,7 +510,7 @@ export default function StationKdsPage({ params }: { params: Promise<{ id: strin
                       )}
                       <span className="flex items-center gap-1 text-sm font-semibold tabular-nums">
                         <Clock className="h-3.5 w-3.5" />
-                        {fmtElapsed(oldestWait)}
+                        {waitLabel(oldestWait)}
                       </span>
                     </span>
                   </div>

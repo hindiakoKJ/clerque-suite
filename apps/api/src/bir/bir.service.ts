@@ -1,6 +1,7 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import ExcelJS from 'exceljs';
+import { taxStatusFlags, type TaxStatus } from '@repo/shared-types';
 
 // ── BIR form result types ────────────────────────────────────────────────────
 
@@ -105,21 +106,49 @@ function toIso(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Is this shop registered with the BIR? VAT and NON_VAT both are — a NON-VAT
+ * shop still files percentage tax (2551Q) and income tax (1701Q) and keeps
+ * books. Decided by taxStatus first (same rule as the login token), with the
+ * legacy `isBirRegistered` column as a fallback.
+ */
+export function isTenantBirRegistered(
+  tenant: { taxStatus?: string | null; isBirRegistered?: boolean | null } | null | undefined,
+): boolean {
+  if (!tenant) return false;
+  const status = tenant.taxStatus as TaxStatus | null | undefined;
+  if (status && taxStatusFlags(status).isBirRegistered) return true;
+  return tenant.isBirRegistered === true;
+}
+
 // ── BirService ───────────────────────────────────────────────────────────────
 
 @Injectable()
 export class BirService {
   constructor(private prisma: PrismaService) {}
 
-  /** Verify tenant has BIR registration; throw 403 otherwise. */
+  /**
+   * Verify the shop is registered with the BIR; throw 403 otherwise.
+   *
+   * "Registered" is decided by taxStatus (VAT or NON_VAT), exactly the way the
+   * login token decides it (auth.service → taxStatusFlags). The stored
+   * `isBirRegistered` column is NOT reliable on its own: signup sets taxStatus
+   * 'NON_VAT' but leaves the column at its schema default (false), so every
+   * NON-VAT shop was refused its percentage-tax / income-tax estimates and its
+   * books while the web app (reading the token) showed the page as available.
+   * The column is still honoured as a fallback so nothing that worked before
+   * stops working. Only a truly unregistered shop is refused.
+   */
   private async assertBirRegistered(tenantId: string) {
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
-      select: { isBirRegistered: true },
+      select: { taxStatus: true, isBirRegistered: true },
     });
-    if (!tenant?.isBirRegistered) {
+    if (!isTenantBirRegistered(tenant)) {
       throw new ForbiddenException(
-        'BIR features require a registered business account. Enable BIR registration in tenant settings.',
+        'Tax estimates and BIR books are only for shops registered with the BIR. ' +
+        'This shop is set up as not registered. If that is wrong, email ' +
+        'devsupport@hnscorpph.com and we will correct it.',
       );
     }
   }

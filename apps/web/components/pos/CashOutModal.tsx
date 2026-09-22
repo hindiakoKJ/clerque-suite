@@ -25,6 +25,7 @@ import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useSound } from '@/hooks/pos/useSound';
 import { useAuthStore } from '@/store/auth';
+import { DIALOG_FIT_FRAME, DIALOG_FIT_BODY, DIALOG_FIT_FOOTER } from './dialog-fit';
 
 interface CashOutModalProps {
   open: boolean;
@@ -203,14 +204,20 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && !submitting && onClose()}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
+      {/*
+        With the category, reason and manager rows showing, this form is taller
+        than the 1024x600 till screen. Capped to the screen: the form scrolls,
+        Cancel and the Pay out / Drop to safe button stay pinned below it.
+      */}
+      <DialogContent className={`max-w-sm p-0 ${DIALOG_FIT_FRAME}`}>
+        <DialogHeader className="mb-0 shrink-0 px-6 pt-5 pb-3">
           <DialogTitle className="flex items-center gap-2">
             {type === 'PAID_OUT' ? <Wallet className="h-5 w-5 text-amber-600" /> : <Vault className="h-5 w-5 text-blue-600" />}
             {type === 'PAID_OUT' ? 'Cash Paid-Out' : 'Cash Drop to Safe'}
           </DialogTitle>
         </DialogHeader>
 
+        <div className={`px-6 pb-4 space-y-3 ${DIALOG_FIT_BODY}`}>
         {/* Type toggle */}
         <div className="grid grid-cols-2 gap-2">
           <button
@@ -373,15 +380,16 @@ export function CashOutModal({ open, shiftId, onClose, onSuccess }: CashOutModal
               ))}
             </select>
             <p className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
-              <ShieldCheck className="h-3 w-3" />
-              In v1 the manager confirms verbally; in a future release this requires their PIN.
+              <ShieldCheck className="h-3 w-3 shrink-0" />
+              Ask the manager to say yes in person before you record this.
             </p>
           </div>
         )}
+        </div>
 
-        <div className="flex gap-2 justify-end mt-2">
-          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit}>
+        <div className={`flex gap-2 justify-end px-6 py-3 bg-card ${DIALOG_FIT_FOOTER}`}>
+          <Button variant="outline" onClick={onClose} disabled={submitting} className="min-h-[44px]">Cancel</Button>
+          <Button onClick={handleSubmit} disabled={!canSubmit} className="min-h-[44px]">
             {submitting ? 'Recording…' : type === 'PAID_OUT' ? 'Pay out' : 'Drop to safe'}
           </Button>
         </div>

@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CheckCircle2, AlertCircle, Loader2, Copy } from 'lucide-react';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/support';
 
 const ACCENT      = '#8B5E3C';
 const ACCENT_SOFT = '#EEE9DF';
@@ -377,7 +378,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
       </main>
       <footer className="text-center py-6 text-xs text-zinc-500 border-t border-zinc-200">
         Questions? Reply to your welcome email or contact{' '}
-        <a href="mailto:support@clerque.ph" className="underline">support@clerque.ph</a>
+        <a href={supportMailto()} className="underline">{SUPPORT_EMAIL}</a>
       </footer>
     </div>
   );

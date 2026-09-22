@@ -8,6 +8,7 @@ import {
 import { api } from '@/lib/api';
 import { downloadAuthFile } from '@/lib/utils';
 import { toast } from 'sonner';
+import { todayIso } from '@/lib/today';
 
 type AccountType    = 'ASSET' | 'LIABILITY' | 'EQUITY' | 'REVENUE' | 'EXPENSE';
 type NormalBalance  = 'DEBIT' | 'CREDIT';
@@ -47,14 +48,10 @@ function fmtPeso(n: number) {
   return `₱${Math.abs(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function todayStr() {
-  return new Date().toISOString().split('T')[0];
-}
-
 
 export default function TrialBalancePage() {
   const router   = useRouter();
-  const [asOf, setAsOf]         = useState(todayStr());
+  const [asOf, setAsOf]         = useState(todayIso());
   const [exporting, setExporting] = useState(false);
 
   async function handleExport() {
@@ -107,7 +104,7 @@ export default function TrialBalancePage() {
           <input
             type="date"
             value={asOf}
-            max={todayStr()}
+            max={todayIso()}
             onChange={(e) => setAsOf(e.target.value)}
             className="h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
           />

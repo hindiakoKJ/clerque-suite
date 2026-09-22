@@ -710,7 +710,7 @@ export class InventoryService {
     const ws = wb.addWorksheet('Buy Now');
 
     const HDRS = [
-      ['Item', 30], ['Unit', 8], ['On hand', 10], ['Alert at', 10], ['SHORT BY', 11],
+      ['Item', 30], ['Unit', 8], ['On hand', 10], ['Reorder level', 13], ['SHORT BY', 11],
       ['Date bought', 13], ['Store', 22], ['Area', 11], ['Pack size', 10],
       ['Pack unit', 11], ['Qty (packs)', 11], ['Unit price (₱)', 13],
       ['Amount (₱)', 12],
@@ -1269,8 +1269,9 @@ export class InventoryService {
               itemName:       String(c['name'] ?? 'Ingredient'),
               unit:           typeof c['unit'] === 'string' ? c['unit'] : null,
               quantity:       -Number(c['quantity'] ?? 0),
-              quantityBefore: 0,
-              quantityAfter:  0,
+              // Not recorded for the ingredients a batch took: blank, not "0" -- a 0 told the owner the shelf was empty.
+              quantityBefore: null,
+              quantityAfter:  null,
               branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
               reason:         `Used to prepare ${String(p['rawMaterialName'] ?? 'a prep')}${at}`,
               reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
@@ -1287,26 +1288,55 @@ export class InventoryService {
         if (p['kind'] !== 'RAW_MATERIAL_RECEIPT') continue;
 
         const occurredAt = (typeof p['receivedAt'] === 'string' ? p['receivedAt'] : ev.createdAt.toISOString());
+        const quantity   = Number(p['quantity'] ?? 0);
+
+        /*
+          Every ingredient event is written under the one payload kind, and
+          this row used to call all of them "STOCK_IN": a write-off read
+          "Stock In -100 ml" with no reason, because the write-off says why in
+          `reason`, not `note`. Named by what the payload says it was; a minus
+          quantity with no name is still stock OUT, never in.
+        */
+        const adjustmentType = typeof p['adjustmentType'] === 'string' ? p['adjustmentType'] : '';
+        const type =
+          adjustmentType === 'WRITE_OFF' || adjustmentType === 'COUNT_CORRECTION' || adjustmentType === 'OPENING_BALANCE'
+            ? adjustmentType
+            : quantity < 0 ? 'STOCK_OUT' : 'STOCK_IN';
+        const reason = typeof p['note'] === 'string' && p['note']
+          ? p['note']
+          : typeof p['reason'] === 'string' && p['reason'] ? p['reason'] : null;
+        const by = typeof p['writtenOffById'] === 'string' ? p['writtenOffById']
+          : typeof p['byId'] === 'string' ? p['byId'] : null;
 
         results.push({
           id:             ev.id,
           kind:           'RAW_MATERIAL',
           occurredAt,
-          type:           'STOCK_IN',
+          type,
           itemName:       String(p['rawMaterialName'] ?? p['productName'] ?? 'Ingredient'),
           unit:           typeof p['unit'] === 'string' ? p['unit'] : null,
-          quantity:       Number(p['quantity'] ?? 0),
+          quantity,
           quantityBefore: null,
           quantityAfter:  null,
           branchId:       typeof p['branchId'] === 'string' ? p['branchId'] : null,
-          reason:         typeof p['note'] === 'string' ? p['note'] : null,
+          reason,
           reference:      typeof p['referenceNumber'] === 'string' ? p['referenceNumber'] : null,
-          createdById:    null,
+          createdById:    by,
           createdByName:  null,
           paymentMethod:  typeof p['paymentMethod'] === 'string' ? p['paymentMethod'] : null,
           totalValue:     Number(p['totalValue'] ?? 0),
           accountingEventId: ev.id,
         });
+      }
+
+      // Who did it, by name, the way the product rows already say it. One query for the lot; every row said "system" before.
+      const rawUserIds = [...new Set(results.filter((r) => r.kind === 'RAW_MATERIAL' && r.createdById && !r.createdByName).map((r) => r.createdById as string))];
+      if (rawUserIds.length) {
+        const rawUsers = await this.prisma.user.findMany({ where: { id: { in: rawUserIds } }, select: { id: true, name: true } });
+        const names = Object.fromEntries(rawUsers.map((u) => [u.id, u.name]));
+        for (const r of results) {
+          if (r.kind === 'RAW_MATERIAL' && r.createdById && !r.createdByName) r.createdByName = names[r.createdById] ?? null;
+        }
       }
     }
 

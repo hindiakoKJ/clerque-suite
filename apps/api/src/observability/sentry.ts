@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/node';
 import { logger } from './logger';
+import { BOT_API_PATH, scrubBreadcrumb, scrubEvent } from './scrub';
 
 /**
  * Initialize Sentry error tracking. Graceful no-op if SENTRY_DSN is not set,
@@ -7,9 +8,6 @@ import { logger } from './logger';
  *
  * Call this once at app startup BEFORE NestFactory.create.
  */
-/** /bot<id>:<secret>/ -- the shape of a Telegram Bot API path. */
-const BOT_API_PATH = /\/bot\d+:[^/]+\//;
-
 export function initSentry(): void {
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) {
@@ -30,16 +28,18 @@ export function initSentry(): void {
     integrations: [
       Sentry.nativeNodeFetchIntegration({ ignoreOutgoingRequests: (url) => BOT_API_PATH.test(url) }),
     ],
+    // Breadcrumbs and the failed request itself go through scrub.ts: a paired
+    // tablet's credential in a query string, an Authorization header, a
+    // cookie -- none of it leaves for Sentry.
     beforeBreadcrumb(crumb) {
-      const url = crumb.data?.url;
-      return typeof url === 'string' && BOT_API_PATH.test(url) ? null : crumb;
+      return scrubBreadcrumb(crumb);
     },
     // Filter known noise.
     beforeSend(event) {
       // Skip 4xx client errors — they're not actionable.
       const status = event.contexts?.response?.status_code;
       if (typeof status === 'number' && status >= 400 && status < 500) return null;
-      return event;
+      return scrubEvent(event);
     },
   });
 
